@@ -626,17 +626,33 @@ window.showLaunchJobModal = async function() {
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Inventory Group</label>
-                    <select class="form-select" name="inventory_group_id" id="job-group-select" required onchange="updateJobGroupHosts(this.value)">
-                        <option value="">Select a group...</option>
-                        ${groupsWithHosts.map(g => `<option value="${g.id}">${escapeHtml(g.name)} (${g.hosts.length} hosts)</option>`).join('')}
-                    </select>
-                </div>
-                <div class="form-group" id="job-hosts-container" style="display: none;">
-                    <label class="form-label">Hosts in Selected Group</label>
-                    <div id="job-hosts-list" style="background: var(--bg-secondary); padding: 1rem; border-radius: 0.375rem; max-height: 200px; overflow-y: auto; border: 1px solid var(--border);">
-                        <div class="empty-state">Select a group to see hosts</div>
+                    <label class="form-label">Select Targets</label>
+                    <div style="background: var(--bg-secondary); padding: 1rem; border-radius: 0.375rem; max-height: 400px; overflow-y: auto; border: 1px solid var(--border);">
+                        ${groupsWithHosts.map(group => `
+                            <div style="margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);">
+                                <label style="display: flex; align-items: center; cursor: pointer; font-weight: 600; margin-bottom: 0.5rem;">
+                                    <input type="checkbox" class="job-group-checkbox" data-group-id="${group.id}" 
+                                           onchange="toggleJobGroup(${group.id}, this.checked)" style="margin-right: 0.5rem;">
+                                    ${escapeHtml(group.name)} <span style="color: var(--text-muted); font-weight: normal; margin-left: 0.5rem;">(${group.hosts.length} hosts)</span>
+                                </label>
+                                <div class="job-hosts-list" data-group-id="${group.id}" style="margin-left: 1.5rem; margin-top: 0.5rem;">
+                                    ${group.hosts.map(host => `
+                                        <label style="display: flex; align-items: center; cursor: pointer; padding: 0.25rem 0; color: var(--text-light);">
+                                            <input type="checkbox" class="job-host-checkbox" name="host_ids[]" value="${host.id}" 
+                                                   data-group-id="${group.id}" style="margin-right: 0.5rem;">
+                                            <span>${escapeHtml(host.hostname)}</span>
+                                            <span style="color: var(--text-muted); margin-left: 0.5rem; font-size: 0.875rem;">${escapeHtml(host.ip_address)}</span>
+                                            <span style="color: var(--text-muted); margin-left: 0.5rem; font-size: 0.75rem;">(${escapeHtml(host.device_type || 'cisco_ios')})</span>
+                                        </label>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        `).join('')}
+                        ${groupsWithHosts.length === 0 ? '<div class="empty-state">No inventory groups available</div>' : ''}
                     </div>
+                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.5rem;">
+                        Select entire groups or individual hosts. At least one target must be selected.
+                    </small>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Credential (optional)</label>
@@ -657,57 +673,62 @@ window.showLaunchJobModal = async function() {
             </form>
         `);
         
-        // Store groups data for the update function
+        // Store groups data
         window._jobGroupsData = groupsWithHosts;
     } catch (error) {
         showError(`Failed to load job form: ${error.message}`);
     }
 };
 
+window.toggleJobGroup = function(groupId, checked) {
+    // Toggle all hosts in this group
+    const hostCheckboxes = document.querySelectorAll(`.job-host-checkbox[data-group-id="${groupId}"]`);
+    hostCheckboxes.forEach(cb => {
+        cb.checked = checked;
+    });
+};
+
 window.updateJobGroupHosts = function(groupId) {
-    const container = document.getElementById('job-hosts-container');
-    const hostsList = document.getElementById('job-hosts-list');
-    
-    if (!groupId || !window._jobGroupsData) {
-        container.style.display = 'none';
-        return;
-    }
-    
-    const group = window._jobGroupsData.find(g => g.id == groupId);
-    if (!group || !group.hosts || group.hosts.length === 0) {
-        container.style.display = 'block';
-        hostsList.innerHTML = '<div class="empty-state">No hosts in this group</div>';
-        return;
-    }
-    
-    container.style.display = 'block';
-    hostsList.innerHTML = group.hosts.map(host => `
-        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid var(--border);">
-            <div>
-                <strong>${escapeHtml(host.hostname)}</strong>
-                <span style="color: var(--text-muted); margin-left: 0.5rem;">${escapeHtml(host.ip_address)}</span>
-                <span style="color: var(--text-muted); margin-left: 0.5rem; font-size: 0.875rem;">(${escapeHtml(host.device_type || 'cisco_ios')})</span>
-            </div>
-        </div>
-    `).join('');
+    // This function is no longer needed but kept for compatibility
 };
 
 window.launchJob = async function(e) {
     e.preventDefault();
     const formData = new FormData(e.target);
+    
+    // Get selected host IDs
+    const hostIds = Array.from(document.querySelectorAll('.job-host-checkbox:checked'))
+        .map(cb => parseInt(cb.value))
+        .filter(id => !isNaN(id)); // Filter out any invalid IDs
+    
+    if (hostIds.length === 0) {
+        showError('Please select at least one host or group');
+        return;
+    }
+    
+    console.log('Launching job with host IDs:', hostIds);
+    
     try {
+        const playbookId = parseInt(formData.get('playbook_id'));
+        const credentialId = formData.get('credential_id') ? parseInt(formData.get('credential_id')) : null;
+        const dryRun = formData.get('dry_run') === 'on';
+        
+        console.log('Job parameters:', { playbookId, credentialId, dryRun, hostIds });
+        
         const job = await api.launchJob(
-            parseInt(formData.get('playbook_id')),
-            parseInt(formData.get('inventory_group_id')),
-            formData.get('credential_id') ? parseInt(formData.get('credential_id')) : null,
+            playbookId,
+            null, // No longer using inventory_group_id
+            credentialId,
             null,
-            formData.get('dry_run') === 'on'
+            dryRun,
+            hostIds
         );
         closeAllModals();
         await loadJobs();
-        showSuccess('Job launched successfully');
+        showSuccess(`Job launched successfully on ${hostIds.length} host(s)`);
         setTimeout(() => viewJobOutput(job.job_id), 500);
     } catch (error) {
+        console.error('Job launch error:', error);
         showError(`Failed to launch job: ${error.message}`);
     }
 };

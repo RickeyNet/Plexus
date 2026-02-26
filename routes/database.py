@@ -215,6 +215,22 @@ async def get_hosts_for_group(group_id: int) -> list[dict]:
         await db.close()
 
 
+async def get_hosts_by_ids(host_ids: list[int]) -> list[dict]:
+    """Get multiple hosts by their IDs."""
+    if not host_ids:
+        return []
+    db = await get_db()
+    try:
+        placeholders = ','.join('?' * len(host_ids))
+        cursor = await db.execute(
+            f"SELECT * FROM hosts WHERE id IN ({placeholders}) ORDER BY ip_address",
+            tuple(host_ids)
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def add_host(group_id: int, hostname: str, ip_address: str,
                    device_type: str = "cisco_ios") -> int:
     db = await get_db()

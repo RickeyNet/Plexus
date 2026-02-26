@@ -188,7 +188,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Plexus API", version="1.0.0", lifespan=lifespan, dependencies=[Depends(require_auth)])
+app = FastAPI(title="Plexus API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -321,17 +321,22 @@ class CredentialUpdate(BaseModel):
 
 class JobLaunch(BaseModel):
     playbook_id: int
-    inventory_group_id: int
+    inventory_group_id: Optional[int] = None  # Optional for backward compatibility
+    host_ids: Optional[list[int]] = None  # List of specific host IDs to target
     credential_id: Optional[int] = None
     template_id: Optional[int] = None
     dry_run: bool = True
+    
+    class Config:
+        # Allow extra fields to be ignored (for backward compatibility)
+        extra = "forbid"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Dashboard
 # ═════════════════════════════════════════════════════════════════════════════
 
-@app.get("/api/dashboard")
+@app.get("/api/dashboard", dependencies=[Depends(require_auth)])
 async def dashboard():
     stats = await db.get_dashboard_stats()
     recent_jobs = await db.get_all_jobs(limit=5)
@@ -343,18 +348,18 @@ async def dashboard():
 # Inventory Groups
 # ═════════════════════════════════════════════════════════════════════════════
 
-@app.get("/api/inventory")
+@app.get("/api/inventory", dependencies=[Depends(require_auth)])
 async def list_groups():
     return await db.get_all_groups()
 
 
-@app.post("/api/inventory", status_code=201)
+@app.post("/api/inventory", status_code=201, dependencies=[Depends(require_auth)])
 async def create_group(body: GroupCreate):
     gid = await db.create_group(body.name, body.description)
     return {"id": gid, "name": body.name}
 
 
-@app.get("/api/inventory/{group_id}")
+@app.get("/api/inventory/{group_id}", dependencies=[Depends(require_auth)])
 async def get_group(group_id: int):
     group = await db.get_group(group_id)
     if not group:
@@ -363,7 +368,7 @@ async def get_group(group_id: int):
     return {**group, "hosts": hosts}
 
 
-@app.delete("/api/inventory/{group_id}")
+@app.delete("/api/inventory/{group_id}", dependencies=[Depends(require_auth)])
 async def delete_group(group_id: int):
     await db.delete_group(group_id)
     return {"ok": True}
@@ -371,24 +376,24 @@ async def delete_group(group_id: int):
 
 # ── Hosts ────────────────────────────────────────────────────────────────────
 
-@app.get("/api/inventory/{group_id}/hosts")
+@app.get("/api/inventory/{group_id}/hosts", dependencies=[Depends(require_auth)])
 async def list_hosts(group_id: int):
     return await db.get_hosts_for_group(group_id)
 
 
-@app.post("/api/inventory/{group_id}/hosts", status_code=201)
+@app.post("/api/inventory/{group_id}/hosts", status_code=201, dependencies=[Depends(require_auth)])
 async def add_host(group_id: int, body: HostCreate):
     hid = await db.add_host(group_id, body.hostname, body.ip_address, body.device_type)
     return {"id": hid}
 
 
-@app.put("/api/hosts/{host_id}")
+@app.put("/api/hosts/{host_id}", dependencies=[Depends(require_auth)])
 async def update_host(host_id: int, body: HostUpdate):
     await db.update_host(host_id, body.hostname, body.ip_address, body.device_type)
     return {"ok": True}
 
 
-@app.delete("/api/hosts/{host_id}")
+@app.delete("/api/hosts/{host_id}", dependencies=[Depends(require_auth)])
 async def remove_host(host_id: int):
     await db.remove_host(host_id)
     return {"ok": True}
@@ -398,7 +403,7 @@ async def remove_host(host_id: int):
 # Playbooks
 # ═════════════════════════════════════════════════════════════════════════════
 
-@app.get("/api/playbooks/{playbook_id}")
+@app.get("/api/playbooks/{playbook_id}", dependencies=[Depends(require_auth)])
 async def get_playbook(playbook_id: int):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
@@ -441,7 +446,7 @@ async def get_playbook(playbook_id: int):
     return playbook
 
 
-@app.get("/api/playbooks")
+@app.get("/api/playbooks", dependencies=[Depends(require_auth)])
 async def list_playbooks():
     # Sync registered playbooks that might be missing from database
     await sync_playbooks_from_registry()
@@ -477,7 +482,7 @@ async def sync_playbooks_from_registry():
                     print(f"[sync] Error adding playbook '{pb['name']}': {e}")
 
 
-@app.post("/api/playbooks", status_code=201)
+@app.post("/api/playbooks", status_code=201, dependencies=[Depends(require_auth)])
 async def create_playbook(body: PlaybookCreate):
     # Ensure filename ends with .py
     filename = body.filename if body.filename.endswith('.py') else body.filename + '.py'
@@ -490,7 +495,7 @@ async def create_playbook(body: PlaybookCreate):
     return {"id": pid}
 
 
-@app.put("/api/playbooks/{playbook_id}")
+@app.put("/api/playbooks/{playbook_id}", dependencies=[Depends(require_auth)])
 async def update_playbook(playbook_id: int, body: PlaybookUpdate):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
@@ -519,7 +524,7 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate):
     return {"ok": True}
 
 
-@app.delete("/api/playbooks/{playbook_id}")
+@app.delete("/api/playbooks/{playbook_id}", dependencies=[Depends(require_auth)])
 async def delete_playbook(playbook_id: int):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
@@ -534,18 +539,18 @@ async def delete_playbook(playbook_id: int):
 # Templates
 # ═════════════════════════════════════════════════════════════════════════════
 
-@app.get("/api/templates")
+@app.get("/api/templates", dependencies=[Depends(require_auth)])
 async def list_templates():
     return await db.get_all_templates()
 
 
-@app.post("/api/templates", status_code=201)
+@app.post("/api/templates", status_code=201, dependencies=[Depends(require_auth)])
 async def create_template(body: TemplateCreate):
     tid = await db.create_template(body.name, body.content, body.description)
     return {"id": tid}
 
 
-@app.get("/api/templates/{template_id}")
+@app.get("/api/templates/{template_id}", dependencies=[Depends(require_auth)])
 async def get_template(template_id: int):
     tpl = await db.get_template(template_id)
     if not tpl:
@@ -553,13 +558,13 @@ async def get_template(template_id: int):
     return tpl
 
 
-@app.put("/api/templates/{template_id}")
+@app.put("/api/templates/{template_id}", dependencies=[Depends(require_auth)])
 async def update_template(template_id: int, body: TemplateUpdate):
     await db.update_template(template_id, body.name, body.content, body.description)
     return {"ok": True}
 
 
-@app.delete("/api/templates/{template_id}")
+@app.delete("/api/templates/{template_id}", dependencies=[Depends(require_auth)])
 async def delete_template(template_id: int):
     await db.delete_template(template_id)
     return {"ok": True}
@@ -569,12 +574,12 @@ async def delete_template(template_id: int):
 # Credentials
 # ═════════════════════════════════════════════════════════════════════════════
 
-@app.get("/api/credentials")
+@app.get("/api/credentials", dependencies=[Depends(require_auth)])
 async def list_credentials():
     return await db.get_all_credentials()
 
 
-@app.post("/api/credentials", status_code=201)
+@app.post("/api/credentials", status_code=201, dependencies=[Depends(require_auth)])
 async def create_credential(body: CredentialCreate):
     cid = await db.create_credential(
         body.name, body.username,
@@ -584,13 +589,13 @@ async def create_credential(body: CredentialCreate):
     return {"id": cid}
 
 
-@app.delete("/api/credentials/{cred_id}")
+@app.delete("/api/credentials/{cred_id}", dependencies=[Depends(require_auth)])
 async def delete_credential(cred_id: int):
     await db.delete_credential(cred_id)
     return {"ok": True}
 
 
-@app.put("/api/credentials/{cred_id}")
+@app.put("/api/credentials/{cred_id}", dependencies=[Depends(require_auth)])
 async def update_credential(cred_id: int, body: CredentialUpdate):
     updates = {}
     if body.name is not None:
@@ -621,12 +626,12 @@ async def update_credential(cred_id: int, body: CredentialUpdate):
 _job_sockets: dict[int, list[WebSocket]] = {}
 
 
-@app.get("/api/jobs")
+@app.get("/api/jobs", dependencies=[Depends(require_auth)])
 async def list_jobs(limit: int = Query(50, ge=1, le=200)):
     return await db.get_all_jobs(limit=limit)
 
 
-@app.get("/api/jobs/{job_id}")
+@app.get("/api/jobs/{job_id}", dependencies=[Depends(require_auth)])
 async def get_job(job_id: int):
     job = await db.get_job(job_id)
     if not job:
@@ -634,32 +639,48 @@ async def get_job(job_id: int):
     return job
 
 
-@app.get("/api/jobs/{job_id}/events")
+@app.get("/api/jobs/{job_id}/events", dependencies=[Depends(require_auth)])
 async def get_job_events(job_id: int):
     return await db.get_job_events(job_id)
 
 
-@app.post("/api/jobs/launch", status_code=201)
+@app.post("/api/jobs/launch", status_code=201, dependencies=[Depends(require_auth)])
 async def launch_job(body: JobLaunch):
     """
     Launch a playbook execution as a background task.
     Returns the job ID immediately. Connect to the WebSocket
     at /ws/jobs/{job_id} to stream real-time output.
     """
+    print(f"[debug] JobLaunch request: playbook_id={body.playbook_id}, host_ids={body.host_ids}, inventory_group_id={body.inventory_group_id}")
+    
     # Validate playbook exists
     playbook = await db.get_playbook(body.playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
 
-    # Validate inventory group
-    group = await db.get_group(body.inventory_group_id)
-    if not group:
-        raise HTTPException(404, "Inventory group not found")
-
-    # Get hosts
-    hosts = await db.get_hosts_for_group(body.inventory_group_id)
-    if not hosts:
-        raise HTTPException(400, "No hosts in inventory group")
+    # Get hosts - either from selected host_ids or from inventory_group_id
+    hosts = []
+    inventory_group_id = None
+    
+    if body.host_ids and len(body.host_ids) > 0:
+        # Use selected host IDs
+        hosts = await db.get_hosts_by_ids(body.host_ids)
+        if not hosts:
+            raise HTTPException(400, "No valid hosts selected")
+        # Use the group_id from the first host (for job record)
+        if hosts:
+            inventory_group_id = hosts[0].get("group_id")
+    elif body.inventory_group_id:
+        # Use all hosts from the group (backward compatibility)
+        group = await db.get_group(body.inventory_group_id)
+        if not group:
+            raise HTTPException(404, "Inventory group not found")
+        hosts = await db.get_hosts_for_group(body.inventory_group_id)
+        if not hosts:
+            raise HTTPException(400, "No hosts in inventory group")
+        inventory_group_id = body.inventory_group_id
+    else:
+        raise HTTPException(400, "Must specify either host_ids or inventory_group_id")
 
     # Get credentials
     credentials = {"username": "netadmin", "password": "cisco123", "secret": "cisco123"}
@@ -687,9 +708,9 @@ async def launch_job(body: JobLaunch):
     if not pb_class:
         raise HTTPException(400, f"No runner registered for '{playbook['filename']}'")
 
-    # Create job record
+    # Create job record (use inventory_group_id from hosts if not provided)
     job_id = await db.create_job(
-        body.playbook_id, body.inventory_group_id,
+        body.playbook_id, inventory_group_id,
         body.credential_id, body.template_id,
         body.dry_run,
     )

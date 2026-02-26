@@ -142,16 +142,35 @@ export async function getJob(jobId) {
     return apiRequest(`/jobs/${jobId}`);
 }
 
-export async function launchJob(playbookId, inventoryGroupId, credentialId = null, templateId = null, dryRun = true) {
+export async function launchJob(playbookId, inventoryGroupId = null, credentialId = null, templateId = null, dryRun = true, hostIds = null) {
+    const body = {
+        playbook_id: playbookId,
+        dry_run: dryRun,
+    };
+    
+    // Only include fields if they have values (Pydantic Optional fields can be omitted)
+    if (hostIds && Array.isArray(hostIds) && hostIds.length > 0) {
+        // Ensure all IDs are integers
+        body.host_ids = hostIds.map(id => parseInt(id)).filter(id => !isNaN(id));
+    }
+    
+    if (inventoryGroupId !== null && inventoryGroupId !== undefined) {
+        body.inventory_group_id = parseInt(inventoryGroupId);
+    }
+    
+    if (credentialId !== null && credentialId !== undefined) {
+        body.credential_id = parseInt(credentialId);
+    }
+    
+    if (templateId !== null && templateId !== undefined) {
+        body.template_id = parseInt(templateId);
+    }
+    
+    console.log('Sending job launch request:', JSON.stringify(body, null, 2));
+    
     return apiRequest('/jobs/launch', {
         method: 'POST',
-        body: {
-            playbook_id: playbookId,
-            inventory_group_id: inventoryGroupId,
-            credential_id: credentialId,
-            template_id: templateId,
-            dry_run: dryRun,
-        },
+        body: body,
     });
 }
 
