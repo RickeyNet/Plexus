@@ -219,15 +219,30 @@ async function loadPlaybooks() {
             return;
         }
 
-        container.innerHTML = playbooks.map(pb => `
+        container.innerHTML = playbooks.map(pb => {
+            // Tags are already parsed as an array by the backend
+            let tags = pb.tags;
+            if (typeof tags === 'string') {
+                try {
+                    tags = JSON.parse(tags);
+                } catch (e) {
+                    tags = [];
+                }
+            }
+            if (!Array.isArray(tags)) {
+                tags = [];
+            }
+            
+            return `
             <div class="card">
                 <div class="card-title">${escapeHtml(pb.name)}</div>
                 <div class="card-description">${escapeHtml(pb.description || '')}</div>
                 <div style="margin-top: 0.5rem;">
-                    ${pb.tags ? JSON.parse(pb.tags).map(tag => `<span class="status-badge" style="margin-right: 0.5rem;">${escapeHtml(tag)}</span>`).join('') : ''}
+                    ${tags.length > 0 ? tags.map(tag => `<span class="status-badge" style="margin-right: 0.5rem;">${escapeHtml(tag)}</span>`).join('') : ''}
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
     } catch (error) {
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
@@ -347,6 +362,9 @@ function closeAllModals() {
     document.getElementById('modal-overlay').classList.remove('active');
     document.getElementById('modal-body').innerHTML = '';
 }
+
+// Expose to window for inline onclick handlers
+window.closeAllModals = closeAllModals;
 
 // Create Group Modal
 window.showCreateGroupModal = function() {
