@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetControl - Network Automation Hub</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Navigation -->
+        <nav class="navbar">
+            <div class="nav-brand">
+                <h1>⚡ NetControl</h1>
+            </div>
+            <div class="nav-links">
+                <a href="#" data-page="dashboard" class="nav-link active">Dashboard</a>
+                <a href="#" data-page="inventory" class="nav-link">Inventory</a>
+                <a href="#" data-page="playbooks" class="nav-link">Playbooks</a>
+                <a href="#" data-page="jobs" class="nav-link">Jobs</a>
+                <a href="#" data-page="templates" class="nav-link">Templates</a>
+                <a href="#" data-page="credentials" class="nav-link">Credentials</a>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Dashboard Page -->
+            <div id="page-dashboard" class="page active">
+                <h2>Dashboard</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Inventory Groups</div>
+                        <div class="stat-value" id="stat-groups">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Hosts</div>
+                        <div class="stat-value" id="stat-hosts">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Playbooks</div>
+                        <div class="stat-value" id="stat-playbooks">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Jobs</div>
+                        <div class="stat-value" id="stat-jobs">-</div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>Recent Jobs</h3>
+                    <div id="recent-jobs" class="jobs-list">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>Inventory Groups</h3>
+                    <div id="groups-overview" class="groups-grid">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Inventory Page -->
+            <div id="page-inventory" class="page">
+                <div class="page-header">
+                    <h2>Inventory Management</h2>
+                    <button class="btn btn-primary" onclick="showCreateGroupModal()">+ New Group</button>
+                </div>
+
+                <div id="inventory-groups" class="groups-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Playbooks Page -->
+            <div id="page-playbooks" class="page">
+                <h2>Playbooks</h2>
+                <div id="playbooks-list" class="playbooks-grid">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Jobs Page -->
+            <div id="page-jobs" class="page">
+                <div class="page-header">
+                    <h2>Job Execution</h2>
+                    <button class="btn btn-primary" onclick="showLaunchJobModal()">Launch Job</button>
+                </div>
+                <div id="jobs-list" class="jobs-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Templates Page -->
+            <div id="page-templates" class="page">
+                <div class="page-header">
+                    <h2>Config Templates</h2>
+                    <button class="btn btn-primary" onclick="showCreateTemplateModal()">+ New Template</button>
+                </div>
+                <div id="templates-list" class="templates-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Credentials Page -->
+            <div id="page-credentials" class="page">
+                <div class="page-header">
+                    <h2>Credentials</h2>
+                    <button class="btn btn-primary" onclick="showCreateCredentialModal()">+ New Credential</button>
+                </div>
+                <div id="credentials-list" class="credentials-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-overlay" class="modal-overlay" onclick="closeAllModals()">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="modal-title">Modal</h3>
+                <button class="modal-close" onclick="closeAllModals()">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Modal content injected here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Job Output Modal -->
+    <div id="job-output-modal" class="modal-overlay" onclick="closeJobOutputModal()">
+        <div class="modal modal-large" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>Job Output</h3>
+                <button class="modal-close" onclick="closeJobOutputModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="job-output" class="job-output"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

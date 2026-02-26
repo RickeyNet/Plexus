@@ -1,0 +1,228 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Sensitive Files - CRITICAL: Never commit these!
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Encryption key (contains Fernet key for credential decryption)
+**/netcontrol.key
+netcontrol.key
+routes/netcontrol.key
+*.key
+
+# Database files (contains encrypted credentials and device inventory)
+**/netcontrol.db
+netcontrol.db
+routes/netcontrol.db
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+*.env
+secrets/
+credentials/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Python
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+virtualenv/
+.venv
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+# Environments
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# mkdocs
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# IDE / Editors
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# VSCode / Cursor
+.vscode/
+.cursor/
+*.code-workspace
+.history/
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.vim/
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OS Files
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Application Specific
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+
+# Config backups (may contain sensitive data)
+*.conf.bak
+*.config.bak
+
+# Job output / execution logs
+job_output/
+executions/
+*.output
+
+# Frontend build (if you add one later, uncomment)
+# netcontrol/static/
+# dist/
+# build/
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Network Device Backups (if stored locally)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Device config backups
+config_backups/
+device_configs/
+*.cfg.backup
+*.config

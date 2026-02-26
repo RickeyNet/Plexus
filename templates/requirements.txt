@@ -1,0 +1,15 @@
+# NetControl Automation Hub - Requirements
+# ─────────────────────────────────────────
+# Core
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+aiosqlite>=0.20.0
+aiofiles>=24.1.0
+cryptography>=43.0.0
+pyyaml>=6.0
+
+# Network automation (install when connecting to real devices)
+netmiko>=4.4.0
+
+# Optional: for future scheduled jobs
+# apscheduler>=3.10.0
