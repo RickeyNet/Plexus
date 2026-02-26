@@ -40,6 +40,76 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
+   Login Screen
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+.login-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: var(--bg);
+}
+
+.login-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 2.5rem;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.login-logo {
+    height: 80px;
+    width: auto;
+    margin-bottom: 1.5rem;
+    border-radius: 8px;
+}
+
+.login-title {
+    font-size: 2rem;
+    color: var(--primary-light);
+    text-align: center;
+    margin-bottom: 0.25rem;
+}
+
+.login-subtitle {
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 2rem;
+    font-size: 0.875rem;
+}
+
+.login-btn {
+    width: 100%;
+    padding: 0.75rem;
+    margin-top: 0.5rem;
+    font-size: 1rem;
+}
+
+.login-error {
+    background: rgba(201, 122, 122, 0.15);
+    color: #c97a7a;
+    padding: 0.75rem;
+    border-radius: 0.375rem;
+    margin-bottom: 1rem;
+    border: 1px solid rgba(201, 122, 122, 0.25);
+    font-size: 0.875rem;
+    text-align: center;
+}
+
+.nav-user {
+    border-left: 1px solid var(--border);
+    margin-left: 0.5rem;
+    padding-left: 1.5rem !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
    Layout
    ═══════════════════════════════════════════════════════════════════════════════ */
 

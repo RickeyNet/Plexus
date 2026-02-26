@@ -8,11 +8,32 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <div class="app-container">
+    <!-- Login Screen -->
+    <div id="login-screen" class="login-screen">
+        <div class="login-card">
+            <img src="/static/img/logo.png" alt="Plexus Logo" class="login-logo">
+            <h1 class="login-title">Plexus</h1>
+            <p class="login-subtitle">Network Automation Hub</p>
+            <form id="login-form">
+                <div class="form-group">
+                    <label class="form-label">Username</label>
+                    <input type="text" class="form-input" id="login-username" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-input" id="login-password" required autocomplete="current-password">
+                </div>
+                <div id="login-error" class="login-error" style="display: none;"></div>
+                <button type="submit" class="btn btn-primary login-btn">Sign In</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="app-container" id="app-container" style="display: none;">
         <!-- Navigation -->
         <nav class="navbar">
             <div class="nav-brand">
-                <img src="/static/img/logo.png" alt="Plexus" class="nav-logo">
+                <img src="/static/img/logo.png" alt="Plexus Logo" class="nav-logo">
                 <h1>Plexus</h1>
             </div>
             <div class="nav-links">
@@ -22,6 +43,7 @@
                 <a href="#" data-page="jobs" class="nav-link">Jobs</a>
                 <a href="#" data-page="templates" class="nav-link">Templates</a>
                 <a href="#" data-page="credentials" class="nav-link">Credentials</a>
+                <a href="#" class="nav-link nav-user" id="nav-user" onclick="showUserMenu()">admin</a>
             </div>
         </nav>
 
@@ -141,6 +163,18 @@
             </div>
             <div class="modal-body">
                 <div id="job-output" class="job-output"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Menu Modal -->
+    <div id="user-menu-overlay" class="modal-overlay" onclick="closeUserMenu()">
+        <div class="modal confirm-modal" onclick="event.stopPropagation()">
+            <h3>Account</h3>
+            <p class="confirm-message" id="user-menu-name"></p>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem;">
+                <button class="btn btn-secondary" onclick="showChangePasswordModal()">Change Password</button>
+                <button class="btn btn-danger" onclick="doLogout()">Sign Out</button>
             </div>
         </div>
     </div>

@@ -1,4 +1,4 @@
-# Plexus Automation Hub - Requirements
+# NetControl Automation Hub - Requirements
 # ─────────────────────────────────────────
 # Core
 fastapi>=0.115.0
@@ -7,6 +7,8 @@ aiosqlite>=0.20.0
 aiofiles>=24.1.0
 cryptography>=43.0.0
 pyyaml>=6.0
+itsdangerous>=2.2.0
+python-multipart>=0.0.9
 
 # Network automation (install when connecting to real devices)
 netmiko>=4.4.0

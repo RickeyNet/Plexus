@@ -34,6 +34,29 @@ async function apiRequest(endpoint, options = {}) {
     }
 }
 
+// Auth
+export async function login(username, password) {
+    return apiRequest('/auth/login', {
+        method: 'POST',
+        body: { username, password },
+    });
+}
+
+export async function logout() {
+    return apiRequest('/auth/logout', { method: 'POST' });
+}
+
+export async function getAuthStatus() {
+    return apiRequest('/auth/status');
+}
+
+export async function changePassword(currentPassword, newPassword) {
+    return apiRequest('/auth/change-password', {
+        method: 'POST',
+        body: { current_password: currentPassword, new_password: newPassword },
+    });
+}
+
 // Dashboard
 export async function getDashboard() {
     return apiRequest('/dashboard');

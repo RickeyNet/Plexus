@@ -953,10 +953,125 @@ function showSuccess(message) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Authentication UI
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let currentUser = null;
+
+function showLoginScreen() {
+    document.getElementById('login-screen').style.display = 'flex';
+    document.getElementById('app-container').style.display = 'none';
+    document.getElementById('login-error').style.display = 'none';
+    document.getElementById('login-username').value = '';
+    document.getElementById('login-password').value = '';
+    document.getElementById('login-username').focus();
+}
+
+function showApp(username) {
+    currentUser = username;
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app-container').style.display = 'flex';
+    document.getElementById('nav-user').textContent = username;
+    initNavigation();
+    loadPageData('dashboard');
+}
+
+function initLoginForm() {
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('login-username').value;
+        const password = document.getElementById('login-password').value;
+        const errorEl = document.getElementById('login-error');
+        errorEl.style.display = 'none';
+
+        try {
+            const result = await api.login(username, password);
+            showApp(result.username);
+        } catch (error) {
+            errorEl.textContent = error.message || 'Invalid username or password';
+            errorEl.style.display = 'block';
+        }
+    });
+}
+
+window.showUserMenu = function() {
+    document.getElementById('user-menu-name').textContent = `Signed in as ${currentUser}`;
+    document.getElementById('user-menu-overlay').classList.add('active');
+};
+
+window.closeUserMenu = function() {
+    document.getElementById('user-menu-overlay').classList.remove('active');
+};
+
+window.doLogout = async function() {
+    try {
+        await api.logout();
+    } catch (e) {
+        // ignore
+    }
+    closeUserMenu();
+    showLoginScreen();
+};
+
+window.showChangePasswordModal = function() {
+    closeUserMenu();
+    showModal('Change Password', `
+        <form id="change-password-form">
+            <div class="form-group">
+                <label class="form-label">Current Password</label>
+                <input type="password" class="form-input" name="current_password" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">New Password</label>
+                <input type="password" class="form-input" name="new_password" required minlength="6">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Confirm New Password</label>
+                <input type="password" class="form-input" name="confirm_password" required minlength="6">
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Change Password</button>
+            </div>
+        </form>
+    `);
+
+    document.getElementById('change-password-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const newPass = formData.get('new_password');
+        const confirmPass = formData.get('confirm_password');
+
+        if (newPass !== confirmPass) {
+            showError('New passwords do not match');
+            return;
+        }
+
+        try {
+            await api.changePassword(formData.get('current_password'), newPass);
+            closeAllModals();
+            showSuccess('Password changed successfully');
+        } catch (error) {
+            showError(`Failed to change password: ${error.message}`);
+        }
+    });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Initialize
 // ═══════════════════════════════════════════════════════════════════════════════
 
-document.addEventListener('DOMContentLoaded', () => {
-    initNavigation();
-    loadPageData('dashboard');
+document.addEventListener('DOMContentLoaded', async () => {
+    initLoginForm();
+
+    try {
+        const status = await api.getAuthStatus();
+        if (status.authenticated) {
+            showApp(status.username);
+        } else {
+            showLoginScreen();
+        }
+    } catch (e) {
+        showLoginScreen();
+    }
 });

@@ -8,6 +8,16 @@ netcontrol.key
 routes/netcontrol.key
 *.key
 
+# Session signing key
+**/session.key
+
+# Auth credentials (contains password hashes)
+**/auth.json
+
+# SSL certificates
+**/certs/
+*.pem
+
 # Database files (contains encrypted credentials and device inventory)
 **/netcontrol.db
 netcontrol.db

@@ -3,24 +3,26 @@ app.py — Plexus FastAPI Application
 
 REST API for inventory, playbooks, templates, credentials, and jobs.
 WebSocket endpoint for real-time job output streaming.
-Serves the React frontend as static files.
+Session-based authentication with signed cookies.
 """
 
 import sys
 import os
 import json
 import asyncio
+import hashlib
+import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request, Depends, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 # Ensure project root is on path for imports
-# Get project root (parent of netcontrol directory)
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
@@ -30,6 +32,105 @@ from routes.runner import get_playbook_class, execute_playbook, LogEvent
 
 # Auto-register all playbooks
 from templates import playbooks  # noqa: F401
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Authentication
+# ═════════════════════════════════════════════════════════════════════════════
+
+AUTH_FILE = os.path.join(os.path.dirname(__file__), "..", "routes", "auth.json")
+SECRET_KEY_FILE = os.path.join(os.path.dirname(__file__), "..", "routes", "session.key")
+SESSION_MAX_AGE = 86400  # 24 hours
+
+
+def _load_or_create_secret_key() -> str:
+    if os.path.isfile(SECRET_KEY_FILE):
+        with open(SECRET_KEY_FILE, "r") as f:
+            return f.read().strip()
+    key = secrets.token_hex(32)
+    with open(SECRET_KEY_FILE, "w") as f:
+        f.write(key)
+    try:
+        os.chmod(SECRET_KEY_FILE, 0o600)
+    except OSError:
+        pass
+    return key
+
+
+_secret_key = _load_or_create_secret_key()
+_serializer = URLSafeTimedSerializer(_secret_key)
+
+
+def _hash_password(password: str, salt: str = "") -> str:
+    return hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+
+
+def _load_users() -> dict:
+    if os.path.isfile(AUTH_FILE):
+        with open(AUTH_FILE, "r") as f:
+            return json.load(f)
+    # Create default admin user on first run
+    salt = secrets.token_hex(16)
+    users = {
+        "admin": {
+            "password_hash": _hash_password("netcontrol", salt),
+            "salt": salt,
+            "role": "admin"
+        }
+    }
+    with open(AUTH_FILE, "w") as f:
+        json.dump(users, f, indent=2)
+    try:
+        os.chmod(AUTH_FILE, 0o600)
+    except OSError:
+        pass
+    print("[auth] Created default user: admin / netcontrol  — CHANGE THIS PASSWORD!")
+    return users
+
+
+def _save_users(users: dict):
+    with open(AUTH_FILE, "w") as f:
+        json.dump(users, f, indent=2)
+
+
+def verify_user(username: str, password: str) -> bool:
+    users = _load_users()
+    user = users.get(username)
+    if not user:
+        return False
+    return _hash_password(password, user["salt"]) == user["password_hash"]
+
+
+def create_session_token(username: str) -> str:
+    return _serializer.dumps({"user": username})
+
+
+def verify_session_token(token: str) -> str | None:
+    try:
+        data = _serializer.loads(token, max_age=SESSION_MAX_AGE)
+        return data.get("user")
+    except (BadSignature, SignatureExpired):
+        return None
+
+
+PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/status", "/favicon.ico", "/docs", "/openapi.json", "/redoc"}
+
+
+async def require_auth(request: Request):
+    """Dependency that checks for a valid session cookie."""
+    path = request.url.path
+    if path.startswith("/static/"):
+        return None
+    if path in PUBLIC_PATHS:
+        return None
+
+    token = request.cookies.get("session")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    username = verify_session_token(token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Session expired")
+    return username
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -48,7 +149,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Plexus API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Plexus API", version="1.0.0", lifespan=lifespan, dependencies=[Depends(require_auth)])
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,6 +158,70 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Auth Routes
+# ═════════════════════════════════════════════════════════════════════════════
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginRequest):
+    if not verify_user(body.username, body.password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_session_token(body.username)
+    response = JSONResponse({"ok": True, "username": body.username})
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        samesite="strict",
+        max_age=SESSION_MAX_AGE,
+        secure=False,  # Set True when using HTTPS
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+async def logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("session")
+    return response
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    token = request.cookies.get("session")
+    if not token:
+        return {"authenticated": False}
+    username = verify_session_token(token)
+    if not username:
+        return {"authenticated": False}
+    return {"authenticated": True, "username": username}
+
+
+@app.post("/api/auth/change-password")
+async def change_password(body: ChangePasswordRequest, request: Request):
+    token = request.cookies.get("session")
+    username = verify_session_token(token) if token else None
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not verify_user(username, body.current_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    users = _load_users()
+    salt = secrets.token_hex(16)
+    users[username]["password_hash"] = _hash_password(body.new_password, salt)
+    users[username]["salt"] = salt
+    _save_users(users)
+    return {"ok": True}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
