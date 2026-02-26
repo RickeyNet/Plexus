@@ -345,20 +345,92 @@ async function loadCredentials() {
         }
 
         container.innerHTML = credentials.map(cred => `
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title">${escapeHtml(cred.name)}</div>
-                        <div class="card-description">Username: ${escapeHtml(cred.username)}</div>
+            <div class="credential-card" data-cred-id="${cred.id}">
+                <div class="credential-fields">
+                    <div class="credential-field">
+                        <label class="credential-label">Name</label>
+                        <input type="text" class="credential-input" data-field="name" value="${escapeHtml(cred.name)}">
                     </div>
+                    <div class="credential-field">
+                        <label class="credential-label">Username</label>
+                        <input type="text" class="credential-input" data-field="username" value="${escapeHtml(cred.username)}">
+                    </div>
+                    <div class="credential-field">
+                        <label class="credential-label">Password</label>
+                        <input type="password" class="credential-input" data-field="password" placeholder="unchanged">
+                    </div>
+                    <div class="credential-field">
+                        <label class="credential-label">Secret</label>
+                        <input type="password" class="credential-input" data-field="secret" placeholder="unchanged">
+                    </div>
+                </div>
+                <div class="credential-actions">
+                    <button class="btn btn-primary btn-sm credential-save-btn" style="display:none;" onclick="saveCredentialInline(${cred.id})">Save</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteCredential(${cred.id})">Delete</button>
                 </div>
             </div>
         `).join('');
+
+        initCredentialChangeTracking();
     } catch (error) {
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
 }
+
+function initCredentialChangeTracking() {
+    document.querySelectorAll('.credential-card').forEach(card => {
+        const inputs = card.querySelectorAll('.credential-input');
+        const saveBtn = card.querySelector('.credential-save-btn');
+        const originals = {};
+        inputs.forEach(input => {
+            originals[input.dataset.field] = input.value;
+        });
+        card._originals = originals;
+
+        inputs.forEach(input => {
+            input.addEventListener('input', () => {
+                let changed = false;
+                inputs.forEach(inp => {
+                    if (inp.dataset.field === 'password' || inp.dataset.field === 'secret') {
+                        if (inp.value.length > 0) changed = true;
+                    } else {
+                        if (inp.value !== originals[inp.dataset.field]) changed = true;
+                    }
+                });
+                saveBtn.style.display = changed ? '' : 'none';
+            });
+        });
+    });
+}
+
+window.saveCredentialInline = async function(credentialId) {
+    const card = document.querySelector(`.credential-card[data-cred-id="${credentialId}"]`);
+    if (!card) return;
+
+    const data = {};
+    card.querySelectorAll('.credential-input').forEach(input => {
+        const field = input.dataset.field;
+        if (field === 'password' || field === 'secret') {
+            if (input.value) data[field] = input.value;
+        } else {
+            data[field] = input.value;
+        }
+    });
+
+    const saveBtn = card.querySelector('.credential-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+        await api.updateCredential(credentialId, data);
+        showSuccess('Credential updated successfully');
+        await loadCredentials();
+    } catch (error) {
+        showError(`Failed to update credential: ${error.message}`);
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+    }
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Modals
@@ -699,6 +771,7 @@ window.createCredential = async function(e) {
         showError(`Failed to create credential: ${error.message}`);
     }
 };
+
 
 // Custom confirm dialog
 function showConfirm(title, message) {

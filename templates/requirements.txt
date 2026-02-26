@@ -1,4 +1,4 @@
-# NetControl Automation Hub - Requirements
+# Plexus Automation Hub - Requirements
 # ─────────────────────────────────────────
 # Core
 fastapi>=0.115.0

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run.py — Start the NetControl server.
+run.py — Start the Plexus server.
 
 Usage:
     python run.py              # Starts on port 8080
@@ -17,7 +17,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="NetControl Automation Hub")
+    parser = argparse.ArgumentParser(description="Plexus Automation Hub")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
     parser.add_argument("--port", type=int, default=8080, help="Port number")
     parser.add_argument("--reload", action="store_true", help="Auto-reload on changes")
@@ -25,7 +25,7 @@ if __name__ == "__main__":
 
     print(f"""
 ╔══════════════════════════════════════════════════╗
-║           NetControl Automation Hub              ║
+║             Plexus Automation Hub                ║
 ║                                                  ║
 ║   API:       http://localhost:{args.port}/api           ║
 ║   Frontend:  http://localhost:{args.port}/              ║

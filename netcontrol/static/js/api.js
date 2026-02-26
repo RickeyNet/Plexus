@@ -1,5 +1,5 @@
 /**
- * API Client for NetControl
+ * API Client for Plexus
  * Handles all HTTP requests to the backend API
  */
 
@@ -158,6 +158,13 @@ export async function createCredential(name, username, password, secret = '') {
     return apiRequest('/credentials', {
         method: 'POST',
         body: { name, username, password, secret },
+    });
+}
+
+export async function updateCredential(credentialId, data) {
+    return apiRequest(`/credentials/${credentialId}`, {
+        method: 'PUT',
+        body: data,
     });
 }
 

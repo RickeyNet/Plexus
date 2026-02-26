@@ -1,5 +1,5 @@
 """
-app.py — NetControl FastAPI Application
+app.py — Plexus FastAPI Application
 
 REST API for inventory, playbooks, templates, credentials, and jobs.
 WebSocket endpoint for real-time job output streaming.
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="NetControl API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Plexus API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -98,6 +98,14 @@ class CredentialCreate(BaseModel):
     username: str
     password: str
     secret: str = ""
+
+
+class CredentialUpdate(BaseModel):
+    name: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    secret: Optional[str] = None
+
 
 class JobLaunch(BaseModel):
     playbook_id: int
@@ -252,6 +260,29 @@ async def create_credential(body: CredentialCreate):
 @app.delete("/api/credentials/{cred_id}")
 async def delete_credential(cred_id: int):
     await db.delete_credential(cred_id)
+    return {"ok": True}
+
+
+@app.put("/api/credentials/{cred_id}")
+async def update_credential(cred_id: int, body: CredentialUpdate):
+    updates = {}
+    if body.name is not None:
+        updates["name"] = body.name
+    if body.username is not None:
+        updates["username"] = body.username
+    if body.password is not None and body.password != "":
+        updates["enc_password"] = encrypt(body.password)
+    if body.secret is not None and body.secret != "":
+        updates["enc_secret"] = encrypt(body.secret)
+    if not updates:
+        return {"ok": True}
+    await db.update_credential(
+        cred_id,
+        name=updates.get("name"),
+        username=updates.get("username"),
+        enc_password=updates.get("enc_password"),
+        enc_secret=updates.get("enc_secret"),
+    )
     return {"ok": True}
 
 

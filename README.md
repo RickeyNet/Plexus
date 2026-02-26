@@ -1,4 +1,4 @@
-# NetControl — Network Automation Hub
+# Plexus — Network Automation Hub
 
 A Python-first network automation control center inspired by Ansible Tower / AWX.
 Manage device inventories, run automation playbooks, store config templates, and

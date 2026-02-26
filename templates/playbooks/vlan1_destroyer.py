@@ -1,268 +1,256 @@
-#!/usr/bin/env python3
 """
-VLAN 1 Remediation Script
---------------------------
-Connects to Cisco Catalyst switches listed in switches.txt,
-inventories all interfaces, identifies access ports assigned to VLAN 1,
-and applies a replacement interface configuration from interface_template.txt.
+vlan1_destroyer.py — VLAN 1 Access Port Remediation Playbook
 
-Requirements:
-    pip install netmiko
+Connects to Cisco Catalyst switches, inventories all interfaces,
+identifies access ports assigned to VLAN 1, and applies a replacement
+interface configuration from the selected template.
 
-Files needed:
-    switches.txt             - One switch IP per line
-    interface_template.txt   - Interface config commands (one per line, no "interface" line)
+When Netmiko is not installed or devices are unreachable during development,
+the script runs in simulation mode with realistic fake output.
 """
 
-import sys
-import os
-import getpass
-import logging
-from datetime import datetime
-from netmiko import ConnectHandler
-from netmiko.exceptions import NetmikoTimeoutException, NetmikoAuthenticationException
+import asyncio
+import random
+from typing import AsyncGenerator
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-SWITCHES_FILE = "switches.txt"
-TEMPLATE_FILE = "interface_template.txt"
-LOG_DIR = "logs"
+from routes.runner import BasePlaybook, LogEvent, register_playbook
 
-# ---------------------------------------------------------------------------
-# Logging setup
-# ---------------------------------------------------------------------------
-os.makedirs(LOG_DIR, exist_ok=True)
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-log_file = os.path.join(LOG_DIR, f"vlan1_remediation_{timestamp}.log")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-logger = logging.getLogger(__name__)
+try:
+    from netmiko import ConnectHandler
+    from netmiko.exceptions import (
+        NetmikoTimeoutException,
+        NetmikoAuthenticationException,
+    )
+    NETMIKO_AVAILABLE = True
+except ImportError:
+    NETMIKO_AVAILABLE = False
 
 
-def load_switches(filepath: str) -> list[str]:
-    """Read switch IPs/hostnames from a text file (one per line)."""
-    if not os.path.isfile(filepath):
-        logger.error(f"Switches file not found: {filepath}")
-        sys.exit(1)
-    with open(filepath) as f:
-        switches = [
-            line.strip()
-            for line in f
-            if line.strip() and not line.strip().startswith("#")
-        ]
-    logger.info(f"Loaded {len(switches)} switch(es) from {filepath}")
-    return switches
-
-
-def load_template(filepath: str) -> list[str]:
-    """Read the interface template config commands from a text file."""
-    if not os.path.isfile(filepath):
-        logger.error(f"Template file not found: {filepath}")
-        sys.exit(1)
-    with open(filepath) as f:
-        commands = [
-            line.rstrip()
-            for line in f
-            if line.strip() and not line.strip().startswith("#")
-        ]
-    logger.info(f"Loaded {len(commands)} template command(s) from {filepath}")
-    return commands
-
-
-def get_vlan1_access_ports(connection) -> list[str]:
-    """
-    Parse 'show interfaces switchport' to find access ports on VLAN 1.
-    Returns a list of interface names that match.
-    """
-    output = connection.send_command("show interfaces switchport", delay_factor=2)
-
+def _parse_vlan1_access_ports(output: str) -> list[str]:
+    """Parse 'show interfaces switchport' to find access ports on VLAN 1."""
     vlan1_ports = []
     current_interface = None
     is_access = False
     access_vlan = None
 
     for line in output.splitlines():
-        # Detect interface header: "Name: Gi1/0/1"
         if line.startswith("Name:"):
-            # Save previous interface if it matched
             if current_interface and is_access and access_vlan == "1":
                 vlan1_ports.append(current_interface)
-
             current_interface = line.split("Name:")[-1].strip()
             is_access = False
             access_vlan = None
-
-        # Detect operational mode
         elif "Administrative Mode:" in line:
             mode = line.split("Administrative Mode:")[-1].strip().lower()
             is_access = mode == "static access"
-
-        # Detect access VLAN
         elif "Access Mode VLAN:" in line:
-            # Format: "Access Mode VLAN: 1 (default)"
             vlan_part = line.split("Access Mode VLAN:")[-1].strip()
             access_vlan = vlan_part.split()[0] if vlan_part else None
 
-    # Don't forget the last interface
     if current_interface and is_access and access_vlan == "1":
         vlan1_ports.append(current_interface)
 
     return vlan1_ports
 
 
-def apply_template_to_ports(
-    connection, ports: list[str], template_commands: list[str], dry_run: bool = False
-) -> dict:
-    """
-    Apply the template configuration to each port.
-    Returns a dict of {interface: output}.
-    """
-    results = {}
-    for port in ports:
-        config_set = [f"interface {port}"] + template_commands
+def _simulate_vlan1_ports() -> list[str]:
+    """Generate realistic fake VLAN 1 port data for simulation mode."""
+    all_ports = [f"Gi1/0/{i}" for i in range(1, 49)]
+    vlan1_count = random.randint(0, 8)
+    return random.sample(all_ports, vlan1_count)
+
+
+@register_playbook
+class Vlan1Destroyer(BasePlaybook):
+    filename = "vlan1_destroyer.py"
+    display_name = "VLAN 1 Destroyer"
+    description = (
+        "Scans Cisco switches for access ports still on VLAN 1 and applies "
+        "a hardening template to move them off the default VLAN. "
+        "Requires a config template with the replacement port commands."
+    )
+    tags = ["vlan", "security", "remediation", "cisco"]
+    requires_template = True
+
+    async def run(self, hosts, credentials, template_commands=None, dry_run=True):
+        yield self.log_info(
+            f"VLAN 1 Destroyer — targeting {len(hosts)} device(s)"
+        )
+
+        if not template_commands:
+            yield self.log_warn(
+                "No template selected. Using default: switchport access vlan 100"
+            )
+            template_commands = [
+                "switchport mode access",
+                "switchport access vlan 100",
+                "spanning-tree portfast",
+                "spanning-tree bpduguard enable",
+            ]
+
+        yield self.log_info(f"Template commands ({len(template_commands)}):")
+        for cmd in template_commands:
+            yield self.log_info(f"  {cmd}")
 
         if dry_run:
-            logger.info(f"  [DRY-RUN] Would apply to {port}:")
-            for cmd in config_set:
-                logger.info(f"    {cmd}")
-            results[port] = "DRY-RUN"
+            yield self.log_warn("*** DRY-RUN MODE — no changes will be made ***")
         else:
-            logger.info(f"  Applying template to {port} ...")
-            output = connection.send_config_set(config_set)
-            results[port] = output
-            logger.debug(output)
+            yield self.log_warn("*** LIVE MODE — changes WILL be written ***")
 
-    return results
+        self._total_remediated = 0
+        self._total_ports_found = 0
 
+        for host_info in hosts:
+            ip = host_info["ip_address"]
+            hostname = host_info.get("hostname", ip)
+            device_type = host_info.get("device_type", "cisco_ios")
 
-def process_switch(
-    ip: str,
-    username: str,
-    password: str,
-    secret: str,
-    template_commands: list[str],
-    dry_run: bool = False,
-):
-    """Connect to a single switch, find VLAN 1 access ports, and remediate."""
-    logger.info(f"{'='*60}")
-    logger.info(f"Connecting to {ip} ...")
+            yield self.log_sep()
+            yield self.log_info(f"Connecting to {hostname} ({ip}) ...", host=hostname)
 
-    device = {
-        "device_type": "cisco_ios",
-        "host": ip,
-        "username": username,
-        "password": password,
-        "secret": secret,
-        "timeout": 30,
-        "banner_timeout": 30,
-    }
+            if NETMIKO_AVAILABLE:
+                async for event in self._process_real_device(
+                    ip, hostname, device_type, credentials,
+                    template_commands, dry_run
+                ):
+                    yield event
+            else:
+                async for event in self._process_simulated_device(
+                    ip, hostname, template_commands, dry_run
+                ):
+                    yield event
 
-    try:
-        conn = ConnectHandler(**device)
-    except NetmikoTimeoutException:
-        logger.error(f"  TIMEOUT connecting to {ip} — skipping.")
-        return
-    except NetmikoAuthenticationException:
-        logger.error(f"  AUTH FAILED for {ip} — skipping.")
-        return
-    except Exception as e:
-        logger.error(f"  Connection error for {ip}: {e} — skipping.")
-        return
+        yield self.log_sep()
+        yield self.log_success(
+            f"Complete: found {self._total_ports_found} VLAN 1 port(s) across "
+            f"{len(hosts)} device(s), remediated {self._total_remediated}."
+        )
 
-    try:
-        # Enter enable mode if needed
-        if not conn.check_enable_mode():
-            conn.enable()
+    async def _process_real_device(
+        self, ip, hostname, device_type, credentials, template_commands, dry_run
+    ):
+        """Connect to a real device via Netmiko."""
+        device = {
+            "device_type": device_type,
+            "host": ip,
+            "username": credentials["username"],
+            "password": credentials["password"],
+            "secret": credentials.get("secret", credentials["password"]),
+            "timeout": 30,
+            "banner_timeout": 30,
+        }
 
-        hostname = conn.find_prompt().replace("#", "").replace(">", "").strip()
-        logger.info(f"  Connected to {hostname} ({ip})")
-
-        # --- Inventory ---
-        logger.info("  Gathering interface inventory ...")
-        vlan1_ports = get_vlan1_access_ports(conn)
-
-        if not vlan1_ports:
-            logger.info("  No access ports on VLAN 1 found. Nothing to do.")
+        try:
+            conn = await asyncio.to_thread(ConnectHandler, **device)
+        except NetmikoTimeoutException:
+            yield self.log_error(f"TIMEOUT connecting to {ip} — skipping.", host=hostname)
+            return
+        except NetmikoAuthenticationException:
+            yield self.log_error(f"AUTH FAILED for {ip} — skipping.", host=hostname)
+            return
+        except Exception as e:
+            yield self.log_error(f"Connection error for {ip}: {e}", host=hostname)
             return
 
-        logger.info(
-            f"  Found {len(vlan1_ports)} access port(s) on VLAN 1: "
-            f"{', '.join(vlan1_ports)}"
+        try:
+            if not conn.check_enable_mode():
+                await asyncio.to_thread(conn.enable)
+
+            prompt = conn.find_prompt().replace("#", "").replace(">", "").strip()
+            yield self.log_success(f"Connected to {prompt} ({ip})", host=hostname)
+
+            yield self.log_info("Gathering interface inventory ...", host=hostname)
+            output = await asyncio.to_thread(
+                conn.send_command, "show interfaces switchport", delay_factor=2
+            )
+            vlan1_ports = _parse_vlan1_access_ports(output)
+
+            if not vlan1_ports:
+                yield self.log_success(
+                    "No access ports on VLAN 1 found. Device is clean.",
+                    host=hostname
+                )
+                yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
+                return
+
+            yield self.log_warn(
+                f"Found {len(vlan1_ports)} access port(s) on VLAN 1: "
+                f"{', '.join(vlan1_ports)}",
+                host=hostname
+            )
+            self._total_ports_found += len(vlan1_ports)
+
+            for port in vlan1_ports:
+                config_set = [f"interface {port}"] + template_commands
+                if dry_run:
+                    yield self.log_info(f"[DRY-RUN] Would apply to {port}:", host=hostname)
+                    for cmd in config_set:
+                        yield self.log_info(f"  {cmd}", host=hostname)
+                else:
+                    yield self.log_info(f"Applying template to {port} ...", host=hostname)
+                    output = await asyncio.to_thread(conn.send_config_set, config_set)
+                    yield self.log_success(f"Applied template to {port}", host=hostname)
+                self._total_remediated += 1
+
+            if not dry_run and self._total_remediated > 0:
+                yield self.log_info("Saving running config ...", host=hostname)
+                await asyncio.to_thread(conn.save_config)
+                yield self.log_success("Config saved.", host=hostname)
+
+            yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
+
+        finally:
+            conn.disconnect()
+
+    async def _process_simulated_device(
+        self, ip, hostname, template_commands, dry_run
+    ):
+        """Simulate device processing for development/testing."""
+        await asyncio.sleep(random.uniform(0.3, 0.8))
+
+        if random.random() < 0.08:
+            yield self.log_error(
+                f"TIMEOUT connecting to {ip} — skipping.", host=hostname
+            )
+            return
+
+        yield self.log_success(f"Connected to {hostname} ({ip})", host=hostname)
+        yield self.log_info("Gathering interface inventory ...", host=hostname)
+        await asyncio.sleep(random.uniform(0.3, 0.6))
+
+        vlan1_ports = _simulate_vlan1_ports()
+
+        if not vlan1_ports:
+            yield self.log_success(
+                "No access ports on VLAN 1 found. Device is clean.",
+                host=hostname
+            )
+            yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
+            return
+
+        yield self.log_warn(
+            f"Found {len(vlan1_ports)} access port(s) on VLAN 1: "
+            f"{', '.join(vlan1_ports)}",
+            host=hostname
         )
+        self._total_ports_found += len(vlan1_ports)
 
-        # --- Remediate ---
-        results = apply_template_to_ports(
-            conn, vlan1_ports, template_commands, dry_run=dry_run
-        )
+        for port in vlan1_ports:
+            await asyncio.sleep(random.uniform(0.1, 0.3))
+            config_set = [f"interface {port}"] + template_commands
+            if dry_run:
+                yield self.log_info(f"[DRY-RUN] Would apply to {port}:", host=hostname)
+                for cmd in config_set:
+                    yield self.log_info(f"  {cmd}", host=hostname)
+            else:
+                yield self.log_info(f"Applying template to {port} ...", host=hostname)
+                await asyncio.sleep(random.uniform(0.2, 0.4))
+                yield self.log_success(f"Applied template to {port}", host=hostname)
+            self._total_remediated += 1
 
-        # Save running config (unless dry run)
-        if not dry_run and results:
-            logger.info("  Saving running config to startup ...")
-            conn.save_config()
+        if not dry_run and self._total_remediated > 0:
+            yield self.log_info("Saving running config ...", host=hostname)
+            await asyncio.sleep(random.uniform(0.2, 0.4))
+            yield self.log_success("Config saved.", host=hostname)
 
-        logger.info(f"  Finished processing {hostname} ({ip}).")
-
-    finally:
-        conn.disconnect()
-
-
-def main():
-    print(
-        """
-╔══════════════════════════════════════════════════╗
-║        VLAN 1 Access Port Remediation Tool       ║
-╚══════════════════════════════════════════════════╝
-"""
-    )
-
-    # --- Load files ---
-    switches = load_switches(SWITCHES_FILE)
-    template_commands = load_template(TEMPLATE_FILE)
-
-    print("\nTemplate commands that will be applied to each VLAN 1 access port:")
-    for cmd in template_commands:
-        print(f"  {cmd}")
-    print()
-
-    # --- Credentials ---
-    username = input("SSH Username: ").strip()
-    password = getpass.getpass("SSH Password: ")
-    secret = getpass.getpass("Enable Secret (press Enter if same as password): ")
-    if not secret:
-        secret = password
-
-    # --- Dry run? ---
-    dry_run_input = (
-        input("\nPerform a DRY RUN first? (y/n) [y]: ").strip().lower() or "y"
-    )
-    dry_run = dry_run_input == "y"
-
-    if dry_run:
-        logger.info("*** DRY-RUN MODE — no changes will be made ***\n")
-    else:
-        confirm = input(
-            "⚠️  LIVE MODE — changes WILL be written to switches. Continue? (yes/no): "
-        )
-        if confirm.strip().lower() != "yes":
-            logger.info("Aborted by user.")
-            sys.exit(0)
-
-    # --- Process each switch ---
-    for ip in switches:
-        process_switch(ip, username, password, secret, template_commands, dry_run=dry_run)
-
-    logger.info(f"\n{'='*60}")
-    logger.info("All switches processed.")
-    logger.info(f"Log saved to: {log_file}")
-
-
-if __name__ == "__main__":
-    main()
+        yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)

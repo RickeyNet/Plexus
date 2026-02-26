@@ -1,5 +1,5 @@
 """
-database.py — Async SQLite database layer for NetControl.
+database.py — Async SQLite database layer for Plexus.
 
 Tables:
     inventory_groups  — device groups (name, description)
@@ -394,6 +394,43 @@ async def delete_credential(cred_id: int):
     db = await get_db()
     try:
         await db.execute("DELETE FROM credentials WHERE id = ?", (cred_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_credential(
+    cred_id: int,
+    *,
+    name: str | None = None,
+    username: str | None = None,
+    enc_password: str | None = None,
+    enc_secret: str | None = None,
+):
+    """Update credential fields. Omit or None means leave unchanged."""
+    updates = []
+    args = []
+    if name is not None:
+        updates.append("name = ?")
+        args.append(name)
+    if username is not None:
+        updates.append("username = ?")
+        args.append(username)
+    if enc_password is not None:
+        updates.append("password = ?")
+        args.append(enc_password)
+    if enc_secret is not None:
+        updates.append("secret = ?")
+        args.append(enc_secret)
+    if not updates:
+        return
+    args.append(cred_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE credentials SET {', '.join(updates)} WHERE id = ?",
+            tuple(args),
+        )
         await db.commit()
     finally:
         await db.close()
