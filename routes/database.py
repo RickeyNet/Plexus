@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS playbooks (
     filename    TEXT    NOT NULL,
     description TEXT    DEFAULT '',
     tags        TEXT    DEFAULT '[]',
-    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    content     TEXT    DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS templates (
@@ -108,6 +110,31 @@ async def init_db():
     try:
         await db.executescript(SCHEMA)
         await db.commit()
+        
+        # Migration: Add content and updated_at columns to playbooks if they don't exist
+        try:
+            cursor = await db.execute("PRAGMA table_info(playbooks)")
+            columns = [row[1] for row in await cursor.fetchall()]
+            
+            if 'content' not in columns:
+                print("[migration] Adding 'content' column to playbooks table...")
+                await db.execute("ALTER TABLE playbooks ADD COLUMN content TEXT DEFAULT ''")
+                await db.commit()
+                print("[migration] Added 'content' column successfully")
+            
+            if 'updated_at' not in columns:
+                print("[migration] Adding 'updated_at' column to playbooks table...")
+                # SQLite doesn't allow non-constant defaults, so add column without default
+                await db.execute("ALTER TABLE playbooks ADD COLUMN updated_at TEXT")
+                await db.commit()
+                # Update existing rows with current timestamp
+                await db.execute("UPDATE playbooks SET updated_at = datetime('now') WHERE updated_at IS NULL")
+                await db.commit()
+                print("[migration] Added 'updated_at' column successfully")
+        except Exception as e:
+            print(f"[migration] Error during migration: {e}")
+            import traceback
+            traceback.print_exc()
     finally:
         await db.close()
 
@@ -272,15 +299,94 @@ async def get_playbook(playbook_id: int) -> dict | None:
 
 
 async def create_playbook(name: str, filename: str, description: str = "",
-                          tags: list[str] | None = None) -> int:
+                          tags: list[str] | None = None, content: str = "") -> int:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO playbooks (name, filename, description, tags) VALUES (?,?,?,?)",
-            (name, filename, description, json.dumps(tags or [])),
+            "INSERT INTO playbooks (name, filename, description, tags, content) VALUES (?,?,?,?,?)",
+            (name, filename, description, json.dumps(tags or []), content),
         )
         await db.commit()
         return cursor.lastrowid
+    except Exception as e:
+        # If it's a unique constraint error, re-raise it
+        if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
+            raise
+        raise
+    finally:
+        await db.close()
+
+
+async def sync_playbook_filename(name: str, filename: str):
+    """Update the filename for an existing playbook by name."""
+    db = await get_db()
+    try:
+        # Check if updated_at column exists
+        try:
+            cursor = await db.execute("PRAGMA table_info(playbooks)")
+            columns = [row[1] for row in await cursor.fetchall()]
+            if 'updated_at' in columns:
+                await db.execute(
+                    "UPDATE playbooks SET filename = ?, updated_at = datetime('now') WHERE name = ?",
+                    (filename, name)
+                )
+            else:
+                await db.execute(
+                    "UPDATE playbooks SET filename = ? WHERE name = ?",
+                    (filename, name)
+                )
+        except Exception:
+            # Fallback if we can't check columns
+            await db.execute(
+                "UPDATE playbooks SET filename = ? WHERE name = ?",
+                (filename, name)
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_playbook(playbook_id: int, name: str = None, filename: str = None,
+                          description: str = None, tags: list[str] | None = None,
+                          content: str = None):
+    """Update playbook fields. None values are not updated."""
+    db = await get_db()
+    try:
+        updates = []
+        params = []
+        
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if filename is not None:
+            updates.append("filename = ?")
+            params.append(filename)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if tags is not None:
+            updates.append("tags = ?")
+            params.append(json.dumps(tags))
+        if content is not None:
+            updates.append("content = ?")
+            params.append(content)
+        
+        if updates:
+            # Check if updated_at column exists before trying to update it
+            try:
+                cursor = await db.execute("PRAGMA table_info(playbooks)")
+                columns = [row[1] for row in await cursor.fetchall()]
+                if 'updated_at' in columns:
+                    updates.append("updated_at = datetime('now')")
+            except Exception:
+                pass  # If we can't check, just skip updated_at
+            
+            params.append(playbook_id)
+            await db.execute(
+                f"UPDATE playbooks SET {', '.join(updates)} WHERE id = ?",
+                params
+            )
+            await db.commit()
     finally:
         await db.close()
 

@@ -113,6 +113,26 @@ export async function getPlaybook(playbookId) {
     return apiRequest(`/playbooks/${playbookId}`);
 }
 
+export async function createPlaybook(name, filename, description = '', tags = [], content = '') {
+    return apiRequest('/playbooks', {
+        method: 'POST',
+        body: { name, filename, description, tags, content },
+    });
+}
+
+export async function updatePlaybook(playbookId, data) {
+    return apiRequest(`/playbooks/${playbookId}`, {
+        method: 'PUT',
+        body: data,
+    });
+}
+
+export async function deletePlaybook(playbookId) {
+    return apiRequest(`/playbooks/${playbookId}`, {
+        method: 'DELETE',
+    });
+}
+
 // Jobs
 export async function getJobs(limit = 50) {
     return apiRequest(`/jobs?limit=${limit}`);

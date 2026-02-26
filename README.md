@@ -19,7 +19,7 @@ netcontrol/
 ├── netcontrol.key          # Fernet encryption key (auto-created, keep safe)
 ├── playbooks/
 │   ├── __init__.py         # Auto-imports all playbook modules
-│   ├── vlan1_remediation.py  # VLAN 1 Destroyer (refactored)
+│   ├── vlan1_destroyer.py  # VLAN 1 Destroyer (refactored)
 │   ├── ntp_audit.py        # NTP compliance checker
 │   └── config_backup.py    # Running-config backup
 ├── static/                 # React frontend build (optional)

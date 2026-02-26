@@ -67,10 +67,22 @@ async def seed():
         print(f"  + Group '{group_name}' with {len(hosts)} hosts")
 
     # ── Playbooks (from registry) ────────────────────────────────────────
+    from routes.database import sync_playbook_filename
     registered = list_registered_playbooks()
     for pb in registered:
-        await create_playbook(pb["name"], pb["filename"], pb["description"], pb["tags"])
-        print(f"  + Playbook '{pb['name']}'")
+        try:
+            await create_playbook(pb["name"], pb["filename"], pb["description"], pb["tags"])
+            print(f"  + Playbook '{pb['name']}'")
+        except Exception as e:
+            # Playbook might already exist - sync the filename in case it changed
+            if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
+                try:
+                    await sync_playbook_filename(pb["name"], pb["filename"])
+                    print(f"  ~ Playbook '{pb['name']}' already exists, synced filename")
+                except Exception as sync_error:
+                    print(f"  ! Playbook '{pb['name']}' already exists, could not sync: {sync_error}")
+            else:
+                print(f"  ! Error creating playbook '{pb['name']}': {e}")
 
     # ── Templates ────────────────────────────────────────────────────────
     templates = [

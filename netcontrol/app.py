@@ -29,9 +29,48 @@ sys.path.insert(0, project_root)
 import routes.database as db
 from routes.crypto import encrypt, decrypt
 from routes.runner import get_playbook_class, execute_playbook, LogEvent
+import importlib
 
 # Auto-register all playbooks
 from templates import playbooks  # noqa: F401
+
+
+def write_playbook_file(filename: str, content: str) -> str:
+    """
+    Write playbook content to a file and reload the module.
+    Returns the file path.
+    """
+    playbooks_dir = os.path.join(project_root, "templates", "playbooks")
+    os.makedirs(playbooks_dir, exist_ok=True)
+    
+    file_path = os.path.join(playbooks_dir, filename)
+    
+    # Ensure filename ends with .py
+    if not filename.endswith('.py'):
+        file_path += '.py'
+        filename += '.py'
+    
+    # Write the file
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    # Reload the playbook module to pick up changes
+    module_name = f"templates.playbooks.{filename[:-3]}"
+    try:
+        # Remove from cache if exists
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+        
+        # Reload the playbooks package to re-import all modules
+        if 'templates.playbooks' in sys.modules:
+            importlib.reload(sys.modules['templates.playbooks'])
+        else:
+            importlib.import_module('templates.playbooks')
+    except Exception as e:
+        # If reload fails, log but don't fail - module will be loaded on next server restart
+        print(f"[warning] Failed to reload playbook module {module_name}: {e}")
+    
+    return file_path
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -247,6 +286,14 @@ class PlaybookCreate(BaseModel):
     filename: str
     description: str = ""
     tags: list[str] = []
+    content: str = ""
+
+class PlaybookUpdate(BaseModel):
+    name: Optional[str] = None
+    filename: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    content: Optional[str] = None
 
 class TemplateCreate(BaseModel):
     name: str
@@ -351,19 +398,134 @@ async def remove_host(host_id: int):
 # Playbooks
 # ═════════════════════════════════════════════════════════════════════════════
 
+@app.get("/api/playbooks/{playbook_id}")
+async def get_playbook(playbook_id: int):
+    playbook = await db.get_playbook(playbook_id)
+    if not playbook:
+        raise HTTPException(404, "Playbook not found")
+    
+    # Ensure content is always a string (handle None case)
+    content = playbook.get("content")
+    if content is None:
+        content = ""
+    
+    # If content is empty, try to load it from the file
+    if not content or content.strip() == "":
+        playbooks_dir = os.path.join(project_root, "templates", "playbooks")
+        filename = playbook["filename"]
+        if not filename.endswith('.py'):
+            filename += '.py'
+        file_path = os.path.join(playbooks_dir, filename)
+        
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_content = f.read()
+                    playbook["content"] = file_content
+                # Sync it back to the database
+                await db.update_playbook(playbook_id, content=file_content)
+                print(f"[info] Loaded playbook content from file: {filename} ({len(file_content)} chars)")
+            except Exception as e:
+                print(f"[warning] Failed to read playbook file {file_path}: {e}")
+                playbook["content"] = ""
+        else:
+            print(f"[warning] Playbook file not found: {file_path}")
+            playbook["content"] = ""
+    else:
+        print(f"[info] Using playbook content from database (length: {len(content)})")
+    
+    # Ensure content is always set (even if empty)
+    if "content" not in playbook:
+        playbook["content"] = ""
+    
+    return playbook
+
+
 @app.get("/api/playbooks")
 async def list_playbooks():
+    # Sync registered playbooks that might be missing from database
+    await sync_playbooks_from_registry()
     return await db.get_all_playbooks()
+
+
+async def sync_playbooks_from_registry():
+    """Sync playbooks from the registry to the database - add any missing ones."""
+    from routes.runner import list_registered_playbooks
+    from routes.database import sync_playbook_filename
+    
+    registered = list_registered_playbooks()
+    db_playbooks = await db.get_all_playbooks()
+    db_filenames = {pb["filename"] for pb in db_playbooks}
+    
+    for pb in registered:
+        if pb["filename"] not in db_filenames:
+            # Check if a playbook with the same name exists (might have different filename)
+            existing = next((p for p in db_playbooks if p["name"] == pb["name"]), None)
+            if existing:
+                # Update the filename
+                try:
+                    await sync_playbook_filename(pb["name"], pb["filename"])
+                    print(f"[sync] Updated filename for '{pb['name']}' to '{pb['filename']}'")
+                except Exception as e:
+                    print(f"[sync] Error syncing filename for '{pb['name']}': {e}")
+            else:
+                # Create new playbook
+                try:
+                    await db.create_playbook(pb["name"], pb["filename"], pb["description"], pb["tags"])
+                    print(f"[sync] Added missing playbook '{pb['name']}' ({pb['filename']})")
+                except Exception as e:
+                    print(f"[sync] Error adding playbook '{pb['name']}': {e}")
 
 
 @app.post("/api/playbooks", status_code=201)
 async def create_playbook(body: PlaybookCreate):
-    pid = await db.create_playbook(body.name, body.filename, body.description, body.tags)
+    # Ensure filename ends with .py
+    filename = body.filename if body.filename.endswith('.py') else body.filename + '.py'
+    
+    # Write the playbook file
+    if body.content:
+        write_playbook_file(filename, body.content)
+    
+    pid = await db.create_playbook(body.name, filename, body.description, body.tags, body.content)
     return {"id": pid}
+
+
+@app.put("/api/playbooks/{playbook_id}")
+async def update_playbook(playbook_id: int, body: PlaybookUpdate):
+    playbook = await db.get_playbook(playbook_id)
+    if not playbook:
+        raise HTTPException(404, "Playbook not found")
+    
+    # If content is being updated, write the file
+    if body.content is not None:
+        filename = body.filename if body.filename else playbook["filename"]
+        if not filename.endswith('.py'):
+            filename += '.py'
+        write_playbook_file(filename, body.content)
+    
+    # Update filename if provided
+    update_filename = body.filename
+    if update_filename and not update_filename.endswith('.py'):
+        update_filename += '.py'
+    
+    await db.update_playbook(
+        playbook_id,
+        name=body.name,
+        filename=update_filename,
+        description=body.description,
+        tags=body.tags,
+        content=body.content
+    )
+    return {"ok": True}
 
 
 @app.delete("/api/playbooks/{playbook_id}")
 async def delete_playbook(playbook_id: int):
+    playbook = await db.get_playbook(playbook_id)
+    if not playbook:
+        raise HTTPException(404, "Playbook not found")
+    
+    # Optionally delete the file (but keep it for now in case of rollback)
     await db.delete_playbook(playbook_id)
     return {"ok": True}
 

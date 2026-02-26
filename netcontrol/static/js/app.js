@@ -227,7 +227,7 @@ async function loadPlaybooks() {
     try {
         const playbooks = await api.getPlaybooks();
         if (!playbooks.length) {
-            container.innerHTML = '<div class="empty-state">No playbooks available</div>';
+            container.innerHTML = '<div class="empty-state">No playbooks available. <button class="btn btn-primary btn-sm" onclick="showCreatePlaybookModal()" style="margin-top: 1rem;">Create Playbook</button></div>';
             return;
         }
 
@@ -247,10 +247,21 @@ async function loadPlaybooks() {
             
             return `
             <div class="card">
-                <div class="card-title">${escapeHtml(pb.name)}</div>
-                <div class="card-description">${escapeHtml(pb.description || '')}</div>
-                <div style="margin-top: 0.5rem;">
-                    ${tags.length > 0 ? tags.map(tag => `<span class="status-badge" style="margin-right: 0.5rem;">${escapeHtml(tag)}</span>`).join('') : ''}
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">${escapeHtml(pb.name)}</div>
+                        <div class="card-description">${escapeHtml(pb.description || '')}</div>
+                        <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-muted);">
+                            File: ${escapeHtml(pb.filename)}
+                        </div>
+                        <div style="margin-top: 0.5rem;">
+                            ${tags.length > 0 ? tags.map(tag => `<span class="status-badge" style="margin-right: 0.5rem;">${escapeHtml(tag)}</span>`).join('') : ''}
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn btn-sm btn-secondary" onclick="editPlaybook(${pb.id})">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="deletePlaybook(${pb.id})">Delete</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -593,21 +604,39 @@ window.showLaunchJobModal = async function() {
             api.getCredentials(),
         ]);
 
+        // Load hosts for each group
+        const groupsWithHosts = await Promise.all(
+            groups.map(async (group) => {
+                try {
+                    const groupData = await api.getGroup(group.id);
+                    return { ...group, hosts: groupData.hosts || [] };
+                } catch (e) {
+                    return { ...group, hosts: [] };
+                }
+            })
+        );
+
         showModal('Launch Job', `
             <form onsubmit="launchJob(event)">
                 <div class="form-group">
                     <label class="form-label">Playbook</label>
-                    <select class="form-select" name="playbook_id" required>
+                    <select class="form-select" name="playbook_id" id="job-playbook-select" required>
                         <option value="">Select a playbook...</option>
                         ${playbooks.map(pb => `<option value="${pb.id}">${escapeHtml(pb.name)}</option>`).join('')}
                     </select>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Inventory Group</label>
-                    <select class="form-select" name="inventory_group_id" required>
+                    <select class="form-select" name="inventory_group_id" id="job-group-select" required onchange="updateJobGroupHosts(this.value)">
                         <option value="">Select a group...</option>
-                        ${groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('')}
+                        ${groupsWithHosts.map(g => `<option value="${g.id}">${escapeHtml(g.name)} (${g.hosts.length} hosts)</option>`).join('')}
                     </select>
+                </div>
+                <div class="form-group" id="job-hosts-container" style="display: none;">
+                    <label class="form-label">Hosts in Selected Group</label>
+                    <div id="job-hosts-list" style="background: var(--bg-secondary); padding: 1rem; border-radius: 0.375rem; max-height: 200px; overflow-y: auto; border: 1px solid var(--border);">
+                        <div class="empty-state">Select a group to see hosts</div>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Credential (optional)</label>
@@ -627,9 +656,40 @@ window.showLaunchJobModal = async function() {
                 </div>
             </form>
         `);
+        
+        // Store groups data for the update function
+        window._jobGroupsData = groupsWithHosts;
     } catch (error) {
         showError(`Failed to load job form: ${error.message}`);
     }
+};
+
+window.updateJobGroupHosts = function(groupId) {
+    const container = document.getElementById('job-hosts-container');
+    const hostsList = document.getElementById('job-hosts-list');
+    
+    if (!groupId || !window._jobGroupsData) {
+        container.style.display = 'none';
+        return;
+    }
+    
+    const group = window._jobGroupsData.find(g => g.id == groupId);
+    if (!group || !group.hosts || group.hosts.length === 0) {
+        container.style.display = 'block';
+        hostsList.innerHTML = '<div class="empty-state">No hosts in this group</div>';
+        return;
+    }
+    
+    container.style.display = 'block';
+    hostsList.innerHTML = group.hosts.map(host => `
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid var(--border);">
+            <div>
+                <strong>${escapeHtml(host.hostname)}</strong>
+                <span style="color: var(--text-muted); margin-left: 0.5rem;">${escapeHtml(host.ip_address)}</span>
+                <span style="color: var(--text-muted); margin-left: 0.5rem; font-size: 0.875rem;">(${escapeHtml(host.device_type || 'cisco_ios')})</span>
+            </div>
+        </div>
+    `).join('');
 };
 
 window.launchJob = async function(e) {
@@ -769,6 +829,270 @@ window.createCredential = async function(e) {
         showSuccess('Credential created successfully');
     } catch (error) {
         showError(`Failed to create credential: ${error.message}`);
+    }
+};
+
+// Create Playbook Modal
+window.showCreatePlaybookModal = function() {
+    const defaultContent = `"""
+Your playbook description here.
+
+This playbook will be executed on all hosts in the selected inventory group.
+"""
+
+import asyncio
+from typing import AsyncGenerator
+
+from routes.runner import BasePlaybook, LogEvent, register_playbook
+
+try:
+    from netmiko import ConnectHandler
+    from netmiko.exceptions import (
+        NetmikoTimeoutException,
+        NetmikoAuthenticationException,
+    )
+    NETMIKO_AVAILABLE = True
+except ImportError:
+    NETMIKO_AVAILABLE = False
+
+
+@register_playbook
+class MyPlaybook(BasePlaybook):
+    filename = "my_playbook.py"
+    display_name = "My Playbook"
+    description = "Description of what this playbook does"
+    tags = ["example"]
+    requires_template = False
+
+    async def run(self, hosts, credentials, template_commands=None, dry_run=True):
+        yield self.log_info(f"My Playbook — targeting {len(hosts)} device(s)")
+        
+        if dry_run:
+            yield self.log_warn("*** DRY-RUN MODE — no changes will be made ***")
+        
+        for host_info in hosts:
+            ip = host_info["ip_address"]
+            hostname = host_info.get("hostname", ip)
+            device_type = host_info.get("device_type", "cisco_ios")
+            
+            yield self.log_sep()
+            yield self.log_info(f"Processing {hostname} ({ip})...", host=hostname)
+            
+            if NETMIKO_AVAILABLE:
+                # Real device connection code here
+                device = {
+                    "device_type": device_type,
+                    "host": ip,
+                    "username": credentials["username"],
+                    "password": credentials["password"],
+                    "secret": credentials.get("secret", credentials["password"]),
+                    "timeout": 30,
+                }
+                
+                try:
+                    conn = await asyncio.to_thread(ConnectHandler, **device)
+                    try:
+                        if not conn.check_enable_mode():
+                            await asyncio.to_thread(conn.enable)
+                        
+                        # Your playbook logic here
+                        yield self.log_success(f"Connected to {hostname}", host=hostname)
+                        
+                        # Example: Run a command
+                        # output = await asyncio.to_thread(conn.send_command, "show version")
+                        # yield self.log_info(f"Output: {output[:100]}...", host=hostname)
+                        
+                    finally:
+                        conn.disconnect()
+                except NetmikoTimeoutException:
+                    yield self.log_error(f"Timeout connecting to {ip}", host=hostname)
+                except NetmikoAuthenticationException:
+                    yield self.log_error(f"Authentication failed for {ip}", host=hostname)
+                except Exception as e:
+                    yield self.log_error(f"Error: {e}", host=hostname)
+            else:
+                yield self.log_warn("Netmiko not available — running in simulation mode", host=hostname)
+                await asyncio.sleep(0.5)
+            
+            yield self.log_success(f"Finished processing {hostname} ({ip})", host=hostname)
+        
+        yield self.log_sep()
+        yield self.log_success("Playbook execution complete")
+`;
+
+    showModal('Create Playbook', `
+        <form onsubmit="createPlaybook(event)">
+            <div class="form-group">
+                <label class="form-label">Playbook Name</label>
+                <input type="text" class="form-input" name="name" placeholder="My Playbook" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Filename</label>
+                <input type="text" class="form-input" name="filename" placeholder="my_playbook.py" required>
+                <small style="color: var(--text-muted); font-size: 0.75rem;">Must end with .py</small>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <input type="text" class="form-input" name="description" placeholder="What this playbook does">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Tags (comma-separated)</label>
+                <input type="text" class="form-input" name="tags" placeholder="example, automation">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Python Code</label>
+                <textarea class="form-textarea" name="content" style="min-height: 400px; font-family: 'Courier New', monospace;" required>${defaultContent}</textarea>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    `);
+};
+
+window.createPlaybook = async function(e) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const tagsStr = formData.get('tags') || '';
+    const tags = tagsStr.split(',').map(t => t.trim()).filter(t => t);
+    
+    try {
+        let filename = formData.get('filename');
+        if (!filename.endsWith('.py')) {
+            filename += '.py';
+        }
+        
+        await api.createPlaybook(
+            formData.get('name'),
+            filename,
+            formData.get('description') || '',
+            tags,
+            formData.get('content')
+        );
+        closeAllModals();
+        await loadPlaybooks();
+        showSuccess('Playbook created successfully');
+    } catch (error) {
+        showError(`Failed to create playbook: ${error.message}`);
+    }
+};
+
+window.editPlaybook = async function(playbookId) {
+    try {
+        const playbook = await api.getPlaybook(playbookId);
+        console.log('Loaded playbook:', playbook);
+        console.log('Content type:', typeof playbook.content);
+        console.log('Content length:', playbook.content ? playbook.content.length : 'null/undefined');
+        
+        let tags = playbook.tags;
+        if (typeof tags === 'string') {
+            try {
+                tags = JSON.parse(tags);
+            } catch (e) {
+                tags = [];
+            }
+        }
+        if (!Array.isArray(tags)) {
+            tags = [];
+        }
+        
+        // Ensure content is a string
+        const playbookContent = playbook.content || '';
+        console.log('Final content to set, length:', playbookContent.length);
+        
+        showModal('Edit Playbook', `
+            <form onsubmit="updatePlaybook(event, ${playbookId})">
+                <div class="form-group">
+                    <label class="form-label">Playbook Name</label>
+                    <input type="text" class="form-input" name="name" value="${escapeHtml(playbook.name || '')}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Filename</label>
+                    <input type="text" class="form-input" name="filename" value="${escapeHtml(playbook.filename || '')}" required>
+                    <small style="color: var(--text-muted); font-size: 0.75rem;">Must end with .py</small>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <input type="text" class="form-input" name="description" value="${escapeHtml(playbook.description || '')}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Tags (comma-separated)</label>
+                    <input type="text" class="form-input" name="tags" value="${escapeHtml(tags.join(', '))}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Python Code</label>
+                    <textarea id="playbook-content-textarea" class="form-textarea" name="content" style="min-height: 400px; font-family: 'Courier New', monospace;" required></textarea>
+                </div>
+                <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                    <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        `);
+        
+        // Set textarea content after modal DOM is updated
+        // Use multiple attempts to ensure DOM is ready
+        const setContent = () => {
+            const textarea = document.getElementById('playbook-content-textarea');
+            if (textarea) {
+                textarea.value = playbookContent;
+                console.log('Successfully set textarea content, length:', playbookContent.length);
+                console.log('Textarea value length:', textarea.value.length);
+            } else {
+                console.warn('Textarea not found, retrying...');
+                setTimeout(setContent, 50);
+            }
+        };
+        
+        // Try immediately, then with delays
+        requestAnimationFrame(() => {
+            setTimeout(setContent, 10);
+        });
+    } catch (error) {
+        console.error('Error loading playbook:', error);
+        showError(`Failed to load playbook: ${error.message}`);
+    }
+};
+
+window.updatePlaybook = async function(e, playbookId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const tagsStr = formData.get('tags') || '';
+    const tags = tagsStr.split(',').map(t => t.trim()).filter(t => t);
+    
+    try {
+        let filename = formData.get('filename');
+        if (!filename.endsWith('.py')) {
+            filename += '.py';
+        }
+        
+        await api.updatePlaybook(playbookId, {
+            name: formData.get('name'),
+            filename: filename,
+            description: formData.get('description') || '',
+            tags: tags,
+            content: formData.get('content')
+        });
+        closeAllModals();
+        await loadPlaybooks();
+        showSuccess('Playbook updated successfully');
+    } catch (error) {
+        showError(`Failed to update playbook: ${error.message}`);
+    }
+};
+
+window.deletePlaybook = async function(playbookId) {
+    if (!await showConfirm('Delete Playbook', 'Are you sure you want to delete this playbook? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        await api.deletePlaybook(playbookId);
+        await loadPlaybooks();
+        showSuccess('Playbook deleted successfully');
+    } catch (error) {
+        showError(`Failed to delete playbook: ${error.message}`);
     }
 };
 
