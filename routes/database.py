@@ -211,6 +211,19 @@ async def remove_host(host_id: int):
         await db.close()
 
 
+async def update_host(host_id: int, hostname: str, ip_address: str,
+                      device_type: str = "cisco_ios"):
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE hosts SET hostname=?, ip_address=?, device_type=? WHERE id=?",
+            (hostname, ip_address, device_type, host_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def update_host_status(host_id: int, status: str):
     db = await get_db()
     try:
@@ -394,7 +407,7 @@ async def get_all_jobs(limit: int = 50) -> list[dict]:
     db = await get_db()
     try:
         cursor = await db.execute("""
-            SELECT j.*, p.name AS playbook_name, g.name AS inventory_name
+            SELECT j.*, p.name AS playbook_name, g.name AS group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
             JOIN inventory_groups g ON g.id = j.inventory_group_id
@@ -409,7 +422,7 @@ async def get_job(job_id: int) -> dict | None:
     db = await get_db()
     try:
         cursor = await db.execute("""
-            SELECT j.*, p.name AS playbook_name, g.name AS inventory_name
+            SELECT j.*, p.name AS playbook_name, g.name AS group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
             JOIN inventory_groups g ON g.id = j.inventory_group_id

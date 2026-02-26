@@ -16,7 +16,7 @@
     --secondary: #6b7280;
     --success: #6b8e6b;
     --warning: #d4a574;
-    --danger: #c97a7a;
+    --danger: #4a0a0a;
     --bg: #0f1410;
     --bg-secondary: #141914;
     --bg-dark: #0a0f0a;
@@ -178,6 +178,14 @@ body {
     border-color: var(--border-light);
 }
 
+.card-clickable {
+    cursor: pointer;
+}
+
+.card-clickable:hover {
+    border-color: var(--primary);
+}
+
 .card-header {
     display: flex;
     justify-content: space-between;
@@ -230,6 +238,11 @@ body {
 .btn-danger {
     background: var(--danger);
     color: white;
+    transition: background 0.2s;
+}
+
+.btn-danger:hover {
+    background: #5a0f0f;
 }
 
 .btn-sm {
@@ -516,6 +529,52 @@ body {
 .host-ip {
     color: var(--text-muted);
     font-size: 0.875rem;
+}
+
+.host-type {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    background: var(--bg-dark);
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Confirm Dialog
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+.confirm-modal {
+    max-width: 400px;
+    text-align: center;
+    padding: 2rem;
+}
+
+.confirm-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    color: var(--danger);
+}
+
+.confirm-modal h3 {
+    margin-bottom: 0.5rem;
+    color: var(--text);
+}
+
+.confirm-message {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-bottom: 1.5rem;
+}
+
+.confirm-actions {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+}
+
+.confirm-actions .btn {
+    min-width: 100px;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════

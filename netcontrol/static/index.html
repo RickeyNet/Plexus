@@ -143,6 +143,19 @@
         </div>
     </div>
 
+    <!-- Confirm Dialog -->
+    <div id="confirm-overlay" class="modal-overlay">
+        <div class="modal confirm-modal" onclick="event.stopPropagation()">
+            <div class="confirm-icon" id="confirm-icon">&#9888;</div>
+            <h3 id="confirm-title">Are you sure?</h3>
+            <p id="confirm-message" class="confirm-message"></p>
+            <div class="confirm-actions">
+                <button class="btn btn-secondary" id="confirm-cancel">Cancel</button>
+                <button class="btn btn-danger" id="confirm-yes">Delete</button>
+            </div>
+        </div>
+    </div>
+
     <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

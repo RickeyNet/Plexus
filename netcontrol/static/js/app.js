@@ -8,6 +8,7 @@ import { connectJobWebSocket, disconnectJobWebSocket } from './websocket.js';
 // Global state
 let currentPage = 'dashboard';
 let dashboardData = null;
+const _hostCache = {};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Navigation
@@ -87,10 +88,10 @@ async function loadDashboard() {
         dashboardData = data;
 
         // Update stats
-        document.getElementById('stat-groups').textContent = data.stats?.groups || 0;
-        document.getElementById('stat-hosts').textContent = data.stats?.hosts || 0;
-        document.getElementById('stat-playbooks').textContent = data.stats?.playbooks || 0;
-        document.getElementById('stat-jobs').textContent = data.stats?.jobs || 0;
+        document.getElementById('stat-groups').textContent = data.stats?.total_groups || 0;
+        document.getElementById('stat-hosts').textContent = data.stats?.total_hosts || 0;
+        document.getElementById('stat-playbooks').textContent = data.stats?.total_playbooks || 0;
+        document.getElementById('stat-jobs').textContent = data.stats?.total_jobs || 0;
 
         // Render recent jobs
         renderRecentJobs(data.recent_jobs || []);
@@ -132,7 +133,7 @@ function renderGroupsOverview(groups) {
     }
 
     container.innerHTML = groups.map(group => `
-        <div class="card">
+        <div class="card card-clickable" onclick="goToInventory()">
             <div class="card-title">${escapeHtml(group.name)}</div>
             <div class="card-description">${escapeHtml(group.description || '')}</div>
             <div class="card-description" style="margin-top: 0.5rem;">
@@ -141,6 +142,10 @@ function renderGroupsOverview(groups) {
         </div>
     `).join('');
 }
+
+window.goToInventory = function() {
+    navigateToPage('inventory');
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Inventory
@@ -188,15 +193,22 @@ function renderInventoryGroups(groups) {
                     <button class="btn btn-sm btn-primary" onclick="showAddHostModal(${group.id})">+ Add Host</button>
                 </div>
                 ${group.hosts && group.hosts.length ? 
-                    group.hosts.map(host => `
+                    group.hosts.map(host => {
+                        // Store host data for the edit modal
+                        _hostCache[host.id] = { groupId: group.id, ...host };
+                        return `
                         <div class="host-item">
                             <div class="host-info">
                                 <span class="host-name">${escapeHtml(host.hostname)}</span>
                                 <span class="host-ip">${escapeHtml(host.ip_address)}</span>
+                                <span class="host-type">${escapeHtml(host.device_type || 'cisco_ios')}</span>
                             </div>
-                            <button class="btn btn-sm btn-danger" onclick="deleteHost(${group.id}, ${host.id})">Delete</button>
+                            <div style="display: flex; gap: 0.25rem;">
+                                <button class="btn btn-sm btn-secondary" onclick="showEditHostModal(${host.id})">Edit</button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteHost(${group.id}, ${host.id})">Delete</button>
+                            </div>
                         </div>
-                    `).join('') :
+                    `;}).join('') :
                     '<div class="empty-state" style="padding: 1rem;">No hosts</div>'
                 }
             </div>
@@ -427,6 +439,66 @@ window.showAddHostModal = function(groupId) {
     `);
 };
 
+// Edit Host Modal
+window.showEditHostModal = function(hostId) {
+    const host = _hostCache[hostId];
+    if (!host) {
+        showError('Host data not found');
+        return;
+    }
+    const hostname = host.hostname;
+    const ipAddress = host.ip_address;
+    const deviceType = host.device_type || 'cisco_ios';
+    const groupId = host.groupId;
+
+    const form = document.createElement('form');
+    form.innerHTML = `
+        <div class="form-group">
+            <label class="form-label">Hostname</label>
+            <input type="text" class="form-input" name="hostname" required>
+        </div>
+        <div class="form-group">
+            <label class="form-label">IP Address</label>
+            <input type="text" class="form-input" name="ip_address" required>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Device Type</label>
+            <select class="form-select" name="device_type">
+                <option value="cisco_ios">Cisco IOS</option>
+                <option value="cisco_nxos">Cisco NX-OS</option>
+                <option value="cisco_asa">Cisco ASA</option>
+            </select>
+        </div>
+        <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+            <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    `;
+
+    form.querySelector('[name="hostname"]').value = hostname;
+    form.querySelector('[name="ip_address"]').value = ipAddress;
+    form.querySelector('[name="device_type"]').value = deviceType;
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(form);
+        try {
+            await api.updateHost(hostId, formData.get('hostname'), formData.get('ip_address'), formData.get('device_type'));
+            closeAllModals();
+            await loadInventory();
+            showSuccess('Host updated successfully');
+        } catch (error) {
+            showError(`Failed to update host: ${error.message}`);
+        }
+    });
+
+    document.getElementById('modal-title').textContent = 'Edit Host';
+    const modalBody = document.getElementById('modal-body');
+    modalBody.innerHTML = '';
+    modalBody.appendChild(form);
+    document.getElementById('modal-overlay').classList.add('active');
+};
+
 window.addHost = async function(e, groupId) {
     e.preventDefault();
     const formData = new FormData(e.target);
@@ -502,9 +574,51 @@ window.launchJob = async function(e) {
         closeAllModals();
         await loadJobs();
         showSuccess('Job launched successfully');
-        setTimeout(() => viewJobOutput(job.id), 500);
+        setTimeout(() => viewJobOutput(job.job_id), 500);
     } catch (error) {
         showError(`Failed to launch job: ${error.message}`);
+    }
+};
+
+// Edit Template Modal
+window.editTemplate = async function(templateId) {
+    try {
+        const template = await api.getTemplate(templateId);
+        showModal('Edit Template', `
+            <form onsubmit="updateTemplate(event, ${templateId})">
+                <div class="form-group">
+                    <label class="form-label">Template Name</label>
+                    <input type="text" class="form-input" name="name" value="${escapeHtml(template.name)}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <input type="text" class="form-input" name="description" value="${escapeHtml(template.description || '')}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Config Content</label>
+                    <textarea class="form-textarea" name="content" style="min-height: 200px;" required>${escapeHtml(template.content)}</textarea>
+                </div>
+                <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                    <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        `);
+    } catch (error) {
+        showError(`Failed to load template: ${error.message}`);
+    }
+};
+
+window.updateTemplate = async function(e, templateId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    try {
+        await api.updateTemplate(templateId, formData.get('name'), formData.get('content'), formData.get('description'));
+        closeAllModals();
+        await loadTemplates();
+        showSuccess('Template updated successfully');
+    } catch (error) {
+        showError(`Failed to update template: ${error.message}`);
     }
 };
 
@@ -586,9 +700,46 @@ window.createCredential = async function(e) {
     }
 };
 
+// Custom confirm dialog
+function showConfirm(title, message) {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('confirm-overlay');
+        document.getElementById('confirm-title').textContent = title;
+        document.getElementById('confirm-message').textContent = message;
+        overlay.classList.add('active');
+
+        const yesBtn = document.getElementById('confirm-yes');
+        const cancelBtn = document.getElementById('confirm-cancel');
+
+        function cleanup() {
+            overlay.classList.remove('active');
+            yesBtn.replaceWith(yesBtn.cloneNode(true));
+            cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+        }
+
+        document.getElementById('confirm-yes').addEventListener('click', () => {
+            cleanup();
+            resolve(true);
+        });
+
+        document.getElementById('confirm-cancel').addEventListener('click', () => {
+            cleanup();
+            resolve(false);
+        });
+
+        overlay.addEventListener('click', function handler(e) {
+            if (e.target === overlay) {
+                cleanup();
+                overlay.removeEventListener('click', handler);
+                resolve(false);
+            }
+        });
+    });
+}
+
 // Delete functions
 window.deleteGroup = async function(groupId) {
-    if (!confirm('Are you sure you want to delete this group?')) return;
+    if (!await showConfirm('Delete Group', 'This will remove the group and all its hosts. This action cannot be undone.')) return;
     try {
         await api.deleteGroup(groupId);
         await loadInventory();
@@ -599,7 +750,7 @@ window.deleteGroup = async function(groupId) {
 };
 
 window.deleteHost = async function(groupId, hostId) {
-    if (!confirm('Are you sure you want to delete this host?')) return;
+    if (!await showConfirm('Delete Host', 'This will permanently remove this host from the inventory.')) return;
     try {
         await api.deleteHost(groupId, hostId);
         await loadInventory();
@@ -610,7 +761,7 @@ window.deleteHost = async function(groupId, hostId) {
 };
 
 window.deleteTemplate = async function(templateId) {
-    if (!confirm('Are you sure you want to delete this template?')) return;
+    if (!await showConfirm('Delete Template', 'This will permanently remove this config template.')) return;
     try {
         await api.deleteTemplate(templateId);
         await loadTemplates();
@@ -621,7 +772,7 @@ window.deleteTemplate = async function(templateId) {
 };
 
 window.deleteCredential = async function(credentialId) {
-    if (!confirm('Are you sure you want to delete this credential?')) return;
+    if (!await showConfirm('Delete Credential', 'This will permanently remove this stored credential.')) return;
     try {
         await api.deleteCredential(credentialId);
         await loadCredentials();

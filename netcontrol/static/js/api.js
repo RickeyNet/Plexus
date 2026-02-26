@@ -68,8 +68,15 @@ export async function addHost(groupId, hostname, ipAddress, deviceType = 'cisco_
     });
 }
 
+export async function updateHost(hostId, hostname, ipAddress, deviceType = 'cisco_ios') {
+    return apiRequest(`/hosts/${hostId}`, {
+        method: 'PUT',
+        body: { hostname, ip_address: ipAddress, device_type: deviceType },
+    });
+}
+
 export async function deleteHost(groupId, hostId) {
-    return apiRequest(`/inventory/${groupId}/hosts/${hostId}`, {
+    return apiRequest(`/hosts/${hostId}`, {
         method: 'DELETE',
     });
 }
@@ -93,7 +100,7 @@ export async function getJob(jobId) {
 }
 
 export async function launchJob(playbookId, inventoryGroupId, credentialId = null, templateId = null, dryRun = true) {
-    return apiRequest('/jobs', {
+    return apiRequest('/jobs/launch', {
         method: 'POST',
         body: {
             playbook_id: playbookId,

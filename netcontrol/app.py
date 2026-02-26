@@ -72,6 +72,11 @@ class HostCreate(BaseModel):
     ip_address: str
     device_type: str = "cisco_ios"
 
+class HostUpdate(BaseModel):
+    hostname: str
+    ip_address: str
+    device_type: str = "cisco_ios"
+
 class PlaybookCreate(BaseModel):
     name: str
     filename: str
@@ -155,6 +160,12 @@ async def list_hosts(group_id: int):
 async def add_host(group_id: int, body: HostCreate):
     hid = await db.add_host(group_id, body.hostname, body.ip_address, body.device_type)
     return {"id": hid}
+
+
+@app.put("/api/hosts/{host_id}")
+async def update_host(host_id: int, body: HostUpdate):
+    await db.update_host(host_id, body.hostname, body.ip_address, body.device_type)
+    return {"ok": True}
 
 
 @app.delete("/api/hosts/{host_id}")
