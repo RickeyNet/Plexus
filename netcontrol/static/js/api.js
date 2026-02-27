@@ -42,12 +42,30 @@ export async function login(username, password) {
     });
 }
 
+export async function register(username, password, displayName = '') {
+    return apiRequest('/auth/register', {
+        method: 'POST',
+        body: { username, password, display_name: displayName },
+    });
+}
+
 export async function logout() {
     return apiRequest('/auth/logout', { method: 'POST' });
 }
 
 export async function getAuthStatus() {
     return apiRequest('/auth/status');
+}
+
+export async function getProfile() {
+    return apiRequest('/auth/profile');
+}
+
+export async function updateProfile(displayName) {
+    return apiRequest('/auth/profile', {
+        method: 'PUT',
+        body: { display_name: displayName },
+    });
 }
 
 export async function changePassword(currentPassword, newPassword) {

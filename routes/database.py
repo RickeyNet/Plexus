@@ -21,6 +21,16 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "netcontrol.db")
 # ── Schema ───────────────────────────────────────────────────────────────────
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    username    TEXT    NOT NULL UNIQUE,
+    password_hash TEXT  NOT NULL,
+    salt        TEXT    NOT NULL,
+    display_name TEXT   DEFAULT '',
+    role        TEXT    NOT NULL DEFAULT 'user',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS inventory_groups (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT    NOT NULL UNIQUE,
@@ -61,10 +71,11 @@ CREATE TABLE IF NOT EXISTS templates (
 
 CREATE TABLE IF NOT EXISTS credentials (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL UNIQUE,
+    name        TEXT    NOT NULL,
     username    TEXT    NOT NULL,
     password    TEXT    NOT NULL,
     secret      TEXT    NOT NULL DEFAULT '',
+    owner_id    INTEGER REFERENCES users(id),
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -124,15 +135,98 @@ async def init_db():
             
             if 'updated_at' not in columns:
                 print("[migration] Adding 'updated_at' column to playbooks table...")
-                # SQLite doesn't allow non-constant defaults, so add column without default
                 await db.execute("ALTER TABLE playbooks ADD COLUMN updated_at TEXT")
                 await db.commit()
-                # Update existing rows with current timestamp
                 await db.execute("UPDATE playbooks SET updated_at = datetime('now') WHERE updated_at IS NULL")
                 await db.commit()
                 print("[migration] Added 'updated_at' column successfully")
         except Exception as e:
-            print(f"[migration] Error during migration: {e}")
+            print(f"[migration] Playbooks migration error: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Migration: Add display_name and role columns to users if they don't exist
+        try:
+            cursor = await db.execute("PRAGMA table_info(users)")
+            columns = [row[1] for row in await cursor.fetchall()]
+
+            if 'display_name' not in columns:
+                print("[migration] Adding 'display_name' column to users table...")
+                await db.execute("ALTER TABLE users ADD COLUMN display_name TEXT DEFAULT ''")
+                await db.commit()
+                print("[migration] Added 'display_name' column successfully")
+            
+            if 'role' not in columns:
+                print("[migration] Adding 'role' column to users table...")
+                await db.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
+                await db.commit()
+                print("[migration] Added 'role' column successfully")
+
+        except Exception as e:
+            print(f"[migration] Users table migration error: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Migration: Add owner_id column to credentials, drop UNIQUE on name
+        try:
+            cursor = await db.execute("PRAGMA table_info(credentials)")
+            columns = [row[1] for row in await cursor.fetchall()]
+
+            # If 'owner_id' is not in columns, it means we are using an old schema
+            # where 'name' might have a UNIQUE constraint.
+            # We need to recreate the table to drop the UNIQUE constraint.
+            if 'owner_id' not in columns:
+                print("[migration] Migrating 'credentials' table to add 'owner_id' and drop UNIQUE on name...")
+                
+                # 1. Rename existing table
+                await db.execute("ALTER TABLE credentials RENAME TO old_credentials")
+                await db.commit()
+
+                # 2. Create new table with updated schema (no UNIQUE on name)
+                await db.execute("""
+                    CREATE TABLE credentials (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name        TEXT    NOT NULL,
+                        username    TEXT    NOT NULL,
+                        password    TEXT    NOT NULL,
+                        secret      TEXT    NOT NULL DEFAULT '',
+                        owner_id    INTEGER REFERENCES users(id),
+                        created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                    )
+                """)
+                await db.commit()
+
+                # 3. Copy data from old table to new table
+                await db.execute("""
+                    INSERT INTO credentials (id, name, username, password, secret, created_at)
+                    SELECT id, name, username, password, secret, created_at FROM old_credentials
+                """)
+                await db.commit()
+
+                # 4. Drop old table
+                await db.execute("DROP TABLE old_credentials")
+                await db.commit()
+                print("[migration] 'credentials' table migration complete.")
+            else:
+                print("[migration] 'owner_id' column already exists in 'credentials' table, skipping full table migration.")
+
+
+            # Assign orphaned credentials to the first admin user (newly created or existing)
+            cursor2 = await db.execute("SELECT COUNT(*) FROM credentials WHERE owner_id IS NULL")
+            orphan_count = (await cursor2.fetchall())[0][0]
+            if orphan_count > 0:
+                # Ensure admin user exists before trying to assign
+                cursor3 = await db.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1")
+                admin_row = await cursor3.fetchone()
+                if admin_row:
+                    admin_id = admin_row[0]
+                    await db.execute("UPDATE credentials SET owner_id = ? WHERE owner_id IS NULL", (admin_id,))
+                    await db.commit()
+                    print(f"[migration] Assigned {orphan_count} orphaned credential(s) to admin user (id={admin_id})")
+                else:
+                    print("[migration] No admin user found to assign orphaned credentials to. Please create an admin user.")
+        except Exception as e:
+            print(f"[migration] Credentials migration error: {e}")
             import traceback
             traceback.print_exc()
     finally:
@@ -149,6 +243,87 @@ def row_to_dict(row) -> dict:
 
 def rows_to_list(rows) -> list[dict]:
     return [dict(r) for r in rows]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Users
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def get_user_by_username(username: str) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM users WHERE username = ?", (username,))
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def get_user_by_id(user_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id, username, display_name, role, created_at FROM users WHERE id = ?", (user_id,))
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def create_user(username: str, password_hash: str, salt: str,
+                      display_name: str = "", role: str = "user") -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO users (username, password_hash, salt, display_name, role) VALUES (?,?,?,?,?)",
+            (username, password_hash, salt, display_name, role),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise ValueError(f"Username '{username}' already exists.")
+        raise
+    finally:
+        await db.close()
+
+
+async def update_user_password(user_id: int, password_hash: str, salt: str):
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
+            (password_hash, salt, user_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_user_profile(user_id: int, display_name: str = None):
+    db = await get_db()
+    try:
+        if display_name is not None:
+            await db.execute("UPDATE users SET display_name = ? WHERE id = ?", (display_name, user_id))
+            await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_all_users() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id, username, display_name, role, created_at FROM users ORDER BY username")
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_user(user_id: int):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM credentials WHERE owner_id = ?", (user_id,))
+        await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        await db.commit()
+    finally:
+        await db.close()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -478,11 +653,16 @@ async def delete_template(template_id: int):
 # Credentials (encrypted externally before storage)
 # ═════════════════════════════════════════════════════════════════════════════
 
-async def get_all_credentials() -> list[dict]:
-    """Return credentials with passwords masked."""
+async def get_all_credentials(owner_id: int | None = None) -> list[dict]:
+    """Return credentials with passwords masked. Filter by owner if provided."""
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT id, name, username, created_at FROM credentials ORDER BY name")
+        if owner_id is not None:
+            cursor = await db.execute(
+                "SELECT id, name, username, owner_id, created_at FROM credentials WHERE owner_id = ? ORDER BY name",
+                (owner_id,))
+        else:
+            cursor = await db.execute("SELECT id, name, username, owner_id, created_at FROM credentials ORDER BY name")
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -499,12 +679,12 @@ async def get_credential_raw(cred_id: int) -> dict | None:
 
 
 async def create_credential(name: str, username: str, enc_password: str,
-                            enc_secret: str = "") -> int:
+                            enc_secret: str = "", owner_id: int | None = None) -> int:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO credentials (name, username, password, secret) VALUES (?,?,?,?)",
-            (name, username, enc_password, enc_secret),
+            "INSERT INTO credentials (name, username, password, secret, owner_id) VALUES (?,?,?,?,?)",
+            (name, username, enc_password, enc_secret, owner_id),
         )
         await db.commit()
         return cursor.lastrowid

@@ -15,7 +15,7 @@ import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request, Depends, Cookie
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -74,10 +74,9 @@ def write_playbook_file(filename: str, content: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Authentication
+# Authentication (DB-backed users)
 # ═════════════════════════════════════════════════════════════════════════════
 
-AUTH_FILE = os.path.join(os.path.dirname(__file__), "..", "routes", "auth.json")
 SECRET_KEY_FILE = os.path.join(os.path.dirname(__file__), "..", "routes", "session.key")
 SESSION_MAX_AGE = 86400  # 24 hours
 
@@ -104,59 +103,47 @@ def _hash_password(password: str, salt: str = "") -> str:
     return hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
 
 
-def _load_users() -> dict:
-    if os.path.isfile(AUTH_FILE):
-        with open(AUTH_FILE, "r") as f:
-            return json.load(f)
-    # Create default admin user on first run
+async def _ensure_default_admin():
+    """Create the default admin user in the DB if no users exist."""
+    existing = await db.get_all_users()
+    if existing:
+        return
     salt = secrets.token_hex(16)
-    users = {
-        "admin": {
-            "password_hash": _hash_password("netcontrol", salt),
-            "salt": salt,
-            "role": "admin"
-        }
-    }
-    with open(AUTH_FILE, "w") as f:
-        json.dump(users, f, indent=2)
-    try:
-        os.chmod(AUTH_FILE, 0o600)
-    except OSError:
-        pass
+    pw_hash = _hash_password("netcontrol", salt)
+    await db.create_user("admin", pw_hash, salt, display_name="Administrator", role="admin")
     print("[auth] Created default user: admin / netcontrol  — CHANGE THIS PASSWORD!")
-    return users
 
 
-def _save_users(users: dict):
-    with open(AUTH_FILE, "w") as f:
-        json.dump(users, f, indent=2)
-
-
-def verify_user(username: str, password: str) -> bool:
-    users = _load_users()
-    user = users.get(username)
+async def verify_user(username: str, password: str) -> dict | None:
+    """Verify credentials and return the user dict, or None."""
+    user = await db.get_user_by_username(username)
     if not user:
-        return False
-    return _hash_password(password, user["salt"]) == user["password_hash"]
+        return None
+    if _hash_password(password, user["salt"]) == user["password_hash"]:
+        return user
+    return None
 
 
-def create_session_token(username: str) -> str:
-    return _serializer.dumps({"user": username})
+def create_session_token(username: str, user_id: int) -> str:
+    return _serializer.dumps({"user": username, "user_id": user_id})
 
 
-def verify_session_token(token: str) -> str | None:
+def verify_session_token(token: str) -> dict | None:
+    """Returns {"user": username, "user_id": id} or None."""
     try:
         data = _serializer.loads(token, max_age=SESSION_MAX_AGE)
-        return data.get("user")
+        if "user" in data and "user_id" in data:
+            return data
+        return None
     except (BadSignature, SignatureExpired):
         return None
 
 
-PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/status", "/favicon.ico", "/docs", "/openapi.json", "/redoc"}
+PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/favicon.ico", "/docs", "/openapi.json", "/redoc"}
 
 
 async def require_auth(request: Request):
-    """Dependency that checks for a valid session cookie."""
+    """Dependency that checks for a valid session cookie. Returns session dict."""
     path = request.url.path
     if path.startswith("/static/"):
         return None
@@ -166,10 +153,18 @@ async def require_auth(request: Request):
     token = request.cookies.get("session")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    username = verify_session_token(token)
-    if not username:
+    session = verify_session_token(token)
+    if not session:
         raise HTTPException(status_code=401, detail="Session expired")
-    return username
+    return session
+
+
+def _get_session(request: Request) -> dict | None:
+    """Extract session data from the request cookie without raising."""
+    token = request.cookies.get("session")
+    if not token:
+        return None
+    return verify_session_token(token)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -180,12 +175,45 @@ async def require_auth(request: Request):
 async def lifespan(app: FastAPI):
     """Initialize DB and seed on startup."""
     await db.init_db()
+    await _ensure_default_admin()
+    # Migrate users from auth.json if it exists
+    await _migrate_auth_json_users()
     # Auto-seed if empty
     check = await db.get_all_groups()
     if not check:
         from routes.seed import seed
         await seed()
     yield
+
+
+async def _migrate_auth_json_users():
+    """One-time migration: import users from legacy auth.json into the DB."""
+    auth_file = os.path.join(os.path.dirname(__file__), "..", "routes", "auth.json")
+    if not os.path.isfile(auth_file):
+        return
+    try:
+        with open(auth_file, "r") as f:
+            legacy_users = json.load(f)
+        migrated = 0
+        for username, data in legacy_users.items():
+            existing = await db.get_user_by_username(username)
+            if not existing:
+                await db.create_user(
+                    username,
+                    data["password_hash"],
+                    data["salt"],
+                    display_name=username.title(),
+                    role=data.get("role", "user"),
+                )
+                migrated += 1
+        if migrated:
+            print(f"[migration] Migrated {migrated} user(s) from auth.json to database")
+        # Rename the file so we don't migrate again
+        backup = auth_file + ".bak"
+        os.rename(auth_file, backup)
+        print(f"[migration] Renamed auth.json to auth.json.bak")
+    except Exception as e:
+        print(f"[migration] auth.json migration error: {e}")
 
 
 app = FastAPI(title="Plexus API", version="1.0.0", lifespan=lifespan)
@@ -207,24 +235,71 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 
+class UpdateProfileRequest(BaseModel):
+    display_name: Optional[str] = None
+
 
 @app.post("/api/auth/login")
 async def login(body: LoginRequest):
-    if not verify_user(body.username, body.password):
+    user = await verify_user(body.username, body.password)
+    if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = create_session_token(body.username)
-    response = JSONResponse({"ok": True, "username": body.username})
+    token = create_session_token(body.username, user["id"])
+    response = JSONResponse({
+        "ok": True,
+        "username": body.username,
+        "user_id": user["id"],
+        "display_name": user["display_name"] or body.username,
+        "role": user["role"],
+    })
     response.set_cookie(
         key="session",
         value=token,
         httponly=True,
         samesite="strict",
         max_age=SESSION_MAX_AGE,
-        secure=False,  # Set True when using HTTPS
+        secure=False,
+    )
+    return response
+
+
+@app.post("/api/auth/register")
+async def register(body: RegisterRequest):
+    existing = await db.get_user_by_username(body.username)
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already taken")
+    if len(body.username) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    salt = secrets.token_hex(16)
+    pw_hash = _hash_password(body.password, salt)
+    display = body.display_name or body.username.title()
+    user_id = await db.create_user(body.username, pw_hash, salt, display_name=display, role="user")
+    token = create_session_token(body.username, user_id)
+    response = JSONResponse({
+        "ok": True,
+        "username": body.username,
+        "user_id": user_id,
+        "display_name": display,
+        "role": "user",
+    })
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        samesite="strict",
+        max_age=SESSION_MAX_AGE,
+        secure=False,
     )
     return response
 
@@ -238,28 +313,52 @@ async def logout():
 
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
-    token = request.cookies.get("session")
-    if not token:
+    session = _get_session(request)
+    if not session:
         return {"authenticated": False}
-    username = verify_session_token(token)
-    if not username:
+    user = await db.get_user_by_id(session["user_id"])
+    if not user:
         return {"authenticated": False}
-    return {"authenticated": True, "username": username}
+    return {
+        "authenticated": True,
+        "username": user["username"],
+        "user_id": user["id"],
+        "display_name": user["display_name"] or user["username"],
+        "role": user["role"],
+    }
 
 
-@app.post("/api/auth/change-password")
+@app.post("/api/auth/change-password", dependencies=[Depends(require_auth)])
 async def change_password(body: ChangePasswordRequest, request: Request):
-    token = request.cookies.get("session")
-    username = verify_session_token(token) if token else None
-    if not username:
+    session = _get_session(request)
+    if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if not verify_user(username, body.current_password):
+    user = await verify_user(session["user"], body.current_password)
+    if not user:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
-    users = _load_users()
     salt = secrets.token_hex(16)
-    users[username]["password_hash"] = _hash_password(body.new_password, salt)
-    users[username]["salt"] = salt
-    _save_users(users)
+    pw_hash = _hash_password(body.new_password, salt)
+    await db.update_user_password(user["id"], pw_hash, salt)
+    return {"ok": True}
+
+
+@app.get("/api/auth/profile", dependencies=[Depends(require_auth)])
+async def get_profile(request: Request):
+    session = _get_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user = await db.get_user_by_id(session["user_id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.put("/api/auth/profile", dependencies=[Depends(require_auth)])
+async def update_profile(body: UpdateProfileRequest, request: Request):
+    session = _get_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    await db.update_user_profile(session["user_id"], display_name=body.display_name)
     return {"ok": True}
 
 
@@ -575,28 +674,45 @@ async def delete_template(template_id: int):
 # ═════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/credentials", dependencies=[Depends(require_auth)])
-async def list_credentials():
-    return await db.get_all_credentials()
+async def list_credentials(request: Request):
+    session = _get_session(request)
+    owner_id = session["user_id"] if session else None
+    return await db.get_all_credentials(owner_id=owner_id)
 
 
 @app.post("/api/credentials", status_code=201, dependencies=[Depends(require_auth)])
-async def create_credential(body: CredentialCreate):
+async def create_credential(body: CredentialCreate, request: Request):
+    session = _get_session(request)
+    owner_id = session["user_id"] if session else None
     cid = await db.create_credential(
         body.name, body.username,
         encrypt(body.password),
         encrypt(body.secret) if body.secret else encrypt(body.password),
+        owner_id=owner_id,
     )
     return {"id": cid}
 
 
 @app.delete("/api/credentials/{cred_id}", dependencies=[Depends(require_auth)])
-async def delete_credential(cred_id: int):
+async def delete_credential(cred_id: int, request: Request):
+    session = _get_session(request)
+    cred = await db.get_credential_raw(cred_id)
+    if not cred:
+        raise HTTPException(404, "Credential not found")
+    if cred.get("owner_id") and session and cred["owner_id"] != session["user_id"]:
+        raise HTTPException(403, "You can only delete your own credentials")
     await db.delete_credential(cred_id)
     return {"ok": True}
 
 
 @app.put("/api/credentials/{cred_id}", dependencies=[Depends(require_auth)])
-async def update_credential(cred_id: int, body: CredentialUpdate):
+async def update_credential(cred_id: int, body: CredentialUpdate, request: Request):
+    session = _get_session(request)
+    cred = await db.get_credential_raw(cred_id)
+    if not cred:
+        raise HTTPException(404, "Credential not found")
+    if cred.get("owner_id") and session and cred["owner_id"] != session["user_id"]:
+        raise HTTPException(403, "You can only edit your own credentials")
     updates = {}
     if body.name is not None:
         updates["name"] = body.name
@@ -645,12 +761,13 @@ async def get_job_events(job_id: int):
 
 
 @app.post("/api/jobs/launch", status_code=201, dependencies=[Depends(require_auth)])
-async def launch_job(body: JobLaunch):
+async def launch_job(body: JobLaunch, request: Request):
     """
     Launch a playbook execution as a background task.
     Returns the job ID immediately. Connect to the WebSocket
     at /ws/jobs/{job_id} to stream real-time output.
     """
+    session = _get_session(request)
     print(f"[debug] JobLaunch request: playbook_id={body.playbook_id}, host_ids={body.host_ids}, inventory_group_id={body.inventory_group_id}")
     
     # Validate playbook exists
@@ -663,15 +780,12 @@ async def launch_job(body: JobLaunch):
     inventory_group_id = None
     
     if body.host_ids and len(body.host_ids) > 0:
-        # Use selected host IDs
         hosts = await db.get_hosts_by_ids(body.host_ids)
         if not hosts:
             raise HTTPException(400, "No valid hosts selected")
-        # Use the group_id from the first host (for job record)
         if hosts:
             inventory_group_id = hosts[0].get("group_id")
     elif body.inventory_group_id:
-        # Use all hosts from the group (backward compatibility)
         group = await db.get_group(body.inventory_group_id)
         if not group:
             raise HTTPException(404, "Inventory group not found")
@@ -682,10 +796,14 @@ async def launch_job(body: JobLaunch):
     else:
         raise HTTPException(400, "Must specify either host_ids or inventory_group_id")
 
-    # Get credentials
+    # Get credentials — verify the user owns the selected credential
     credentials = {"username": "netadmin", "password": "cisco123", "secret": "cisco123"}
     if body.credential_id:
         cred = await db.get_credential_raw(body.credential_id)
+        if not cred:
+            raise HTTPException(404, "Credential not found")
+        if cred.get("owner_id") and session and cred["owner_id"] != session["user_id"]:
+            raise HTTPException(403, "You can only use your own credentials")
         if cred:
             credentials = {
                 "username": cred["username"],
@@ -708,11 +826,11 @@ async def launch_job(body: JobLaunch):
     if not pb_class:
         raise HTTPException(400, f"No runner registered for '{playbook['filename']}'")
 
-    # Create job record (use inventory_group_id from hosts if not provided)
+    launched_by = session["user"] if session else "admin"
     job_id = await db.create_job(
         body.playbook_id, inventory_group_id,
         body.credential_id, body.template_id,
-        body.dry_run,
+        body.dry_run, launched_by=launched_by,
     )
 
     # Launch as background task

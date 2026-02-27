@@ -1302,6 +1302,7 @@ function showSuccess(message) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 let currentUser = null;
+let currentUserData = null; // {username, user_id, display_name, role}
 
 function showLoginScreen() {
     document.getElementById('login-screen').style.display = 'flex';
@@ -1309,14 +1310,36 @@ function showLoginScreen() {
     document.getElementById('login-error').style.display = 'none';
     document.getElementById('login-username').value = '';
     document.getElementById('login-password').value = '';
+    showLoginForm();
     document.getElementById('login-username').focus();
 }
 
-function showApp(username) {
-    currentUser = username;
+window.showRegisterScreen = function() {
+    document.getElementById('login-form').style.display = 'none';
+    document.getElementById('register-form').style.display = 'block';
+    document.getElementById('register-back').style.display = 'block';
+    // Hide "Don't have an account?" link
+    document.getElementById('login-form').nextElementSibling.style.display = 'none';
+    document.getElementById('register-error').style.display = 'none';
+    document.getElementById('register-username').focus();
+};
+
+window.showLoginForm = function() {
+    document.getElementById('login-form').style.display = 'block';
+    document.getElementById('register-form').style.display = 'none';
+    document.getElementById('register-back').style.display = 'none';
+    // Show "Don't have an account?" link
+    const registerLink = document.getElementById('login-form').nextElementSibling;
+    if (registerLink) registerLink.style.display = 'block';
+    document.getElementById('login-error').style.display = 'none';
+};
+
+function showApp(userData) {
+    currentUserData = userData;
+    currentUser = userData.username;
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app-container').style.display = 'flex';
-    document.getElementById('nav-user').textContent = username;
+    document.getElementById('nav-user').textContent = userData.display_name || userData.username;
     initNavigation();
     loadPageData('dashboard');
 }
@@ -1331,17 +1354,85 @@ function initLoginForm() {
 
         try {
             const result = await api.login(username, password);
-            showApp(result.username);
+            showApp(result);
         } catch (error) {
             errorEl.textContent = error.message || 'Invalid username or password';
             errorEl.style.display = 'block';
         }
     });
+
+    document.getElementById('register-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('register-username').value;
+        const displayName = document.getElementById('register-display-name').value;
+        const password = document.getElementById('register-password').value;
+        const confirm = document.getElementById('register-confirm').value;
+        const errorEl = document.getElementById('register-error');
+        errorEl.style.display = 'none';
+
+        if (password !== confirm) {
+            errorEl.textContent = 'Passwords do not match';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        try {
+            const result = await api.register(username, password, displayName);
+            showApp(result);
+        } catch (error) {
+            errorEl.textContent = error.message || 'Registration failed';
+            errorEl.style.display = 'block';
+        }
+    });
 }
 
-window.showUserMenu = function() {
-    document.getElementById('user-menu-name').textContent = `Signed in as ${currentUser}`;
-    document.getElementById('user-menu-overlay').classList.add('active');
+window.showUserMenu = async function() {
+    // Load fresh profile data
+    try {
+        const profile = await api.getProfile();
+        currentUserData = profile;
+        console.log('showUserMenu: Fetched profile:', profile);
+
+        const userMenuOverlay = document.getElementById('user-menu-overlay');
+        if (!userMenuOverlay) {
+            console.error('Error: user-menu-overlay not found!');
+            return;
+        }
+
+        const avatar = document.getElementById('user-avatar');
+        if (!avatar) {
+            console.error('Error: user-avatar not found BEFORE assignment!');
+            return;
+        }
+
+        const displayNameEl = document.getElementById('user-menu-display-name');
+        const usernameEl = document.getElementById('user-menu-username');
+        const roleEl = document.getElementById('user-menu-role');
+
+        if (!displayNameEl || !usernameEl || !roleEl) {
+            console.error('Error: One or more user menu text elements not found BEFORE assignment!');
+            return;
+        }
+
+        const displayName = profile.display_name || profile.username;
+        console.log('showUserMenu: Attempting to set avatar textContent. Avatar element:', avatar); // NEW LOG
+        avatar.textContent = displayName.charAt(0).toUpperCase();
+        displayNameEl.textContent = displayName;
+        usernameEl.textContent = `@${profile.username}`;
+        roleEl.textContent = profile.role;
+        console.log('showUserMenu: Updated user menu elements.');
+    } catch (e) {
+        console.error('showUserMenu: Error fetching profile, falling back to cached data:', e);
+    }
+    
+    // Final check before activating overlay
+    const finalOverlay = document.getElementById('user-menu-overlay');
+    if (!finalOverlay) {
+        console.error('Error: user-menu-overlay not found when trying to activate!');
+        return;
+    }
+    finalOverlay.classList.add('active');
+    console.log('showUserMenu: User menu overlay activated.');
 };
 
 window.closeUserMenu = function() {
@@ -1354,8 +1445,48 @@ window.doLogout = async function() {
     } catch (e) {
         // ignore
     }
+    currentUser = null;
+    currentUserData = null;
     closeUserMenu();
     showLoginScreen();
+};
+
+window.showEditProfileModal = function() {
+    closeUserMenu();
+    const displayName = currentUserData?.display_name || currentUserData?.username || '';
+    showModal('Edit Profile', `
+        <form id="edit-profile-form">
+            <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" class="form-input" value="${escapeHtml(currentUserData?.username || '')}" disabled style="opacity: 0.6;">
+                <small style="color: var(--text-muted);">Username cannot be changed</small>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Display Name</label>
+                <input type="text" class="form-input" name="display_name" value="${escapeHtml(displayName)}" required>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    `);
+
+    document.getElementById('edit-profile-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        try {
+            await api.updateProfile(formData.get('display_name'));
+            closeAllModals();
+            // Update nav display
+            const newName = formData.get('display_name');
+            document.getElementById('nav-user').textContent = newName;
+            if (currentUserData) currentUserData.display_name = newName;
+            showSuccess('Profile updated successfully');
+        } catch (error) {
+            showError(`Failed to update profile: ${error.message}`);
+        }
+    });
 };
 
 window.showChangePasswordModal = function() {
@@ -1412,7 +1543,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         const status = await api.getAuthStatus();
         if (status.authenticated) {
-            showApp(status.username);
+            showApp(status);
         } else {
             showLoginScreen();
         }
