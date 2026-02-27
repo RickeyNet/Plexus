@@ -27,10 +27,24 @@ netcontrol/
 ```
 
 ## Quick Start
-
+CD to repository folder
 ```bash
-cd netcontrol
-pip install -r requirements.txt
+cd plexus
+```
+
+Create the virtual enviroment
+```bash
+py -3.14 -m venv venv
+```
+
+Activate venv
+```bash
+.\venv\scripts\activate
+```
+
+Install requirements
+```bash
+pip install -r templates\requirements.txt
 python run.py
 ```
 
