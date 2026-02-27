@@ -13,6 +13,10 @@ import argparse
 import sys
 import os
 import uvicorn
+import signal
+import asyncio
+import functools
+import socket
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
@@ -82,6 +86,28 @@ def generate_self_signed_cert():
         print("[ssl] ERROR: 'cryptography' package required for HTTPS.")
         sys.exit(1)
 
+
+# Graceful shutdown handler
+def handle_shutdown(signal, loop):
+    print("\nShutting down gracefully...")
+    for task in asyncio.all_tasks(loop):
+        task.cancel()
+    loop.stop()
+
+
+# Suppress ConnectionResetError globally for socket operations
+def ignore_connection_reset_error(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except ConnectionResetError:
+            pass
+    return wrapper
+
+if os.name == "nt":
+    original_shutdown = socket.socket.shutdown
+    socket.socket.shutdown = ignore_connection_reset_error(original_shutdown)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plexus Automation Hub")
