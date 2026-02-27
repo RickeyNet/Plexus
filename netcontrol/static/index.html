@@ -171,6 +171,33 @@
                     <div class="loading">Loading...</div>
                 </div>
             </div>
+
+            <!-- Settings Page -->
+            <div id="page-settings" class="page">
+                <h2>Admin Settings</h2>
+                <div class="section">
+                    <h3>User Management</h3>
+                    <div id="admin-users-list" class="admin-users-list">
+                        <div class="loading">Loading users...</div>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>User Groups</h3>
+                    <div id="admin-groups-list" class="admin-groups-list">
+                        <div class="loading">Loading groups...</div>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>Login Rules</h3>
+                    <form id="admin-login-rules-form">
+                        <label>Max Attempts: <input type="number" id="login-max-attempts" min="1"></label><br>
+                        <label>Lockout Time (sec): <input type="number" id="login-lockout-time" min="1"></label><br>
+                        <label>Rate Limit Window (sec): <input type="number" id="login-rate-window" min="1"></label><br>
+                        <label>Rate Limit Max: <input type="number" id="login-rate-max" min="1"></label><br>
+                        <button type="submit" class="btn btn-primary">Save Rules</button>
+                    </form>
+                </div>
+            </div>
         </main>
     </div>
 
