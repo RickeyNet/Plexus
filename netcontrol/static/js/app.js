@@ -68,6 +68,9 @@ async function loadPageData(page) {
             case 'credentials':
                 await loadCredentials();
                 break;
+            case 'settings':
+                await loadAdminSettings();
+                break;
         }
     } catch (error) {
         console.error(`Error loading ${page}:`, error);

@@ -14,13 +14,13 @@ import hashlib
 import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
-
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+import time
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -167,6 +167,31 @@ def _get_session(request: Request) -> dict | None:
     return verify_session_token(token)
 
 
+# In-memory stores for rate limiting and lockout
+LOGIN_ATTEMPTS = {}
+LOCKED_OUT = {}
+MAX_ATTEMPTS = 5
+LOCKOUT_TIME = 900  # 15 minutes
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = 10
+
+# In-memory login rules (should be persisted in production)
+LOGIN_RULES = {
+    "max_attempts": MAX_ATTEMPTS,
+    "lockout_time": LOCKOUT_TIME,
+    "rate_limit_window": RATE_LIMIT_WINDOW,
+    "rate_limit_max": RATE_LIMIT_MAX,
+}
+
+async def require_admin(request: Request):
+    """Dependency that checks for admin access. Returns session dict."""
+    session = await require_auth(request)
+    user = await db.get_user_by_username(session["user"])
+    if not user or user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return session
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # App Lifecycle
 # ═════════════════════════════════════════════════════════════════════════════
@@ -249,10 +274,36 @@ class UpdateProfileRequest(BaseModel):
 
 
 @app.post("/api/auth/login")
-async def login(body: LoginRequest):
+async def login(body: LoginRequest, request: Request):
+    ip = request.client.host
+    now = time.time()
+
+    # Account lockout check
+    if ip in LOCKED_OUT:
+        if now < LOCKED_OUT[ip]:
+            raise HTTPException(status_code=429, detail=f"Account locked. Try again in {int((LOCKED_OUT[ip]-now)//60)+1} min.")
+        else:
+            del LOCKED_OUT[ip]
+            LOGIN_ATTEMPTS.pop(ip, None)
+
+    # Rate limiting
+    attempts = LOGIN_ATTEMPTS.get(ip, [])
+    # Remove old attempts
+    attempts = [t for t in attempts if now - t < RATE_LIMIT_WINDOW]
+    if len(attempts) >= RATE_LIMIT_MAX:
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please wait a minute.")
+
     user = await verify_user(body.username, body.password)
     if not user:
+        attempts.append(now)
+        LOGIN_ATTEMPTS[ip] = attempts
+        # Lockout if too many failed attempts
+        if len(attempts) >= MAX_ATTEMPTS:
+            LOCKED_OUT[ip] = now + LOCKOUT_TIME
+            raise HTTPException(status_code=429, detail="Account locked due to too many failed attempts. Try again later.")
         raise HTTPException(status_code=401, detail="Invalid username or password")
+    # On success, reset attempts
+    LOGIN_ATTEMPTS.pop(ip, None)
     token = create_session_token(body.username, user["id"])
     response = JSONResponse({
         "ok": True,
