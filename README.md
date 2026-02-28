@@ -44,8 +44,16 @@ Activate venv
 
 Install requirements
 ```bash
-pip install -r templates\requirements.txt
-python run.py
+cd templates
+pip install -r requirements.txt
+python run.py --https
+options:
+  -h, --help            show this help message and exit
+  --host HOST           Bind address (default: 127.0.0.1)
+  --port PORT           Port number
+  --reload              Auto-reload on changes
+  --https               Enable HTTPS with self-signed cert
+  --expose              Bind to 0.0.0.0 (network accessible)
 ```
 
 The server starts on `http://localhost:8080`. On first launch it auto-seeds
