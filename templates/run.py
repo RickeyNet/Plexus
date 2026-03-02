@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 run.py — Start the Plexus server.
@@ -8,6 +9,10 @@ Usage:
     python run.py --https           # Enable HTTPS with auto-generated certs
     python run.py --expose          # Bind to 0.0.0.0 (accessible on network)
 """
+
+# Ensure Plexus is in the Python path for netcontrol.* imports
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import argparse
 import sys

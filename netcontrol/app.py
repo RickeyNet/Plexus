@@ -8,6 +8,8 @@ Session-based authentication with signed cookies.
 
 import sys
 import os
+import sys
+import os
 import json
 import asyncio
 import hashlib
@@ -18,6 +20,13 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Quer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+
+# Ensure project root is on path for imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+# Register converter API
+from netcontrol.routes.converter import router as converter_router
 from pydantic import BaseModel
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import time
@@ -26,9 +35,9 @@ import time
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-import routes.database as db
-from routes.crypto import encrypt, decrypt
-from routes.runner import get_playbook_class, execute_playbook, LogEvent
+import netcontrol.routes.database as db
+from netcontrol.routes.crypto import encrypt, decrypt
+from netcontrol.routes.runner import get_playbook_class, execute_playbook, LogEvent
 import importlib
 
 # Auto-register all playbooks
@@ -242,6 +251,7 @@ async def _migrate_auth_json_users():
 
 
 app = FastAPI(title="Plexus API", version="1.0.0", lifespan=lifespan)
+app.include_router(converter_router)
 
 app.add_middleware(
     CORSMiddleware,
