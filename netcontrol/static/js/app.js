@@ -71,12 +71,87 @@ async function loadPageData(page) {
             case 'settings':
                 await loadAdminSettings();
                 break;
+            case 'converter':
+                await loadConverter();
+                break;
         }
     } catch (error) {
         console.error(`Error loading ${page}:`, error);
         showError(`Failed to load ${page}: ${error.message}`);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Converter
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadConverter() {
+    const form = document.getElementById('converter-form');
+    const resultDiv = document.getElementById('converter-result');
+    const modal = document.getElementById('converter-output-modal');
+    const outputWindow = document.getElementById('converter-output-window');
+    if (!form) return;
+    form.reset();
+    resultDiv.textContent = '';
+
+    form.onsubmit = async (e) => {
+        e.preventDefault();
+        outputWindow.textContent = '';
+        modal.style.display = 'flex';
+        resultDiv.textContent = 'Uploading and processing...';
+        const formData = new FormData(form);
+        formData.set('deploy', document.getElementById('ftd-deploy').checked ? 'true' : '');
+        try {
+            // Use fetch with streaming if supported
+            const resp = await fetch('/api/convert-fortigate', {
+                method: 'POST',
+                body: formData
+            });
+            let data;
+            if (resp.body && window.ReadableStream) {
+                // Stream output to modal window
+                const reader = resp.body.getReader();
+                let decoder = new TextDecoder();
+                let done = false;
+                let buffer = '';
+                while (!done) {
+                    const { value, done: doneReading } = await reader.read();
+                    done = doneReading;
+                    if (value) {
+                        const chunk = decoder.decode(value);
+                        buffer += chunk;
+                        outputWindow.textContent += chunk;
+                        outputWindow.scrollTop = outputWindow.scrollHeight;
+                    }
+                }
+                try {
+                    data = JSON.parse(buffer);
+                } catch {
+                    data = { detail: buffer };
+                }
+            } else {
+                data = await resp.json();
+                outputWindow.textContent =
+                    'Conversion Output:\n' + (data.conversion_output || '') +
+                    '\n\nImport Output:\n' + (data.import_output || '');
+            }
+            if (!resp.ok) {
+                throw new Error(data.detail || 'Conversion failed');
+            }
+            resultDiv.textContent = 'Conversion and import completed.';
+        } catch (err) {
+            outputWindow.textContent += '\nError: ' + err.message;
+            resultDiv.textContent = 'Error: ' + err.message;
+        }
+    };
+}
+
+window.openConverterOutputModal = function() {
+    document.getElementById('converter-output-modal').style.display = 'flex';
+};
+window.closeConverterOutputModal = function() {
+    document.getElementById('converter-output-modal').style.display = 'none';
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Dashboard

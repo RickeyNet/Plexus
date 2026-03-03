@@ -1,3 +1,15 @@
+    <!-- Converter Output Modal -->
+    <div id="converter-output-modal" class="modal-overlay" style="display:none;">
+        <div class="modal modal-large" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>Converter Progress</h3>
+                <button class="modal-close" onclick="closeConverterOutputModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <pre id="converter-output-window" style="height: 400px; overflow-y: auto; background: #181c20; color: #e0e0e0; padding: 1rem; border-radius: 0.5rem; font-size: 1rem;"></pre>
+            </div>
+        </div>
+    </div>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -73,6 +85,7 @@
                 <a href="#" data-page="jobs" class="nav-link">Jobs</a>
                 <a href="#" data-page="templates" class="nav-link">Templates</a>
                 <a href="#" data-page="credentials" class="nav-link">Credentials</a>
+                <a href="#" data-page="converter" class="nav-link">Converter</a>
                 <a href="#" class="nav-link nav-user" id="nav-user" onclick="showUserMenu()">admin</a>
             </div>
         </nav>
@@ -114,6 +127,36 @@
                         <div class="loading">Loading...</div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Converter Page -->
+            <div id="page-converter" class="page">
+                <div class="page-header">
+                    <h2>FortiGate to Cisco FTD Converter</h2>
+                </div>
+                <form id="converter-form" enctype="multipart/form-data" style="max-width: 500px; margin: 2rem 0;">
+                    <div class="form-group">
+                        <label for="fortigate-yaml">FortiGate YAML Config</label>
+                        <input type="file" id="fortigate-yaml" name="yaml_file" class="form-input" accept=".yaml,.yml" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="ftd-host">Cisco FTD Host/IP</label>
+                        <input type="text" id="ftd-host" name="ftd_host" class="form-input" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="ftd-username">FTD Username</label>
+                        <input type="text" id="ftd-username" name="ftd_username" class="form-input" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="ftd-password">FTD Password</label>
+                        <input type="password" id="ftd-password" name="ftd_password" class="form-input" required />
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="ftd-deploy" name="deploy" /> Deploy after import</label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Convert & Import</button>
+                </form>
+                    <div id="converter-result" style="white-space: pre-wrap; margin-top: 1rem;" onclick="openConverterOutputModal()"></div>
             </div>
 
             <!-- Inventory Page -->
