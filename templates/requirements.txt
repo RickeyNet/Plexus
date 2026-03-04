@@ -13,5 +13,9 @@ python-multipart>=0.0.9
 # Network automation (install when connecting to real devices)
 netmiko>=4.4.0
 
+# Firewall converter tools
+requests>=2.31.0
+urllib3>=2.0.0
+
 # Optional: for future scheduled jobs
 # apscheduler>=3.10.0

@@ -35,9 +35,9 @@ import time
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-import netcontrol.routes.database as db
-from netcontrol.routes.crypto import encrypt, decrypt
-from netcontrol.routes.runner import get_playbook_class, execute_playbook, LogEvent
+import routes.database as db
+from routes.crypto import encrypt, decrypt
+from routes.runner import get_playbook_class, execute_playbook, LogEvent
 import importlib
 
 # Auto-register all playbooks

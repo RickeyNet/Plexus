@@ -481,6 +481,7 @@ class InterfaceConverter:
                 switch_ports.append((switch_name, switch_props))
         
         # Process system_interface section
+        skipped_special = []
         for intf_dict in interfaces:
             intf_name = list(intf_dict.keys())[0]
             properties = intf_dict[intf_name]
@@ -490,6 +491,43 @@ class InterfaceConverter:
                 continue
             
             intf_type = properties.get('type', 'physical')
+
+            # ----------------------------------------------------------------
+            # Skip non-data interfaces that should never map to FTD data ports
+            # ----------------------------------------------------------------
+            # Virtual wire interfaces:
+            #   FortiGate CLI uses "vwl-peer" (hyphen); YAML preserves hyphens verbatim.
+            #   Some export tools convert to underscore, so check both.
+            if (intf_type in ('vwl', 'vwl-zone')
+                    or 'vwl-peer' in properties
+                    or 'vwl_peer' in properties):
+                skipped_special.append((intf_name, 'virtual-wire'))
+                continue
+            # HA-dedicated interfaces:
+            #   FortiGate CLI: "set role ha"  →  YAML key: "role", value: "ha"
+            if intf_type == 'ha' or properties.get('role') == 'ha':
+                skipped_special.append((intf_name, 'ha'))
+                continue
+            # Management-dedicated interfaces:
+            #   FortiGate CLI: "set dedicated-to management"  →  YAML key: "dedicated-to"
+            #   Some export tools normalise hyphens to underscores, check both.
+            dedicated = properties.get('dedicated-to') or properties.get('dedicated_to') or ''
+            if str(dedicated).lower() in ('management', 'mgmt'):
+                skipped_special.append((intf_name, 'management'))
+                continue
+            # Name-pattern fallback for interfaces that carry no distinguishing fields
+            # in the YAML (e.g. some export formats strip extra attributes).
+            #   FortiGate 500E defaults: mgmt1, ha1, vwl1, vwl2
+            _lname = str(intf_name).lower()
+            if (_lname in ('mgmt', 'mgmt1', 'mgmt2')
+                    or _lname.startswith('ha') and _lname[2:].isdigit()
+                    or _lname.startswith('vwl') and _lname[3:].isdigit()):
+                reason = ('management' if _lname.startswith('mgmt')
+                          else 'ha' if _lname.startswith('ha')
+                          else 'virtual-wire')
+                skipped_special.append((intf_name, reason))
+                continue
+            # ----------------------------------------------------------------
             
             # Check if this is a VLAN interface (has 'interface' and 'vlanid')
             if 'interface' in properties and 'vlanid' in properties:
@@ -499,7 +537,7 @@ class InterfaceConverter:
             elif intf_type == 'physical':
                 physical_ports.append((intf_name, properties))
             # Skip tunnel, loopback, etc.
-        
+
         # ====================================================================
         # PHASE 2: Identify which physical interfaces have subinterfaces
         # ====================================================================
@@ -566,6 +604,12 @@ class InterfaceConverter:
         print(f"      - Standalone physical: {len(physical_standalone)}")
         if member_interfaces:
             print(f"      - Excluded (EC members): {len(member_interfaces)} ({', '.join(sorted(member_interfaces))})")
+        if skipped_special:
+            by_reason = {}
+            for name, reason in skipped_special:
+                by_reason.setdefault(reason, []).append(name)
+            parts = [f"{len(v)} {k}" for k, v in by_reason.items()]
+            print(f"      - Skipped (non-data): {len(skipped_special)} ({', '.join(parts)})")
         print(f"    Total ports needed: {total_needed}")
         
         if total_needed > available:
@@ -1280,7 +1324,7 @@ if __name__ == '__main__':
                     'vdom': 'root',
                     'ip': ['10.0.0.10', '255.255.255.252'],
                     'type': 'physical',
-                    'alias': 'L3_NTP'
+                    'alias': 'NTP'
                 }
             },
             {
@@ -1288,7 +1332,7 @@ if __name__ == '__main__':
                     'vdom': 'root',
                     'type': 'aggregate',
                     'member': ['x1', 'x2'],
-                    'alias': 'UTB',
+                    'alias': 'rt',
                     'mtu-override': 'enable',
                     'mtu': 9216
                 }

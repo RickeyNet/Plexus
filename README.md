@@ -4,6 +4,8 @@ A Python-first network automation control center inspired by Ansible Tower / AWX
 Manage device inventories, run automation playbooks, store config templates, and
 stream live job output — all through a REST API with WebSocket support.
 
+**Scope (current):** FortiGate YAML → FTD JSON conversion and import; FastAPI backend with playbook runner and WebSocket streaming.
+
 ## Architecture
 
 ```
@@ -60,6 +62,36 @@ The server starts on `http://localhost:8080`. On first launch it auto-seeds
 the database with demo inventory groups, playbooks, templates, and a
 default credential.
 
+## Running locally (venv)
+
+1) Copy `.env.example` to `.env` and adjust values (host, port, https, defaults).
+2) Create/activate venv and install deps from `templates/requirements.txt` (as above).
+3) Start the server from the repo root:
+```bash
+python templates/run.py --host 0.0.0.0 --port 8080
+```
+4) Visit `http://localhost:8080/docs`.
+
+## Running with Docker
+
+This avoids installing Python/deps locally.
+
+1) Copy `.env.example` to `.env` and update values.
+2) Build and start:
+```bash
+docker-compose up --build
+```
+3) Access at `http://localhost:8080` (mapped from the container).
+4) Stop/remove containers:
+```bash
+docker-compose down
+```
+
+Notes:
+- The Docker image runs `python templates/run.py --host 0.0.0.0 --port 8080` inside the container.
+- The built-in healthcheck pings `/docs`; compose restarts the container if it becomes unhealthy.
+- For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables.
+
 Interactive API docs: `http://localhost:8080/docs`
 
 ## Core Concepts
@@ -93,15 +125,15 @@ async background tasks. Output streams to subscribers via WebSocket.
 | GET | `/api/dashboard` | Stats, recent jobs, inventory overview |
 
 ### Inventory
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/inventory` | List all groups (with host counts) |
-| POST | `/api/inventory` | Create group `{name, description}` |
-| GET | `/api/inventory/{id}` | Group detail with hosts |
-| DELETE | `/api/inventory/{id}` | Delete group and its hosts |
-| GET | `/api/inventory/{id}/hosts` | List hosts in group |
-| POST | `/api/inventory/{id}/hosts` | Add host `{hostname, ip_address, device_type}` |
-| DELETE | `/api/hosts/{id}` | Remove a host |
+| Method | Endpoint                    | Description                                    |
+|--------|-----------------------------|------------------------------------------------|
+| GET    | `/api/inventory`            | List all groups (with host counts)             |
+| POST   | `/api/inventory`            | Create group `{name, description}`             |
+| GET    | `/api/inventory/{id}`       | Group detail with hosts                        |
+| DELETE | `/api/inventory/{id}`       | Delete group and its hosts                     |
+| GET    | `/api/inventory/{id}/hosts` | List hosts in group                            |
+| POST   | `/api/inventory/{id}/hosts` | Add host `{hostname, ip_address, device_type}` |
+| DELETE | `/api/hosts/{id}`           | Remove a host                                  |
 
 ### Playbooks
 | Method | Endpoint | Description |

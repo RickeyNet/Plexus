@@ -1,62 +1,451 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
+from typing import List
 import os
 import sys
-import tempfile
 import subprocess
+import asyncio
 import shutil
-
-# Adjust import path for converter scripts
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool')))
+import uuid
+import json
+import time
+from datetime import datetime
 
 router = APIRouter()
 
-@router.post('/api/convert-fortigate')
-async def convert_fortigate(
+# Persistent directory for converted config files (lives inside the app, gitignored)
+SESSIONS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../converter_sessions'))
+os.makedirs(SESSIONS_DIR, exist_ok=True)
+
+# In-memory session store: session_id -> {session_dir, base, created_at, target_model}
+_sessions: dict = {}
+SESSION_TTL = 7200  # 2 hours
+
+CONVERTER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/fortigate_converter.py'))
+IMPORTER_PATH  = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py'))
+CLEANUP_PATH   = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_cleanup.py'))
+
+
+def _cleanup_old_sessions():
+    now = time.time()
+    for sid in list(_sessions.keys()):
+        if now - _sessions[sid]['created_at'] > SESSION_TTL:
+            shutil.rmtree(_sessions[sid]['session_dir'], ignore_errors=True)
+            del _sessions[sid]
+
+
+def _load_session_from_disk(session_id: str):
+    """Rebuild session metadata from files on disk if memory state is missing."""
+    session_dir = os.path.join(SESSIONS_DIR, session_id)
+    if not os.path.isdir(session_dir):
+        return None
+
+    metadata_path = os.path.join(session_dir, 'ftd_config_metadata.json')
+    target_model = ''
+    base = 'ftd_config'
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path) as f:
+                meta = json.load(f)
+                target_model = meta.get('target_model', '') or ''
+                base = meta.get('output_basename', 'ftd_config') or 'ftd_config'
+        except Exception:
+            pass
+    created_at = os.path.getmtime(session_dir)
+
+    _sessions[session_id] = {
+        'session_dir':  session_dir,
+        'base':         base,
+        'created_at':   created_at,
+        'target_model': target_model,
+    }
+    return _sessions[session_id]
+
+
+def _get_session(session_id: str):
+    session = _sessions.get(session_id)
+    if session:
+        return session
+    return _load_session_from_disk(session_id)
+
+
+def _resolve_session_file(session_dir: str, base: str, filename: str):
+    """Ensure the requested file stays inside the session directory and matches the expected prefix."""
+    if not filename.startswith(base) or not filename.endswith('.json'):
+        raise HTTPException(status_code=400, detail='Invalid file name.')
+    abs_session = os.path.abspath(session_dir)
+    path = os.path.abspath(os.path.join(session_dir, filename))
+    if not path.startswith(abs_session):
+        raise HTTPException(status_code=400, detail='Invalid file path.')
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail='File not found.')
+    return path
+
+
+@router.post('/api/convert-only')
+async def convert_only(
     yaml_file: UploadFile = File(...),
-    ftd_host: str = Form(...),
-    ftd_username: str = Form(...),
-    ftd_password: str = Form(...),
-    deploy: bool = Form(False)
+    target_model: str = Form(default=''),
+    source_model: str = Form(default='')
 ):
     """
-    Accepts a FortiGate YAML config, converts it to FTD JSON, and imports it using the Cisco API.
+    Step 1: Convert a FortiGate YAML config to FTD JSON files.
+    Returns a session_id, conversion output text, and a summary dict.
     """
-    # Save uploaded YAML to temp file
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Ensure filename is not None and safe
+    _cleanup_old_sessions()
+    session_id = str(uuid.uuid4())
+    session_dir = os.path.join(SESSIONS_DIR, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+    try:
         filename = yaml_file.filename or 'input.yaml'
-        yaml_path = os.path.join(tmpdir, filename)
+        yaml_path = os.path.join(session_dir, filename)
         with open(yaml_path, 'wb') as f:
             f.write(await yaml_file.read())
 
-        # Run the converter script
-        converter_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/fortigate_converter.py'))
-        proc = subprocess.run([
-            sys.executable, converter_path, yaml_path
-        ], cwd=tmpdir, capture_output=True, text=True)
-        if proc.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"Conversion failed: {proc.stderr}")
+        effective_model = target_model.strip() if target_model else 'ftd-3120'
+        # Always use 'ftd_config' as the output base name so the importer can reliably find the files
+        BASE_NAME = 'ftd_config'
 
-        # Find the base name for output files
-        base = os.path.splitext(os.path.basename(filename))[0]
-        # Run the importer script
-        importer_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py'))
-        import_args = [
-            sys.executable, importer_path,
-            '--host', ftd_host,
-            '--username', ftd_username,
-            '--password', ftd_password,
-            '--base', base
+        cmd = [
+            sys.executable, CONVERTER_PATH, yaml_path,
+            '--target-model', effective_model,
+            '--output', BASE_NAME
         ]
-        if deploy:
-            import_args.append('--deploy')
-        proc2 = subprocess.run(import_args, cwd=tmpdir, capture_output=True, text=True)
-        if proc2.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"Import failed: {proc2.stderr}")
+
+        proc = subprocess.run(
+            cmd,
+            cwd=session_dir, capture_output=True, text=True
+        )
+        if proc.returncode != 0:
+            shutil.rmtree(session_dir, ignore_errors=True)
+            raise HTTPException(status_code=500, detail=f"Conversion failed:\n{proc.stderr or proc.stdout}")
+
+        summary = {}
+        summary_path = os.path.join(session_dir, f"{BASE_NAME}_summary.json")
+        if os.path.exists(summary_path):
+            with open(summary_path) as f:
+                summary = json.load(f)
+
+        _sessions[session_id] = {
+            'session_dir':  session_dir,
+            'base':         BASE_NAME,
+            'created_at':   time.time(),
+            'target_model': effective_model
+        }
 
         return JSONResponse({
             'ok': True,
+            'session_id': session_id,
             'conversion_output': proc.stdout,
-            'import_output': proc2.stdout
+            'summary': summary,
+            'target_model': effective_model
         })
+    except HTTPException:
+        raise
+    except Exception as e:
+        shutil.rmtree(session_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ImportRequest(BaseModel):
+    session_id: str
+    ftd_host: str
+    ftd_username: str
+    ftd_password: str
+    deploy: bool = False
+    debug: bool = False
+    only_flags: List[str] = []
+
+
+@router.post('/api/import-fortigate')
+async def import_fortigate(req: ImportRequest):
+    """
+    Step 2: Import previously converted FTD JSON files into a live FTD device.
+    """
+    session = _get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail='Session not found. Please run Convert again.')
+
+    session_dir = session['session_dir']
+    base        = session['base']
+
+    import_args = [
+        sys.executable, '-u', IMPORTER_PATH,
+        '--host',     req.ftd_host,
+        '--username', req.ftd_username,
+        '--password', req.ftd_password,
+        '--base',     base
+    ]
+    if req.deploy:
+        import_args.append('--deploy')
+    if req.debug:
+        import_args.append('--debug')
+    for flag in req.only_flags:
+        import_args.append(f'--{flag}')
+
+    proc = subprocess.run(import_args, cwd=session_dir, capture_output=True, text=True)
+
+    # Keep session files so cleanup/rollback can still reference them; TTL handles eventual removal
+    if proc.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"Import failed:\n{proc.stderr or proc.stdout}")
+
+    return JSONResponse({'ok': True, 'import_output': proc.stdout})
+
+
+@router.post('/api/import-fortigate-stream')
+async def import_fortigate_stream(req: ImportRequest):
+    """Stream import output live to the frontend."""
+    session = _sessions.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail='Session not found. Please run Convert again.')
+
+    session_dir = session['session_dir']
+    base        = session['base']
+
+    import_args = [
+        sys.executable, IMPORTER_PATH,
+        '--host',     req.ftd_host,
+        '--username', req.ftd_username,
+        '--password', req.ftd_password,
+        '--base',     base
+    ]
+    if req.deploy:
+        import_args.append('--deploy')
+    if req.debug:
+        import_args.append('--debug')
+    for flag in req.only_flags:
+        import_args.append(f'--{flag}')
+
+    proc = await asyncio.create_subprocess_exec(
+        *import_args,
+        cwd=session_dir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+
+    async def stream_lines():
+        try:
+            assert proc.stdout is not None
+            async for line in proc.stdout:
+                yield line.decode('utf-8', errors='replace')
+            rc = await proc.wait()
+            if rc != 0:
+                yield f"\n[ERROR] Import failed (exit {rc}).\n"
+        finally:
+            # No explicit close needed; StreamReader lacks close() and the subprocess pipes
+            # are cleaned up when the process exits.
+            pass
+
+    return StreamingResponse(stream_lines(), media_type='text/plain')
+
+
+class CleanupRequest(BaseModel):
+    session_id: str = ''
+    ftd_host: str
+    ftd_username: str
+    ftd_password: str
+    dry_run: bool = False
+    deploy: bool = False
+    debug: bool = False
+    delete_flags: List[str] = []
+
+
+@router.post('/api/cleanup-ftd')
+async def cleanup_ftd(req: CleanupRequest):
+    """
+    Step 3 (Optional): Delete / rollback objects previously imported to FTD.
+    """
+    if not req.delete_flags:
+        raise HTTPException(status_code=400, detail='Must select at least one item to delete.')
+
+    session = _get_session(req.session_id) if req.session_id else None
+    session_dir  = session['session_dir'] if session else SESSIONS_DIR
+    target_model = session.get('target_model', '') if session else ''
+
+    cmd = [
+        sys.executable, CLEANUP_PATH,
+        '--host',     req.ftd_host,
+        '--username', req.ftd_username,
+        '--password', req.ftd_password,
+        '--yes',  # skip interactive prompt; UI provides confirmation
+    ]
+    if req.dry_run:
+        cmd.append('--dry-run')
+    if req.deploy:
+        cmd.append('--deploy')
+    if req.debug:
+        cmd.append('--debug')
+    if target_model:
+        cmd += ['--appliance-model', target_model]
+    if session and session.get('session_dir'):
+        metadata_path = os.path.join(session['session_dir'], f"{session['base']}_metadata.json")
+        if os.path.exists(metadata_path):
+            cmd += ['--metadata-file', metadata_path]
+    for flag in req.delete_flags:
+        cmd.append(f'--{flag}')
+
+    proc = subprocess.run(cmd, cwd=session_dir, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"Cleanup failed:\n{proc.stderr or proc.stdout}")
+
+    return JSONResponse({'ok': True, 'cleanup_output': proc.stdout})
+
+
+@router.post('/api/cleanup-ftd-stream')
+async def cleanup_ftd_stream(req: CleanupRequest):
+    """Stream cleanup output live to the frontend."""
+    if not req.delete_flags:
+        raise HTTPException(status_code=400, detail='Must select at least one item to delete.')
+
+    session = _get_session(req.session_id) if req.session_id else None
+    session_dir  = session['session_dir'] if session else SESSIONS_DIR
+    target_model = session.get('target_model', '') if session else ''
+
+    cmd = [
+        sys.executable, CLEANUP_PATH,
+        '--host',     req.ftd_host,
+        '--username', req.ftd_username,
+        '--password', req.ftd_password,
+        '--yes',
+    ]
+    if req.dry_run:
+        cmd.append('--dry-run')
+    if req.deploy:
+        cmd.append('--deploy')
+    if req.debug:
+        cmd.append('--debug')
+    if target_model:
+        cmd += ['--appliance-model', target_model]
+    if session and session.get('session_dir'):
+        metadata_path = os.path.join(session['session_dir'], f"{session['base']}_metadata.json")
+        if os.path.exists(metadata_path):
+            cmd += ['--metadata-file', metadata_path]
+    for flag in req.delete_flags:
+        cmd.append(f'--{flag}')
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=session_dir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+
+    async def stream_lines():
+        try:
+            assert proc.stdout is not None
+            async for line in proc.stdout:
+                yield line.decode('utf-8', errors='replace')
+            rc = await proc.wait()
+            if rc != 0:
+                yield f"\n[ERROR] Cleanup failed (exit {rc}).\n"
+        finally:
+            pass
+
+    return StreamingResponse(stream_lines(), media_type='text/plain')
+
+
+class ResetRequest(BaseModel):
+    session_id: str = ''
+
+
+@router.post('/api/reset-session')
+async def reset_session(req: ResetRequest):
+    """Delete a session's files when the user clicks Start Over."""
+    session = _sessions.pop(req.session_id, None)
+    if session:
+        shutil.rmtree(session['session_dir'], ignore_errors=True)
+    else:
+        # Also handle cases where the session wasn't in memory (e.g., after reload) but exists on disk
+        session_dir = os.path.join(SESSIONS_DIR, req.session_id)
+        if os.path.isdir(session_dir):
+            shutil.rmtree(session_dir, ignore_errors=True)
+    return JSONResponse({'ok': True})
+
+
+@router.get('/api/converter-sessions')
+async def list_converter_sessions():
+    """List on-disk converter sessions for re-use after page reload."""
+    sessions = []
+    for sid in os.listdir(SESSIONS_DIR):
+        session_dir = os.path.join(SESSIONS_DIR, sid)
+        if not os.path.isdir(session_dir):
+            continue
+        meta_path = os.path.join(session_dir, 'ftd_config_metadata.json')
+        summary_path = os.path.join(session_dir, 'ftd_config_summary.json')
+        target_model = ''
+        base = 'ftd_config'
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                    target_model = meta.get('target_model', '') or ''
+                    base = meta.get('output_basename', 'ftd_config') or 'ftd_config'
+            except Exception:
+                pass
+        created_at = os.path.getmtime(session_dir)
+        sessions.append({
+            'session_id': sid,
+            'target_model': target_model,
+            'base': base,
+            'created_at': created_at,
+            'created_at_iso': datetime.fromtimestamp(created_at).isoformat(),
+            'has_summary': os.path.exists(summary_path),
+            'has_metadata': os.path.exists(meta_path),
+        })
+    # Sort newest first
+    sessions.sort(key=lambda x: x['created_at'], reverse=True)
+    return JSONResponse({'ok': True, 'sessions': sessions})
+
+
+@router.get('/api/converter-session-files')
+async def converter_session_files(session_id: str):
+    """List generated config files for a session (names and sizes only)."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail='Session not found.')
+
+    session_dir = session['session_dir']
+    base = session['base']
+    files = []
+    for fname in os.listdir(session_dir):
+        if fname.startswith(base) and fname.endswith('.json'):
+            path = os.path.join(session_dir, fname)
+            files.append({
+                'name': fname,
+                'size': os.path.getsize(path),
+                'updated_at': os.path.getmtime(path)
+            })
+    files.sort(key=lambda x: x['name'])
+
+    return JSONResponse({
+        'ok': True,
+        'session_id': session_id,
+        'target_model': session.get('target_model', ''),
+        'base': base,
+        'files': files
+    })
+
+
+@router.get('/api/converter-session-file')
+async def converter_session_file(session_id: str, filename: str):
+    """Return the full contents of a generated config file for preview purposes."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail='Session not found.')
+
+    session_dir = session['session_dir']
+    base = session['base']
+    path = _resolve_session_file(session_dir, base, filename)
+
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+
+    return JSONResponse({
+        'ok': True,
+        'session_id': session_id,
+        'filename': filename,
+        'content': content
+    })

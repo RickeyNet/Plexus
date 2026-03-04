@@ -22,11 +22,20 @@ import signal
 import asyncio
 import functools
 import socket
+from typing import Optional
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 CERTS_DIR = os.path.join(project_root, "certs")
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Parse truthy/falsey env vars like '1', 'true', 'yes', 'on'."""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def generate_self_signed_cert():
@@ -116,11 +125,11 @@ if os.name == "nt":
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plexus Automation Hub")
-    parser.add_argument("--host", default=None, help="Bind address (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8080, help="Port number")
-    parser.add_argument("--reload", action="store_true", help="Auto-reload on changes")
-    parser.add_argument("--https", action="store_true", help="Enable HTTPS with self-signed cert")
-    parser.add_argument("--expose", action="store_true", help="Bind to 0.0.0.0 (network accessible)")
+    parser.add_argument("--host", default=os.getenv("APP_HOST"), help="Bind address (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=int(os.getenv("APP_PORT", "8080")), help="Port number")
+    parser.add_argument("--reload", action="store_true", default=_env_flag("APP_RELOAD", False), help="Auto-reload on changes")
+    parser.add_argument("--https", action="store_true", default=_env_flag("APP_HTTPS", False), help="Enable HTTPS with self-signed cert")
+    parser.add_argument("--expose", action="store_true", default=_env_flag("APP_EXPOSE", False), help="Bind to 0.0.0.0 (network accessible)")
     args = parser.parse_args()
 
     bind_host = args.host or ("0.0.0.0" if args.expose else "127.0.0.1")
