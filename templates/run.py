@@ -24,6 +24,8 @@ import functools
 import socket
 from typing import Optional
 
+from netcontrol.version import APP_VERSION
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
@@ -125,6 +127,7 @@ if os.name == "nt":
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plexus Automation Hub")
+    parser.add_argument("--version", action="version", version=f"Plexus {APP_VERSION}")
     parser.add_argument("--host", default=os.getenv("APP_HOST"), help="Bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=int(os.getenv("APP_PORT", "8080")), help="Port number")
     parser.add_argument("--reload", action="store_true", default=_env_flag("APP_RELOAD", False), help="Auto-reload on changes")
