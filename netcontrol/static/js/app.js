@@ -11,6 +11,32 @@ let dashboardData = null;
 const _hostCache = {};
 let converterSessionId = null;
 
+const THEME_KEY = 'plexus-theme';
+const VALID_THEMES = ['forest', 'dark', 'light'];
+const DEFAULT_THEME = 'forest';
+
+function normalizeTheme(theme) {
+    return VALID_THEMES.includes(theme) ? theme : DEFAULT_THEME;
+}
+
+function applyTheme(theme) {
+    const chosen = normalizeTheme(theme);
+    document.documentElement.setAttribute('data-theme', chosen);
+    localStorage.setItem(THEME_KEY, chosen);
+    const select = document.getElementById('theme-select');
+    if (select) select.value = chosen;
+}
+
+function initThemeControls() {
+    const savedTheme = localStorage.getItem(THEME_KEY) || DEFAULT_THEME;
+    applyTheme(savedTheme);
+
+    const select = document.getElementById('theme-select');
+    if (select) {
+        select.addEventListener('change', (e) => applyTheme(e.target.value));
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Navigation
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2033,6 +2059,7 @@ window.showChangePasswordModal = function() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', async () => {
+    initThemeControls();
     initLoginForm();
 
     try {
