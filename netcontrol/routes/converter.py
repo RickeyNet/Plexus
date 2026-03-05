@@ -1,21 +1,20 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
-from typing import List
-from io import BytesIO
-import os
-import sys
-import subprocess
 import asyncio
-import shutil
-import uuid
-import json
-import time
 import difflib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from io import BytesIO
 
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value
+from pydantic import BaseModel
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.converter")
@@ -101,7 +100,7 @@ def _session_backup_root(session_dir: str) -> str:
 
 def _create_timestamped_snapshot(session_dir: str, base: str) -> str:
     """Store a point-in-time copy of generated converter files for rollback/diff."""
-    snapshot_name = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    snapshot_name = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     snapshot_dir = os.path.join(_session_backup_root(session_dir), snapshot_name)
     os.makedirs(snapshot_dir, exist_ok=True)
 
@@ -129,7 +128,7 @@ def _latest_snapshot_with_file(session_dir: str, filename: str) -> str | None:
 
 
 def _pretty_json_text(path: str) -> str:
-    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+    with open(path, encoding='utf-8', errors='ignore') as f:
         data = json.load(f)
     return json.dumps(data, indent=2, sort_keys=True)
 
@@ -139,7 +138,7 @@ def _load_summary_file(session_dir: str, base: str) -> dict:
     if not os.path.exists(summary_path):
         return {}
     try:
-        with open(summary_path, 'r', encoding='utf-8') as f:
+        with open(summary_path, encoding='utf-8') as f:
             return json.load(f)
     except Exception:
         return {}
@@ -150,7 +149,7 @@ def _load_conversion_output(session_dir: str, base: str) -> str:
     if not os.path.exists(output_path):
         return ''
     try:
-        with open(output_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(output_path, encoding='utf-8', errors='ignore') as f:
             return f.read()
     except Exception:
         return ''
@@ -237,7 +236,7 @@ class ImportRequest(BaseModel):
     ftd_password: str
     deploy: bool = False
     debug: bool = False
-    only_flags: List[str] = []
+    only_flags: list[str] = []
 
 
 @router.post('/api/import-fortigate')
@@ -338,7 +337,7 @@ class CleanupRequest(BaseModel):
     dry_run: bool = False
     deploy: bool = False
     debug: bool = False
-    delete_flags: List[str] = []
+    delete_flags: list[str] = []
 
 
 @router.post('/api/cleanup-ftd')
@@ -536,7 +535,7 @@ async def converter_session_file(session_id: str, filename: str):
     base = session['base']
     path = _resolve_session_file(session_dir, base, filename)
 
-    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+    with open(path, encoding='utf-8', errors='ignore') as f:
         content = f.read()
 
     return JSONResponse({
@@ -630,7 +629,7 @@ async def converter_session_download(session_id: str):
                 zf.write(os.path.join(session_dir, fname), arcname=fname)
 
     memory_file.seek(0)
-    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
     headers = {
         'Content-Disposition': f'attachment; filename="plexus_converter_{session_id}_{timestamp}.zip"'
     }

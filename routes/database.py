@@ -11,10 +11,11 @@ Tables:
     job_events        — per-host log lines for each job
 """
 
-import os
 import json
+import os
+from datetime import UTC, datetime
+
 import aiosqlite
-from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "netcontrol.db")
 
@@ -697,7 +698,7 @@ async def update_host_status(host_id: int, status: str):
     try:
         await db.execute(
             "UPDATE hosts SET status = ?, last_seen = ? WHERE id = ?",
-            (status, datetime.now(timezone.utc).isoformat(), host_id),
+            (status, datetime.now(UTC).isoformat(), host_id),
         )
         await db.commit()
     finally:
@@ -1036,7 +1037,7 @@ async def create_job(playbook_id: int, inventory_group_id: int,
                VALUES (?,?,?,?,?,?,?,?)""",
             (playbook_id, inventory_group_id, credential_id, template_id,
              1 if dry_run else 0, "running",
-             datetime.now(timezone.utc).isoformat(), launched_by),
+             datetime.now(UTC).isoformat(), launched_by),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1051,7 +1052,7 @@ async def finish_job(job_id: int, status: str, hosts_ok: int = 0,
         await db.execute(
             """UPDATE jobs SET status=?, finished_at=?, hosts_ok=?,
                hosts_failed=?, hosts_skipped=? WHERE id=?""",
-            (status, datetime.now(timezone.utc).isoformat(),
+            (status, datetime.now(UTC).isoformat(),
              hosts_ok, hosts_failed, hosts_skipped, job_id),
         )
         await db.commit()

@@ -11,19 +11,19 @@ Usage:
 """
 
 # Ensure Plexus is in the Python path for netcontrol.* imports
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import argparse
-import sys
-import os
-import uvicorn
-import signal
 import asyncio
 import functools
+import os
 import socket
-from typing import Optional
+import sys
 
+import uvicorn
 from netcontrol.version import APP_VERSION
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -50,12 +50,13 @@ def generate_self_signed_cert():
         return cert_file, key_file
 
     try:
-        from cryptography import x509
-        from cryptography.x509.oid import NameOID
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
         import datetime
         import ipaddress
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
 
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         subject = issuer = x509.Name([
@@ -68,8 +69,8 @@ def generate_self_signed_cert():
             .issuer_name(issuer)
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
-            .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-            .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365))
+            .not_valid_before(datetime.datetime.now(datetime.UTC))
+            .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365))
             .add_extension(
                 x509.SubjectAlternativeName([
                     x509.DNSName("localhost"),

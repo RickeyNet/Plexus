@@ -1,13 +1,12 @@
 import json
 import os
 import time
+import zipfile
 from io import BytesIO
 from types import SimpleNamespace
-import zipfile
 
 import pytest
 from fastapi import UploadFile
-
 from netcontrol.routes import converter
 
 

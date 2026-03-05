@@ -33,15 +33,15 @@ SAFETY FEATURES:
     - Detailed logging of what's being deleted
 """
 
-import requests
-import json
 import argparse
+import getpass
+import json
+import os
 import sys
 import time
-import getpass
-import os
+
+import requests
 import urllib3
-from typing import Dict, List, Optional, Tuple
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -175,7 +175,7 @@ class FTDBulkDelete:
             print(f"[ERROR] Connection error: {e}")
             return False
     
-    def get_all_objects(self, endpoint: str) -> List[Dict]:
+    def get_all_objects(self, endpoint: str) -> list[dict]:
         """
         Retrieve ALL objects from FTD endpoint with pagination.
         
@@ -206,7 +206,7 @@ class FTDBulkDelete:
                     
                     # Debug: Show first object
                     if self.debug and items and offset == 0:
-                        print(f"\n    [DEBUG] First object:")
+                        print("\n    [DEBUG] First object:")
                         print(f"      Name: {items[0].get('name')}")
                         print(f"      ID: {items[0].get('id')}")
                         print(f"      Type: {items[0].get('type')}")
@@ -240,7 +240,7 @@ class FTDBulkDelete:
             print(f"  Error: {e}")
             return []
         
-    def get_default_virtual_router_id(self) -> Tuple[bool, Optional[str]]:
+    def get_default_virtual_router_id(self) -> tuple[bool, str | None]:
         """
         Get the ID of the default virtual router (typically 'Global').
 
@@ -317,7 +317,7 @@ class FTDBulkDelete:
         print(f"\n  Found {len(routes)} static routes")
 
         # Show what will be deleted
-        print(f"\n  Static routes to delete:")
+        print("\n  Static routes to delete:")
         for r in routes[:10]:
             name = r.get("name", "UNNAMED")
             rid = r.get("id", "")
@@ -359,7 +359,7 @@ class FTDBulkDelete:
         return fail_count == 0
 
     
-    def delete_object(self, endpoint: str, object_id: str) -> Tuple[bool, str]:
+    def delete_object(self, endpoint: str, object_id: str) -> tuple[bool, str]:
         """Delete a single object by ID.
         
         Returns:
@@ -437,7 +437,7 @@ class FTDBulkDelete:
             return True
         
         # Show sample of what will be deleted
-        print(f"\n  Sample custom objects found:")
+        print("\n  Sample custom objects found:")
         for obj in custom_objects[:10]:
             name = obj.get('name', 'UNNAMED')
             obj_id = obj.get('id', 'NO_ID')
@@ -486,13 +486,13 @@ class FTDBulkDelete:
         self.stats["deleted"] = success_count
         self.stats["failed"] = fail_count
         
-        print(f"\n  Summary:")
+        print("\n  Summary:")
         print(f"    Deleted: {success_count}")
         print(f"    Failed: {fail_count}")
         
         # Show failed objects summary if any
         if failed_objects:
-            print(f"\n  Failed objects:")
+            print("\n  Failed objects:")
             for name, error in failed_objects[:10]:
                 print(f"    - {name}: {error}")
             if len(failed_objects) > 10:
@@ -501,7 +501,7 @@ class FTDBulkDelete:
         return fail_count == 0
     
     @staticmethod
-    def _parse_port_number(hardware_name: str) -> Optional[int]:
+    def _parse_port_number(hardware_name: str) -> int | None:
         """
         Extract the port number from a hardware interface name.
         
@@ -523,7 +523,7 @@ class FTDBulkDelete:
         except (ValueError, IndexError):
             return None
     
-    def reset_physical_interface(self, intf: Dict, dry_run: bool = False) -> Tuple[bool, str]:
+    def reset_physical_interface(self, intf: dict, dry_run: bool = False) -> tuple[bool, str]:
         """
         Reset a physical interface to default (unconfigured) state.
         
@@ -753,7 +753,7 @@ class FTDBulkDelete:
             return True
         
         # Show what will be reset
-        print(f"\n  Interfaces to reset:")
+        print("\n  Interfaces to reset:")
         for intf in configured_interfaces[:10]:
             hardware = intf.get('hardwareName', 'Unknown')
             name = intf.get('name', '(unnamed)')
@@ -791,13 +791,13 @@ class FTDBulkDelete:
                 
                 time.sleep(0.2)
         
-        print(f"\n  Summary:")
+        print("\n  Summary:")
         print(f"    Reset: {success_count}")
         print(f"    Failed: {fail_count}")
         
         return fail_count == 0
     
-    def get_all_subinterfaces(self) -> List[Dict]:
+    def get_all_subinterfaces(self) -> list[dict]:
         """
         Get all subinterfaces from FTD.
         
@@ -858,7 +858,7 @@ class FTDBulkDelete:
         
         return all_subinterfaces
     
-    def delete_subinterface(self, subintf: Dict, dry_run: bool = False) -> Tuple[bool, str]:
+    def delete_subinterface(self, subintf: dict, dry_run: bool = False) -> tuple[bool, str]:
         """
         Delete a single subinterface.
         
@@ -924,7 +924,7 @@ class FTDBulkDelete:
         print(f"\n  Found {len(all_subinterfaces)} subinterfaces total")
         
         # Show what will be deleted
-        print(f"\n  Subinterfaces to delete:")
+        print("\n  Subinterfaces to delete:")
         for intf in all_subinterfaces[:10]:
             name = intf.get('name', 'UNNAMED')
             hardware = intf.get('hardwareName', 'Unknown')
@@ -966,7 +966,7 @@ class FTDBulkDelete:
         print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
         
         if failed_objects:
-            print(f"\n  Failed subinterfaces:")
+            print("\n  Failed subinterfaces:")
             for name, error in failed_objects[:10]:
                 print(f"    - {name}: {error}")
             if len(failed_objects) > 10:
@@ -974,7 +974,7 @@ class FTDBulkDelete:
         
         return fail_count == 0
 
-    def _disable_ha_monitor(self, endpoint: str, obj_id: str, obj_name: str) -> Tuple[bool, str]:
+    def _disable_ha_monitor(self, endpoint: str, obj_id: str, obj_name: str) -> tuple[bool, str]:
         """
         Disable HA interface monitoring on an object before deletion.
 
@@ -1061,7 +1061,7 @@ class FTDBulkDelete:
         print(f"\n  Found {len(all_etherchannels)} etherchannels")
         
         # Show what will be deleted
-        print(f"\n  EtherChannels to delete:")
+        print("\n  EtherChannels to delete:")
         for intf in all_etherchannels[:10]:
             name = intf.get('name', 'UNNAMED')
             hardware = intf.get('hardwareName', 'Unknown')
@@ -1141,7 +1141,7 @@ class FTDBulkDelete:
         print(f"\n  Found {len(all_bridge_groups)} bridge groups")
         
         # Show what will be deleted
-        print(f"\n  Bridge groups to delete:")
+        print("\n  Bridge groups to delete:")
         for intf in all_bridge_groups[:10]:
             name = intf.get('name', 'UNNAMED')
             bvi_id = intf.get('bridgeGroupId', '?')
@@ -1339,7 +1339,7 @@ Examples:
     meta = {}
     if args.metadata_file:
         try:
-            with open(args.metadata_file, "r", encoding="utf-8") as f:
+            with open(args.metadata_file, encoding="utf-8") as f:
                 meta = json.load(f)
             if not isinstance(meta, dict):
                 meta = {}

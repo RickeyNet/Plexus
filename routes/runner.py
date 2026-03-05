@@ -6,11 +6,10 @@ The runner executes playbooks as async background tasks, yielding
 LogEvent objects that get stored in the DB and streamed via WebSocket.
 """
 
-import asyncio
 import traceback
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 
 # ── Registry ─────────────────────────────────────────────────────────────────
 
@@ -46,7 +45,7 @@ class LogEvent:
     level: str          # info, success, error, warn, cmd, dim, sep
     message: str
     host: str = ""
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict:
         return asdict(self)

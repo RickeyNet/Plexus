@@ -7,13 +7,13 @@ that are missing NTP servers or have unauthorized NTP sources.
 
 import asyncio
 import random
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from routes.runner import BasePlaybook, LogEvent, register_playbook
 
 try:
     from netmiko import ConnectHandler
-    from netmiko.exceptions import NetmikoTimeoutException, NetmikoAuthenticationException
+    from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
     NETMIKO_AVAILABLE = True
 except ImportError:
     NETMIKO_AVAILABLE = False

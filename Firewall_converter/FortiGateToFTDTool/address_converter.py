@@ -30,7 +30,8 @@ FTD JSON OUTPUT FORMAT:
     }
 """
 import re
-from typing import Dict, List, Any
+from typing import Any
+
 
 def sanitize_name(name: str) -> str:
     """
@@ -71,7 +72,7 @@ class AddressConverter:
     4. Formatting addresses for FTD API compatibility
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: dict[str, Any]):
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -87,7 +88,7 @@ class AddressConverter:
         # Starts empty and gets populated by the convert() method
         self.ftd_network_objects = []
     
-    def convert(self) -> List[Dict]:
+    def convert(self) -> list[dict]:
         """
         Main conversion method - converts all FortiGate address objects to FTD format.
         
@@ -218,7 +219,7 @@ class AddressConverter:
         # ====================================================================
         return network_objects
     
-    def _determine_address_type(self, properties: Dict) -> str:
+    def _determine_address_type(self, properties: dict) -> str:
         """
         Determine the FTD address subType based on FortiGate address format.
         
@@ -288,7 +289,7 @@ class AddressConverter:
         else:
             return "HOST"
     
-    def _extract_address_value(self, properties: Dict) -> str:
+    def _extract_address_value(self, properties: dict) -> str:
         """
         Extract and format the address value from FortiGate format to FTD format.
         
@@ -428,7 +429,7 @@ class AddressConverter:
             # If conversion fails (invalid netmask), print warning and default to /32
             # /32 is the safest default as it represents a single host
             print(f"  Warning: Could not convert netmask '{netmask}' to CIDR (Error: {e})")
-            print(f"    Defaulting to /32 (single host)")
+            print("    Defaulting to /32 (single host)")
             return 32
     
     def _is_ip_address(self, name: str) -> bool:

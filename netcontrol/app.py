@@ -6,36 +6,36 @@ WebSocket endpoint for real-time job output streaming.
 Session-based authentication with signed cookies.
 """
 
-import sys
-import os
-import json
 import asyncio
 import hashlib
+import json
+import os
 import secrets
-import socket
+import sys
 import traceback
 from contextlib import asynccontextmanager
-from typing import Optional
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request, Depends
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 # Register converter API
-from netcontrol.routes.converter import router as converter_router
-from pydantic import BaseModel, ConfigDict
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import time
 
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from netcontrol.routes.converter import router as converter_router
+from pydantic import BaseModel, ConfigDict
+
 try:
+    from pyrad import packet as radius_packet
     from pyrad.client import Client as RadiusClient
     from pyrad.dictionary import Dictionary as RadiusDictionary
-    from pyrad import packet as radius_packet
     PYRAD_AVAILABLE = True
 except Exception:
     RadiusClient = None
@@ -47,16 +47,16 @@ except Exception:
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
+import importlib
+
 import routes.database as db
-from routes.crypto import encrypt, decrypt
-from routes.runner import get_playbook_class, execute_playbook, LogEvent
 from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value, snapshot_metrics
 from netcontrol.version import APP_VERSION
-import importlib
+from routes.crypto import decrypt, encrypt
+from routes.runner import LogEvent, execute_playbook, get_playbook_class
 
 # Auto-register all playbooks
 from templates import playbooks  # noqa: F401
-
 
 LOGGER = configure_logging("plexus.app")
 APP_START_TIME = time.time()
@@ -136,7 +136,7 @@ SESSION_MAX_AGE = 86400  # 24 hours
 
 def _load_or_create_secret_key() -> str:
     if os.path.isfile(SECRET_KEY_FILE):
-        with open(SECRET_KEY_FILE, "r") as f:
+        with open(SECRET_KEY_FILE) as f:
             return f.read().strip()
     key = secrets.token_hex(32)
     with open(SECRET_KEY_FILE, "w") as f:
@@ -340,7 +340,7 @@ def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) ->
         if reply.code == radius_packet.AccessReject:
             return False, "reject"
         return False, "reject"
-    except (socket.timeout, OSError):
+    except (TimeoutError, OSError):
         return False, "error"
     except Exception:
         return False, "error"
@@ -487,7 +487,7 @@ async def _migrate_auth_json_users():
     if not os.path.isfile(auth_file):
         return
     try:
-        with open(auth_file, "r") as f:
+        with open(auth_file) as f:
             legacy_users = json.load(f)
         migrated = 0
         for username, data in legacy_users.items():
@@ -506,7 +506,7 @@ async def _migrate_auth_json_users():
         # Rename the file so we don't migrate again
         backup = auth_file + ".bak"
         os.rename(auth_file, backup)
-        print(f"[migration] Renamed auth.json to auth.json.bak")
+        print("[migration] Renamed auth.json to auth.json.bak")
     except Exception as e:
         print(f"[migration] auth.json migration error: {e}")
 
@@ -616,7 +616,7 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 class UpdateProfileRequest(BaseModel):
-    display_name: Optional[str] = None
+    display_name: str | None = None
 
 
 @app.post("/api/auth/login")
@@ -778,9 +778,9 @@ class AdminUserCreateRequest(BaseModel):
 
 
 class AdminUserUpdateRequest(BaseModel):
-    username: Optional[str] = None
-    display_name: Optional[str] = None
-    role: Optional[str] = None
+    username: str | None = None
+    display_name: str | None = None
+    role: str | None = None
 
 
 class AdminUserPasswordResetRequest(BaseModel):
@@ -1073,11 +1073,11 @@ class PlaybookCreate(BaseModel):
     content: str = ""
 
 class PlaybookUpdate(BaseModel):
-    name: Optional[str] = None
-    filename: Optional[str] = None
-    description: Optional[str] = None
-    tags: Optional[list[str]] = None
-    content: Optional[str] = None
+    name: str | None = None
+    filename: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    content: str | None = None
 
 class TemplateCreate(BaseModel):
     name: str
@@ -1097,18 +1097,18 @@ class CredentialCreate(BaseModel):
 
 
 class CredentialUpdate(BaseModel):
-    name: Optional[str] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-    secret: Optional[str] = None
+    name: str | None = None
+    username: str | None = None
+    password: str | None = None
+    secret: str | None = None
 
 
 class JobLaunch(BaseModel):
     playbook_id: int
-    inventory_group_id: Optional[int] = None  # Optional for backward compatibility
-    host_ids: Optional[list[int]] = None  # List of specific host IDs to target
-    credential_id: Optional[int] = None
-    template_id: Optional[int] = None
+    inventory_group_id: int | None = None  # Optional for backward compatibility
+    host_ids: list[int] | None = None  # List of specific host IDs to target
+    credential_id: int | None = None
+    template_id: int | None = None
     dry_run: bool = True
 
     # Forbid unknown fields for strict payload validation.
@@ -1216,7 +1216,7 @@ async def get_playbook(playbook_id: int):
         
         if os.path.exists(file_path):
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, encoding='utf-8') as f:
                     file_content = f.read()
                     playbook["content"] = file_content
                 # Sync it back to the database
@@ -1247,8 +1247,8 @@ async def list_playbooks():
 
 async def sync_playbooks_from_registry():
     """Sync playbooks from the registry to the database - add any missing ones."""
-    from routes.runner import list_registered_playbooks
     from routes.database import sync_playbook_filename
+    from routes.runner import list_registered_playbooks
     
     registered = list_registered_playbooks()
     db_playbooks = await db.get_all_playbooks()

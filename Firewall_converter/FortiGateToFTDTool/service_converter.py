@@ -44,7 +44,8 @@ FTD JSON OUTPUT FORMAT:
 """
 
 import re
-from typing import Dict, List, Any, Set
+from typing import Any
+
 
 def sanitize_name(name: str) -> str:
     """
@@ -124,7 +125,7 @@ class ServiceConverter:
     6. Handling special protocols (IP, ICMP, etc.)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: dict[str, Any]):
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -154,7 +155,7 @@ class ServiceConverter:
         # Used by ServiceGroupConverter to filter these out of groups
         self.skipped_services = set()
     
-    def _parse_port_list(self, port_value: Any) -> List[str]:
+    def _parse_port_list(self, port_value: Any) -> list[str]:
         """
         Parse FortiGate port value into a list of individual ports/ranges.
         
@@ -208,7 +209,7 @@ class ServiceConverter:
         
         return ports
     
-    def convert(self) -> List[Dict]:
+    def convert(self) -> list[dict]:
         """
         Main conversion method - converts all FortiGate services to FTD port objects.
         
@@ -404,7 +405,7 @@ class ServiceConverter:
         self.ftd_port_objects = port_objects
         return port_objects
     
-    def get_statistics(self) -> Dict[str, int]:
+    def get_statistics(self) -> dict[str, int]:
         """
         Get conversion statistics for reporting.
         
@@ -421,7 +422,7 @@ class ServiceConverter:
             "icmp_skipped": self.icmp_skipped_count  # ICMP and other non-port protocols
         }
     
-    def get_service_name_mapping(self) -> Dict[str, List[str]]:
+    def get_service_name_mapping(self) -> dict[str, list[str]]:
         """
         Get a mapping of original FortiGate service names to FTD object names.
         
@@ -434,7 +435,7 @@ class ServiceConverter:
         """
         return self.service_name_mapping
     
-    def get_skipped_services(self) -> Set[str]:
+    def get_skipped_services(self) -> set[str]:
         """
         Get the set of service names that were skipped (ICMP, etc.).
         

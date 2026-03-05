@@ -6,6 +6,7 @@ Keep this file safe — losing it means stored credentials are unrecoverable.
 """
 
 import os
+
 from cryptography.fernet import Fernet
 
 KEY_FILE = os.path.join(os.path.dirname(__file__), "netcontrol.key")

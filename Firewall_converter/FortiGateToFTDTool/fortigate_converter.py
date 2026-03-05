@@ -61,22 +61,22 @@
 
 
 
-import yaml
-import json
 import argparse
+import json
 import sys
-from pathlib import Path
+
+import yaml
 
 # Import our custom converter modules
 # These modules contain the logic for converting specific object types
 try:
     from address_converter import AddressConverter
     from address_group_converter import AddressGroupConverter
-    from service_converter import ServiceConverter
-    from service_group_converter import ServiceGroupConverter
+    from interface_converter import FTD_MODELS, InterfaceConverter
     from policy_converter import PolicyConverter
     from route_converter import RouteConverter
-    from interface_converter import InterfaceConverter, FTD_MODELS
+    from service_converter import ServiceConverter
+    from service_group_converter import ServiceGroupConverter
 except ImportError as e:
     print("\n" + "="*60)
     print("ERROR: Missing converter module files!")
@@ -123,7 +123,7 @@ def preprocess_yaml_file(input_file: str) -> str:
     skip_section = False
     current_indent = 0
     
-    with open(input_file, 'r', encoding='utf-8') as f:
+    with open(input_file, encoding='utf-8') as f:
         for line in f:
             # Get the indentation level of this line
             stripped = line.lstrip()
@@ -152,7 +152,7 @@ def preprocess_yaml_file(input_file: str) -> str:
             cleaned_lines.append(line)
     
     cleaned_yaml = ''.join(cleaned_lines)
-    print(f"  [OK] Pre-processing complete")
+    print("  [OK] Pre-processing complete")
     return cleaned_yaml
 
 def build_conversion_metadata(args: argparse.Namespace) -> dict:
@@ -388,7 +388,7 @@ Supported FTD Models:
         
     except yaml.YAMLError as e:
         # This error occurs if the YAML file has syntax errors
-        print(f"\n[ERROR] Could not parse YAML file!")
+        print("\n[ERROR] Could not parse YAML file!")
         print(f"  Details: {e}")
         print("\nMake sure the file is valid YAML format")
         return 1
@@ -438,7 +438,7 @@ Supported FTD Models:
     
     # Get statistics
     intf_stats = interface_converter.get_statistics()
-    print(f"\n[OK] Interface conversion complete:")
+    print("\n[OK] Interface conversion complete:")
     print(f"  - Physical interfaces to update: {intf_stats['physical_updated']}")
     print(f"  - EtherChannels to create: {intf_stats['etherchannels_created']}")
     print(f"  - Bridge groups to create: {intf_stats['bridge_groups_created']}")
@@ -625,8 +625,8 @@ Supported FTD Models:
     # ========================================================================
     # STEP 13: Write the output JSON files
     # ========================================================================
-    print(f"\n" + "-"*60)
-    print(f"Saving output files...")
+    print("\n" + "-"*60)
+    print("Saving output files...")
     print("-"*60)
     
     # Generate output filenames based on the base name provided
@@ -813,8 +813,8 @@ Supported FTD Models:
             json.dump(summary, f, indent=2)
         print(f"[OK] Summary saved to: {summary_output}")
         
-    except IOError as e:
-        print(f"\n[ERROR] Could not write output files!")
+    except OSError as e:
+        print("\n[ERROR] Could not write output files!")
         print(f"  Details: {e}")
         return 1
     
@@ -824,7 +824,7 @@ Supported FTD Models:
     print("\n" + "="*60)
     print("CONVERSION COMPLETE")
     print("="*60)
-    print(f"\nOutput Files Created:")
+    print("\nOutput Files Created:")
     print(f"  1. {address_objects_output}")
     print(f"     - Network Objects: {len(network_objects)}")
     print(f"\n  2. {address_groups_output}")
@@ -841,7 +841,7 @@ Supported FTD Models:
     print(f"     - Static Routes: {route_stats['total_routes']}")
     print(f"       (Converted: {route_stats['converted']}, Skipped: {route_stats['blackhole_skipped'] + route_stats['other_skipped']})")
     print(f"\n  7. {summary_output}")
-    print(f"     - Conversion statistics")
+    print("     - Conversion statistics")
     print("\n" + "="*60)
     print("IMPORT ORDER FOR FTD FDM API:")
     print("="*60)
