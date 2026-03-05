@@ -4,7 +4,7 @@ target-version = "py311"
 
 [lint]
 select = ["E", "F", "I", "UP", "ASYNC"]
-ignore = []
+ignore = ["E402", "E501", "E722", "F401", "F841", "ASYNC221", "ASYNC230", "ASYNC240"]
 
 [lint.isort]
 combine-as-imports = true

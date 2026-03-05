@@ -13,8 +13,9 @@ from io import BytesIO
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
-from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value
 from pydantic import BaseModel
+
+from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.converter")
