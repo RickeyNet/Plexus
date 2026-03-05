@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List
+from io import BytesIO
 import os
 import sys
 import subprocess
@@ -10,9 +11,14 @@ import shutil
 import uuid
 import json
 import time
-from datetime import datetime
+import difflib
+import zipfile
+from datetime import datetime, timezone
+
+from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value
 
 router = APIRouter()
+LOGGER = configure_logging("plexus.converter")
 
 # Persistent directory for converted config files (lives inside the app, gitignored)
 SESSIONS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../converter_sessions'))
@@ -25,6 +31,10 @@ SESSION_TTL = 7200  # 2 hours
 CONVERTER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/fortigate_converter.py'))
 IMPORTER_PATH  = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py'))
 CLEANUP_PATH   = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_cleanup.py'))
+
+
+def _conversion_output_path(session_dir: str, base: str) -> str:
+    return os.path.join(session_dir, f"{base}_conversion_output.log")
 
 
 def _cleanup_old_sessions():
@@ -83,6 +93,69 @@ def _resolve_session_file(session_dir: str, base: str, filename: str):
     return path
 
 
+def _session_backup_root(session_dir: str) -> str:
+    path = os.path.join(session_dir, "backups")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _create_timestamped_snapshot(session_dir: str, base: str) -> str:
+    """Store a point-in-time copy of generated converter files for rollback/diff."""
+    snapshot_name = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    snapshot_dir = os.path.join(_session_backup_root(session_dir), snapshot_name)
+    os.makedirs(snapshot_dir, exist_ok=True)
+
+    for fname in os.listdir(session_dir):
+        if fname.startswith(base) and fname.endswith('.json'):
+            shutil.copy2(os.path.join(session_dir, fname), os.path.join(snapshot_dir, fname))
+    return snapshot_name
+
+
+def _latest_snapshot_with_file(session_dir: str, filename: str) -> str | None:
+    backups_dir = _session_backup_root(session_dir)
+    if not os.path.isdir(backups_dir):
+        return None
+
+    candidate_snapshots = []
+    for snapshot in os.listdir(backups_dir):
+        snapshot_dir = os.path.join(backups_dir, snapshot)
+        file_path = os.path.join(snapshot_dir, filename)
+        if os.path.isdir(snapshot_dir) and os.path.isfile(file_path):
+            candidate_snapshots.append((snapshot, file_path))
+    if not candidate_snapshots:
+        return None
+    candidate_snapshots.sort(key=lambda item: item[0], reverse=True)
+    return candidate_snapshots[0][1]
+
+
+def _pretty_json_text(path: str) -> str:
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        data = json.load(f)
+    return json.dumps(data, indent=2, sort_keys=True)
+
+
+def _load_summary_file(session_dir: str, base: str) -> dict:
+    summary_path = os.path.join(session_dir, f"{base}_summary.json")
+    if not os.path.exists(summary_path):
+        return {}
+    try:
+        with open(summary_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _load_conversion_output(session_dir: str, base: str) -> str:
+    output_path = _conversion_output_path(session_dir, base)
+    if not os.path.exists(output_path):
+        return ''
+    try:
+        with open(output_path, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+    except Exception:
+        return ''
+
+
 @router.post('/api/convert-only')
 async def convert_only(
     yaml_file: UploadFile = File(...),
@@ -93,6 +166,7 @@ async def convert_only(
     Step 1: Convert a FortiGate YAML config to FTD JSON files.
     Returns a session_id, conversion output text, and a summary dict.
     """
+    started = time.perf_counter()
     _cleanup_old_sessions()
     session_id = str(uuid.uuid4())
     session_dir = os.path.join(SESSIONS_DIR, session_id)
@@ -118,14 +192,15 @@ async def convert_only(
             cwd=session_dir, capture_output=True, text=True
         )
         if proc.returncode != 0:
+            increment_metric("converter.convert.failure")
+            observe_timing("converter.convert.duration_ms", (time.perf_counter() - started) * 1000)
+            LOGGER.error("Conversion failed for session %s: %s", session_id, redact_value(proc.stderr or proc.stdout))
             shutil.rmtree(session_dir, ignore_errors=True)
-            raise HTTPException(status_code=500, detail=f"Conversion failed:\n{proc.stderr or proc.stdout}")
+            raise HTTPException(status_code=500, detail="Conversion failed. Check server logs for details.")
 
-        summary = {}
-        summary_path = os.path.join(session_dir, f"{BASE_NAME}_summary.json")
-        if os.path.exists(summary_path):
-            with open(summary_path) as f:
-                summary = json.load(f)
+        summary = _load_summary_file(session_dir, BASE_NAME)
+        with open(_conversion_output_path(session_dir, BASE_NAME), 'w', encoding='utf-8') as f:
+            f.write(proc.stdout or '')
 
         _sessions[session_id] = {
             'session_dir':  session_dir,
@@ -133,19 +208,26 @@ async def convert_only(
             'created_at':   time.time(),
             'target_model': effective_model
         }
+        snapshot_id = _create_timestamped_snapshot(session_dir, BASE_NAME)
+        increment_metric("converter.convert.success")
+        observe_timing("converter.convert.duration_ms", (time.perf_counter() - started) * 1000)
 
         return JSONResponse({
             'ok': True,
             'session_id': session_id,
             'conversion_output': proc.stdout,
             'summary': summary,
-            'target_model': effective_model
+            'target_model': effective_model,
+            'snapshot_id': snapshot_id,
         })
     except HTTPException:
         raise
     except Exception as e:
+        increment_metric("converter.convert.failure")
+        observe_timing("converter.convert.duration_ms", (time.perf_counter() - started) * 1000)
+        LOGGER.error("Unexpected conversion error for session %s: %s", session_id, redact_value(str(e)))
         shutil.rmtree(session_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Conversion failed due to an unexpected server error")
 
 
 class ImportRequest(BaseModel):
@@ -163,6 +245,7 @@ async def import_fortigate(req: ImportRequest):
     """
     Step 2: Import previously converted FTD JSON files into a live FTD device.
     """
+    started = time.perf_counter()
     session = _get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail='Session not found. Please run Convert again.')
@@ -188,7 +271,13 @@ async def import_fortigate(req: ImportRequest):
 
     # Keep session files so cleanup/rollback can still reference them; TTL handles eventual removal
     if proc.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"Import failed:\n{proc.stderr or proc.stdout}")
+        increment_metric("converter.import.failure")
+        observe_timing("converter.import.duration_ms", (time.perf_counter() - started) * 1000)
+        LOGGER.error("Import failed for session %s: %s", req.session_id, redact_value(proc.stderr or proc.stdout))
+        raise HTTPException(status_code=500, detail="Import failed. Check server logs for details.")
+
+    increment_metric("converter.import.success")
+    observe_timing("converter.import.duration_ms", (time.perf_counter() - started) * 1000)
 
     return JSONResponse({'ok': True, 'import_output': proc.stdout})
 
@@ -257,6 +346,7 @@ async def cleanup_ftd(req: CleanupRequest):
     """
     Step 3 (Optional): Delete / rollback objects previously imported to FTD.
     """
+    started = time.perf_counter()
     if not req.delete_flags:
         raise HTTPException(status_code=400, detail='Must select at least one item to delete.')
 
@@ -288,7 +378,13 @@ async def cleanup_ftd(req: CleanupRequest):
 
     proc = subprocess.run(cmd, cwd=session_dir, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"Cleanup failed:\n{proc.stderr or proc.stdout}")
+        increment_metric("converter.cleanup.failure")
+        observe_timing("converter.cleanup.duration_ms", (time.perf_counter() - started) * 1000)
+        LOGGER.error("Cleanup failed for session %s: %s", req.session_id, redact_value(proc.stderr or proc.stdout))
+        raise HTTPException(status_code=500, detail="Cleanup failed. Check server logs for details.")
+
+    increment_metric("converter.cleanup.success")
+    observe_timing("converter.cleanup.duration_ms", (time.perf_counter() - started) * 1000)
 
     return JSONResponse({'ok': True, 'cleanup_output': proc.stdout})
 
@@ -449,3 +545,93 @@ async def converter_session_file(session_id: str, filename: str):
         'filename': filename,
         'content': content
     })
+
+
+@router.get('/api/converter-session-state')
+async def converter_session_state(session_id: str):
+    """Return persisted conversion summary/output for a session after page reload."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail='Session not found.')
+
+    session_dir = session['session_dir']
+    base = session['base']
+    summary = _load_summary_file(session_dir, base)
+    conversion_output = _load_conversion_output(session_dir, base)
+
+    return JSONResponse({
+        'ok': True,
+        'session_id': session_id,
+        'target_model': session.get('target_model', ''),
+        'base': base,
+        'summary': summary,
+        'conversion_output': conversion_output,
+    })
+
+
+@router.get('/api/converter-session-diff')
+async def converter_session_diff(session_id: str, filename: str, compare_session_id: str = ''):
+    """Generate a unified diff between this session and a baseline session/snapshot."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail='Session not found.')
+
+    session_dir = session['session_dir']
+    base = session['base']
+    current_path = _resolve_session_file(session_dir, base, filename)
+
+    previous_path = None
+    if compare_session_id:
+        compare_session = _get_session(compare_session_id)
+        if not compare_session:
+            raise HTTPException(status_code=404, detail='compare_session_id not found.')
+        previous_path = _resolve_session_file(compare_session['session_dir'], compare_session['base'], filename)
+    else:
+        previous_path = _latest_snapshot_with_file(session_dir, filename)
+    if not previous_path:
+        raise HTTPException(status_code=404, detail='No snapshot available for diff.')
+
+    current_text = _pretty_json_text(current_path).splitlines(keepends=True)
+    previous_text = _pretty_json_text(previous_path).splitlines(keepends=True)
+    diff_text = ''.join(
+        difflib.unified_diff(
+            previous_text,
+            current_text,
+            fromfile='snapshot',
+            tofile='current',
+            n=3,
+        )
+    )
+
+    return JSONResponse({
+        'ok': True,
+        'session_id': session_id,
+        'compare_session_id': compare_session_id or None,
+        'filename': filename,
+        'diff': diff_text,
+        'has_changes': bool(diff_text.strip()),
+    })
+
+
+@router.get('/api/converter-session-download')
+async def converter_session_download(session_id: str):
+    """Download all generated converter artifacts for a session as a zip file."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail='Session not found.')
+
+    session_dir = session['session_dir']
+    base = session['base']
+
+    memory_file = BytesIO()
+    with zipfile.ZipFile(memory_file, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+        for fname in os.listdir(session_dir):
+            if fname.startswith(base) and fname.endswith('.json'):
+                zf.write(os.path.join(session_dir, fname), arcname=fname)
+
+    memory_file.seek(0)
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    headers = {
+        'Content-Disposition': f'attachment; filename="plexus_converter_{session_id}_{timestamp}.zip"'
+    }
+    return StreamingResponse(memory_file, media_type='application/zip', headers=headers)

@@ -8,16 +8,16 @@ Session-based authentication with signed cookies.
 
 import sys
 import os
-import sys
-import os
 import json
 import asyncio
 import hashlib
 import secrets
 import socket
+import traceback
 from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request, Depends
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -28,7 +28,7 @@ sys.path.insert(0, project_root)
 
 # Register converter API
 from netcontrol.routes.converter import router as converter_router
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import time
 
@@ -50,10 +50,41 @@ sys.path.insert(0, project_root)
 import routes.database as db
 from routes.crypto import encrypt, decrypt
 from routes.runner import get_playbook_class, execute_playbook, LogEvent
+from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value, snapshot_metrics
 import importlib
 
 # Auto-register all playbooks
 from templates import playbooks  # noqa: F401
+
+
+LOGGER = configure_logging("plexus.app")
+APP_START_TIME = time.time()
+APP_API_TOKEN = os.getenv("APP_API_TOKEN", "").strip()
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_startup_config() -> None:
+    errors = []
+    if _env_flag("APP_REQUIRE_API_TOKEN", False) and not APP_API_TOKEN:
+        errors.append("APP_REQUIRE_API_TOKEN is true but APP_API_TOKEN is not set")
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+
+def _extract_api_token(request: Request) -> str:
+    token = request.headers.get("x-api-token", "").strip()
+    if token:
+        return token
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return ""
 
 
 def write_playbook_file(filename: str, content: str) -> str:
@@ -160,7 +191,7 @@ def verify_session_token(token: str) -> dict | None:
         return None
 
 
-PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/favicon.ico", "/docs", "/openapi.json", "/redoc"}
+PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/api/health", "/favicon.ico", "/docs", "/openapi.json", "/redoc"}
 
 
 async def require_auth(request: Request):
@@ -170,6 +201,13 @@ async def require_auth(request: Request):
         return None
     if path in PUBLIC_PATHS:
         return None
+
+    api_token = _extract_api_token(request)
+    if APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN):
+        return {"user": "api-token", "user_id": 0, "auth_mode": "token"}
+
+    if _env_flag("APP_REQUIRE_API_TOKEN", False) and path.startswith("/api/"):
+        raise HTTPException(status_code=401, detail="Missing or invalid API token")
 
     token = request.cookies.get("session")
     if not token:
@@ -398,6 +436,8 @@ async def _get_user_features(user: dict) -> list[str]:
 def require_feature(feature_key: str):
     async def _dependency(request: Request):
         session = await require_auth(request)
+        if session and session.get("auth_mode") == "token":
+            return session
         user = await db.get_user_by_id(session["user_id"])
         if not user:
             raise HTTPException(status_code=401, detail="Not authenticated")
@@ -410,6 +450,8 @@ def require_feature(feature_key: str):
 async def require_admin(request: Request):
     """Dependency that checks for admin access. Returns session dict."""
     session = await require_auth(request)
+    if session and session.get("auth_mode") == "token":
+        return session
     user = await db.get_user_by_username(session["user"])
     if not user or user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -423,6 +465,8 @@ async def require_admin(request: Request):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize DB and seed on startup."""
+    _validate_startup_config()
+    LOGGER.info("Starting Plexus API")
     await db.init_db()
     await _ensure_default_admin()
     # Migrate users from auth.json if it exists
@@ -479,6 +523,78 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def metrics_and_logging_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - start) * 1000
+        increment_metric("api.requests.total")
+        increment_metric("api.requests.failed")
+        observe_timing("api.request.duration_ms", duration_ms)
+        raise
+
+    duration_ms = (time.perf_counter() - start) * 1000
+    increment_metric("api.requests.total")
+    if response.status_code >= 400:
+        increment_metric("api.requests.failed")
+    observe_timing("api.request.duration_ms", duration_ms)
+    return response
+
+
+def _api_error_response(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ok": False,
+            "error": {
+                "code": code,
+                "message": message,
+            },
+        },
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if not request.url.path.startswith("/api/"):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
+    safe_detail = str(redact_value(detail))
+    LOGGER.warning("HTTP %s on %s: %s", exc.status_code, request.url.path, safe_detail)
+    return _api_error_response(exc.status_code, "http_error", safe_detail)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    if not request.url.path.startswith("/api/"):
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+    LOGGER.warning("Validation error on %s: %s", request.url.path, redact_value(exc.errors()))
+    return _api_error_response(422, "validation_error", "Request payload validation failed")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    if request.url.path.startswith("/api/"):
+        LOGGER.error("Unhandled error on %s: %s", request.url.path, redact_value(str(exc)))
+        LOGGER.debug("Traceback: %s", traceback.format_exc())
+        return _api_error_response(500, "internal_error", "Internal server error")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+@app.get("/api/health")
+async def health():
+    return {
+        "ok": True,
+        "status": "healthy",
+        "uptime_seconds": int(time.time() - APP_START_TIME),
+        "metrics": snapshot_metrics(),
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -993,10 +1109,9 @@ class JobLaunch(BaseModel):
     credential_id: Optional[int] = None
     template_id: Optional[int] = None
     dry_run: bool = True
-    
-    class Config:
-        # Allow extra fields to be ignored (for backward compatibility)
-        extra = "forbid"
+
+    # Forbid unknown fields for strict payload validation.
+    model_config = ConfigDict(extra="forbid")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

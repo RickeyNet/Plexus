@@ -69,6 +69,8 @@ default credential.
 ## Running locally (venv)
 
 1) Copy `.env.example` to `.env` and adjust values (host, port, https, defaults).
+  - Set `APP_API_TOKEN` to enable token-based API auth via `X-API-Token` or `Authorization: Bearer <token>`.
+  - Set `APP_REQUIRE_API_TOKEN=true` to fail startup when no token is configured.
 2) Create/activate venv and install deps from `templates/requirements.txt` (as above).
 3) Start the server from the repo root:
 ```bash
@@ -127,6 +129,7 @@ async background tasks. Output streams to subscribers via WebSocket.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/dashboard` | Stats, recent jobs, inventory overview |
+| GET | `/api/health` | Service health + lightweight counters/timing metrics |
 
 ### Inventory
 | Method | Endpoint                    | Description                                    |
