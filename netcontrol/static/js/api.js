@@ -260,3 +260,92 @@ export async function deleteCredential(credentialId) {
         method: 'DELETE',
     });
 }
+
+// Admin Settings
+export async function getAdminCapabilities() {
+    return apiRequest('/admin/capabilities');
+}
+
+export async function getAdminUsers() {
+    return apiRequest('/admin/users');
+}
+
+export async function createAdminUser(payload) {
+    return apiRequest('/admin/users', {
+        method: 'POST',
+        body: payload,
+    });
+}
+
+export async function updateAdminUser(userId, payload) {
+    return apiRequest(`/admin/users/${userId}`, {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function resetAdminUserPassword(userId, newPassword) {
+    return apiRequest(`/admin/users/${userId}/password`, {
+        method: 'PUT',
+        body: { new_password: newPassword },
+    });
+}
+
+export async function setAdminUserGroups(userId, groupIds) {
+    return apiRequest(`/admin/users/${userId}/groups`, {
+        method: 'PUT',
+        body: { group_ids: groupIds },
+    });
+}
+
+export async function deleteAdminUser(userId) {
+    return apiRequest(`/admin/users/${userId}`, {
+        method: 'DELETE',
+    });
+}
+
+export async function getAccessGroups() {
+    return apiRequest('/admin/access-groups');
+}
+
+export async function createAccessGroup(payload) {
+    return apiRequest('/admin/access-groups', {
+        method: 'POST',
+        body: payload,
+    });
+}
+
+export async function updateAccessGroup(groupId, payload) {
+    return apiRequest(`/admin/access-groups/${groupId}`, {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function deleteAccessGroup(groupId) {
+    return apiRequest(`/admin/access-groups/${groupId}`, {
+        method: 'DELETE',
+    });
+}
+
+export async function getLoginRules() {
+    return apiRequest('/admin/login-rules');
+}
+
+export async function updateLoginRules(payload) {
+    return apiRequest('/admin/login-rules', {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function getAuthConfig() {
+    return apiRequest('/admin/auth-config');
+}
+
+export async function updateAuthConfig(payload) {
+    return apiRequest('/admin/auth-config', {
+        method: 'PUT',
+        body: payload,
+    });
+}

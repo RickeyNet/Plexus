@@ -83,6 +83,78 @@
     --overlay: rgba(7, 12, 24, 0.8);
 }
 
+[data-theme="dark-modern"] {
+    --primary: #4ea1ff;
+    --primary-dark: #2d7dd2;
+    --primary-light: #9fccff;
+    --secondary: #8b96ab;
+    --success: #73c991;
+    --warning: #d7ba7d;
+    --danger: #f48771;
+    --bg: #1f1f1f;
+    --bg-secondary: #252526;
+    --bg-dark: #181818;
+    --card-bg: #2a2d2e;
+    --card-bg-hover: #313538;
+    --text: #d4d4d4;
+    --text-light: #c5c5c5;
+    --text-muted: #9da1a6;
+    --border: #3b3f45;
+    --border-light: #4a4f57;
+    --primary-soft: rgba(78, 161, 255, 0.14);
+    --primary-soft-strong: rgba(78, 161, 255, 0.24);
+    --primary-glow: rgba(78, 161, 255, 0.22);
+    --overlay: rgba(16, 16, 16, 0.82);
+}
+
+[data-theme="easy"] {
+    --primary: #d97757;
+    --primary-dark: #bf6546;
+    --primary-light: #e8a286;
+    --secondary: #9a8e80;
+    --success: #5f8f73;
+    --warning: #c7994d;
+    --danger: #c85f4b;
+    --bg: #f6f2eb;
+    --bg-secondary: #efe8dc;
+    --bg-dark: #e6dece;
+    --card-bg: #fffaf1;
+    --card-bg-hover: #f7efe1;
+    --text: #2f2a24;
+    --text-light: #4a433a;
+    --text-muted: #7a6f62;
+    --border: #dccfb9;
+    --border-light: #cebea5;
+    --primary-soft: rgba(217, 119, 87, 0.14);
+    --primary-soft-strong: rgba(217, 119, 87, 0.24);
+    --primary-glow: rgba(217, 119, 87, 0.2);
+    --overlay: rgba(50, 40, 28, 0.35);
+}
+
+[data-theme="easy-dark"] {
+    --primary: #e08a67;
+    --primary-dark: #c77451;
+    --primary-light: #f0b49b;
+    --secondary: #9c9085;
+    --success: #7caf8f;
+    --warning: #d3aa66;
+    --danger: #df7a68;
+    --bg: #1f1b18;
+    --bg-secondary: #26211d;
+    --bg-dark: #171311;
+    --card-bg: #2e2823;
+    --card-bg-hover: #37302a;
+    --text: #e7ddd0;
+    --text-light: #d6cabc;
+    --text-muted: #ad9f90;
+    --border: #473f38;
+    --border-light: #5a5047;
+    --primary-soft: rgba(224, 138, 103, 0.16);
+    --primary-soft-strong: rgba(224, 138, 103, 0.28);
+    --primary-glow: rgba(224, 138, 103, 0.24);
+    --overlay: rgba(12, 10, 9, 0.82);
+}
+
 [data-theme="light"] {
     --primary: #2f855a;
     --primary-dark: #276749;

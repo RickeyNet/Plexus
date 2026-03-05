@@ -31,6 +31,31 @@ CREATE TABLE IF NOT EXISTS users (
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS access_groups (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    description TEXT    DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS access_group_features (
+    group_id    INTEGER NOT NULL REFERENCES access_groups(id) ON DELETE CASCADE,
+    feature_key TEXT    NOT NULL,
+    PRIMARY KEY (group_id, feature_key)
+);
+
+CREATE TABLE IF NOT EXISTS user_group_memberships (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    group_id    INTEGER NOT NULL REFERENCES access_groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, group_id)
+);
+
+CREATE TABLE IF NOT EXISTS auth_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS inventory_groups (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT    NOT NULL UNIQUE,
@@ -307,6 +332,33 @@ async def update_user_profile(user_id: int, display_name: str = None):
         await db.close()
 
 
+async def update_user_admin(user_id: int, username: str = None, display_name: str = None, role: str = None):
+    db = await get_db()
+    try:
+        fields = []
+        values = []
+        if username is not None:
+            fields.append("username = ?")
+            values.append(username)
+        if display_name is not None:
+            fields.append("display_name = ?")
+            values.append(display_name)
+        if role is not None:
+            fields.append("role = ?")
+            values.append(role)
+        if not fields:
+            return
+        values.append(user_id)
+        await db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(values))
+        await db.commit()
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise ValueError("Username already exists")
+        raise
+    finally:
+        await db.close()
+
+
 async def get_all_users() -> list[dict]:
     db = await get_db()
     try:
@@ -322,6 +374,192 @@ async def delete_user(user_id: int):
         await db.execute("DELETE FROM credentials WHERE owner_id = ?", (user_id,))
         await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_user_group_ids(user_id: int) -> list[int]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT group_id FROM user_group_memberships WHERE user_id = ? ORDER BY group_id",
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return [int(r[0]) for r in rows]
+    finally:
+        await db.close()
+
+
+async def set_user_groups(user_id: int, group_ids: list[int]):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM user_group_memberships WHERE user_id = ?", (user_id,))
+        for gid in sorted(set(group_ids)):
+            await db.execute(
+                "INSERT INTO user_group_memberships (user_id, group_id) VALUES (?, ?)",
+                (user_id, gid),
+            )
+        await db.commit()
+    except Exception as e:
+        if "FOREIGN KEY constraint failed" in str(e):
+            raise ValueError("One or more selected groups do not exist")
+        raise
+    finally:
+        await db.close()
+
+
+async def get_all_access_groups() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            SELECT g.id, g.name, g.description, g.created_at, COUNT(m.user_id) AS member_count
+            FROM access_groups g
+            LEFT JOIN user_group_memberships m ON m.group_id = g.id
+            GROUP BY g.id
+            ORDER BY g.name
+            """
+        )
+        groups = rows_to_list(await cursor.fetchall())
+
+        for group in groups:
+            fcur = await db.execute(
+                "SELECT feature_key FROM access_group_features WHERE group_id = ? ORDER BY feature_key",
+                (group["id"],),
+            )
+            group["feature_keys"] = [r[0] for r in await fcur.fetchall()]
+        return groups
+    finally:
+        await db.close()
+
+
+async def get_access_group(group_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, name, description, created_at FROM access_groups WHERE id = ?",
+            (group_id,),
+        )
+        group = row_to_dict(await cursor.fetchone())
+        if not group:
+            return None
+
+        fcur = await db.execute(
+            "SELECT feature_key FROM access_group_features WHERE group_id = ? ORDER BY feature_key",
+            (group_id,),
+        )
+        mcur = await db.execute(
+            "SELECT COUNT(*) FROM user_group_memberships WHERE group_id = ?",
+            (group_id,),
+        )
+        group["feature_keys"] = [r[0] for r in await fcur.fetchall()]
+        group["member_count"] = int((await mcur.fetchone())[0])
+        return group
+    finally:
+        await db.close()
+
+
+async def create_access_group(name: str, description: str, feature_keys: list[str]) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO access_groups (name, description) VALUES (?, ?)",
+            (name, description),
+        )
+        group_id = cursor.lastrowid
+        for feature in sorted(set(feature_keys)):
+            await db.execute(
+                "INSERT INTO access_group_features (group_id, feature_key) VALUES (?, ?)",
+                (group_id, feature),
+            )
+        await db.commit()
+        return int(group_id)
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise ValueError("Access group name already exists")
+        raise
+    finally:
+        await db.close()
+
+
+async def update_access_group(group_id: int, name: str, description: str, feature_keys: list[str]):
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE access_groups SET name = ?, description = ? WHERE id = ?",
+            (name, description, group_id),
+        )
+        await db.execute("DELETE FROM access_group_features WHERE group_id = ?", (group_id,))
+        for feature in sorted(set(feature_keys)):
+            await db.execute(
+                "INSERT INTO access_group_features (group_id, feature_key) VALUES (?, ?)",
+                (group_id, feature),
+            )
+        await db.commit()
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise ValueError("Access group name already exists")
+        raise
+    finally:
+        await db.close()
+
+
+async def delete_access_group(group_id: int):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM access_groups WHERE id = ?", (group_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_user_effective_features(user_id: int) -> list[str]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            SELECT DISTINCT f.feature_key
+            FROM access_group_features f
+            INNER JOIN user_group_memberships m ON m.group_id = f.group_id
+            WHERE m.user_id = ?
+            ORDER BY f.feature_key
+            """,
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+    finally:
+        await db.close()
+
+
+async def set_auth_setting(key: str, value: dict):
+    db = await get_db()
+    try:
+        payload = json.dumps(value)
+        await db.execute(
+            """
+            INSERT INTO auth_settings (key, value, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = datetime('now')
+            """,
+            (key, payload),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_auth_setting(key: str) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT value FROM auth_settings WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return json.loads(row[0])
     finally:
         await db.close()
 

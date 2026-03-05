@@ -74,14 +74,7 @@
                 <a href="#" data-page="templates" class="nav-link">Templates</a>
                 <a href="#" data-page="credentials" class="nav-link">Credentials</a>
                 <a href="#" data-page="converter" class="nav-link">Converter</a>
-                <div class="theme-selector">
-                    <span class="theme-label">Theme</span>
-                    <select id="theme-select" class="theme-select" aria-label="Select theme">
-                        <option value="forest">Forest</option>
-                        <option value="dark">Dark</option>
-                        <option value="light">Light</option>
-                    </select>
-                </div>
+                <a href="#" data-page="settings" class="nav-link">Settings</a>
                 <a href="#" class="nav-link nav-user" id="nav-user" onclick="showUserMenu()">admin</a>
             </div>
         </nav>
@@ -355,13 +348,33 @@
             <div id="page-settings" class="page">
                 <h2>Admin Settings</h2>
                 <div class="section">
-                    <h3>User Management</h3>
+                    <h3>Appearance</h3>
+                    <div style="max-width: 260px;">
+                        <label class="form-label" for="theme-select-settings">Theme</label>
+                        <select id="theme-select-settings" class="theme-select" aria-label="Select theme in settings">
+                            <option value="forest">Forest</option>
+                            <option value="dark">Dark Blue</option>
+                            <option value="dark-modern">Dark Modern</option>
+                            <option value="easy">Easy Light</option>
+                            <option value="easy-dark">Easy Dark</option>
+                            <option value="light">Light</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="section">
+                    <div class="page-header" style="margin-bottom: 1rem;">
+                        <h3 style="margin: 0;">User Management</h3>
+                        <button class="btn btn-primary" onclick="showCreateAdminUserModal()">+ New User</button>
+                    </div>
                     <div id="admin-users-list" class="admin-users-list">
                         <div class="loading">Loading users...</div>
                     </div>
                 </div>
                 <div class="section">
-                    <h3>User Groups</h3>
+                    <div class="page-header" style="margin-bottom: 1rem;">
+                        <h3 style="margin: 0;">User Groups</h3>
+                        <button class="btn btn-primary" onclick="showCreateAccessGroupModal()">+ New Group</button>
+                    </div>
                     <div id="admin-groups-list" class="admin-groups-list">
                         <div class="loading">Loading groups...</div>
                     </div>
@@ -374,6 +387,51 @@
                         <label>Rate Limit Window (sec): <input type="number" id="login-rate-window" min="1"></label><br>
                         <label>Rate Limit Max: <input type="number" id="login-rate-max" min="1"></label><br>
                         <button type="submit" class="btn btn-primary">Save Rules</button>
+                    </form>
+                </div>
+                <div class="section">
+                    <h3>Authentication Provider</h3>
+                    <form id="admin-auth-config-form" style="display: grid; gap: 0.8rem; max-width: 700px;">
+                        <div class="form-group">
+                            <label class="form-label" for="auth-provider">Active Provider</label>
+                            <select id="auth-provider" class="form-select">
+                                <option value="local">Local Database</option>
+                                <option value="radius">RADIUS (planned)</option>
+                            </select>
+                        </div>
+                        <div id="radius-config-panel" style="display: none; border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 0.5rem; padding: 0.75rem;">
+                            <div class="form-group">
+                                <label><input type="checkbox" id="radius-enabled"> Enable RADIUS login path</label>
+                            </div>
+                            <div class="form-group" style="display: grid; gap: 0.4rem; margin-top: 0.35rem;">
+                                <label><input type="checkbox" id="radius-fallback-local" checked> Fallback to local auth when RADIUS is unavailable</label>
+                                <label><input type="checkbox" id="radius-fallback-reject"> Allow fallback to local auth on RADIUS reject</label>
+                                <small style="color: var(--text-muted);">Recommended: keep reject fallback disabled so invalid RADIUS credentials are denied immediately.</small>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 140px; gap: 0.75rem;">
+                                <div class="form-group">
+                                    <label class="form-label" for="radius-server">RADIUS Server</label>
+                                    <input type="text" id="radius-server" class="form-input" placeholder="10.0.0.50">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="radius-port">Port</label>
+                                    <input type="number" id="radius-port" class="form-input" min="1">
+                                </div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 140px; gap: 0.75rem;">
+                                <div class="form-group">
+                                    <label class="form-label" for="radius-secret">Shared Secret</label>
+                                    <input type="password" id="radius-secret" class="form-input" placeholder="Stored in app settings">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="radius-timeout">Timeout (sec)</label>
+                                    <input type="number" id="radius-timeout" class="form-input" min="1">
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <button type="submit" class="btn btn-primary">Save Auth Configuration</button>
+                        </div>
                     </form>
                 </div>
             </div>
