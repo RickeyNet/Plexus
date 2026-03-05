@@ -9,6 +9,7 @@ import { connectJobWebSocket, disconnectJobWebSocket } from './websocket.js';
 let currentPage = 'dashboard';
 let dashboardData = null;
 const _hostCache = {};
+let converterSessionId = null;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Navigation
@@ -85,72 +86,434 @@ async function loadPageData(page) {
 // Converter
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function loadConverter() {
-    const form = document.getElementById('converter-form');
-    const resultDiv = document.getElementById('converter-result');
-    const modal = document.getElementById('converter-output-modal');
-    const outputWindow = document.getElementById('converter-output-window');
-    if (!form) return;
-    form.reset();
-    resultDiv.textContent = '';
+// Firewall brand/model data
+const FIREWALL_MODELS = {
+    source: {
+        fortinet: [
+            { value: 'fortigate-60f',   label: 'FortiGate 60F' },
+            { value: 'fortigate-80f',   label: 'FortiGate 80F' },
+            { value: 'fortigate-100f',  label: 'FortiGate 100F' },
+            { value: 'fortigate-200f',  label: 'FortiGate 200F' },
+            { value: 'fortigate-300e',  label: 'FortiGate 300E' },
+            { value: 'fortigate-400e',  label: 'FortiGate 400E' },
+            { value: 'fortigate-500e',  label: 'FortiGate 500E' },
+            { value: 'fortigate-600e',  label: 'FortiGate 600E' },
+            { value: 'fortigate-1000d', label: 'FortiGate 1000D' },
+            { value: 'fortigate-2000e', label: 'FortiGate 2000E' },
+            { value: 'fortigate-3000d', label: 'FortiGate 3000D' },
+            { value: 'fortigate-3200d', label: 'FortiGate 3200D' },
+            { value: 'fortigate-3600e', label: 'FortiGate 3600E' },
+            { value: 'fortigate-3980e', label: 'FortiGate 3980E' },
+            { value: 'fortigate-6300f', label: 'FortiGate 6300F' },
+            { value: 'fortigate-6500f', label: 'FortiGate 6500F' },
+        ]
+    },
+    target: {
+        cisco: [
+            { value: 'ftd-1010', label: 'Firepower 1010' },
+            { value: 'ftd-1120', label: 'Firepower 1120' },
+            { value: 'ftd-1140', label: 'Firepower 1140' },
+            { value: 'ftd-2110', label: 'Firepower 2110' },
+            { value: 'ftd-2120', label: 'Firepower 2120' },
+            { value: 'ftd-2130', label: 'Firepower 2130' },
+            { value: 'ftd-2140', label: 'Firepower 2140' },
+            { value: 'ftd-3105', label: 'Secure Firewall 3105' },
+            { value: 'ftd-3110', label: 'Secure Firewall 3110' },
+            { value: 'ftd-3120', label: 'Secure Firewall 3120' },
+            { value: 'ftd-3130', label: 'Secure Firewall 3130' },
+            { value: 'ftd-3140', label: 'Secure Firewall 3140' },
+            { value: 'ftd-4215', label: 'Secure Firewall 4215' },
+        ]
+    }
+};
 
-    form.onsubmit = async (e) => {
+window.updateSourceModels = function () {
+    const brand = document.getElementById('source-brand').value;
+    const modelSelect = document.getElementById('source-model');
+    const models = FIREWALL_MODELS.source[brand] || [];
+    modelSelect.innerHTML = '<option value="">-- Select Model --</option>' +
+        models.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+};
+
+window.updateTargetModels = function () {
+    const brand = document.getElementById('target-brand').value;
+    const modelSelect = document.getElementById('target-model');
+    const models = FIREWALL_MODELS.target[brand] || [];
+    modelSelect.innerHTML = '<option value="">-- Select Model --</option>' +
+        models.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+};
+
+async function loadConverter() {
+    const convertForm   = document.getElementById('converter-form');
+    const importForm    = document.getElementById('import-form');
+    const statusDiv     = document.getElementById('converter-status');
+    const step2         = document.getElementById('converter-step2');
+    const step3         = document.getElementById('converter-step3');
+    const outputWindow  = document.getElementById('converter-output-window');
+    const summaryCards  = document.getElementById('converter-summary-cards');
+    const importOutput  = document.getElementById('import-output-window');
+    const cleanupForm   = document.getElementById('cleanup-form');
+    const cleanupOutput = document.getElementById('cleanup-output-window');
+    const recentSessions = document.getElementById('recent-sessions');
+    const configSection = document.getElementById('session-config-preview');
+    const configFileSelect = document.getElementById('session-config-file');
+    const configContent = document.getElementById('session-config-content');
+    const configMeta = document.getElementById('session-config-meta');
+
+    // Bail out if any required element is missing
+    if (!convertForm || !importForm || !statusDiv || !step2 || !outputWindow || !summaryCards || !importOutput) {
+        console.error('Converter: missing DOM elements', { convertForm, importForm, statusDiv, step2, outputWindow, summaryCards, importOutput });
+        return;
+    }
+
+    // Reset state on page load
+    convertForm.reset();
+    statusDiv.textContent = '';
+    step2.style.display = 'none';
+    if (step3) step3.style.display = 'block';
+    importOutput.style.display = 'none';
+
+    converterSessionId = null;
+
+    // ── Step 1: Convert ──────────────────────────────────────────────────────
+    convertForm.onsubmit = async (e) => {
         e.preventDefault();
-        outputWindow.textContent = '';
-        modal.style.display = 'flex';
-        resultDiv.textContent = 'Uploading and processing...';
-        const formData = new FormData(form);
-        formData.set('deploy', document.getElementById('ftd-deploy').checked ? 'true' : '');
+        step2.style.display = 'none';
+        converterSessionId = null;
+
+        const targetModel = document.getElementById('target-model').value;
+        const sourceModel = document.getElementById('source-model').value;
+
+        if (!targetModel) {
+            statusDiv.textContent = 'Error: Please select a target firewall brand and model before converting.';
+            return;
+        }
+        if (!sourceModel) {
+            statusDiv.textContent = 'Error: Please select a source firewall brand and model before converting.';
+            return;
+        }
+
+        statusDiv.textContent = `Converting for target model: ${targetModel}...`;
+
+        const formData = new FormData(convertForm);
+        // Explicitly set model values to ensure they are included regardless of FormData capture behaviour
+        formData.set('target_model', targetModel);
+        formData.set('source_model', sourceModel);
+
+        // Debug: confirm what is being sent
+        console.log('[Converter] Sending target_model:', formData.get('target_model'), '| source_model:', formData.get('source_model'));
+
         try {
-            // Use fetch with streaming if supported
-            const resp = await fetch('/api/convert-fortigate', {
-                method: 'POST',
-                body: formData
-            });
-            let data;
-            if (resp.body && window.ReadableStream) {
-                // Stream output to modal window
-                const reader = resp.body.getReader();
-                let decoder = new TextDecoder();
-                let done = false;
-                let buffer = '';
-                while (!done) {
-                    const { value, done: doneReading } = await reader.read();
-                    done = doneReading;
-                    if (value) {
-                        const chunk = decoder.decode(value);
-                        buffer += chunk;
-                        outputWindow.textContent += chunk;
-                        outputWindow.scrollTop = outputWindow.scrollHeight;
-                    }
-                }
-                try {
-                    data = JSON.parse(buffer);
-                } catch {
-                    data = { detail: buffer };
-                }
+            const resp = await fetch('/api/convert-only', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || 'Conversion failed');
+
+            converterSessionId = data.session_id;
+
+            // Show raw output, prefixed with confirmed model from backend
+            outputWindow.textContent = `[Backend confirmed target model: ${data.target_model}]\n\n` + (data.conversion_output || '(no output)');
+
+            // Build summary stat cards
+            const s = data.summary?.conversion_summary;
+            if (s) {
+                summaryCards.innerHTML = `
+                    <div class="stat-card"><div class="stat-label">Address Objects</div><div class="stat-value">${s.address_objects ?? '-'}</div></div>
+                    <div class="stat-card"><div class="stat-label">Address Groups</div><div class="stat-value">${s.address_groups ?? '-'}</div></div>
+                    <div class="stat-card"><div class="stat-label">Service Objects</div><div class="stat-value">${s.service_objects?.total ?? '-'}</div></div>
+                    <div class="stat-card"><div class="stat-label">Service Groups</div><div class="stat-value">${s.service_groups ?? '-'}</div></div>
+                    <div class="stat-card"><div class="stat-label">Access Rules</div><div class="stat-value">${s.access_rules?.total ?? '-'}</div></div>
+                    <div class="stat-card"><div class="stat-label">Static Routes</div><div class="stat-value">${s.static_routes?.total ?? '-'}</div></div>
+                `;
             } else {
-                data = await resp.json();
-                outputWindow.textContent =
-                    'Conversion Output:\n' + (data.conversion_output || '') +
-                    '\n\nImport Output:\n' + (data.import_output || '');
+                summaryCards.innerHTML = '';
             }
-            if (!resp.ok) {
-                throw new Error(data.detail || 'Conversion failed');
-            }
-            resultDiv.textContent = 'Conversion and import completed.';
+
+            step2.style.display = 'block';
+            if (step3) step3.style.display = 'block';
+            statusDiv.textContent = 'Conversion complete. Review below, then import.';
+            await loadRecentSessions();
         } catch (err) {
-            outputWindow.textContent += '\nError: ' + err.message;
-            resultDiv.textContent = 'Error: ' + err.message;
+            statusDiv.textContent = 'Error: ' + err.message;
         }
     };
+
+    // ── Recent sessions list ──────────────────────────────────────────────
+    async function loadRecentSessions() {
+        if (!recentSessions) return;
+        recentSessions.innerHTML = '<div class="loading">Loading...</div>';
+        try {
+            const resp = await fetch('/api/converter-sessions');
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || 'Failed to load sessions');
+            const sessions = data.sessions || [];
+            if (!sessions.length) {
+                recentSessions.innerHTML = '<div class="empty-state">No recent conversions found.</div>';
+                return;
+            }
+            recentSessions.innerHTML = sessions.map(s => {
+                const when = new Date(s.created_at * 1000).toLocaleString();
+                return `
+                    <div class="job-item">
+                        <div class="job-info">
+                            <div class="job-title">Session ${s.session_id}</div>
+                            <div class="job-meta">Model: ${s.target_model || 'unknown'} • Base: ${s.base} • ${when}</div>
+                        </div>
+                        <div style="display:flex; gap:0.5rem;">
+                            <button class="btn btn-sm" onclick="viewSessionConfig('${s.session_id}')">View</button>
+                            <button class="btn btn-sm btn-secondary" onclick="resumeImport('${s.session_id}')">Import</button>
+                            <button class="btn btn-sm" onclick="resumeCleanup('${s.session_id}')">Cleanup</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteSession('${s.session_id}')">Delete</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } catch (err) {
+            recentSessions.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+        }
+    }
+
+    window.deleteSession = async function (id) {
+        const confirmed = await showConfirm({
+            title: 'Delete Session',
+            message: `Delete session ${id}? This removes its generated files.`,
+            confirmText: 'Delete',
+            cancelText: 'Keep Session',
+            confirmClass: 'btn-danger'
+        });
+        if (!confirmed) return;
+        try {
+            const resp = await fetch('/api/reset-session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: id })
+            });
+            if (!resp.ok) throw new Error('Delete failed');
+            if (converterSessionId === id) {
+                converterSessionId = null;
+                const statusDiv = document.getElementById('converter-status');
+                if (statusDiv) statusDiv.textContent = 'Active session deleted.';
+            }
+            await loadRecentSessions();
+        } catch (err) {
+            alert('Error deleting session: ' + err.message);
+        }
+    };
+
+    function setActiveSession(id, message) {
+        converterSessionId = id;
+        if (statusDiv) statusDiv.textContent = message || `Using session ${id}.`;
+        if (step2) step2.style.display = 'block';
+        if (step3) step3.style.display = 'block';
+    }
+
+    window.resumeImport = function (id) {
+        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to re-run import.`);
+        if (importOutput) { importOutput.textContent = ''; importOutput.style.display = 'none'; }
+        if (cleanupOutput) { cleanupOutput.textContent = ''; cleanupOutput.style.display = 'none'; }
+        document.getElementById('converter-step2')?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    window.resumeCleanup = function (id) {
+        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to clean up.`);
+        if (cleanupOutput) { cleanupOutput.textContent = 'Ready to clean up this session.'; cleanupOutput.style.display = 'block'; }
+        document.getElementById('converter-step3')?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    async function loadSessionConfigFile(sessionId, filename) {
+        if (!configContent) return;
+        if (!filename) { configContent.textContent = 'Select a file to preview.'; return; }
+        configContent.textContent = 'Loading file...';
+        try {
+            const resp = await fetch(`/api/converter-session-file?session_id=${encodeURIComponent(sessionId)}&filename=${encodeURIComponent(filename)}`);
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || 'Failed to load file');
+            const raw = data.content || '';
+            const trimmed = raw.trim();
+            if (!trimmed) {
+                configContent.textContent = '(empty file)';
+                return;
+            }
+            // Pretty-print JSON when possible; fallback to raw text on parse errors
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    configContent.textContent = JSON.stringify(parsed, null, 2);
+                    return;
+                } catch (_) {
+                    // fall through to raw
+                }
+            }
+            configContent.textContent = raw;
+        } catch (err) {
+            configContent.textContent = 'Error: ' + err.message;
+        }
+    }
+
+    window.viewSessionConfig = async function (id) {
+        setActiveSession(id, `Viewing generated config for session ${id}.`);
+        if (!configSection || !configContent || !configFileSelect) return;
+        configSection.style.display = 'block';
+        configContent.textContent = 'Loading files...';
+        configFileSelect.innerHTML = '';
+        if (configMeta) configMeta.textContent = '';
+        try {
+            const resp = await fetch(`/api/converter-session-files?session_id=${encodeURIComponent(id)}`);
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || 'Failed to load session files');
+            const files = data.files || [];
+            if (configMeta) configMeta.textContent = `Model: ${data.target_model || 'unknown'} • Base: ${data.base || ''}`;
+            if (!files.length) {
+                configContent.textContent = 'No generated config files found for this session.';
+                return;
+            }
+            configFileSelect.innerHTML = files.map(f => {
+                const kb = Math.max(1, Math.round(f.size / 1024));
+                return `<option value="${f.name}">${f.name} (${kb} KB)</option>`;
+            }).join('');
+            configFileSelect.onchange = () => loadSessionConfigFile(id, configFileSelect.value);
+            await loadSessionConfigFile(id, files[0].name);
+            configSection.scrollIntoView({ behavior: 'smooth' });
+        } catch (err) {
+            configContent.textContent = 'Error: ' + err.message;
+        }
+    };
+
+    await loadRecentSessions();
+
+    // ── Step 2: Import ───────────────────────────────────────────────────────
+    importForm.onsubmit = async (e) => {
+        e.preventDefault();
+        if (!converterSessionId) { alert('No active conversion session. Please convert first or resume one.'); return; }
+        importOutput.textContent = `Importing session ${converterSessionId} to FTD...\n`;
+        importOutput.style.display = 'block';
+        importOutput.scrollIntoView({ behavior: 'smooth' });
+
+        try {
+            const resp = await fetch('/api/import-fortigate-stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: converterSessionId,
+                    ftd_host:     document.getElementById('ftd-host').value,
+                    ftd_username: document.getElementById('ftd-username').value,
+                    ftd_password: document.getElementById('ftd-password').value,
+                    deploy:       document.getElementById('ftd-deploy').checked,
+                    debug:        document.getElementById('ftd-debug').checked,
+                    only_flags:   [...document.querySelectorAll('.only-flag:checked')].map(cb => cb.value)
+                })
+            });
+
+            if (!resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                throw new Error(data.detail || `Import request failed (HTTP ${resp.status})`);
+            }
+
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                importOutput.textContent += decoder.decode(value, { stream: true });
+                importOutput.scrollTop = importOutput.scrollHeight;
+            }
+        } catch (err) {
+            importOutput.textContent += '\nError: ' + err.message;
+        }
+    };
+
+    // ── Step 3: Cleanup ───────────────────────────────────────────────────────
+    if (cleanupForm) {
+        cleanupForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const deleteFlags = [...document.querySelectorAll('.delete-flag:checked')].map(cb => cb.value);
+            if (deleteFlags.length === 0) {
+                alert('Please select at least one item to delete.');
+                return;
+            }
+            if (cleanupOutput) {
+                cleanupOutput.textContent = 'Running cleanup...';
+                cleanupOutput.style.display = 'block';
+                cleanupOutput.scrollIntoView({ behavior: 'smooth' });
+            }
+            try {
+                const resp = await fetch('/api/cleanup-ftd-stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id:   converterSessionId || '',
+                        ftd_host:     document.getElementById('cleanup-host').value,
+                        ftd_username: document.getElementById('cleanup-username').value,
+                        ftd_password: document.getElementById('cleanup-password').value,
+                        dry_run:      document.getElementById('cleanup-dry-run').checked,
+                        deploy:       document.getElementById('cleanup-deploy').checked,
+                        debug:        document.getElementById('cleanup-debug').checked,
+                        delete_flags: deleteFlags
+                    })
+                });
+
+                if (!resp.ok) {
+                    const data = await resp.json().catch(() => ({}));
+                    throw new Error(data.detail || `Cleanup request failed (HTTP ${resp.status})`);
+                }
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    cleanupOutput.textContent += decoder.decode(value, { stream: true });
+                    cleanupOutput.scrollTop = cleanupOutput.scrollHeight;
+                }
+            } catch (err) {
+                if (cleanupOutput) cleanupOutput.textContent = 'Error: ' + err.message;
+            }
+        };
+    }
 }
 
-window.openConverterOutputModal = function() {
-    document.getElementById('converter-output-modal').style.display = 'flex';
+window.toggleDeleteAll = function (cb) {
+    const specifics = document.querySelectorAll('.delete-specific');
+    const allIfaces = document.getElementById('cleanup-delete-all-ifaces');
+    specifics.forEach(f => { f.checked = cb.checked; f.disabled = cb.checked; });
+    if (allIfaces) { allIfaces.checked = cb.checked; allIfaces.disabled = cb.checked; }
 };
-window.closeConverterOutputModal = function() {
-    document.getElementById('converter-output-modal').style.display = 'none';
+
+window.resetConverter = function () {
+    // Fire-and-forget: clean up server-side session files
+    const currentSession = converterSessionId;
+    if (currentSession) {
+        fetch('/api/reset-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: currentSession })
+        }).catch(() => {});
+    }
+    converterSessionId = null;
+    const f  = document.getElementById('converter-form');
+    const s  = document.getElementById('converter-status');
+    const s2 = document.getElementById('converter-step2');
+    const io = document.getElementById('import-output-window');
+    const co = document.getElementById('cleanup-output-window');
+    const cf = document.getElementById('cleanup-form');
+    const sc = document.getElementById('session-config-preview');
+    const scf = document.getElementById('session-config-file');
+    const scc = document.getElementById('session-config-content');
+    const scm = document.getElementById('session-config-meta');
+    if (f)  f.reset();
+    if (s)  s.textContent = '';
+    if (s2) s2.style.display = 'none';
+    if (io) io.style.display = 'none';
+    if (co) { co.style.display = 'none'; co.textContent = ''; }
+    if (cf) cf.reset();
+    if (sc) sc.style.display = 'none';
+    if (scf) scf.innerHTML = '';
+    if (scc) scc.textContent = '';
+    if (scm) scm.textContent = '';
+    // Clear dynamic model dropdowns
+    const srcModel = document.getElementById('source-model');
+    const tgtModel = document.getElementById('target-model');
+    if (srcModel) srcModel.innerHTML = '<option value="">-- Select Model --</option>';
+    if (tgtModel) tgtModel.innerHTML = '<option value="">-- Select Model --</option>';
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -538,6 +901,91 @@ function closeAllModals() {
 
 // Expose to window for inline onclick handlers
 window.closeAllModals = closeAllModals;
+
+// Themed confirmation dialog using the app modal styling (also accepts legacy signature showConfirm(title, message))
+function showConfirm(optionsOrTitle = {}) {
+    const defaults = {
+        title: 'Confirm',
+        message: 'Are you sure?',
+        confirmText: 'Confirm',
+        cancelText: 'Cancel',
+        confirmClass: 'btn-danger'
+    };
+
+    const opts = typeof optionsOrTitle === 'string'
+        ? { ...defaults, title: optionsOrTitle, message: arguments[1] || defaults.message }
+        : { ...defaults, ...(optionsOrTitle || {}) };
+
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('modal-overlay');
+        const body = document.getElementById('modal-body');
+
+        document.getElementById('modal-title').textContent = opts.title;
+        body.innerHTML = '';
+
+        const msg = document.createElement('p');
+        msg.className = 'modal-confirm-message';
+        msg.textContent = opts.message;
+
+        const actions = document.createElement('div');
+        actions.style.display = 'flex';
+        actions.style.gap = '0.5rem';
+        actions.style.justifyContent = 'flex-end';
+        actions.style.marginTop = '1rem';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn btn-secondary';
+        cancelBtn.textContent = opts.cancelText;
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = `btn ${opts.confirmClass}`;
+        confirmBtn.textContent = opts.confirmText;
+
+        actions.appendChild(cancelBtn);
+        actions.appendChild(confirmBtn);
+        body.appendChild(msg);
+        body.appendChild(actions);
+
+        // Pause the overlay's default click-to-close handler so we can resolve the promise
+        const previousOverlayOnClick = overlay.onclick;
+        overlay.onclick = null;
+
+        const onOverlay = (e) => {
+            if (e.target === overlay) {
+                e.stopPropagation();
+                onCancel();
+            }
+        };
+
+        const cleanup = () => {
+            cancelBtn.removeEventListener('click', onCancel);
+            confirmBtn.removeEventListener('click', onConfirm);
+            overlay.removeEventListener('click', onOverlay);
+            overlay.onclick = previousOverlayOnClick || null;
+        };
+
+        const onCancel = () => {
+            cleanup();
+            closeAllModals();
+            resolve(false);
+        };
+
+        const onConfirm = () => {
+            cleanup();
+            closeAllModals();
+            resolve(true);
+        };
+
+        overlay.addEventListener('click', onOverlay);
+        overlay.classList.add('active');
+        cancelBtn.addEventListener('click', onCancel);
+        confirmBtn.addEventListener('click', onConfirm);
+    });
+}
+
+window.showConfirm = showConfirm;
 
 // Create Group Modal
 window.showCreateGroupModal = function() {
@@ -1182,7 +1630,13 @@ window.updatePlaybook = async function(e, playbookId) {
 };
 
 window.deletePlaybook = async function(playbookId) {
-    if (!await showConfirm('Delete Playbook', 'Are you sure you want to delete this playbook? This action cannot be undone.')) {
+    if (!await showConfirm({
+        title: 'Delete Playbook',
+        message: 'Are you sure you want to delete this playbook? This action cannot be undone.',
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+        confirmClass: 'btn-danger'
+    })) {
         return;
     }
     
@@ -1195,43 +1649,6 @@ window.deletePlaybook = async function(playbookId) {
     }
 };
 
-
-// Custom confirm dialog
-function showConfirm(title, message) {
-    return new Promise((resolve) => {
-        const overlay = document.getElementById('confirm-overlay');
-        document.getElementById('confirm-title').textContent = title;
-        document.getElementById('confirm-message').textContent = message;
-        overlay.classList.add('active');
-
-        const yesBtn = document.getElementById('confirm-yes');
-        const cancelBtn = document.getElementById('confirm-cancel');
-
-        function cleanup() {
-            overlay.classList.remove('active');
-            yesBtn.replaceWith(yesBtn.cloneNode(true));
-            cancelBtn.replaceWith(cancelBtn.cloneNode(true));
-        }
-
-        document.getElementById('confirm-yes').addEventListener('click', () => {
-            cleanup();
-            resolve(true);
-        });
-
-        document.getElementById('confirm-cancel').addEventListener('click', () => {
-            cleanup();
-            resolve(false);
-        });
-
-        overlay.addEventListener('click', function handler(e) {
-            if (e.target === overlay) {
-                cleanup();
-                overlay.removeEventListener('click', handler);
-                resolve(false);
-            }
-        });
-    });
-}
 
 // Delete functions
 window.deleteGroup = async function(groupId) {

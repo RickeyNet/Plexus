@@ -1,3 +1,7 @@
+# Converter session files (converted firewall configs, temporary per-session)
+netcontrol/converter_sessions/*
+!netcontrol/converter_sessions/.gitkeep
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Sensitive Files - CRITICAL: Never commit these!
 # ═══════════════════════════════════════════════════════════════════════════════

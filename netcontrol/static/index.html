@@ -1,15 +1,3 @@
-    <!-- Converter Output Modal -->
-    <div id="converter-output-modal" class="modal-overlay" style="display:none;">
-        <div class="modal modal-large" onclick="event.stopPropagation()">
-            <div class="modal-header">
-                <h3>Converter Progress</h3>
-                <button class="modal-close" onclick="closeConverterOutputModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <pre id="converter-output-window" style="height: 400px; overflow-y: auto; background: #181c20; color: #e0e0e0; padding: 1rem; border-radius: 0.5rem; font-size: 1rem;"></pre>
-            </div>
-        </div>
-    </div>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -132,31 +120,171 @@
             <!-- Converter Page -->
             <div id="page-converter" class="page">
                 <div class="page-header">
-                    <h2>FortiGate to Cisco FTD Converter</h2>
+                    <h2>Firewall Migration Tool</h2>
                 </div>
-                <form id="converter-form" enctype="multipart/form-data" style="max-width: 500px; margin: 2rem 0;">
-                    <div class="form-group">
-                        <label for="fortigate-yaml">FortiGate YAML Config</label>
-                        <input type="file" id="fortigate-yaml" name="yaml_file" class="form-input" accept=".yaml,.yml" required />
+
+                <!-- Step 1: Upload & Convert -->
+                <div id="converter-step1">
+                    <form id="converter-form" enctype="multipart/form-data" style="max-width: 560px; margin: 2rem 0;">
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="form-group">
+                                <label for="source-brand">Source Firewall Brand</label>
+                                <select id="source-brand" name="source_brand" class="form-input" onchange="updateSourceModels()">
+                                    <option value="">-- Select Brand --</option>
+                                    <option value="fortinet">Fortinet</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="source-model">Source Firewall Model</label>
+                                <select id="source-model" name="source_model" class="form-input">
+                                    <option value="">-- Select Model --</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="form-group">
+                                <label for="target-brand">Target Firewall Brand</label>
+                                <select id="target-brand" name="target_brand" class="form-input" onchange="updateTargetModels()">
+                                    <option value="">-- Select Brand --</option>
+                                    <option value="cisco">Cisco</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="target-model">Target Firewall Model</label>
+                                <select id="target-model" name="target_model" class="form-input" required>
+                                    <option value="">-- Select Model --</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="fortigate-yaml">Source Firewall Config (YAML)</label>
+                            <input type="file" id="fortigate-yaml" name="yaml_file" class="form-input" accept=".yaml,.yml" required />
+                        </div>
+                        <button type="submit" class="btn btn-primary">Convert</button>
+                    </form>
+                    <div id="converter-status" style="margin-top: 1rem; color: var(--text-muted);"></div>
+                    <div class="section" style="margin-top: 1.5rem;">
+                        <h3>Recent Conversions</h3>
+                        <div id="recent-sessions" class="jobs-list"><div class="loading">Loading...</div></div>
                     </div>
-                    <div class="form-group">
-                        <label for="ftd-host">Cisco FTD Host/IP</label>
-                        <input type="text" id="ftd-host" name="ftd_host" class="form-input" required />
+                    <div id="session-config-preview" class="section" style="display:none; margin-top: 1rem;">
+                        <h3>Session Config Preview</h3>
+                        <div id="session-config-meta" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.5rem;"></div>
+                        <div style="margin-bottom: 0.5rem; max-width: 320px;">
+                            <label class="form-label" style="font-size: 0.9rem;">Select config file</label>
+                            <select id="session-config-file" class="form-input"></select>
+                        </div>
+                        <pre id="session-config-content" style="max-height: 320px; overflow-y: auto; background: #181c20; color: #e0e0e0; padding: 1rem; border-radius: 0.5rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word;"></pre>
                     </div>
-                    <div class="form-group">
-                        <label for="ftd-username">FTD Username</label>
-                        <input type="text" id="ftd-username" name="ftd_username" class="form-input" required />
+                </div>
+
+                <!-- Step 2: Results + Import (shown after conversion) -->
+                <div id="converter-step2" style="display:none;">
+                    <div class="section">
+                        <h3>Conversion Summary</h3>
+                        <div id="converter-summary-cards" class="stats-grid"></div>
                     </div>
-                    <div class="form-group">
-                        <label for="ftd-password">FTD Password</label>
-                        <input type="password" id="ftd-password" name="ftd_password" class="form-input" required />
+                    <div class="section">
+                        <h3>Conversion Output</h3>
+                        <pre id="converter-output-window" style="max-height: 400px; overflow-y: auto; background: #181c20; color: #e0e0e0; padding: 1rem; border-radius: 0.5rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word;"></pre>
                     </div>
-                    <div class="form-group">
-                        <label><input type="checkbox" id="ftd-deploy" name="deploy" /> Deploy after import</label>
+                    <div class="section">
+                        <h3>Import to FTD</h3>
+                        <form id="import-form" style="max-width: 600px; margin: 1rem 0;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
+                                <div class="form-group">
+                                    <label for="ftd-host">FTD Host/IP</label>
+                                    <input type="text" id="ftd-host" class="form-input" required />
+                                </div>
+                                <div class="form-group">
+                                    <label for="ftd-username">Username</label>
+                                    <input type="text" id="ftd-username" class="form-input" required />
+                                </div>
+                                <div class="form-group">
+                                    <label for="ftd-password">Password</label>
+                                    <input type="password" id="ftd-password" class="form-input" required />
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 2rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
+                                <label><input type="checkbox" id="ftd-deploy" /> Deploy after import</label>
+                                <label><input type="checkbox" id="ftd-debug" /> Debug output</label>
+                            </div>
+                            <details style="margin-bottom: 1rem;">
+                                <summary style="cursor: pointer; color: var(--primary-light); user-select: none; font-size: 0.9rem;">Advanced: Import specific categories only</summary>
+                                <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--bg-secondary); border-radius: 0.5rem; border: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem;">
+                                    <p style="font-size: 0.8rem; color: var(--text-muted); grid-column: span 2; margin-bottom: 0.25rem;">If none are checked, all categories are imported.</p>
+                                    <label><input type="checkbox" class="only-flag" value="only-physical-interfaces" /> Physical Interfaces</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-etherchannels" /> EtherChannels</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-bridge-groups" /> Bridge Groups</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-subinterfaces" /> Subinterfaces</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-security-zones" /> Security Zones</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-address-objects" /> Address Objects</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-address-groups" /> Address Groups</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-service-objects" /> Service Objects</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-service-groups" /> Service Groups</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-routes" /> Static Routes</label>
+                                    <label><input type="checkbox" class="only-flag" value="only-rules" /> Access Rules</label>
+                                </div>
+                            </details>
+                            <button type="submit" class="btn btn-primary">Import to FTD</button>
+                            <button type="button" class="btn btn-secondary" onclick="resetConverter()" style="margin-left: 0.75rem;">Start Over</button>
+                        </form>
+                        <pre id="import-output-window" style="display:none; margin-top: 1rem; max-height: 400px; overflow-y: auto; background: #181c20; color: #e0e0e0; padding: 1rem; border-radius: 0.5rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word;"></pre>
                     </div>
-                    <button type="submit" class="btn btn-primary">Convert & Import</button>
-                </form>
-                    <div id="converter-result" style="white-space: pre-wrap; margin-top: 1rem;" onclick="openConverterOutputModal()"></div>
+                </div>
+
+                <!-- Step 3: Cleanup / Rollback -->
+                <div id="converter-step3" style="display:block;">
+                    <div class="section">
+                        <h3>Cleanup / Rollback</h3>
+                        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Remove objects previously imported to the FTD device. Appliance model is auto-detected from the active session.</p>
+                        <form id="cleanup-form" style="max-width: 600px; margin: 1rem 0;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
+                                <div class="form-group">
+                                    <label for="cleanup-host">FTD Host/IP</label>
+                                    <input type="text" id="cleanup-host" class="form-input" required />
+                                </div>
+                                <div class="form-group">
+                                    <label for="cleanup-username">Username</label>
+                                    <input type="text" id="cleanup-username" class="form-input" required />
+                                </div>
+                                <div class="form-group">
+                                    <label for="cleanup-password">Password</label>
+                                    <input type="password" id="cleanup-password" class="form-input" required />
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 2rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
+                                <label><input type="checkbox" id="cleanup-dry-run" /> Dry Run (preview only)</label>
+                                <label><input type="checkbox" id="cleanup-deploy" /> Deploy after cleanup</label>
+                                <label><input type="checkbox" id="cleanup-debug" /> Debug output</label>
+                            </div>
+                            <div style="padding: 0.75rem; background: var(--bg-secondary); border-radius: 0.5rem; border: 1px solid var(--border); margin-bottom: 1rem;">
+                                <p style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">Select what to delete:</p>
+                                <label style="display:block; margin-bottom:0.4rem;"><input type="checkbox" class="delete-flag" value="delete-all" id="cleanup-delete-all" onchange="toggleDeleteAll(this)" /> <strong>Delete Everything</strong> (all custom objects &amp; interfaces)</label>
+                                <label style="display:block; margin-bottom:0.4rem;"><input type="checkbox" class="delete-flag" value="delete-all-interfaces" id="cleanup-delete-all-ifaces" /> <strong>Delete All Interfaces</strong></label>
+                                <hr style="border-color: var(--border); margin: 0.5rem 0;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem;">
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-address-objects" /> Address Objects</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-address-groups" /> Address Groups</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-service-objects" /> Service Objects</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-service-groups" /> Service Groups</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-security-zones" /> Security Zones</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-routes" /> Static Routes</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-rules" /> Access Rules</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-subinterfaces" /> Subinterfaces</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-etherchannels" /> EtherChannels</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="delete-bridge-groups" /> Bridge Groups</label>
+                                    <label><input type="checkbox" class="delete-flag delete-specific" value="reset-physical-interfaces" /> Reset Physical Interfaces</label>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary" style="background: #c0392b; border-color: #c0392b;">Run Cleanup</button>
+                        </form>
+                        <pre id="cleanup-output-window" style="display:none; margin-top: 1rem; max-height: 400px; overflow-y: auto; background: #181c20; color: #e0e0e0; padding: 1rem; border-radius: 0.5rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word;"></pre>
+                    </div>
+                </div>
             </div>
 
             <!-- Inventory Page -->
