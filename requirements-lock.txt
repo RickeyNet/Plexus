@@ -9,4 +9,4 @@ python-multipart==0.0.9
 requests==2.31.0
 urllib3==2.2.3
 netmiko==4.4.0
-pyrad==2.4
+pyrad==2.5.4
