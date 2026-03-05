@@ -9,6 +9,7 @@ import { connectJobWebSocket, disconnectJobWebSocket } from './websocket.js';
 let currentPage = 'dashboard';
 let dashboardData = null;
 const _hostCache = {};
+const _groupCache = {};
 let converterSessionId = null;
 
 const THEME_KEY = 'plexus-theme';
@@ -652,7 +653,10 @@ function renderInventoryGroups(groups) {
                     <div class="card-title">${escapeHtml(group.name)}</div>
                     <div class="card-description">${escapeHtml(group.description || '')}</div>
                 </div>
-                <button class="btn btn-sm btn-danger" onclick="deleteGroup(${group.id})">Delete</button>
+                <div style="display: flex; gap: 0.25rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="showEditGroupModal(${group.id})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteGroup(${group.id})">Delete</button>
+                </div>
             </div>
             <div class="hosts-list">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
@@ -681,6 +685,14 @@ function renderInventoryGroups(groups) {
             </div>
         </div>
     `).join('');
+
+    groups.forEach(group => {
+        _groupCache[group.id] = {
+            id: group.id,
+            name: group.name,
+            description: group.description || '',
+        };
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -915,12 +927,23 @@ window.saveCredentialInline = async function(credentialId) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function showModal(title, content) {
+    const modal = document.querySelector('#modal-overlay .modal');
+    if (modal) {
+        const isCodeEditorModal = /playbook|template/i.test(title);
+        modal.classList.toggle('modal-large', isCodeEditorModal);
+    }
+
     document.getElementById('modal-title').textContent = title;
     document.getElementById('modal-body').innerHTML = content;
     document.getElementById('modal-overlay').classList.add('active');
 }
 
 function closeAllModals() {
+    const modal = document.querySelector('#modal-overlay .modal');
+    if (modal) {
+        modal.classList.remove('modal-large');
+    }
+
     document.getElementById('modal-overlay').classList.remove('active');
     document.getElementById('modal-body').innerHTML = '';
 }
@@ -1046,6 +1069,44 @@ window.createGroup = async function(e) {
     }
 };
 
+window.showEditGroupModal = function(groupId) {
+    const group = _groupCache[groupId];
+    if (!group) {
+        showError('Group data not found');
+        return;
+    }
+
+    showModal('Edit Inventory Group', `
+        <form onsubmit="updateGroup(event, ${groupId})">
+            <div class="form-group">
+                <label class="form-label">Group Name</label>
+                <input type="text" class="form-input" name="name" value="${escapeHtml(group.name)}" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea class="form-textarea" name="description">${escapeHtml(group.description || '')}</textarea>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    `);
+};
+
+window.updateGroup = async function(e, groupId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    try {
+        await api.updateGroup(groupId, formData.get('name'), formData.get('description'));
+        closeAllModals();
+        await loadInventory();
+        showSuccess('Group updated successfully');
+    } catch (error) {
+        showError(`Failed to update group: ${error.message}`);
+    }
+};
+
 // Add Host Modal
 window.showAddHostModal = function(groupId) {
     showModal('Add Host', `
@@ -1150,10 +1211,11 @@ window.addHost = async function(e, groupId) {
 // Launch Job Modal
 window.showLaunchJobModal = async function() {
     try {
-        const [playbooks, groups, credentials] = await Promise.all([
+        const [playbooks, groups, credentials, templates] = await Promise.all([
             api.getPlaybooks(),
             api.getInventoryGroups(),
             api.getCredentials(),
+            api.getTemplates(),
         ]);
 
         // Load hosts for each group
@@ -1214,6 +1276,14 @@ window.showLaunchJobModal = async function() {
                     </select>
                 </div>
                 <div class="form-group">
+                    <label class="form-label">Template (optional)</label>
+                    <select class="form-select" name="template_id">
+                        <option value="">None</option>
+                        ${templates.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')}
+                    </select>
+                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.25rem;">If the selected playbook expects a template (e.g., VLAN 1 remediation), choose one here.</small>
+                </div>
+                <div class="form-group">
                     <label>
                         <input type="checkbox" name="dry_run" checked> Dry Run (simulation)
                     </label>
@@ -1263,15 +1333,16 @@ window.launchJob = async function(e) {
     try {
         const playbookId = parseInt(formData.get('playbook_id'));
         const credentialId = formData.get('credential_id') ? parseInt(formData.get('credential_id')) : null;
+        const templateId = formData.get('template_id') ? parseInt(formData.get('template_id')) : null;
         const dryRun = formData.get('dry_run') === 'on';
         
-        console.log('Job parameters:', { playbookId, credentialId, dryRun, hostIds });
+        console.log('Job parameters:', { playbookId, credentialId, templateId, dryRun, hostIds });
         
         const job = await api.launchJob(
             playbookId,
             null, // No longer using inventory_group_id
             credentialId,
-            null,
+            templateId,
             dryRun,
             hostIds
         );
@@ -1301,7 +1372,7 @@ window.editTemplate = async function(templateId) {
                 </div>
                 <div class="form-group">
                     <label class="form-label">Config Content</label>
-                    <textarea class="form-textarea" name="content" style="min-height: 200px;" required>${escapeHtml(template.content)}</textarea>
+                    <textarea class="form-textarea code-editor" name="content" wrap="off" spellcheck="false" style="min-height: 320px;" required>${escapeHtml(template.content)}</textarea>
                 </div>
                 <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                     <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
@@ -1341,7 +1412,7 @@ window.showCreateTemplateModal = function() {
             </div>
             <div class="form-group">
                 <label class="form-label">Config Content</label>
-                <textarea class="form-textarea" name="content" style="min-height: 200px;" required></textarea>
+                <textarea class="form-textarea code-editor" name="content" wrap="off" spellcheck="false" style="min-height: 320px;" required></textarea>
             </div>
             <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                 <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
@@ -1514,7 +1585,7 @@ class MyPlaybook(BasePlaybook):
             </div>
             <div class="form-group">
                 <label class="form-label">Python Code</label>
-                <textarea class="form-textarea" name="content" style="min-height: 400px; font-family: 'Courier New', monospace;" required>${defaultContent}</textarea>
+                <textarea class="form-textarea code-editor" name="content" wrap="off" spellcheck="false" style="min-height: 500px; font-family: 'Courier New', monospace;" required>${defaultContent}</textarea>
             </div>
             <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                 <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
@@ -1595,7 +1666,7 @@ window.editPlaybook = async function(playbookId) {
                 </div>
                 <div class="form-group">
                     <label class="form-label">Python Code</label>
-                    <textarea id="playbook-content-textarea" class="form-textarea" name="content" style="min-height: 400px; font-family: 'Courier New', monospace;" required></textarea>
+                    <textarea id="playbook-content-textarea" class="form-textarea code-editor" name="content" wrap="off" spellcheck="false" style="min-height: 500px; font-family: 'Courier New', monospace;" required></textarea>
                 </div>
                 <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                     <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>

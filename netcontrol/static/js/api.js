@@ -96,6 +96,13 @@ export async function createGroup(name, description = '') {
     });
 }
 
+export async function updateGroup(groupId, name, description = '') {
+    return apiRequest(`/inventory/${groupId}`, {
+        method: 'PUT',
+        body: { name, description },
+    });
+}
+
 export async function deleteGroup(groupId) {
     return apiRequest(`/inventory/${groupId}`, {
         method: 'DELETE',

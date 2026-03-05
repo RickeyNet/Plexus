@@ -431,6 +431,11 @@ class GroupCreate(BaseModel):
     name: str
     description: str = ""
 
+
+class GroupUpdate(BaseModel):
+    name: str
+    description: str = ""
+
 class HostCreate(BaseModel):
     hostname: str
     ip_address: str
@@ -517,6 +522,15 @@ async def list_groups():
 async def create_group(body: GroupCreate):
     gid = await db.create_group(body.name, body.description)
     return {"id": gid, "name": body.name}
+
+
+@app.put("/api/inventory/{group_id}", dependencies=[Depends(require_auth)])
+async def update_group(group_id: int, body: GroupUpdate):
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    await db.update_group(group_id, body.name, body.description)
+    return {"ok": True}
 
 
 @app.get("/api/inventory/{group_id}", dependencies=[Depends(require_auth)])

@@ -366,6 +366,18 @@ async def create_group(name: str, description: str = "") -> int:
         await db.close()
 
 
+async def update_group(group_id: int, name: str, description: str = ""):
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE inventory_groups SET name = ?, description = ? WHERE id = ?",
+            (name, description, group_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def delete_group(group_id: int):
     db = await get_db()
     try:
