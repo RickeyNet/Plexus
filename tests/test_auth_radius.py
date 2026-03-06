@@ -1,6 +1,5 @@
-import pytest
-
 import netcontrol.app as app_module
+import pytest
 
 
 @pytest.mark.asyncio

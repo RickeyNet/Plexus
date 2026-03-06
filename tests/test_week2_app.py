@@ -1,8 +1,7 @@
 from typing import cast
 
-from fastapi import Request
-
 import netcontrol.app as app_module
+from fastapi import Request
 
 
 class DummyRequest:

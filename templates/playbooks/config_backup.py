@@ -5,13 +5,12 @@ Pulls running-config from each device and saves to timestamped files.
 """
 
 import asyncio
-import random
-import os
-import netmiko
 import datetime
-from typing import AsyncGenerator
+import os
+import random
 
-from routes.runner import BasePlaybook, LogEvent, register_playbook
+import netmiko
+from routes.runner import BasePlaybook, register_playbook
 
 
 @register_playbook

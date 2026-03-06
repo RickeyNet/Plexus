@@ -27,8 +27,7 @@ FTD INTERFACE NAME RULES:
 """
 
 import re
-from typing import Dict, List, Any, Set, Tuple, Optional
-
+from typing import Any
 
 # =============================================================================
 # FIREWALL MODEL DEFINITIONS
@@ -199,7 +198,7 @@ class InterfaceConverter:
     Use set_target_model() to configure for a specific firewall.
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], target_model: str = 'ftd-3120', custom_ha_port: str = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: dict[str, Any], target_model: str = 'ftd-3120', custom_ha_port: str = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -352,10 +351,10 @@ class InterfaceConverter:
     
         # Warn if using port 1 (often used for management/uplink)
         if port_num == 1:
-            print(f"\nWARNING: Using Ethernet1/1 as HA port. This is typically the first data port.")
-            print(f"         Ensure this doesn't conflict with your network design.\n")
+            print("\nWARNING: Using Ethernet1/1 as HA port. This is typically the first data port.")
+            print("         Ensure this doesn't conflict with your network design.\n")
 
-    def set_port_mapping(self, mapping: Dict[str, str]):
+    def set_port_mapping(self, mapping: dict[str, str]):
         """
         Set explicit port mapping for specific interfaces.
         
@@ -381,7 +380,7 @@ class InterfaceConverter:
             if ftd_port in self.available_ftd_ports:
                 self.available_ftd_ports.remove(ftd_port)
     
-    def set_skip_ports(self, ports: Set[str]):
+    def set_skip_ports(self, ports: set[str]):
         """
         Set additional FTD ports to skip.
         
@@ -394,7 +393,7 @@ class InterfaceConverter:
         # Remove from available list
         self.available_ftd_ports = [p for p in self.available_ftd_ports if p not in ports]
     
-    def _get_ftd_hardware_name(self, fg_port: str) -> Optional[str]:
+    def _get_ftd_hardware_name(self, fg_port: str) -> str | None:
         """
         Get the FTD hardware name for a FortiGate port.
         
@@ -427,7 +426,7 @@ class InterfaceConverter:
         except:
             return 24  # Default
     
-    def convert(self) -> Dict[str, List[Dict]]:
+    def convert(self) -> dict[str, list[dict]]:
         """
         Main conversion method - converts all FortiGate interfaces to FTD format.
         
@@ -597,7 +596,7 @@ class InterfaceConverter:
         
         print(f"\n  Port Analysis for {self.model_info['name']}:") # pyright: ignore[reportOptionalSubscript]
         print(f"    Available FTD ports: {available}")
-        print(f"    FortiGate interfaces to convert:")
+        print("    FortiGate interfaces to convert:")
         print(f"      - EtherChannel members: {etherch_member_count}")
         print(f"      - Bridge Group members: {bridge_member_count}")
         print(f"      - Physical with subinterfaces: {len(physical_with_subs)}")
@@ -614,11 +613,11 @@ class InterfaceConverter:
         
         if total_needed > available:
             print(f"\n  [WARNING] Not enough ports! Need {total_needed}, have {available}")
-            print(f"  [INFO] Using priority-based assignment:")
-            print(f"         1. EtherChannels (aggregate traffic)")
-            print(f"         2. Bridge Groups (switch ports)")
-            print(f"         3. Interfaces with subinterfaces (carry VLANs)")
-            print(f"         4. Standalone interfaces (if ports remain)")
+            print("  [INFO] Using priority-based assignment:")
+            print("         1. EtherChannels (aggregate traffic)")
+            print("         2. Bridge Groups (switch ports)")
+            print("         3. Interfaces with subinterfaces (carry VLANs)")
+            print("         4. Standalone interfaces (if ports remain)")
         
         # ====================================================================
         # PHASE 4: Convert in PRIORITY ORDER
@@ -671,7 +670,7 @@ class InterfaceConverter:
         self._generate_security_zones()
         
         # Print final port allocation summary
-        print(f"\n  Port Allocation Summary:")
+        print("\n  Port Allocation Summary:")
         print(f"    Ports used: {len(self.assigned_ftd_ports) - len(self.skip_ftd_ports)}")
         print(f"    Ports remaining: {len(self.available_ftd_ports)}")
         print(f"    Security zones created: {len(self.security_zones)}")
@@ -820,7 +819,7 @@ class InterfaceConverter:
             else:
                 print(f"    Created zone: {zone_name} (interface: {interfaces[0]['hardwareName']})")
 
-    def _convert_physical_interface(self, fg_name: str, properties: Dict):
+    def _convert_physical_interface(self, fg_name: str, properties: dict):
         """Convert a FortiGate physical interface to FTD format."""
         
         # Skip certain interfaces
@@ -923,7 +922,7 @@ class InterfaceConverter:
         
         print(f"    Converted: {fg_name} -> {ftd_name} ({ftd_hardware})")
     
-    def _convert_aggregate_interface(self, fg_name: str, properties: Dict):
+    def _convert_aggregate_interface(self, fg_name: str, properties: dict):
         """Convert a FortiGate aggregate interface to FTD EtherChannel."""
         
         # Get interface name
@@ -1013,7 +1012,7 @@ class InterfaceConverter:
         member_str = ', '.join([m['hardwareName'] for m in ftd_members])
         print(f"    Converted: {fg_name} -> {ftd_name} (Port-channel{etherchannel_id}) members: [{member_str}]")
     
-    def _convert_switch_interface(self, fg_name: str, properties: Dict):
+    def _convert_switch_interface(self, fg_name: str, properties: dict):
         """Convert a FortiGate switch interface to FTD Bridge Group."""
         
         # Get interface name
@@ -1126,7 +1125,7 @@ class InterfaceConverter:
         member_str = ', '.join([m['hardwareName'] for m in ftd_members])
         print(f"    Converted: {fg_name} -> {ftd_name} (BVI{bridge_group_id}) members: [{member_str}]")
 
-    def _get_interface_properties(self, intf_name: str) -> Dict:
+    def _get_interface_properties(self, intf_name: str) -> dict:
         """
         Look up interface properties from system_interface section.
         
@@ -1145,7 +1144,7 @@ class InterfaceConverter:
         
         return {}
     
-    def _convert_vlan_interface(self, fg_name: str, properties: Dict):
+    def _convert_vlan_interface(self, fg_name: str, properties: dict):
         """
         Convert a FortiGate VLAN interface to FTD Subinterface.
         
@@ -1284,7 +1283,7 @@ class InterfaceConverter:
         else:
             print(f"    Converted: {fg_name} -> {ftd_name} ({hardware_name}) VLAN {vlan_id}")
     
-    def get_interface_mapping(self) -> Dict[str, str]:
+    def get_interface_mapping(self) -> dict[str, str]:
         """
         Get the mapping of FortiGate interface names to FTD interface names.
         
@@ -1295,7 +1294,7 @@ class InterfaceConverter:
         """
         return self.interface_name_mapping.copy()
     
-    def get_statistics(self) -> Dict[str, int]:
+    def get_statistics(self) -> dict[str, int]:
         """Get conversion statistics."""
         return self.stats.copy()
 

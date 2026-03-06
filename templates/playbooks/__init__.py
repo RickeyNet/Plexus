@@ -1,8 +1,8 @@
 """
 Auto-import all playbook modules so their @register_playbook decorators fire.
 """
-import os
 import importlib
+import os
 import sys
 
 # Ensure the project root is on the path so 'routes.runner' can be imported
