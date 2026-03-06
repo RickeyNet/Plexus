@@ -422,7 +422,7 @@ class ServiceConverter:
             "icmp_skipped": self.icmp_skipped_count  # ICMP and other non-port protocols
         }
     
-    def get_service_name_mapping(self) -> dict[str, list[str]]:
+    def get_service_name_mapping(self) -> dict[str, list[tuple[str, str]]]:
         """
         Get a mapping of original FortiGate service names to FTD object names.
         
@@ -430,8 +430,8 @@ class ServiceConverter:
         to the correct FTD object names.
         
         Returns:
-            Dict mapping FortiGate service name -> list of FTD object names
-            Example: {"LR_CLUST": ["LR_CLUST_TCP_1", "LR_CLUST_TCP_2", "LR_CLUST_UDP_3"]}
+            Dict mapping FortiGate service name -> list of (FTD object name, object type)
+            Example: {"DNS": [("DNS_TCP", "tcpportobject"), ("DNS_UDP", "udpportobject")]}
         """
         return self.service_name_mapping
     

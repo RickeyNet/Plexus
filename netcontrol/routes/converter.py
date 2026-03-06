@@ -28,7 +28,7 @@ os.makedirs(SESSIONS_DIR, exist_ok=True)
 _sessions: dict = {}
 SESSION_TTL = 7200  # 2 hours
 
-CONVERTER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/fortigate_converter.py'))
+CONVERTER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/converter_v2/fortigate_converter_v2.py'))
 IMPORTER_PATH  = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py'))
 CLEANUP_PATH   = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_cleanup.py'))
 

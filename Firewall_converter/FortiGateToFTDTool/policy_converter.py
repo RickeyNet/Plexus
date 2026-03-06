@@ -100,15 +100,15 @@ class PolicyConverter:
     6. Converting to FTD's accessrule format
     """
     
-    def __init__(self, fortigate_config: dict[str, Any], 
-                 split_services: set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_name_mapping: dict[str, list[tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
-                 skipped_services: set[str] = None, # pyright: ignore[reportArgumentType]
-                 address_name_mapping: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
-                 address_group_members: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
-                 address_groups: set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_groups: set[str] = None, # pyright: ignore[reportArgumentType]
-                 interface_name_mapping: dict[str, str] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: dict[str, Any],
+                 split_services: set[str] | None = None,
+                 service_name_mapping: dict[str, list[tuple[str, str]]] | None = None,
+                 skipped_services: set[str] | None = None,
+                 address_name_mapping: dict[str, str] | None = None,
+                 address_group_members: dict[str, list[str]] | None = None,
+                 address_groups: set[str] | None = None,
+                 service_groups: set[str] | None = None,
+                 interface_name_mapping: dict[str, str] | None = None):
         """
         Initialize the converter with FortiGate configuration data.
         
