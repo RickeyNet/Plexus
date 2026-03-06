@@ -90,6 +90,8 @@ class FTDBulkDelete:
         
         self.access_token = None
         self.refresh_token = None
+        self.last_api_error = ""
+        self.auth_error_encountered = False
         
         # Track statistics
         self.stats = {
@@ -229,6 +231,10 @@ class FTDBulkDelete:
                         break
                 else:
                     print(f"    Warning: HTTP {response.status_code}")
+                    self.last_api_error = f"GET {endpoint} failed with HTTP {response.status_code}"
+                    if response.status_code in {401, 403}:
+                        self.auth_error_encountered = True
+                        print("    [ERROR] Authentication/authorization failed while reading objects.")
                     if self.debug:
                         print(f"    Response: {response.text[:200]}")
                     break
@@ -414,6 +420,10 @@ class FTDBulkDelete:
         
         # Get ALL objects from FTD
         all_objects = self.get_all_objects(endpoint)
+
+        if self.auth_error_encountered:
+            print(f"  [ERROR] Aborting {object_type.lower()} cleanup due to API auth failure")
+            return False
         
         if not all_objects:
             print(f"  No {object_type.lower()} found in FTD")
@@ -1377,79 +1387,85 @@ Examples:
     print(f"{'='*60}")
     
     # Delete in reverse dependency order
+    overall_success = True
+
     if args.delete_all or args.delete_rules:
-        client.delete_all_custom_objects(
+        overall_success = client.delete_all_custom_objects(
             "/policy/accesspolicies/default/accessrules",
             "Access Rules",
             args.dry_run
-        )
+        ) and overall_success
     
     if args.delete_all or args.delete_routes:
-        client.delete_all_static_routes(args.dry_run)
+        overall_success = client.delete_all_static_routes(args.dry_run) and overall_success
 
     # Security zones depend on interfaces, delete zones before interfaces
     if args.delete_all or args.delete_security_zones:
-        client.delete_all_custom_objects(
+        overall_success = client.delete_all_custom_objects(
             "/object/securityzones",
             "Security Zones",
             args.dry_run
-        )
+        ) and overall_success
     
     # Delete interfaces BEFORE objects (interfaces may reference objects)
     # Order: subinterfaces -> etherchannels -> bridge groups -> physical reset
     if args.delete_all or args.delete_all_interfaces or args.delete_subinterfaces:
-        client.delete_all_subinterfaces(args.dry_run)
+        overall_success = client.delete_all_subinterfaces(args.dry_run) and overall_success
     
     if args.delete_all or args.delete_all_interfaces or args.delete_etherchannels:
-        client.delete_all_etherchannels(args.dry_run)
+        overall_success = client.delete_all_etherchannels(args.dry_run) and overall_success
     
     if args.delete_all or args.delete_all_interfaces or args.delete_bridge_groups:
-        client.delete_all_bridge_groups(args.dry_run)
+        overall_success = client.delete_all_bridge_groups(args.dry_run) and overall_success
     
     if args.delete_all or args.delete_all_interfaces or args.reset_physical_interfaces:
-        client.reset_all_physical_interfaces(args.dry_run)
+        overall_success = client.reset_all_physical_interfaces(args.dry_run) and overall_success
     
     if args.delete_all or args.delete_service_groups:
-        client.delete_all_custom_objects(
+        overall_success = client.delete_all_custom_objects(
             "/object/portgroups",
             "Service Groups",
             args.dry_run
-        )
+        ) and overall_success
     
     if args.delete_all or args.delete_service_objects:
         # Delete TCP ports
-        client.delete_all_custom_objects(
+        overall_success = client.delete_all_custom_objects(
             "/object/tcpports",
             "TCP Port Objects",
             args.dry_run
-        )
+        ) and overall_success
         # Delete UDP ports
-        client.delete_all_custom_objects(
+        overall_success = client.delete_all_custom_objects(
             "/object/udpports",
             "UDP Port Objects",
             args.dry_run
-        )
+        ) and overall_success
     
     if args.delete_all or args.delete_address_groups:
-        client.delete_all_custom_objects(
+        overall_success = client.delete_all_custom_objects(
             "/object/networkgroups",
             "Address Groups",
             args.dry_run
-        )
+        ) and overall_success
     
     if args.delete_all or args.delete_address_objects:
-        client.delete_all_custom_objects(
+        overall_success = client.delete_all_custom_objects(
             "/object/networks",
             "Address Objects",
             args.dry_run
-        )
+        ) and overall_success
     
     # Deploy if requested
     if args.deploy and not args.dry_run:
-        client.deploy_changes()
+        overall_success = client.deploy_changes() and overall_success
     
     print(f"\n{'='*60}")
-    if args.dry_run:
+    if not overall_success:
+        print("CLEANUP FAILED")
+        if client.last_api_error:
+            print(f"Last API error: {client.last_api_error}")
+    elif args.dry_run:
         print("DRY RUN COMPLETE - No changes made")
         print("Remove --dry-run to actually delete")
     else:
@@ -1458,7 +1474,7 @@ Examples:
             print("Changes pending - deploy manually or use --deploy")
     print(f"{'='*60}")
     
-    return 0
+    return 0 if overall_success else 1
 
 
 if __name__ == '__main__':
