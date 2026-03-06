@@ -6,6 +6,10 @@ stream live job output — all through a REST API with WebSocket support.
 
 **Scope (current):** FortiGate YAML → FTD JSON conversion and import; FastAPI backend with playbook runner and WebSocket streaming.
 
+## Guides
+
+- RADIUS setup: `RADIUS_CONFIGURATION_GUIDE.md`
+
 ## Architecture
 
 ```

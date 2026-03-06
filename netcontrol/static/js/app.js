@@ -11,9 +11,20 @@ let dashboardData = null;
 const _hostCache = {};
 const _groupCache = {};
 let converterSessionId = null;
+let currentFeatureAccess = [];
+
+const NAV_FEATURE_MAP = {
+    dashboard: 'dashboard',
+    inventory: 'inventory',
+    playbooks: 'playbooks',
+    jobs: 'jobs',
+    templates: 'templates',
+    credentials: 'credentials',
+    converter: 'converter',
+};
 
 const THEME_KEY = 'plexus-theme';
-const VALID_THEMES = ['forest', 'dark', 'light'];
+const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light'];
 const DEFAULT_THEME = 'forest';
 
 function normalizeTheme(theme) {
@@ -24,17 +35,42 @@ function applyTheme(theme) {
     const chosen = normalizeTheme(theme);
     document.documentElement.setAttribute('data-theme', chosen);
     localStorage.setItem(THEME_KEY, chosen);
-    const select = document.getElementById('theme-select');
-    if (select) select.value = chosen;
+    ['theme-select', 'theme-select-settings'].forEach((id) => {
+        const select = document.getElementById(id);
+        if (select) select.value = chosen;
+    });
 }
 
 function initThemeControls() {
     const savedTheme = localStorage.getItem(THEME_KEY) || DEFAULT_THEME;
     applyTheme(savedTheme);
 
-    const select = document.getElementById('theme-select');
-    if (select) {
-        select.addEventListener('change', (e) => applyTheme(e.target.value));
+    ['theme-select', 'theme-select-settings'].forEach((id) => {
+        const select = document.getElementById(id);
+        if (select && select.dataset.themeBound !== '1') {
+            select.addEventListener('change', (e) => applyTheme(e.target.value));
+            select.dataset.themeBound = '1';
+        }
+    });
+}
+
+function canAccessFeature(feature) {
+    if (currentUserData?.role === 'admin') return true;
+    if (!Array.isArray(currentFeatureAccess) || currentFeatureAccess.length === 0) return true;
+    return currentFeatureAccess.includes(feature);
+}
+
+function applyFeatureVisibility() {
+    document.querySelectorAll('.nav-link[data-page]').forEach((link) => {
+        const page = link.getAttribute('data-page');
+        const feature = NAV_FEATURE_MAP[page];
+        if (!feature) return;
+        link.style.display = canAccessFeature(feature) ? '' : 'none';
+    });
+
+    const settingsLink = document.querySelector('.nav-link[data-page="settings"]');
+    if (settingsLink) {
+        settingsLink.style.display = currentUserData?.role === 'admin' ? '' : 'none';
     }
 }
 
@@ -53,6 +89,15 @@ function initNavigation() {
 }
 
 function navigateToPage(page) {
+    if (page === 'settings' && currentUserData?.role !== 'admin') {
+        showError('Admin access required for Settings');
+        return;
+    }
+    if (NAV_FEATURE_MAP[page] && !canAccessFeature(NAV_FEATURE_MAP[page])) {
+        showError(`Your account does not have access to ${page}`);
+        return;
+    }
+
     // Update active nav link
     document.querySelectorAll('.nav-link').forEach(link => {
         link.classList.remove('active');
@@ -919,6 +964,416 @@ window.saveCredentialInline = async function(credentialId) {
         showError(`Failed to update credential: ${error.message}`);
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save';
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Admin Settings
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const adminState = {
+    capabilities: null,
+    users: [],
+    groups: [],
+    loginRules: null,
+    authConfig: null,
+};
+
+function getGroupNameMap() {
+    const map = {};
+    (adminState.groups || []).forEach((g) => {
+        map[g.id] = g.name;
+    });
+    return map;
+}
+
+function featureLabel(feature) {
+    return feature.charAt(0).toUpperCase() + feature.slice(1);
+}
+
+function renderFeatureCheckboxes(selected = []) {
+    const features = adminState.capabilities?.feature_flags || [];
+    const selectedSet = new Set(selected || []);
+    return features.map((feature) => `
+        <label style="display:flex; align-items:center; gap:0.35rem;">
+            <input type="checkbox" name="feature_keys" value="${feature}" ${selectedSet.has(feature) ? 'checked' : ''}>
+            <span>${featureLabel(feature)}</span>
+        </label>
+    `).join('');
+}
+
+function renderGroupCheckboxes(selected = []) {
+    const selectedSet = new Set((selected || []).map((v) => Number(v)));
+    return (adminState.groups || []).map((group) => `
+        <label style="display:flex; align-items:center; gap:0.35rem;">
+            <input type="checkbox" name="group_ids" value="${group.id}" ${selectedSet.has(Number(group.id)) ? 'checked' : ''}>
+            <span>${escapeHtml(group.name)}</span>
+        </label>
+    `).join('');
+}
+
+function collectCheckedValues(formEl, name) {
+    return Array.from(formEl.querySelectorAll(`input[name="${name}"]:checked`)).map((el) => el.value);
+}
+
+function renderAdminUsers() {
+    const container = document.getElementById('admin-users-list');
+    if (!container) return;
+    if (!adminState.users.length) {
+        container.innerHTML = '<div class="empty-state" style="padding:1rem;">No user accounts found.</div>';
+        return;
+    }
+
+    const groupNames = getGroupNameMap();
+    container.innerHTML = adminState.users.map((user) => {
+        const groupBadges = (user.group_ids || []).map((gid) => groupNames[gid] || `Group ${gid}`);
+        const features = user.feature_access || [];
+        return `
+            <div class="card" style="margin-bottom:0.75rem;">
+                <div class="card-header" style="margin-bottom:0.5rem;">
+                    <div>
+                        <div class="card-title">${escapeHtml(user.display_name || user.username)}</div>
+                        <div class="card-description">@${escapeHtml(user.username)} • ${escapeHtml(user.role)} • Created ${formatDate(user.created_at)}</div>
+                    </div>
+                    <div style="display:flex; gap:0.35rem; flex-wrap:wrap;">
+                        <button class="btn btn-sm btn-secondary" onclick="showEditAdminUserModal(${user.id})">Edit</button>
+                        <button class="btn btn-sm btn-secondary" onclick="showResetAdminUserPasswordModal(${user.id})">Reset Password</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteAdminUser(${user.id})">Delete</button>
+                    </div>
+                </div>
+                <div style="display:grid; gap:0.4rem;">
+                    <div style="font-size:0.8rem; color:var(--text-muted);">Access Groups</div>
+                    <div style="display:flex; flex-wrap:wrap; gap:0.4rem;">${groupBadges.length ? groupBadges.map((name) => `<span class="status-badge">${escapeHtml(name)}</span>`).join('') : '<span class="card-description">No groups assigned (full default access)</span>'}</div>
+                    <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">Effective Features</div>
+                    <div style="display:flex; flex-wrap:wrap; gap:0.4rem;">${features.map((name) => `<span class="status-badge status-running">${escapeHtml(name)}</span>`).join('')}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderAdminGroups() {
+    const container = document.getElementById('admin-groups-list');
+    if (!container) return;
+    if (!adminState.groups.length) {
+        container.innerHTML = '<div class="empty-state" style="padding:1rem;">No access groups defined yet.</div>';
+        return;
+    }
+
+    container.innerHTML = adminState.groups.map((group) => `
+        <div class="card" style="margin-bottom:0.75rem;">
+            <div class="card-header" style="margin-bottom:0.5rem;">
+                <div>
+                    <div class="card-title">${escapeHtml(group.name)}</div>
+                    <div class="card-description">${escapeHtml(group.description || '')}</div>
+                    <div class="card-description">${group.member_count || 0} member(s)</div>
+                </div>
+                <div style="display:flex; gap:0.35rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="showEditAccessGroupModal(${group.id})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteAccessGroupAdmin(${group.id})">Delete</button>
+                </div>
+            </div>
+            <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+                ${(group.feature_keys || []).map((feature) => `<span class="status-badge">${escapeHtml(feature)}</span>`).join('') || '<span class="card-description">No features assigned</span>'}
+            </div>
+        </div>
+    `).join('');
+}
+
+function bindLoginRulesForm() {
+    const form = document.getElementById('admin-login-rules-form');
+    if (!form || form.dataset.bound === '1') return;
+    form.dataset.bound = '1';
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+            const payload = {
+                max_attempts: Number(document.getElementById('login-max-attempts').value),
+                lockout_time: Number(document.getElementById('login-lockout-time').value),
+                rate_limit_window: Number(document.getElementById('login-rate-window').value),
+                rate_limit_max: Number(document.getElementById('login-rate-max').value),
+            };
+            adminState.loginRules = await api.updateLoginRules(payload);
+            showSuccess('Login rules updated');
+        } catch (error) {
+            showError(`Failed to save login rules: ${error.message}`);
+        }
+    });
+}
+
+function renderLoginRules() {
+    if (!adminState.loginRules) return;
+    document.getElementById('login-max-attempts').value = adminState.loginRules.max_attempts;
+    document.getElementById('login-lockout-time').value = adminState.loginRules.lockout_time;
+    document.getElementById('login-rate-window').value = adminState.loginRules.rate_limit_window;
+    document.getElementById('login-rate-max').value = adminState.loginRules.rate_limit_max;
+}
+
+function bindAuthConfigForm() {
+    const form = document.getElementById('admin-auth-config-form');
+    if (!form || form.dataset.bound === '1') return;
+    form.dataset.bound = '1';
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+            const payload = {
+                provider: document.getElementById('auth-provider').value,
+                radius: {
+                    enabled: document.getElementById('radius-enabled').checked,
+                    fallback_to_local: document.getElementById('radius-fallback-local').checked,
+                    fallback_on_reject: document.getElementById('radius-fallback-reject').checked,
+                    server: document.getElementById('radius-server').value,
+                    port: Number(document.getElementById('radius-port').value),
+                    secret: document.getElementById('radius-secret').value,
+                    timeout: Number(document.getElementById('radius-timeout').value),
+                },
+            };
+            adminState.authConfig = await api.updateAuthConfig(payload);
+            renderAuthConfig();
+            showSuccess('Authentication settings saved');
+        } catch (error) {
+            showError(`Failed to save authentication settings: ${error.message}`);
+        }
+    });
+
+    const providerEl = document.getElementById('auth-provider');
+    if (providerEl) {
+        providerEl.addEventListener('change', () => {
+            const radiusPanel = document.getElementById('radius-config-panel');
+            if (radiusPanel) {
+                radiusPanel.style.display = providerEl.value === 'radius' ? '' : 'none';
+            }
+        });
+    }
+}
+
+function renderAuthConfig() {
+    if (!adminState.authConfig) return;
+    const cfg = adminState.authConfig;
+    document.getElementById('auth-provider').value = cfg.provider || 'local';
+    document.getElementById('radius-enabled').checked = !!cfg.radius?.enabled;
+    document.getElementById('radius-fallback-local').checked = cfg.radius?.fallback_to_local !== false;
+    document.getElementById('radius-fallback-reject').checked = !!cfg.radius?.fallback_on_reject;
+    document.getElementById('radius-server').value = cfg.radius?.server || '';
+    document.getElementById('radius-port').value = cfg.radius?.port || 1812;
+    document.getElementById('radius-secret').value = cfg.radius?.secret || '';
+    document.getElementById('radius-timeout').value = cfg.radius?.timeout || 5;
+    const radiusPanel = document.getElementById('radius-config-panel');
+    if (radiusPanel) {
+        radiusPanel.style.display = cfg.provider === 'radius' ? '' : 'none';
+    }
+}
+
+async function refreshAdminData() {
+    const [users, groups, loginRules, authConfig] = await Promise.all([
+        api.getAdminUsers(),
+        api.getAccessGroups(),
+        api.getLoginRules(),
+        api.getAuthConfig(),
+    ]);
+    adminState.users = users;
+    adminState.groups = groups;
+    adminState.loginRules = loginRules;
+    adminState.authConfig = authConfig;
+}
+
+async function loadAdminSettings() {
+    const page = document.getElementById('page-settings');
+    if (!page) return;
+    if (currentUserData?.role !== 'admin') {
+        page.innerHTML = '<h2>Settings</h2><div class="error">Admin access is required to view settings.</div>';
+        return;
+    }
+
+    try {
+        if (!adminState.capabilities) {
+            adminState.capabilities = await api.getAdminCapabilities();
+        }
+        await refreshAdminData();
+        renderAdminUsers();
+        renderAdminGroups();
+        bindLoginRulesForm();
+        bindAuthConfigForm();
+        renderLoginRules();
+        renderAuthConfig();
+        initThemeControls();
+    } catch (error) {
+        const usersContainer = document.getElementById('admin-users-list');
+        if (usersContainer) {
+            usersContainer.innerHTML = `<div class="error">Failed loading admin settings: ${escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+window.showCreateAdminUserModal = function() {
+    showModal('Create User Account', `
+        <form id="admin-create-user-form">
+            <div class="form-group"><label class="form-label">Username</label><input class="form-input" name="username" required minlength="3"></div>
+            <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" name="display_name"></div>
+            <div class="form-group"><label class="form-label">Password</label><input type="password" class="form-input" name="password" required minlength="6"></div>
+            <div class="form-group"><label class="form-label">Role</label><select class="form-select" name="role"><option value="user">User</option><option value="admin">Admin</option></select></div>
+            <div class="form-group"><label class="form-label">Access Groups</label><div style="display:grid; gap:0.35rem; max-height:160px; overflow:auto; border:1px solid var(--border); border-radius:0.375rem; padding:0.6rem;">${renderGroupCheckboxes([]) || '<span class="card-description">Create access groups first.</span>'}</div></div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;"><button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button><button class="btn btn-primary" type="submit">Create</button></div>
+        </form>
+    `);
+    document.getElementById('admin-create-user-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const data = {
+            username: form.username.value.trim(),
+            display_name: form.display_name.value.trim(),
+            password: form.password.value,
+            role: form.role.value,
+            group_ids: collectCheckedValues(form, 'group_ids').map((v) => Number(v)),
+        };
+        try {
+            await api.createAdminUser(data);
+            closeAllModals();
+            await loadAdminSettings();
+            showSuccess('User account created');
+        } catch (error) {
+            showError(`Failed to create user: ${error.message}`);
+        }
+    });
+};
+
+window.showEditAdminUserModal = function(userId) {
+    const user = (adminState.users || []).find((u) => Number(u.id) === Number(userId));
+    if (!user) return;
+    showModal('Edit User Account', `
+        <form id="admin-edit-user-form">
+            <div class="form-group"><label class="form-label">Username</label><input class="form-input" name="username" required minlength="3" value="${escapeHtml(user.username)}"></div>
+            <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" name="display_name" value="${escapeHtml(user.display_name || '')}"></div>
+            <div class="form-group"><label class="form-label">Role</label><select class="form-select" name="role"><option value="user" ${user.role === 'user' ? 'selected' : ''}>User</option><option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option></select></div>
+            <div class="form-group"><label class="form-label">Access Groups</label><div style="display:grid; gap:0.35rem; max-height:160px; overflow:auto; border:1px solid var(--border); border-radius:0.375rem; padding:0.6rem;">${renderGroupCheckboxes(user.group_ids || [])}</div></div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;"><button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+        </form>
+    `);
+    document.getElementById('admin-edit-user-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        try {
+            await api.updateAdminUser(userId, {
+                username: form.username.value.trim(),
+                display_name: form.display_name.value.trim(),
+                role: form.role.value,
+            });
+            await api.setAdminUserGroups(userId, collectCheckedValues(form, 'group_ids').map((v) => Number(v)));
+            closeAllModals();
+            await loadAdminSettings();
+            showSuccess('User account updated');
+        } catch (error) {
+            showError(`Failed to update user: ${error.message}`);
+        }
+    });
+};
+
+window.showResetAdminUserPasswordModal = function(userId) {
+    const user = (adminState.users || []).find((u) => Number(u.id) === Number(userId));
+    if (!user) return;
+    showModal('Reset User Password', `
+        <form id="admin-reset-user-password-form">
+            <p class="card-description" style="margin-bottom:0.75rem;">Set a new login password for @${escapeHtml(user.username)}.</p>
+            <div class="form-group"><label class="form-label">New Password</label><input type="password" class="form-input" name="new_password" required minlength="6"></div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;"><button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button><button class="btn btn-primary" type="submit">Reset Password</button></div>
+        </form>
+    `);
+    document.getElementById('admin-reset-user-password-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const newPassword = e.target.new_password.value;
+        try {
+            await api.resetAdminUserPassword(userId, newPassword);
+            closeAllModals();
+            showSuccess('Password reset successfully');
+        } catch (error) {
+            showError(`Failed to reset password: ${error.message}`);
+        }
+    });
+};
+
+window.deleteAdminUser = async function(userId) {
+    const user = (adminState.users || []).find((u) => Number(u.id) === Number(userId));
+    if (!user) return;
+    if (!await showConfirm({ title: 'Delete User', message: `Delete @${user.username}?`, confirmText: 'Delete', cancelText: 'Cancel', confirmClass: 'btn-danger' })) {
+        return;
+    }
+    try {
+        await api.deleteAdminUser(userId);
+        await loadAdminSettings();
+        showSuccess('User deleted');
+    } catch (error) {
+        showError(`Failed to delete user: ${error.message}`);
+    }
+};
+
+window.showCreateAccessGroupModal = function() {
+    showModal('Create Access Group', `
+        <form id="admin-create-access-group-form">
+            <div class="form-group"><label class="form-label">Group Name</label><input class="form-input" name="name" required minlength="2"></div>
+            <div class="form-group"><label class="form-label">Description</label><input class="form-input" name="description"></div>
+            <div class="form-group"><label class="form-label">Feature Access</label><div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:0.4rem;">${renderFeatureCheckboxes([])}</div></div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;"><button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button><button class="btn btn-primary" type="submit">Create Group</button></div>
+        </form>
+    `);
+    document.getElementById('admin-create-access-group-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        try {
+            await api.createAccessGroup({
+                name: form.name.value.trim(),
+                description: form.description.value.trim(),
+                feature_keys: collectCheckedValues(form, 'feature_keys'),
+            });
+            closeAllModals();
+            await loadAdminSettings();
+            showSuccess('Access group created');
+        } catch (error) {
+            showError(`Failed to create access group: ${error.message}`);
+        }
+    });
+};
+
+window.showEditAccessGroupModal = function(groupId) {
+    const group = (adminState.groups || []).find((g) => Number(g.id) === Number(groupId));
+    if (!group) return;
+    showModal('Edit Access Group', `
+        <form id="admin-edit-access-group-form">
+            <div class="form-group"><label class="form-label">Group Name</label><input class="form-input" name="name" required minlength="2" value="${escapeHtml(group.name)}"></div>
+            <div class="form-group"><label class="form-label">Description</label><input class="form-input" name="description" value="${escapeHtml(group.description || '')}"></div>
+            <div class="form-group"><label class="form-label">Feature Access</label><div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:0.4rem;">${renderFeatureCheckboxes(group.feature_keys || [])}</div></div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;"><button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+        </form>
+    `);
+    document.getElementById('admin-edit-access-group-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        try {
+            await api.updateAccessGroup(groupId, {
+                name: form.name.value.trim(),
+                description: form.description.value.trim(),
+                feature_keys: collectCheckedValues(form, 'feature_keys'),
+            });
+            closeAllModals();
+            await loadAdminSettings();
+            showSuccess('Access group updated');
+        } catch (error) {
+            showError(`Failed to update access group: ${error.message}`);
+        }
+    });
+};
+
+window.deleteAccessGroupAdmin = async function(groupId) {
+    const group = (adminState.groups || []).find((g) => Number(g.id) === Number(groupId));
+    if (!group) return;
+    if (!await showConfirm({ title: 'Delete Access Group', message: `Delete group '${group.name}'?`, confirmText: 'Delete', cancelText: 'Cancel', confirmClass: 'btn-danger' })) {
+        return;
+    }
+    try {
+        await api.deleteAccessGroup(groupId);
+        await loadAdminSettings();
+        showSuccess('Access group deleted');
+    } catch (error) {
+        showError(`Failed to delete group: ${error.message}`);
     }
 };
 
@@ -1929,11 +2384,16 @@ window.showLoginForm = function() {
 function showApp(userData) {
     currentUserData = userData;
     currentUser = userData.username;
+    currentFeatureAccess = Array.isArray(userData.feature_access) ? userData.feature_access : [];
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app-container').style.display = 'flex';
     document.getElementById('nav-user').textContent = userData.display_name || userData.username;
     initNavigation();
-    loadPageData('dashboard');
+    applyFeatureVisibility();
+
+    const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter'];
+    const firstAllowed = orderedPages.find((page) => canAccessFeature(NAV_FEATURE_MAP[page])) || 'dashboard';
+    navigateToPage(firstAllowed);
 }
 
 function initLoginForm() {
