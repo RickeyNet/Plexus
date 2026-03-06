@@ -29,7 +29,7 @@ sys.path.insert(0, project_root)
 import time
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from netcontrol.routes.converter import router as converter_router
 
@@ -251,6 +251,7 @@ FEATURE_FLAGS = [
 
 AUTH_CONFIG_DEFAULTS = {
     "provider": "local",
+    "job_retention_days": 30,
     "radius": {
         "enabled": False,
         "server": "",
@@ -266,6 +267,8 @@ RADIUS_DICTIONARY_FILE = os.path.join(os.path.dirname(__file__), "..", "routes",
 
 LOGIN_RULES = dict(DEFAULT_LOGIN_RULES)
 AUTH_CONFIG = dict(AUTH_CONFIG_DEFAULTS)
+JOB_RETENTION_MIN_DAYS = 30
+JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
 
 
 def _sanitize_login_rules(data: dict | None) -> dict:
@@ -286,6 +289,8 @@ def _sanitize_auth_config(data: dict | None) -> dict:
     if isinstance(data, dict):
         if data.get("provider") in {"local", "radius"}:
             cfg["provider"] = data["provider"]
+        if "job_retention_days" in data:
+            cfg["job_retention_days"] = int(data.get("job_retention_days", cfg["job_retention_days"]))
         radius = data.get("radius")
         if isinstance(radius, dict):
             cfg["radius"].update({
@@ -297,9 +302,36 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "fallback_to_local": bool(radius.get("fallback_to_local", cfg["radius"]["fallback_to_local"])),
                 "fallback_on_reject": bool(radius.get("fallback_on_reject", cfg["radius"]["fallback_on_reject"])),
             })
+    cfg["job_retention_days"] = max(JOB_RETENTION_MIN_DAYS, int(cfg.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
     cfg["radius"]["port"] = max(1, cfg["radius"]["port"])
     cfg["radius"]["timeout"] = max(1, cfg["radius"]["timeout"])
     return cfg
+
+
+def _effective_job_retention_days() -> int:
+    return max(JOB_RETENTION_MIN_DAYS, int(AUTH_CONFIG.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
+
+
+async def _cleanup_expired_jobs() -> int:
+    retention_days = _effective_job_retention_days()
+    deleted = await db.delete_expired_jobs(retention_days)
+    if deleted:
+        LOGGER.info("Deleted %s expired job(s) older than %s day(s)", deleted, retention_days)
+        increment_metric("jobs.retention.deleted")
+    return deleted
+
+
+async def _job_retention_cleanup_loop() -> None:
+    while True:
+        try:
+            await _cleanup_expired_jobs()
+            await asyncio.sleep(JOB_RETENTION_CLEANUP_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("Job retention cleanup failed: %s", redact_value(str(exc)))
+            increment_metric("jobs.retention.cleanup.failed")
+            await asyncio.sleep(JOB_RETENTION_CLEANUP_INTERVAL_SECONDS)
 
 
 def _ensure_radius_dictionary_file() -> str:
@@ -480,7 +512,16 @@ async def lifespan(app: FastAPI):
     if not check:
         from routes.seed import seed
         await seed()
-    yield
+    await _cleanup_expired_jobs()
+    retention_task = asyncio.create_task(_job_retention_cleanup_loop())
+    try:
+        yield
+    finally:
+        retention_task.cancel()
+        try:
+            await retention_task
+        except asyncio.CancelledError:
+            pass
 
 
 async def _migrate_auth_json_users():
@@ -824,6 +865,7 @@ class RadiusConfigRequest(BaseModel):
 
 class AuthConfigRequest(BaseModel):
     provider: str = "local"
+    job_retention_days: int = Field(default=30, ge=30)
     radius: RadiusConfigRequest = RadiusConfigRequest()
 
 

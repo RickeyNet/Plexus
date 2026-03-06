@@ -78,16 +78,14 @@ Your working directory should contain:
 
 ```
 FortiGate-FTD-Migration/
-├── fortigate_converter.py          # Main converter script
-├── address_converter.py            # Address object module
-├── address_group_converter.py      # Address group module
-├── service_converter.py            # Service object module
-├── service_group_converter.py      # Service group module
-├── policy_converter.py             # Access policy module
-├── route_converter.py              # Static route module
-├── interface_converter.py          # Interface conversion module
-├── ftd_api_importer.py             # API importer script
-├── ftd_api_cleanup.py              # Bulk delete/cleanup utility
+├── converter_v2/
+│   ├── fortigate_converter_v2.py   # Main converter script
+│   ├── core/                       # Converter implementations used by v2
+│   ├── models.py                   # Typed conversion models
+│   └── *.py                        # Domain adapters (addresses, services, routes, etc.)
+├── FortiGateToFTDTool/
+│   ├── ftd_api_importer.py         # API importer script
+│   └── ftd_api_cleanup.py          # Bulk delete/cleanup utility
 ├── fortigate_config.yaml           # Your FortiGate YAML (input)
 └── ftd_config_*.json               # Generated FTD JSON files (output)
 ```
@@ -202,7 +200,7 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 ### Conversion Phase
 
 ```
-□ Run: python fortigate_converter.py config.yaml --target-model ftd-3120 --pretty
+□ Run: python converter_v2/fortigate_converter_v2.py config.yaml --target-model ftd-3120 --pretty
 □ (Optional) Specify custom HA port: --ha-port Ethernet1/5
 □ Review generated JSON files (13 files total including metadata)
 □ Check summary.json for conversion statistics
@@ -255,7 +253,7 @@ Before converting, determine which FTD model you're migrating to. This affects i
 
 **List available models:**
 ```bash
-python fortigate_converter.py --list-models
+python converter_v2/fortigate_converter_v2.py --list-models
 ```
 
 **Supported models:**
@@ -299,7 +297,7 @@ By default, most FTD models reserve **Ethernet1/2** for High Availability (HA) c
 
 #### Custom HA Port Syntax
 ```bash
-python fortigate_converter.py config.yaml --target-model MODEL --ha-port EthernetX/Y
+python converter_v2/fortigate_converter_v2.py config.yaml --target-model MODEL --ha-port EthernetX/Y
 ```
 
 **Format Requirements:**
@@ -312,7 +310,7 @@ python fortigate_converter.py config.yaml --target-model MODEL --ha-port Etherne
 
 **Example 1: Use Ethernet1/5 for HA on FTD-3120 (16-port model)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/5 --pretty
+python converter_v2/fortigate_converter_v2.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/5 --pretty
 ```
 **Result:**
 - HA configured on: Ethernet1/5
@@ -322,7 +320,7 @@ python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port E
 
 **Example 2: Use Ethernet1/10 for HA on FTD-3140 (24-port model)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3140 --ha-port Ethernet1/10 --pretty
+python converter_v2/fortigate_converter_v2.py fortigate.yaml --target-model ftd-3140 --ha-port Ethernet1/10 --pretty
 ```
 **Result:**
 - HA configured on: Ethernet1/10
@@ -332,7 +330,7 @@ python fortigate_converter.py fortigate.yaml --target-model ftd-3140 --ha-port E
 
 **Example 3: Keep default HA port (Ethernet1/2)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --pretty
+python converter_v2/fortigate_converter_v2.py fortigate.yaml --target-model ftd-3120 --pretty
 ```
 **Result:**
 - HA configured on: Ethernet1/2 (default)
@@ -342,7 +340,7 @@ python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --pretty
 
 **Example 4: Try invalid port number (will error)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/99
+python converter_v2/fortigate_converter_v2.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/99
 ```
 **Result:**
 ```
@@ -354,7 +352,7 @@ Specify a port between Ethernet1/1 and Ethernet1/16.
 
 **Example 5: Try invalid format (will error)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port eth1/5
+python converter_v2/fortigate_converter_v2.py fortigate.yaml --target-model ftd-3120 --ha-port eth1/5
 ```
 **Result:**
 ```
@@ -407,17 +405,17 @@ The metadata file stores your model selection for the import process.
 
 **Basic conversion (uses default ftd-3120):**
 ```bash
-python fortigate_converter.py fortigate_config.yaml --pretty
+python converter_v2/fortigate_converter_v2.py fortigate_config.yaml --pretty
 ```
 
 **Specify target model (recommended):**
 ```bash
-python fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 --pretty
+python converter_v2/fortigate_converter_v2.py fortigate_config.yaml --target-model ftd-3120 --pretty
 ```
 
 **Custom output name:**
 ```bash
-python fortigate_converter.py fortigate_config.yaml -o prod_ftd --target-model ftd-3120 --pretty
+python converter_v2/fortigate_converter_v2.py fortigate_config.yaml -o prod_ftd --target-model ftd-3120 --pretty
 ```
 
 **Command options:**
@@ -721,10 +719,10 @@ SSL: CERTIFICATE_VERIFY_FAILED
 **Solution:**
 ```bash
 # Check your model's port range
-python fortigate_converter.py --list-models
+python converter_v2/fortigate_converter_v2.py --list-models
 
 # Example: FTD-3120 has 16 ports, so valid range is Ethernet1/1 through Ethernet1/16
-python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/12 --pretty
+python converter_v2/fortigate_converter_v2.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/12 --pretty
 ```
 
 ---
@@ -736,7 +734,7 @@ python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethe
 **Solution:**
 ```bash
 # Correct format (case-sensitive)
-python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/5
+python converter_v2/fortigate_converter_v2.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/5
 
 # WRONG formats (will error):
 # --ha-port eth1/5
@@ -767,7 +765,7 @@ python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethe
 **Solution:**
 ```bash
 # Re-run conversion with explicit HA port
-python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/8 --pretty
+python converter_v2/fortigate_converter_v2.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/8 --pretty
 
 # Verify in generated files
 grep -i "hardwareName" ftd_config_physical_interfaces.json
@@ -1001,19 +999,19 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 **Conversion Commands:**
 ```bash
 # Basic conversion
-python fortigate_converter.py config.yaml --pretty
+python converter_v2/fortigate_converter_v2.py config.yaml --pretty
 
 # Specify target model
-python fortigate_converter.py config.yaml --target-model ftd-3120 --pretty
+python converter_v2/fortigate_converter_v2.py config.yaml --target-model ftd-3120 --pretty
 
 # Custom output name
-python fortigate_converter.py config.yaml -o prod_ftd --target-model ftd-3120 --pretty
+python converter_v2/fortigate_converter_v2.py config.yaml -o prod_ftd --target-model ftd-3120 --pretty
 
 # List supported models
-python fortigate_converter.py --list-models
+python converter_v2/fortigate_converter_v2.py --list-models
 
 # Help
-python fortigate_converter.py --help
+python converter_v2/fortigate_converter_v2.py --help
 ```
 
 **Import Commands:**

@@ -20,3 +20,26 @@
 - [x] Operator docs: runbook (upload config, review diff, apply), rollback steps, FAQ for mismatch causes.
 - [x] Performance/scale: test large configs; document limits; add timeouts/retries on device/API calls.
 - [x] Compliance: pick a license; document data handling/retention for configs (storage location and duration).
+
+## Week 4: Security Hardening
+- [ ] Enforce first-login password reset for default admin account; block privileged operations until password is rotated.
+- [ ] Add `APP_ALLOW_SELF_REGISTER` (default `false` in production) and gate `/api/auth/register` behind explicit opt-in.
+- [ ] Harden playbook file writes with filename allowlist, path normalization, and extension enforcement.
+- [ ] Add CSRF protection for cookie-authenticated API calls; keep token-auth workflows compatible.
+
+## Week 5: Reliability and Observability
+- [ ] Add scheduled disk cleanup for `netcontrol/converter_sessions` backups and stale session directories based on retention settings.
+- [ ] Add import idempotency/checkpoint markers so failed staged imports can resume safely.
+- [ ] Add bounded concurrency controls for convert/import jobs to avoid FTD API saturation.
+- [ ] Replace remaining `print()` statements with structured logger events and consistent redaction.
+- [ ] Add request/job correlation IDs in logs and API responses for traceability.
+- [ ] Add audit events for auth changes, playbook CRUD actions, and import/deploy operations.
+
+## Week 6: Test Depth, CI/CD, and Ops Readiness
+- [ ] Add integration tests for protected API behavior when `APP_REQUIRE_API_TOKEN=true`.
+- [ ] Add tests for playbook filename/path sanitization edge cases and malicious input attempts.
+- [ ] Add end-to-end smoke tests for convert -> diff -> import workflow with artifact validation.
+- [ ] Enforce minimum test coverage threshold in CI and fail on critical-module regression.
+- [ ] Add CI security gates (`pip-audit`, `bandit`, optional CodeQL) and publish SBOM artifacts for releases.
+- [ ] Add release automation to validate changelog/version consistency and publish container images.
+- [ ] Refine README setup steps (`.venv` consistency, run commands) and add incident-response runbook scenarios.

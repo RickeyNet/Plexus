@@ -1173,8 +1173,14 @@ function bindAuthConfigForm() {
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         try {
+            const retentionDays = Number(document.getElementById('job-retention-days').value);
+            if (retentionDays < 30) {
+                showError('Job retention must be at least 30 days');
+                return;
+            }
             const payload = {
                 provider: document.getElementById('auth-provider').value,
+                job_retention_days: retentionDays,
                 radius: {
                     enabled: document.getElementById('radius-enabled').checked,
                     fallback_to_local: document.getElementById('radius-fallback-local').checked,
@@ -1208,6 +1214,7 @@ function renderAuthConfig() {
     if (!adminState.authConfig) return;
     const cfg = adminState.authConfig;
     document.getElementById('auth-provider').value = cfg.provider || 'local';
+    document.getElementById('job-retention-days').value = Math.max(30, Number(cfg.job_retention_days || 30));
     document.getElementById('radius-enabled').checked = !!cfg.radius?.enabled;
     document.getElementById('radius-fallback-local').checked = cfg.radius?.fallback_to_local !== false;
     document.getElementById('radius-fallback-reject').checked = !!cfg.radius?.fallback_on_reject;
@@ -1268,14 +1275,45 @@ window.showCreateAdminUserModal = function() {
             <div class="form-group"><label class="form-label">Username</label><input class="form-input" name="username" required minlength="3"></div>
             <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" name="display_name"></div>
             <div class="form-group"><label class="form-label">Password</label><input type="password" class="form-input" name="password" required minlength="6"></div>
+            <div class="form-group"><label class="form-label">Confirm Password</label><input type="password" class="form-input" name="confirm_password" required minlength="6"></div>
+            <div class="form-group"><label><input type="checkbox" id="admin-create-user-show-password"> Show passwords</label></div>
             <div class="form-group"><label class="form-label">Role</label><select class="form-select" name="role"><option value="user">User</option><option value="admin">Admin</option></select></div>
             <div class="form-group"><label class="form-label">Access Groups</label><div style="display:grid; gap:0.35rem; max-height:160px; overflow:auto; border:1px solid var(--border); border-radius:0.375rem; padding:0.6rem;">${renderGroupCheckboxes([]) || '<span class="card-description">Create access groups first.</span>'}</div></div>
             <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;"><button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button><button class="btn btn-primary" type="submit">Create</button></div>
         </form>
     `);
-    document.getElementById('admin-create-user-form').addEventListener('submit', async (e) => {
+    const createForm = document.getElementById('admin-create-user-form');
+    const showPasswordToggle = document.getElementById('admin-create-user-show-password');
+    const passwordInput = createForm?.elements?.password;
+    const confirmPasswordInput = createForm?.elements?.confirm_password;
+
+    function validatePasswordMatch() {
+        if (!passwordInput || !confirmPasswordInput) return true;
+        const matches = passwordInput.value === confirmPasswordInput.value;
+        confirmPasswordInput.setCustomValidity(matches ? '' : 'Passwords do not match');
+        return matches;
+    }
+
+    if (showPasswordToggle && passwordInput && confirmPasswordInput) {
+        showPasswordToggle.addEventListener('change', () => {
+            const inputType = showPasswordToggle.checked ? 'text' : 'password';
+            passwordInput.type = inputType;
+            confirmPasswordInput.type = inputType;
+        });
+    }
+
+    if (passwordInput && confirmPasswordInput) {
+        passwordInput.addEventListener('input', validatePasswordMatch);
+        confirmPasswordInput.addEventListener('input', validatePasswordMatch);
+    }
+
+    createForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const form = e.target;
+        if (!validatePasswordMatch()) {
+            form.reportValidity();
+            return;
+        }
         const data = {
             username: form.username.value.trim(),
             display_name: form.display_name.value.trim(),

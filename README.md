@@ -151,13 +151,18 @@ Referenced by ID when launching jobs.
 An execution of a playbook against an inventory group. Jobs run as
 async background tasks. Output streams to subscribers via WebSocket.
 
+Job history retention is configurable in `Settings > Authentication Provider` via
+`Job History Retention (days)`. Completed jobs (`success`/`failed`) older than
+the configured value are deleted automatically. Minimum retention is 30 days.
+Cleanup runs at startup and periodically while the app is running.
+
 ## API Reference
 
 ### Dashboard
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/dashboard` | Stats, recent jobs, inventory overview |
-| GET | `/api/health` | Service health + lightweight counters/timing metrics |
+| Method | Endpoint         | Description                                          |
+|--------|------------------|------------------------------------------------------|
+| GET    | `/api/dashboard` | Stats, recent jobs, inventory overview               |
+| GET    | `/api/health`    | Service health + lightweight counters/timing metrics |
 
 ### Inventory
 | Method | Endpoint                    | Description                                    |

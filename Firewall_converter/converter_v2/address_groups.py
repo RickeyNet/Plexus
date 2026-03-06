@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from Firewall_converter.FortiGateToFTDTool.address_group_converter import AddressGroupConverter
+from Firewall_converter.converter_v2.core.address_group_converter import AddressGroupConverter
 
 from .models import FTDAddressGroupObject
 

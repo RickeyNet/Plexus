@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from Firewall_converter.FortiGateToFTDTool.interface_converter import InterfaceConverter
+from Firewall_converter.converter_v2.core.interface_converter import InterfaceConverter
 
 from .models import FTDInterfaceBundle
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from Firewall_converter.FortiGateToFTDTool.policy_converter import PolicyConverter
+from Firewall_converter.converter_v2.core.policy_converter import PolicyConverter
 
 from .models import FTDAccessRuleObject
 

@@ -1,49 +1,42 @@
 #!/usr/bin/env python3
 """
-FortiGate Service Group Converter Module
+FortiGate Address Group Converter Module
 =========================================
-This module handles the conversion of FortiGate service groups to 
-Cisco FTD port object groups.
-
-IMPORTANT CONSIDERATION:
-    - When a FortiGate service group references a service that was split
-      into TCP and UDP objects (like "DNS" -> "DNS_TCP" and "DNS_UDP"),
-      the group must include BOTH the TCP and UDP versions
-    - This module assumes all member names are provided as-is from FortiGate
-    - The main script should handle resolving split services
+This module handles the conversion of FortiGate address groups to 
+Cisco FTD network object groups.
 
 WHAT THIS MODULE DOES:
-    - Parses FortiGate 'firewall_service_group' section from YAML
-    - Extracts group name and member services
-    - Converts to FTD 'portobjectgroup' format
+    - Parses FortiGate 'firewall_addrgrp' section from YAML
+    - Extracts group name and member objects
+    - Converts to FTD 'networkobjectgroup' format
     - Handles both single members and lists of members
 
 FORTIGATE YAML FORMAT:
-    firewall_service_group:
+    firewall_addrgrp:
         - GROUP_NAME:
             uuid: xxxxx
-            member: ["HTTP", "HTTPS", "DNS"]  # List of service names
+            member: ["object1", "object2", "object3"]  # List of members
             color: 13  # Optional
         - ANOTHER_GROUP:
-            member: "single_service"  # Single member (string, not list)
+            member: "single_object"  # Single member (string, not list)
 
 FTD JSON OUTPUT FORMAT:
     {
-        "name": "Web_Access",
+        "name": "GROUP_NAME",
         "isSystemDefined": false,
         "objects": [
-            {"name": "HTTP_TCP", "type": "tcpportobject"},
-            {"name": "HTTPS_TCP", "type": "tcpportobject"},
-            {"name": "DNS_TCP", "type": "tcpportobject"},
-            {"name": "DNS_UDP", "type": "udpportobject"}
+            {"name": "object1", "type": "networkobject"},
+            {"name": "object2", "type": "networkobject"}
         ],
-        "type": "portobjectgroup"
+        "type": "networkobjectgroup"
     }
 
-NOTE ON MEMBER TYPES:
-    - We don't know in advance if a member is TCP or UDP
-    - We include the member name as-is from FortiGate
-    - The type field is set generically (could be refined in post-processing)
+IMPORTANT NOTES:
+    - FortiGate 'member' can be either a STRING or a LIST
+      Examples: member: "single_object" OR member: ["obj1", "obj2"]
+    - We need to normalize this to always be a list for processing
+    - FTD requires each member to be an object with 'name' and 'type' fields
+    - The 'type' is always 'networkobject' for address group members
 """
 
 import re
@@ -78,50 +71,37 @@ def sanitize_name(name: str) -> str:
 
 
 
-class ServiceGroupConverter:
+class AddressGroupConverter:
     """
-    Converter class for transforming FortiGate service groups to FTD port groups.
+    Converter class for transforming FortiGate address groups to FTD network groups.
     
     This class is responsible for:
-    1. Reading the 'firewall_service_group' section from FortiGate YAML
-    2. Extracting group names and their member services
+    1. Reading the 'firewall_addrgrp' section from FortiGate YAML
+    2. Extracting group names and their member objects
     3. FLATTENING nested groups (FTD doesn't allow groups inside groups)
-    4. Converting to FTD's portobjectgroup format
+    4. Converting to FTD's networkobjectgroup format
     5. Handling edge cases (empty groups, single vs multiple members)
-    6. Expanding services that were split into multiple FTD objects
     """
     
-    def __init__(self, fortigate_config: dict[str, Any],
-                 split_services: set[str] | None = None,
-                 service_name_mapping: dict[str, list[tuple[str, str]]] | None = None,
-                 skipped_services: set[str] | None = None):
+    def __init__(self, fortigate_config: dict[str, Any], address_object_names: set = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
         Args:
             fortigate_config: Dictionary containing the complete parsed FortiGate YAML
-                             Expected to have a 'firewall_service_group' key
-            split_services: (DEPRECATED) Set of service names that were split into TCP and UDP
-            service_name_mapping: Dict mapping FortiGate service names to list of FTD object names
-                                 Example: {"LR_CLUST": ["LR_CLUST_TCP_1", "LR_CLUST_TCP_2", "LR_CLUST_UDP_3"]}
-            skipped_services: Set of service names that were skipped (ICMP, etc.) and should be
-                            filtered out of groups
+                             Expected to have a 'firewall_addrgrp' key with group data
+            address_object_names: Set of address object names (to distinguish objects from groups)
         """
         # Store the entire FortiGate configuration
+        # We'll extract what we need from this in the convert() method
         self.fg_config = fortigate_config
         
-        # DEPRECATED: Old way of tracking split services (kept for backward compatibility)
-        self.split_services = split_services or set()
+        # Set of known address object names (not groups)
+        self.address_object_names = address_object_names or set()
         
-        # NEW: Mapping of FortiGate service name -> list of FTD object names
-        # This handles services split into multiple ports AND TCP/UDP splits
-        self.service_name_mapping = service_name_mapping or {}
-        
-        # Set of services that were skipped (ICMP, etc.) - filter these from groups
-        self.skipped_services = skipped_services or set()
-
-        # This will store the converted FTD port groups
-        self.ftd_port_groups = []
+        # This will store the converted FTD network groups
+        # Starts empty and gets populated by the convert() method
+        self.ftd_network_groups = []
         
         # Build a lookup of group name -> member list for flattening nested groups
         self.group_members = {}
@@ -132,9 +112,9 @@ class ServiceGroupConverter:
         Build a lookup dictionary of group names to their members.
         This is used to flatten nested groups.
         """
-        service_groups = self.fg_config.get('firewall_service_group', [])
+        address_groups = self.fg_config.get('firewall_addrgrp', [])
         
-        for group_dict in service_groups:
+        for group_dict in address_groups:
             group_name = list(group_dict.keys())[0]
             properties = group_dict[group_name]
             
@@ -152,7 +132,7 @@ class ServiceGroupConverter:
     
     def _is_group(self, name: str) -> bool:
         """
-        Check if a name refers to a group (not an individual service object).
+        Check if a name refers to a group (not an individual object).
         
         Args:
             name: The sanitized object/group name to check
@@ -211,38 +191,38 @@ class ServiceGroupConverter:
     
     def convert(self) -> list[dict]:
         """
-        Main conversion method - converts all FortiGate service groups to FTD format.
+        Main conversion method - converts all FortiGate address groups to FTD format.
         
         CONVERSION PROCESS:
-        1. Extract the 'firewall_service_group' list from FortiGate config
+        1. Extract the 'firewall_addrgrp' list from FortiGate config
         2. Loop through each group entry
         3. Extract the group name (the dictionary key)
         4. Extract the group properties (uuid, member, color, etc.)
         5. Normalize the 'member' field to always be a list
-        6. Expand members that were split (add both _TCP and _UDP versions)
-        7. Create FTD portobjectgroup structure
+        6. FLATTEN any nested groups (expand group members into individual objects)
+        7. Create FTD networkobjectgroup structure
         8. Return the complete list of converted groups
         
         Returns:
-            List of dictionaries, each representing an FTD port object group
+            List of dictionaries, each representing an FTD network object group
         """
         # ====================================================================
-        # STEP 1: Extract service groups from FortiGate configuration
+        # STEP 1: Extract address groups from FortiGate configuration
         # ====================================================================
-        service_groups = self.fg_config.get('firewall_service_group', [])
+        address_groups = self.fg_config.get('firewall_addrgrp', [])
         
-        if not service_groups:
-            print("Warning: No service groups found in FortiGate configuration")
-            print("  Expected key: 'firewall_service_group'")
+        if not address_groups:
+            print("Warning: No address groups found in FortiGate configuration")
+            print("  Expected key: 'firewall_addrgrp'")
             return []
         
         # This list will accumulate all converted groups
-        port_groups = []
+        network_groups = []
         
         # ====================================================================
-        # STEP 2: Process each FortiGate service group
+        # STEP 2: Process each FortiGate address group
         # ====================================================================
-        for group_dict in service_groups:
+        for group_dict in address_groups:
             # ================================================================
             # STEP 2A: Extract the group name
             # ================================================================
@@ -276,81 +256,31 @@ class ServiceGroupConverter:
             flattened_members = self._flatten_members(members_list)
             
             # ================================================================
-            # STEP 2E: Filter out skipped services (ICMP, etc.)
-            # ================================================================
-            filtered_members = []
-            for member_name in flattened_members:
-                if member_name in self.skipped_services:
-                    print(f"    Filtered out: {member_name} (ICMP/non-port service)")
-                else:
-                    filtered_members.append(member_name)
-
-            # ================================================================
-            # STEP 2F: Expand members that were split into multiple FTD objects
-            # ================================================================
-            # expanded_members now contains tuples of (name, type)
-            expanded_members = []
-            
-            for member_name in filtered_members:
-                # Check if this service was split into multiple FTD objects
-                if member_name in self.service_name_mapping:
-                    # Use the mapping to get all FTD objects (list of (name, type) tuples)
-                    ftd_objects = self.service_name_mapping[member_name]
-                    expanded_members.extend(ftd_objects)
-                    if len(ftd_objects) > 1:
-                        print(f"    Expanded: {member_name} -> {len(ftd_objects)} objects")
-                elif member_name in self.split_services:
-                    # Compatibility fallback: add _TCP and _UDP suffixes
-                    expanded_members.append((f"{member_name}_TCP", "tcpportobject"))
-                    expanded_members.append((f"{member_name}_UDP", "udpportobject"))
-                    print(f"    Expanded (fallback): {member_name} -> {member_name}_TCP, {member_name}_UDP")
-                else:
-                    # This service was not in our mapping - might be a built-in FTD service
-                    # Try to determine type from name, default to TCP
-                    if '_UDP' in member_name:
-                        expanded_members.append((member_name, "udpportobject"))
-                    else:
-                        expanded_members.append((member_name, "tcpportobject"))
-            
-            # ================================================================
-            # STEP 2G: Convert members to FTD object format
+            # STEP 2E: Convert members to FTD object format
             # ================================================================
             ftd_members = []
-            for member_info in expanded_members:
-                # Handle both tuple format (name, type) and compatibility string format
-                if isinstance(member_info, tuple):
-                    member_name, member_type = member_info
-                else:
-                    # Compatibility fallback - shouldn't happen but kept defensively
-                    member_name = member_info
-                    if '_TCP' in member_name:
-                        member_type = "tcpportobject"
-                    elif '_UDP' in member_name:
-                        member_type = "udpportobject"
-                    else:
-                        member_type = "tcpportobject"
-                
+            for member_name in flattened_members:
                 member_obj = {
                     "name": member_name,
-                    "type": member_type
+                    "type": "networkobject"
                 }
                 ftd_members.append(member_obj)
             
             # ================================================================
-            # STEP 2H: Create the FTD port group structure
+            # STEP 2F: Create the FTD network group structure
             # ================================================================
             ftd_group = {
                 "name": sanitized_group_name,
                 "isSystemDefined": False,
                 "objects": ftd_members,
-                "type": "portobjectgroup"
+                "type": "networkobjectgroup"
             }
             
             # Add the converted group to our result list
-            port_groups.append(ftd_group)
+            network_groups.append(ftd_group)
             
             # ================================================================
-            # STEP 2I: Print conversion details for user feedback
+            # STEP 2G: Print conversion details for user feedback
             # ================================================================
             original_count = len(members_list)
             final_count = len(ftd_members)
@@ -361,47 +291,77 @@ class ServiceGroupConverter:
                 print(f"  Converted: {sanitized_group_name} ({final_count} members)", end="")
             
             if final_count != original_count:
-                print(f" [flattened/expanded from {original_count} entries]")
+                print(f" [flattened from {original_count} entries]")
             else:
                 print()
         
         # ====================================================================
-        # STEP 3: Store results and return
+        # STEP 3: Return all converted groups
         # ====================================================================
-        self.ftd_port_groups = port_groups
-        return port_groups
-    
-    def set_split_services(self, split_services: set[str] | None = None,
-                           service_name_mapping: dict[str, list[tuple[str, str]]] | None = None,
-                           skipped_services: set[str] | None = None):
+        self.ftd_network_groups = network_groups
+        return network_groups
 
+
+# =============================================================================
+# ADDITIONAL HELPER METHODS (if needed in the future)
+# =============================================================================
+
+    def _validate_group(self, group_name: str, properties: dict) -> bool:
         """
-        Update the service expansion information.
-        
-        This should be called by the main script after converting service objects,
-        so the group converter knows which members need to be expanded.
+        Validate that a group has all required fields.
+        This is an optional validation method that could be called before conversion.
         
         Args:
-            split_services: (DEPRECATED) Set of service names that have both TCP and UDP versions
-            service_name_mapping: Dict mapping FortiGate service names to list of
-                (FTD object name, object type) tuples
-            skipped_services: Set of service names that were skipped (ICMP, etc.) 
+            group_name: Name of the group being validated
+            properties: Dictionary of group properties
+            
+        Returns:
+            True if valid, False otherwise
         """
-        if split_services is not None:
-            self.split_services = split_services
-        if service_name_mapping is not None:
-            self.service_name_mapping = service_name_mapping
-        if skipped_services is not None:
-            self.skipped_services = skipped_services
+        # Check if the group has members
+        if 'member' not in properties:
+            print(f"  Warning: Group '{group_name}' has no members")
+            return False
+        
+        members = properties['member']
+        
+        # Check if members is empty
+        if isinstance(members, list) and len(members) == 0:
+            print(f"  Warning: Group '{group_name}' has empty member list")
+            return False
+        
+        if isinstance(members, str) and members.strip() == '':
+            print(f"  Warning: Group '{group_name}' has empty member string")
+            return False
+        
+        return True
     
     def get_group_count(self) -> int:
         """
-        Get the number of service groups that were converted.
+        Get the number of address groups that were converted.
         
         Returns:
             Integer count of converted groups
         """
-        return len(self.ftd_port_groups)
+        return len(self.ftd_network_groups)
+    
+    def get_member_count(self, group_name: str) -> int:
+        """
+        Get the number of members in a specific converted group.
+        
+        Args:
+            group_name: Name of the group to check
+            
+        Returns:
+            Integer count of members, or -1 if group not found
+        """
+        # Search through converted groups to find the matching name
+        for group in self.ftd_network_groups:
+            if group['name'] == group_name:
+                return len(group['objects'])
+        
+        # Group not found
+        return -1
 
 
 # =============================================================================
@@ -414,41 +374,53 @@ if __name__ == '__main__':
     It's useful for testing the converter without running the main script.
     
     To test this module standalone:
-        python service_group_converter.py
+        python address_group_converter.py
     """
     
     # Sample FortiGate configuration for testing
+    # Includes nested groups to test flattening
     test_config = {
-        'firewall_service_group': [
+        'firewall_addrgrp': [
             {
-                'Email Access': {
-                    'uuid': '11111111-2222-3333-8888-000000000013',
-                    'member': ["DNS", "IMAP", "IMAPS", "POP3", "POP3S", "SMTP"]
+                'Blocked IPs': {
+                    'uuid': '11111111-2222-3333-8888-000000000005',
+                    'member': ["BadIP1", "BadIP2", "BadIP3"]
                 }
             },
             {
-                'Web Access': {
-                    'uuid': '11111111-2222-3333-8888-000000000013',
-                    'member': ["DNS", "HTTP", "HTTPS"]
+                'Switches': {
+                    'uuid': '11111111-2222-3333-8888-000000000006',
+                    'member': ["Switch1", "Switch2", "Switch3"]
                 }
             },
             {
-                'Windows AD': {
-                    'uuid': '11111111-2222-3333-8888-000000000013',
-                    'member': ["DNS", "Kerberos", "SAMBA", "SMB"]
+                'Servers': {
+                    'uuid': '11111111-2222-3333-8888-000000000007',
+                    'member': ["Server1", "Server2"]
+                }
+            },
+            {
+                'All_Network_Devices': {
+                    'uuid': '11111111-2222-3333-8888-000000000008',
+                    # This group contains OTHER GROUPS - needs to be flattened!
+                    'member': ["Switches", "Servers", "Firewall1"]
+                }
+            },
+            {
+                'Everything': {
+                    'uuid': '11111111-2222-3333-8888-000000000009',
+                    # This group contains a group that contains groups - deep nesting!
+                    'member': ["All_Network_Devices", "Blocked IPs", "SingleServer"]
                 }
             }
         ]
     }
     
-    # Simulate that DNS and HTTPS were split into TCP and UDP
-    split_services = {"DNS", "HTTPS"}
-    
     # Create converter instance
-    converter = ServiceGroupConverter(test_config, split_services)
+    converter = AddressGroupConverter(test_config)
     
     # Run conversion
-    print("Testing Service Group Converter...")
+    print("Testing Address Group Converter with Nested Groups...")
     print("="*60)
     result = converter.convert()
     
@@ -459,3 +431,9 @@ if __name__ == '__main__':
     print(json.dumps(result, indent=2))
     print("\n" + "="*60)
     print(f"Total groups converted: {len(result)}")
+    
+    # Show flattening results
+    print("\nFlattening Summary:")
+    print("-"*60)
+    for group in result:
+        print(f"  {group['name']}: {len(group['objects'])} members")
