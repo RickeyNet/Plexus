@@ -509,6 +509,16 @@ body {
     color: var(--text-light);
 }
 
+.code-editor {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+    overflow-x: auto;
+    overflow-y: auto;
+    resize: both;
+    tab-size: 4;
+}
+
 .form-input:focus,
 .form-textarea:focus,
 .form-select:focus {
@@ -545,14 +555,15 @@ body {
     background: var(--card-bg);
     border-radius: 0.5rem;
     box-shadow: var(--shadow-lg);
-    max-width: 600px;
+    max-width: 700px;
     width: 100%;
     max-height: 90vh;
     overflow-y: auto;
+    overflow-x: auto;
 }
 
 .modal-large {
-    max-width: 900px;
+    max-width: 1200px;
 }
 
 .modal-header {
@@ -591,6 +602,7 @@ body {
 
 .modal-body {
     padding: 1.5rem;
+    overflow-x: auto;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -970,5 +982,10 @@ code {
         flex-direction: column;
         align-items: flex-start;
         gap: 1rem;
+    }
+
+    .modal,
+    .modal-large {
+        max-width: 95vw;
     }
 }
