@@ -60,7 +60,7 @@ IMPORTANT NOTES:
 """
 
 import re
-from typing import Dict, List, Any, Set, Tuple
+from typing import Any
 
 
 def sanitize_name(name: str) -> str:
@@ -100,15 +100,15 @@ class PolicyConverter:
     6. Converting to FTD's accessrule format
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], 
-                 split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_name_mapping: Dict[str, List[Tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
-                 skipped_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 address_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                 address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                 address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: dict[str, Any], 
+                 split_services: set[str] = None, # pyright: ignore[reportArgumentType]
+                 service_name_mapping: dict[str, list[tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
+                 skipped_services: set[str] = None, # pyright: ignore[reportArgumentType]
+                 address_name_mapping: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
+                 address_group_members: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
+                 address_groups: set[str] = None, # pyright: ignore[reportArgumentType]
+                 service_groups: set[str] = None, # pyright: ignore[reportArgumentType]
+                 interface_name_mapping: dict[str, str] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -159,7 +159,7 @@ class PolicyConverter:
         self.permit_count = 0
         self.deny_count = 0
     
-    def convert(self) -> List[Dict]:
+    def convert(self) -> list[dict]:
         """
         Main conversion method - converts all FortiGate policies to FTD access rules.
         
@@ -317,7 +317,7 @@ class PolicyConverter:
             print(f"    Warning: Unknown action '{fg_action}', defaulting to DENY")
             return 'DENY'
     
-    def _normalize_to_list(self, value: Any) -> List[str]:
+    def _normalize_to_list(self, value: Any) -> list[str]:
         """
         Normalize a value to always be a list.
         
@@ -343,7 +343,7 @@ class PolicyConverter:
         else:
             return [str(value)]
     
-    def _create_zone_objects(self, zone_names: List[str]) -> List[Dict]:
+    def _create_zone_objects(self, zone_names: list[str]) -> list[dict]:
         """
         Create FTD security zone references from FortiGate interface names.
         
@@ -431,7 +431,7 @@ class PolicyConverter:
               f"using '{sanitized}' - verify zone exists")
         return sanitized
     
-    def _create_network_objects(self, addr_names: List[str]) -> List[Dict]:
+    def _create_network_objects(self, addr_names: list[str]) -> list[dict]:
         """
         Create FTD network object references from FortiGate address names.
         
@@ -481,7 +481,7 @@ class PolicyConverter:
         
         return network_objects
     
-    def _expand_services(self, services: List[str]) -> List[Tuple[str, str]]:
+    def _expand_services(self, services: list[str]) -> list[tuple[str, str]]:
         """
         Expand services using the service_name_mapping.
         
@@ -530,7 +530,7 @@ class PolicyConverter:
         
         return expanded
     
-    def _create_port_objects(self, service_info: List[Tuple[str, str]]) -> List[Dict]:
+    def _create_port_objects(self, service_info: list[tuple[str, str]]) -> list[dict]:
         """
         Create FTD port object references from expanded service info.
         
@@ -551,14 +551,14 @@ class PolicyConverter:
         
         return port_objects
     
-    def set_split_services(self, split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           service_name_mapping: Dict[str, List[Tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
-                           skipped_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           address_name_mapping: Dict[str, str] = None, # pyright: ignore[reportArgumentType]
-                           address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                           address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           service_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
+    def set_split_services(self, split_services: set[str] = None, # pyright: ignore[reportArgumentType]
+                           service_name_mapping: dict[str, list[tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
+                           skipped_services: set[str] = None, # pyright: ignore[reportArgumentType]
+                           address_name_mapping: dict[str, str] = None, # pyright: ignore[reportArgumentType]
+                           address_group_members: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
+                           address_groups: set[str] = None, # pyright: ignore[reportArgumentType]
+                           service_groups: set[str] = None, # pyright: ignore[reportArgumentType]
+                           interface_name_mapping: dict[str, str] = None): # pyright: ignore[reportArgumentType]
         """
         Update the service and address mappings.
         
@@ -591,7 +591,7 @@ class PolicyConverter:
         if interface_name_mapping is not None:
             self.interface_name_mapping = interface_name_mapping
     
-    def get_statistics(self) -> Dict[str, int]:
+    def get_statistics(self) -> dict[str, int]:
         """
         Get conversion statistics for reporting.
         

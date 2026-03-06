@@ -47,7 +47,8 @@ NOTE ON MEMBER TYPES:
 """
 
 import re
-from typing import Dict, List, Any, Set
+from typing import Any
+
 
 def sanitize_name(name: str) -> str:
     """
@@ -90,10 +91,10 @@ class ServiceGroupConverter:
     6. Expanding services that were split into multiple FTD objects
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], 
-                 split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                 skipped_services: Set[str] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: dict[str, Any], 
+                 split_services: set[str] = None, # pyright: ignore[reportArgumentType]
+                 service_name_mapping: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
+                 skipped_services: set[str] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -161,7 +162,7 @@ class ServiceGroupConverter:
         """
         return name in self.group_members
     
-    def _flatten_members(self, members: List[str], visited: set = None) -> List[str]: # pyright: ignore[reportArgumentType]
+    def _flatten_members(self, members: list[str], visited: set = None) -> list[str]: # pyright: ignore[reportArgumentType]
         """
         Recursively flatten a list of members, expanding any nested groups.
         
@@ -208,7 +209,7 @@ class ServiceGroupConverter:
         
         return unique_flattened
     
-    def convert(self) -> List[Dict]:
+    def convert(self) -> list[dict]:
         """
         Main conversion method - converts all FortiGate service groups to FTD format.
         
@@ -370,9 +371,9 @@ class ServiceGroupConverter:
         self.ftd_port_groups = port_groups
         return port_groups
     
-    def set_split_services(self, split_services: Set[str] = None,  # pyright: ignore[reportArgumentType]
-                           service_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                           skipped_services: Set[str] = None): # pyright: ignore[reportArgumentType]
+    def set_split_services(self, split_services: set[str] = None,  # pyright: ignore[reportArgumentType]
+                           service_name_mapping: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
+                           skipped_services: set[str] = None): # pyright: ignore[reportArgumentType]
 
         """
         Update the service expansion information.

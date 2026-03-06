@@ -5,21 +5,26 @@ Run once after init_db(). Idempotent — skips if data already exists.
 """
 
 import asyncio
-import sys
 import os
+import sys
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from routes.database import (
-    get_db, init_db,
-    create_group, add_host,
-    create_playbook, create_template, create_credential,
-)
-from routes.crypto import encrypt
 from templates import playbooks as _pb_module  # noqa: F401 — triggers @register_playbook decorators
+
+from routes.crypto import encrypt
+from routes.database import (
+    add_host,
+    create_credential,
+    create_group,
+    create_playbook,
+    create_template,
+    get_db,
+    init_db,
+)
 from routes.runner import list_registered_playbooks
 
 

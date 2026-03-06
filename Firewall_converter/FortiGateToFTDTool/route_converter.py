@@ -55,7 +55,8 @@ IMPORTANT NOTES:
 
 import json
 import re
-from typing import Dict, List, Any, Optional
+from typing import Any
+
 
 def sanitize_name(name: str) -> str:
     """
@@ -100,11 +101,11 @@ class RouteConverter:
     
     def __init__(
     self,
-    fortigate_config: Dict[str, Any],
-    network_objects: Optional[List[Dict]] = None,
-    address_objects_json_path: Optional[str] = None,
-    interface_name_mapping: Optional[Dict[str, str]] = None,
-    converted_interfaces: Optional[Dict[str, List[Dict]]] = None,
+    fortigate_config: dict[str, Any],
+    network_objects: list[dict] | None = None,
+    address_objects_json_path: str | None = None,
+    interface_name_mapping: dict[str, str] | None = None,
+    converted_interfaces: dict[str, list[dict]] | None = None,
     debug: bool = False
     ):
 
@@ -148,7 +149,7 @@ class RouteConverter:
         # Track any objects we auto-generate so the caller can export them
         # This list accumulates objects from _ensure_network_object_with_value()
         # and _ensure_network_object_for_value() for export by fortigate_converter.py
-        self.generated_network_objects: List[Dict] = []
+        self.generated_network_objects: list[dict] = []
         
         # Build lookup dictionaries
         # Name -> full network object (for routes)
@@ -174,7 +175,7 @@ class RouteConverter:
         self.missing_network_objects = []
 
         # The interface object currently being processed in convert()
-        self._current_route_interface_obj: Optional[Dict] = None
+        self._current_route_interface_obj: dict | None = None
 
         
         # Track statistics
@@ -190,7 +191,7 @@ class RouteConverter:
             if name:
                 self.name_to_network_object[name] = obj
 
-    def _ensure_host_object_for_ip(self, ip: str, name_prefix: str) -> Dict:
+    def _ensure_host_object_for_ip(self, ip: str, name_prefix: str) -> dict:
         """
         Ensure a host network object exists for the given IP.
 
@@ -310,7 +311,7 @@ class RouteConverter:
                 if ip32 not in self.ip_to_network_object_name:
                     self.ip_to_network_object_name[ip32] = name
 
-    def _ensure_network_object_with_value(self, name: str, value: str, sub_type: str, description: str = "") -> Dict:
+    def _ensure_network_object_with_value(self, name: str, value: str, sub_type: str, description: str = "") -> dict:
         """
         Ensure a network object exists with the specified name/value/subType.
 
@@ -377,7 +378,7 @@ class RouteConverter:
         return {"name": name, "type": "networkobject"}
 
 
-    def _ensure_network_object_for_value(self, value: str, name_prefix: str) -> Dict:
+    def _ensure_network_object_for_value(self, value: str, name_prefix: str) -> dict:
         """
         Ensure a networkobject exists for a given value string (CIDR/host/range).
         Used for destinations when FortiGate references raw values without address objects.
@@ -423,7 +424,7 @@ class RouteConverter:
         return {"name": obj_name, "type": "networkobject"}
 
     
-    def _load_network_objects_from_json(self, filename: str) -> List[Dict]:
+    def _load_network_objects_from_json(self, filename: str) -> list[dict]:
         """
         Load converted address objects (network objects) from a JSON file.
 
@@ -441,7 +442,7 @@ class RouteConverter:
             List of address/network object dictionaries.
         """
         try:
-            with open(filename, "r", encoding="utf-8") as f:
+            with open(filename, encoding="utf-8") as f:
                 data = json.load(f)
 
             if not isinstance(data, list):
@@ -515,7 +516,7 @@ class RouteConverter:
             return ip_addr
         
 
-    def _get_network_object_for_destination(self, dst: List) -> Optional[Dict]:
+    def _get_network_object_for_destination(self, dst: list) -> dict | None:
         """
         Get the full network object for a route destination.
 
@@ -593,7 +594,7 @@ class RouteConverter:
         )
 
     
-    def _get_network_object_for_gateway(self, gateway_ip: str) -> Optional[Dict]:
+    def _get_network_object_for_gateway(self, gateway_ip: str) -> dict | None:
         """
         Get the full network object for a gateway IP.
 
@@ -665,7 +666,7 @@ class RouteConverter:
 
 
     
-    def _get_interface_object(self, interface_name: str) -> Optional[Dict]:
+    def _get_interface_object(self, interface_name: str) -> dict | None:
         """
         Get the full interface object by name.
         
@@ -678,7 +679,7 @@ class RouteConverter:
         return self.name_to_interface_object.get(interface_name)
     
     
-    def convert(self) -> List[Dict]:
+    def convert(self) -> list[dict]:
         """
         Main conversion method - converts all FortiGate static routes to FTD format.
         
@@ -772,7 +773,7 @@ class RouteConverter:
             interface_obj = self._get_interface_object(ftd_interface_name) # type: ignore
             if not interface_obj:
                 print(f"  Warning: Route [{route_id}] - Could not find interface object for {ftd_interface_name}")
-                print(f"           Using basic interface reference")
+                print("           Using basic interface reference")
                 # Create basic interface reference as fallback
                 interface_obj = {
                     "name": ftd_interface_name,
@@ -861,7 +862,7 @@ class RouteConverter:
         self.ftd_static_routes = static_routes
         return static_routes
     
-    def _format_destination(self, dst: List) -> str:
+    def _format_destination(self, dst: list) -> str:
         """
         Convert FortiGate destination format to CIDR notation.
         
@@ -913,12 +914,12 @@ class RouteConverter:
             
             return cidr_prefix
             
-        except Exception as e:
+        except Exception:
             # If conversion fails, default to /32
             print(f"    Warning: Could not convert netmask '{netmask}' to CIDR")
             return 32
         
-    def _get_interface_ipv4_prefix(self, interface_obj: Dict) -> Optional[int]:
+    def _get_interface_ipv4_prefix(self, interface_obj: dict) -> int | None:
         """
         Extract the IPv4 prefix length for a converted interface object.
 
@@ -946,7 +947,7 @@ class RouteConverter:
         return self._netmask_to_cidr(str(netmask))
 
     
-    def _create_network_name(self, dst: List) -> str:
+    def _create_network_name(self, dst: list) -> str:
         """
         Find the interface name for the destination network.
         
@@ -1001,7 +1002,7 @@ class RouteConverter:
             return result
         
         if self.debug:
-            print(f"    [DEBUG] No interface found, trying address objects...")
+            print("    [DEBUG] No interface found, trying address objects...")
         
         # FALLBACK: Try legacy address object lookup
         cidr_notation = f"{ip_addr}/{cidr}"
@@ -1027,7 +1028,7 @@ class RouteConverter:
         
         return generated_name
     
-    def _create_gateway_name(self, gateway_ip: str, properties: Dict) -> str:
+    def _create_gateway_name(self, gateway_ip: str, properties: dict) -> str:
         """
         Find the interface name for the gateway IP.
         
@@ -1065,7 +1066,7 @@ class RouteConverter:
             return result
         
         if self.debug:
-            print(f"    [DEBUG] No interface found, trying address objects...")
+            print("    [DEBUG] No interface found, trying address objects...")
         
         # FALLBACK: Try legacy address object lookup
         if gateway_cidr in self.ip_to_name: # pyright: ignore[reportAttributeAccessIssue]
@@ -1087,7 +1088,7 @@ class RouteConverter:
         
         return generated_name
     
-    def get_statistics(self) -> Dict[str, int]:
+    def get_statistics(self) -> dict[str, int]:
         """
         Get conversion statistics for reporting.
         
@@ -1103,7 +1104,7 @@ class RouteConverter:
         }
     
 
-    def get_missing_network_objects(self) -> List[Dict]:
+    def get_missing_network_objects(self) -> list[dict]:
         """
         Get list of network objects that need to be created for routes.
         

@@ -40,7 +40,8 @@ IMPORTANT NOTES:
 """
 
 import re
-from typing import Dict, List, Any
+from typing import Any
+
 
 def sanitize_name(name: str) -> str:
     """
@@ -82,7 +83,7 @@ class AddressGroupConverter:
     5. Handling edge cases (empty groups, single vs multiple members)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], address_object_names: set = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: dict[str, Any], address_object_names: set = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -141,7 +142,7 @@ class AddressGroupConverter:
         """
         return name in self.group_members
     
-    def _flatten_members(self, members: List[str], visited: set = None) -> List[str]: # pyright: ignore[reportArgumentType]
+    def _flatten_members(self, members: list[str], visited: set = None) -> list[str]: # pyright: ignore[reportArgumentType]
         """
         Recursively flatten a list of members, expanding any nested groups.
         
@@ -188,7 +189,7 @@ class AddressGroupConverter:
         
         return unique_flattened
     
-    def convert(self) -> List[Dict]:
+    def convert(self) -> list[dict]:
         """
         Main conversion method - converts all FortiGate address groups to FTD format.
         
@@ -305,7 +306,7 @@ class AddressGroupConverter:
 # ADDITIONAL HELPER METHODS (if needed in the future)
 # =============================================================================
 
-    def _validate_group(self, group_name: str, properties: Dict) -> bool:
+    def _validate_group(self, group_name: str, properties: dict) -> bool:
         """
         Validate that a group has all required fields.
         This is an optional validation method that could be called before conversion.

@@ -11,15 +11,14 @@ the script runs in simulation mode with realistic fake output.
 
 import asyncio
 import random
-from typing import AsyncGenerator
 
-from routes.runner import BasePlaybook, LogEvent, register_playbook
+from routes.runner import BasePlaybook, register_playbook
 
 try:
     from netmiko import ConnectHandler
     from netmiko.exceptions import (
-        NetmikoTimeoutException,
         NetmikoAuthenticationException,
+        NetmikoTimeoutException,
     )
     NETMIKO_AVAILABLE = True
 except ImportError:
