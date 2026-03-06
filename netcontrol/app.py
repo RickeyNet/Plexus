@@ -29,8 +29,9 @@ sys.path.insert(0, project_root)
 import time
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from netcontrol.routes.converter import router as converter_router
 from pydantic import BaseModel, ConfigDict
+
+from netcontrol.routes.converter import router as converter_router
 
 try:
     from pyrad import packet as radius_packet
@@ -50,13 +51,14 @@ sys.path.insert(0, project_root)
 import importlib
 
 import routes.database as db
-from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value, snapshot_metrics
-from netcontrol.version import APP_VERSION
 from routes.crypto import decrypt, encrypt
 from routes.runner import LogEvent, execute_playbook, get_playbook_class
 
 # Auto-register all playbooks
 from templates import playbooks  # noqa: F401
+
+from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value, snapshot_metrics
+from netcontrol.version import APP_VERSION
 
 LOGGER = configure_logging("plexus.app")
 APP_START_TIME = time.time()
