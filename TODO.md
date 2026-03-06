@@ -8,11 +8,11 @@
 - [x] Docs: expand README with quickstart, scope (FortiGate → FTD), and how to run dev server/CLI + Docker.
 
 ## Week 2: Reliability, Security, and UX
-- [ ] Error handling/logging: standardize logging with redaction; normalize API/CLI error responses and exit codes.
-- [ ] Config validation: startup checks for required env vars/credentials; fail fast with clear messages.
-- [ ] UX: add dry-run and diff view for conversions; ensure downloadable artifacts and timestamped backups.
-- [ ] Security: dependency scanning (Dependabot/Snyk/OWASP dep-check); secrets never logged; add basic auth/RBAC for UI/API (at least token protection).
-- [ ] Observability: emit counters for conversion success/failure and timings; add health endpoint for web app.
+- [x] Error handling/logging: standardize logging with redaction; normalize API/CLI error responses and exit codes.
+- [x] Config validation: startup checks for required env vars/credentials; fail fast with clear messages.
+- [x] UX: add dry-run and diff view for conversions; ensure downloadable artifacts and timestamped backups.
+- [x] Security: dependency scanning (Dependabot/Snyk/OWASP dep-check); secrets never logged; add basic auth/RBAC for UI/API (at least token protection).
+- [x] Observability: emit counters for conversion success/failure and timings; add health endpoint for web app.
 
 ## Week 3: Deployability, Docs, and Governance
 - [ ] Packaging: add Dockerfile and docker-compose (app + backing services) with healthcheck; env-based config.

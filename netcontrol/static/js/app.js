@@ -247,6 +247,44 @@ async function loadConverter() {
 
     converterSessionId = null;
 
+    function apiErrorMessage(data, fallback) {
+        return data?.error?.message || data?.detail || fallback;
+    }
+
+    function renderSummary(summary) {
+        const s = summary?.conversion_summary;
+        if (s) {
+            summaryCards.innerHTML = `
+                <div class="stat-card"><div class="stat-label">Address Objects</div><div class="stat-value">${s.address_objects ?? '-'}</div></div>
+                <div class="stat-card"><div class="stat-label">Address Groups</div><div class="stat-value">${s.address_groups ?? '-'}</div></div>
+                <div class="stat-card"><div class="stat-label">Service Objects</div><div class="stat-value">${s.service_objects?.total ?? '-'}</div></div>
+                <div class="stat-card"><div class="stat-label">Service Groups</div><div class="stat-value">${s.service_groups ?? '-'}</div></div>
+                <div class="stat-card"><div class="stat-label">Access Rules</div><div class="stat-value">${s.access_rules?.total ?? '-'}</div></div>
+                <div class="stat-card"><div class="stat-label">Static Routes</div><div class="stat-value">${s.static_routes?.total ?? '-'}</div></div>
+            `;
+        } else {
+            summaryCards.innerHTML = '';
+        }
+    }
+
+    async function loadSessionState(sessionId) {
+        try {
+            const resp = await fetch(`/api/converter-session-state?session_id=${encodeURIComponent(sessionId)}`);
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load session state'));
+
+            const modelLabel = data.target_model || 'unknown';
+            outputWindow.textContent = `[Backend confirmed target model: ${modelLabel}]\n\n` + (data.conversion_output || '(no output captured for this session)');
+            renderSummary(data.summary || {});
+            if (step2) step2.style.display = 'block';
+            return data;
+        } catch (err) {
+            outputWindow.textContent = 'Error loading conversion output: ' + err.message;
+            summaryCards.innerHTML = '';
+            return null;
+        }
+    }
+
     // ── Step 1: Convert ──────────────────────────────────────────────────────
     convertForm.onsubmit = async (e) => {
         e.preventDefault();
@@ -278,7 +316,7 @@ async function loadConverter() {
         try {
             const resp = await fetch('/api/convert-only', { method: 'POST', body: formData });
             const data = await resp.json();
-            if (!resp.ok) throw new Error(data.detail || 'Conversion failed');
+            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Conversion failed'));
 
             converterSessionId = data.session_id;
 
@@ -286,19 +324,7 @@ async function loadConverter() {
             outputWindow.textContent = `[Backend confirmed target model: ${data.target_model}]\n\n` + (data.conversion_output || '(no output)');
 
             // Build summary stat cards
-            const s = data.summary?.conversion_summary;
-            if (s) {
-                summaryCards.innerHTML = `
-                    <div class="stat-card"><div class="stat-label">Address Objects</div><div class="stat-value">${s.address_objects ?? '-'}</div></div>
-                    <div class="stat-card"><div class="stat-label">Address Groups</div><div class="stat-value">${s.address_groups ?? '-'}</div></div>
-                    <div class="stat-card"><div class="stat-label">Service Objects</div><div class="stat-value">${s.service_objects?.total ?? '-'}</div></div>
-                    <div class="stat-card"><div class="stat-label">Service Groups</div><div class="stat-value">${s.service_groups ?? '-'}</div></div>
-                    <div class="stat-card"><div class="stat-label">Access Rules</div><div class="stat-value">${s.access_rules?.total ?? '-'}</div></div>
-                    <div class="stat-card"><div class="stat-label">Static Routes</div><div class="stat-value">${s.static_routes?.total ?? '-'}</div></div>
-                `;
-            } else {
-                summaryCards.innerHTML = '';
-            }
+            renderSummary(data.summary || {});
 
             step2.style.display = 'block';
             if (step3) step3.style.display = 'block';
@@ -316,7 +342,7 @@ async function loadConverter() {
         try {
             const resp = await fetch('/api/converter-sessions');
             const data = await resp.json();
-            if (!resp.ok) throw new Error(data.detail || 'Failed to load sessions');
+            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load sessions'));
             const sessions = data.sessions || [];
             if (!sessions.length) {
                 recentSessions.innerHTML = '<div class="empty-state">No recent conversions found.</div>';
@@ -380,6 +406,7 @@ async function loadConverter() {
 
     window.resumeImport = function (id) {
         setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to re-run import.`);
+        loadSessionState(id);
         if (importOutput) { importOutput.textContent = ''; importOutput.style.display = 'none'; }
         if (cleanupOutput) { cleanupOutput.textContent = ''; cleanupOutput.style.display = 'none'; }
         document.getElementById('converter-step2')?.scrollIntoView({ behavior: 'smooth' });
@@ -387,6 +414,7 @@ async function loadConverter() {
 
     window.resumeCleanup = function (id) {
         setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to clean up.`);
+        loadSessionState(id);
         if (cleanupOutput) { cleanupOutput.textContent = 'Ready to clean up this session.'; cleanupOutput.style.display = 'block'; }
         document.getElementById('converter-step3')?.scrollIntoView({ behavior: 'smooth' });
     };
@@ -398,7 +426,7 @@ async function loadConverter() {
         try {
             const resp = await fetch(`/api/converter-session-file?session_id=${encodeURIComponent(sessionId)}&filename=${encodeURIComponent(filename)}`);
             const data = await resp.json();
-            if (!resp.ok) throw new Error(data.detail || 'Failed to load file');
+            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load file'));
             const raw = data.content || '';
             const trimmed = raw.trim();
             if (!trimmed) {
@@ -423,6 +451,7 @@ async function loadConverter() {
 
     window.viewSessionConfig = async function (id) {
         setActiveSession(id, `Viewing generated config for session ${id}.`);
+        await loadSessionState(id);
         if (!configSection || !configContent || !configFileSelect) return;
         configSection.style.display = 'block';
         configContent.textContent = 'Loading files...';
@@ -431,7 +460,7 @@ async function loadConverter() {
         try {
             const resp = await fetch(`/api/converter-session-files?session_id=${encodeURIComponent(id)}`);
             const data = await resp.json();
-            if (!resp.ok) throw new Error(data.detail || 'Failed to load session files');
+            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load session files'));
             const files = data.files || [];
             if (configMeta) configMeta.textContent = `Model: ${data.target_model || 'unknown'} • Base: ${data.base || ''}`;
             if (!files.length) {
