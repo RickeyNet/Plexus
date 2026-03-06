@@ -15,8 +15,8 @@
 - [x] Observability: emit counters for conversion success/failure and timings; add health endpoint for web app.
 
 ## Week 3: Deployability, Docs, and Governance
-- [ ] Packaging: add Dockerfile and docker-compose (app + backing services) with healthcheck; env-based config.
-- [ ] Versioning/release: adopt semantic versioning; add `--version` flag; start CHANGELOG; tag first internal release.
-- [ ] Operator docs: runbook (upload config, review diff, apply), rollback steps, FAQ for mismatch causes.
-- [ ] Performance/scale: test large configs; document limits; add timeouts/retries on device/API calls.
-- [ ] Compliance: pick a license; document data handling/retention for configs (storage location and duration).
+- [x] Packaging: add Dockerfile and docker-compose (app + backing services) with healthcheck; env-based config.
+- [x] Versioning/release: adopt semantic versioning; add `--version` flag; start CHANGELOG; tag first internal release.
+- [x] Operator docs: runbook (upload config, review diff, apply), rollback steps, FAQ for mismatch causes.
+- [x] Performance/scale: test large configs; document limits; add timeouts/retries on device/API calls.
+- [x] Compliance: pick a license; document data handling/retention for configs (storage location and duration).
