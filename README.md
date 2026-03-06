@@ -9,6 +9,9 @@ stream live job output — all through a REST API with WebSocket support.
 ## Guides
 
 - RADIUS setup: `RADIUS_CONFIGURATION_GUIDE.md`
+- Operator runbook: `OPERATOR_RUNBOOK.md`
+- Performance and scale notes: `PERFORMANCE_LIMITS.md`
+- Data handling and retention: `DATA_RETENTION.md`
 
 ## Architecture
 
@@ -95,8 +98,33 @@ docker-compose down
 
 Notes:
 - The Docker image runs `python templates/run.py --host 0.0.0.0 --port 8080` inside the container.
-- The built-in healthcheck pings `/docs`; compose restarts the container if it becomes unhealthy.
+- The built-in healthcheck pings `/api/health`; compose restarts the container if it becomes unhealthy.
+- Named volumes persist converter sessions, DB data, and generated certs across restarts.
 - For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables.
+
+## Versioning and Release
+
+- Plexus follows Semantic Versioning (`MAJOR.MINOR.PATCH`).
+- Current version is `0.2.0`.
+- Check runtime version with:
+```bash
+python templates/run.py --version
+```
+- See release notes in `CHANGELOG.md`.
+
+## FTD API Timeout and Retry Controls
+
+Importer and cleanup tooling support configurable API resilience controls:
+
+- `--api-timeout`
+- `--api-retries`
+- `--api-retry-backoff`
+
+The same defaults can be set via environment variables:
+
+- `FTD_API_TIMEOUT` (default `30`)
+- `FTD_API_RETRIES` (default `3`)
+- `FTD_API_RETRY_BACKOFF` (default `1.0`)
 
 Interactive API docs: `http://localhost:8080/docs`
 
@@ -253,5 +281,6 @@ output. This is useful for frontend development and demos.
 - **netcontrol.key** — Fernet encryption key for credentials. Back it up.
   Losing it means stored passwords are unrecoverable.
 - Credentials are encrypted at rest but decrypted in memory during job execution.
-- The API has no authentication by default — add middleware for production use.
+- API token protection is supported via `APP_API_TOKEN`; set `APP_REQUIRE_API_TOKEN=true` to enforce token auth for API routes.
 - Default seed credential uses `netadmin / cisco123` — change in production.
+- License: MIT (`LICENSE`).

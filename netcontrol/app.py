@@ -51,6 +51,7 @@ import routes.database as db
 from routes.crypto import encrypt, decrypt
 from routes.runner import get_playbook_class, execute_playbook, LogEvent
 from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value, snapshot_metrics
+from netcontrol.version import APP_VERSION
 import importlib
 
 # Auto-register all playbooks
@@ -510,7 +511,7 @@ async def _migrate_auth_json_users():
         print(f"[migration] auth.json migration error: {e}")
 
 
-app = FastAPI(title="Plexus API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Plexus API", version=APP_VERSION, lifespan=lifespan)
 app.include_router(
     converter_router,
     dependencies=[Depends(require_auth), Depends(require_feature("converter"))],
