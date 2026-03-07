@@ -148,7 +148,7 @@ class RouteConverter:
 
         # Track any objects we auto-generate so the caller can export them
         # This list accumulates objects from _ensure_network_object_with_value()
-        # and _ensure_network_object_for_value() for export by fortigate_converter.py
+        # and _ensure_network_object_for_value() for export by converter_v2/fortigate_converter_v2.py
         self.generated_network_objects: list[dict] = []
         
         # Build lookup dictionaries
@@ -354,7 +354,7 @@ class RouteConverter:
             "value": value
         }
 
-        # Track for later export/merge in fortigate_converter.py
+        # Track for later export/merge in converter_v2/fortigate_converter_v2.py
         # Add to both lists: missing_network_objects for backward compatibility
         # and generated_network_objects for the main export mechanism
         self.missing_network_objects.append(new_obj)
@@ -1004,7 +1004,7 @@ class RouteConverter:
         if self.debug:
             print("    [DEBUG] No interface found, trying address objects...")
         
-        # FALLBACK: Try legacy address object lookup
+        # Fallback: try address object lookup
         cidr_notation = f"{ip_addr}/{cidr}"
         
         # Try to find the address object by exact CIDR match
@@ -1068,7 +1068,7 @@ class RouteConverter:
         if self.debug:
             print("    [DEBUG] No interface found, trying address objects...")
         
-        # FALLBACK: Try legacy address object lookup
+        # Fallback: try address object lookup
         if gateway_cidr in self.ip_to_name: # pyright: ignore[reportAttributeAccessIssue]
             result = self.ip_to_name[gateway_cidr] # pyright: ignore[reportAttributeAccessIssue]
             if self.debug:

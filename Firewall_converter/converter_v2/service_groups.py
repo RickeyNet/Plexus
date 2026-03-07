@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from Firewall_converter.FortiGateToFTDTool.service_group_converter import ServiceGroupConverter
+from Firewall_converter.converter_v2.core.service_group_converter import ServiceGroupConverter
 
 from .models import FTDServiceGroupObject
 

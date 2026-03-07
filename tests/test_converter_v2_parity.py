@@ -9,13 +9,13 @@ from Firewall_converter.converter_v2.policies import convert_policies_v2
 from Firewall_converter.converter_v2.routes import convert_routes_v2
 from Firewall_converter.converter_v2.service_groups import convert_service_groups_v2
 from Firewall_converter.converter_v2.services import convert_services_v2
-from Firewall_converter.FortiGateToFTDTool.address_converter import AddressConverter
-from Firewall_converter.FortiGateToFTDTool.address_group_converter import AddressGroupConverter
-from Firewall_converter.FortiGateToFTDTool.interface_converter import InterfaceConverter
-from Firewall_converter.FortiGateToFTDTool.policy_converter import PolicyConverter
-from Firewall_converter.FortiGateToFTDTool.route_converter import RouteConverter
-from Firewall_converter.FortiGateToFTDTool.service_converter import ServiceConverter
-from Firewall_converter.FortiGateToFTDTool.service_group_converter import ServiceGroupConverter
+from Firewall_converter.converter_v2.core.address_converter import AddressConverter
+from Firewall_converter.converter_v2.core.address_group_converter import AddressGroupConverter
+from Firewall_converter.converter_v2.core.interface_converter import InterfaceConverter
+from Firewall_converter.converter_v2.core.policy_converter import PolicyConverter
+from Firewall_converter.converter_v2.core.route_converter import RouteConverter
+from Firewall_converter.converter_v2.core.service_converter import ServiceConverter
+from Firewall_converter.converter_v2.core.service_group_converter import ServiceGroupConverter
 
 
 def _normalized(items: list[dict]) -> list[tuple[str, str, str, str, str]]:
@@ -31,7 +31,7 @@ def _normalized(items: list[dict]) -> list[tuple[str, str, str, str, str]]:
     )
 
 
-def test_address_conversion_v2_matches_v1_output_contract():
+def test_address_conversion_v2_matches_core_output_contract():
     fortigate_config = {
         "firewall_address": [
             {
@@ -57,10 +57,10 @@ def test_address_conversion_v2_matches_v1_output_contract():
         ]
     }
 
-    v1 = AddressConverter(fortigate_config).convert()
+    baseline = AddressConverter(fortigate_config).convert()
     v2 = convert_addresses_v2(fortigate_config)
 
-    assert _normalized(v2) == _normalized(v1)
+    assert _normalized(v2) == _normalized(baseline)
 
 
 def _normalized_services(items: list[dict]) -> list[tuple[str, bool, str, str]]:
@@ -75,7 +75,7 @@ def _normalized_services(items: list[dict]) -> list[tuple[str, bool, str, str]]:
     )
 
 
-def test_service_conversion_v2_matches_v1_output_contract():
+def test_service_conversion_v2_matches_core_output_contract():
     fortigate_config = {
         "firewall_service_custom": [
             {
@@ -97,10 +97,10 @@ def test_service_conversion_v2_matches_v1_output_contract():
         ]
     }
 
-    v1 = ServiceConverter(fortigate_config).convert()
+    baseline = ServiceConverter(fortigate_config).convert()
     v2 = convert_services_v2(fortigate_config)
 
-    assert _normalized_services(v2) == _normalized_services(v1)
+    assert _normalized_services(v2) == _normalized_services(baseline)
 
 
 def _normalized_routes(items: list[dict]) -> list[tuple[str, str, str, str, int | str, str, str]]:
@@ -133,7 +133,7 @@ def _canonical(value: object) -> object:
     return value
 
 
-def test_route_conversion_v2_matches_v1_output_contract():
+def test_route_conversion_v2_matches_core_output_contract():
     fortigate_config = {
         "router_static": [
             {
@@ -177,7 +177,7 @@ def test_route_conversion_v2_matches_v1_output_contract():
         "bridge_groups": [],
     }
 
-    v1 = RouteConverter(
+    baseline = RouteConverter(
         fortigate_config=fortigate_config,
         network_objects=network_objects,
         interface_name_mapping=interface_name_mapping,
@@ -192,10 +192,10 @@ def test_route_conversion_v2_matches_v1_output_contract():
         debug=False,
     )
 
-    assert _normalized_routes(v2) == _normalized_routes(v1)
+    assert _normalized_routes(v2) == _normalized_routes(baseline)
 
 
-def test_address_group_conversion_v2_matches_v1_output_contract():
+def test_address_group_conversion_v2_matches_core_output_contract():
     fortigate_config = {
         "firewall_addrgrp": [
             {"Branch_Group": {"member": ["Host_A", "Host_B"]}},
@@ -203,7 +203,7 @@ def test_address_group_conversion_v2_matches_v1_output_contract():
     }
     address_object_names = {"Host_A", "Host_B"}
 
-    v1 = AddressGroupConverter(
+    baseline = AddressGroupConverter(
         fortigate_config=fortigate_config,
         address_object_names=address_object_names,
     ).convert()
@@ -212,10 +212,10 @@ def test_address_group_conversion_v2_matches_v1_output_contract():
         address_object_names=address_object_names,
     )
 
-    assert _canonical(v2) == _canonical(v1)
+    assert _canonical(v2) == _canonical(baseline)
 
 
-def test_service_group_conversion_v2_matches_v1_output_contract():
+def test_service_group_conversion_v2_matches_core_output_contract():
     fortigate_config = {
         "firewall_service_group": [
             {"Web_Services": {"member": ["HTTP", "DNS"]}},
@@ -226,7 +226,7 @@ def test_service_group_conversion_v2_matches_v1_output_contract():
         "DNS": [("DNS_TCP", "tcpportobject"), ("DNS_UDP", "udpportobject")],
     }
 
-    v1 = ServiceGroupConverter(
+    baseline = ServiceGroupConverter(
         fortigate_config=fortigate_config,
         service_name_mapping=service_name_mapping,
         skipped_services=set(),
@@ -237,10 +237,10 @@ def test_service_group_conversion_v2_matches_v1_output_contract():
         skipped_services=set(),
     )
 
-    assert _canonical(v2) == _canonical(v1)
+    assert _canonical(v2) == _canonical(baseline)
 
 
-def test_policy_conversion_v2_matches_v1_output_contract():
+def test_policy_conversion_v2_matches_core_output_contract():
     fortigate_config = {
         "firewall_policy": [
             {
@@ -259,7 +259,7 @@ def test_policy_conversion_v2_matches_v1_output_contract():
     service_name_mapping = {"HTTPS": [("HTTPS", "tcpportobject")]}
     address_name_mapping = {"LAN_NET": "LAN_NET", "WAN_TARGET": "WAN_TARGET"}
 
-    v1 = PolicyConverter(
+    baseline = PolicyConverter(
         fortigate_config=fortigate_config,
         service_name_mapping=service_name_mapping,
         address_name_mapping=address_name_mapping,
@@ -272,10 +272,10 @@ def test_policy_conversion_v2_matches_v1_output_contract():
         interface_name_mapping={"inside": "inside", "outside": "outside"},
     )
 
-    assert _canonical(v2) == _canonical(v1)
+    assert _canonical(v2) == _canonical(baseline)
 
 
-def test_interface_conversion_v2_matches_v1_output_contract():
+def test_interface_conversion_v2_matches_core_output_contract():
     fortigate_config = {
         "system_interface": [
             {
@@ -289,7 +289,7 @@ def test_interface_conversion_v2_matches_v1_output_contract():
         ]
     }
 
-    v1 = InterfaceConverter(
+    baseline = InterfaceConverter(
         fortigate_config=fortigate_config,
         target_model="ftd-3120",
     ).convert()
@@ -298,4 +298,4 @@ def test_interface_conversion_v2_matches_v1_output_contract():
         target_model="ftd-3120",
     )
 
-    assert _canonical(v2) == _canonical(v1)
+    assert _canonical(v2) == _canonical(baseline)

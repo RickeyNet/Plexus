@@ -1083,6 +1083,26 @@ async def get_job_events(job_id: int) -> list[dict]:
         await db.close()
 
 
+async def delete_expired_jobs(retention_days: int) -> int:
+    """Delete completed jobs older than retention_days and return deleted row count."""
+    db = await get_db()
+    try:
+        safe_days = max(1, int(retention_days))
+        cursor = await db.execute(
+            """
+            DELETE FROM jobs
+            WHERE status IN ('success', 'failed')
+              AND started_at IS NOT NULL
+              AND julianday(COALESCE(finished_at, started_at)) <= julianday('now') - ?
+            """,
+            (safe_days,),
+        )
+        await db.commit()
+        return cursor.rowcount or 0
+    finally:
+        await db.close()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Dashboard Stats
 # ═════════════════════════════════════════════════════════════════════════════
