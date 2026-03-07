@@ -231,6 +231,7 @@ async function loadConverter() {
     const configFileSelect = document.getElementById('session-config-file');
     const configContent = document.getElementById('session-config-content');
     const configMeta = document.getElementById('session-config-meta');
+    const importSelectAll = document.getElementById('import-only-select-all');
 
     // Bail out if any required element is missing
     if (!convertForm || !importForm || !statusDiv || !step2 || !outputWindow || !summaryCards || !importOutput) {
@@ -246,6 +247,31 @@ async function loadConverter() {
     importOutput.style.display = 'none';
 
     converterSessionId = null;
+
+    function syncImportOnlySelectAll() {
+        if (!importSelectAll) return;
+        const onlyFlags = [...document.querySelectorAll('.only-flag')];
+        const checkedCount = onlyFlags.filter(cb => cb.checked).length;
+
+        importSelectAll.checked = onlyFlags.length > 0 && checkedCount === onlyFlags.length;
+        importSelectAll.indeterminate = checkedCount > 0 && checkedCount < onlyFlags.length;
+    }
+
+    if (importSelectAll) {
+        importSelectAll.onchange = () => {
+            const checkAll = importSelectAll.checked;
+            document.querySelectorAll('.only-flag').forEach((cb) => {
+                cb.checked = checkAll;
+            });
+            importSelectAll.indeterminate = false;
+        };
+    }
+
+    document.querySelectorAll('.only-flag').forEach((cb) => {
+        cb.onchange = syncImportOnlySelectAll;
+    });
+
+    syncImportOnlySelectAll();
 
     function apiErrorMessage(data, fallback) {
         return data?.error?.message || data?.detail || fallback;
@@ -601,6 +627,8 @@ window.resetConverter = function () {
     const scc = document.getElementById('session-config-content');
     const scm = document.getElementById('session-config-meta');
     if (f)  f.reset();
+    const importSelectAll = document.getElementById('import-only-select-all');
+    if (importSelectAll) importSelectAll.indeterminate = false;
     if (s)  s.textContent = '';
     if (s2) s2.style.display = 'none';
     if (io) io.style.display = 'none';
