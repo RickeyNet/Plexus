@@ -1,4 +1,4 @@
-"""Typed v2 converter scaffolding for gradual migration from legacy converters."""
+"""Typed v2 converter package and adapter entry points."""
 
 from .address_groups import convert_address_groups_v2
 from .addresses import convert_addresses_v2

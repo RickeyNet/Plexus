@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from Firewall_converter.FortiGateToFTDTool.route_converter import RouteConverter
+from Firewall_converter.converter_v2.core.route_converter import RouteConverter
 
 from .models import FTDStaticRouteObject
 

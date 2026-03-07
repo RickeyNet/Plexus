@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""V2 conversion entrypoint that preserves legacy output artifacts.
+"""V2 conversion entrypoint that preserves the established output artifacts.
 
 This script keeps the same file contract used by importer/cleanup while routing
 conversion through the typed v2 adapters.
@@ -30,13 +30,13 @@ from Firewall_converter.converter_v2 import (  # noqa: E402
     convert_service_groups_v2,
     convert_services_v2,
 )
-from Firewall_converter.FortiGateToFTDTool.interface_converter import (  # noqa: E402
+from Firewall_converter.converter_v2.core.interface_converter import (  # noqa: E402
     FTD_MODELS,
     InterfaceConverter,
     print_supported_models,
 )
-from Firewall_converter.FortiGateToFTDTool.route_converter import RouteConverter  # noqa: E402
-from Firewall_converter.FortiGateToFTDTool.service_converter import ServiceConverter  # noqa: E402
+from Firewall_converter.converter_v2.core.route_converter import RouteConverter  # noqa: E402
+from Firewall_converter.converter_v2.core.service_converter import ServiceConverter  # noqa: E402
 
 
 def preprocess_yaml_file(input_file: str) -> str:

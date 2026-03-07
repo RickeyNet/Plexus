@@ -300,10 +300,10 @@ class ServiceGroupConverter:
                     if len(ftd_objects) > 1:
                         print(f"    Expanded: {member_name} -> {len(ftd_objects)} objects")
                 elif member_name in self.split_services:
-                    # DEPRECATED: Old way - just add _TCP and _UDP suffixes
+                    # Compatibility fallback: add _TCP and _UDP suffixes
                     expanded_members.append((f"{member_name}_TCP", "tcpportobject"))
                     expanded_members.append((f"{member_name}_UDP", "udpportobject"))
-                    print(f"    Expanded (legacy): {member_name} -> {member_name}_TCP, {member_name}_UDP")
+                    print(f"    Expanded (fallback): {member_name} -> {member_name}_TCP, {member_name}_UDP")
                 else:
                     # This service was not in our mapping - might be a built-in FTD service
                     # Try to determine type from name, default to TCP
@@ -317,11 +317,11 @@ class ServiceGroupConverter:
             # ================================================================
             ftd_members = []
             for member_info in expanded_members:
-                # Handle both tuple format (name, type) and legacy string format
+                # Handle both tuple format (name, type) and compatibility string format
                 if isinstance(member_info, tuple):
                     member_name, member_type = member_info
                 else:
-                    # Legacy fallback - shouldn't happen but just in case
+                    # Compatibility fallback - shouldn't happen but kept defensively
                     member_name = member_info
                     if '_TCP' in member_name:
                         member_type = "tcpportobject"

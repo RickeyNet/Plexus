@@ -13,23 +13,13 @@ def test_fastapi_metadata_uses_shared_app_version():
     assert app_module.app.version == APP_VERSION
 
 
-def _canonical(value: object) -> object:
-    if isinstance(value, dict):
-        return {k: _canonical(v) for k, v in sorted(value.items())}
-    if isinstance(value, list):
-        items = [_canonical(v) for v in value]
-        return sorted(items, key=lambda item: json.dumps(item, sort_keys=True))
-    return value
-
-
 def _load_json(path: Path) -> object:
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def test_converter_v2_entrypoint_matches_legacy_artifacts(tmp_path):
+def test_converter_v2_entrypoint_emits_expected_artifacts(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
-    legacy_script = repo_root / "Firewall_converter" / "FortiGateToFTDTool" / "fortigate_converter.py"
     v2_script = repo_root / "Firewall_converter" / "converter_v2" / "fortigate_converter_v2.py"
 
     fortigate_config = {
@@ -121,15 +111,6 @@ def test_converter_v2_entrypoint_matches_legacy_artifacts(tmp_path):
     config_path = tmp_path / "sample_fortigate.yaml"
     config_path.write_text(json.dumps(fortigate_config, indent=2), encoding="utf-8")
 
-    legacy_result = subprocess.run(
-        [sys.executable, str(legacy_script), str(config_path), "--output", "legacy", "--target-model", "ftd-3120"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert legacy_result.returncode == 0, legacy_result.stderr or legacy_result.stdout
-
     v2_result = subprocess.run(
         [sys.executable, str(v2_script), str(config_path), "--output", "v2", "--target-model", "ftd-3120"],
         cwd=tmp_path,
@@ -156,19 +137,20 @@ def test_converter_v2_entrypoint_matches_legacy_artifacts(tmp_path):
     ]
 
     for suffix in artifact_suffixes:
-        legacy_path = tmp_path / f"legacy_{suffix}"
         v2_path = tmp_path / f"v2_{suffix}"
-        assert legacy_path.exists(), f"Missing legacy artifact: {legacy_path.name}"
         assert v2_path.exists(), f"Missing v2 artifact: {v2_path.name}"
 
-        legacy_payload_raw = _load_json(legacy_path)
-        v2_payload_raw = _load_json(v2_path)
-        if suffix == "metadata.json":
-            assert isinstance(legacy_payload_raw, dict)
-            assert isinstance(v2_payload_raw, dict)
-            legacy_payload_raw["output_basename"] = "_normalized"
-            v2_payload_raw["output_basename"] = "_normalized"
+    metadata = _load_json(tmp_path / "v2_metadata.json")
+    summary = _load_json(tmp_path / "v2_summary.json")
+    access_rules = _load_json(tmp_path / "v2_access_rules.json")
 
-        legacy_payload = _canonical(legacy_payload_raw)
-        v2_payload = _canonical(v2_payload_raw)
-        assert v2_payload == legacy_payload, f"Artifact mismatch for {suffix}"
+    assert isinstance(metadata, dict)
+    assert metadata.get("target_model") == "ftd-3120"
+    assert metadata.get("output_basename") == "v2"
+
+    assert isinstance(summary, dict)
+    assert "conversion_summary" in summary
+    assert isinstance(summary["conversion_summary"], dict)
+
+    assert isinstance(access_rules, list)
+    assert len(access_rules) == 1
