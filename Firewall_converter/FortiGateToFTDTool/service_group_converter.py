@@ -91,10 +91,10 @@ class ServiceGroupConverter:
     6. Expanding services that were split into multiple FTD objects
     """
     
-    def __init__(self, fortigate_config: dict[str, Any], 
-                 split_services: set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_name_mapping: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
-                 skipped_services: set[str] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: dict[str, Any],
+                 split_services: set[str] | None = None,
+                 service_name_mapping: dict[str, list[tuple[str, str]]] | None = None,
+                 skipped_services: set[str] | None = None):
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -371,9 +371,9 @@ class ServiceGroupConverter:
         self.ftd_port_groups = port_groups
         return port_groups
     
-    def set_split_services(self, split_services: set[str] = None,  # pyright: ignore[reportArgumentType]
-                           service_name_mapping: dict[str, list[str]] = None, # pyright: ignore[reportArgumentType]
-                           skipped_services: set[str] = None): # pyright: ignore[reportArgumentType]
+    def set_split_services(self, split_services: set[str] | None = None,
+                           service_name_mapping: dict[str, list[tuple[str, str]]] | None = None,
+                           skipped_services: set[str] | None = None):
 
         """
         Update the service expansion information.
@@ -383,7 +383,8 @@ class ServiceGroupConverter:
         
         Args:
             split_services: (DEPRECATED) Set of service names that have both TCP and UDP versions
-            service_name_mapping: Dict mapping FortiGate service names to list of FTD object names
+            service_name_mapping: Dict mapping FortiGate service names to list of
+                (FTD object name, object type) tuples
             skipped_services: Set of service names that were skipped (ICMP, etc.) 
         """
         if split_services is not None:
