@@ -1,4 +1,4 @@
-"""Local converter implementations used by converter_v2."""
+"""Active converter implementations used by converter_v2."""
 
 from .address_converter import AddressConverter
 from .address_group_converter import AddressGroupConverter

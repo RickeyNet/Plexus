@@ -53,6 +53,9 @@ IMPORTANT NOTES:
     - Default routes (0.0.0.0/0) are converted to "any-ipv4" reference
 """
 
+# NOTE: This module is feature-frozen for compatibility.
+# Implement new conversion behavior in Firewall_converter/converter_v2/core.
+
 import json
 import re
 from typing import Any

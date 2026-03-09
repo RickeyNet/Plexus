@@ -26,6 +26,9 @@ FTD INTERFACE NAME RULES:
     - Cannot start with a number
 """
 
+# NOTE: This module is feature-frozen for compatibility.
+# Implement new conversion behavior in Firewall_converter/converter_v2/core.
+
 import re
 from typing import Any
 
