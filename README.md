@@ -8,10 +8,11 @@ stream live job output — all through a REST API with WebSocket support.
 
 ## Guides
 
-- RADIUS setup: `RADIUS_CONFIGURATION_GUIDE.md`
-- Operator runbook: `OPERATOR_RUNBOOK.md`
+- FortiGate → FTD v2 workflow (CLI + API examples): `V2_WORKFLOW_GUIDE.md`
+- Operator runbook (recovery playbook + verification checklists): `OPERATOR_RUNBOOK.md`
 - Performance and scale notes: `PERFORMANCE_LIMITS.md`
 - Data handling and retention: `DATA_RETENTION.md`
+- RADIUS setup: `RADIUS_CONFIGURATION_GUIDE.md`
 
 ## Architecture
 

@@ -2,6 +2,7 @@ import asyncio
 import difflib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,8 +18,22 @@ from pydantic import BaseModel
 
 from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value
 
+from routes.database import add_audit_event
+
+
+async def _safe_audit(category: str, action: str, user: str, detail: str, correlation_id: str) -> None:
+    """Fire-and-forget audit write.  Never propagates to the caller."""
+    try:
+        await add_audit_event(category, action, user, detail, correlation_id)
+    except Exception:
+        LOGGER.debug("Audit write failed for %s/%s (non-fatal)", category, action)
+
 router = APIRouter()
 LOGGER = configure_logging("plexus.converter")
+
+# Bounded concurrency for heavy import/cleanup operations
+_MAX_CONCURRENT_IMPORTS = int(os.environ.get("APP_MAX_CONCURRENT_IMPORTS", "3"))
+_import_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_IMPORTS)
 
 # Persistent directory for converted config files (lives inside the app, gitignored)
 SESSIONS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../converter_sessions'))
@@ -33,6 +48,79 @@ IMPORTER_PATH  = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../
 CLEANUP_PATH   = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_cleanup.py'))
 
 
+def _normalize_correlation_id(correlation_id: str = "", session_id: str = "") -> str:
+    corr = correlation_id if isinstance(correlation_id, str) else ""
+    sess = session_id if isinstance(session_id, str) else ""
+    value = (corr or "").strip() or (sess or "").strip()
+    return value or str(uuid.uuid4())
+
+
+def _log_event(level: str, event: str, **fields) -> None:
+    payload = {k: v for k, v in fields.items() if v is not None and v != ""}
+    details = " ".join(f"{k}={payload[k]}" for k in sorted(payload.keys()))
+    message = f"event={event} {details}".strip()
+    log_fn = getattr(LOGGER, level, LOGGER.info)
+    log_fn(message)
+
+
+def _metric_key_fragment(label: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+    return cleaned or "unknown"
+
+
+def _emit_import_phase_metrics(import_output: str) -> None:
+    if not import_output:
+        return
+    pattern = re.compile(r"^(.+?)\s+([0-9]+(?:\.[0-9]+)?)s\s+\[(OK|FAIL)\]$", re.MULTILINE)
+    for match in pattern.finditer(import_output):
+        label = match.group(1).strip()
+        seconds = float(match.group(2))
+        status = match.group(3)
+        key = _metric_key_fragment(label)
+        observe_timing(f"converter.import.phase.{key}.duration_ms", seconds * 1000)
+        increment_metric(f"converter.import.phase.{key}.{status.lower()}")
+
+
+_CHECKPOINT_FILE = "_checkpoint.json"
+
+
+def _read_checkpoint(session_dir: str) -> dict:
+    """Read the import checkpoint file for a session, if it exists."""
+    path = os.path.join(session_dir, _CHECKPOINT_FILE)
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _write_checkpoint(session_dir: str, import_output: str) -> dict:
+    """Parse the timing summary from import output and persist checkpoint state.
+
+    Each phase is recorded with its status (ok/fail) so that a subsequent
+    import can skip already-completed stages.
+    """
+    checkpoint: dict = {"completed_stages": [], "failed_stages": [], "updated_at": datetime.now(UTC).isoformat()}
+    pattern = re.compile(r"^(.+?)\s+([0-9]+(?:\.[0-9]+)?)s\s+\[(OK|FAIL)\]$", re.MULTILINE)
+    for match in pattern.finditer(import_output or ""):
+        label = match.group(1).strip()
+        status = match.group(3)
+        if status == "OK":
+            checkpoint["completed_stages"].append(label)
+        else:
+            checkpoint["failed_stages"].append(label)
+
+    path = os.path.join(session_dir, _CHECKPOINT_FILE)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(checkpoint, f, indent=2)
+    except OSError as exc:
+        LOGGER.warning("Could not write checkpoint file %s: %s", path, exc)
+    return checkpoint
+
+
 def _conversion_output_path(session_dir: str, base: str) -> str:
     return os.path.join(session_dir, f"{base}_conversion_output.log")
 
@@ -40,9 +128,68 @@ def _conversion_output_path(session_dir: str, base: str) -> str:
 def _cleanup_old_sessions():
     now = time.time()
     for sid in list(_sessions.keys()):
-        if now - _sessions[sid]['created_at'] > SESSION_TTL:
-            shutil.rmtree(_sessions[sid]['session_dir'], ignore_errors=True)
+        session_dir = _sessions[sid].get('session_dir', '')
+        if not session_dir or not os.path.isdir(session_dir) or now - _sessions[sid]['created_at'] > SESSION_TTL:
+            # In-memory cache eviction only; on-disk retention is handled by
+            # scheduled pruning with configurable retention days.
             del _sessions[sid]
+
+
+def prune_converter_sessions(session_retention_days: int, backup_retention_days: int) -> dict:
+    """Prune old converter session folders and old backup snapshots.
+
+    Args:
+        session_retention_days: Remove entire session folders older than this.
+        backup_retention_days: Remove snapshot folders older than this.
+
+    Returns:
+        Summary counters for observability/logging.
+    """
+    now = time.time()
+    session_cutoff = now - (max(1, int(session_retention_days)) * 86400)
+    backup_cutoff = now - (max(1, int(backup_retention_days)) * 86400)
+
+    summary = {
+        "sessions_deleted": 0,
+        "snapshots_deleted": 0,
+        "sessions_kept": 0,
+    }
+
+    if not os.path.isdir(SESSIONS_DIR):
+        return summary
+
+    for sid in os.listdir(SESSIONS_DIR):
+        session_dir = os.path.join(SESSIONS_DIR, sid)
+        if not os.path.isdir(session_dir):
+            continue
+
+        session_mtime = os.path.getmtime(session_dir)
+        if session_mtime < session_cutoff:
+            shutil.rmtree(session_dir, ignore_errors=True)
+            _sessions.pop(sid, None)
+            summary["sessions_deleted"] += 1
+            continue
+
+        summary["sessions_kept"] += 1
+        backups_dir = os.path.join(session_dir, "backups")
+        if not os.path.isdir(backups_dir):
+            continue
+
+        for snapshot in os.listdir(backups_dir):
+            snapshot_dir = os.path.join(backups_dir, snapshot)
+            if not os.path.isdir(snapshot_dir):
+                continue
+            if os.path.getmtime(snapshot_dir) < backup_cutoff:
+                shutil.rmtree(snapshot_dir, ignore_errors=True)
+                summary["snapshots_deleted"] += 1
+
+    # Evict stale in-memory entries that no longer exist on disk.
+    for sid in list(_sessions.keys()):
+        session_dir = _sessions[sid].get('session_dir', '')
+        if not session_dir or not os.path.isdir(session_dir):
+            _sessions.pop(sid, None)
+
+    return summary
 
 
 def _load_session_from_disk(session_id: str):
@@ -156,11 +303,30 @@ def _load_conversion_output(session_dir: str, base: str) -> str:
         return ''
 
 
+def _cleanup_reported_progress(output_text: str) -> bool:
+    """Return True when cleanup output indicates at least one deletion/reset succeeded."""
+    if not output_text:
+        return False
+
+    # Match lines like "Summary: 3 deleted, 1 failed" from cleanup phases.
+    for match in re.finditer(r"Summary:\s*(\d+)\s+deleted", output_text, flags=re.IGNORECASE):
+        try:
+            if int(match.group(1)) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+
+    # Fallback markers used by the cleanup script for successful actions.
+    lowered = output_text.lower()
+    return "[deleted]" in lowered or "[destroyed]" in lowered or "[thrown" in lowered
+
+
 @router.post('/api/convert-only')
 async def convert_only(
     yaml_file: UploadFile = File(...),
     target_model: str = Form(default=''),
-    source_model: str = Form(default='')
+    source_model: str = Form(default=''),
+    correlation_id: str = Form(default='')
 ):
     """
     Step 1: Convert a FortiGate YAML config to FTD JSON files.
@@ -169,13 +335,17 @@ async def convert_only(
     started = time.perf_counter()
     _cleanup_old_sessions()
     session_id = str(uuid.uuid4())
+    corr_id = _normalize_correlation_id(correlation_id, session_id)
     session_dir = os.path.join(SESSIONS_DIR, session_id)
     os.makedirs(session_dir, exist_ok=True)
     try:
+        _log_event("info", "converter.convert.start", session_id=session_id, correlation_id=corr_id)
         filename = yaml_file.filename or 'input.yaml'
         yaml_path = os.path.join(session_dir, filename)
+        parse_started = time.perf_counter()
         with open(yaml_path, 'wb') as f:
             f.write(await yaml_file.read())
+        observe_timing("converter.parse.duration_ms", (time.perf_counter() - parse_started) * 1000)
 
         effective_model = target_model.strip() if target_model else 'ftd-3120'
         # Always use 'ftd_config' as the output base name so the importer can reliably find the files
@@ -187,10 +357,12 @@ async def convert_only(
             '--output', BASE_NAME
         ]
 
+        convert_started = time.perf_counter()
         proc = subprocess.run(
             cmd,
             cwd=session_dir, capture_output=True, text=True
         )
+        observe_timing("converter.convert.stage.duration_ms", (time.perf_counter() - convert_started) * 1000)
         if proc.returncode != 0:
             increment_metric("converter.convert.failure")
             observe_timing("converter.convert.duration_ms", (time.perf_counter() - started) * 1000)
@@ -198,6 +370,7 @@ async def convert_only(
             shutil.rmtree(session_dir, ignore_errors=True)
             raise HTTPException(status_code=500, detail="Conversion failed. Check server logs for details.")
 
+        write_started = time.perf_counter()
         summary = _load_summary_file(session_dir, BASE_NAME)
         with open(_conversion_output_path(session_dir, BASE_NAME), 'w', encoding='utf-8') as f:
             f.write(proc.stdout or '')
@@ -209,12 +382,23 @@ async def convert_only(
             'target_model': effective_model
         }
         snapshot_id = _create_timestamped_snapshot(session_dir, BASE_NAME)
+        observe_timing("converter.write_artifacts.duration_ms", (time.perf_counter() - write_started) * 1000)
         increment_metric("converter.convert.success")
         observe_timing("converter.convert.duration_ms", (time.perf_counter() - started) * 1000)
+        _log_event(
+            "info",
+            "converter.convert.complete",
+            session_id=session_id,
+            correlation_id=corr_id,
+            target_model=effective_model,
+            snapshot_id=snapshot_id,
+        )
+        await _safe_audit("converter", "convert.complete", "", f"session={session_id} model={effective_model}", corr_id)
 
         return JSONResponse({
             'ok': True,
             'session_id': session_id,
+            'correlation_id': corr_id,
             'conversion_output': proc.stdout,
             'summary': summary,
             'target_model': effective_model,
@@ -232,12 +416,26 @@ async def convert_only(
 
 class ImportRequest(BaseModel):
     session_id: str
+    correlation_id: str = ''
     ftd_host: str
     ftd_username: str
     ftd_password: str
     deploy: bool = False
     debug: bool = False
     only_flags: list[str] = []
+    workers: int = 6
+    workers_address_objects: int | None = None
+    workers_service_objects: int | None = None
+    workers_subinterfaces: int | None = None
+    retry_attempts: int | None = None
+    retry_attempts_address_objects: int | None = None
+    retry_attempts_service_objects: int | None = None
+    retry_attempts_subinterfaces: int | None = None
+    retry_backoff: float | None = None
+    retry_backoff_address_objects: float | None = None
+    retry_backoff_service_objects: float | None = None
+    retry_backoff_subinterfaces: float | None = None
+    retry_jitter_max: float = 0.25
 
 
 @router.post('/api/import-fortigate')
@@ -246,6 +444,7 @@ async def import_fortigate(req: ImportRequest):
     Step 2: Import previously converted FTD JSON files into a live FTD device.
     """
     started = time.perf_counter()
+    corr_id = _normalize_correlation_id(req.correlation_id, req.session_id)
     session = _get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail='Session not found. Please run Convert again.')
@@ -253,44 +452,80 @@ async def import_fortigate(req: ImportRequest):
     session_dir = session['session_dir']
     base        = session['base']
 
-    import_args = [
-        sys.executable, '-u', IMPORTER_PATH,
-        '--host',     req.ftd_host,
-        '--username', req.ftd_username,
-        '--password', req.ftd_password,
-        '--base',     base
-    ]
-    if req.deploy:
-        import_args.append('--deploy')
-    if req.debug:
-        import_args.append('--debug')
-    for flag in req.only_flags:
-        import_args.append(f'--{flag}')
+    async with _import_semaphore:
+        _log_event("info", "converter.import.start", session_id=req.session_id, correlation_id=corr_id)
 
-    proc = subprocess.run(import_args, cwd=session_dir, capture_output=True, text=True)
+        import_args = [
+            sys.executable, '-u', IMPORTER_PATH,
+            '--host',     req.ftd_host,
+            '--username', req.ftd_username,
+            '--password', req.ftd_password,
+            '--base',     base
+        ]
+        if req.deploy:
+            import_args.append('--deploy')
+        if req.debug:
+            import_args.append('--debug')
+        import_args += ['--workers', str(max(1, req.workers))]
+        if req.workers_address_objects is not None:
+            import_args += ['--workers-address-objects', str(max(1, req.workers_address_objects))]
+        if req.workers_service_objects is not None:
+            import_args += ['--workers-service-objects', str(max(1, req.workers_service_objects))]
+        if req.workers_subinterfaces is not None:
+            import_args += ['--workers-subinterfaces', str(max(1, req.workers_subinterfaces))]
 
-    # Keep session files so cleanup/rollback can still reference them; TTL handles eventual removal
-    if proc.returncode != 0:
-        increment_metric("converter.import.failure")
+        if req.retry_attempts is not None:
+            import_args += ['--retry-attempts', str(max(1, req.retry_attempts))]
+        if req.retry_attempts_address_objects is not None:
+            import_args += ['--retry-attempts-address-objects', str(max(1, req.retry_attempts_address_objects))]
+        if req.retry_attempts_service_objects is not None:
+            import_args += ['--retry-attempts-service-objects', str(max(1, req.retry_attempts_service_objects))]
+        if req.retry_attempts_subinterfaces is not None:
+            import_args += ['--retry-attempts-subinterfaces', str(max(1, req.retry_attempts_subinterfaces))]
+
+        if req.retry_backoff is not None:
+            import_args += ['--retry-backoff', str(max(0.0, req.retry_backoff))]
+        if req.retry_backoff_address_objects is not None:
+            import_args += ['--retry-backoff-address-objects', str(max(0.0, req.retry_backoff_address_objects))]
+        if req.retry_backoff_service_objects is not None:
+            import_args += ['--retry-backoff-service-objects', str(max(0.0, req.retry_backoff_service_objects))]
+        if req.retry_backoff_subinterfaces is not None:
+            import_args += ['--retry-backoff-subinterfaces', str(max(0.0, req.retry_backoff_subinterfaces))]
+        import_args += ['--retry-jitter-max', str(max(0.0, req.retry_jitter_max))]
+        for flag in req.only_flags:
+            import_args.append(f'--{flag}')
+
+        proc = subprocess.run(import_args, cwd=session_dir, capture_output=True, text=True)
+
+        # Keep session files so cleanup/rollback can still reference them; TTL handles eventual removal
+        if proc.returncode != 0:
+            _write_checkpoint(session_dir, proc.stdout or "")
+            increment_metric("converter.import.failure")
+            observe_timing("converter.import.duration_ms", (time.perf_counter() - started) * 1000)
+            LOGGER.error("Import failed for session %s: %s", req.session_id, redact_value(proc.stderr or proc.stdout))
+            raise HTTPException(status_code=500, detail="Import failed. Check server logs for details.")
+
+        _emit_import_phase_metrics(proc.stdout or "")
+        checkpoint = _write_checkpoint(session_dir, proc.stdout or "")
+        increment_metric("converter.import.success")
         observe_timing("converter.import.duration_ms", (time.perf_counter() - started) * 1000)
-        LOGGER.error("Import failed for session %s: %s", req.session_id, redact_value(proc.stderr or proc.stdout))
-        raise HTTPException(status_code=500, detail="Import failed. Check server logs for details.")
+        _log_event("info", "converter.import.complete", session_id=req.session_id, correlation_id=corr_id)
+        await _safe_audit("converter", "import.complete", "", f"session={req.session_id} host={req.ftd_host} deploy={req.deploy}", corr_id)
 
-    increment_metric("converter.import.success")
-    observe_timing("converter.import.duration_ms", (time.perf_counter() - started) * 1000)
-
-    return JSONResponse({'ok': True, 'import_output': proc.stdout})
+        return JSONResponse({'ok': True, 'correlation_id': corr_id, 'import_output': proc.stdout, 'checkpoint': checkpoint})
 
 
 @router.post('/api/import-fortigate-stream')
 async def import_fortigate_stream(req: ImportRequest):
     """Stream import output live to the frontend."""
+    corr_id = _normalize_correlation_id(req.correlation_id, req.session_id)
     session = _sessions.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail='Session not found. Please run Convert again.')
 
     session_dir = session['session_dir']
     base        = session['base']
+    _log_event("info", "converter.import.stream.start", session_id=req.session_id, correlation_id=corr_id)
 
     import_args = [
         sys.executable, IMPORTER_PATH,
@@ -303,6 +538,32 @@ async def import_fortigate_stream(req: ImportRequest):
         import_args.append('--deploy')
     if req.debug:
         import_args.append('--debug')
+    import_args += ['--workers', str(max(1, req.workers))]
+    if req.workers_address_objects is not None:
+        import_args += ['--workers-address-objects', str(max(1, req.workers_address_objects))]
+    if req.workers_service_objects is not None:
+        import_args += ['--workers-service-objects', str(max(1, req.workers_service_objects))]
+    if req.workers_subinterfaces is not None:
+        import_args += ['--workers-subinterfaces', str(max(1, req.workers_subinterfaces))]
+
+    if req.retry_attempts is not None:
+        import_args += ['--retry-attempts', str(max(1, req.retry_attempts))]
+    if req.retry_attempts_address_objects is not None:
+        import_args += ['--retry-attempts-address-objects', str(max(1, req.retry_attempts_address_objects))]
+    if req.retry_attempts_service_objects is not None:
+        import_args += ['--retry-attempts-service-objects', str(max(1, req.retry_attempts_service_objects))]
+    if req.retry_attempts_subinterfaces is not None:
+        import_args += ['--retry-attempts-subinterfaces', str(max(1, req.retry_attempts_subinterfaces))]
+
+    if req.retry_backoff is not None:
+        import_args += ['--retry-backoff', str(max(0.0, req.retry_backoff))]
+    if req.retry_backoff_address_objects is not None:
+        import_args += ['--retry-backoff-address-objects', str(max(0.0, req.retry_backoff_address_objects))]
+    if req.retry_backoff_service_objects is not None:
+        import_args += ['--retry-backoff-service-objects', str(max(0.0, req.retry_backoff_service_objects))]
+    if req.retry_backoff_subinterfaces is not None:
+        import_args += ['--retry-backoff-subinterfaces', str(max(0.0, req.retry_backoff_subinterfaces))]
+    import_args += ['--retry-jitter-max', str(max(0.0, req.retry_jitter_max))]
     for flag in req.only_flags:
         import_args.append(f'--{flag}')
 
@@ -332,6 +593,7 @@ async def import_fortigate_stream(req: ImportRequest):
 
 class CleanupRequest(BaseModel):
     session_id: str = ''
+    correlation_id: str = ''
     ftd_host: str
     ftd_username: str
     ftd_password: str
@@ -347,12 +609,14 @@ async def cleanup_ftd(req: CleanupRequest):
     Step 3 (Optional): Delete / rollback objects previously imported to FTD.
     """
     started = time.perf_counter()
+    corr_id = _normalize_correlation_id(req.correlation_id, req.session_id)
     if not req.delete_flags:
         raise HTTPException(status_code=400, detail='Must select at least one item to delete.')
 
     session = _get_session(req.session_id) if req.session_id else None
     session_dir  = session['session_dir'] if session else SESSIONS_DIR
     target_model = session.get('target_model', '') if session else ''
+    _log_event("info", "converter.cleanup.start", session_id=req.session_id, correlation_id=corr_id)
 
     cmd = [
         sys.executable, CLEANUP_PATH,
@@ -378,6 +642,18 @@ async def cleanup_ftd(req: CleanupRequest):
 
     proc = subprocess.run(cmd, cwd=session_dir, capture_output=True, text=True)
     if proc.returncode != 0:
+        cleanup_output = proc.stdout or proc.stderr or ""
+        if _cleanup_reported_progress(cleanup_output):
+            increment_metric("converter.cleanup.partial")
+            observe_timing("converter.cleanup.duration_ms", (time.perf_counter() - started) * 1000)
+            LOGGER.warning(
+                "Cleanup completed with warnings for session %s (exit %s)",
+                req.session_id,
+                proc.returncode,
+            )
+            _log_event("warning", "converter.cleanup.partial", session_id=req.session_id, correlation_id=corr_id)
+            return JSONResponse({'ok': True, 'partial': True, 'correlation_id': corr_id, 'cleanup_output': cleanup_output})
+
         increment_metric("converter.cleanup.failure")
         observe_timing("converter.cleanup.duration_ms", (time.perf_counter() - started) * 1000)
         LOGGER.error("Cleanup failed for session %s: %s", req.session_id, redact_value(proc.stderr or proc.stdout))
@@ -385,19 +661,23 @@ async def cleanup_ftd(req: CleanupRequest):
 
     increment_metric("converter.cleanup.success")
     observe_timing("converter.cleanup.duration_ms", (time.perf_counter() - started) * 1000)
+    _log_event("info", "converter.cleanup.complete", session_id=req.session_id, correlation_id=corr_id)
+    await _safe_audit("converter", "cleanup.complete", "", f"session={req.session_id} host={req.ftd_host} dry_run={req.dry_run}", corr_id)
 
-    return JSONResponse({'ok': True, 'cleanup_output': proc.stdout})
+    return JSONResponse({'ok': True, 'correlation_id': corr_id, 'cleanup_output': proc.stdout})
 
 
 @router.post('/api/cleanup-ftd-stream')
 async def cleanup_ftd_stream(req: CleanupRequest):
     """Stream cleanup output live to the frontend."""
+    corr_id = _normalize_correlation_id(req.correlation_id, req.session_id)
     if not req.delete_flags:
         raise HTTPException(status_code=400, detail='Must select at least one item to delete.')
 
     session = _get_session(req.session_id) if req.session_id else None
     session_dir  = session['session_dir'] if session else SESSIONS_DIR
     target_model = session.get('target_model', '') if session else ''
+    _log_event("info", "converter.cleanup.stream.start", session_id=req.session_id, correlation_id=corr_id)
 
     cmd = [
         sys.executable, CLEANUP_PATH,
@@ -430,13 +710,20 @@ async def cleanup_ftd_stream(req: CleanupRequest):
     )
 
     async def stream_lines():
+        collected = []
         try:
             assert proc.stdout is not None
             async for line in proc.stdout:
-                yield line.decode('utf-8', errors='replace')
+                text_line = line.decode('utf-8', errors='replace')
+                collected.append(text_line)
+                yield text_line
             rc = await proc.wait()
             if rc != 0:
-                yield f"\n[ERROR] Cleanup failed (exit {rc}).\n"
+                full_output = "".join(collected)
+                if _cleanup_reported_progress(full_output):
+                    yield f"\n[WARN] Cleanup completed with warnings (exit {rc}).\n"
+                else:
+                    yield f"\n[ERROR] Cleanup failed (exit {rc}).\n"
         finally:
             pass
 
@@ -459,6 +746,16 @@ async def reset_session(req: ResetRequest):
         if os.path.isdir(session_dir):
             shutil.rmtree(session_dir, ignore_errors=True)
     return JSONResponse({'ok': True})
+
+
+@router.get('/api/converter-sessions/{session_id}/checkpoint')
+async def get_import_checkpoint(session_id: str):
+    """Return the import checkpoint for a session (completed/failed stages)."""
+    session_dir = os.path.join(SESSIONS_DIR, session_id)
+    if not os.path.isdir(session_dir):
+        raise HTTPException(status_code=404, detail='Session not found.')
+    checkpoint = _read_checkpoint(session_dir)
+    return JSONResponse({'ok': True, 'checkpoint': checkpoint})
 
 
 @router.get('/api/converter-sessions')

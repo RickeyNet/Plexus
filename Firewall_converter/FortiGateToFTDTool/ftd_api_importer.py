@@ -56,6 +56,50 @@ except ImportError:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+MAX_IMPORT_WORKERS = 32
+DEFAULT_STAGE_WORKERS = {
+    "address_objects": 6,
+    "service_objects": 6,
+    "subinterfaces": 4,
+}
+DEFAULT_STAGE_RETRY_ATTEMPTS = {
+    "address_objects": 4,
+    "service_objects": 4,
+    "subinterfaces": 6,
+}
+DEFAULT_STAGE_RETRY_BACKOFF = {
+    "address_objects": 0.3,
+    "service_objects": 0.3,
+    "subinterfaces": 0.75,
+}
+DEFAULT_RETRY_JITTER_MAX = 0.25
+
+
+def _bounded_workers(value: Optional[int], stage: str) -> int:
+    requested = value if value is not None else DEFAULT_STAGE_WORKERS.get(stage, 1)
+    workers = max(1, int(requested))
+    if workers > MAX_IMPORT_WORKERS:
+        print(f"[WARN] Capping {stage} workers from {workers} to {MAX_IMPORT_WORKERS}")
+        return MAX_IMPORT_WORKERS
+    return workers
+
+
+def _resolve_stage_attempts(stage: str, stage_value: Optional[int], global_value: Optional[int]) -> int:
+    if stage_value is not None:
+        return max(1, int(stage_value))
+    if global_value is not None:
+        return max(1, int(global_value))
+    return DEFAULT_STAGE_RETRY_ATTEMPTS.get(stage, 3)
+
+
+def _resolve_stage_backoff(stage: str, stage_value: Optional[float], global_value: Optional[float]) -> float:
+    if stage_value is not None:
+        return max(0.0, float(stage_value))
+    if global_value is not None:
+        return max(0.0, float(global_value))
+    return DEFAULT_STAGE_RETRY_BACKOFF.get(stage, 0.3)
+
+
 class FTDAPIClient:
     """
     Client for interacting with Cisco FTD Firewall Device Manager (FDM) API.
@@ -104,6 +148,8 @@ class FTDAPIClient:
         self._physical_interface_cache = {}      # Ethernet1/1 -> {id: xxx, .}
         self._etherchannel_cache = {}            # Port-channel1 -> {id: xxx, .}
         self._bridge_group_cache = {}            # BVI/BridgeGroup name -> {id: xxx, .}  (NO hardwareName)
+        self._missing_physical_interface_cache = set()  # parent hardware names not found
+        self._missing_etherchannel_cache = set()        # parent hardware names not found
         self._security_zone_cache = {}           # zone_name -> {id: xxx, .}
         self._network_object_cache = {}          # object_name -> {id: xxx, .}
         self._caches_populated = False
@@ -154,61 +200,88 @@ class FTDAPIClient:
     # =========================================================================
     # REFERENCE CACHING METHODS
     # =========================================================================
+
+    def _fetch_paginated_items(self, endpoint: str, limit: int = 200, timeout: int = 30) -> List[Dict]:
+        """Fetch all paginated items from an FDM endpoint."""
+        items: List[Dict] = []
+        offset = 0
+
+        while True:
+            response = self.session.get(
+                endpoint,
+                params={"offset": offset, "limit": limit},
+                timeout=timeout,
+            )
+            if response.status_code != 200:
+                print(f"    Warning: Failed to fetch {endpoint} (HTTP {response.status_code})")
+                break
+
+            data = response.json()
+            page_items = data.get("items", [])
+            if not page_items:
+                break
+
+            items.extend(page_items)
+            paging = data.get("paging", {})
+            if not paging.get("next"):
+                break
+
+            offset += limit
+
+        return items
     
-    def prefetch_interface_cache(self):
+    def prefetch_interface_cache(self, force_refresh: bool = False):
         """
         Prefetch and cache all physical interfaces and etherchannels.
         
         This should be called ONCE before importing subinterfaces to avoid
         repeated API calls for parent interface lookups.
         """
-        if self._caches_populated:
+        if self._caches_populated and not force_refresh:
             return
+
+        if force_refresh:
+            self._physical_interface_cache.clear()
+            self._etherchannel_cache.clear()
+            self._bridge_group_cache.clear()
+            self._missing_physical_interface_cache.clear()
+            self._missing_etherchannel_cache.clear()
         
         print("  Prefetching interface references...")
         
         # Fetch all physical interfaces
         endpoint = f"{self.base_url}/devices/default/interfaces"
         try:
-            response = self.session.get(endpoint, params={"limit": 200}, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                interfaces = data.get("items", [])
-                for intf in interfaces:
-                    hardware_name = intf.get('hardwareName', '')
-                    if hardware_name:
-                        self._physical_interface_cache[hardware_name] = intf
-                print(f"    Cached {len(self._physical_interface_cache)} physical interfaces")
+            interfaces = self._fetch_paginated_items(endpoint, limit=200, timeout=30)
+            for intf in interfaces:
+                hardware_name = intf.get('hardwareName', '')
+                if hardware_name:
+                    self._physical_interface_cache[hardware_name] = intf
+            print(f"    Cached {len(self._physical_interface_cache)} physical interfaces")
         except Exception as e:
             print(f"    Warning: Failed to cache physical interfaces: {e}")
         
         # Fetch all etherchannels
         endpoint = f"{self.base_url}/devices/default/etherchannelinterfaces"
         try:
-            response = self.session.get(endpoint, params={"limit": 100}, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                etherchannels = data.get("items", [])
-                for ec in etherchannels:
-                    hardware_name = ec.get('hardwareName', '')
-                    if hardware_name:
-                        self._etherchannel_cache[hardware_name] = ec
-                print(f"    Cached {len(self._etherchannel_cache)} etherchannels")
+            etherchannels = self._fetch_paginated_items(endpoint, limit=200, timeout=30)
+            for ec in etherchannels:
+                hardware_name = ec.get('hardwareName', '')
+                if hardware_name:
+                    self._etherchannel_cache[hardware_name] = ec
+            print(f"    Cached {len(self._etherchannel_cache)} etherchannels")
         except Exception as e:
             print(f"    Warning: Failed to cache etherchannels: {e}")
 
         # Fetch all bridge-group interfaces (these often do NOT have hardwareName)
         endpoint = f"{self.base_url}/devices/default/bridgegroupinterfaces"
         try:
-            response = self.session.get(endpoint, params={"limit": 200}, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                bgs = data.get("items", [])
-                for bg in bgs:
-                    bg_name = (bg.get("name") or "").strip()
-                    if bg_name:
-                        self._bridge_group_cache[bg_name] = bg
-                print(f"    Cached {len(self._bridge_group_cache)} bridge groups")
+            bgs = self._fetch_paginated_items(endpoint, limit=200, timeout=30)
+            for bg in bgs:
+                bg_name = (bg.get("name") or "").strip()
+                if bg_name:
+                    self._bridge_group_cache[bg_name] = bg
+            print(f"    Cached {len(self._bridge_group_cache)} bridge groups")
         except Exception as e:
             print(f"    Warning: Failed to cache bridge groups: {e}")
 
@@ -286,11 +359,18 @@ class FTDAPIClient:
         # Check cache first
         if hardware_name in self._physical_interface_cache:
             return True, self._physical_interface_cache[hardware_name]
+
+        # Negative cache to avoid repeated full scans for missing parents.
+        if hardware_name in self._missing_physical_interface_cache:
+            return False, f"Interface {hardware_name} not found"  # pyright: ignore[reportReturnType]
         
         # Not in cache - do a direct lookup and cache it
         success, result = self.get_physical_interface(hardware_name)
         if success and isinstance(result, dict):
             self._physical_interface_cache[hardware_name] = result
+            self._missing_physical_interface_cache.discard(hardware_name)
+        else:
+            self._missing_physical_interface_cache.add(hardware_name)
         return success, result
     
     def get_cached_etherchannel(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
@@ -306,11 +386,18 @@ class FTDAPIClient:
         # Check cache first
         if hardware_name in self._etherchannel_cache:
             return True, self._etherchannel_cache[hardware_name]
+
+        # Negative cache to avoid repeated full scans for missing parents.
+        if hardware_name in self._missing_etherchannel_cache:
+            return False, f"EtherChannel {hardware_name} not found"  # pyright: ignore[reportReturnType]
         
         # Not in cache - do a direct lookup and cache it
         success, result = self._get_etherchannel_by_hardware(hardware_name)
         if success and isinstance(result, dict):
             self._etherchannel_cache[hardware_name] = result
+            self._missing_etherchannel_cache.discard(hardware_name)
+        else:
+            self._missing_etherchannel_cache.add(hardware_name)
         return success, result
     
     def populate_physical_interface_cache(self):
@@ -370,6 +457,8 @@ class FTDAPIClient:
         """Clear all reference caches."""
         self._physical_interface_cache.clear()
         self._etherchannel_cache.clear()
+        self._missing_physical_interface_cache.clear()
+        self._missing_etherchannel_cache.clear()
         self._security_zone_cache.clear()
         self._network_object_cache.clear()
         self._caches_populated = False
@@ -1255,6 +1344,9 @@ class FTDAPIClient:
         if intf.get('name') == '':
             update_payload['name'] = ''
 
+        # EtherChannel member prep: CTS/SGT must be disabled on members.
+        disable_cts_sgt_settings(update_payload)
+
         
         # Remove switchport-specific fields if present (they're not valid in routed mode)
         switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan', 
@@ -2122,7 +2214,80 @@ def physical_interface_matches_json_config(current: Dict, desired_json: Dict) ->
     return True
 
 
-def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4) -> bool:
+def is_cts_sgt_enabled(interface_obj: Dict) -> bool:
+    """Best-effort detection of CTS/SGT enablement on an interface object."""
+    bool_enable_keys = (
+        "ctsEnabled",
+        "trustSecEnabled",
+        "securityGroupTagging",
+        "sgtEnabled",
+        "enableCts",
+        "ctsManual",
+    )
+
+    for key in bool_enable_keys:
+        if interface_obj.get(key) is True:
+            return True
+
+    # Common nested blocks returned by FDM APIs.
+    cts_block = interface_obj.get("cts")
+    if isinstance(cts_block, dict):
+        if cts_block.get("enabled") is True:
+            return True
+        mode = str(cts_block.get("mode", "")).upper()
+        if mode in {"ENABLED", "INLINE", "MANUAL"}:
+            return True
+
+    # Any explicit tag assignment implies SGT is active.
+    tag_value = interface_obj.get("securityGroupTag")
+    if tag_value not in (None, "", 0, "0"):
+        return True
+
+    return False
+
+
+def disable_cts_sgt_settings(interface_payload: Dict) -> None:
+    """Mutate payload to disable CTS/SGT so interfaces can join EtherChannels."""
+    # Boolean toggles if present.
+    for key in (
+        "ctsEnabled",
+        "trustSecEnabled",
+        "securityGroupTagging",
+        "sgtEnabled",
+        "enableCts",
+        "ctsManual",
+    ):
+        if key in interface_payload:
+            interface_payload[key] = False
+
+    # Explicit tag assignments should be cleared.
+    for key in (
+        "securityGroupTag",
+        "securityGroupTagId",
+        "sgt",
+        "ctsTag",
+    ):
+        if key in interface_payload:
+            interface_payload.pop(key, None)
+
+    # Normalize nested CTS object if present.
+    cts_block = interface_payload.get("cts")
+    if isinstance(cts_block, dict):
+        cts_block["enabled"] = False
+        if "mode" in cts_block:
+            cts_block["mode"] = "DISABLED"
+        for key in ("securityGroupTag", "securityGroupTagId", "sgt", "ctsTag"):
+            cts_block.pop(key, None)
+
+
+def import_address_objects(
+    client: FTDAPIClient,
+    filename: str,
+    max_workers: int = 1,
+    max_attempts: int = 4,
+    retry_backoff: float = 0.3,
+    retry_jitter_max: float = DEFAULT_RETRY_JITTER_MAX,
+) -> bool:
     """
     Import address objects from JSON file to FTD.
     
@@ -2155,6 +2320,8 @@ def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int
             operation=lambda: client.create_network_object(obj, track_stats=False),
             should_retry=is_transient_error,
             max_attempts=max_attempts,
+            initial_backoff=retry_backoff,
+            jitter_max=retry_jitter_max,
         )
         if success:
             if isinstance(result, str) and str(result).startswith("SKIPPED"):
@@ -2266,7 +2433,14 @@ def clean_group_object(group: Dict) -> Dict:
     return cleaned
 
 
-def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4) -> bool:
+def import_service_objects(
+    client: FTDAPIClient,
+    filename: str,
+    max_workers: int = 1,
+    max_attempts: int = 4,
+    retry_backoff: float = 0.3,
+    retry_jitter_max: float = DEFAULT_RETRY_JITTER_MAX,
+) -> bool:
     """
     Import service port objects from JSON file to FTD.
 
@@ -2300,6 +2474,8 @@ def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int
             operation=lambda: client.create_port_object(obj, track_stats=False),
             should_retry=is_transient_error,
             max_attempts=max_attempts,
+            initial_backoff=retry_backoff,
+            jitter_max=retry_jitter_max,
         )
         if success:
             if isinstance(result, str) and str(result).startswith("SKIPPED"):
@@ -2426,8 +2602,10 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
         # Get the original interface from cache
         original = client._physical_interface_cache[hardware]
 
-        # Check if the interface already matches the desired JSON config
-        if physical_interface_matches_json_config(original, intf):
+        # Check if the interface already matches the desired JSON config.
+        # Even when config matches, force update when CTS/SGT is enabled so
+        # EtherChannel member validation does not fail later.
+        if physical_interface_matches_json_config(original, intf) and not is_cts_sgt_enabled(original):
             print("[OK] No changes needed.")
             skipped_count += 1
             client.stats["physical_interfaces_skipped"] += 1
@@ -2559,7 +2737,15 @@ def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
     return all_success
 
 
-def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter: Optional[str] = None) -> bool:
+def import_subinterfaces(
+    client: FTDAPIClient,
+    filename: str,
+    parent_type_filter: Optional[str] = None,
+    max_workers: int = 4,
+    max_attempts: int = 3,
+    retry_backoff: float = 0.2,
+    retry_jitter_max: float = DEFAULT_RETRY_JITTER_MAX,
+) -> bool:
     """
     Import subinterfaces (VLANs) from JSON file to FTD.
     
@@ -2629,41 +2815,89 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
     if not filtered_interfaces:
         print("  No subinterfaces match filter criteria")
         return True
+
+    # Warm/refresh caches once per phase so parent lookups stay in-memory.
+    # Force refresh for EtherChannel phase because those parents are created
+    # earlier in the same run and won't exist in stale caches.
+    client.prefetch_interface_cache(force_refresh=(parent_type_filter == 'etherchannel'))
+
+    # Prime parent lookups once per unique parent to avoid repeated fallback
+    # scans for each subinterface when a cache entry is missing.
+    unique_parents = set()
+    for intf in filtered_interfaces:
+        hardware_name = str(intf.get('hardwareName', ''))
+        if '.' in hardware_name:
+            unique_parents.add(hardware_name.rsplit('.', 1)[0])
+    for parent_hardware in unique_parents:
+        if parent_hardware.lower().startswith('port-channel'):
+            client.get_cached_etherchannel(parent_hardware)
+        else:
+            client.get_cached_physical_interface(parent_hardware)
     
-    print(f"  Processing {len(filtered_interfaces)} subinterfaces...")
-    
-    all_success = True
+    total = len(filtered_interfaces)
+
+    # FDM commonly returns HTTP 423 lockTimeout when writing many
+    # EtherChannel subinterfaces in parallel. Serialize that phase by default.
+    effective_workers = max_workers
+    effective_attempts = max_attempts
+    effective_backoff = retry_backoff
+    if parent_type_filter == 'etherchannel':
+        effective_workers = 1
+        effective_attempts = max(max_attempts, 6)
+        effective_backoff = max(retry_backoff, 0.75)
+
+    print(f"  Processing {total} subinterfaces with up to {effective_workers} workers...")
+
+    print_lock = threading.Lock()
+    count_lock = threading.Lock()
+    failed_flag = [False]
     created_count = 0
     skipped_api_count = 0
     failed_count = 0
-    
-    for i, intf in enumerate(filtered_interfaces, 1):
+
+    def worker(idx: int, intf: Dict) -> None:
+        nonlocal created_count, skipped_api_count, failed_count
         name = intf.get("name", "Unknown")
         hardware = intf.get("hardwareName", "Unknown")
-        print(f"  [{i}/{len(filtered_interfaces)}] Creating: {name} ({hardware})...", end=" ")
-        
-        success, result = client.create_subinterface(intf)
+
+        success, result = run_with_retry(
+            operation=lambda: client.create_subinterface(intf),
+            should_retry=is_transient_error,
+            max_attempts=effective_attempts,
+            initial_backoff=effective_backoff,
+            jitter_max=retry_jitter_max,
+        )
+
         if success:
             if "SKIPPED" in str(result):
                 if "already exists" in str(result).lower():
-                    print("SKIP (already exists)")
+                    line = f"  [{idx+1}/{total}] Creating: {name} ({hardware})... SKIP (already exists)"
                 else:
-                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})") # pyright: ignore[reportOptionalMemberAccess]
-                skipped_api_count += 1
+                    reason = str(result).split("SKIPPED:")[-1].strip()[:50]
+                    line = f"  [{idx+1}/{total}] Creating: {name} ({hardware})... SKIP ({reason})"
+                with count_lock:
+                    skipped_api_count += 1
             else:
-                print("OK")
-                created_count += 1
-        else:
-            print(f"FAIL {result}")
+                line = f"  [{idx+1}/{total}] Creating: {name} ({hardware})... OK"
+                with count_lock:
+                    created_count += 1
+            with print_lock:
+                print(line)
+            return
+
+        line = f"  [{idx+1}/{total}] Creating: {name} ({hardware})... FAIL {result}"
+        with count_lock:
             failed_count += 1
-            all_success = False
-        
-        time.sleep(0.2)
+            failed_flag[0] = True
+        with print_lock:
+            print(line)
+
+    run_thread_pool(filtered_interfaces, max_workers=effective_workers, worker=worker)
     
     # Print summary
     print(f"\n  Summary: {created_count} created, {skipped_api_count} skipped, {failed_count} failed")
     
-    return all_success
+    return not failed_flag[0]
 
 def import_security_zones(client: FTDAPIClient, filename: str) -> bool:
     """
@@ -2836,7 +3070,33 @@ Examples:
     parser.add_argument("--metadata-file", default="",
                        help="Path to *_metadata.json generated by converter_v2/fortigate_converter_v2.py (used for model-specific behavior).",)
     parser.add_argument('--workers', type=int, default=6,
-                       help='Max concurrent workers for address/service object imports (default: 6)')
+                       help='Global worker override for object/subinterface imports (default: 6, max: 32)')
+    parser.add_argument('--workers-address-objects', type=int, default=None,
+                       help='Workers for address object imports (default: stage/global setting)')
+    parser.add_argument('--workers-service-objects', type=int, default=None,
+                       help='Workers for service object imports (default: stage/global setting)')
+    parser.add_argument('--workers-subinterfaces', type=int, default=None,
+                       help='Workers for subinterface imports (default: stage/global setting)')
+
+    parser.add_argument('--retry-attempts', type=int, default=None,
+                       help='Global retry attempts override (default: stage-specific)')
+    parser.add_argument('--retry-attempts-address-objects', type=int, default=None,
+                       help='Retry attempts for address object imports')
+    parser.add_argument('--retry-attempts-service-objects', type=int, default=None,
+                       help='Retry attempts for service object imports')
+    parser.add_argument('--retry-attempts-subinterfaces', type=int, default=None,
+                       help='Retry attempts for subinterface imports')
+
+    parser.add_argument('--retry-backoff', type=float, default=None,
+                       help='Global initial retry backoff seconds override (default: stage-specific)')
+    parser.add_argument('--retry-backoff-address-objects', type=float, default=None,
+                       help='Initial retry backoff seconds for address object imports')
+    parser.add_argument('--retry-backoff-service-objects', type=float, default=None,
+                       help='Initial retry backoff seconds for service object imports')
+    parser.add_argument('--retry-backoff-subinterfaces', type=float, default=None,
+                       help='Initial retry backoff seconds for subinterface imports')
+    parser.add_argument('--retry-jitter-max', type=float, default=DEFAULT_RETRY_JITTER_MAX,
+                       help='Maximum random jitter added to retry backoff (default: 0.25)')
 
     
     # Selective import options - allows importing only specific object types
@@ -2889,6 +3149,23 @@ Examples:
         password=args.password,
         verify_ssl=not args.skip_verify
     )
+
+    stage_workers = {
+        "address_objects": _bounded_workers(args.workers_address_objects or args.workers, "address_objects"),
+        "service_objects": _bounded_workers(args.workers_service_objects or args.workers, "service_objects"),
+        "subinterfaces": _bounded_workers(args.workers_subinterfaces or args.workers, "subinterfaces"),
+    }
+    stage_attempts = {
+        "address_objects": _resolve_stage_attempts("address_objects", args.retry_attempts_address_objects, args.retry_attempts),
+        "service_objects": _resolve_stage_attempts("service_objects", args.retry_attempts_service_objects, args.retry_attempts),
+        "subinterfaces": _resolve_stage_attempts("subinterfaces", args.retry_attempts_subinterfaces, args.retry_attempts),
+    }
+    stage_backoff = {
+        "address_objects": _resolve_stage_backoff("address_objects", args.retry_backoff_address_objects, args.retry_backoff),
+        "service_objects": _resolve_stage_backoff("service_objects", args.retry_backoff_service_objects, args.retry_backoff),
+        "subinterfaces": _resolve_stage_backoff("subinterfaces", args.retry_backoff_subinterfaces, args.retry_backoff),
+    }
+    retry_jitter_max = max(0.0, float(args.retry_jitter_max))
 
     # Track per-phase timings for simple performance comparisons
     phase_timings = []
@@ -2950,17 +3227,55 @@ Examples:
         elif args.type == 'subinterfaces':
             # Import subinterfaces in two phases for correct parent dependency order
             print("\nPhase 1: Subinterfaces on Physical Interfaces")
-            record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, args.file, parent_type_filter='physical')
+            record_phase(
+                "Subinterfaces (physical parents)",
+                import_subinterfaces,
+                client,
+                args.file,
+                parent_type_filter='physical',
+                max_workers=stage_workers["subinterfaces"],
+                max_attempts=stage_attempts["subinterfaces"],
+                retry_backoff=stage_backoff["subinterfaces"],
+                retry_jitter_max=retry_jitter_max,
+            )
             print("\nPhase 2: Subinterfaces on EtherChannels")
-            record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, args.file, parent_type_filter='etherchannel')
+            record_phase(
+                "Subinterfaces (etherchannel parents)",
+                import_subinterfaces,
+                client,
+                args.file,
+                parent_type_filter='etherchannel',
+                max_workers=stage_workers["subinterfaces"],
+                max_attempts=stage_attempts["subinterfaces"],
+                retry_backoff=stage_backoff["subinterfaces"],
+                retry_jitter_max=retry_jitter_max,
+            )
         elif args.type == 'security-zones':
             record_phase("Security Zones", import_security_zones, client, args.file)
         elif args.type == 'address-objects':
-            record_phase("Address Objects", import_address_objects, client, args.file, args.workers)
+            record_phase(
+                "Address Objects",
+                import_address_objects,
+                client,
+                args.file,
+                stage_workers["address_objects"],
+                stage_attempts["address_objects"],
+                stage_backoff["address_objects"],
+                retry_jitter_max,
+            )
         elif args.type == 'address-groups':
             record_phase("Address Groups", import_address_groups, client, args.file)
         elif args.type == 'service-objects':
-            record_phase("Service Objects", import_service_objects, client, args.file, args.workers)
+            record_phase(
+                "Service Objects",
+                import_service_objects,
+                client,
+                args.file,
+                stage_workers["service_objects"],
+                stage_attempts["service_objects"],
+                stage_backoff["service_objects"],
+                retry_jitter_max,
+            )
         elif args.type == 'service-groups':
             record_phase("Service Groups", import_service_groups, client, args.file)
         elif args.type == 'routes':
@@ -2992,8 +3307,28 @@ Examples:
             imported_any = True
         
         if args.only_subinterfaces:
-            record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
-            record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
+            record_phase(
+                "Subinterfaces (physical parents)",
+                import_subinterfaces,
+                client,
+                f"{args.base}_subinterfaces.json",
+                parent_type_filter='physical',
+                max_workers=stage_workers["subinterfaces"],
+                max_attempts=stage_attempts["subinterfaces"],
+                retry_backoff=stage_backoff["subinterfaces"],
+                retry_jitter_max=retry_jitter_max,
+            )
+            record_phase(
+                "Subinterfaces (etherchannel parents)",
+                import_subinterfaces,
+                client,
+                f"{args.base}_subinterfaces.json",
+                parent_type_filter='etherchannel',
+                max_workers=stage_workers["subinterfaces"],
+                max_attempts=stage_attempts["subinterfaces"],
+                retry_backoff=stage_backoff["subinterfaces"],
+                retry_jitter_max=retry_jitter_max,
+            )
             imported_any = True
         
         if args.only_security_zones:
@@ -3003,7 +3338,16 @@ Examples:
 
         if args.only_address_objects:
             print("  - Address Objects")
-            record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers)
+            record_phase(
+                "Address Objects",
+                import_address_objects,
+                client,
+                f"{args.base}_address_objects.json",
+                stage_workers["address_objects"],
+                stage_attempts["address_objects"],
+                stage_backoff["address_objects"],
+                retry_jitter_max,
+            )
             imported_any = True
         
         if args.only_address_groups:
@@ -3013,7 +3357,16 @@ Examples:
         
         if args.only_service_objects:
             print("  - Service Objects")
-            record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers)
+            record_phase(
+                "Service Objects",
+                import_service_objects,
+                client,
+                f"{args.base}_service_objects.json",
+                stage_workers["service_objects"],
+                stage_attempts["service_objects"],
+                stage_backoff["service_objects"],
+                retry_jitter_max,
+            )
             imported_any = True
         
         if args.only_service_groups:
@@ -3054,13 +3407,33 @@ Examples:
         record_phase("Physical Interfaces", import_physical_interfaces, client, f"{args.base}_physical_interfaces.json")
         
         # Step 2: Create subinterfaces on physical interfaces BEFORE adding them to EtherChannels
-        record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
+        record_phase(
+            "Subinterfaces (physical parents)",
+            import_subinterfaces,
+            client,
+            f"{args.base}_subinterfaces.json",
+            parent_type_filter='physical',
+            max_workers=stage_workers["subinterfaces"],
+            max_attempts=stage_attempts["subinterfaces"],
+            retry_backoff=stage_backoff["subinterfaces"],
+            retry_jitter_max=retry_jitter_max,
+        )
         
         # Step 3: Create etherchannels (this may add physical interfaces as members)
         record_phase("EtherChannels", import_etherchannels, client, f"{args.base}_etherchannels.json")
         
         # Step 4: Create subinterfaces on EtherChannels AFTER they are created
-        record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
+        record_phase(
+            "Subinterfaces (etherchannel parents)",
+            import_subinterfaces,
+            client,
+            f"{args.base}_subinterfaces.json",
+            parent_type_filter='etherchannel',
+            max_workers=stage_workers["subinterfaces"],
+            max_attempts=stage_attempts["subinterfaces"],
+            retry_backoff=stage_backoff["subinterfaces"],
+            retry_jitter_max=retry_jitter_max,
+        )
         
         # Step 5: Create bridge groups
         record_phase("Bridge Groups", import_bridge_groups, client, f"{args.base}_bridge_groups.json")
@@ -3069,13 +3442,31 @@ Examples:
         record_phase("Security Zones", import_security_zones, client, f"{args.base}_security_zones.json")
 
         # Step 5: Import address objects
-        record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers)
+        record_phase(
+            "Address Objects",
+            import_address_objects,
+            client,
+            f"{args.base}_address_objects.json",
+            stage_workers["address_objects"],
+            stage_attempts["address_objects"],
+            stage_backoff["address_objects"],
+            retry_jitter_max,
+        )
         
         # Step 6: Import address groups
         record_phase("Address Groups", import_address_groups, client, f"{args.base}_address_groups.json")
         
         # Step 7: Import service objects
-        record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers)
+        record_phase(
+            "Service Objects",
+            import_service_objects,
+            client,
+            f"{args.base}_service_objects.json",
+            stage_workers["service_objects"],
+            stage_attempts["service_objects"],
+            stage_backoff["service_objects"],
+            retry_jitter_max,
+        )
         
         # Step 8: Import service groups
         record_phase("Service Groups", import_service_groups, client, f"{args.base}_service_groups.json")

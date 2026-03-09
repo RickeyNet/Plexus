@@ -9,6 +9,7 @@ Tables:
     credentials       — encrypted SSH credentials per inventory group
     jobs              — execution history
     job_events        — per-host log lines for each job
+    audit_events      — immutable audit trail for auth, CRUD, and operational actions
 """
 
 import json
@@ -16,6 +17,10 @@ import os
 from datetime import UTC, datetime
 
 import aiosqlite
+
+from netcontrol.telemetry import configure_logging
+
+_LOGGER = configure_logging("plexus.db")
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "netcontrol.db")
 
@@ -29,6 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
     salt        TEXT    NOT NULL,
     display_name TEXT   DEFAULT '',
     role        TEXT    NOT NULL DEFAULT 'user',
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -129,6 +135,16 @@ CREATE TABLE IF NOT EXISTS job_events (
     host        TEXT    DEFAULT '',
     message     TEXT    NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS audit_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT    NOT NULL DEFAULT (datetime('now')),
+    category        TEXT    NOT NULL,
+    action          TEXT    NOT NULL,
+    user            TEXT    NOT NULL DEFAULT '',
+    detail          TEXT    DEFAULT '',
+    correlation_id  TEXT    DEFAULT ''
+);
 """
 
 
@@ -154,22 +170,20 @@ async def init_db():
             columns = [row[1] for row in await cursor.fetchall()]
             
             if 'content' not in columns:
-                print("[migration] Adding 'content' column to playbooks table...")
+                _LOGGER.info("migration: adding 'content' column to playbooks table")
                 await db.execute("ALTER TABLE playbooks ADD COLUMN content TEXT DEFAULT ''")
                 await db.commit()
-                print("[migration] Added 'content' column successfully")
+                _LOGGER.info("migration: added 'content' column successfully")
             
             if 'updated_at' not in columns:
-                print("[migration] Adding 'updated_at' column to playbooks table...")
+                _LOGGER.info("migration: adding 'updated_at' column to playbooks table")
                 await db.execute("ALTER TABLE playbooks ADD COLUMN updated_at TEXT")
                 await db.commit()
                 await db.execute("UPDATE playbooks SET updated_at = datetime('now') WHERE updated_at IS NULL")
                 await db.commit()
-                print("[migration] Added 'updated_at' column successfully")
+                _LOGGER.info("migration: added 'updated_at' column successfully")
         except Exception as e:
-            print(f"[migration] Playbooks migration error: {e}")
-            import traceback
-            traceback.print_exc()
+            _LOGGER.error("migration: playbooks migration error: %s", e, exc_info=True)
 
         # Migration: Add display_name and role columns to users if they don't exist
         try:
@@ -177,32 +191,27 @@ async def init_db():
             columns = [row[1] for row in await cursor.fetchall()]
 
             if 'display_name' not in columns:
-                print("[migration] Adding 'display_name' column to users table...")
+                _LOGGER.info("migration: adding 'display_name' column to users table")
                 await db.execute("ALTER TABLE users ADD COLUMN display_name TEXT DEFAULT ''")
                 await db.commit()
-                print("[migration] Added 'display_name' column successfully")
+                _LOGGER.info("migration: added 'display_name' column successfully")
             
             if 'role' not in columns:
-                print("[migration] Adding 'role' column to users table...")
+                _LOGGER.info("migration: adding 'role' column to users table")
                 await db.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
                 await db.commit()
-                print("[migration] Added 'role' column successfully")
+                _LOGGER.info("migration: added 'role' column successfully")
 
         except Exception as e:
-            print(f"[migration] Users table migration error: {e}")
-            import traceback
-            traceback.print_exc()
+            _LOGGER.error("migration: users table migration error: %s", e, exc_info=True)
 
         # Migration: Add owner_id column to credentials, drop UNIQUE on name
         try:
             cursor = await db.execute("PRAGMA table_info(credentials)")
             columns = [row[1] for row in await cursor.fetchall()]
 
-            # If 'owner_id' is not in columns, it means we are using an old schema
-            # where 'name' might have a UNIQUE constraint.
-            # We need to recreate the table to drop the UNIQUE constraint.
             if 'owner_id' not in columns:
-                print("[migration] Migrating 'credentials' table to add 'owner_id' and drop UNIQUE on name...")
+                _LOGGER.info("migration: migrating 'credentials' table to add 'owner_id' and drop UNIQUE on name")
                 
                 # 1. Rename existing table
                 await db.execute("ALTER TABLE credentials RENAME TO old_credentials")
@@ -232,29 +241,38 @@ async def init_db():
                 # 4. Drop old table
                 await db.execute("DROP TABLE old_credentials")
                 await db.commit()
-                print("[migration] 'credentials' table migration complete.")
+                _LOGGER.info("migration: 'credentials' table migration complete")
             else:
-                print("[migration] 'owner_id' column already exists in 'credentials' table, skipping full table migration.")
+                _LOGGER.info("migration: 'owner_id' column already exists in 'credentials' table, skipping")
 
 
             # Assign orphaned credentials to the first admin user (newly created or existing)
             cursor2 = await db.execute("SELECT COUNT(*) FROM credentials WHERE owner_id IS NULL")
             orphan_count = (await cursor2.fetchall())[0][0]
             if orphan_count > 0:
-                # Ensure admin user exists before trying to assign
                 cursor3 = await db.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1")
                 admin_row = await cursor3.fetchone()
                 if admin_row:
                     admin_id = admin_row[0]
                     await db.execute("UPDATE credentials SET owner_id = ? WHERE owner_id IS NULL", (admin_id,))
                     await db.commit()
-                    print(f"[migration] Assigned {orphan_count} orphaned credential(s) to admin user (id={admin_id})")
+                    _LOGGER.info("migration: assigned %s orphaned credential(s) to admin user (id=%s)", orphan_count, admin_id)
                 else:
-                    print("[migration] No admin user found to assign orphaned credentials to. Please create an admin user.")
+                    _LOGGER.warning("migration: no admin user found to assign orphaned credentials to")
         except Exception as e:
-            print(f"[migration] Credentials migration error: {e}")
-            import traceback
-            traceback.print_exc()
+            _LOGGER.error("migration: credentials migration error: %s", e, exc_info=True)
+
+        # Migration: Add must_change_password column to users if it doesn't exist
+        try:
+            cursor = await db.execute("PRAGMA table_info(users)")
+            columns = [row[1] for row in await cursor.fetchall()]
+            if 'must_change_password' not in columns:
+                _LOGGER.info("migration: adding 'must_change_password' column to users table")
+                await db.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+                await db.commit()
+                _LOGGER.info("migration: added 'must_change_password' column successfully")
+        except Exception as e:
+            _LOGGER.error("migration: must_change_password migration error: %s", e, exc_info=True)
     finally:
         await db.close()
 
@@ -287,19 +305,23 @@ async def get_user_by_username(username: str) -> dict | None:
 async def get_user_by_id(user_id: int) -> dict | None:
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT id, username, display_name, role, created_at FROM users WHERE id = ?", (user_id,))
+        cursor = await db.execute(
+            "SELECT id, username, display_name, role, must_change_password, created_at FROM users WHERE id = ?",
+            (user_id,),
+        )
         return row_to_dict(await cursor.fetchone())
     finally:
         await db.close()
 
 
 async def create_user(username: str, password_hash: str, salt: str,
-                      display_name: str = "", role: str = "user") -> int:
+                      display_name: str = "", role: str = "user",
+                      must_change_password: bool = False) -> int:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO users (username, password_hash, salt, display_name, role) VALUES (?,?,?,?,?)",
-            (username, password_hash, salt, display_name, role),
+            "INSERT INTO users (username, password_hash, salt, display_name, role, must_change_password) VALUES (?,?,?,?,?,?)",
+            (username, password_hash, salt, display_name, role, int(must_change_password)),
         )
         await db.commit()
         return cursor.lastrowid
@@ -315,7 +337,7 @@ async def update_user_password(user_id: int, password_hash: str, salt: str):
     db = await get_db()
     try:
         await db.execute(
-            "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
+            "UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0 WHERE id = ?",
             (password_hash, salt, user_id),
         )
         await db.commit()
@@ -363,7 +385,9 @@ async def update_user_admin(user_id: int, username: str = None, display_name: st
 async def get_all_users() -> list[dict]:
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT id, username, display_name, role, created_at FROM users ORDER BY username")
+        cursor = await db.execute(
+            "SELECT id, username, display_name, role, must_change_password, created_at FROM users ORDER BY username"
+        )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -1135,3 +1159,51 @@ async def get_dashboard_stats() -> dict:
         }
     finally:
         await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Audit Events
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def add_audit_event(
+    category: str,
+    action: str,
+    user: str = "",
+    detail: str = "",
+    correlation_id: str = "",
+) -> int:
+    """Insert an immutable audit record and return its ID."""
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            """INSERT INTO audit_events (category, action, user, detail, correlation_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (category, action, user, detail, correlation_id),
+        )
+        await conn.commit()
+        return cursor.lastrowid
+    finally:
+        await conn.close()
+
+
+async def get_audit_events(
+    limit: int = 100,
+    category: str | None = None,
+) -> list[dict]:
+    """Return recent audit events, optionally filtered by category."""
+    conn = await get_db()
+    try:
+        if category:
+            cursor = await conn.execute(
+                "SELECT * FROM audit_events WHERE category = ? ORDER BY id DESC LIMIT ?",
+                (category, limit),
+            )
+        else:
+            cursor = await conn.execute(
+                "SELECT * FROM audit_events ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await conn.close()

@@ -105,7 +105,20 @@ class AddressGroupConverter:
         
         # Build a lookup of group name -> member list for flattening nested groups
         self.group_members = {}
+        self._flatten_cache: dict[str, list[str]] = {}
+        self._cycle_warnings: set[str] = set()
         self._build_group_lookup()
+
+    @staticmethod
+    def _dedupe_preserve_order(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in items:
+            if item in seen:
+                continue
+            seen.add(item)
+            result.append(item)
+        return result
     
     def _build_group_lookup(self):
         """
@@ -142,6 +155,26 @@ class AddressGroupConverter:
         """
         return name in self.group_members
     
+    def _flatten_group(self, group_name: str, stack: set[str]) -> list[str]:
+        """Return flattened members for a group with memoization."""
+        if group_name in self._flatten_cache:
+            return self._flatten_cache[group_name]
+
+        if group_name in stack:
+            # Circular references are legal in source configs but invalid for FTD groups.
+            # Warn once and skip the recursive branch.
+            if group_name not in self._cycle_warnings:
+                print(f"    Warning: Circular reference detected for group '{group_name}', skipping")
+                self._cycle_warnings.add(group_name)
+            return []
+
+        nested_stack = set(stack)
+        nested_stack.add(group_name)
+        flattened = self._flatten_members(self.group_members.get(group_name, []), nested_stack)
+        flattened = self._dedupe_preserve_order(flattened)
+        self._flatten_cache[group_name] = flattened
+        return flattened
+
     def _flatten_members(self, members: list[str], visited: set = None) -> list[str]: # pyright: ignore[reportArgumentType]
         """
         Recursively flatten a list of members, expanding any nested groups.
@@ -153,41 +186,18 @@ class AddressGroupConverter:
         Returns:
             List of individual object names (no groups)
         """
-        if visited is None:
-            visited = set()
+        stack = visited or set()
         
-        flattened = []
+        flattened: list[str] = []
         
         for member in members:
             if self._is_group(member):
-                # This member is a group - expand it
-                if member in visited:
-                    # Circular reference - skip to prevent infinite loop
-                    print(f"    Warning: Circular reference detected for group '{member}', skipping")
-                    continue
-                
-                # Mark as visited
-                visited.add(member)
-                
-                # Get the group's members and recursively flatten
-                nested_members = self.group_members.get(member, [])
-                expanded = self._flatten_members(nested_members, visited)
-                
-                print(f"    Flattening nested group '{member}' -> {len(expanded)} objects")
-                flattened.extend(expanded)
+                flattened.extend(self._flatten_group(member, stack))
             else:
                 # This is an individual object - add it
                 flattened.append(member)
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_flattened = []
-        for item in flattened:
-            if item not in seen:
-                seen.add(item)
-                unique_flattened.append(item)
-        
-        return unique_flattened
+
+        return self._dedupe_preserve_order(flattened)
     
     def convert(self) -> list[dict]:
         """
