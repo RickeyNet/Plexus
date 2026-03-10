@@ -426,7 +426,7 @@ async function loadConverter() {
             }
             await loadRecentSessions();
         } catch (err) {
-            alert('Error deleting session: ' + err.message);
+            showToast('Error deleting session: ' + err.message, 'error');
         }
     };
 
@@ -517,7 +517,7 @@ async function loadConverter() {
     // ── Step 2: Import ───────────────────────────────────────────────────────
     importForm.onsubmit = async (e) => {
         e.preventDefault();
-        if (!converterSessionId) { alert('No active conversion session. Please convert first or resume one.'); return; }
+        if (!converterSessionId) { showToast('No active conversion session. Please convert first or resume one.', 'error'); return; }
         importOutput.textContent = `Importing session ${converterSessionId} to FTD...\n`;
         importOutput.style.display = 'block';
         importOutput.scrollIntoView({ behavior: 'smooth' });
@@ -564,7 +564,7 @@ async function loadConverter() {
             e.preventDefault();
             const deleteFlags = [...document.querySelectorAll('.delete-flag:checked')].map(cb => cb.value);
             if (deleteFlags.length === 0) {
-                alert('Please select at least one item to delete.');
+                showToast('Please select at least one item to delete.', 'error');
                 return;
             }
             if (cleanupOutput) {
@@ -2457,24 +2457,67 @@ function formatTime(dateString) {
     return date.toLocaleTimeString();
 }
 
+function getToastContainer() {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    return container;
+}
+
+function showToast(message, type = 'info', duration = 4000) {
+    const container = getToastContainer();
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+
+    const icons = {
+        success: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+        error: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+        info: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+    };
+
+    toast.innerHTML = `
+        <span class="toast-icon">${icons[type] || icons.info}</span>
+        <span class="toast-message">${escapeHtml(message)}</span>
+        <button class="toast-close" aria-label="Close">&times;</button>
+    `;
+
+    toast.querySelector('.toast-close').addEventListener('click', () => dismissToast(toast));
+    container.appendChild(toast);
+    // Trigger entrance animation on next frame
+    requestAnimationFrame(() => toast.classList.add('toast-visible'));
+
+    const timer = setTimeout(() => dismissToast(toast), duration);
+    toast._timer = timer;
+}
+
+function dismissToast(toast) {
+    if (toast._dismissed) return;
+    toast._dismissed = true;
+    clearTimeout(toast._timer);
+    toast.classList.remove('toast-visible');
+    toast.classList.add('toast-exit');
+    toast.addEventListener('animationend', () => toast.remove(), { once: true });
+    // Fallback removal
+    setTimeout(() => toast.remove(), 500);
+}
+
 function showError(message, container = null) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error';
-    errorDiv.textContent = message;
     if (container) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error';
+        errorDiv.textContent = message;
         container.insertBefore(errorDiv, container.firstChild);
     } else {
-        document.body.insertBefore(errorDiv, document.body.firstChild);
-        setTimeout(() => errorDiv.remove(), 5000);
+        showToast(message, 'error', 5000);
     }
 }
 
 function showSuccess(message) {
-    const successDiv = document.createElement('div');
-    successDiv.className = 'success';
-    successDiv.textContent = message;
-    document.body.insertBefore(successDiv, document.body.firstChild);
-    setTimeout(() => successDiv.remove(), 3000);
+    showToast(message, 'success', 3000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2728,6 +2771,87 @@ window.showChangePasswordModal = function() {
 // Initialize
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function initLoginParticles() {
+    const canvas = document.getElementById('login-particles');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let animId;
+    const particles = [];
+    const PARTICLE_COUNT = 50;
+
+    function resize() {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Read primary colour from theme CSS variable
+    function getColor() {
+        const style = getComputedStyle(document.documentElement);
+        return style.getPropertyValue('--primary-light').trim() || '#7fa07f';
+    }
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        particles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            r: Math.random() * 2 + 0.5,
+            dx: (Math.random() - 0.5) * 0.4,
+            dy: (Math.random() - 0.5) * 0.4,
+            opacity: Math.random() * 0.5 + 0.15,
+        });
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const color = getColor();
+        // Draw connecting lines for nearby particles
+        for (let i = 0; i < particles.length; i++) {
+            for (let j = i + 1; j < particles.length; j++) {
+                const dx = particles[i].x - particles[j].x;
+                const dy = particles[i].y - particles[j].y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 120) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = color;
+                    ctx.globalAlpha = (1 - dist / 120) * 0.12;
+                    ctx.lineWidth = 0.5;
+                    ctx.moveTo(particles[i].x, particles[i].y);
+                    ctx.lineTo(particles[j].x, particles[j].y);
+                    ctx.stroke();
+                }
+            }
+        }
+        // Draw particles
+        for (const p of particles) {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.globalAlpha = p.opacity;
+            ctx.fill();
+            p.x += p.dx;
+            p.y += p.dy;
+            if (p.x < 0 || p.x > canvas.width) p.dx *= -1;
+            if (p.y < 0 || p.y > canvas.height) p.dy *= -1;
+        }
+        ctx.globalAlpha = 1;
+        animId = requestAnimationFrame(draw);
+    }
+
+    draw();
+
+    // Stop animation once user logs in (login-screen hidden)
+    const observer = new MutationObserver(() => {
+        const screen = document.getElementById('login-screen');
+        if (screen && screen.style.display === 'none') {
+            cancelAnimationFrame(animId);
+            observer.disconnect();
+        }
+    });
+    observer.observe(document.getElementById('login-screen'), { attributes: true, attributeFilter: ['style'] });
+}
+
 function initSidebar() {
     const sidebar = document.getElementById('sidebar');
     const toggle = document.getElementById('sidebar-toggle');
@@ -2745,6 +2869,7 @@ function initSidebar() {
 document.addEventListener('DOMContentLoaded', async () => {
     initThemeControls();
     initSidebar();
+    initLoginParticles();
     initLoginForm();
 
     try {
