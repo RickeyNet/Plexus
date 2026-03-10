@@ -43,3 +43,22 @@
 - [ ] Add CI security gates (`pip-audit`, `bandit`, optional CodeQL) and publish SBOM artifacts for releases.
 - [ ] Add release automation to validate changelog/version consistency and publish container images.
 - [ ] Refine README setup steps (`.venv` consistency, run commands) and add incident-response runbook scenarios.
+
+## UI/UX Modernization
+- [x] Sidebar navigation: collapsible icon+label sidebar replacing top navbar.
+- [x] Glassmorphism cards: translucent backdrop-blur on cards, modals, and panels.
+- [x] Animated gradient background: floating orbs using theme colors on app and login screens.
+- [x] Neon glow accents & gradient borders: glowing hover states, active indicators, and button halos.
+- [ ] Modern typography: Inter for body text, JetBrains Mono for code blocks.
+- [x] Micro-interactions & motion: skeleton loaders, animated stat counters, staggered card entrances.
+- [ ] 3D perspective card tilt: CSS perspective hover effect on cards.
+- [ ] Dashboard visual upgrades: ring charts, pulse dots on running status, activity timeline.
+- [x] Spacing & visual hierarchy: gradient text headings, better rhythm, section dividers.
+- [ ] Animated login screen: particle background, card slide-in, logo pulse.
+- [ ] Toast notifications: slide-in toasts replacing inline error/success banners.
+- [ ] Converter stepper UI: visual progress bar for the 3-step convert/import/cleanup flow.
+- [ ] Keyboard shortcuts: Ctrl+K page switcher, Esc modal close, / to focus search.
+- [ ] Breadcrumb / page title bar: top bar with current page name and breadcrumb trail.
+- [x] Custom scrollbar styling: thin themed scrollbars matching color palette.
+- [ ] Empty state illustrations: SVG illustrations with call-to-action on empty pages.
+- [ ] Responsive sidebar overlay: mobile hamburger toggle with slide-in overlay + backdrop.
