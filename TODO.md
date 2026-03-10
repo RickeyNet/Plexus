@@ -22,18 +22,18 @@
 - [x] Compliance: pick a license; document data handling/retention for configs (storage location and duration).
 
 ## Week 4: Security Hardening
-- [ ] Enforce first-login password reset for default admin account; block privileged operations until password is rotated.
-- [ ] Add `APP_ALLOW_SELF_REGISTER` (default `false` in production) and gate `/api/auth/register` behind explicit opt-in.
-- [ ] Harden playbook file writes with filename allowlist, path normalization, and extension enforcement.
-- [ ] Add CSRF protection for cookie-authenticated API calls; keep token-auth workflows compatible.
+- [x] Enforce first-login password reset for default admin account; block privileged operations until password is rotated.
+- [x] Add `APP_ALLOW_SELF_REGISTER` (default `false` in production) and gate `/api/auth/register` behind explicit opt-in.
+- [x] Harden playbook file writes with filename allowlist, path normalization, and extension enforcement.
+- [x] Add CSRF protection for cookie-authenticated API calls; keep token-auth workflows compatible.
 
 ## Week 5: Reliability and Observability
-- [ ] Add scheduled disk cleanup for `netcontrol/converter_sessions` backups and stale session directories based on retention settings.
-- [ ] Add import idempotency/checkpoint markers so failed staged imports can resume safely.
-- [ ] Add bounded concurrency controls for convert/import jobs to avoid FTD API saturation.
-- [ ] Replace remaining `print()` statements with structured logger events and consistent redaction.
-- [ ] Add request/job correlation IDs in logs and API responses for traceability.
-- [ ] Add audit events for auth changes, playbook CRUD actions, and import/deploy operations.
+- [x] Add scheduled disk cleanup for `netcontrol/converter_sessions` backups and stale session directories based on retention settings.
+- [x] Add import idempotency/checkpoint markers so failed staged imports can resume safely.
+- [x] Add bounded concurrency controls for convert/import jobs to avoid FTD API saturation.
+- [x] Replace remaining `print()` statements with structured logger events and consistent redaction.
+- [x] Add request/job correlation IDs in logs and API responses for traceability.
+- [x] Add audit events for auth changes, playbook CRUD actions, and import/deploy operations.
 
 ## Week 6: Test Depth, CI/CD, and Ops Readiness
 - [ ] Add integration tests for protected API behavior when `APP_REQUIRE_API_TOKEN=true`.

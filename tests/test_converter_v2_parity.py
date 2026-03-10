@@ -299,3 +299,45 @@ def test_interface_conversion_v2_matches_core_output_contract():
     )
 
     assert _canonical(v2) == _canonical(baseline)
+
+
+def test_address_group_flattening_reuses_nested_group_members():
+    fortigate_config = {
+        "firewall_addrgrp": [
+            {"Nested": {"member": ["Host_A", "Host_B"]}},
+            {"Parent": {"member": ["Nested", "Host_C", "Nested"]}},
+        ]
+    }
+
+    groups = AddressGroupConverter(fortigate_config=fortigate_config).convert()
+    parent = next(item for item in groups if item["name"] == "Parent")
+    member_names = [obj["name"] for obj in parent["objects"]]
+
+    assert member_names == ["Host_A", "Host_B", "Host_C"]
+
+
+def test_service_group_flattening_reuses_nested_group_members():
+    fortigate_config = {
+        "firewall_service_group": [
+            {"Nested": {"member": ["HTTPS"]}},
+            {"Parent": {"member": ["Nested", "DNS", "Nested"]}},
+        ]
+    }
+    mapping = {
+        "HTTPS": [("HTTPS", "tcpportobject")],
+        "DNS": [("DNS_TCP", "tcpportobject"), ("DNS_UDP", "udpportobject")],
+    }
+
+    groups = ServiceGroupConverter(
+        fortigate_config=fortigate_config,
+        service_name_mapping=mapping,
+        skipped_services=set(),
+    ).convert()
+    parent = next(item for item in groups if item["name"] == "Parent")
+    members = [(obj["name"], obj["type"]) for obj in parent["objects"]]
+
+    assert members == [
+        ("HTTPS", "tcpportobject"),
+        ("DNS_TCP", "tcpportobject"),
+        ("DNS_UDP", "udpportobject"),
+    ]

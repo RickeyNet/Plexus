@@ -3,6 +3,7 @@
  */
 
 import * as api from './api.js';
+import { getCsrfToken, setCsrfToken } from './api.js';
 import { connectJobWebSocket, disconnectJobWebSocket } from './websocket.js';
 
 // Global state
@@ -340,7 +341,10 @@ async function loadConverter() {
         console.log('[Converter] Sending target_model:', formData.get('target_model'), '| source_model:', formData.get('source_model'));
 
         try {
-            const resp = await fetch('/api/convert-only', { method: 'POST', body: formData });
+            const convertHeaders = {};
+            const csrfTok1 = getCsrfToken();
+            if (csrfTok1) convertHeaders['X-CSRF-Token'] = csrfTok1;
+            const resp = await fetch('/api/convert-only', { method: 'POST', headers: convertHeaders, body: formData });
             const data = await resp.json();
             if (!resp.ok) throw new Error(apiErrorMessage(data, 'Conversion failed'));
 
@@ -406,9 +410,12 @@ async function loadConverter() {
         });
         if (!confirmed) return;
         try {
+            const delHeaders = { 'Content-Type': 'application/json' };
+            const csrfTok2 = getCsrfToken();
+            if (csrfTok2) delHeaders['X-CSRF-Token'] = csrfTok2;
             const resp = await fetch('/api/reset-session', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: delHeaders,
                 body: JSON.stringify({ session_id: id })
             });
             if (!resp.ok) throw new Error('Delete failed');
@@ -516,9 +523,12 @@ async function loadConverter() {
         importOutput.scrollIntoView({ behavior: 'smooth' });
 
         try {
+            const importHeaders = { 'Content-Type': 'application/json' };
+            const csrfTok3 = getCsrfToken();
+            if (csrfTok3) importHeaders['X-CSRF-Token'] = csrfTok3;
             const resp = await fetch('/api/import-fortigate-stream', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: importHeaders,
                 body: JSON.stringify({
                     session_id: converterSessionId,
                     ftd_host:     document.getElementById('ftd-host').value,
@@ -563,9 +573,12 @@ async function loadConverter() {
                 cleanupOutput.scrollIntoView({ behavior: 'smooth' });
             }
             try {
+                const headers = { 'Content-Type': 'application/json' };
+                const csrfTok = getCsrfToken();
+                if (csrfTok) headers['X-CSRF-Token'] = csrfTok;
                 const resp = await fetch('/api/cleanup-ftd-stream', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers,
                     body: JSON.stringify({
                         session_id:   converterSessionId || '',
                         ftd_host:     document.getElementById('cleanup-host').value,
@@ -609,9 +622,12 @@ window.resetConverter = function () {
     // Fire-and-forget: clean up server-side session files
     const currentSession = converterSessionId;
     if (currentSession) {
+        const resetHeaders = { 'Content-Type': 'application/json' };
+        const csrfTok4 = getCsrfToken();
+        if (csrfTok4) resetHeaders['X-CSRF-Token'] = csrfTok4;
         fetch('/api/reset-session', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: resetHeaders,
             body: JSON.stringify({ session_id: currentSession })
         }).catch(() => {});
     }
@@ -2477,6 +2493,10 @@ window.showLoginForm = function() {
 };
 
 function showApp(userData) {
+    // Store CSRF token from login/register response
+    if (userData.csrf_token) {
+        setCsrfToken(userData.csrf_token);
+    }
     currentUserData = userData;
     currentUser = userData.username;
     currentFeatureAccess = Array.isArray(userData.feature_access) ? userData.feature_access : [];
