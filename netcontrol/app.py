@@ -31,7 +31,7 @@ import time
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
-from netcontrol.routes.converter import router as converter_router
+from netcontrol.routes.converter import prune_converter_sessions, router as converter_router
 
 try:
     from pyrad import packet as radius_packet
@@ -64,6 +64,10 @@ LOGGER = configure_logging("plexus.app")
 APP_START_TIME = time.time()
 APP_API_TOKEN = os.getenv("APP_API_TOKEN", "").strip()
 
+# Bounded concurrency for convert/import jobs
+_MAX_CONCURRENT_JOBS = int(os.getenv("APP_MAX_CONCURRENT_JOBS", "4"))
+_job_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_JOBS)
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -72,12 +76,69 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_cors_origins() -> list[str]:
+    """Return sanitized CORS origin allowlist from APP_CORS_ORIGINS.
+
+    Comma-separated values are accepted. Empty entries are ignored.
+    Defaults to localhost dev origins when unset.
+    """
+    raw = os.getenv("APP_CORS_ORIGINS", "")
+    if not raw.strip():
+        return ["http://localhost:8080", "http://127.0.0.1:8080"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+APP_HTTPS_ENABLED = _env_flag("APP_HTTPS", False)
+APP_HSTS_ENABLED = _env_flag("APP_HSTS", APP_HTTPS_ENABLED)
+APP_HSTS_MAX_AGE = int(os.getenv("APP_HSTS_MAX_AGE", "31536000"))
+APP_CORS_ALLOW_ORIGINS = _parse_cors_origins()
+
+
+# ── CSRF token helpers ───────────────────────────────────────────────────────
+
+_csrf_serializer: URLSafeTimedSerializer | None = None  # initialised after secret key load
+CSRF_TOKEN_MAX_AGE = 86400  # 24 hours — aligned with session lifetime
+
+
+def _generate_csrf_token(session_user: str) -> str:
+    """Create a signed, time-limited CSRF token bound to the session user."""
+    return _csrf_serializer.dumps({"csrf_user": session_user})
+
+
+def _validate_csrf_token(token: str, session_user: str) -> bool:
+    """Return True when the token is valid, not expired, and bound to the user."""
+    try:
+        data = _csrf_serializer.loads(token, max_age=CSRF_TOKEN_MAX_AGE)
+        return data.get("csrf_user") == session_user
+    except (BadSignature, SignatureExpired):
+        return False
+
+
 def _validate_startup_config() -> None:
     errors = []
     if _env_flag("APP_REQUIRE_API_TOKEN", False) and not APP_API_TOKEN:
         errors.append("APP_REQUIRE_API_TOKEN is true but APP_API_TOKEN is not set")
     if errors:
         raise RuntimeError("; ".join(errors))
+
+
+async def _audit(
+    category: str,
+    action: str,
+    user: str = "",
+    detail: str = "",
+    correlation_id: str = "",
+) -> None:
+    """Fire-and-forget audit record.  Never raises to the caller."""
+    try:
+        await db.add_audit_event(category, action, user=user, detail=detail, correlation_id=correlation_id)
+    except Exception:
+        LOGGER.warning("Failed to write audit event category=%s action=%s", category, action)
+
+
+def _corr_id(request: Request) -> str:
+    """Extract the correlation ID attached by correlation_id_middleware."""
+    return getattr(request.state, "correlation_id", "") if hasattr(request, "state") else ""
 
 
 def _extract_api_token(request: Request) -> str:
@@ -90,6 +151,39 @@ def _extract_api_token(request: Request) -> str:
     return ""
 
 
+import re as _re
+
+# Allowed playbook filename pattern: alphanumeric, underscores, hyphens only (no path separators)
+_PLAYBOOK_FILENAME_RE = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]*$")
+_PLAYBOOK_ALLOWED_EXT = ".py"
+
+
+def _sanitize_playbook_filename(filename: str) -> str:
+    """Validate and normalise a playbook filename.
+
+    Rules:
+      - Strip any leading/trailing whitespace.
+      - Strip a trailing ``.py`` extension (we re-add it).
+      - The bare stem must match ``[A-Za-z0-9][A-Za-z0-9_-]*`` (no path
+        separators, dots, or other special characters).
+      - The returned value always ends with ``.py``.
+
+    Raises ``ValueError`` on invalid input.
+    """
+    name = filename.strip()
+    if name.endswith(_PLAYBOOK_ALLOWED_EXT):
+        name = name[: -len(_PLAYBOOK_ALLOWED_EXT)]
+    # Reject anything that looks like a path
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValueError("Invalid playbook filename: path separators are not allowed")
+    if not _PLAYBOOK_FILENAME_RE.match(name):
+        raise ValueError(
+            f"Invalid playbook filename '{filename}': "
+            "only letters, digits, underscores and hyphens are allowed"
+        )
+    return name + _PLAYBOOK_ALLOWED_EXT
+
+
 def write_playbook_file(filename: str, content: str) -> str:
     """
     Write playbook content to a file and reload the module.
@@ -97,20 +191,22 @@ def write_playbook_file(filename: str, content: str) -> str:
     """
     playbooks_dir = os.path.join(project_root, "templates", "playbooks")
     os.makedirs(playbooks_dir, exist_ok=True)
-    
-    file_path = os.path.join(playbooks_dir, filename)
-    
-    # Ensure filename ends with .py
-    if not filename.endswith('.py'):
-        file_path += '.py'
-        filename += '.py'
-    
+
+    # Validate and normalise filename
+    safe_filename = _sanitize_playbook_filename(filename)
+
+    file_path = os.path.normpath(os.path.join(playbooks_dir, safe_filename))
+
+    # Belt-and-suspenders: ensure resolved path stays inside playbooks_dir
+    if not file_path.startswith(os.path.normpath(playbooks_dir)):
+        raise ValueError("Invalid playbook filename: resulting path escapes the playbooks directory")
+
     # Write the file
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
-    
+
     # Reload the playbook module to pick up changes
-    module_name = f"templates.playbooks.{filename[:-3]}"
+    module_name = f"templates.playbooks.{safe_filename[:-3]}"
     try:
         # Remove from cache if exists
         if module_name in sys.modules:
@@ -123,7 +219,7 @@ def write_playbook_file(filename: str, content: str) -> str:
             importlib.import_module('templates.playbooks')
     except Exception as e:
         # If reload fails, log but don't fail - module will be loaded on next server restart
-        print(f"[warning] Failed to reload playbook module {module_name}: {e}")
+        LOGGER.warning("Failed to reload playbook module %s: %s", module_name, e)
     
     return file_path
 
@@ -152,6 +248,7 @@ def _load_or_create_secret_key() -> str:
 
 _secret_key = _load_or_create_secret_key()
 _serializer = URLSafeTimedSerializer(_secret_key)
+_csrf_serializer = URLSafeTimedSerializer(_secret_key + "-csrf")
 
 
 def _hash_password(password: str, salt: str = "") -> str:
@@ -165,8 +262,12 @@ async def _ensure_default_admin():
         return
     salt = secrets.token_hex(16)
     pw_hash = _hash_password("netcontrol", salt)
-    await db.create_user("admin", pw_hash, salt, display_name="Administrator", role="admin")
-    print("[auth] Created default user: admin / netcontrol  — CHANGE THIS PASSWORD!")
+    await db.create_user(
+        "admin", pw_hash, salt,
+        display_name="Administrator", role="admin",
+        must_change_password=True,
+    )
+    LOGGER.warning("Created default user: admin / netcontrol — CHANGE THIS PASSWORD!")
 
 
 async def verify_user(username: str, password: str) -> dict | None:
@@ -196,6 +297,17 @@ def verify_session_token(token: str) -> dict | None:
 
 PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/api/health", "/favicon.ico", "/docs", "/openapi.json", "/redoc"}
 
+# Paths that remain accessible even when must_change_password is true
+PASSWORD_CHANGE_ALLOWED_PATHS = {
+    "/api/auth/change-password",
+    "/api/auth/logout",
+    "/api/auth/status",
+    "/api/auth/profile",
+}
+
+# State-changing methods that require CSRF validation for cookie-auth
+_CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
 
 async def require_auth(request: Request):
     """Dependency that checks for a valid session cookie. Returns session dict."""
@@ -218,6 +330,16 @@ async def require_auth(request: Request):
     session = verify_session_token(token)
     if not session:
         raise HTTPException(status_code=401, detail="Session expired")
+
+    # Enforce first-login password reset: block privileged operations
+    if path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+        user = await db.get_user_by_id(session["user_id"])
+        if user and user.get("must_change_password"):
+            raise HTTPException(
+                status_code=403,
+                detail="Password change required before accessing this resource",
+            )
+
     return session
 
 
@@ -252,6 +374,8 @@ FEATURE_FLAGS = [
 AUTH_CONFIG_DEFAULTS = {
     "provider": "local",
     "job_retention_days": 30,
+    "converter_session_retention_days": 30,
+    "converter_backup_retention_days": 30,
     "radius": {
         "enabled": False,
         "server": "",
@@ -269,6 +393,8 @@ LOGIN_RULES = dict(DEFAULT_LOGIN_RULES)
 AUTH_CONFIG = dict(AUTH_CONFIG_DEFAULTS)
 JOB_RETENTION_MIN_DAYS = 30
 JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
+CONVERTER_SESSION_RETENTION_MIN_DAYS = 1
+CONVERTER_BACKUP_RETENTION_MIN_DAYS = 1
 
 
 def _sanitize_login_rules(data: dict | None) -> dict:
@@ -291,6 +417,14 @@ def _sanitize_auth_config(data: dict | None) -> dict:
             cfg["provider"] = data["provider"]
         if "job_retention_days" in data:
             cfg["job_retention_days"] = int(data.get("job_retention_days", cfg["job_retention_days"]))
+        if "converter_session_retention_days" in data:
+            cfg["converter_session_retention_days"] = int(
+                data.get("converter_session_retention_days", cfg["converter_session_retention_days"])
+            )
+        if "converter_backup_retention_days" in data:
+            cfg["converter_backup_retention_days"] = int(
+                data.get("converter_backup_retention_days", cfg["converter_backup_retention_days"])
+            )
         radius = data.get("radius")
         if isinstance(radius, dict):
             cfg["radius"].update({
@@ -303,6 +437,14 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "fallback_on_reject": bool(radius.get("fallback_on_reject", cfg["radius"]["fallback_on_reject"])),
             })
     cfg["job_retention_days"] = max(JOB_RETENTION_MIN_DAYS, int(cfg.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
+    cfg["converter_session_retention_days"] = max(
+        CONVERTER_SESSION_RETENTION_MIN_DAYS,
+        int(cfg.get("converter_session_retention_days", AUTH_CONFIG_DEFAULTS["converter_session_retention_days"])),
+    )
+    cfg["converter_backup_retention_days"] = max(
+        CONVERTER_BACKUP_RETENTION_MIN_DAYS,
+        int(cfg.get("converter_backup_retention_days", AUTH_CONFIG_DEFAULTS["converter_backup_retention_days"])),
+    )
     cfg["radius"]["port"] = max(1, cfg["radius"]["port"])
     cfg["radius"]["timeout"] = max(1, cfg["radius"]["timeout"])
     return cfg
@@ -310,6 +452,30 @@ def _sanitize_auth_config(data: dict | None) -> dict:
 
 def _effective_job_retention_days() -> int:
     return max(JOB_RETENTION_MIN_DAYS, int(AUTH_CONFIG.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
+
+
+def _effective_converter_session_retention_days() -> int:
+    return max(
+        CONVERTER_SESSION_RETENTION_MIN_DAYS,
+        int(
+            AUTH_CONFIG.get(
+                "converter_session_retention_days",
+                AUTH_CONFIG_DEFAULTS["converter_session_retention_days"],
+            )
+        ),
+    )
+
+
+def _effective_converter_backup_retention_days() -> int:
+    return max(
+        CONVERTER_BACKUP_RETENTION_MIN_DAYS,
+        int(
+            AUTH_CONFIG.get(
+                "converter_backup_retention_days",
+                AUTH_CONFIG_DEFAULTS["converter_backup_retention_days"],
+            )
+        ),
+    )
 
 
 async def _cleanup_expired_jobs() -> int:
@@ -321,16 +487,42 @@ async def _cleanup_expired_jobs() -> int:
     return deleted
 
 
+async def _cleanup_expired_converter_sessions() -> dict:
+    session_days = _effective_converter_session_retention_days()
+    backup_days = _effective_converter_backup_retention_days()
+    summary = await asyncio.to_thread(prune_converter_sessions, session_days, backup_days)
+
+    sessions_deleted = int(summary.get("sessions_deleted", 0))
+    snapshots_deleted = int(summary.get("snapshots_deleted", 0))
+    if sessions_deleted:
+        LOGGER.info(
+            "Deleted %s converter session(s) older than %s day(s)",
+            sessions_deleted,
+            session_days,
+        )
+        increment_metric("converter.retention.sessions.deleted")
+    if snapshots_deleted:
+        LOGGER.info(
+            "Deleted %s converter snapshot(s) older than %s day(s)",
+            snapshots_deleted,
+            backup_days,
+        )
+        increment_metric("converter.retention.snapshots.deleted")
+    return summary
+
+
 async def _job_retention_cleanup_loop() -> None:
     while True:
         try:
             await _cleanup_expired_jobs()
+            await _cleanup_expired_converter_sessions()
             await asyncio.sleep(JOB_RETENTION_CLEANUP_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            LOGGER.warning("Job retention cleanup failed: %s", redact_value(str(exc)))
+            LOGGER.warning("Retention cleanup failed: %s", redact_value(str(exc)))
             increment_metric("jobs.retention.cleanup.failed")
+            increment_metric("converter.retention.cleanup.failed")
             await asyncio.sleep(JOB_RETENTION_CLEANUP_INTERVAL_SECONDS)
 
 
@@ -513,6 +705,7 @@ async def lifespan(app: FastAPI):
         from routes.seed import seed
         await seed()
     await _cleanup_expired_jobs()
+    await _cleanup_expired_converter_sessions()
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
     try:
         yield
@@ -545,13 +738,13 @@ async def _migrate_auth_json_users():
                 )
                 migrated += 1
         if migrated:
-            print(f"[migration] Migrated {migrated} user(s) from auth.json to database")
+            LOGGER.info("migration: migrated %s user(s) from auth.json to database", migrated)
         # Rename the file so we don't migrate again
         backup = auth_file + ".bak"
         os.rename(auth_file, backup)
-        print("[migration] Renamed auth.json to auth.json.bak")
+        LOGGER.info("migration: renamed auth.json to auth.json.bak")
     except Exception as e:
-        print(f"[migration] auth.json migration error: {e}")
+        LOGGER.error("migration: auth.json migration error: %s", e)
 
 
 app = FastAPI(title="Plexus API", version=APP_VERSION, lifespan=lifespan)
@@ -562,7 +755,7 @@ app.include_router(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=APP_CORS_ALLOW_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -570,8 +763,51 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def csrf_protection_middleware(request: Request, call_next):
+    """Validate CSRF token on state-changing requests authenticated via session cookie.
+
+    Requests authenticated via API token (X-API-Token / Bearer) are exempt
+    because they are not susceptible to cross-site request forgery.
+    """
+    if request.method in _CSRF_PROTECTED_METHODS and request.url.path.startswith("/api/"):
+        # Skip CSRF check for public paths (login, register, etc.)
+        if request.url.path not in PUBLIC_PATHS:
+            # Only enforce when using cookie-based auth (no API-token header)
+            api_token = _extract_api_token(request)
+            using_api_token = bool(APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN))
+            if not using_api_token:
+                session_cookie = request.cookies.get("session")
+                if session_cookie:
+                    session = verify_session_token(session_cookie)
+                    if session:
+                        csrf_tok = (
+                            request.headers.get("x-csrf-token", "")
+                            or request.headers.get("x-csrftoken", "")
+                            or request.headers.get("x-xsrf-token", "")
+                        )
+                        if not csrf_tok or not _validate_csrf_token(csrf_tok, session["user"]):
+                            return _api_error_response(403, "csrf_error", "Missing or invalid CSRF token")
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    """Attach a correlation ID to every request for log traceability.
+
+    Callers may supply ``X-Correlation-ID``; otherwise one is generated.
+    The ID is returned in the response header for client-side linking.
+    """
+    corr_id = request.headers.get("x-correlation-id", "").strip() or secrets.token_hex(8)
+    request.state.correlation_id = corr_id
+    response = await call_next(request)
+    response.headers["X-Correlation-ID"] = corr_id
+    return response
+
+
+@app.middleware("http")
 async def metrics_and_logging_middleware(request: Request, call_next):
     start = time.perf_counter()
+    corr_id = getattr(request.state, "correlation_id", "")
     try:
         response = await call_next(request)
     except Exception:
@@ -579,6 +815,7 @@ async def metrics_and_logging_middleware(request: Request, call_next):
         increment_metric("api.requests.total")
         increment_metric("api.requests.failed")
         observe_timing("api.request.duration_ms", duration_ms)
+        LOGGER.warning("request error path=%s correlation_id=%s duration_ms=%.1f", request.url.path, corr_id, duration_ms)
         raise
 
     duration_ms = (time.perf_counter() - start) * 1000
@@ -586,6 +823,18 @@ async def metrics_and_logging_middleware(request: Request, call_next):
     if response.status_code >= 400:
         increment_metric("api.requests.failed")
     observe_timing("api.request.duration_ms", duration_ms)
+    return response
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add transport-oriented headers.
+
+    HSTS is enabled only when APP_HSTS/APP_HTTPS is enabled.
+    """
+    response = await call_next(request)
+    if APP_HSTS_ENABLED:
+        response.headers["Strict-Transport-Security"] = f"max-age={max(0, APP_HSTS_MAX_AGE)}; includeSubDomains"
     return response
 
 
@@ -686,6 +935,7 @@ async def login(body: LoginRequest, request: Request):
     if not user:
         attempts.append(now)
         LOGIN_ATTEMPTS[ip] = attempts
+        await _audit("auth", "login.failure", user=body.username, detail=auth_error or "bad credentials", correlation_id=_corr_id(request))
         # Lockout if too many failed attempts
         if len(attempts) >= LOGIN_RULES["max_attempts"]:
             LOCKED_OUT[ip] = now + LOGIN_RULES["lockout_time"]
@@ -693,7 +943,9 @@ async def login(body: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
     # On success, reset attempts
     LOGIN_ATTEMPTS.pop(ip, None)
+    await _audit("auth", "login.success", user=body.username, detail=f"source={auth_source}", correlation_id=_corr_id(request))
     token = create_session_token(body.username, user["id"])
+    csrf_token = _generate_csrf_token(body.username)
     response = JSONResponse({
         "ok": True,
         "username": body.username,
@@ -702,6 +954,8 @@ async def login(body: LoginRequest, request: Request):
         "role": user["role"],
         "auth_source": auth_source,
         "feature_access": await _get_user_features(user),
+        "must_change_password": bool(user.get("must_change_password")),
+        "csrf_token": csrf_token,
     })
     response.set_cookie(
         key="session",
@@ -709,13 +963,15 @@ async def login(body: LoginRequest, request: Request):
         httponly=True,
         samesite="strict",
         max_age=SESSION_MAX_AGE,
-        secure=False,
+        secure=APP_HTTPS_ENABLED,
     )
     return response
 
 
 @app.post("/api/auth/register")
-async def register(body: RegisterRequest):
+async def register(body: RegisterRequest, request: Request = None):
+    if not _env_flag("APP_ALLOW_SELF_REGISTER", False):
+        raise HTTPException(status_code=403, detail="Self-registration is disabled")
     existing = await db.get_user_by_username(body.username)
     if existing:
         raise HTTPException(status_code=400, detail="Username already taken")
@@ -728,7 +984,9 @@ async def register(body: RegisterRequest):
     display = body.display_name or body.username.title()
     user_id = await db.create_user(body.username, pw_hash, salt, display_name=display, role="user")
     user = await db.get_user_by_id(user_id)
+    await _audit("auth", "register", user=body.username, correlation_id=_corr_id(request) if request else "")
     token = create_session_token(body.username, user_id)
+    csrf_token = _generate_csrf_token(body.username)
     response = JSONResponse({
         "ok": True,
         "username": body.username,
@@ -736,6 +994,7 @@ async def register(body: RegisterRequest):
         "display_name": display,
         "role": "user",
         "feature_access": await _get_user_features(user),
+        "csrf_token": csrf_token,
     })
     response.set_cookie(
         key="session",
@@ -743,7 +1002,7 @@ async def register(body: RegisterRequest):
         httponly=True,
         samesite="strict",
         max_age=SESSION_MAX_AGE,
-        secure=False,
+        secure=APP_HTTPS_ENABLED,
     )
     return response
 
@@ -770,6 +1029,8 @@ async def auth_status(request: Request):
         "display_name": user["display_name"] or user["username"],
         "role": user["role"],
         "feature_access": await _get_user_features(user),
+        "csrf_token": _generate_csrf_token(user["username"]),
+        "must_change_password": bool(user.get("must_change_password")),
     }
 
 
@@ -784,6 +1045,7 @@ async def change_password(body: ChangePasswordRequest, request: Request):
     salt = secrets.token_hex(16)
     pw_hash = _hash_password(body.new_password, salt)
     await db.update_user_password(user["id"], pw_hash, salt)
+    await _audit("auth", "password.change", user=session["user"], correlation_id=_corr_id(request))
     return {"ok": True}
 
 
@@ -866,6 +1128,8 @@ class RadiusConfigRequest(BaseModel):
 class AuthConfigRequest(BaseModel):
     provider: str = "local"
     job_retention_days: int = Field(default=30, ge=30)
+    converter_session_retention_days: int = Field(default=30, ge=1)
+    converter_backup_retention_days: int = Field(default=30, ge=1)
     radius: RadiusConfigRequest = RadiusConfigRequest()
 
 
@@ -893,12 +1157,56 @@ async def _admin_user_payload(user: dict) -> dict:
     }
 
 
+def _security_check_payload() -> dict:
+    """Build a runtime snapshot of transport and app hardening settings."""
+    api_token_required = _env_flag("APP_REQUIRE_API_TOKEN", False)
+    warnings = []
+    if not APP_HTTPS_ENABLED:
+        warnings.append("APP_HTTPS is false: browser traffic may be sent over HTTP if your proxy does not enforce HTTPS.")
+    if not APP_HSTS_ENABLED:
+        warnings.append("APP_HSTS is false: browsers are not instructed to enforce HTTPS for future requests.")
+    if not api_token_required:
+        warnings.append("APP_REQUIRE_API_TOKEN is false: non-session API calls are not forced to present an API token.")
+    if not APP_API_TOKEN:
+        warnings.append("APP_API_TOKEN is not set: token-based API auth cannot be used.")
+
+    return {
+        "ok": True,
+        "transport": {
+            "https_enabled": APP_HTTPS_ENABLED,
+            "hsts_enabled": APP_HSTS_ENABLED,
+            "hsts_max_age": max(0, APP_HSTS_MAX_AGE),
+        },
+        "cookies": {
+            "session_cookie_secure": APP_HTTPS_ENABLED,
+            "session_cookie_httponly": True,
+            "session_cookie_samesite": "strict",
+        },
+        "cors": {
+            "allow_origins": APP_CORS_ALLOW_ORIGINS,
+            "allow_credentials": True,
+        },
+        "auth": {
+            "csrf_protected_methods": sorted(_CSRF_PROTECTED_METHODS),
+            "api_token_required": api_token_required,
+            "api_token_configured": bool(APP_API_TOKEN),
+        },
+        "warnings": warnings,
+    }
+
+
 @app.get("/api/admin/capabilities", dependencies=[Depends(require_admin)])
 async def admin_capabilities():
     return {
         "feature_flags": FEATURE_FLAGS,
         "auth_providers": ["local", "radius"],
     }
+
+
+@app.get("/api/admin/security-check", dependencies=[Depends(require_admin)])
+async def admin_security_check():
+    """Return active security-relevant runtime settings for quick verification."""
+    return _security_check_payload()
 
 
 @app.get("/api/admin/users", dependencies=[Depends(require_admin)])
@@ -911,7 +1219,7 @@ async def admin_list_users():
 
 
 @app.post("/api/admin/users", status_code=201, dependencies=[Depends(require_admin)])
-async def admin_create_user(body: AdminUserCreateRequest):
+async def admin_create_user(body: AdminUserCreateRequest, request: Request):
     username = body.username.strip()
     if len(username) < 3:
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
@@ -931,6 +1239,8 @@ async def admin_create_user(body: AdminUserCreateRequest):
             await db.set_user_groups(user_id, body.group_ids)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    session = _get_session(request)
+    await _audit("auth", "user.create", user=session["user"] if session else "", detail=f"created user '{username}' role={role}", correlation_id=_corr_id(request))
     user = await db.get_user_by_id(user_id)
     return await _admin_user_payload(user)
 
@@ -1006,6 +1316,7 @@ async def admin_delete_user(user_id: int, request: Request):
             raise HTTPException(status_code=400, detail="Cannot delete the last admin user")
 
     await db.delete_user(user_id)
+    await _audit("auth", "user.delete", user=session["user"] if session else "", detail=f"deleted user '{target['username']}'", correlation_id=_corr_id(request))
     return {"ok": True}
 
 
@@ -1060,6 +1371,12 @@ async def admin_delete_access_group(group_id: int):
     return {"ok": True}
 
 
+@app.get("/api/admin/audit-events", dependencies=[Depends(require_admin)])
+async def admin_get_audit_events(limit: int = Query(200, ge=1, le=1000)):
+    """Return recent audit events for the admin dashboard."""
+    return await db.get_audit_events(limit=limit)
+
+
 @app.get("/api/admin/login-rules", dependencies=[Depends(require_admin)])
 async def admin_get_login_rules():
     return LOGIN_RULES
@@ -1084,6 +1401,23 @@ async def admin_update_auth_config(body: AuthConfigRequest):
     AUTH_CONFIG = _sanitize_auth_config(body.dict())
     await db.set_auth_setting("auth_config", AUTH_CONFIG)
     return AUTH_CONFIG
+
+
+@app.post("/api/admin/retention/cleanup-now", dependencies=[Depends(require_admin)])
+async def admin_run_retention_cleanup_now():
+    """Run retention cleanup immediately for jobs and converter artifacts."""
+    jobs_deleted = await _cleanup_expired_jobs()
+    converter_summary = await _cleanup_expired_converter_sessions()
+    return {
+        "ok": True,
+        "jobs_deleted": jobs_deleted,
+        "converter": converter_summary,
+        "effective_retention_days": {
+            "jobs": _effective_job_retention_days(),
+            "converter_sessions": _effective_converter_session_retention_days(),
+            "converter_backups": _effective_converter_backup_retention_days(),
+        },
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1265,15 +1599,15 @@ async def get_playbook(playbook_id: int):
                     playbook["content"] = file_content
                 # Sync it back to the database
                 await db.update_playbook(playbook_id, content=file_content)
-                print(f"[info] Loaded playbook content from file: {filename} ({len(file_content)} chars)")
+                LOGGER.info("Loaded playbook content from file: %s (%s chars)", filename, len(file_content))
             except Exception as e:
-                print(f"[warning] Failed to read playbook file {file_path}: {e}")
+                LOGGER.warning("Failed to read playbook file %s: %s", file_path, e)
                 playbook["content"] = ""
         else:
-            print(f"[warning] Playbook file not found: {file_path}")
+            LOGGER.warning("Playbook file not found: %s", file_path)
             playbook["content"] = ""
     else:
-        print(f"[info] Using playbook content from database (length: {len(content)})")
+        LOGGER.debug("Using playbook content from database (length: %s)", len(content))
     
     # Ensure content is always set (even if empty)
     if "content" not in playbook:
@@ -1306,48 +1640,54 @@ async def sync_playbooks_from_registry():
                 # Update the filename
                 try:
                     await sync_playbook_filename(pb["name"], pb["filename"])
-                    print(f"[sync] Updated filename for '{pb['name']}' to '{pb['filename']}'")
+                    LOGGER.info("sync: updated filename for '%s' to '%s'", pb['name'], pb['filename'])
                 except Exception as e:
-                    print(f"[sync] Error syncing filename for '{pb['name']}': {e}")
+                    LOGGER.warning("sync: error syncing filename for '%s': %s", pb['name'], e)
             else:
                 # Create new playbook
                 try:
                     await db.create_playbook(pb["name"], pb["filename"], pb["description"], pb["tags"])
-                    print(f"[sync] Added missing playbook '{pb['name']}' ({pb['filename']})")
+                    LOGGER.info("sync: added missing playbook '%s' (%s)", pb['name'], pb['filename'])
                 except Exception as e:
-                    print(f"[sync] Error adding playbook '{pb['name']}': {e}")
+                    LOGGER.warning("sync: error adding playbook '%s': %s", pb['name'], e)
 
 
 @app.post("/api/playbooks", status_code=201, dependencies=[Depends(require_auth), Depends(require_feature("playbooks"))])
-async def create_playbook(body: PlaybookCreate):
-    # Ensure filename ends with .py
-    filename = body.filename if body.filename.endswith('.py') else body.filename + '.py'
-    
+async def create_playbook(body: PlaybookCreate, request: Request = None):
+    # Validate and normalise filename (raises ValueError on bad input)
+    try:
+        filename = _sanitize_playbook_filename(body.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     # Write the playbook file
     if body.content:
         write_playbook_file(filename, body.content)
-    
+
     pid = await db.create_playbook(body.name, filename, body.description, body.tags, body.content)
+    session = _get_session(request) if request else None
+    await _audit("config", "playbook.create", user=session["user"] if session else "", detail=f"created playbook '{body.name}'", correlation_id=_corr_id(request))
     return {"id": pid}
 
 
 @app.put("/api/playbooks/{playbook_id}", dependencies=[Depends(require_auth), Depends(require_feature("playbooks"))])
-async def update_playbook(playbook_id: int, body: PlaybookUpdate):
+async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Request = None):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
-    
+
+    # Validate filename if provided
+    update_filename = None
+    if body.filename is not None:
+        try:
+            update_filename = _sanitize_playbook_filename(body.filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     # If content is being updated, write the file
     if body.content is not None:
-        filename = body.filename if body.filename else playbook["filename"]
-        if not filename.endswith('.py'):
-            filename += '.py'
-        write_playbook_file(filename, body.content)
-    
-    # Update filename if provided
-    update_filename = body.filename
-    if update_filename and not update_filename.endswith('.py'):
-        update_filename += '.py'
+        target_filename = update_filename or playbook["filename"]
+        write_playbook_file(target_filename, body.content)
     
     await db.update_playbook(
         playbook_id,
@@ -1357,17 +1697,21 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate):
         tags=body.tags,
         content=body.content
     )
+    session = _get_session(request) if request else None
+    await _audit("config", "playbook.update", user=session["user"] if session else "", detail=f"updated playbook {playbook_id}", correlation_id=_corr_id(request))
     return {"ok": True}
 
 
 @app.delete("/api/playbooks/{playbook_id}", dependencies=[Depends(require_auth), Depends(require_feature("playbooks"))])
-async def delete_playbook(playbook_id: int):
+async def delete_playbook(playbook_id: int, request: Request = None):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
     
     # Optionally delete the file (but keep it for now in case of rollback)
     await db.delete_playbook(playbook_id)
+    session = _get_session(request) if request else None
+    await _audit("config", "playbook.delete", user=session["user"] if session else "", detail=f"deleted playbook {playbook_id} ('{playbook['name']}')", correlation_id=_corr_id(request))
     return {"ok": True}
 
 
@@ -1381,8 +1725,10 @@ async def list_templates():
 
 
 @app.post("/api/templates", status_code=201, dependencies=[Depends(require_auth), Depends(require_feature("templates"))])
-async def create_template(body: TemplateCreate):
+async def create_template(body: TemplateCreate, request: Request = None):
     tid = await db.create_template(body.name, body.content, body.description)
+    session = _get_session(request) if request else None
+    await _audit("config", "template.create", user=session["user"] if session else "", detail=f"created template '{body.name}'", correlation_id=_corr_id(request))
     return {"id": tid}
 
 
@@ -1395,14 +1741,18 @@ async def get_template(template_id: int):
 
 
 @app.put("/api/templates/{template_id}", dependencies=[Depends(require_auth), Depends(require_feature("templates"))])
-async def update_template(template_id: int, body: TemplateUpdate):
+async def update_template(template_id: int, body: TemplateUpdate, request: Request = None):
     await db.update_template(template_id, body.name, body.content, body.description)
+    session = _get_session(request) if request else None
+    await _audit("config", "template.update", user=session["user"] if session else "", detail=f"updated template {template_id}", correlation_id=_corr_id(request))
     return {"ok": True}
 
 
 @app.delete("/api/templates/{template_id}", dependencies=[Depends(require_auth), Depends(require_feature("templates"))])
-async def delete_template(template_id: int):
+async def delete_template(template_id: int, request: Request = None):
     await db.delete_template(template_id)
+    session = _get_session(request) if request else None
+    await _audit("config", "template.delete", user=session["user"] if session else "", detail=f"deleted template {template_id}", correlation_id=_corr_id(request))
     return {"ok": True}
 
 
@@ -1427,6 +1777,7 @@ async def create_credential(body: CredentialCreate, request: Request):
         encrypt(body.secret) if body.secret else encrypt(body.password),
         owner_id=owner_id,
     )
+    await _audit("config", "credential.create", user=session["user"] if session else "", detail=f"created credential '{body.name}'", correlation_id=_corr_id(request))
     return {"id": cid}
 
 
@@ -1439,6 +1790,7 @@ async def delete_credential(cred_id: int, request: Request):
     if cred.get("owner_id") and session and cred["owner_id"] != session["user_id"]:
         raise HTTPException(403, "You can only delete your own credentials")
     await db.delete_credential(cred_id)
+    await _audit("config", "credential.delete", user=session["user"] if session else "", detail=f"deleted credential {cred_id}", correlation_id=_corr_id(request))
     return {"ok": True}
 
 
@@ -1468,6 +1820,7 @@ async def update_credential(cred_id: int, body: CredentialUpdate, request: Reque
         enc_password=updates.get("enc_password"),
         enc_secret=updates.get("enc_secret"),
     )
+    await _audit("config", "credential.update", user=session["user"] if session else "", detail=f"updated credential {cred_id}", correlation_id=_corr_id(request))
     return {"ok": True}
 
 
@@ -1505,7 +1858,7 @@ async def launch_job(body: JobLaunch, request: Request):
     at /ws/jobs/{job_id} to stream real-time output.
     """
     session = _get_session(request)
-    print(f"[debug] JobLaunch request: playbook_id={body.playbook_id}, host_ids={body.host_ids}, inventory_group_id={body.inventory_group_id}")
+    LOGGER.debug("JobLaunch request: playbook_id=%s host_ids=%s inventory_group_id=%s", body.playbook_id, body.host_ids, body.inventory_group_id)
     
     # Validate playbook exists
     playbook = await db.get_playbook(body.playbook_id)
@@ -1575,6 +1928,7 @@ async def launch_job(body: JobLaunch, request: Request):
         job_id, pb_class, hosts, credentials, template_commands, body.dry_run
     ))
 
+    await _audit("jobs", "job.launch", user=launched_by, detail=f"launched job {job_id} playbook='{playbook['name']}' hosts={len(hosts)} dry_run={body.dry_run}", correlation_id=_corr_id(request))
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1587,55 +1941,56 @@ async def _run_job(
     dry_run: bool,
 ):
     """Background task: execute playbook, store events, broadcast via WebSocket."""
-    hosts_ok = 0
-    hosts_failed = 0
+    async with _job_semaphore:
+        hosts_ok = 0
+        hosts_failed = 0
 
-    async def on_event(event: LogEvent):
-        nonlocal hosts_ok, hosts_failed
+        async def on_event(event: LogEvent):
+            nonlocal hosts_ok, hosts_failed
 
-        # Persist event
-        await db.add_job_event(job_id, event.level, event.message, event.host)
+            # Persist event
+            await db.add_job_event(job_id, event.level, event.message, event.host)
 
-        # Track host results
-        if event.level == "success" and "Finished processing" in event.message:
-            hosts_ok += 1
-        elif event.level == "error" and event.host:
-            hosts_failed += 1
+            # Track host results
+            if event.level == "success" and "Finished processing" in event.message:
+                hosts_ok += 1
+            elif event.level == "error" and event.host:
+                hosts_failed += 1
 
-        # Broadcast to WebSocket subscribers
-        sockets = _job_sockets.get(job_id, [])
-        dead = []
+            # Broadcast to WebSocket subscribers
+            sockets = _job_sockets.get(job_id, [])
+            dead = []
+            for ws in sockets:
+                try:
+                    await ws.send_json(event.to_dict())
+                except Exception:
+                    dead.append(ws)
+            for ws in dead:
+                sockets.remove(ws)
+
+        try:
+            result = await execute_playbook(
+                pb_class, hosts, credentials, template_commands, dry_run, on_event
+            )
+            await db.finish_job(
+                job_id,
+                status=result.status,
+                hosts_ok=hosts_ok,
+                hosts_failed=hosts_failed,
+                hosts_skipped=result.hosts_skipped,
+            )
+        except Exception as e:
+            await db.finish_job(job_id, status="failed", hosts_failed=len(hosts))
+            await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
+
+        # Notify WebSocket clients that job is done
+        done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
+        sockets = _job_sockets.pop(job_id, [])
         for ws in sockets:
             try:
-                await ws.send_json(event.to_dict())
+                await ws.send_json(done_msg)
             except Exception:
-                dead.append(ws)
-        for ws in dead:
-            sockets.remove(ws)
-
-    try:
-        result = await execute_playbook(
-            pb_class, hosts, credentials, template_commands, dry_run, on_event
-        )
-        await db.finish_job(
-            job_id,
-            status=result.status,
-            hosts_ok=hosts_ok,
-            hosts_failed=hosts_failed,
-            hosts_skipped=result.hosts_skipped,
-        )
-    except Exception as e:
-        await db.finish_job(job_id, status="failed", hosts_failed=len(hosts))
-        await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
-
-    # Notify WebSocket clients that job is done
-    done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
-    sockets = _job_sockets.pop(job_id, [])
-    for ws in sockets:
-        try:
-            await ws.send_json(done_msg)
-        except Exception:
-            pass
+                pass
 
 
 # ── WebSocket for live job streaming ─────────────────────────────────────────

@@ -2,6 +2,8 @@
 
 This runbook documents the standard path for converting FortiGate configs to FTD artifacts and applying them safely.
 
+For full workflow examples and CLI/API reference see [V2_WORKFLOW_GUIDE.md](V2_WORKFLOW_GUIDE.md).
+
 ## Preconditions
 
 - `.env` is configured and API auth is enabled for production (`APP_API_TOKEN`, `APP_REQUIRE_API_TOKEN=true`).
@@ -13,12 +15,40 @@ This runbook documents the standard path for converting FortiGate configs to FTD
 1. Start Plexus and verify service health:
    - `GET /api/health` returns `{"ok": true, ...}`.
 2. Upload FortiGate YAML in the converter UI.
-3. Run conversion with dry-run enabled first.
-4. Review generated diff and conversion summary.
-5. Download artifacts archive for record keeping.
-6. Run import against target FTD using generated JSON artifacts.
-7. Validate interfaces, zones, routes, and rules on target.
-8. Deploy changes in FTD when validation is complete.
+3. Run conversion and review the summary before importing.
+4. Download artifacts archive for record keeping.
+5. Run import against target FTD using generated JSON artifacts.
+6. Validate interfaces, zones, routes, and rules on target (see checklist below).
+7. Deploy changes in FTD when validation is complete.
+
+## Post-Conversion Verification Checklist
+
+Run these checks after Step 3 (conversion) and before triggering any import.
+
+- [ ] `conversion_output.log` — no unexpected `[WARN]` or `[ERROR]` lines
+- [ ] `address_objects.json` — object count matches expected (`jq length ftd_config_address_objects.json`)
+- [ ] `address_groups.json` — spot-check that groups have non-empty member lists (empty members = unresolvable reference in source)
+- [ ] `service_objects.json` — TCP + UDP totals match source policy service definitions
+- [ ] `access_rules.json` — rule count and permit/deny ratio reasonable; check `conversion_summary.access_rules`
+- [ ] `static_routes.json` — `converted` count is expected; `blackhole_skipped` is intentional (null-routes dropped)
+- [ ] `metadata.json` — `target_model` matches the physical FTD appliance being imported into
+- [ ] `subinterfaces.json` / `physical_interfaces.json` — interface names match FTD hardware naming (`Ethernet1/x`)
+- [ ] No duplicate names in `address_objects.json` (`jq '[.[].name] | unique | length' ftd_config_address_objects.json`)
+- [ ] Download artifacts zip and archive it before importing
+
+## Post-Import Verification Checklist
+
+Run these checks after import completes and before issuing a deploy.
+
+- [ ] FTD Objects page — address object count matches `conversion_summary.address_objects`
+- [ ] FTD Object Groups page — group count matches `conversion_summary.address_groups`
+- [ ] FTD Service Objects page — service object count matches `conversion_summary.service_objects.total`
+- [ ] FTD Interfaces page — all expected physical and subinterfaces are present with correct zones
+- [ ] FTD Routing page — static route count matches `conversion_summary.static_routes.converted`
+- [ ] FTD Access Control Policy — rule count matches `conversion_summary.access_rules.total`, order is preserved
+- [ ] No interface is in an error/admin-down state that should be up
+- [ ] No pending-deploy error indicators in FDM UI before deploying
+- [ ] Test traffic path for a representative rule (if possible, on a non-production window)
 
 ## Rollback Steps
 
@@ -27,6 +57,106 @@ This runbook documents the standard path for converting FortiGate configs to FTD
 3. Re-run import in dry-run mode and review mismatch details.
 4. Correct source config or object mappings.
 5. Re-apply in a maintenance window.
+
+---
+
+## Partial Import Failure Recovery Playbook
+
+Import failures are stage-specific — only the failed stage needs to be re-run. The importer
+skips objects that already exist (duplicate detection), so re-running a stage is safe.
+
+### 1. Identify which stage failed
+
+Import output uses a structured line format:
+
+```
+Address Objects    12.3s [OK]
+Address Groups      3.1s [FAIL]
+```
+
+The first `[FAIL]` line marks the stage to resume from.
+
+### 2. Fix the root cause before re-running
+
+| Symptom | Likely Cause | Fix |
+|---|---|---|
+| `404 Not Found` on group import | Dependent address object was not imported | Re-run `--only-address-objects` first, then groups |
+| `409 Conflict / already exists` | Object present from a previous partial run | Safe to ignore — importer skips duplicates by default |
+| `404 Not Found` on route/rule import | Referenced interface or object missing | Import missing dependency stage first |
+| `422 / hardwareName not found` | Interface name mismatch for target model | Check `metadata.json` target_model vs actual FTD hardware |
+| `429 Too Many Requests` | FTD API rate limiting | Reduce `--workers`, add `--retry-backoff 1.0 --retry-attempts 6` |
+| `5xx` transient errors | FTD API congestion or instability | Retry same stage with `--retry-attempts 6 --retry-backoff 0.5` |
+| Stage times out completely | Network or FDM unresponsive | Check FTD management plane, increase `--api-timeout` |
+
+### 3. Re-run only the failed stage
+
+```bash
+# Example: groups failed because objects were partially missing
+python Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py \
+    --host 10.10.10.10 --username admin --password '***' \
+    --base ftd_config \
+    --only-address-objects   # ensure objects are complete first
+
+python Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py \
+    --host 10.10.10.10 --username admin --password '***' \
+    --base ftd_config \
+    --only-address-groups    # now re-run the failed stage
+```
+
+```bash
+# Example: route import failed with transient 5xx
+python Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py \
+    --host 10.10.10.10 --username admin --password '***' \
+    --base ftd_config \
+    --only-routes \
+    --retry-attempts 6 --retry-backoff 0.5 --retry-jitter-max 0.4
+```
+
+```bash
+# Example: rule import failed with 429 rate limiting
+python Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py \
+    --host 10.10.10.10 --username admin --password '***' \
+    --base ftd_config \
+    --only-rules \
+    --workers 2 --retry-attempts 8 --retry-backoff 1.0
+```
+
+### 4. Dependency order for manual re-sequencing
+
+If you need to re-run multiple stages manually, respect this order:
+
+```
+address_objects  →  address_groups
+service_objects  →  service_groups
+physical_interfaces  →  etherchannels  →  security_zones  →  subinterfaces  →  bridge_groups
+(all of the above)  →  routes  →  rules  →  deploy
+```
+
+Stages within the same row have no mutual dependency and can be run in any order relative to each other.
+
+### 5. When to do a full cleanup and re-import
+
+If the FTD state is inconsistent (partial objects from multiple runs, mismatched counts), prefer
+cleanup over incremental repair:
+
+1. Run the cleanup tool to remove all previously imported objects.
+2. Re-verify the source YAML has not changed.
+3. Re-run conversion to regenerate fresh artifacts.
+4. Re-run a full import from scratch.
+
+> **Do not deploy** until the post-import verification checklist above passes.
+
+### 6. Preserving artifacts for post-mortem
+
+Before a cleanup, archive the current session artifacts:
+
+```bash
+curl -o pre-cleanup-artifacts.zip \
+  "http://localhost:8080/api/converter-session/$SESSION_ID/download" \
+  -H "X-API-Token: $TOKEN"
+```
+
+---
 
 ## FAQ (Mismatch Causes)
 

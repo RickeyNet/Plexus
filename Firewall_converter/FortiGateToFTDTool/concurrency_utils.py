@@ -11,9 +11,13 @@ R = TypeVar("R")
 # Common error fragments returned by FTD API wrappers for transient failures.
 DEFAULT_TRANSIENT_ERROR_TOKENS = (
     "429",
+    "423",
     "too many",
     "rate limit",
     "timeout",
+    "locktimeout",
+    "read-lock",
+    "unable to acquire the read-lock",
     "temporarily",
     "503",
     "504",

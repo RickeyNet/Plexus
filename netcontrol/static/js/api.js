@@ -5,6 +5,16 @@
 
 const API_BASE = '/api';
 
+let _csrfToken = '';
+
+export function setCsrfToken(token) {
+    _csrfToken = token || '';
+}
+
+export function getCsrfToken() {
+    return _csrfToken;
+}
+
 async function apiRequest(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
     const config = {
@@ -14,6 +24,11 @@ async function apiRequest(endpoint, options = {}) {
         },
         ...options,
     };
+
+    // Attach CSRF token for state-changing requests
+    if (_csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes((config.method || 'GET').toUpperCase())) {
+        config.headers['X-CSRF-Token'] = _csrfToken;
+    }
 
     if (config.body && typeof config.body === 'object') {
         config.body = JSON.stringify(config.body);
