@@ -46,6 +46,9 @@ NOTE ON MEMBER TYPES:
     - The type field is set generically (could be refined in post-processing)
 """
 
+# NOTE: This module is feature-frozen for compatibility.
+# Implement new conversion behavior in Firewall_converter/converter_v2/core.
+
 import re
 from typing import Any
 
