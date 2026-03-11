@@ -92,6 +92,66 @@ function initPerformanceMode() {
     applyPerformanceMode(enabled);
 }
 
+// ── Modal Accessibility: Focus Trap & Focus Return ──────────────────────────
+let _previouslyFocusedElement = null;
+const _focusTrapStack = [];
+
+const FOCUSABLE_SELECTOR = [
+    'a[href]', 'button:not([disabled])', 'input:not([disabled])',
+    'select:not([disabled])', 'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+].join(', ');
+
+function trapFocus(container) {
+    const handler = (e) => {
+        if (e.key !== 'Tab') return;
+        const focusable = Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR))
+            .filter(el => el.offsetParent !== null);
+        if (focusable.length === 0) { e.preventDefault(); return; }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+            if (document.activeElement === first || !container.contains(document.activeElement)) {
+                e.preventDefault();
+                last.focus();
+            }
+        } else {
+            if (document.activeElement === last || !container.contains(document.activeElement)) {
+                e.preventDefault();
+                first.focus();
+            }
+        }
+    };
+    container.addEventListener('keydown', handler);
+    return handler;
+}
+
+function activateFocusTrap(overlayId) {
+    _previouslyFocusedElement = document.activeElement;
+    const overlay = document.getElementById(overlayId);
+    if (!overlay) return;
+    const dialog = overlay.querySelector('[role="dialog"], [role="alertdialog"], .command-palette');
+    const target = dialog || overlay;
+    const handler = trapFocus(target);
+    _focusTrapStack.push({ overlayId, handler, target, previousFocus: _previouslyFocusedElement });
+    // Auto-focus first focusable element inside the dialog
+    requestAnimationFrame(() => {
+        const first = target.querySelector(FOCUSABLE_SELECTOR);
+        if (first) first.focus();
+    });
+}
+
+function deactivateFocusTrap(overlayId) {
+    const idx = _focusTrapStack.findIndex(t => t.overlayId === overlayId);
+    if (idx === -1) return;
+    const entry = _focusTrapStack.splice(idx, 1)[0];
+    entry.target.removeEventListener('keydown', entry.handler);
+    // Restore focus to the element that was focused before the modal opened
+    if (entry.previousFocus && typeof entry.previousFocus.focus === 'function') {
+        requestAnimationFrame(() => entry.previousFocus.focus());
+    }
+}
+
 function markPageCacheFresh(page) {
     pageCacheMeta[page] = Date.now();
 }
@@ -141,7 +201,14 @@ function initNavigation() {
     });
 }
 
-function navigateToPage(page) {
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'settings'];
+
+function getPageFromHash() {
+    const hash = window.location.hash.replace(/^#\/?/, '');
+    return VALID_PAGES.includes(hash) ? hash : null;
+}
+
+function navigateToPage(page, { updateHash = true } = {}) {
     if (page === 'settings' && currentUserData?.role !== 'admin') {
         showError('Admin access required for Settings');
         return;
@@ -171,6 +238,13 @@ function navigateToPage(page) {
         currentPage = page;
         updateBreadcrumb(page);
         loadPageData(page);
+        // Sync URL hash
+        if (updateHash) {
+            const newHash = `#${page}`;
+            if (window.location.hash !== newHash) {
+                history.pushState(null, '', newHash);
+            }
+        }
     }
 }
 
@@ -311,17 +385,19 @@ async function loadConverter(options = {}) {
     const importSelectAll = document.getElementById('import-only-select-all');
 
     // Bail out if any required element is missing
-    if (!convertForm || !importForm || !statusDiv || !step2 || !outputWindow || !summaryCards || !importOutput) {
-        console.error('Converter: missing DOM elements', { convertForm, importForm, statusDiv, step2, outputWindow, summaryCards, importOutput });
+    if (!convertForm || !importForm || !statusDiv || !step2 || !step3 || !outputWindow || !summaryCards || !importOutput) {
+        console.error('Converter: missing DOM elements', { convertForm, importForm, statusDiv, step2, step3, outputWindow, summaryCards, importOutput });
         return;
     }
 
     // Reset state only on first load/forced refresh so revisiting keeps context.
     if (!preserveContent) {
+        const step1 = document.getElementById('converter-step1');
+        if (step1) step1.style.display = '';
         convertForm.reset();
         statusDiv.textContent = '';
         step2.style.display = 'none';
-        if (step3) step3.style.display = 'none';
+        step3.style.display = 'none';
         importOutput.style.display = 'none';
         converterSessionId = null;
         updateConverterStepper(1);
@@ -434,9 +510,13 @@ async function loadConverter(options = {}) {
             // Build summary stat cards
             renderSummary(data.summary || {});
 
+            const step1El = document.getElementById('converter-step1');
+            if (step1El) step1El.style.display = 'none';
             step2.style.display = 'block';
-            statusDiv.textContent = 'Conversion complete. Review below, then import.';
+            step3.style.display = 'none';
+            statusDiv.textContent = 'Conversion complete. Review the output, then proceed to import.';
             updateConverterStepper(2);
+            step2.scrollIntoView({ behavior: 'smooth' });
             await loadRecentSessions();
         } catch (err) {
             statusDiv.textContent = 'Error: ' + err.message;
@@ -508,28 +588,32 @@ async function loadConverter(options = {}) {
         }
     };
 
-    function setActiveSession(id, message, showCleanup = false) {
+    function setActiveSession(id, message) {
         converterSessionId = id;
         if (statusDiv) statusDiv.textContent = message || `Using session ${id}.`;
-        if (step2) step2.style.display = 'block';
-        if (step3) step3.style.display = showCleanup ? 'block' : 'none';
     }
 
     window.resumeImport = function (id) {
-        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to re-run import.`, false);
+        const step1 = document.getElementById('converter-step1');
+        if (step1) step1.style.display = 'none';
+        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to import.`);
         loadSessionState(id);
-        updateConverterStepper(2);
+        step2.style.display = 'none';
+        step3.style.display = 'block';
+        updateConverterStepper(3);
         if (importOutput) { importOutput.textContent = ''; importOutput.style.display = 'none'; }
-        if (cleanupOutput) { cleanupOutput.textContent = ''; cleanupOutput.style.display = 'none'; }
-        document.getElementById('converter-step2')?.scrollIntoView({ behavior: 'smooth' });
+        document.getElementById('converter-step3')?.scrollIntoView({ behavior: 'smooth' });
     };
 
     window.resumeCleanup = function (id) {
-        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to clean up.`, true);
-        loadSessionState(id);
-        updateConverterStepper(3);
+        setActiveSession(id, `Linked session ${id} for cleanup.`);
+        // Open the cleanup section and scroll to it
+        const cleanupSection = document.getElementById('converter-cleanup-section');
+        if (cleanupSection) {
+            cleanupSection.open = true;
+            cleanupSection.scrollIntoView({ behavior: 'smooth' });
+        }
         if (cleanupOutput) { cleanupOutput.textContent = 'Ready to clean up this session.'; cleanupOutput.style.display = 'block'; }
-        document.getElementById('converter-step3')?.scrollIntoView({ behavior: 'smooth' });
     };
 
     async function loadSessionConfigFile(sessionId, filename) {
@@ -594,15 +678,13 @@ async function loadConverter(options = {}) {
 
     await loadRecentSessions();
 
-    // ── Step 2: Import ───────────────────────────────────────────────────────
+    // ── Step 3: Import ───────────────────────────────────────────────────────
     importForm.onsubmit = async (e) => {
         e.preventDefault();
         if (!converterSessionId) { showToast('No active conversion session. Please convert first or resume one.', 'error'); return; }
-        if (step3) step3.style.display = 'block';
         importOutput.textContent = `Importing session ${converterSessionId} to FTD...\n`;
         importOutput.style.display = 'block';
         importOutput.scrollIntoView({ behavior: 'smooth' });
-        updateConverterStepper(3);
 
         try {
             const importHeaders = { 'Content-Type': 'application/json' };
@@ -640,12 +722,10 @@ async function loadConverter(options = {}) {
         }
     };
 
-    // ── Step 3: Cleanup ───────────────────────────────────────────────────────
+    // ── Cleanup Utility ─────────────────────────────────────────────────────
     if (cleanupForm) {
         cleanupForm.onsubmit = async (e) => {
             e.preventDefault();
-            if (step3) step3.style.display = 'block';
-            updateConverterStepper(3);
             const deleteFlags = [...document.querySelectorAll('.delete-flag:checked')].map(cb => cb.value);
             if (deleteFlags.length === 0) {
                 showToast('Please select at least one item to delete.', 'error');
@@ -727,10 +807,12 @@ window.resetConverter = function () {
     const scf = document.getElementById('session-config-file');
     const scc = document.getElementById('session-config-content');
     const scm = document.getElementById('session-config-meta');
+    const s1 = document.getElementById('converter-step1');
     if (f)  f.reset();
     const importSelectAll = document.getElementById('import-only-select-all');
     if (importSelectAll) importSelectAll.indeterminate = false;
     if (s)  s.textContent = '';
+    if (s1) s1.style.display = '';
     if (s2) s2.style.display = 'none';
     if (s3) s3.style.display = 'none';
     if (io) io.style.display = 'none';
@@ -1868,6 +1950,7 @@ function showModal(title, content) {
     document.getElementById('modal-title').textContent = title;
     document.getElementById('modal-body').innerHTML = content;
     document.getElementById('modal-overlay').classList.add('active');
+    activateFocusTrap('modal-overlay');
 }
 
 function closeAllModals() {
@@ -1878,6 +1961,7 @@ function closeAllModals() {
 
     document.getElementById('modal-overlay').classList.remove('active');
     document.getElementById('modal-body').innerHTML = '';
+    deactivateFocusTrap('modal-overlay');
 }
 
 // Expose to window for inline onclick handlers
@@ -1961,8 +2045,11 @@ function showConfirm(optionsOrTitle = {}) {
 
         overlay.addEventListener('click', onOverlay);
         overlay.classList.add('active');
+        activateFocusTrap('modal-overlay');
         cancelBtn.addEventListener('click', onCancel);
         confirmBtn.addEventListener('click', onConfirm);
+        // Focus the cancel button by default for safety
+        requestAnimationFrame(() => cancelBtn.focus());
     });
 }
 
@@ -2723,6 +2810,7 @@ window.viewJobOutput = async function(jobId) {
     
     output.innerHTML = '<div class="loading">Loading...</div>';
     modal.classList.add('active');
+    activateFocusTrap('job-output-modal');
 
     // Load historical events
     try {
@@ -2766,6 +2854,7 @@ window.viewJobOutput = async function(jobId) {
 window.closeJobOutputModal = function() {
     document.getElementById('job-output-modal').classList.remove('active');
     disconnectJobWebSocket();
+    deactivateFocusTrap('job-output-modal');
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2914,7 +3003,10 @@ function showApp(userData) {
 
     const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter'];
     const firstAllowed = orderedPages.find((page) => canAccessFeature(NAV_FEATURE_MAP[page])) || 'dashboard';
-    navigateToPage(firstAllowed);
+    // Restore page from URL hash if present, otherwise go to first allowed page
+    const hashPage = getPageFromHash();
+    const startPage = hashPage && canAccessFeature(NAV_FEATURE_MAP[hashPage] || hashPage) ? hashPage : firstAllowed;
+    navigateToPage(startPage);
 }
 
 function initLoginForm() {
@@ -3005,11 +3097,13 @@ window.showUserMenu = async function() {
         return;
     }
     finalOverlay.classList.add('active');
+    activateFocusTrap('user-menu-overlay');
     console.log('showUserMenu: User menu overlay activated.');
 };
 
 window.closeUserMenu = function() {
     document.getElementById('user-menu-overlay').classList.remove('active');
+    deactivateFocusTrap('user-menu-overlay');
 };
 
 window.doLogout = async function() {
@@ -3329,6 +3423,45 @@ function updateConverterStepper(activeStep) {
     if (fill2) fill2.style.width = activeStep > 2 ? '100%' : '0%';
 }
 
+window.jumpToConverterStep = function (step) {
+    const step1 = document.getElementById('converter-step1');
+    const step2 = document.getElementById('converter-step2');
+    const step3 = document.getElementById('converter-step3');
+    const statusDiv = document.getElementById('converter-status');
+    const importOutput = document.getElementById('import-output-window');
+
+    if (step === 1) {
+        // Show upload form, hide review/import
+        if (step1) step1.style.display = '';
+        if (step2) step2.style.display = 'none';
+        if (step3) step3.style.display = 'none';
+        updateConverterStepper(1);
+        if (statusDiv) statusDiv.textContent = '';
+        step1?.scrollIntoView({ behavior: 'smooth' });
+    } else if (step === 2) {
+        // Show review section
+        if (step1) step1.style.display = 'none';
+        if (step2) step2.style.display = 'block';
+        if (step3) step3.style.display = 'none';
+        updateConverterStepper(2);
+        if (statusDiv) statusDiv.textContent = converterSessionId
+            ? `Reviewing session ${converterSessionId}.`
+            : 'No conversion session active — go back to Step 1 to convert, or select a recent session.';
+        step2?.scrollIntoView({ behavior: 'smooth' });
+    } else if (step === 3) {
+        // Show import section
+        if (step1) step1.style.display = 'none';
+        if (step2) step2.style.display = 'none';
+        if (step3) step3.style.display = 'block';
+        updateConverterStepper(3);
+        if (statusDiv) statusDiv.textContent = converterSessionId
+            ? `Using session ${converterSessionId}. Provide FTD credentials to import.`
+            : 'No conversion session active — go back to Step 1 to convert, or select a recent session.';
+        if (importOutput) { importOutput.textContent = ''; importOutput.style.display = 'none'; }
+        step3?.scrollIntoView({ behavior: 'smooth' });
+    }
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Dashboard Ring Charts
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3407,12 +3540,14 @@ function openCommandPalette() {
     input.value = '';
     commandPaletteSelectedIndex = 0;
     renderCommandPaletteResults('');
+    activateFocusTrap('command-palette-overlay');
     setTimeout(() => input.focus(), 50);
 }
 
 window.closeCommandPalette = function () {
     const overlay = document.getElementById('command-palette-overlay');
     if (overlay) overlay.classList.remove('visible');
+    deactivateFocusTrap('command-palette-overlay');
 };
 
 function renderCommandPaletteResults(query) {
@@ -3482,12 +3617,17 @@ function initKeyboardShortcuts() {
             }
             // Close any open modal (but not the forced password change modal)
             if (currentUserData?.must_change_password) return;
-            const modals = ['modal-overlay', 'job-output-modal', 'user-menu-overlay', 'confirm-overlay'];
-            for (const id of modals) {
+            const modalClosers = {
+                'modal-overlay': closeAllModals,
+                'job-output-modal': closeJobOutputModal,
+                'user-menu-overlay': closeUserMenu,
+                'confirm-overlay': closeAllModals,
+            };
+            for (const [id, closeFn] of Object.entries(modalClosers)) {
                 const el = document.getElementById(id);
                 if (el && (el.classList.contains('active') || el.classList.contains('visible'))) {
                     e.preventDefault();
-                    closeAllModals();
+                    closeFn();
                     return;
                 }
             }
@@ -3647,6 +3787,14 @@ function emptyStateHTML(message, type, actionBtn) {
         ${actionBtn || ''}
     </div>`;
 }
+
+// ── Hash-based routing: back/forward button support ─────────────────────────
+window.addEventListener('popstate', () => {
+    const page = getPageFromHash();
+    if (page && page !== currentPage && document.getElementById('app-container')?.style.display !== 'none') {
+        navigateToPage(page, { updateHash: false });
+    }
+});
 
 document.addEventListener('DOMContentLoaded', async () => {
     initThemeControls();
