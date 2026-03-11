@@ -118,10 +118,33 @@ docker-compose up --build
 docker-compose down
 ```
 
+PostgreSQL mode (recommended for VM/production reliability):
+
+```bash
+# in .env
+APP_DB_ENGINE=postgres
+APP_DATABASE_URL=postgresql://plexus:plexus@postgres:5432/plexus
+POSTGRES_DB=plexus
+POSTGRES_USER=plexus
+POSTGRES_PASSWORD=change_me
+
+docker compose up --build
+```
+
+SQLite mode (default/dev):
+
+```bash
+# in .env
+APP_DB_ENGINE=sqlite
+
+docker compose up --build
+```
+
 Notes:
 - The Docker image runs `python templates/run.py --host 0.0.0.0 --port 8080` inside the container.
 - The built-in healthcheck pings `/api/health`; compose restarts the container if it becomes unhealthy.
 - Named volumes persist converter sessions, DB data, and generated certs across restarts.
+- Compose now includes a PostgreSQL service; SQLite remains available as a backend option.
 - For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables.
 
 ## Database Backends
@@ -136,6 +159,18 @@ Planned backend env selectors:
 
 - `APP_DB_ENGINE=sqlite|postgres`
 - `APP_DATABASE_URL=postgresql://<user>:<pass>@postgres:5432/<db>`
+
+SQLite to PostgreSQL migration utility:
+
+```bash
+# verify source and show source row counts only
+python tools/migrate_sqlite_to_postgres.py --dry-run
+
+# migrate and verify row-count parity
+python tools/migrate_sqlite_to_postgres.py \
+  --sqlite-path routes/netcontrol.db \
+  --postgres-url postgresql://plexus:plexus@localhost:5432/plexus
+```
 
 ## Versioning and Release
 
