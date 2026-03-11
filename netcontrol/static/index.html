@@ -5,9 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Plexus - Network Automation Hub</title>
     <link rel="icon" type="image/png" href="/static/img/logo.png">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -224,7 +221,7 @@
 
                 <!-- Stepper Progress Bar -->
                 <div class="stepper">
-                    <div class="stepper-step active" data-step="1">
+                    <div class="stepper-step active stepper-clickable" data-step="1" onclick="jumpToConverterStep(1)" title="Upload & Convert">
                         <div class="stepper-indicator">
                             <div class="stepper-number">1</div>
                         </div>
@@ -233,20 +230,20 @@
                     <div class="stepper-connector">
                         <div class="stepper-connector-fill" id="stepper-fill-1"></div>
                     </div>
-                    <div class="stepper-step" data-step="2">
+                    <div class="stepper-step stepper-clickable" data-step="2" onclick="jumpToConverterStep(2)" title="Review conversion output">
                         <div class="stepper-indicator">
                             <div class="stepper-number">2</div>
                         </div>
-                        <div class="stepper-label">Review & Import</div>
+                        <div class="stepper-label">Review</div>
                     </div>
                     <div class="stepper-connector">
                         <div class="stepper-connector-fill" id="stepper-fill-2"></div>
                     </div>
-                    <div class="stepper-step" data-step="3">
+                    <div class="stepper-step stepper-clickable" data-step="3" onclick="jumpToConverterStep(3)" title="Import to FTD">
                         <div class="stepper-indicator">
                             <div class="stepper-number">3</div>
                         </div>
-                        <div class="stepper-label">Cleanup</div>
+                        <div class="stepper-label">Import</div>
                     </div>
                 </div>
 
@@ -308,7 +305,7 @@
                     </div>
                 </div>
 
-                <!-- Step 2: Results + Import (shown after conversion) -->
+                <!-- Step 2: Review (shown after conversion) -->
                 <div id="converter-step2" style="display:none;">
                     <div class="section">
                         <h3>Conversion Summary</h3>
@@ -318,6 +315,14 @@
                         <h3>Conversion Output</h3>
                         <pre id="converter-output-window" style="max-height: 400px; overflow-y: auto; background: #181c20; color: #e0e0e0; padding: 1rem; border-radius: 0.5rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word;"></pre>
                     </div>
+                    <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+                        <button class="btn btn-primary" onclick="jumpToConverterStep(3)">Proceed to Import</button>
+                        <button class="btn btn-secondary" onclick="jumpToConverterStep(1)">Back</button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Import to FTD -->
+                <div id="converter-step3" style="display:none;">
                     <div class="section">
                         <h3>Import to FTD</h3>
                         <form id="import-form" style="max-width: 600px; margin: 1rem 0;">
@@ -364,12 +369,16 @@
                     </div>
                 </div>
 
-                <!-- Step 3: Cleanup / Rollback -->
-                <div id="converter-step3" style="display:none;">
-                    <div class="section">
-                        <h3>Cleanup / Rollback</h3>
-                        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Remove objects previously imported to the FTD device. Appliance model is auto-detected from the active session.</p>
-                        <form id="cleanup-form" style="max-width: 600px; margin: 1rem 0;">
+                <!-- FTD Cleanup Utility (standalone, outside stepper flow) -->
+                <div class="converter-cleanup-divider"></div>
+                <details id="converter-cleanup-section" class="converter-cleanup-details">
+                    <summary class="converter-cleanup-summary">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                        FTD Cleanup Utility
+                    </summary>
+                    <div class="converter-cleanup-body">
+                        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Remove objects from an FTD device. Useful for rolling back imports or cleaning up test data. Optionally link to a conversion session for model auto-detection.</p>
+                        <form id="cleanup-form" style="max-width: 600px; margin: 0;">
                             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
                                 <div class="form-group">
                                     <label for="cleanup-host">FTD Host/IP</label>
@@ -412,7 +421,7 @@
                         </form>
                         <pre id="cleanup-output-window" style="display:none; margin-top: 1rem; max-height: 400px; overflow-y: auto; background: #181c20; color: #e0e0e0; padding: 1rem; border-radius: 0.5rem; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word;"></pre>
                     </div>
-                </div>
+                </details>
             </div>
 
             <!-- Inventory Page -->
@@ -655,10 +664,10 @@
 
     <!-- Modals -->
     <div id="modal-overlay" class="modal-overlay" onclick="closeAllModals()">
-        <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <h3 id="modal-title">Modal</h3>
-                <button class="modal-close" onclick="closeAllModals()">&times;</button>
+                <button class="modal-close" onclick="closeAllModals()" aria-label="Close dialog">&times;</button>
             </div>
             <div class="modal-body" id="modal-body">
                 <!-- Modal content injected here -->
@@ -668,10 +677,10 @@
 
     <!-- Job Output Modal -->
     <div id="job-output-modal" class="modal-overlay" onclick="closeJobOutputModal()">
-        <div class="modal modal-large" onclick="event.stopPropagation()">
+        <div class="modal modal-large" role="dialog" aria-modal="true" aria-label="Job Output" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <h3>Job Output</h3>
-                <button class="modal-close" onclick="closeJobOutputModal()">&times;</button>
+                <button class="modal-close" onclick="closeJobOutputModal()" aria-label="Close dialog">&times;</button>
             </div>
             <div class="modal-body">
                 <div id="job-output" class="job-output"></div>
@@ -681,7 +690,7 @@
 
     <!-- User Menu Modal -->
     <div id="user-menu-overlay" class="modal-overlay" onclick="closeUserMenu()">
-        <div class="modal confirm-modal" onclick="event.stopPropagation()" style="min-width: 340px;">
+        <div class="modal confirm-modal" role="dialog" aria-modal="true" aria-label="Account menu" onclick="event.stopPropagation()" style="min-width: 340px;">
             <h3>Account</h3>
             <div id="user-profile-section" style="margin-top: 1rem;">
                 <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; padding: 1rem; background: var(--bg-secondary); border-radius: 0.5rem; border: 1px solid var(--border);">
@@ -703,7 +712,7 @@
 
     <!-- Command Palette (Ctrl+K) -->
     <div id="command-palette-overlay" class="modal-overlay" onclick="closeCommandPalette()">
-        <div class="command-palette" onclick="event.stopPropagation()">
+        <div class="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onclick="event.stopPropagation()">
             <div class="command-palette-input-wrap">
                 <svg class="command-palette-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 <input type="text" id="command-palette-input" class="command-palette-input" placeholder="Search pages..." autocomplete="off" />
@@ -715,7 +724,7 @@
 
     <!-- Confirm Dialog -->
     <div id="confirm-overlay" class="modal-overlay">
-        <div class="modal confirm-modal" onclick="event.stopPropagation()">
+        <div class="modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" onclick="event.stopPropagation()">
             <div class="confirm-icon" id="confirm-icon">&#9888;</div>
             <h3 id="confirm-title">Are you sure?</h3>
             <p id="confirm-message" class="confirm-message"></p>
