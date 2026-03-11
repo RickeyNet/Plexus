@@ -123,6 +123,10 @@
                 </a>
             </div>
             <div class="sidebar-bottom">
+                <a href="#" class="nav-link perf-toggle" id="perf-mode-toggle" onclick="togglePerformanceMode(event)" title="Performance Mode — reduce animations and blur">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+                    <span class="nav-label">Performance</span>
+                </a>
                 <a href="#" class="nav-link nav-user" id="nav-user" onclick="showUserMenu()">
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                     <span class="nav-label nav-user-label">admin</span>
@@ -473,6 +477,12 @@
                         <option value="all">Dry Run: All</option>
                         <option value="yes">Dry Run: Yes</option>
                         <option value="no">Dry Run: No</option>
+                    </select>
+                    <select id="jobs-date-filter" class="form-select list-control-select">
+                        <option value="all">Date: All</option>
+                        <option value="today">Date: Today</option>
+                        <option value="7d">Date: Last 7 days</option>
+                        <option value="30d">Date: Last 30 days</option>
                     </select>
                     <select id="jobs-sort" class="form-select list-control-select">
                         <option value="started_desc">Started: Newest</option>

@@ -33,7 +33,7 @@ const pageCacheMeta = {};
 const listViewState = {
     inventory: { items: [], query: '', sort: 'name_asc' },
     playbooks: { items: [], query: '', sort: 'name_asc' },
-    jobs: { items: [], query: '', sort: 'started_desc', status: 'all', dryRun: 'all' },
+    jobs: { items: [], query: '', sort: 'started_desc', status: 'all', dryRun: 'all', dateRange: 'all' },
     templates: { items: [], query: '', sort: 'name_asc' },
     credentials: { items: [], query: '', sort: 'name_asc' },
 };
@@ -63,6 +63,33 @@ function initThemeControls() {
             select.dataset.themeBound = '1';
         }
     });
+}
+
+// ── Performance / Reduced-Motion Mode ─────────────────────────────────────────
+const PERF_KEY = 'plexus_performance_mode';
+
+function applyPerformanceMode(enabled) {
+    document.body.classList.toggle('reduced-motion', enabled);
+    localStorage.setItem(PERF_KEY, enabled ? '1' : '0');
+    const toggle = document.getElementById('perf-mode-toggle');
+    if (toggle) {
+        toggle.classList.toggle('active', enabled);
+        toggle.title = enabled ? 'Performance Mode ON — click to disable' : 'Performance Mode — reduce animations and blur';
+    }
+}
+
+function togglePerformanceMode(e) {
+    e.preventDefault();
+    const isActive = document.body.classList.contains('reduced-motion');
+    applyPerformanceMode(!isActive);
+}
+window.togglePerformanceMode = togglePerformanceMode;
+
+function initPerformanceMode() {
+    const osPrefers = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const saved = localStorage.getItem(PERF_KEY);
+    const enabled = saved !== null ? saved === '1' : osPrefers;
+    applyPerformanceMode(enabled);
 }
 
 function markPageCacheFresh(page) {
@@ -105,7 +132,7 @@ function applyFeatureVisibility() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function initNavigation() {
-    document.querySelectorAll('.nav-link').forEach(link => {
+    document.querySelectorAll('.nav-link[data-page]').forEach(link => {
         link.addEventListener('click', (e) => {
             e.preventDefault();
             const page = link.getAttribute('data-page');
@@ -124,8 +151,8 @@ function navigateToPage(page) {
         return;
     }
 
-    // Update active nav link
-    document.querySelectorAll('.nav-link').forEach(link => {
+    // Update active nav link (only page-navigation links, not utility toggles)
+    document.querySelectorAll('.nav-link[data-page]').forEach(link => {
         link.classList.remove('active');
         if (link.getAttribute('data-page') === page) {
             link.classList.add('active');
@@ -764,11 +791,16 @@ async function loadDashboard(_options = {}) {
     }
 }
 
+function isReducedMotion() {
+    return document.body.classList.contains('reduced-motion');
+}
+
 function animateCounter(elementId, target) {
     const el = document.getElementById(elementId);
     if (!el) return;
     const num = parseInt(target, 10) || 0;
     if (num === 0) { el.textContent = '0'; return; }
+    if (isReducedMotion()) { el.textContent = num; return; }
     const duration = 600;
     const start = performance.now();
     function step(now) {
@@ -877,12 +909,22 @@ function applyPlaybookFilters() {
 function applyJobFilters() {
     const state = listViewState.jobs;
     const query = state.query.trim().toLowerCase();
+    const now = new Date();
     const filtered = state.items.filter((job) => {
         const matchesText = !query || textMatch(job.playbook_name, query) || textMatch(job.group_name, query) || textMatch(job.status, query);
         const matchesStatus = state.status === 'all' || String(job.status || '').toLowerCase() === state.status;
         const isDry = Boolean(job.dry_run);
         const matchesDryRun = state.dryRun === 'all' || (state.dryRun === 'yes' && isDry) || (state.dryRun === 'no' && !isDry);
-        return matchesText && matchesStatus && matchesDryRun;
+        let matchesDate = true;
+        if (state.dateRange !== 'all' && job.started_at) {
+            const jobDate = new Date(job.started_at);
+            const diffMs = now - jobDate;
+            const diffDays = diffMs / (1000 * 60 * 60 * 24);
+            if (state.dateRange === 'today') matchesDate = diffDays < 1;
+            else if (state.dateRange === '7d') matchesDate = diffDays <= 7;
+            else if (state.dateRange === '30d') matchesDate = diffDays <= 30;
+        }
+        return matchesText && matchesStatus && matchesDryRun && matchesDate;
     });
     if (state.sort === 'started_asc') filtered.sort((a, b) => String(a.started_at || '').localeCompare(String(b.started_at || '')));
     else filtered.sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')));
@@ -954,6 +996,10 @@ function initListPageControls() {
     });
     bindListControl('jobs-dryrun-filter', (e) => {
         listViewState.jobs.dryRun = e.target.value;
+        renderJobsList(applyJobFilters());
+    });
+    bindListControl('jobs-date-filter', (e) => {
+        listViewState.jobs.dateRange = e.target.value;
         renderJobsList(applyJobFilters());
     });
     bindListControl('templates-search', (e) => {
@@ -1193,7 +1239,12 @@ function renderTemplatesList(templates) {
         return;
     }
 
-    container.innerHTML = templates.map((template, i) => `
+    container.innerHTML = templates.map((template, i) => {
+        const content = escapeHtml(template.content);
+        const lines = content.split('\n');
+        const isLong = lines.length > 3;
+        const preview = lines.slice(0, 3).join('\n');
+        return `
         <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
             <div class="card-header">
                 <div>
@@ -1201,14 +1252,45 @@ function renderTemplatesList(templates) {
                     <div class="card-description">${escapeHtml(template.description || '')}</div>
                 </div>
                 <div>
+                    ${isLong ? `<button class="btn btn-sm btn-ghost template-expand-btn" onclick="toggleTemplateContent(this)" data-expanded="false">Expand</button>` : ''}
                     <button class="btn btn-sm btn-secondary" onclick="editTemplate(${template.id})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteTemplate(${template.id})">Delete</button>
                 </div>
             </div>
-            <pre style="background: var(--bg); padding: 1rem; border-radius: 0.375rem; overflow-x: auto; margin-top: 1rem; font-size: 0.75rem;">${escapeHtml(template.content)}</pre>
-        </div>
-    `).join('');
+            <div class="template-content-wrap${isLong ? ' template-content-collapsed' : ''}">
+                <pre class="template-content-pre">${isLong ? preview : content}</pre>
+                ${isLong ? `<pre class="template-content-full" style="display:none;">${content}</pre>` : ''}
+                ${isLong ? '<div class="template-fade"></div>' : ''}
+            </div>
+        </div>`;
+    }).join('');
 }
+
+function toggleTemplateContent(btn) {
+    const card = btn.closest('.card');
+    const wrap = card.querySelector('.template-content-wrap');
+    const preview = wrap.querySelector('.template-content-pre');
+    const full = wrap.querySelector('.template-content-full');
+    const fade = wrap.querySelector('.template-fade');
+    const expanded = btn.dataset.expanded === 'true';
+
+    if (expanded) {
+        preview.style.display = '';
+        full.style.display = 'none';
+        if (fade) fade.style.display = '';
+        wrap.classList.add('template-content-collapsed');
+        btn.textContent = 'Expand';
+        btn.dataset.expanded = 'false';
+    } else {
+        preview.style.display = 'none';
+        full.style.display = '';
+        if (fade) fade.style.display = 'none';
+        wrap.classList.remove('template-content-collapsed');
+        btn.textContent = 'Collapse';
+        btn.dataset.expanded = 'true';
+    }
+}
+window.toggleTemplateContent = toggleTemplateContent;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Credentials
@@ -3153,10 +3235,10 @@ function initLoginParticles() {
             if (p.y < 0 || p.y > canvas.height) p.dy *= -1;
         }
         ctx.globalAlpha = 1;
-        animId = requestAnimationFrame(draw);
+        if (!isReducedMotion()) animId = requestAnimationFrame(draw);
     }
 
-    draw();
+    if (!isReducedMotion()) draw();
 
     // Stop animation once user logs in (login-screen hidden)
     const observer = new MutationObserver(() => {
@@ -3461,7 +3543,7 @@ function initCardTilt() {
     const MAX_TILT = 6; // degrees
     document.addEventListener('mousemove', (e) => {
         const card = e.target.closest('.card, .stat-card');
-        if (!card) return;
+        if (!card || isReducedMotion()) return;
         const rect = card.getBoundingClientRect();
         const x = (e.clientX - rect.left) / rect.width;
         const y = (e.clientY - rect.top) / rect.height;
@@ -3568,6 +3650,7 @@ function emptyStateHTML(message, type, actionBtn) {
 
 document.addEventListener('DOMContentLoaded', async () => {
     initThemeControls();
+    initPerformanceMode();
     initSidebar();
     initLoginParticles();
     initLoginForm();
