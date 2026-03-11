@@ -1128,7 +1128,15 @@ async function loadInventory(options = {}) {
 
 function renderInventoryGroups(groups) {
     const container = document.getElementById('inventory-groups');
-    container.innerHTML = groups.map((group, i) => `
+    const query = (listViewState.inventory.query || '').trim().toLowerCase();
+    const hostMatchesQuery = (host) => query && (
+        textMatch(host.hostname, query) || textMatch(host.ip_address, query) || textMatch(host.device_type, query)
+    );
+    container.innerHTML = groups.map((group, i) => {
+        const hosts = group.hosts || [];
+        // When searching, sort matching hosts to the top
+        const sortedHosts = query ? [...hosts].sort((a, b) => (hostMatchesQuery(b) ? 1 : 0) - (hostMatchesQuery(a) ? 1 : 0)) : hosts;
+        return `
         <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
             <div class="card-header">
                 <div>
@@ -1136,22 +1144,37 @@ function renderInventoryGroups(groups) {
                     <div class="card-description">${escapeHtml(group.description || '')}</div>
                 </div>
                 <div style="display: flex; gap: 0.25rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="showGroupSnmpProfileModal(${group.id})">SNMP Profile</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showTestSnmpProfileModal(${group.id})">Test SNMP</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showDiscoveryModal('scan', ${group.id})">Scan</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showDiscoveryModal('sync', ${group.id})">Sync</button>
                     <button class="btn btn-sm btn-secondary" onclick="showEditGroupModal(${group.id})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteGroup(${group.id})">Delete</button>
                 </div>
             </div>
             <div class="hosts-list">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                    <strong>Hosts</strong>
-                    <button class="btn btn-sm btn-primary" onclick="showAddHostModal(${group.id})">+ Add Host</button>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        ${sortedHosts.length ? `<input type="checkbox" data-select-all="${group.id}" onchange="toggleSelectAllHosts(${group.id}, this.checked)" title="Select all hosts">` : ''}
+                        <strong>Hosts</strong>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.25rem;">
+                        <span id="bulk-actions-${group.id}" style="display:none; gap:0.25rem;">
+                            <button class="btn btn-sm btn-secondary" onclick="bulkMoveHosts(${group.id})">Move</button>
+                            <button class="btn btn-sm btn-danger" onclick="bulkDeleteHosts(${group.id})">Delete</button>
+                        </span>
+                        <button class="btn btn-sm btn-primary" onclick="showAddHostModal(${group.id})">+ Add Host</button>
+                    </div>
                 </div>
-                ${group.hosts && group.hosts.length ? 
-                    group.hosts.map(host => {
+                ${sortedHosts.length ?
+                    sortedHosts.map(host => {
                         // Store host data for the edit modal
                         _hostCache[host.id] = { groupId: group.id, ...host };
+                        const isMatch = hostMatchesQuery(host);
                         return `
-                        <div class="host-item">
-                            <div class="host-info">
+                        <div class="host-item"${isMatch ? ' style="background: var(--highlight-bg, rgba(59,130,246,0.08)); border-radius: 4px;"' : ''}>
+                            <div class="host-info" style="display:flex; align-items:center; gap:0.5rem;">
+                                <input type="checkbox" class="host-select" data-host-id="${host.id}" data-group-id="${group.id}" onchange="onHostSelectChange(${group.id})">
                                 <span class="host-name">${escapeHtml(host.hostname)}</span>
                                 <span class="host-ip">${escapeHtml(host.ip_address)}</span>
                                 <span class="host-type">${escapeHtml(host.device_type || 'cisco_ios')}</span>
@@ -1165,8 +1188,8 @@ function renderInventoryGroups(groups) {
                     '<div class="empty-state" style="padding: 1rem;">No hosts</div>'
                 }
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
 
     groups.forEach(group => {
         _groupCache[group.id] = {
@@ -1176,6 +1199,442 @@ function renderInventoryGroups(groups) {
         };
     });
 }
+
+window.showDiscoveryModal = function(mode, groupId) {
+    const group = _groupCache[groupId];
+    if (!group) {
+        showError('Group data not found');
+        return;
+    }
+    const isSync = mode === 'sync';
+    const title = isSync ? `Discovery Sync: ${group.name}` : `Discovery Scan: ${group.name}`;
+    showModal(title, `
+        <form onsubmit="runInventoryDiscovery(event, ${groupId}, '${isSync ? 'sync' : 'scan'}')">
+            <div class="form-group">
+                <label class="form-label">CIDR Targets</label>
+                <textarea class="form-textarea" name="cidrs" placeholder="10.0.0.0/24\n10.0.1.0/24" required></textarea>
+                <div class="form-help">One CIDR per line or comma-separated.</div>
+            </div>
+            <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+                <div>
+                    <label class="form-label">Timeout Seconds</label>
+                    <input type="number" class="form-input" name="timeout_seconds" value="0.35" step="0.05" min="0.05" max="5">
+                </div>
+                <div>
+                    <label class="form-label">Max Hosts</label>
+                    <input type="number" class="form-input" name="max_hosts" value="256" min="1" max="4096">
+                </div>
+            </div>
+            <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+                <div>
+                    <label class="form-label">Device Type</label>
+                    <input type="text" class="form-input" name="device_type" value="unknown">
+                </div>
+                <div>
+                    <label class="form-label">Hostname Prefix</label>
+                    <input type="text" class="form-input" name="hostname_prefix" value="discovered">
+                </div>
+            </div>
+            <label style="display:flex; align-items:center; gap:0.4rem; margin-top:0.5rem;">
+                <input type="checkbox" name="use_snmp" value="1" checked> Use SNMP discovery first (falls back to TCP probe)
+            </label>
+            ${isSync ? `
+                <label style="display:flex; align-items:center; gap:0.4rem; margin-top:0.5rem;">
+                    <input type="checkbox" name="remove_absent" value="1"> Remove hosts not found in this scan
+                </label>
+            ` : ''}
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">${isSync ? 'Run Sync' : 'Run Scan'}</button>
+            </div>
+        </form>
+    `);
+};
+
+window.runInventoryDiscovery = async function(e, groupId, mode) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const cidrRaw = String(formData.get('cidrs') || '');
+    const cidrs = cidrRaw
+        .split(/[\n,]+/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+    if (!cidrs.length) {
+        showError('At least one CIDR target is required');
+        return;
+    }
+
+    const options = {
+        timeoutSeconds: Number(formData.get('timeout_seconds') || 0.35),
+        maxHosts: Number(formData.get('max_hosts') || 256),
+        deviceType: String(formData.get('device_type') || 'unknown').trim() || 'unknown',
+        hostnamePrefix: String(formData.get('hostname_prefix') || 'discovered').trim() || 'discovered',
+        useSnmp: formData.get('use_snmp') === '1',
+        removeAbsent: formData.get('remove_absent') === '1',
+    };
+
+    try {
+        const result = mode === 'sync'
+            ? await api.syncInventoryGroup(groupId, cidrs, options)
+            : await api.scanInventoryGroup(groupId, cidrs, options);
+
+        closeAllModals();
+        if (mode === 'sync') {
+            await loadInventory();
+            const sync = result.sync || {};
+            showSuccess(`Sync complete. Added ${sync.added || 0}, updated ${sync.updated || 0}, removed ${sync.removed || 0}.`);
+            return;
+        }
+
+        const discovered = result.discovered_hosts || [];
+        window._lastDiscoveryResults = discovered;
+        showModal('Discovery Scan Results', `
+            <div class="card-description" style="margin-bottom:0.75rem;">
+                Scanned ${result.scanned_hosts || 0} host(s); discovered ${result.discovered_count || 0} reachable device(s).
+            </div>
+            <div style="max-height: 340px; overflow:auto; border:1px solid var(--border); border-radius:0.5rem; padding:0.5rem;">
+                ${discovered.length ? discovered.map((host, idx) => `
+                    <div class="host-item" style="margin-bottom:0.4rem;">
+                        <label style="display:flex; align-items:center; gap:0.5rem; width:100%;">
+                            <input type="checkbox" class="discovery-onboard-host" value="${idx}" checked>
+                            <span class="host-name">${escapeHtml(host.hostname || '-')}</span>
+                            <span class="host-ip">${escapeHtml(host.ip_address || '-')}</span>
+                            <span class="host-type">${escapeHtml(host.device_type || 'unknown')}</span>
+                        </label>
+                    </div>
+                `).join('') : '<div class="empty-state" style="padding:1rem;">No reachable hosts discovered.</div>'}
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:0.75rem; gap:0.5rem;">
+                <button type="button" class="btn btn-secondary" onclick="toggleDiscoverySelection(true)">Select All</button>
+                <div style="display:flex; gap:0.5rem;">
+                    <button type="button" class="btn btn-primary" onclick="onboardDiscoveredHosts(${groupId})">Onboard Selected</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+                </div>
+            </div>
+        `);
+    } catch (error) {
+        showError(`Discovery ${mode} failed: ${error.message}`);
+    }
+};
+
+window.toggleDiscoverySelection = function(checked) {
+    document.querySelectorAll('.discovery-onboard-host').forEach((cb) => {
+        cb.checked = checked;
+    });
+};
+
+window.onboardDiscoveredHosts = async function(groupId) {
+    const discovered = window._lastDiscoveryResults || [];
+    const selectedIndices = Array.from(document.querySelectorAll('.discovery-onboard-host:checked')).map((el) => Number(el.value));
+    const selectedHosts = selectedIndices
+        .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < discovered.length)
+        .map((idx) => discovered[idx]);
+    if (!selectedHosts.length) {
+        showError('Select at least one discovered host to onboard.');
+        return;
+    }
+    try {
+        const result = await api.onboardDiscoveredHosts(groupId, selectedHosts);
+        closeAllModals();
+        await loadInventory();
+        const sync = result.sync || {};
+        showSuccess(`Onboard complete. Added ${sync.added || 0}, updated ${sync.updated || 0}.`);
+    } catch (error) {
+        showError(`Onboarding failed: ${error.message}`);
+    }
+};
+
+window.showSnmpDiscoverySettingsModal = async function() {
+    try {
+        const cfg = await api.getSnmpDiscoveryConfig();
+        const v3 = cfg.v3 || {};
+        showModal('SNMP Discovery Settings', `
+            <form onsubmit="saveSnmpDiscoverySettings(event)">
+                <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.75rem;">
+                    <input type="checkbox" name="enabled" value="1" ${cfg.enabled ? 'checked' : ''}> Enable SNMP discovery
+                </label>
+                <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label class="form-label">Version</label>
+                        <select class="form-select" name="version">
+                            <option value="2c" ${cfg.version === '2c' ? 'selected' : ''}>SNMPv2c</option>
+                            <option value="3" ${cfg.version === '3' ? 'selected' : ''}>SNMPv3</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">Port</label>
+                        <input type="number" class="form-input" name="port" value="${cfg.port || 161}" min="1" max="65535">
+                    </div>
+                    <div>
+                        <label class="form-label">Retries</label>
+                        <input type="number" class="form-input" name="retries" value="${cfg.retries || 0}" min="0" max="5">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Community (v2c)</label>
+                    <input type="text" class="form-input" name="community" value="${escapeHtml(cfg.community || 'public')}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Timeout Seconds</label>
+                    <input type="number" class="form-input" name="timeout_seconds" value="${cfg.timeout_seconds || 1.2}" min="0.2" max="10" step="0.1">
+                </div>
+                <div class="card-description" style="margin-bottom:0.5rem;">SNMPv3 Credentials</div>
+                <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-input" name="v3_username" value="${escapeHtml(v3.username || '')}">
+                    </div>
+                    <div>
+                        <label class="form-label">Auth Protocol</label>
+                        <select class="form-select" name="v3_auth_protocol">
+                            <option value="sha" ${(v3.auth_protocol || 'sha') === 'sha' ? 'selected' : ''}>SHA</option>
+                            <option value="sha256" ${(v3.auth_protocol || '') === 'sha256' ? 'selected' : ''}>SHA-256</option>
+                            <option value="sha512" ${(v3.auth_protocol || '') === 'sha512' ? 'selected' : ''}>SHA-512</option>
+                            <option value="md5" ${(v3.auth_protocol || '') === 'md5' ? 'selected' : ''}>MD5</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label class="form-label">Auth Password</label>
+                        <input type="password" class="form-input" name="v3_auth_password" value="${escapeHtml(v3.auth_password || '')}">
+                    </div>
+                    <div>
+                        <label class="form-label">Privacy Protocol</label>
+                        <select class="form-select" name="v3_priv_protocol">
+                            <option value="aes128" ${(v3.priv_protocol || 'aes128') === 'aes128' ? 'selected' : ''}>AES128</option>
+                            <option value="aes192" ${(v3.priv_protocol || '') === 'aes192' ? 'selected' : ''}>AES192</option>
+                            <option value="aes256" ${(v3.priv_protocol || '') === 'aes256' ? 'selected' : ''}>AES256</option>
+                            <option value="des" ${(v3.priv_protocol || '') === 'des' ? 'selected' : ''}>DES</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Privacy Password</label>
+                    <input type="password" class="form-input" name="v3_priv_password" value="${escapeHtml(v3.priv_password || '')}">
+                </div>
+                <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                    <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save SNMP Settings</button>
+                </div>
+            </form>
+        `);
+    } catch (error) {
+        showError(`Unable to load SNMP settings: ${error.message}`);
+    }
+};
+
+window.saveSnmpDiscoverySettings = async function(e) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const payload = {
+        enabled: formData.get('enabled') === '1',
+        version: String(formData.get('version') || '2c'),
+        community: String(formData.get('community') || 'public').trim(),
+        port: Number(formData.get('port') || 161),
+        timeout_seconds: Number(formData.get('timeout_seconds') || 1.2),
+        retries: Number(formData.get('retries') || 0),
+        v3: {
+            username: String(formData.get('v3_username') || '').trim(),
+            auth_protocol: String(formData.get('v3_auth_protocol') || 'sha'),
+            auth_password: String(formData.get('v3_auth_password') || ''),
+            priv_protocol: String(formData.get('v3_priv_protocol') || 'aes128'),
+            priv_password: String(formData.get('v3_priv_password') || ''),
+        },
+    };
+
+    try {
+        await api.updateSnmpDiscoveryConfig(payload);
+        closeAllModals();
+        showSuccess('SNMP discovery settings saved.');
+    } catch (error) {
+        showError(`Failed to save SNMP settings: ${error.message}`);
+    }
+};
+
+window.showGroupSnmpProfileModal = async function(groupId) {
+    const group = _groupCache[groupId];
+    if (!group) {
+        showError('Group data not found');
+        return;
+    }
+    try {
+        const cfg = await api.getGroupSnmpDiscoveryProfile(groupId);
+        const v3 = cfg.v3 || {};
+        showModal(`SNMP Profile: ${group.name}`, `
+            <form onsubmit="saveGroupSnmpProfile(event, ${groupId})">
+                <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.75rem;">
+                    <input type="checkbox" name="enabled" value="1" ${cfg.enabled ? 'checked' : ''}> Enable this group SNMP profile
+                </label>
+                <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label class="form-label">Version</label>
+                        <select class="form-select" name="version">
+                            <option value="2c" ${cfg.version === '2c' ? 'selected' : ''}>SNMPv2c</option>
+                            <option value="3" ${cfg.version === '3' ? 'selected' : ''}>SNMPv3</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">Port</label>
+                        <input type="number" class="form-input" name="port" value="${cfg.port || 161}" min="1" max="65535">
+                    </div>
+                    <div>
+                        <label class="form-label">Retries</label>
+                        <input type="number" class="form-input" name="retries" value="${cfg.retries || 0}" min="0" max="5">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Community (v2c)</label>
+                    <input type="text" class="form-input" name="community" value="${escapeHtml(cfg.community || '')}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Timeout Seconds</label>
+                    <input type="number" class="form-input" name="timeout_seconds" value="${cfg.timeout_seconds || 1.2}" min="0.2" max="10" step="0.1">
+                </div>
+                <div class="card-description" style="margin-bottom:0.5rem;">SNMPv3 Credentials</div>
+                <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-input" name="v3_username" value="${escapeHtml(v3.username || '')}">
+                    </div>
+                    <div>
+                        <label class="form-label">Auth Protocol</label>
+                        <select class="form-select" name="v3_auth_protocol">
+                            <option value="sha" ${(v3.auth_protocol || 'sha') === 'sha' ? 'selected' : ''}>SHA</option>
+                            <option value="sha256" ${(v3.auth_protocol || '') === 'sha256' ? 'selected' : ''}>SHA-256</option>
+                            <option value="sha512" ${(v3.auth_protocol || '') === 'sha512' ? 'selected' : ''}>SHA-512</option>
+                            <option value="md5" ${(v3.auth_protocol || '') === 'md5' ? 'selected' : ''}>MD5</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label class="form-label">Auth Password</label>
+                        <input type="password" class="form-input" name="v3_auth_password" value="${escapeHtml(v3.auth_password || '')}">
+                    </div>
+                    <div>
+                        <label class="form-label">Privacy Protocol</label>
+                        <select class="form-select" name="v3_priv_protocol">
+                            <option value="aes128" ${(v3.priv_protocol || 'aes128') === 'aes128' ? 'selected' : ''}>AES128</option>
+                            <option value="aes192" ${(v3.priv_protocol || '') === 'aes192' ? 'selected' : ''}>AES192</option>
+                            <option value="aes256" ${(v3.priv_protocol || '') === 'aes256' ? 'selected' : ''}>AES256</option>
+                            <option value="des" ${(v3.priv_protocol || '') === 'des' ? 'selected' : ''}>DES</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Privacy Password</label>
+                    <input type="password" class="form-input" name="v3_priv_password" value="${escapeHtml(v3.priv_password || '')}">
+                </div>
+                <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                    <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Group Profile</button>
+                </div>
+            </form>
+        `);
+    } catch (error) {
+        showError(`Unable to load group SNMP profile: ${error.message}`);
+    }
+};
+
+window.saveGroupSnmpProfile = async function(e, groupId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const payload = {
+        enabled: formData.get('enabled') === '1',
+        version: String(formData.get('version') || '2c'),
+        community: String(formData.get('community') || '').trim(),
+        port: Number(formData.get('port') || 161),
+        timeout_seconds: Number(formData.get('timeout_seconds') || 1.2),
+        retries: Number(formData.get('retries') || 0),
+        v3: {
+            username: String(formData.get('v3_username') || '').trim(),
+            auth_protocol: String(formData.get('v3_auth_protocol') || 'sha'),
+            auth_password: String(formData.get('v3_auth_password') || ''),
+            priv_protocol: String(formData.get('v3_priv_protocol') || 'aes128'),
+            priv_password: String(formData.get('v3_priv_password') || ''),
+        },
+    };
+    try {
+        await api.updateGroupSnmpDiscoveryProfile(groupId, payload);
+        closeAllModals();
+        showSuccess('Group SNMP profile saved.');
+    } catch (error) {
+        showError(`Failed to save group SNMP profile: ${error.message}`);
+    }
+};
+
+window.showTestSnmpProfileModal = function(groupId) {
+    const group = _groupCache[groupId];
+    if (!group) {
+        showError('Group data not found');
+        return;
+    }
+    showModal(`Test SNMP Profile: ${group.name}`, `
+        <form onsubmit="runTestSnmpProfile(event, ${groupId})">
+            <div class="form-group">
+                <label class="form-label">Target IP Address</label>
+                <input type="text" class="form-input" name="target_ip" placeholder="e.g. 10.0.0.1" required
+                       pattern="^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$"
+                       title="Enter a valid IPv4 address">
+                <div class="form-help">Enter a single IP to validate SNMP credentials before running a full subnet scan.</div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="test-snmp-submit-btn">Test</button>
+            </div>
+        </form>
+        <div id="snmp-test-result" style="margin-top: 1rem;"></div>
+    `);
+};
+
+window.runTestSnmpProfile = async function(e, groupId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const targetIp = String(formData.get('target_ip') || '').trim();
+    if (!targetIp) return;
+    const btn = document.getElementById('test-snmp-submit-btn');
+    const resultDiv = document.getElementById('snmp-test-result');
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    resultDiv.innerHTML = '<div class="card-description">Probing target...</div>';
+    try {
+        const resp = await api.testGroupSnmpProfile(groupId, targetIp);
+        if (resp.success) {
+            const r = resp.result;
+            const d = r.discovery || {};
+            resultDiv.innerHTML = `
+                <div class="card" style="border-left: 3px solid var(--success-color, #22c55e);">
+                    <div style="padding: 0.75rem;">
+                        <strong>SNMP OK</strong> &mdash; credentials validated
+                        <table style="width:100%; margin-top:0.5rem; font-size:0.85rem;">
+                            <tr><td style="opacity:0.7;">Hostname</td><td>${escapeHtml(r.hostname || '')}</td></tr>
+                            <tr><td style="opacity:0.7;">IP</td><td>${escapeHtml(r.ip_address || '')}</td></tr>
+                            <tr><td style="opacity:0.7;">Device Type</td><td>${escapeHtml(r.device_type || '')}</td></tr>
+                            <tr><td style="opacity:0.7;">Protocol</td><td>${escapeHtml(d.protocol || '')}</td></tr>
+                            <tr><td style="opacity:0.7;">Vendor</td><td>${escapeHtml(d.vendor || 'unknown')}</td></tr>
+                            <tr><td style="opacity:0.7;">OS</td><td>${escapeHtml(d.os || 'unknown')}</td></tr>
+                            <tr><td style="opacity:0.7;">sysDescr</td><td style="word-break:break-word;">${escapeHtml(d.sys_descr || '')}</td></tr>
+                        </table>
+                    </div>
+                </div>`;
+        } else {
+            resultDiv.innerHTML = `
+                <div class="card" style="border-left: 3px solid var(--danger-color, #ef4444);">
+                    <div style="padding: 0.75rem;">
+                        <strong>SNMP Failed</strong><br>
+                        <span style="opacity:0.8;">${escapeHtml(resp.error || 'Unknown error')}</span>
+                    </div>
+                </div>`;
+        }
+    } catch (error) {
+        resultDiv.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Test';
+    }
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Playbooks
@@ -2775,6 +3234,84 @@ window.deleteHost = async function(groupId, hostId) {
         showSuccess('Host deleted successfully');
     } catch (error) {
         showError(`Failed to delete host: ${error.message}`);
+    }
+};
+
+function getSelectedHostIds(groupId) {
+    return Array.from(document.querySelectorAll(`.host-select[data-group-id="${groupId}"]:checked`))
+        .map(cb => Number(cb.dataset.hostId));
+}
+
+window.onHostSelectChange = function(groupId) {
+    const selected = getSelectedHostIds(groupId);
+    const bar = document.getElementById(`bulk-actions-${groupId}`);
+    if (bar) bar.style.display = selected.length ? 'flex' : 'none';
+    const selectAll = document.querySelector(`[data-select-all="${groupId}"]`);
+    if (selectAll) {
+        const total = document.querySelectorAll(`.host-select[data-group-id="${groupId}"]`).length;
+        selectAll.checked = selected.length === total && total > 0;
+        selectAll.indeterminate = selected.length > 0 && selected.length < total;
+    }
+};
+
+window.toggleSelectAllHosts = function(groupId, checked) {
+    document.querySelectorAll(`.host-select[data-group-id="${groupId}"]`)
+        .forEach(cb => { cb.checked = checked; });
+    onHostSelectChange(groupId);
+};
+
+window.bulkDeleteHosts = async function(groupId) {
+    const hostIds = getSelectedHostIds(groupId);
+    if (!hostIds.length) return;
+    if (!await showConfirm('Delete Hosts', `This will permanently remove ${hostIds.length} host(s) from the inventory.`)) return;
+    try {
+        await api.bulkDeleteHosts(hostIds);
+        await loadInventory();
+        showSuccess(`${hostIds.length} host(s) deleted.`);
+    } catch (error) {
+        showError(`Failed to delete hosts: ${error.message}`);
+    }
+};
+
+window.bulkMoveHosts = function(groupId) {
+    const hostIds = getSelectedHostIds(groupId);
+    if (!hostIds.length) return;
+    const groups = (listViewState.inventory.items || []).filter(g => g.id !== groupId);
+    if (!groups.length) {
+        showError('No other groups available to move hosts to.');
+        return;
+    }
+    showModal(`Move ${hostIds.length} Host(s)`, `
+        <form onsubmit="executeBulkMove(event, ${groupId})">
+            <div class="form-group">
+                <label class="form-label">Destination Group</label>
+                <select class="form-select" name="target_group_id" required>
+                    <option value="">-- Select group --</option>
+                    ${groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('')}
+                </select>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Move</button>
+            </div>
+        </form>
+    `);
+};
+
+window.executeBulkMove = async function(e, sourceGroupId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const targetGroupId = Number(formData.get('target_group_id'));
+    if (!targetGroupId) return;
+    const hostIds = getSelectedHostIds(sourceGroupId);
+    if (!hostIds.length) return;
+    try {
+        await api.moveHosts(hostIds, targetGroupId);
+        closeAllModals();
+        await loadInventory();
+        showSuccess(`${hostIds.length} host(s) moved.`);
+    } catch (error) {
+        showError(`Failed to move hosts: ${error.message}`);
     }
 };
 

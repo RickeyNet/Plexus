@@ -428,7 +428,10 @@
             <div id="page-inventory" class="page">
                 <div class="page-header">
                     <h2>Inventory Management</h2>
-                    <button class="btn btn-primary" onclick="showCreateGroupModal()">+ New Group</button>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-secondary" onclick="showSnmpDiscoverySettingsModal()">SNMP Discovery Settings</button>
+                        <button class="btn btn-primary" onclick="showCreateGroupModal()">+ New Group</button>
+                    </div>
                 </div>
                 <div class="list-controls">
                     <input id="inventory-search" class="form-input list-control-search" type="search" placeholder="Search groups, hosts, IPs, device types">

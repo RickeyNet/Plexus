@@ -969,6 +969,38 @@ async def update_host(host_id: int, hostname: str, ip_address: str,
         await db.close()
 
 
+async def move_hosts(host_ids: list[int], target_group_id: int) -> int:
+    if not host_ids:
+        return 0
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" for _ in host_ids)
+        cursor = await db.execute(
+            f"UPDATE hosts SET group_id = ? WHERE id IN ({placeholders})",
+            (target_group_id, *host_ids),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def bulk_delete_hosts(host_ids: list[int]) -> int:
+    if not host_ids:
+        return 0
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" for _ in host_ids)
+        cursor = await db.execute(
+            f"DELETE FROM hosts WHERE id IN ({placeholders})",
+            tuple(host_ids),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
 async def update_host_status(host_id: int, status: str):
     db = await get_db()
     try:

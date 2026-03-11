@@ -8,9 +8,11 @@ Session-based authentication with signed cookies.
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
+import socket
 import sys
 import traceback
 from contextlib import asynccontextmanager
@@ -43,6 +45,45 @@ except Exception:
     RadiusDictionary = None
     radius_packet = None
     PYRAD_AVAILABLE = False
+
+try:
+    from pysnmp.hlapi.v3arch import (
+        CommunityData,
+        ContextData,
+        ObjectIdentity,
+        ObjectType,
+        SnmpEngine,
+        UdpTransportTarget,
+        UsmUserData,
+        get_cmd,
+        usmAesCfb128Protocol,
+        usmAesCfb192Protocol,
+        usmAesCfb256Protocol,
+        usmDESPrivProtocol,
+        usmHMACMD5AuthProtocol,
+        usmHMACSHAAuthProtocol,
+        usmHMAC192SHA256AuthProtocol,
+        usmHMAC384SHA512AuthProtocol,
+    )
+    PYSMNP_AVAILABLE = True
+except Exception:
+    CommunityData = None
+    ContextData = None
+    ObjectIdentity = None
+    ObjectType = None
+    SnmpEngine = None
+    UdpTransportTarget = None
+    UsmUserData = None
+    get_cmd = None
+    usmAesCfb128Protocol = None
+    usmAesCfb192Protocol = None
+    usmAesCfb256Protocol = None
+    usmDESPrivProtocol = None
+    usmHMACMD5AuthProtocol = None
+    usmHMACSHAAuthProtocol = None
+    usmHMAC192SHA256AuthProtocol = None
+    usmHMAC384SHA512AuthProtocol = None
+    PYSMNP_AVAILABLE = False
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +133,47 @@ APP_HTTPS_ENABLED = _env_flag("APP_HTTPS", False)
 APP_HSTS_ENABLED = _env_flag("APP_HSTS", APP_HTTPS_ENABLED)
 APP_HSTS_MAX_AGE = int(os.getenv("APP_HSTS_MAX_AGE", "31536000"))
 APP_CORS_ALLOW_ORIGINS = _parse_cors_origins()
+DISCOVERY_DEFAULT_TIMEOUT_SECONDS = float(os.getenv("APP_DISCOVERY_TIMEOUT_SECONDS", "0.35"))
+DISCOVERY_DEFAULT_MAX_HOSTS = int(os.getenv("APP_DISCOVERY_MAX_HOSTS", "256"))
+DISCOVERY_MAX_CONCURRENT_PROBES = int(os.getenv("APP_DISCOVERY_MAX_CONCURRENT_PROBES", "64"))
+DISCOVERY_PROBE_PORTS = (22, 443)
+SNMP_DISCOVERY_DEFAULTS = {
+    "enabled": False,
+    "version": "2c",
+    "community": "public",
+    "port": 161,
+    "timeout_seconds": 1.2,
+    "retries": 0,
+    "v3": {
+        "username": "",
+        "auth_protocol": "sha",
+        "auth_password": "",
+        "priv_protocol": "aes128",
+        "priv_password": "",
+    },
+}
+SNMP_DISCOVERY_PROFILE_DEFAULTS = {
+    "enabled": False,
+    "version": "2c",
+    "community": "",
+    "port": 161,
+    "timeout_seconds": 1.2,
+    "retries": 0,
+    "v3": {
+        "username": "",
+        "auth_protocol": "sha",
+        "auth_password": "",
+        "priv_protocol": "aes128",
+        "priv_password": "",
+    },
+}
+DISCOVERY_SYNC_DEFAULTS = {
+    "enabled": False,
+    "interval_seconds": 900,
+    "profiles": [],
+}
+DISCOVERY_SYNC_MIN_INTERVAL_SECONDS = 60
+DISCOVERY_SYNC_MAX_INTERVAL_SECONDS = 86400
 
 
 # ── CSRF token helpers ───────────────────────────────────────────────────────
@@ -391,6 +473,9 @@ RADIUS_DICTIONARY_FILE = os.path.join(os.path.dirname(__file__), "..", "routes",
 
 LOGIN_RULES = dict(DEFAULT_LOGIN_RULES)
 AUTH_CONFIG = dict(AUTH_CONFIG_DEFAULTS)
+DISCOVERY_SYNC_CONFIG = dict(DISCOVERY_SYNC_DEFAULTS)
+SNMP_DISCOVERY_CONFIG = dict(SNMP_DISCOVERY_DEFAULTS)
+SNMP_DISCOVERY_PROFILES: dict[int, dict] = {}
 JOB_RETENTION_MIN_DAYS = 30
 JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
 CONVERTER_SESSION_RETENTION_MIN_DAYS = 1
@@ -478,6 +563,168 @@ def _effective_converter_backup_retention_days() -> int:
     )
 
 
+def _sanitize_discovery_sync_config(data: dict | None) -> dict:
+    cfg = {
+        "enabled": bool(DISCOVERY_SYNC_DEFAULTS["enabled"]),
+        "interval_seconds": int(DISCOVERY_SYNC_DEFAULTS["interval_seconds"]),
+        "profiles": [],
+    }
+    if not isinstance(data, dict):
+        return cfg
+
+    cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+    cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
+    cfg["interval_seconds"] = max(
+        DISCOVERY_SYNC_MIN_INTERVAL_SECONDS,
+        min(DISCOVERY_SYNC_MAX_INTERVAL_SECONDS, cfg["interval_seconds"]),
+    )
+
+    profiles = data.get("profiles", [])
+    if not isinstance(profiles, list):
+        return cfg
+
+    sanitized_profiles: list[dict] = []
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            continue
+        group_id = profile.get("group_id")
+        cidrs = profile.get("cidrs")
+        if not isinstance(group_id, int) or group_id <= 0:
+            continue
+        if not isinstance(cidrs, list) or not cidrs:
+            continue
+        profile_obj = {
+            "group_id": group_id,
+            "cidrs": [str(c).strip() for c in cidrs if str(c).strip()],
+            "remove_absent": bool(profile.get("remove_absent", False)),
+            "use_snmp": bool(profile.get("use_snmp", True)),
+            "device_type": str(profile.get("device_type", "unknown")).strip() or "unknown",
+            "hostname_prefix": str(profile.get("hostname_prefix", "discovered")).strip() or "discovered",
+            "timeout_seconds": float(profile.get("timeout_seconds", DISCOVERY_DEFAULT_TIMEOUT_SECONDS)),
+            "max_hosts": int(profile.get("max_hosts", DISCOVERY_DEFAULT_MAX_HOSTS)),
+        }
+        if not profile_obj["cidrs"]:
+            continue
+        profile_obj["timeout_seconds"] = max(0.05, min(5.0, profile_obj["timeout_seconds"]))
+        profile_obj["max_hosts"] = max(1, min(4096, profile_obj["max_hosts"]))
+        sanitized_profiles.append(profile_obj)
+
+    cfg["profiles"] = sanitized_profiles
+    return cfg
+
+
+def _sanitize_snmp_discovery_config(data: dict | None) -> dict:
+    cfg = {
+        "enabled": bool(SNMP_DISCOVERY_DEFAULTS["enabled"]),
+        "version": str(SNMP_DISCOVERY_DEFAULTS["version"]),
+        "community": str(SNMP_DISCOVERY_DEFAULTS["community"]),
+        "port": int(SNMP_DISCOVERY_DEFAULTS["port"]),
+        "timeout_seconds": float(SNMP_DISCOVERY_DEFAULTS["timeout_seconds"]),
+        "retries": int(SNMP_DISCOVERY_DEFAULTS["retries"]),
+        "v3": dict(SNMP_DISCOVERY_DEFAULTS["v3"]),
+    }
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        version = str(data.get("version", cfg["version"]).strip().lower())
+        if version in {"2c", "3"}:
+            cfg["version"] = version
+        cfg["community"] = str(data.get("community", cfg["community"]))
+        cfg["port"] = int(data.get("port", cfg["port"]))
+        cfg["timeout_seconds"] = float(data.get("timeout_seconds", cfg["timeout_seconds"]))
+        cfg["retries"] = int(data.get("retries", cfg["retries"]))
+        if isinstance(data.get("v3"), dict):
+            v3 = data["v3"]
+            cfg["v3"]["username"] = str(v3.get("username", cfg["v3"]["username"]))
+            cfg["v3"]["auth_protocol"] = str(v3.get("auth_protocol", cfg["v3"]["auth_protocol"])).lower()
+            cfg["v3"]["auth_password"] = str(v3.get("auth_password", cfg["v3"]["auth_password"]))
+            cfg["v3"]["priv_protocol"] = str(v3.get("priv_protocol", cfg["v3"]["priv_protocol"])).lower()
+            cfg["v3"]["priv_password"] = str(v3.get("priv_password", cfg["v3"]["priv_password"]))
+
+    cfg["port"] = max(1, min(65535, cfg["port"]))
+    cfg["timeout_seconds"] = max(0.2, min(10.0, cfg["timeout_seconds"]))
+    cfg["retries"] = max(0, min(5, cfg["retries"]))
+    if cfg["v3"]["auth_protocol"] not in {"md5", "sha", "sha256", "sha512"}:
+        cfg["v3"]["auth_protocol"] = "sha"
+    if cfg["v3"]["priv_protocol"] not in {"des", "aes128", "aes192", "aes256"}:
+        cfg["v3"]["priv_protocol"] = "aes128"
+    return cfg
+
+
+def _sanitize_snmp_discovery_profile(group_id: int, data: dict | None) -> dict:
+    cfg = {
+        "group_id": int(group_id),
+        "enabled": bool(SNMP_DISCOVERY_PROFILE_DEFAULTS["enabled"]),
+        "version": str(SNMP_DISCOVERY_PROFILE_DEFAULTS["version"]),
+        "community": str(SNMP_DISCOVERY_PROFILE_DEFAULTS["community"]),
+        "port": int(SNMP_DISCOVERY_PROFILE_DEFAULTS["port"]),
+        "timeout_seconds": float(SNMP_DISCOVERY_PROFILE_DEFAULTS["timeout_seconds"]),
+        "retries": int(SNMP_DISCOVERY_PROFILE_DEFAULTS["retries"]),
+        "v3": dict(SNMP_DISCOVERY_PROFILE_DEFAULTS["v3"]),
+    }
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        version = str(data.get("version", cfg["version"]).strip().lower())
+        if version in {"2c", "3"}:
+            cfg["version"] = version
+        cfg["community"] = str(data.get("community", cfg["community"]))
+        cfg["port"] = int(data.get("port", cfg["port"]))
+        cfg["timeout_seconds"] = float(data.get("timeout_seconds", cfg["timeout_seconds"]))
+        cfg["retries"] = int(data.get("retries", cfg["retries"]))
+        if isinstance(data.get("v3"), dict):
+            v3 = data["v3"]
+            cfg["v3"]["username"] = str(v3.get("username", cfg["v3"]["username"]))
+            cfg["v3"]["auth_protocol"] = str(v3.get("auth_protocol", cfg["v3"]["auth_protocol"])).lower()
+            cfg["v3"]["auth_password"] = str(v3.get("auth_password", cfg["v3"]["auth_password"]))
+            cfg["v3"]["priv_protocol"] = str(v3.get("priv_protocol", cfg["v3"]["priv_protocol"])).lower()
+            cfg["v3"]["priv_password"] = str(v3.get("priv_password", cfg["v3"]["priv_password"]))
+
+    cfg["port"] = max(1, min(65535, cfg["port"]))
+    cfg["timeout_seconds"] = max(0.2, min(10.0, cfg["timeout_seconds"]))
+    cfg["retries"] = max(0, min(5, cfg["retries"]))
+    if cfg["v3"]["auth_protocol"] not in {"md5", "sha", "sha256", "sha512"}:
+        cfg["v3"]["auth_protocol"] = "sha"
+    if cfg["v3"]["priv_protocol"] not in {"des", "aes128", "aes192", "aes256"}:
+        cfg["v3"]["priv_protocol"] = "aes128"
+    return cfg
+
+
+def _sanitize_snmp_discovery_profiles(data: dict | None) -> dict[int, dict]:
+    if not isinstance(data, dict):
+        return {}
+    profiles: dict[int, dict] = {}
+    for key, value in data.items():
+        try:
+            group_id = int(key)
+        except Exception:
+            continue
+        if group_id <= 0:
+            continue
+        profiles[group_id] = _sanitize_snmp_discovery_profile(group_id, value)
+    return profiles
+
+
+def _resolve_snmp_discovery_config(group_id: int | None = None) -> dict:
+    effective = _sanitize_snmp_discovery_config(SNMP_DISCOVERY_CONFIG)
+    if group_id is None:
+        return effective
+    profile = SNMP_DISCOVERY_PROFILES.get(int(group_id))
+    if not profile:
+        return effective
+    merged = dict(effective)
+    merged["v3"] = dict(effective.get("v3", {}))
+    merged.update({
+        "enabled": bool(profile.get("enabled", merged.get("enabled", False))),
+        "version": str(profile.get("version", merged.get("version", "2c"))),
+        "community": str(profile.get("community", merged.get("community", ""))),
+        "port": int(profile.get("port", merged.get("port", 161))),
+        "timeout_seconds": float(profile.get("timeout_seconds", merged.get("timeout_seconds", 1.2))),
+        "retries": int(profile.get("retries", merged.get("retries", 0))),
+    })
+    if isinstance(profile.get("v3"), dict):
+        merged["v3"].update(profile["v3"])
+    return _sanitize_snmp_discovery_config(merged)
+
+
 async def _cleanup_expired_jobs() -> int:
     retention_days = _effective_job_retention_days()
     deleted = await db.delete_expired_jobs(retention_days)
@@ -524,6 +771,70 @@ async def _job_retention_cleanup_loop() -> None:
             increment_metric("jobs.retention.cleanup.failed")
             increment_metric("converter.retention.cleanup.failed")
             await asyncio.sleep(JOB_RETENTION_CLEANUP_INTERVAL_SECONDS)
+
+
+async def _run_discovery_sync_once() -> dict:
+    if not DISCOVERY_SYNC_CONFIG.get("enabled"):
+        return {"enabled": False, "profiles": 0, "synced_groups": 0, "errors": 0}
+
+    profiles = DISCOVERY_SYNC_CONFIG.get("profiles", [])
+    synced_groups = 0
+    errors = 0
+    for profile in profiles:
+        group_id = int(profile.get("group_id", 0))
+        if group_id <= 0:
+            continue
+        group = await db.get_group(group_id)
+        if not group:
+            errors += 1
+            LOGGER.warning("discovery sync: skipped missing group_id=%s", group_id)
+            continue
+        try:
+            body = DiscoverySyncRequest.model_validate({
+                "cidrs": profile.get("cidrs", []),
+                "timeout_seconds": profile.get("timeout_seconds", DISCOVERY_DEFAULT_TIMEOUT_SECONDS),
+                "max_hosts": profile.get("max_hosts", DISCOVERY_DEFAULT_MAX_HOSTS),
+                "device_type": profile.get("device_type", "unknown"),
+                "hostname_prefix": profile.get("hostname_prefix", "discovered"),
+                "use_snmp": profile.get("use_snmp", True),
+                "remove_absent": profile.get("remove_absent", False),
+            })
+            _, discovered = await _discover_hosts(body, group_id=group_id)
+            result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
+            synced_groups += 1
+            LOGGER.info(
+                "discovery sync: group_id=%s discovered=%s added=%s updated=%s removed=%s",
+                group_id,
+                len(discovered),
+                result["added"],
+                result["updated"],
+                result["removed"],
+            )
+            increment_metric("inventory.discovery.sync.success")
+        except Exception as exc:
+            errors += 1
+            LOGGER.warning("discovery sync failed for group_id=%s: %s", group_id, redact_value(str(exc)))
+            increment_metric("inventory.discovery.sync.failed")
+
+    return {
+        "enabled": True,
+        "profiles": len(profiles),
+        "synced_groups": synced_groups,
+        "errors": errors,
+    }
+
+
+async def _discovery_sync_loop() -> None:
+    while True:
+        try:
+            await _run_discovery_sync_once()
+            await asyncio.sleep(int(DISCOVERY_SYNC_CONFIG.get("interval_seconds", DISCOVERY_SYNC_DEFAULTS["interval_seconds"])))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("discovery sync loop failure: %s", redact_value(str(exc)))
+            increment_metric("inventory.discovery.sync.loop.failed")
+            await asyncio.sleep(DISCOVERY_SYNC_DEFAULTS["interval_seconds"])
 
 
 def _ensure_radius_dictionary_file() -> str:
@@ -641,11 +952,17 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 
 
 async def _load_persisted_security_settings():
-    global LOGIN_RULES, AUTH_CONFIG
+    global LOGIN_RULES, AUTH_CONFIG, DISCOVERY_SYNC_CONFIG, SNMP_DISCOVERY_CONFIG, SNMP_DISCOVERY_PROFILES
     login_rules = await db.get_auth_setting("login_rules")
     auth_config = await db.get_auth_setting("auth_config")
+    discovery_sync = await db.get_auth_setting("discovery_sync")
+    snmp_discovery = await db.get_auth_setting("snmp_discovery")
+    snmp_discovery_profiles = await db.get_auth_setting("snmp_discovery_profiles")
     LOGIN_RULES = _sanitize_login_rules(login_rules)
     AUTH_CONFIG = _sanitize_auth_config(auth_config)
+    DISCOVERY_SYNC_CONFIG = _sanitize_discovery_sync_config(discovery_sync)
+    SNMP_DISCOVERY_CONFIG = _sanitize_snmp_discovery_config(snmp_discovery)
+    SNMP_DISCOVERY_PROFILES = _sanitize_snmp_discovery_profiles(snmp_discovery_profiles)
 
 
 async def _get_user_features(user: dict) -> list[str]:
@@ -706,13 +1023,20 @@ async def lifespan(app: FastAPI):
         await seed()
     await _cleanup_expired_jobs()
     await _cleanup_expired_converter_sessions()
+    await _run_discovery_sync_once()
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
+    discovery_sync_task = asyncio.create_task(_discovery_sync_loop())
     try:
         yield
     finally:
         retention_task.cancel()
+        discovery_sync_task.cancel()
         try:
             await retention_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await discovery_sync_task
         except asyncio.CancelledError:
             pass
 
@@ -1420,6 +1744,43 @@ async def admin_run_retention_cleanup_now():
     }
 
 
+@app.get("/api/admin/discovery-sync", dependencies=[Depends(require_admin)])
+async def admin_get_discovery_sync_config():
+    return DISCOVERY_SYNC_CONFIG
+
+
+@app.put("/api/admin/discovery-sync", dependencies=[Depends(require_admin)])
+async def admin_update_discovery_sync_config(body: dict):
+    global DISCOVERY_SYNC_CONFIG
+    DISCOVERY_SYNC_CONFIG = _sanitize_discovery_sync_config(body)
+    await db.set_auth_setting("discovery_sync", DISCOVERY_SYNC_CONFIG)
+    return DISCOVERY_SYNC_CONFIG
+
+
+@app.post("/api/admin/discovery-sync/run-now", dependencies=[Depends(require_admin)])
+async def admin_run_discovery_sync_now():
+    result = await _run_discovery_sync_once()
+    return {"ok": True, "result": result}
+
+
+@app.get("/api/admin/snmp-discovery", dependencies=[Depends(require_admin)])
+async def admin_get_snmp_discovery_config():
+    return SNMP_DISCOVERY_CONFIG
+
+
+@app.put("/api/admin/snmp-discovery", dependencies=[Depends(require_admin)])
+async def admin_update_snmp_discovery_config(body: dict):
+    global SNMP_DISCOVERY_CONFIG
+    SNMP_DISCOVERY_CONFIG = _sanitize_snmp_discovery_config(body)
+    await db.set_auth_setting("snmp_discovery", SNMP_DISCOVERY_CONFIG)
+    return SNMP_DISCOVERY_CONFIG
+
+
+@app.get("/api/admin/snmp-discovery-profiles", dependencies=[Depends(require_admin)])
+async def admin_get_snmp_discovery_profiles():
+    return SNMP_DISCOVERY_PROFILES
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Pydantic Models
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1442,6 +1803,27 @@ class HostUpdate(BaseModel):
     hostname: str
     ip_address: str
     device_type: str = "cisco_ios"
+
+
+class DiscoveryScanRequest(BaseModel):
+    cidrs: list[str] = Field(default_factory=list)
+    timeout_seconds: float = Field(default=DISCOVERY_DEFAULT_TIMEOUT_SECONDS, ge=0.05, le=5.0)
+    max_hosts: int = Field(default=DISCOVERY_DEFAULT_MAX_HOSTS, ge=1, le=4096)
+    device_type: str = "unknown"
+    hostname_prefix: str = "discovered"
+    use_snmp: bool = True
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DiscoverySyncRequest(DiscoveryScanRequest):
+    remove_absent: bool = False
+
+
+class DiscoveryOnboardRequest(BaseModel):
+    discovered_hosts: list[dict] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
 
 class PlaybookCreate(BaseModel):
     name: str
@@ -1569,6 +1951,457 @@ async def update_host(host_id: int, body: HostUpdate):
 async def remove_host(host_id: int):
     await db.remove_host(host_id)
     return {"ok": True}
+
+
+@app.post("/api/hosts/bulk-delete", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def bulk_delete_hosts(body: dict):
+    host_ids = body.get("host_ids", [])
+    if not host_ids or not isinstance(host_ids, list):
+        raise HTTPException(400, "host_ids must be a non-empty list")
+    host_ids = [int(h) for h in host_ids]
+    deleted = await db.bulk_delete_hosts(host_ids)
+    return {"deleted": deleted}
+
+
+@app.post("/api/hosts/move", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def move_hosts(body: dict):
+    host_ids = body.get("host_ids", [])
+    target_group_id = body.get("target_group_id")
+    if not host_ids or not isinstance(host_ids, list):
+        raise HTTPException(400, "host_ids must be a non-empty list")
+    if not target_group_id:
+        raise HTTPException(400, "target_group_id is required")
+    target_group_id = int(target_group_id)
+    group = await db.get_group(target_group_id)
+    if not group:
+        raise HTTPException(404, "Target group not found")
+    host_ids = [int(h) for h in host_ids]
+    moved = await db.move_hosts(host_ids, target_group_id)
+    return {"moved": moved}
+
+
+def _expand_scan_targets(cidrs: list[str], max_hosts: int) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for cidr in cidrs:
+        network = ipaddress.ip_network(cidr, strict=False)
+        for host in network.hosts():
+            ip_str = str(host)
+            if ip_str in seen:
+                continue
+            seen.add(ip_str)
+            targets.append(ip_str)
+            if len(targets) >= max_hosts:
+                return targets
+    return targets
+
+
+async def _probe_discovery_target(
+    ip_address: str,
+    timeout_seconds: float,
+    device_type: str,
+    hostname_prefix: str,
+    use_snmp: bool,
+    snmp_config: dict,
+) -> dict | None:
+    if use_snmp:
+        snmp_hit = await _probe_discovery_target_snmp(ip_address, timeout_seconds, snmp_config)
+        if snmp_hit is not None:
+            return snmp_hit
+
+    detected_port = 0
+    detected_protocol = ""
+    banner_sample = ""
+    for port in DISCOVERY_PROBE_PORTS:
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(ip_address, port), timeout=timeout_seconds)
+            if port == 22:
+                try:
+                    banner = await asyncio.wait_for(reader.read(256), timeout=timeout_seconds)
+                    banner_sample = banner.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    banner_sample = ""
+            writer.close()
+            await writer.wait_closed()
+            _ = reader
+            detected_port = port
+            detected_protocol = "ssh" if port == 22 else "https"
+            break
+        except Exception:
+            continue
+    if not detected_port:
+        return None
+
+    try:
+        hostname = socket.gethostbyaddr(ip_address)[0]
+    except Exception:
+        hostname = f"{hostname_prefix}-{ip_address.replace('.', '-')}"
+
+    inferred_device_type = device_type
+    inferred_os = "unknown"
+    inferred_vendor = "unknown"
+    if banner_sample:
+        lower_banner = banner_sample.lower()
+        if "cisco" in lower_banner:
+            inferred_vendor = "cisco"
+            inferred_device_type = "cisco_ios"
+        elif "juniper" in lower_banner or "junos" in lower_banner:
+            inferred_vendor = "juniper"
+            inferred_device_type = "juniper_junos"
+        elif "arista" in lower_banner:
+            inferred_vendor = "arista"
+            inferred_device_type = "arista_eos"
+        elif "forti" in lower_banner:
+            inferred_vendor = "fortinet"
+            inferred_device_type = "fortinet"
+
+        if "ios" in lower_banner:
+            inferred_os = "ios"
+        elif "nx-os" in lower_banner or "nxos" in lower_banner:
+            inferred_os = "nx-os"
+        elif "junos" in lower_banner:
+            inferred_os = "junos"
+        elif "eos" in lower_banner:
+            inferred_os = "eos"
+        elif "fortios" in lower_banner:
+            inferred_os = "fortios"
+
+    return {
+        "hostname": hostname,
+        "ip_address": ip_address,
+        "device_type": inferred_device_type,
+        "status": "online",
+        "discovery": {
+            "protocol": detected_protocol,
+            "port": detected_port,
+            "banner": banner_sample,
+            "vendor": inferred_vendor,
+            "os": inferred_os,
+        },
+    }
+
+
+def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
+    lowered = (raw_text or "").lower()
+    vendor = "unknown"
+    detected_type = "unknown"
+    os_name = "unknown"
+
+    if "cisco" in lowered:
+        vendor = "cisco"
+        detected_type = "cisco_ios"
+    elif "juniper" in lowered or "junos" in lowered:
+        vendor = "juniper"
+        detected_type = "juniper_junos"
+    elif "arista" in lowered:
+        vendor = "arista"
+        detected_type = "arista_eos"
+    elif "forti" in lowered:
+        vendor = "fortinet"
+        detected_type = "fortinet"
+
+    if "ios" in lowered:
+        os_name = "ios"
+    elif "nx-os" in lowered or "nxos" in lowered:
+        os_name = "nx-os"
+    elif "junos" in lowered:
+        os_name = "junos"
+    elif "eos" in lowered:
+        os_name = "eos"
+    elif "fortios" in lowered:
+        os_name = "fortios"
+
+    return vendor, detected_type, os_name
+
+
+async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) -> dict | None:
+    if not PYSMNP_AVAILABLE:
+        return None
+    if not snmp_config.get("enabled", False):
+        return None
+
+    cfg = snmp_config
+    version = str(cfg.get("version", "2c"))
+    port = int(cfg.get("port", 161))
+    retries = int(cfg.get("retries", 0))
+    timeout = max(timeout_seconds, float(cfg.get("timeout_seconds", timeout_seconds)))
+
+    auth_data = None
+    if version == "3":
+        v3 = cfg.get("v3", {})
+        username = str(v3.get("username", "")).strip()
+        auth_password = str(v3.get("auth_password", "")).strip()
+        priv_password = str(v3.get("priv_password", "")).strip()
+        if not username or not auth_password:
+            return None
+        auth_map = {
+            "md5": usmHMACMD5AuthProtocol,
+            "sha": usmHMACSHAAuthProtocol,
+            "sha256": usmHMAC192SHA256AuthProtocol,
+            "sha512": usmHMAC384SHA512AuthProtocol,
+        }
+        priv_map = {
+            "des": usmDESPrivProtocol,
+            "aes128": usmAesCfb128Protocol,
+            "aes192": usmAesCfb192Protocol,
+            "aes256": usmAesCfb256Protocol,
+        }
+        auth_proto = auth_map.get(str(v3.get("auth_protocol", "sha")).lower(), usmHMACSHAAuthProtocol)
+        priv_proto = priv_map.get(str(v3.get("priv_protocol", "aes128")).lower(), usmAesCfb128Protocol)
+        if priv_password:
+            auth_data = UsmUserData(
+                username,
+                authKey=auth_password,
+                privKey=priv_password,
+                authProtocol=auth_proto,
+                privProtocol=priv_proto,
+            )
+        else:
+            auth_data = UsmUserData(
+                username,
+                authKey=auth_password,
+                authProtocol=auth_proto,
+            )
+    else:
+        community = str(cfg.get("community", "public")).strip()
+        if not community:
+            return None
+        auth_data = CommunityData(community, mpModel=1)
+
+    engine = SnmpEngine()
+    error_indication, error_status, _error_index, var_binds = await get_cmd(
+        engine,
+        auth_data,
+        UdpTransportTarget((ip_address, port), timeout=timeout, retries=retries),
+        ContextData(),
+        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),
+        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),
+    )
+    engine.close_dispatcher()
+    if error_indication or error_status:
+        return None
+
+    values = {str(name): str(value) for name, value in var_binds}
+    sys_descr = values.get("1.3.6.1.2.1.1.1.0", "")
+    sys_name = values.get("1.3.6.1.2.1.1.5.0", "")
+    vendor, detected_type, os_name = _infer_vendor_os_from_text(sys_descr)
+    return {
+        "hostname": sys_name or f"snmp-{ip_address.replace('.', '-')}",
+        "ip_address": ip_address,
+        "device_type": detected_type,
+        "status": "online",
+        "discovery": {
+            "protocol": f"snmpv{version}",
+            "port": port,
+            "vendor": vendor,
+            "os": os_name,
+            "sys_descr": sys_descr,
+            "auth": "configured",
+        },
+    }
+
+
+async def _probe_discovery_target_snmp(ip_address: str, timeout_seconds: float, snmp_config: dict) -> dict | None:
+    try:
+        return await _snmp_get(ip_address, timeout_seconds, snmp_config)
+    except Exception:
+        return None
+
+
+async def _discover_hosts(request: DiscoveryScanRequest, group_id: int | None = None) -> tuple[int, list[dict]]:
+    targets = _expand_scan_targets(request.cidrs, request.max_hosts)
+    semaphore = asyncio.Semaphore(max(1, DISCOVERY_MAX_CONCURRENT_PROBES))
+    snmp_cfg = _resolve_snmp_discovery_config(group_id)
+
+    async def _scan_one(ip_address: str) -> dict | None:
+        async with semaphore:
+            return await _probe_discovery_target(
+                ip_address=ip_address,
+                timeout_seconds=request.timeout_seconds,
+                device_type=request.device_type,
+                hostname_prefix=request.hostname_prefix,
+                use_snmp=request.use_snmp,
+                snmp_config=snmp_cfg,
+            )
+
+    discovered_raw = await asyncio.gather(*[_scan_one(ip) for ip in targets])
+    discovered = [item for item in discovered_raw if item is not None]
+    discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
+    return len(targets), discovered
+
+
+async def _sync_group_hosts(
+    group_id: int,
+    discovered_hosts: list[dict],
+    remove_absent: bool = False,
+) -> dict:
+    existing_hosts = await db.get_hosts_for_group(group_id)
+    existing_by_ip = {str(host["ip_address"]): host for host in existing_hosts}
+
+    normalized_discovered: dict[str, dict] = {}
+    for host in discovered_hosts:
+        ip = str(host.get("ip_address", "")).strip()
+        if not ip:
+            continue
+        normalized_discovered[ip] = {
+            "hostname": str(host.get("hostname") or "").strip() or f"host-{ip.replace('.', '-')}",
+            "ip_address": ip,
+            "device_type": str(host.get("device_type") or "unknown").strip() or "unknown",
+            "status": str(host.get("status") or "online").strip() or "online",
+        }
+
+    added = 0
+    updated = 0
+    removed = 0
+
+    for ip, discovered in normalized_discovered.items():
+        existing = existing_by_ip.get(ip)
+        if existing is None:
+            new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
+            await db.update_host_status(new_id, discovered["status"])
+            added += 1
+            continue
+
+        if (
+            existing.get("hostname") != discovered["hostname"]
+            or existing.get("device_type") != discovered["device_type"]
+        ):
+            await db.update_host(existing["id"], discovered["hostname"], discovered["ip_address"], discovered["device_type"])
+            updated += 1
+        await db.update_host_status(existing["id"], discovered["status"])
+
+    if remove_absent:
+        discovered_ips = set(normalized_discovered)
+        for ip, existing in existing_by_ip.items():
+            if ip in discovered_ips:
+                continue
+            await db.remove_host(existing["id"])
+            removed += 1
+
+    return {
+        "added": added,
+        "updated": updated,
+        "removed": removed,
+        "matched": len(normalized_discovered),
+        "existing_before": len(existing_hosts),
+        "existing_after": len(existing_hosts) + added - removed,
+    }
+
+
+@app.post("/api/inventory/{group_id}/discovery/scan", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def discovery_scan(group_id: int, body: DiscoveryScanRequest):
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    scanned_count, discovered = await _discover_hosts(body, group_id=group_id)
+    return {
+        "group_id": group_id,
+        "scanned_hosts": scanned_count,
+        "discovered_count": len(discovered),
+        "discovered_hosts": discovered,
+    }
+
+
+@app.get("/api/inventory/{group_id}/snmp-discovery-profile", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def get_group_snmp_discovery_profile(group_id: int):
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    profile = SNMP_DISCOVERY_PROFILES.get(group_id)
+    if profile:
+        return profile
+    return _sanitize_snmp_discovery_profile(group_id, {})
+
+
+@app.put("/api/inventory/{group_id}/snmp-discovery-profile", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def update_group_snmp_discovery_profile(group_id: int, body: dict):
+    global SNMP_DISCOVERY_PROFILES
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    profile = _sanitize_snmp_discovery_profile(group_id, body)
+    SNMP_DISCOVERY_PROFILES[group_id] = profile
+    await db.set_auth_setting("snmp_discovery_profiles", SNMP_DISCOVERY_PROFILES)
+    return profile
+
+
+@app.post("/api/inventory/{group_id}/snmp-discovery-profile/test", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def test_group_snmp_profile(group_id: int, body: dict):
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    target_ip = str(body.get("target_ip", "")).strip()
+    if not target_ip:
+        raise HTTPException(400, "target_ip is required")
+    snmp_config = _resolve_snmp_discovery_config(group_id)
+    if not snmp_config.get("enabled"):
+        raise HTTPException(400, "SNMP is not enabled for this group")
+    timeout = float(snmp_config.get("timeout_seconds", 1.2))
+    try:
+        result = await _snmp_get(target_ip, timeout, snmp_config)
+    except Exception as exc:
+        return {"success": False, "target_ip": target_ip, "error": str(exc)}
+    if result is None:
+        return {"success": False, "target_ip": target_ip, "error": "SNMP query failed — no response or bad credentials"}
+    return {"success": True, "target_ip": target_ip, "result": result}
+
+
+@app.post("/api/inventory/{group_id}/discovery/sync", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Request):
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+
+    scanned_count, discovered = await _discover_hosts(body, group_id=group_id)
+    sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
+    session = _get_session(request)
+    audit_user = session["user"] if session else "api-token"
+
+    await _audit(
+        "inventory",
+        "discovery.sync",
+        user=audit_user,
+        detail=(
+            f"group_id={group_id} scanned={scanned_count} discovered={len(discovered)} "
+            f"added={sync_result['added']} updated={sync_result['updated']} removed={sync_result['removed']}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+
+    return {
+        "group_id": group_id,
+        "scanned_hosts": scanned_count,
+        "discovered_count": len(discovered),
+        "sync": sync_result,
+    }
+
+
+@app.post("/api/inventory/{group_id}/discovery/onboard", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def discovery_onboard(group_id: int, body: DiscoveryOnboardRequest, request: Request):
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    if not body.discovered_hosts:
+        raise HTTPException(400, "No discovered hosts provided")
+
+    sync_result = await _sync_group_hosts(group_id, body.discovered_hosts, remove_absent=False)
+    session = _get_session(request)
+    audit_user = session["user"] if session else "api-token"
+    await _audit(
+        "inventory",
+        "discovery.onboard",
+        user=audit_user,
+        detail=(
+            f"group_id={group_id} provided={len(body.discovered_hosts)} "
+            f"added={sync_result['added']} updated={sync_result['updated']}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {
+        "group_id": group_id,
+        "provided_count": len(body.discovered_hosts),
+        "sync": sync_result,
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
