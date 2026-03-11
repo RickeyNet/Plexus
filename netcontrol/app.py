@@ -1510,7 +1510,9 @@ async def dashboard():
 # ═════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/inventory", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
-async def list_groups():
+async def list_groups(include_hosts: bool = Query(default=False)):
+    if include_hosts:
+        return await db.get_all_groups_with_hosts()
     return await db.get_all_groups()
 
 

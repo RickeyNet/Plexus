@@ -51,14 +51,26 @@
 - [x] Neon glow accents & gradient borders: glowing hover states, active indicators, and button halos.
 - [x] Modern typography: Inter for body text, JetBrains Mono for code blocks.
 - [x] Micro-interactions & motion: skeleton loaders, animated stat counters, staggered card entrances.
-- [ ] 3D perspective card tilt: CSS perspective hover effect on cards.
-- [ ] Dashboard visual upgrades: ring charts, pulse dots on running status, activity timeline.
+- [x] 3D perspective card tilt: CSS perspective hover effect on cards.
+- [x] Dashboard visual upgrades: ring charts, pulse dots on running status, activity timeline.
 - [x] Spacing & visual hierarchy: gradient text headings, better rhythm, section dividers.
 - [x] Animated login screen: particle background, card slide-in, logo pulse.
 - [x] Toast notifications: slide-in toasts replacing inline error/success banners.
-- [ ] Converter stepper UI: visual progress bar for the 3-step convert/import/cleanup flow.
-- [ ] Keyboard shortcuts: Ctrl+K page switcher, Esc modal close, / to focus search.
-- [ ] Breadcrumb / page title bar: top bar with current page name and breadcrumb trail.
+- [x] Converter stepper UI: visual progress bar for the 3-step convert/import/cleanup flow.
+- [x] Keyboard shortcuts: Ctrl+K page switcher, Esc modal close, / to focus search.
+- [x] Breadcrumb / page title bar: top bar with current page name and breadcrumb trail.
 - [x] Custom scrollbar styling: thin themed scrollbars matching color palette.
-- [ ] Empty state illustrations: SVG illustrations with call-to-action on empty pages.
-- [ ] Responsive sidebar overlay: mobile hamburger toggle with slide-in overlay + backdrop.
+- [x] Empty state illustrations: SVG illustrations with call-to-action on empty pages.
+- [x] Responsive sidebar overlay: mobile hamburger toggle with slide-in overlay + backdrop.
+
+## UI/UX Improvement Backlog (Post-Modernization)
+- [x] Optimize Inventory load path: remove N+1 group->hosts requests by using a single inventory payload with embedded hosts.
+- [x] Add page-level data cache + stale-while-revalidate behavior so nav switches feel instant and avoid full refetch every time.
+- [x] Align converter stepper state with visible content: hide Cleanup until Step 3 and keep reset state consistent.
+- [x] Add page-level search/filter/sort controls for Inventory, Playbooks, Jobs, Templates, and Credentials.
+- [ ] Reduce visual weight on Templates list (snippet/preview by default, full content on expand/edit).
+- [ ] Improve Jobs scanability with sticky filters (status/date/dry-run) and denser list/table view.
+- [ ] Add reduced-motion/performance mode for blur-heavy and infinite animations.
+- [ ] Improve modal accessibility (dialog semantics, focus trap, focus return, keyboard-only flow).
+- [ ] Add URL/deep-link support for internal pages (hash or pushState) so refresh/back keeps context.
+- [ ] Improve first paint by reducing remote font dependency (self-host or robust fallback stack).

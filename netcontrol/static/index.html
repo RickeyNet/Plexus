@@ -71,6 +71,12 @@
             <div class="gradient-orb orb-3"></div>
         </div>
 
+        <!-- Mobile Hamburger Toggle -->
+        <button class="hamburger-btn" id="hamburger-btn" aria-label="Toggle navigation">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+        </button>
+        <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
         <!-- Sidebar Navigation -->
         <nav class="sidebar" id="sidebar">
             <div class="sidebar-top">
@@ -126,31 +132,71 @@
 
         <!-- Main Content -->
         <main class="main-content">
+            <!-- Breadcrumb / Page Title Bar -->
+            <div class="breadcrumb-bar" id="breadcrumb-bar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                <a class="breadcrumb-home" onclick="navigateToPage('dashboard')">Home</a>
+                <span class="breadcrumb-sep">/</span>
+                <span class="breadcrumb-current" id="breadcrumb-current">Dashboard</span>
+            </div>
+
             <!-- Dashboard Page -->
             <div id="page-dashboard" class="page active">
                 <h2>Dashboard</h2>
                 <div class="stats-grid">
-                    <div class="stat-card">
+                    <div class="stat-card stat-card-ring">
+                        <div class="stat-ring-wrap">
+                            <svg class="stat-ring" viewBox="0 0 80 80">
+                                <circle class="stat-ring-bg" cx="40" cy="40" r="34" />
+                                <circle class="stat-ring-fill" id="ring-groups" cx="40" cy="40" r="34" />
+                            </svg>
+                            <div class="stat-ring-value" id="stat-groups">-</div>
+                        </div>
                         <div class="stat-label">Inventory Groups</div>
-                        <div class="stat-value" id="stat-groups">-</div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card stat-card-ring">
+                        <div class="stat-ring-wrap">
+                            <svg class="stat-ring" viewBox="0 0 80 80">
+                                <circle class="stat-ring-bg" cx="40" cy="40" r="34" />
+                                <circle class="stat-ring-fill" id="ring-hosts" cx="40" cy="40" r="34" />
+                            </svg>
+                            <div class="stat-ring-value" id="stat-hosts">-</div>
+                        </div>
                         <div class="stat-label">Total Hosts</div>
-                        <div class="stat-value" id="stat-hosts">-</div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card stat-card-ring">
+                        <div class="stat-ring-wrap">
+                            <svg class="stat-ring" viewBox="0 0 80 80">
+                                <circle class="stat-ring-bg" cx="40" cy="40" r="34" />
+                                <circle class="stat-ring-fill" id="ring-playbooks" cx="40" cy="40" r="34" />
+                            </svg>
+                            <div class="stat-ring-value" id="stat-playbooks">-</div>
+                        </div>
                         <div class="stat-label">Playbooks</div>
-                        <div class="stat-value" id="stat-playbooks">-</div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card stat-card-ring">
+                        <div class="stat-ring-wrap">
+                            <svg class="stat-ring" viewBox="0 0 80 80">
+                                <circle class="stat-ring-bg" cx="40" cy="40" r="34" />
+                                <circle class="stat-ring-fill" id="ring-jobs" cx="40" cy="40" r="34" />
+                            </svg>
+                            <div class="stat-ring-value" id="stat-jobs">-</div>
+                        </div>
                         <div class="stat-label">Total Jobs</div>
-                        <div class="stat-value" id="stat-jobs">-</div>
                     </div>
                 </div>
 
                 <div class="section">
                     <h3>Recent Jobs</h3>
                     <div id="recent-jobs" class="jobs-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
+                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>Activity Timeline</h3>
+                    <div id="activity-timeline" class="activity-timeline">
                         <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
                         <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
                     </div>
@@ -170,6 +216,34 @@
             <div id="page-converter" class="page">
                 <div class="page-header">
                     <h2>Firewall Migration Tool</h2>
+                </div>
+
+                <!-- Stepper Progress Bar -->
+                <div class="stepper">
+                    <div class="stepper-step active" data-step="1">
+                        <div class="stepper-indicator">
+                            <div class="stepper-number">1</div>
+                        </div>
+                        <div class="stepper-label">Upload & Convert</div>
+                    </div>
+                    <div class="stepper-connector">
+                        <div class="stepper-connector-fill" id="stepper-fill-1"></div>
+                    </div>
+                    <div class="stepper-step" data-step="2">
+                        <div class="stepper-indicator">
+                            <div class="stepper-number">2</div>
+                        </div>
+                        <div class="stepper-label">Review & Import</div>
+                    </div>
+                    <div class="stepper-connector">
+                        <div class="stepper-connector-fill" id="stepper-fill-2"></div>
+                    </div>
+                    <div class="stepper-step" data-step="3">
+                        <div class="stepper-indicator">
+                            <div class="stepper-number">3</div>
+                        </div>
+                        <div class="stepper-label">Cleanup</div>
+                    </div>
                 </div>
 
                 <!-- Step 1: Upload & Convert -->
@@ -287,7 +361,7 @@
                 </div>
 
                 <!-- Step 3: Cleanup / Rollback -->
-                <div id="converter-step3" style="display:block;">
+                <div id="converter-step3" style="display:none;">
                     <div class="section">
                         <h3>Cleanup / Rollback</h3>
                         <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Remove objects previously imported to the FTD device. Appliance model is auto-detected from the active session.</p>
@@ -343,6 +417,15 @@
                     <h2>Inventory Management</h2>
                     <button class="btn btn-primary" onclick="showCreateGroupModal()">+ New Group</button>
                 </div>
+                <div class="list-controls">
+                    <input id="inventory-search" class="form-input list-control-search" type="search" placeholder="Search groups, hosts, IPs, device types">
+                    <select id="inventory-sort" class="form-select list-control-select">
+                        <option value="name_asc">Name: A-Z</option>
+                        <option value="name_desc">Name: Z-A</option>
+                        <option value="hosts_desc">Host Count: High-Low</option>
+                        <option value="hosts_asc">Host Count: Low-High</option>
+                    </select>
+                </div>
 
                 <div id="inventory-groups" class="groups-list">
                     <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
@@ -357,6 +440,15 @@
                     <h2>Playbooks</h2>
                     <button class="btn btn-primary" onclick="showCreatePlaybookModal()">+ New Playbook</button>
                 </div>
+                <div class="list-controls">
+                    <input id="playbooks-search" class="form-input list-control-search" type="search" placeholder="Search playbooks, tags, filenames">
+                    <select id="playbooks-sort" class="form-select list-control-select">
+                        <option value="name_asc">Name: A-Z</option>
+                        <option value="name_desc">Name: Z-A</option>
+                        <option value="updated_desc">Updated: Newest</option>
+                        <option value="updated_asc">Updated: Oldest</option>
+                    </select>
+                </div>
                 <div id="playbooks-list" class="playbooks-grid">
                     <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
                     <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
@@ -368,6 +460,24 @@
                 <div class="page-header">
                     <h2>Job Execution</h2>
                     <button class="btn btn-primary" onclick="showLaunchJobModal()">Launch Job</button>
+                </div>
+                <div class="list-controls list-controls-jobs">
+                    <input id="jobs-search" class="form-input list-control-search" type="search" placeholder="Search playbook, group, status">
+                    <select id="jobs-status-filter" class="form-select list-control-select">
+                        <option value="all">Status: All</option>
+                        <option value="running">Status: Running</option>
+                        <option value="success">Status: Success</option>
+                        <option value="failed">Status: Failed</option>
+                    </select>
+                    <select id="jobs-dryrun-filter" class="form-select list-control-select">
+                        <option value="all">Dry Run: All</option>
+                        <option value="yes">Dry Run: Yes</option>
+                        <option value="no">Dry Run: No</option>
+                    </select>
+                    <select id="jobs-sort" class="form-select list-control-select">
+                        <option value="started_desc">Started: Newest</option>
+                        <option value="started_asc">Started: Oldest</option>
+                    </select>
                 </div>
                 <div id="jobs-list" class="jobs-list">
                     <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
@@ -382,6 +492,15 @@
                     <h2>Config Templates</h2>
                     <button class="btn btn-primary" onclick="showCreateTemplateModal()">+ New Template</button>
                 </div>
+                <div class="list-controls">
+                    <input id="templates-search" class="form-input list-control-search" type="search" placeholder="Search templates and content">
+                    <select id="templates-sort" class="form-select list-control-select">
+                        <option value="name_asc">Name: A-Z</option>
+                        <option value="name_desc">Name: Z-A</option>
+                        <option value="updated_desc">Updated: Newest</option>
+                        <option value="updated_asc">Updated: Oldest</option>
+                    </select>
+                </div>
                 <div id="templates-list" class="templates-list">
                     <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
                     <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
@@ -393,6 +512,15 @@
                 <div class="page-header">
                     <h2>Credentials</h2>
                     <button class="btn btn-primary" onclick="showCreateCredentialModal()">+ New Credential</button>
+                </div>
+                <div class="list-controls">
+                    <input id="credentials-search" class="form-input list-control-search" type="search" placeholder="Search credential name or username">
+                    <select id="credentials-sort" class="form-select list-control-select">
+                        <option value="name_asc">Name: A-Z</option>
+                        <option value="name_desc">Name: Z-A</option>
+                        <option value="created_desc">Created: Newest</option>
+                        <option value="created_asc">Created: Oldest</option>
+                    </select>
                 </div>
                 <div id="credentials-list" class="credentials-list">
                     <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
@@ -439,12 +567,26 @@
                 </div>
                 <div class="section">
                     <h3>Login Rules</h3>
-                    <form id="admin-login-rules-form">
-                        <label>Max Attempts: <input type="number" id="login-max-attempts" min="1"></label><br>
-                        <label>Lockout Time (sec): <input type="number" id="login-lockout-time" min="1"></label><br>
-                        <label>Rate Limit Window (sec): <input type="number" id="login-rate-window" min="1"></label><br>
-                        <label>Rate Limit Max: <input type="number" id="login-rate-max" min="1"></label><br>
-                        <button type="submit" class="btn btn-primary">Save Rules</button>
+                    <form id="admin-login-rules-form" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; max-width: 560px;">
+                        <div class="form-group">
+                            <label class="form-label" for="login-max-attempts">Max Attempts</label>
+                            <input type="number" id="login-max-attempts" class="form-input" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="login-lockout-time">Lockout Time (sec)</label>
+                            <input type="number" id="login-lockout-time" class="form-input" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="login-rate-window">Rate Limit Window (sec)</label>
+                            <input type="number" id="login-rate-window" class="form-input" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="login-rate-max">Rate Limit Max</label>
+                            <input type="number" id="login-rate-max" class="form-input" min="1">
+                        </div>
+                        <div style="grid-column: 1 / -1;">
+                            <button type="submit" class="btn btn-primary">Save Rules</button>
+                        </div>
                     </form>
                 </div>
                 <div class="section">
@@ -546,6 +688,18 @@
                 <button class="btn btn-secondary" onclick="showChangePasswordModal()">Change Password</button>
                 <button class="btn btn-danger" onclick="doLogout()">Sign Out</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Command Palette (Ctrl+K) -->
+    <div id="command-palette-overlay" class="modal-overlay" onclick="closeCommandPalette()">
+        <div class="command-palette" onclick="event.stopPropagation()">
+            <div class="command-palette-input-wrap">
+                <svg class="command-palette-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input type="text" id="command-palette-input" class="command-palette-input" placeholder="Search pages..." autocomplete="off" />
+                <kbd class="command-palette-kbd">ESC</kbd>
+            </div>
+            <div id="command-palette-results" class="command-palette-results"></div>
         </div>
     </div>
 

@@ -96,8 +96,8 @@ export async function getDashboard() {
 }
 
 // Inventory
-export async function getInventoryGroups() {
-    return apiRequest('/inventory');
+export async function getInventoryGroups(includeHosts = false) {
+    return apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory');
 }
 
 export async function getGroup(groupId) {
