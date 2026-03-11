@@ -206,6 +206,29 @@ class TestSanitizePlaybookFilename:
     def test_strips_whitespace(self):
         assert app_module._sanitize_playbook_filename("  hello  ") == "hello.py"
 
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            "%2e%2e%2fetc%2fpasswd",
+            "..%2F..%2Fwindows",
+            "playbook.py/../evil",
+            "playbook\\..\\evil",
+            "con\x00fig",
+            "evil\nname",
+            "evil\tname",
+            "evil.",
+            ".hidden",
+            "C:/Windows/System32",
+            "C:\\Windows\\System32",
+        ],
+    )
+    def test_rejects_malicious_or_pathlike_names(self, bad_name):
+        with pytest.raises(ValueError):
+            app_module._sanitize_playbook_filename(bad_name)
+
+    def test_keeps_single_extension_after_whitespace_trim(self):
+        assert app_module._sanitize_playbook_filename("  valid_name.py  ") == "valid_name.py"
+
 
 def test_write_playbook_file_prevents_escape(tmp_path, monkeypatch):
     """write_playbook_file must reject filenames that would escape the playbooks dir."""

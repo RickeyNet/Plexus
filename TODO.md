@@ -36,9 +36,9 @@
 - [x] Add audit events for auth changes, playbook CRUD actions, and import/deploy operations.
 
 ## Week 6: Test Depth, CI/CD, and Ops Readiness
-- [ ] Add integration tests for protected API behavior when `APP_REQUIRE_API_TOKEN=true`.
-- [ ] Add tests for playbook filename/path sanitization edge cases and malicious input attempts.
-- [ ] Add end-to-end smoke tests for convert -> diff -> import workflow with artifact validation.
+- [x] Add integration tests for protected API behavior when `APP_REQUIRE_API_TOKEN=true`.
+- [x] Add tests for playbook filename/path sanitization edge cases and malicious input attempts.
+- [x] Add end-to-end smoke tests for convert -> diff -> import workflow with artifact validation.
 - [ ] Enforce minimum test coverage threshold in CI and fail on critical-module regression.
 - [ ] Add CI security gates (`pip-audit`, `bandit`, optional CodeQL) and publish SBOM artifacts for releases.
 - [ ] Add release automation to validate changelog/version consistency and publish container images.
