@@ -175,3 +175,75 @@ curl -o pre-cleanup-artifacts.zip \
 - Timeout/API transient failures:
   - Cause: FTD API congestion or intermittent connectivity.
   - Action: increase timeout/retries and rerun the failed stage.
+
+---
+
+## Incident Response Scenarios
+
+Use this section for live operational incidents where immediate containment and
+clear rollback paths matter more than feature delivery.
+
+### Scenario 1: Suspected API token exposure
+
+Symptoms:
+- API requests from unknown source IPs.
+- Unexpected admin/config changes in audit logs.
+
+Immediate actions:
+1. Rotate `APP_API_TOKEN` in `.env`.
+2. Restart Plexus so the new token is enforced.
+3. Temporarily set `APP_REQUIRE_API_TOKEN=true` if it is not already set.
+4. Review `/api/admin/audit-events` for unauthorized actions.
+
+Recovery:
+1. Revoke/replace any exposed credentials used during affected window.
+2. Re-run critical config operations in dry-run to verify intended state.
+3. Document timeline and impacted endpoints.
+
+### Scenario 2: Conversion/import causes production policy impact
+
+Symptoms:
+- Traffic drops after import/deploy.
+- FTD policy object/rule counts diverge from conversion summary.
+
+Immediate actions:
+1. Stop additional imports/deploys.
+2. Restore pre-change FTD backup/snapshot.
+3. Preserve converter artifacts zip and importer logs for forensics.
+
+Recovery:
+1. Compare generated artifacts with previous known-good snapshot via diff.
+2. Re-run conversion and import in dry-run mode only.
+3. Re-introduce change during maintenance window after checklist re-validation.
+
+### Scenario 3: SQLite DB lock or app instability
+
+Symptoms:
+- Intermittent `database is locked` errors.
+- API latency spikes or failed writes.
+
+Immediate actions:
+1. Check host disk space and inode usage.
+2. Restart Plexus process/container.
+3. Verify `/api/health` and confirm job backlog status.
+
+Recovery:
+1. Archive and rotate oversized logs/artifacts if disk pressure is present.
+2. Run retention cleanup endpoint (`/api/admin/retention/cleanup-now`).
+3. If corruption is suspected, restore `routes/netcontrol.db` from backup.
+
+### Scenario 4: Release rollout mismatch (tag/version/changelog)
+
+Symptoms:
+- Release pipeline fails validation.
+- Published image tag does not match expected app version.
+
+Immediate actions:
+1. Run `python tools/check_release_consistency.py <tag>` locally.
+2. Align `netcontrol/version.py` and latest `CHANGELOG.md` entry.
+3. Re-tag release with correct semantic version if needed.
+
+Recovery:
+1. Re-run release workflow after metadata is aligned.
+2. Verify GHCR image tags include both `vX.Y.Z` and `latest`.
+3. Capture release notes update in post-incident report.
