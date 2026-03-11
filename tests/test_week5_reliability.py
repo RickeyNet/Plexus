@@ -171,6 +171,25 @@ def test_max_concurrent_jobs_env_default():
     assert app_module._MAX_CONCURRENT_JOBS >= 1
 
 
+def test_db_unique_violation_helper_matches_sqlite_and_postgres_messages():
+    assert db_module._is_unique_violation(Exception("UNIQUE constraint failed: users.username"))
+    assert db_module._is_unique_violation(Exception("duplicate key value violates unique constraint \"users_username_key\""))
+    assert not db_module._is_unique_violation(Exception("timeout"))
+
+
+def test_db_foreign_key_violation_helper_matches_sqlite_and_postgres_messages():
+    assert db_module._is_foreign_key_violation(Exception("FOREIGN KEY constraint failed"))
+    assert db_module._is_foreign_key_violation(Exception("insert or update on table violates foreign key constraint"))
+    assert not db_module._is_foreign_key_violation(Exception("duplicate key value"))
+
+
+@pytest.mark.asyncio
+async def test_get_db_rejects_invalid_engine(monkeypatch):
+    monkeypatch.setattr(db_module, "DB_ENGINE", "invalid")
+    with pytest.raises(RuntimeError, match="Unsupported APP_DB_ENGINE"):
+        await db_module.get_db()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 4. Import checkpoint write/read round-trip
 # ═════════════════════════════════════════════════════════════════════════════

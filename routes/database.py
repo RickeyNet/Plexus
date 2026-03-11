@@ -14,13 +14,22 @@ Tables:
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 
 import aiosqlite
+try:
+    import asyncpg
+except Exception:  # pragma: no cover - optional dependency for postgres mode
+    asyncpg = None
 
 from netcontrol.telemetry import configure_logging
 
 _LOGGER = configure_logging("plexus.db")
+
+DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
+APP_DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
+_VALID_DB_ENGINES = {"sqlite", "postgres"}
 
 DB_PATH = os.getenv(
     "APP_DB_PATH",
@@ -28,6 +37,18 @@ DB_PATH = os.getenv(
 )
 SQLITE_CONNECT_TIMEOUT = float(os.getenv("APP_SQLITE_CONNECT_TIMEOUT", "30"))
 SQLITE_BUSY_TIMEOUT_MS = int(os.getenv("APP_SQLITE_BUSY_TIMEOUT_MS", "5000"))
+
+_INSERT_ID_TABLES = {
+    "users",
+    "access_groups",
+    "inventory_groups",
+    "hosts",
+    "playbooks",
+    "templates",
+    "credentials",
+    "jobs",
+    "audit_events",
+}
 
 # ── Schema ───────────────────────────────────────────────────────────────────
 
@@ -153,8 +174,131 @@ CREATE TABLE IF NOT EXISTS audit_events (
 """
 
 
-async def get_db() -> aiosqlite.Connection:
-    """Open a connection with row_factory enabled."""
+def _convert_sqlite_schema_to_postgres(sqlite_schema: str) -> str:
+    converted = sqlite_schema
+    converted = converted.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    converted = converted.replace("DEFAULT (datetime('now'))", "DEFAULT NOW()")
+    return converted
+
+
+POSTGRES_SCHEMA = _convert_sqlite_schema_to_postgres(SCHEMA)
+
+
+def _split_sql_statements(schema: str) -> list[str]:
+    return [stmt.strip() for stmt in schema.split(";") if stmt.strip()]
+
+
+def _convert_qmark_to_dollar_params(query: str) -> str:
+    out: list[str] = []
+    in_single_quote = False
+    param_index = 1
+    for ch in query:
+        if ch == "'":
+            in_single_quote = not in_single_quote
+            out.append(ch)
+            continue
+        if ch == "?" and not in_single_quote:
+            out.append(f"${param_index}")
+            param_index += 1
+            continue
+        out.append(ch)
+    converted = "".join(out)
+    converted = converted.replace("datetime('now')", "NOW()")
+    return converted
+
+
+def _parse_rowcount(status: str) -> int:
+    try:
+        return int(status.rsplit(" ", 1)[-1])
+    except Exception:
+        return 0
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "unique constraint" in message or "duplicate key value violates unique constraint" in message
+
+
+def _is_foreign_key_violation(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "foreign key constraint failed" in message or "violates foreign key constraint" in message
+
+
+class _PostgresCursorCompat:
+    def __init__(self, rows=None, *, lastrowid: int | None = None, rowcount: int = 0):
+        self._rows = rows or []
+        self._idx = 0
+        self.lastrowid = lastrowid
+        self.rowcount = rowcount
+
+    async def fetchone(self):
+        if self._idx >= len(self._rows):
+            return None
+        row = self._rows[self._idx]
+        self._idx += 1
+        return row
+
+    async def fetchall(self):
+        return list(self._rows)
+
+
+class _PostgresConnectionCompat:
+    def __init__(self, conn):
+        self._conn = conn
+        self.row_factory = None
+
+    async def execute(self, query: str, params=()):
+        params = tuple(params or ())
+        query_stripped = query.strip()
+        query_upper = query_stripped.upper()
+        converted = _convert_qmark_to_dollar_params(query)
+
+        if query_upper.startswith("SELECT") or query_upper.startswith("WITH"):
+            rows = await self._conn.fetch(converted, *params)
+            return _PostgresCursorCompat(rows=rows, rowcount=len(rows))
+
+        if query_upper.startswith("INSERT"):
+            m = re.match(r"^\s*INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)", query_stripped, re.IGNORECASE)
+            table = m.group(1).lower() if m else ""
+            if table in _INSERT_ID_TABLES and "RETURNING" not in query_upper:
+                returning_query = f"{converted.rstrip()} RETURNING id"
+                row = await self._conn.fetchrow(returning_query, *params)
+                lastrowid = row["id"] if row is not None and "id" in row else None
+                return _PostgresCursorCompat(lastrowid=lastrowid, rowcount=1 if row else 0)
+
+            status = await self._conn.execute(converted, *params)
+            return _PostgresCursorCompat(rowcount=_parse_rowcount(status))
+
+        status = await self._conn.execute(converted, *params)
+        return _PostgresCursorCompat(rowcount=_parse_rowcount(status))
+
+    async def executescript(self, script: str):
+        for stmt in _split_sql_statements(script):
+            await self._conn.execute(stmt)
+
+    async def commit(self):
+        # asyncpg uses autocommit when no explicit transaction is active.
+        return None
+
+    async def close(self):
+        await self._conn.close()
+
+
+async def get_db():
+    """Open a backend connection using APP_DB_ENGINE."""
+    if DB_ENGINE not in _VALID_DB_ENGINES:
+        raise RuntimeError(
+            f"Unsupported APP_DB_ENGINE '{DB_ENGINE}'. Supported values: {', '.join(sorted(_VALID_DB_ENGINES))}"
+        )
+
+    if DB_ENGINE == "postgres":
+        if asyncpg is None:
+            raise RuntimeError("APP_DB_ENGINE=postgres requires the 'asyncpg' package")
+        if not APP_DATABASE_URL:
+            raise RuntimeError("APP_DB_ENGINE=postgres requires APP_DATABASE_URL")
+        conn = await asyncpg.connect(APP_DATABASE_URL)
+        return _PostgresConnectionCompat(conn)
+
     db_dir = os.path.dirname(DB_PATH)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
@@ -168,10 +312,50 @@ async def get_db() -> aiosqlite.Connection:
     return db
 
 
+async def _init_postgres(db) -> None:
+    for stmt in _split_sql_statements(POSTGRES_SCHEMA):
+        await db.execute(stmt)
+
+    # Idempotent startup migrations for already-created databases.
+    await db.execute("ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS content TEXT DEFAULT ''")
+    await db.execute("ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS updated_at TEXT")
+    await db.execute("UPDATE playbooks SET updated_at = NOW()::text WHERE updated_at IS NULL")
+
+    await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")
+    await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'")
+    await db.execute(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password INTEGER NOT NULL DEFAULT 0"
+    )
+
+    await db.execute("ALTER TABLE credentials ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id)")
+
+    cursor = await db.execute("SELECT COUNT(*) FROM credentials WHERE owner_id IS NULL")
+    orphan_count_row = await cursor.fetchone()
+    orphan_count = orphan_count_row[0] if orphan_count_row else 0
+    if orphan_count > 0:
+        admin_cursor = await db.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1")
+        admin_row = await admin_cursor.fetchone()
+        if admin_row:
+            await db.execute("UPDATE credentials SET owner_id = ? WHERE owner_id IS NULL", (admin_row[0],))
+            _LOGGER.info(
+                "migration(postgres): assigned %s orphaned credential(s) to admin user (id=%s)",
+                orphan_count,
+                admin_row[0],
+            )
+        else:
+            _LOGGER.warning("migration(postgres): no admin user found to assign orphaned credentials")
+
+    await db.commit()
+
+
 async def init_db():
     """Create all tables if they don't exist."""
     db = await get_db()
     try:
+        if DB_ENGINE == "postgres":
+            await _init_postgres(db)
+            return
+
         await db.executescript(SCHEMA)
         await db.commit()
         
@@ -337,7 +521,7 @@ async def create_user(username: str, password_hash: str, salt: str,
         await db.commit()
         return cursor.lastrowid
     except Exception as e:
-        if "UNIQUE constraint" in str(e):
+        if _is_unique_violation(e):
             raise ValueError(f"Username '{username}' already exists.")
         raise
     finally:
@@ -386,7 +570,7 @@ async def update_user_admin(user_id: int, username: str = None, display_name: st
         await db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(values))
         await db.commit()
     except Exception as e:
-        if "UNIQUE constraint" in str(e):
+        if _is_unique_violation(e):
             raise ValueError("Username already exists")
         raise
     finally:
@@ -438,7 +622,7 @@ async def set_user_groups(user_id: int, group_ids: list[int]):
             )
         await db.commit()
     except Exception as e:
-        if "FOREIGN KEY constraint failed" in str(e):
+        if _is_foreign_key_violation(e):
             raise ValueError("One or more selected groups do not exist")
         raise
     finally:
@@ -512,7 +696,7 @@ async def create_access_group(name: str, description: str, feature_keys: list[st
         await db.commit()
         return int(group_id)
     except Exception as e:
-        if "UNIQUE constraint" in str(e):
+        if _is_unique_violation(e):
             raise ValueError("Access group name already exists")
         raise
     finally:
@@ -534,7 +718,7 @@ async def update_access_group(group_id: int, name: str, description: str, featur
             )
         await db.commit()
     except Exception as e:
-        if "UNIQUE constraint" in str(e):
+        if _is_unique_violation(e):
             raise ValueError("Access group name already exists")
         raise
     finally:
@@ -844,7 +1028,7 @@ async def create_playbook(name: str, filename: str, description: str = "",
         return cursor.lastrowid
     except Exception as e:
         # If it's a unique constraint error, re-raise it
-        if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
+        if _is_unique_violation(e):
             raise
         raise
     finally:
@@ -855,25 +1039,15 @@ async def sync_playbook_filename(name: str, filename: str):
     """Update the filename for an existing playbook by name."""
     db = await get_db()
     try:
-        # Check if updated_at column exists
-        try:
-            cursor = await db.execute("PRAGMA table_info(playbooks)")
-            columns = [row[1] for row in await cursor.fetchall()]
-            if 'updated_at' in columns:
-                await db.execute(
-                    "UPDATE playbooks SET filename = ?, updated_at = datetime('now') WHERE name = ?",
-                    (filename, name)
-                )
-            else:
-                await db.execute(
-                    "UPDATE playbooks SET filename = ? WHERE name = ?",
-                    (filename, name)
-                )
-        except Exception:
-            # Fallback if we can't check columns
+        if DB_ENGINE == "postgres":
             await db.execute(
-                "UPDATE playbooks SET filename = ? WHERE name = ?",
-                (filename, name)
+                "UPDATE playbooks SET filename = ?, updated_at = NOW()::text WHERE name = ?",
+                (filename, name),
+            )
+        else:
+            await db.execute(
+                "UPDATE playbooks SET filename = ?, updated_at = datetime('now') WHERE name = ?",
+                (filename, name),
             )
         await db.commit()
     finally:
@@ -906,15 +1080,8 @@ async def update_playbook(playbook_id: int, name: str = None, filename: str = No
             params.append(content)
         
         if updates:
-            # Check if updated_at column exists before trying to update it
-            try:
-                cursor = await db.execute("PRAGMA table_info(playbooks)")
-                columns = [row[1] for row in await cursor.fetchall()]
-                if 'updated_at' in columns:
-                    updates.append("updated_at = datetime('now')")
-            except Exception:
-                pass  # If we can't check, just skip updated_at
-            
+            updates.append("updated_at = NOW()::text" if DB_ENGINE == "postgres" else "updated_at = datetime('now')")
+
             params.append(playbook_id)
             await db.execute(
                 f"UPDATE playbooks SET {', '.join(updates)} WHERE id = ?",
@@ -1180,15 +1347,26 @@ async def delete_expired_jobs(retention_days: int) -> int:
     db = await get_db()
     try:
         safe_days = max(1, int(retention_days))
-        cursor = await db.execute(
-            """
-            DELETE FROM jobs
-            WHERE status IN ('success', 'failed')
-              AND started_at IS NOT NULL
-              AND julianday(COALESCE(finished_at, started_at)) <= julianday('now') - ?
-            """,
-            (safe_days,),
-        )
+        if DB_ENGINE == "postgres":
+            cursor = await db.execute(
+                """
+                DELETE FROM jobs
+                WHERE status IN ('success', 'failed')
+                  AND started_at IS NOT NULL
+                  AND COALESCE(finished_at, started_at)::timestamp <= (NOW() - (?::int * INTERVAL '1 day'))
+                """,
+                (safe_days,),
+            )
+        else:
+            cursor = await db.execute(
+                """
+                DELETE FROM jobs
+                WHERE status IN ('success', 'failed')
+                  AND started_at IS NOT NULL
+                  AND julianday(COALESCE(finished_at, started_at)) <= julianday('now') - ?
+                """,
+                (safe_days,),
+            )
         await db.commit()
         return cursor.rowcount or 0
     finally:
