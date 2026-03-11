@@ -68,9 +68,9 @@
 - [x] Add page-level data cache + stale-while-revalidate behavior so nav switches feel instant and avoid full refetch every time.
 - [x] Align converter stepper state with visible content: hide Cleanup until Step 3 and keep reset state consistent.
 - [x] Add page-level search/filter/sort controls for Inventory, Playbooks, Jobs, Templates, and Credentials.
-- [ ] Reduce visual weight on Templates list (snippet/preview by default, full content on expand/edit).
-- [ ] Improve Jobs scanability with sticky filters (status/date/dry-run) and denser list/table view.
-- [ ] Add reduced-motion/performance mode for blur-heavy and infinite animations.
+- [x] Reduce visual weight on Templates list (snippet/preview by default, full content on expand/edit).
+- [x] Improve Jobs scanability with sticky filters (status/date/dry-run) and denser list/table view.
+- [x] Add reduced-motion/performance mode for blur-heavy and infinite animations.
 - [ ] Improve modal accessibility (dialog semantics, focus trap, focus return, keyboard-only flow).
 - [ ] Add URL/deep-link support for internal pages (hash or pushState) so refresh/back keeps context.
 - [ ] Improve first paint by reducing remote font dependency (self-host or robust fallback stack).

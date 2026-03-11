@@ -832,7 +832,15 @@ body {
 }
 
 .list-controls-jobs {
-    grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(160px, 220px));
+    grid-template-columns: minmax(200px, 1fr) repeat(4, minmax(140px, 200px));
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(from var(--bg) r g b / 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: 0.75rem 0;
+    margin: -0.75rem 0 0.5rem 0;
 }
 
 .list-control-search,
@@ -977,6 +985,51 @@ body {
     color: var(--text-muted);
     font-size: 0.875rem;
     margin-top: 0.5rem;
+}
+
+/* Template content preview */
+.template-content-wrap {
+    position: relative;
+    margin-top: 1rem;
+}
+
+.template-content-pre,
+.template-content-full {
+    background: var(--bg);
+    padding: 1rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    font-size: 0.75rem;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.template-content-collapsed {
+    max-height: 5.5rem;
+    overflow: hidden;
+}
+
+.template-fade {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2rem;
+    background: linear-gradient(transparent, var(--card-bg));
+    border-radius: 0 0 0.375rem 0.375rem;
+    pointer-events: none;
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--primary-light);
+    border: 1px solid rgba(from var(--primary) r g b / 0.3);
+}
+
+.btn-ghost:hover {
+    background: var(--primary-soft);
+    border-color: var(--primary);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -1284,23 +1337,34 @@ input[type="number"].form-input {
     gap: 1.5rem;
 }
 
+.jobs-list {
+    border: 1px solid rgba(from var(--border) r g b / 0.4);
+    border-radius: 0.625rem;
+    overflow: hidden;
+}
+
 .job-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1rem;
-    background: rgba(from var(--card-bg) r g b / 0.4);
+    padding: 0.625rem 1rem;
+    background: rgba(from var(--card-bg) r g b / 0.25);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(from var(--border) r g b / 0.5);
-    border-radius: 0.625rem;
-    transition: background 0.2s, border-color 0.2s, transform 0.2s;
+    border-bottom: 1px solid rgba(from var(--border) r g b / 0.3);
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.job-item:last-child {
+    border-bottom: none;
+}
+
+.job-item:nth-child(even) {
+    background: rgba(from var(--card-bg) r g b / 0.4);
 }
 
 .job-item:hover {
     background: rgba(from var(--card-bg-hover) r g b / 0.55);
-    border-color: rgba(from var(--border-light) r g b / 0.6);
-    transform: translateY(-1px);
 }
 
 .job-info {
@@ -1309,11 +1373,12 @@ input[type="number"].form-input {
 
 .job-title {
     font-weight: 600;
-    margin-bottom: 0.25rem;
+    font-size: 0.9rem;
+    margin-bottom: 0.125rem;
 }
 
 .job-meta {
-    font-size: 0.875rem;
+    font-size: 0.8rem;
     color: var(--text-muted);
 }
 
@@ -2482,5 +2547,111 @@ code {
 
     .breadcrumb-bar {
         margin-left: 2.75rem;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Reduced-Motion / Performance Mode
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+/* Toggle indicator in sidebar */
+.perf-toggle.active {
+    color: var(--warning) !important;
+}
+
+.perf-toggle.active .nav-icon {
+    color: var(--warning);
+    filter: drop-shadow(0 0 4px var(--warning));
+}
+
+/* Shared reduced-motion rules — applied by class or OS preference */
+.reduced-motion *,
+.reduced-motion *::before,
+.reduced-motion *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.1s !important;
+}
+
+.reduced-motion .gradient-orb,
+.reduced-motion .orb-1,
+.reduced-motion .orb-2,
+.reduced-motion .orb-3 {
+    display: none !important;
+}
+
+.reduced-motion .sidebar,
+.reduced-motion .login-card,
+.reduced-motion .modal,
+.reduced-motion .command-palette {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: var(--card-bg) !important;
+}
+
+.reduced-motion .card,
+.reduced-motion .stat-card,
+.reduced-motion .toast,
+.reduced-motion .stepper {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+.reduced-motion .job-item,
+.reduced-motion .timeline-item {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+.reduced-motion .list-controls-jobs {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: var(--bg) !important;
+}
+
+.reduced-motion .card {
+    transform: none !important;
+    will-change: auto !important;
+}
+
+.reduced-motion .page h2 {
+    animation: none !important;
+    background-size: 100% 100% !important;
+}
+
+/* Auto-apply for OS prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001s !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.1s !important;
+    }
+
+    .gradient-orb,
+    .orb-1,
+    .orb-2,
+    .orb-3 {
+        display: none !important;
+    }
+
+    .sidebar,
+    .login-card,
+    .modal,
+    .command-palette,
+    .card,
+    .stat-card,
+    .toast,
+    .stepper,
+    .job-item,
+    .timeline-item {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+
+    .card {
+        transform: none !important;
+        will-change: auto !important;
     }
 }
