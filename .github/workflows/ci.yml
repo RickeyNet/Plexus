@@ -40,8 +40,20 @@ jobs:
       - name: Security audit (pip-audit)
         run: pip-audit --progress-spinner off
 
+      - name: Generate SBOM (CycloneDX)
+        run: pip-audit -r requirements-lock.txt -f cyclonedx-json -o sbom.cdx.json --progress-spinner off --no-deps
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx-py${{ matrix.python-version }}
+          path: sbom.cdx.json
+
       - name: Static security checks (bandit)
         run: bandit -q -r netcontrol routes Firewall_converter templates -ll -ii
 
       - name: Tests with coverage gate
-        run: pytest --cov=netcontrol --cov=routes --cov-report=term-missing --cov-fail-under=49
+        run: pytest --cov=netcontrol --cov=routes --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=49
+
+      - name: Critical module regression gate
+        run: python tools/coverage_gate.py coverage.json
