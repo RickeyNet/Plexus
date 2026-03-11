@@ -2502,7 +2502,8 @@ function showApp(userData) {
     currentFeatureAccess = Array.isArray(userData.feature_access) ? userData.feature_access : [];
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app-container').style.display = 'flex';
-    document.getElementById('nav-user').textContent = userData.display_name || userData.username;
+    const navUserLabel = document.querySelector('#nav-user .nav-user-label');
+    if (navUserLabel) navUserLabel.textContent = userData.display_name || userData.username;
     initNavigation();
     applyFeatureVisibility();
 
@@ -2647,7 +2648,8 @@ window.showEditProfileModal = function() {
             closeAllModals();
             // Update nav display
             const newName = formData.get('display_name');
-            document.getElementById('nav-user').textContent = newName;
+            const navLabel = document.querySelector('#nav-user .nav-user-label');
+            if (navLabel) navLabel.textContent = newName;
             if (currentUserData) currentUserData.display_name = newName;
             showSuccess('Profile updated successfully');
         } catch (error) {
@@ -2704,8 +2706,23 @@ window.showChangePasswordModal = function() {
 // Initialize
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function initSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const toggle = document.getElementById('sidebar-toggle');
+    if (!sidebar || !toggle) return;
+    const COLLAPSED_KEY = 'plexus-sidebar-collapsed';
+    if (localStorage.getItem(COLLAPSED_KEY) === '1') {
+        sidebar.classList.add('collapsed');
+    }
+    toggle.addEventListener('click', () => {
+        sidebar.classList.toggle('collapsed');
+        localStorage.setItem(COLLAPSED_KEY, sidebar.classList.contains('collapsed') ? '1' : '0');
+    });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     initThemeControls();
+    initSidebar();
     initLoginForm();
 
     try {
