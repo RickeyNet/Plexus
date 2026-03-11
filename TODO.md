@@ -74,3 +74,11 @@
 - [x] Improve modal accessibility (dialog semantics, focus trap, focus return, keyboard-only flow).
 - [x] Add URL/deep-link support for internal pages (hash or pushState) so refresh/back keeps context.
 - [x] Improve first paint by reducing remote font dependency (self-host or robust fallback stack).
+
+## Week 7: PostgreSQL Optional Deployment (VM/Prod Focus)
+- [ ] Add dual-backend database abstraction (`sqlite` + `postgres`) while preserving existing `routes.database` API surface.
+- [ ] Add PostgreSQL schema bootstrap + migration-safe startup path (remove SQLite-specific assumptions for Postgres mode).
+- [ ] Add Docker Compose PostgreSQL service and env-based backend selection.
+- [ ] Add SQLite -> PostgreSQL migration utility with dry-run and parity verification.
+- [ ] Add CI matrix coverage for SQLite and PostgreSQL backends on critical API/database tests.
+- [ ] Update README and operator runbook for PostgreSQL deployment and backup/restore procedures.

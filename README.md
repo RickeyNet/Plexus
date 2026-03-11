@@ -124,6 +124,19 @@ Notes:
 - Named volumes persist converter sessions, DB data, and generated certs across restarts.
 - For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables.
 
+## Database Backends
+
+Plexus currently uses SQLite by default. PostgreSQL optional deployment work is planned and tracked in `POSTGRESQL_MIGRATION_PLAN.md`.
+
+- Docker remains the primary deployment approach for both modes.
+- SQLite mode remains supported for local/dev workflows.
+- PostgreSQL mode is targeted for VM/production reliability where storage contention is common.
+
+Planned backend env selectors:
+
+- `APP_DB_ENGINE=sqlite|postgres`
+- `APP_DATABASE_URL=postgresql://<user>:<pass>@postgres:5432/<db>`
+
 ## Versioning and Release
 
 - Plexus follows Semantic Versioning (`MAJOR.MINOR.PATCH`).

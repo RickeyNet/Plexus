@@ -231,6 +231,7 @@ Recovery:
 1. Archive and rotate oversized logs/artifacts if disk pressure is present.
 2. Run retention cleanup endpoint (`/api/admin/retention/cleanup-now`).
 3. If corruption is suspected, restore `routes/netcontrol.db` from backup.
+4. For VM/shared-folder deployments, move SQLite to local VM disk via `APP_DB_PATH` and increase lock wait via `APP_SQLITE_BUSY_TIMEOUT_MS`.
 
 ### Scenario 4: Release rollout mismatch (tag/version/changelog)
 

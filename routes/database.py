@@ -22,7 +22,12 @@ from netcontrol.telemetry import configure_logging
 
 _LOGGER = configure_logging("plexus.db")
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "netcontrol.db")
+DB_PATH = os.getenv(
+    "APP_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "netcontrol.db"),
+)
+SQLITE_CONNECT_TIMEOUT = float(os.getenv("APP_SQLITE_CONNECT_TIMEOUT", "30"))
+SQLITE_BUSY_TIMEOUT_MS = int(os.getenv("APP_SQLITE_BUSY_TIMEOUT_MS", "5000"))
 
 # ── Schema ───────────────────────────────────────────────────────────────────
 
@@ -150,9 +155,15 @@ CREATE TABLE IF NOT EXISTS audit_events (
 
 async def get_db() -> aiosqlite.Connection:
     """Open a connection with row_factory enabled."""
-    db = await aiosqlite.connect(DB_PATH)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    db = await aiosqlite.connect(DB_PATH, timeout=SQLITE_CONNECT_TIMEOUT)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    await db.execute("PRAGMA synchronous=NORMAL")
     await db.execute("PRAGMA foreign_keys=ON")
     return db
 
