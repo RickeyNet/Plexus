@@ -27,6 +27,16 @@ const NAV_FEATURE_MAP = {
 const THEME_KEY = 'plexus-theme';
 const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light'];
 const DEFAULT_THEME = 'forest';
+const PAGE_CACHE_TTL_MS = 30 * 1000;
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter'];
+const pageCacheMeta = {};
+const listViewState = {
+    inventory: { items: [], query: '', sort: 'name_asc' },
+    playbooks: { items: [], query: '', sort: 'name_asc' },
+    jobs: { items: [], query: '', sort: 'started_desc', status: 'all', dryRun: 'all' },
+    templates: { items: [], query: '', sort: 'name_asc' },
+    credentials: { items: [], query: '', sort: 'name_asc' },
+};
 
 function normalizeTheme(theme) {
     return VALID_THEMES.includes(theme) ? theme : DEFAULT_THEME;
@@ -52,6 +62,21 @@ function initThemeControls() {
             select.addEventListener('change', (e) => applyTheme(e.target.value));
             select.dataset.themeBound = '1';
         }
+    });
+}
+
+function markPageCacheFresh(page) {
+    pageCacheMeta[page] = Date.now();
+}
+
+function isPageCacheFresh(page) {
+    const ts = pageCacheMeta[page];
+    return Boolean(ts && (Date.now() - ts) < PAGE_CACHE_TTL_MS);
+}
+
+function invalidatePageCache(...pages) {
+    pages.forEach((page) => {
+        delete pageCacheMeta[page];
     });
 }
 
@@ -117,38 +142,61 @@ function navigateToPage(page) {
     if (targetPage) {
         targetPage.classList.add('active');
         currentPage = page;
+        updateBreadcrumb(page);
         loadPageData(page);
     }
 }
 
-async function loadPageData(page) {
+const PAGE_LABELS = {
+    dashboard: 'Dashboard',
+    inventory: 'Inventory Management',
+    playbooks: 'Playbooks',
+    jobs: 'Job Execution',
+    templates: 'Config Templates',
+    credentials: 'Credentials',
+    converter: 'Firewall Migration Tool',
+    settings: 'Admin Settings',
+};
+
+function updateBreadcrumb(page) {
+    const el = document.getElementById('breadcrumb-current');
+    if (el) el.textContent = PAGE_LABELS[page] || page;
+}
+
+async function loadPageData(page, options = {}) {
+    const { force = false } = options;
+    if (!force && isPageCacheFresh(page)) {
+        return;
+    }
+    const preserveContent = !force && Boolean(pageCacheMeta[page]);
     try {
         switch (page) {
             case 'dashboard':
-                await loadDashboard();
+                await loadDashboard({ preserveContent });
                 break;
             case 'inventory':
-                await loadInventory();
+                await loadInventory({ preserveContent });
                 break;
             case 'playbooks':
-                await loadPlaybooks();
+                await loadPlaybooks({ preserveContent });
                 break;
             case 'jobs':
-                await loadJobs();
+                await loadJobs({ preserveContent });
                 break;
             case 'templates':
-                await loadTemplates();
+                await loadTemplates({ preserveContent });
                 break;
             case 'credentials':
-                await loadCredentials();
+                await loadCredentials({ preserveContent });
                 break;
             case 'settings':
-                await loadAdminSettings();
+                await loadAdminSettings({ preserveContent });
                 break;
             case 'converter':
-                await loadConverter();
+                await loadConverter({ preserveContent });
                 break;
         }
+        markPageCacheFresh(page);
     } catch (error) {
         console.error(`Error loading ${page}:`, error);
         showError(`Failed to load ${page}: ${error.message}`);
@@ -216,7 +264,8 @@ window.updateTargetModels = function () {
         models.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
 };
 
-async function loadConverter() {
+async function loadConverter(options = {}) {
+    const { preserveContent = false } = options;
     const convertForm   = document.getElementById('converter-form');
     const importForm    = document.getElementById('import-form');
     const statusDiv     = document.getElementById('converter-status');
@@ -240,14 +289,16 @@ async function loadConverter() {
         return;
     }
 
-    // Reset state on page load
-    convertForm.reset();
-    statusDiv.textContent = '';
-    step2.style.display = 'none';
-    if (step3) step3.style.display = 'block';
-    importOutput.style.display = 'none';
-
-    converterSessionId = null;
+    // Reset state only on first load/forced refresh so revisiting keeps context.
+    if (!preserveContent) {
+        convertForm.reset();
+        statusDiv.textContent = '';
+        step2.style.display = 'none';
+        if (step3) step3.style.display = 'none';
+        importOutput.style.display = 'none';
+        converterSessionId = null;
+        updateConverterStepper(1);
+    }
 
     function syncImportOnlySelectAll() {
         if (!importSelectAll) return;
@@ -357,8 +408,8 @@ async function loadConverter() {
             renderSummary(data.summary || {});
 
             step2.style.display = 'block';
-            if (step3) step3.style.display = 'block';
             statusDiv.textContent = 'Conversion complete. Review below, then import.';
+            updateConverterStepper(2);
             await loadRecentSessions();
         } catch (err) {
             statusDiv.textContent = 'Error: ' + err.message;
@@ -375,7 +426,7 @@ async function loadConverter() {
             if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load sessions'));
             const sessions = data.sessions || [];
             if (!sessions.length) {
-                recentSessions.innerHTML = '<div class="empty-state">No recent conversions found.</div>';
+                recentSessions.innerHTML = emptyStateHTML('No recent conversions', 'converter');
                 return;
             }
             recentSessions.innerHTML = sessions.map(s => {
@@ -430,24 +481,26 @@ async function loadConverter() {
         }
     };
 
-    function setActiveSession(id, message) {
+    function setActiveSession(id, message, showCleanup = false) {
         converterSessionId = id;
         if (statusDiv) statusDiv.textContent = message || `Using session ${id}.`;
         if (step2) step2.style.display = 'block';
-        if (step3) step3.style.display = 'block';
+        if (step3) step3.style.display = showCleanup ? 'block' : 'none';
     }
 
     window.resumeImport = function (id) {
-        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to re-run import.`);
+        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to re-run import.`, false);
         loadSessionState(id);
+        updateConverterStepper(2);
         if (importOutput) { importOutput.textContent = ''; importOutput.style.display = 'none'; }
         if (cleanupOutput) { cleanupOutput.textContent = ''; cleanupOutput.style.display = 'none'; }
         document.getElementById('converter-step2')?.scrollIntoView({ behavior: 'smooth' });
     };
 
     window.resumeCleanup = function (id) {
-        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to clean up.`);
+        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to clean up.`, true);
         loadSessionState(id);
+        updateConverterStepper(3);
         if (cleanupOutput) { cleanupOutput.textContent = 'Ready to clean up this session.'; cleanupOutput.style.display = 'block'; }
         document.getElementById('converter-step3')?.scrollIntoView({ behavior: 'smooth' });
     };
@@ -518,9 +571,11 @@ async function loadConverter() {
     importForm.onsubmit = async (e) => {
         e.preventDefault();
         if (!converterSessionId) { showToast('No active conversion session. Please convert first or resume one.', 'error'); return; }
+        if (step3) step3.style.display = 'block';
         importOutput.textContent = `Importing session ${converterSessionId} to FTD...\n`;
         importOutput.style.display = 'block';
         importOutput.scrollIntoView({ behavior: 'smooth' });
+        updateConverterStepper(3);
 
         try {
             const importHeaders = { 'Content-Type': 'application/json' };
@@ -562,6 +617,8 @@ async function loadConverter() {
     if (cleanupForm) {
         cleanupForm.onsubmit = async (e) => {
             e.preventDefault();
+            if (step3) step3.style.display = 'block';
+            updateConverterStepper(3);
             const deleteFlags = [...document.querySelectorAll('.delete-flag:checked')].map(cb => cb.value);
             if (deleteFlags.length === 0) {
                 showToast('Please select at least one item to delete.', 'error');
@@ -635,6 +692,7 @@ window.resetConverter = function () {
     const f  = document.getElementById('converter-form');
     const s  = document.getElementById('converter-status');
     const s2 = document.getElementById('converter-step2');
+    const s3 = document.getElementById('converter-step3');
     const io = document.getElementById('import-output-window');
     const co = document.getElementById('cleanup-output-window');
     const cf = document.getElementById('cleanup-form');
@@ -647,6 +705,7 @@ window.resetConverter = function () {
     if (importSelectAll) importSelectAll.indeterminate = false;
     if (s)  s.textContent = '';
     if (s2) s2.style.display = 'none';
+    if (s3) s3.style.display = 'none';
     if (io) io.style.display = 'none';
     if (co) { co.style.display = 'none'; co.textContent = ''; }
     if (cf) cf.reset();
@@ -659,13 +718,14 @@ window.resetConverter = function () {
     const tgtModel = document.getElementById('target-model');
     if (srcModel) srcModel.innerHTML = '<option value="">-- Select Model --</option>';
     if (tgtModel) tgtModel.innerHTML = '<option value="">-- Select Model --</option>';
+    updateConverterStepper(1);
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Dashboard
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function loadDashboard() {
+async function loadDashboard(_options = {}) {
     const container = document.getElementById('page-dashboard');
     container.querySelector('.loading')?.remove();
 
@@ -673,14 +733,29 @@ async function loadDashboard() {
         const data = await api.getDashboard();
         dashboardData = data;
 
+        const groups = data.stats?.total_groups || 0;
+        const hosts = data.stats?.total_hosts || 0;
+        const playbooks = data.stats?.total_playbooks || 0;
+        const jobs = data.stats?.total_jobs || 0;
+
         // Animate stats
-        animateCounter('stat-groups', data.stats?.total_groups || 0);
-        animateCounter('stat-hosts', data.stats?.total_hosts || 0);
-        animateCounter('stat-playbooks', data.stats?.total_playbooks || 0);
-        animateCounter('stat-jobs', data.stats?.total_jobs || 0);
+        animateCounter('stat-groups', groups);
+        animateCounter('stat-hosts', hosts);
+        animateCounter('stat-playbooks', playbooks);
+        animateCounter('stat-jobs', jobs);
+
+        // Animate ring charts — use a sensible max so partial rings look meaningful
+        const ringMax = Math.max(groups, hosts, playbooks, jobs, 1);
+        animateRing('ring-groups', groups, ringMax);
+        animateRing('ring-hosts', hosts, ringMax);
+        animateRing('ring-playbooks', playbooks, ringMax);
+        animateRing('ring-jobs', jobs, ringMax);
 
         // Render recent jobs
         renderRecentJobs(data.recent_jobs || []);
+
+        // Render activity timeline
+        renderActivityTimeline(data.recent_jobs || []);
 
         // Render groups overview
         renderGroupsOverview(data.groups || []);
@@ -714,7 +789,7 @@ function skeletonCards(count = 3) {
 function renderRecentJobs(jobs) {
     const container = document.getElementById('recent-jobs');
     if (!jobs.length) {
-        container.innerHTML = '<div class="empty-state">No jobs yet</div>';
+        container.innerHTML = emptyStateHTML('No recent jobs', 'jobs');
         return;
     }
 
@@ -736,7 +811,7 @@ function renderRecentJobs(jobs) {
 function renderGroupsOverview(groups) {
     const container = document.getElementById('groups-overview');
     if (!groups.length) {
-        container.innerHTML = '<div class="empty-state">No inventory groups</div>';
+        container.innerHTML = emptyStateHTML('No inventory groups', 'inventory');
         return;
     }
 
@@ -755,30 +830,169 @@ window.goToInventory = function() {
     navigateToPage('inventory');
 };
 
+function textMatch(value, query) {
+    if (!query) return true;
+    return String(value || '').toLowerCase().includes(query);
+}
+
+function byNameAsc(a, b) {
+    return String(a.name || '').localeCompare(String(b.name || ''));
+}
+
+function byNameDesc(a, b) {
+    return String(b.name || '').localeCompare(String(a.name || ''));
+}
+
+function applyInventoryFilters() {
+    const state = listViewState.inventory;
+    const query = state.query.trim().toLowerCase();
+    const filtered = state.items.filter((group) => {
+        if (!query) return true;
+        if (textMatch(group.name, query) || textMatch(group.description, query)) return true;
+        return (group.hosts || []).some((host) =>
+            textMatch(host.hostname, query) || textMatch(host.ip_address, query) || textMatch(host.device_type, query)
+        );
+    });
+    if (state.sort === 'hosts_desc') filtered.sort((a, b) => (b.host_count || (b.hosts || []).length || 0) - (a.host_count || (a.hosts || []).length || 0));
+    else if (state.sort === 'hosts_asc') filtered.sort((a, b) => (a.host_count || (a.hosts || []).length || 0) - (b.host_count || (b.hosts || []).length || 0));
+    else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
+    else filtered.sort(byNameAsc);
+    return filtered;
+}
+
+function applyPlaybookFilters() {
+    const state = listViewState.playbooks;
+    const query = state.query.trim().toLowerCase();
+    const filtered = state.items.filter((pb) => {
+        const tags = Array.isArray(pb.tags) ? pb.tags.join(' ') : (typeof pb.tags === 'string' ? pb.tags : '');
+        return !query || textMatch(pb.name, query) || textMatch(pb.description, query) || textMatch(pb.filename, query) || textMatch(tags, query);
+    });
+    if (state.sort === 'updated_desc') filtered.sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
+    else if (state.sort === 'updated_asc') filtered.sort((a, b) => String(a.updated_at || a.created_at || '').localeCompare(String(b.updated_at || b.created_at || '')));
+    else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
+    else filtered.sort(byNameAsc);
+    return filtered;
+}
+
+function applyJobFilters() {
+    const state = listViewState.jobs;
+    const query = state.query.trim().toLowerCase();
+    const filtered = state.items.filter((job) => {
+        const matchesText = !query || textMatch(job.playbook_name, query) || textMatch(job.group_name, query) || textMatch(job.status, query);
+        const matchesStatus = state.status === 'all' || String(job.status || '').toLowerCase() === state.status;
+        const isDry = Boolean(job.dry_run);
+        const matchesDryRun = state.dryRun === 'all' || (state.dryRun === 'yes' && isDry) || (state.dryRun === 'no' && !isDry);
+        return matchesText && matchesStatus && matchesDryRun;
+    });
+    if (state.sort === 'started_asc') filtered.sort((a, b) => String(a.started_at || '').localeCompare(String(b.started_at || '')));
+    else filtered.sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')));
+    return filtered;
+}
+
+function applyTemplateFilters() {
+    const state = listViewState.templates;
+    const query = state.query.trim().toLowerCase();
+    const filtered = state.items.filter((tpl) =>
+        !query || textMatch(tpl.name, query) || textMatch(tpl.description, query) || textMatch(tpl.content, query)
+    );
+    if (state.sort === 'updated_desc') filtered.sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
+    else if (state.sort === 'updated_asc') filtered.sort((a, b) => String(a.updated_at || a.created_at || '').localeCompare(String(b.updated_at || b.created_at || '')));
+    else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
+    else filtered.sort(byNameAsc);
+    return filtered;
+}
+
+function applyCredentialFilters() {
+    const state = listViewState.credentials;
+    const query = state.query.trim().toLowerCase();
+    const filtered = state.items.filter((cred) =>
+        !query || textMatch(cred.name, query) || textMatch(cred.username, query)
+    );
+    if (state.sort === 'created_desc') filtered.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    else if (state.sort === 'created_asc') filtered.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
+    else filtered.sort(byNameAsc);
+    return filtered;
+}
+
+function bindListControl(id, handler) {
+    const el = document.getElementById(id);
+    if (!el || el.dataset.bound === '1') return;
+    el.dataset.bound = '1';
+    el.addEventListener('input', handler);
+    el.addEventListener('change', handler);
+}
+
+function initListPageControls() {
+    bindListControl('inventory-search', (e) => {
+        listViewState.inventory.query = e.target.value;
+        renderInventoryGroups(applyInventoryFilters());
+    });
+    bindListControl('inventory-sort', (e) => {
+        listViewState.inventory.sort = e.target.value;
+        renderInventoryGroups(applyInventoryFilters());
+    });
+    bindListControl('playbooks-search', (e) => {
+        listViewState.playbooks.query = e.target.value;
+        renderPlaybooksList(applyPlaybookFilters());
+    });
+    bindListControl('playbooks-sort', (e) => {
+        listViewState.playbooks.sort = e.target.value;
+        renderPlaybooksList(applyPlaybookFilters());
+    });
+    bindListControl('jobs-search', (e) => {
+        listViewState.jobs.query = e.target.value;
+        renderJobsList(applyJobFilters());
+    });
+    bindListControl('jobs-sort', (e) => {
+        listViewState.jobs.sort = e.target.value;
+        renderJobsList(applyJobFilters());
+    });
+    bindListControl('jobs-status-filter', (e) => {
+        listViewState.jobs.status = e.target.value;
+        renderJobsList(applyJobFilters());
+    });
+    bindListControl('jobs-dryrun-filter', (e) => {
+        listViewState.jobs.dryRun = e.target.value;
+        renderJobsList(applyJobFilters());
+    });
+    bindListControl('templates-search', (e) => {
+        listViewState.templates.query = e.target.value;
+        renderTemplatesList(applyTemplateFilters());
+    });
+    bindListControl('templates-sort', (e) => {
+        listViewState.templates.sort = e.target.value;
+        renderTemplatesList(applyTemplateFilters());
+    });
+    bindListControl('credentials-search', (e) => {
+        listViewState.credentials.query = e.target.value;
+        renderCredentialsList(applyCredentialFilters());
+    });
+    bindListControl('credentials-sort', (e) => {
+        listViewState.credentials.sort = e.target.value;
+        renderCredentialsList(applyCredentialFilters());
+    });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Inventory
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function loadInventory() {
+async function loadInventory(options = {}) {
+    const { preserveContent = false } = options;
     const container = document.getElementById('inventory-groups');
-    container.innerHTML = skeletonCards(4);
+    if (!preserveContent) {
+        container.innerHTML = skeletonCards(4);
+    }
 
     try {
-        const groups = await api.getInventoryGroups();
+        const groups = await api.getInventoryGroups(true);
+        listViewState.inventory.items = groups || [];
         if (!groups.length) {
-            container.innerHTML = '<div class="empty-state">No inventory groups. Create one to get started!</div>';
+            container.innerHTML = emptyStateHTML('No inventory groups', 'inventory', '<button class="btn btn-primary btn-sm" onclick="showCreateGroupModal()">+ New Group</button>');
             return;
         }
-
-        // Load full details for each group
-        const groupsWithHosts = await Promise.all(
-            groups.map(async (group) => {
-                const fullGroup = await api.getGroup(group.id);
-                return fullGroup;
-            })
-        );
-
-        renderInventoryGroups(groupsWithHosts);
+        renderInventoryGroups(applyInventoryFilters());
     } catch (error) {
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
@@ -839,32 +1053,47 @@ function renderInventoryGroups(groups) {
 // Playbooks
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function loadPlaybooks() {
+async function loadPlaybooks(options = {}) {
+    const { preserveContent = false } = options;
     const container = document.getElementById('playbooks-list');
-    container.innerHTML = skeletonCards(3);
+    if (!preserveContent) {
+        container.innerHTML = skeletonCards(3);
+    }
 
     try {
         const playbooks = await api.getPlaybooks();
+        listViewState.playbooks.items = playbooks || [];
         if (!playbooks.length) {
-            container.innerHTML = '<div class="empty-state">No playbooks available. <button class="btn btn-primary btn-sm" onclick="showCreatePlaybookModal()" style="margin-top: 1rem;">Create Playbook</button></div>';
+            container.innerHTML = emptyStateHTML('No playbooks available', 'playbooks', '<button class="btn btn-primary btn-sm" onclick="showCreatePlaybookModal()">Create Playbook</button>');
             return;
         }
+        renderPlaybooksList(applyPlaybookFilters());
+    } catch (error) {
+        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+    }
+}
 
-        container.innerHTML = playbooks.map((pb, i) => {
-            // Tags are already parsed as an array by the backend
-            let tags = pb.tags;
-            if (typeof tags === 'string') {
-                try {
-                    tags = JSON.parse(tags);
-                } catch (e) {
-                    tags = [];
-                }
-            }
-            if (!Array.isArray(tags)) {
+function renderPlaybooksList(playbooks) {
+    const container = document.getElementById('playbooks-list');
+    if (!playbooks.length) {
+        container.innerHTML = emptyStateHTML('No matching playbooks', 'playbooks');
+        return;
+    }
+
+    container.innerHTML = playbooks.map((pb, i) => {
+        let tags = pb.tags;
+        if (typeof tags === 'string') {
+            try {
+                tags = JSON.parse(tags);
+            } catch (e) {
                 tags = [];
             }
-            
-            return `
+        }
+        if (!Array.isArray(tags)) {
+            tags = [];
+        }
+
+        return `
             <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
                 <div class="card-header">
                     <div>
@@ -884,127 +1113,160 @@ async function loadPlaybooks() {
                 </div>
             </div>
         `;
-        }).join('');
-    } catch (error) {
-        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
-    }
+    }).join('');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Jobs
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function loadJobs() {
+async function loadJobs(options = {}) {
+    const { preserveContent = false } = options;
     const container = document.getElementById('jobs-list');
-    container.innerHTML = skeletonCards(5);
+    if (!preserveContent) {
+        container.innerHTML = skeletonCards(5);
+    }
 
     try {
         const jobs = await api.getJobs(100);
+        listViewState.jobs.items = jobs || [];
         if (!jobs.length) {
-            container.innerHTML = '<div class="empty-state">No jobs yet. Launch a playbook to get started!</div>';
+            container.innerHTML = emptyStateHTML('No jobs yet', 'jobs', '<button class="btn btn-primary btn-sm" onclick="showLaunchJobModal()">Launch Job</button>');
             return;
         }
-
-        container.innerHTML = jobs.map((job, i) => `
-            <div class="job-item animate-in" style="animation-delay: ${i * 0.06}s">
-                <div class="job-info">
-                    <div class="job-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
-                    <div class="job-meta">
-                        Group: ${escapeHtml(job.group_name || 'Unknown')} • 
-                        Started: ${formatDate(job.started_at)} • 
-                        <span class="status-badge status-${job.status}">${job.status}</span>
-                        ${job.dry_run ? ' • <span style="color: var(--warning);">DRY RUN</span>' : ''}
-                    </div>
-                </div>
-                <button class="btn btn-sm btn-secondary" onclick="viewJobOutput(${job.id})">View Output</button>
-            </div>
-        `).join('');
+        renderJobsList(applyJobFilters());
     } catch (error) {
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
+}
+
+function renderJobsList(jobs) {
+    const container = document.getElementById('jobs-list');
+    if (!jobs.length) {
+        container.innerHTML = emptyStateHTML('No matching jobs', 'jobs');
+        return;
+    }
+    container.innerHTML = jobs.map((job, i) => `
+        <div class="job-item animate-in" style="animation-delay: ${i * 0.06}s">
+            <div class="job-info">
+                <div class="job-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
+                <div class="job-meta">
+                    Group: ${escapeHtml(job.group_name || 'Unknown')} •
+                    Started: ${formatDate(job.started_at)} •
+                    <span class="status-badge status-${job.status}">${job.status}</span>
+                    ${job.dry_run ? ' • <span style="color: var(--warning);">DRY RUN</span>' : ''}
+                </div>
+            </div>
+            <button class="btn btn-sm btn-secondary" onclick="viewJobOutput(${job.id})">View Output</button>
+        </div>
+    `).join('');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Templates
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function loadTemplates() {
+async function loadTemplates(options = {}) {
+    const { preserveContent = false } = options;
     const container = document.getElementById('templates-list');
-    container.innerHTML = skeletonCards(3);
+    if (!preserveContent) {
+        container.innerHTML = skeletonCards(3);
+    }
 
     try {
         const templates = await api.getTemplates();
+        listViewState.templates.items = templates || [];
         if (!templates.length) {
-            container.innerHTML = '<div class="empty-state">No templates. Create one to get started!</div>';
+            container.innerHTML = emptyStateHTML('No templates', 'templates', '<button class="btn btn-primary btn-sm" onclick="showCreateTemplateModal()">+ New Template</button>');
             return;
         }
-
-        container.innerHTML = templates.map((template, i) => `
-            <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title">${escapeHtml(template.name)}</div>
-                        <div class="card-description">${escapeHtml(template.description || '')}</div>
-                    </div>
-                    <div>
-                        <button class="btn btn-sm btn-secondary" onclick="editTemplate(${template.id})">Edit</button>
-                        <button class="btn btn-sm btn-danger" onclick="deleteTemplate(${template.id})">Delete</button>
-                    </div>
-                </div>
-                <pre style="background: var(--bg); padding: 1rem; border-radius: 0.375rem; overflow-x: auto; margin-top: 1rem; font-size: 0.75rem;">${escapeHtml(template.content)}</pre>
-            </div>
-        `).join('');
+        renderTemplatesList(applyTemplateFilters());
     } catch (error) {
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
+}
+
+function renderTemplatesList(templates) {
+    const container = document.getElementById('templates-list');
+    if (!templates.length) {
+        container.innerHTML = emptyStateHTML('No matching templates', 'templates');
+        return;
+    }
+
+    container.innerHTML = templates.map((template, i) => `
+        <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">${escapeHtml(template.name)}</div>
+                    <div class="card-description">${escapeHtml(template.description || '')}</div>
+                </div>
+                <div>
+                    <button class="btn btn-sm btn-secondary" onclick="editTemplate(${template.id})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteTemplate(${template.id})">Delete</button>
+                </div>
+            </div>
+            <pre style="background: var(--bg); padding: 1rem; border-radius: 0.375rem; overflow-x: auto; margin-top: 1rem; font-size: 0.75rem;">${escapeHtml(template.content)}</pre>
+        </div>
+    `).join('');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Credentials
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function loadCredentials() {
+async function loadCredentials(options = {}) {
+    const { preserveContent = false } = options;
     const container = document.getElementById('credentials-list');
-    container.innerHTML = skeletonCards(3);
+    if (!preserveContent) {
+        container.innerHTML = skeletonCards(3);
+    }
 
     try {
         const credentials = await api.getCredentials();
+        listViewState.credentials.items = credentials || [];
         if (!credentials.length) {
-            container.innerHTML = '<div class="empty-state">No credentials. Create one to get started!</div>';
+            container.innerHTML = emptyStateHTML('No credentials', 'credentials', '<button class="btn btn-primary btn-sm" onclick="showCreateCredentialModal()">+ New Credential</button>');
             return;
         }
-
-        container.innerHTML = credentials.map((cred, i) => `
-            <div class="credential-card animate-in" style="animation-delay: ${i * 0.06}s" data-cred-id="${cred.id}">
-                <div class="credential-fields">
-                    <div class="credential-field">
-                        <label class="credential-label">Name</label>
-                        <input type="text" class="credential-input" data-field="name" value="${escapeHtml(cred.name)}">
-                    </div>
-                    <div class="credential-field">
-                        <label class="credential-label">Username</label>
-                        <input type="text" class="credential-input" data-field="username" value="${escapeHtml(cred.username)}">
-                    </div>
-                    <div class="credential-field">
-                        <label class="credential-label">Password</label>
-                        <input type="password" class="credential-input" data-field="password" placeholder="unchanged">
-                    </div>
-                    <div class="credential-field">
-                        <label class="credential-label">Secret</label>
-                        <input type="password" class="credential-input" data-field="secret" placeholder="unchanged">
-                    </div>
-                </div>
-                <div class="credential-actions">
-                    <button class="btn btn-primary btn-sm credential-save-btn" style="display:none;" onclick="saveCredentialInline(${cred.id})">Save</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteCredential(${cred.id})">Delete</button>
-                </div>
-            </div>
-        `).join('');
-
+        renderCredentialsList(applyCredentialFilters());
         initCredentialChangeTracking();
     } catch (error) {
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
+}
+
+function renderCredentialsList(credentials) {
+    const container = document.getElementById('credentials-list');
+    if (!credentials.length) {
+        container.innerHTML = emptyStateHTML('No matching credentials', 'credentials');
+        return;
+    }
+    container.innerHTML = credentials.map((cred, i) => `
+        <div class="credential-card animate-in" style="animation-delay: ${i * 0.06}s" data-cred-id="${cred.id}">
+            <div class="credential-fields">
+                <div class="credential-field">
+                    <label class="credential-label">Name</label>
+                    <input type="text" class="credential-input" data-field="name" value="${escapeHtml(cred.name)}">
+                </div>
+                <div class="credential-field">
+                    <label class="credential-label">Username</label>
+                    <input type="text" class="credential-input" data-field="username" value="${escapeHtml(cred.username)}">
+                </div>
+                <div class="credential-field">
+                    <label class="credential-label">Password</label>
+                    <input type="password" class="credential-input" data-field="password" placeholder="unchanged">
+                </div>
+                <div class="credential-field">
+                    <label class="credential-label">Secret</label>
+                    <input type="password" class="credential-input" data-field="secret" placeholder="unchanged">
+                </div>
+            </div>
+            <div class="credential-actions">
+                <button class="btn btn-primary btn-sm credential-save-btn" style="display:none;" onclick="saveCredentialInline(${cred.id})">Save</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteCredential(${cred.id})">Delete</button>
+            </div>
+        </div>
+    `).join('');
 }
 
 function initCredentialChangeTracking() {
@@ -1115,7 +1377,7 @@ function renderAdminUsers() {
     const container = document.getElementById('admin-users-list');
     if (!container) return;
     if (!adminState.users.length) {
-        container.innerHTML = '<div class="empty-state" style="padding:1rem;">No user accounts found.</div>';
+        container.innerHTML = emptyStateHTML('No user accounts found', 'default');
         return;
     }
 
@@ -1151,7 +1413,7 @@ function renderAdminGroups() {
     const container = document.getElementById('admin-groups-list');
     if (!container) return;
     if (!adminState.groups.length) {
-        container.innerHTML = '<div class="empty-state" style="padding:1rem;">No access groups defined yet.</div>';
+        container.innerHTML = emptyStateHTML('No access groups defined', 'default', '<button class="btn btn-primary btn-sm" onclick="showCreateAccessGroupModal()">+ New Group</button>');
         return;
     }
 
@@ -1279,7 +1541,7 @@ async function refreshAdminData() {
     adminState.authConfig = authConfig;
 }
 
-async function loadAdminSettings() {
+async function loadAdminSettings(_options = {}) {
     const page = document.getElementById('page-settings');
     if (!page) return;
     if (currentUserData?.role !== 'admin') {
@@ -1801,22 +2063,11 @@ window.showLaunchJobModal = async function() {
     try {
         const [playbooks, groups, credentials, templates] = await Promise.all([
             api.getPlaybooks(),
-            api.getInventoryGroups(),
+            api.getInventoryGroups(true),
             api.getCredentials(),
             api.getTemplates(),
         ]);
-
-        // Load hosts for each group
-        const groupsWithHosts = await Promise.all(
-            groups.map(async (group) => {
-                try {
-                    const groupData = await api.getGroup(group.id);
-                    return { ...group, hosts: groupData.hosts || [] };
-                } catch (e) {
-                    return { ...group, hosts: [] };
-                }
-            })
-        );
+        const groupsWithHosts = groups.map((group) => ({ ...group, hosts: group.hosts || [] }));
 
         showModal('Launch Job', `
             <form onsubmit="launchJob(event)">
@@ -2558,6 +2809,7 @@ window.showLoginForm = function() {
 };
 
 function showApp(userData) {
+    invalidatePageCache(...CACHEABLE_PAGES);
     // Store CSRF token from login/register response
     if (userData.csrf_token) {
         setCsrfToken(userData.csrf_token);
@@ -2571,6 +2823,12 @@ function showApp(userData) {
     if (navUserLabel) navUserLabel.textContent = userData.display_name || userData.username;
     initNavigation();
     applyFeatureVisibility();
+
+    // Enforce first-login password reset before allowing any navigation
+    if (userData.must_change_password) {
+        showForcePasswordChange();
+        return;
+    }
 
     const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter'];
     const firstAllowed = orderedPages.find((page) => canAccessFeature(NAV_FEATURE_MAP[page])) || 'dashboard';
@@ -2680,6 +2938,7 @@ window.doLogout = async function() {
     }
     currentUser = null;
     currentUserData = null;
+    invalidatePageCache(...CACHEABLE_PAGES);
     closeUserMenu();
     showLoginScreen();
 };
@@ -2722,6 +2981,64 @@ window.showEditProfileModal = function() {
         }
     });
 };
+
+function showForcePasswordChange() {
+    showModal('Password Change Required', `
+        <p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+            You must change the default password before continuing.
+        </p>
+        <form id="force-password-form">
+            <div class="form-group">
+                <label class="form-label">Current Password</label>
+                <input type="password" class="form-input" name="current_password" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">New Password</label>
+                <input type="password" class="form-input" name="new_password" required minlength="6">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Confirm New Password</label>
+                <input type="password" class="form-input" name="confirm_password" required minlength="6">
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="submit" class="btn btn-primary">Change Password</button>
+            </div>
+        </form>
+    `);
+
+    // Prevent closing the modal without changing password
+    const overlay = document.getElementById('modal-overlay');
+    if (overlay) overlay.setAttribute('onclick', '');
+    const closeBtn = overlay?.querySelector('.modal-close');
+    if (closeBtn) closeBtn.style.display = 'none';
+
+    document.getElementById('force-password-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const newPass = formData.get('new_password');
+        const confirmPass = formData.get('confirm_password');
+
+        if (newPass !== confirmPass) {
+            showError('New passwords do not match');
+            return;
+        }
+
+        try {
+            await api.changePassword(formData.get('current_password'), newPass);
+            // Restore modal close behavior
+            if (overlay) overlay.setAttribute('onclick', 'closeAllModals()');
+            if (closeBtn) closeBtn.style.display = '';
+            closeAllModals();
+            currentUserData.must_change_password = false;
+            showSuccess('Password changed successfully. Welcome!');
+            const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter'];
+            const firstAllowed = orderedPages.find((page) => canAccessFeature(NAV_FEATURE_MAP[page])) || 'dashboard';
+            navigateToPage(firstAllowed);
+        } catch (error) {
+            showError(`Failed to change password: ${error.message}`);
+        }
+    });
+}
 
 window.showChangePasswordModal = function() {
     closeUserMenu();
@@ -2864,6 +3181,389 @@ function initSidebar() {
         sidebar.classList.toggle('collapsed');
         localStorage.setItem(COLLAPSED_KEY, sidebar.classList.contains('collapsed') ? '1' : '0');
     });
+
+    // Mobile hamburger + backdrop
+    const hamburger = document.getElementById('hamburger-btn');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (hamburger) {
+        hamburger.addEventListener('click', () => toggleMobileSidebar());
+    }
+    if (backdrop) {
+        backdrop.addEventListener('click', () => closeMobileSidebar());
+    }
+    // Close mobile sidebar on nav link click
+    sidebar.querySelectorAll('.nav-link[data-page]').forEach(link => {
+        link.addEventListener('click', () => {
+            if (window.innerWidth <= 768) closeMobileSidebar();
+        });
+    });
+}
+
+function toggleMobileSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (!sidebar) return;
+    const opening = !sidebar.classList.contains('mobile-open');
+    sidebar.classList.toggle('mobile-open', opening);
+    if (backdrop) backdrop.classList.toggle('visible', opening);
+}
+
+function closeMobileSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (sidebar) sidebar.classList.remove('mobile-open');
+    if (backdrop) backdrop.classList.remove('visible');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Converter Stepper
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function updateConverterStepper(activeStep) {
+    const steps = document.querySelectorAll('.stepper-step');
+    const fill1 = document.getElementById('stepper-fill-1');
+    const fill2 = document.getElementById('stepper-fill-2');
+    if (!steps.length) return;
+
+    steps.forEach((step) => {
+        const stepNum = parseInt(step.dataset.step, 10);
+        step.classList.remove('active', 'completed');
+        if (stepNum < activeStep) {
+            step.classList.add('completed');
+            // Replace number with checkmark
+            const numEl = step.querySelector('.stepper-number');
+            if (numEl) numEl.innerHTML = '&#10003;';
+        } else if (stepNum === activeStep) {
+            step.classList.add('active');
+            const numEl = step.querySelector('.stepper-number');
+            if (numEl) numEl.textContent = stepNum;
+        } else {
+            const numEl = step.querySelector('.stepper-number');
+            if (numEl) numEl.textContent = stepNum;
+        }
+    });
+
+    if (fill1) fill1.style.width = activeStep > 1 ? '100%' : '0%';
+    if (fill2) fill2.style.width = activeStep > 2 ? '100%' : '0%';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Dashboard Ring Charts
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function animateRing(elementId, value, maxValue) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    const circumference = 2 * Math.PI * 34; // r=34
+    const clamped = Math.min(value, maxValue);
+    const ratio = maxValue > 0 ? clamped / maxValue : 0;
+    const offset = circumference * (1 - ratio);
+    // Start fully hidden, then animate
+    el.style.strokeDasharray = circumference;
+    el.style.strokeDashoffset = circumference;
+    requestAnimationFrame(() => {
+        el.style.strokeDashoffset = offset;
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Dashboard Activity Timeline
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function renderActivityTimeline(jobs) {
+    const container = document.getElementById('activity-timeline');
+    if (!container) return;
+
+    if (!jobs || !jobs.length) {
+        container.innerHTML = emptyStateHTML('No recent activity', 'jobs');
+        return;
+    }
+
+    container.innerHTML = jobs.map((job, i) => {
+        const statusClass = job.status === 'running' ? 'timeline-running'
+            : job.status === 'failed' ? 'timeline-failure'
+            : job.status === 'completed' ? 'timeline-success'
+            : '';
+        const pulseDot = job.status === 'running' ? '<span class="pulse-dot"></span>' : '';
+        return `
+            <div class="timeline-item ${statusClass} animate-in" style="animation-delay: ${i * 0.08}s">
+                <div class="timeline-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
+                <div class="timeline-meta">
+                    ${pulseDot}
+                    <span class="status-badge status-${job.status}">${job.status}</span>
+                    <span>${escapeHtml(job.group_name || '')}</span>
+                </div>
+                <div class="timeline-time">${formatDate(job.started_at)}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Keyboard Shortcuts & Command Palette
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const COMMAND_PALETTE_PAGES = [
+    { page: 'dashboard',   label: 'Dashboard',   icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>' },
+    { page: 'inventory',   label: 'Inventory',   icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
+    { page: 'playbooks',   label: 'Playbooks',   icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>' },
+    { page: 'jobs',        label: 'Jobs',         icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>' },
+    { page: 'templates',   label: 'Templates',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
+    { page: 'credentials', label: 'Credentials',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' },
+    { page: 'converter',   label: 'Converter',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>' },
+    { page: 'settings',    label: 'Settings',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
+];
+
+let commandPaletteSelectedIndex = 0;
+let commandPaletteFilteredItems = [];
+
+function openCommandPalette() {
+    const overlay = document.getElementById('command-palette-overlay');
+    const input = document.getElementById('command-palette-input');
+    if (!overlay || !input) return;
+    overlay.classList.add('visible');
+    input.value = '';
+    commandPaletteSelectedIndex = 0;
+    renderCommandPaletteResults('');
+    setTimeout(() => input.focus(), 50);
+}
+
+window.closeCommandPalette = function () {
+    const overlay = document.getElementById('command-palette-overlay');
+    if (overlay) overlay.classList.remove('visible');
+};
+
+function renderCommandPaletteResults(query) {
+    const container = document.getElementById('command-palette-results');
+    if (!container) return;
+
+    const q = query.toLowerCase().trim();
+    commandPaletteFilteredItems = COMMAND_PALETTE_PAGES.filter((item) => {
+        // Filter by access
+        if (item.page === 'settings' && currentUserData?.role !== 'admin') return false;
+        const feature = NAV_FEATURE_MAP[item.page];
+        if (feature && !canAccessFeature(feature)) return false;
+        // Filter by search
+        if (!q) return true;
+        return item.label.toLowerCase().includes(q) || item.page.toLowerCase().includes(q);
+    });
+
+    if (!commandPaletteFilteredItems.length) {
+        container.innerHTML = '<div class="command-palette-empty">No results found</div>';
+        return;
+    }
+
+    if (commandPaletteSelectedIndex >= commandPaletteFilteredItems.length) {
+        commandPaletteSelectedIndex = 0;
+    }
+
+    container.innerHTML = commandPaletteFilteredItems.map((item, i) => `
+        <div class="command-palette-item ${i === commandPaletteSelectedIndex ? 'selected' : ''}" data-page="${item.page}">
+            <div class="command-palette-item-icon">${item.icon}</div>
+            <div class="command-palette-item-label">${escapeHtml(item.label)}</div>
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.command-palette-item').forEach((el) => {
+        el.addEventListener('click', () => {
+            navigateToPage(el.dataset.page);
+            closeCommandPalette();
+        });
+    });
+}
+
+function initKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        const overlay = document.getElementById('command-palette-overlay');
+        const paletteOpen = overlay?.classList.contains('visible');
+
+        // Ctrl+K / Cmd+K: open command palette
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            if (paletteOpen) {
+                closeCommandPalette();
+            } else {
+                // Only open when logged in
+                if (document.getElementById('app-container')?.style.display !== 'none') {
+                    openCommandPalette();
+                }
+            }
+            return;
+        }
+
+        // Esc: close modals / command palette
+        if (e.key === 'Escape') {
+            if (paletteOpen) {
+                e.preventDefault();
+                closeCommandPalette();
+                return;
+            }
+            // Close any open modal (but not the forced password change modal)
+            if (currentUserData?.must_change_password) return;
+            const modals = ['modal-overlay', 'job-output-modal', 'user-menu-overlay', 'confirm-overlay'];
+            for (const id of modals) {
+                const el = document.getElementById(id);
+                if (el && (el.classList.contains('active') || el.classList.contains('visible'))) {
+                    e.preventDefault();
+                    closeAllModals();
+                    return;
+                }
+            }
+        }
+
+        // / to focus search (only when not in an input)
+        if (e.key === '/' && !paletteOpen) {
+            const tag = document.activeElement?.tagName.toLowerCase();
+            if (tag !== 'input' && tag !== 'textarea' && tag !== 'select' && !document.activeElement?.isContentEditable) {
+                e.preventDefault();
+                if (document.getElementById('app-container')?.style.display !== 'none') {
+                    openCommandPalette();
+                }
+            }
+        }
+
+        // Command palette navigation
+        if (paletteOpen) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                commandPaletteSelectedIndex = (commandPaletteSelectedIndex + 1) % (commandPaletteFilteredItems.length || 1);
+                renderCommandPaletteResults(document.getElementById('command-palette-input')?.value || '');
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                commandPaletteSelectedIndex = (commandPaletteSelectedIndex - 1 + (commandPaletteFilteredItems.length || 1)) % (commandPaletteFilteredItems.length || 1);
+                renderCommandPaletteResults(document.getElementById('command-palette-input')?.value || '');
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const item = commandPaletteFilteredItems[commandPaletteSelectedIndex];
+                if (item) {
+                    navigateToPage(item.page);
+                    closeCommandPalette();
+                }
+            }
+        }
+    });
+
+    // Input filtering for command palette
+    const paletteInput = document.getElementById('command-palette-input');
+    if (paletteInput) {
+        paletteInput.addEventListener('input', (e) => {
+            commandPaletteSelectedIndex = 0;
+            renderCommandPaletteResults(e.target.value);
+        });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 3D Perspective Card Tilt
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function initCardTilt() {
+    const MAX_TILT = 6; // degrees
+    document.addEventListener('mousemove', (e) => {
+        const card = e.target.closest('.card, .stat-card');
+        if (!card) return;
+        const rect = card.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        const rotateY = (x - 0.5) * MAX_TILT * 2;
+        const rotateX = (0.5 - y) * MAX_TILT * 2;
+        card.style.transform = `perspective(800px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-3px)`;
+    });
+    document.addEventListener('mouseleave', (e) => {
+        const card = e.target.closest('.card, .stat-card');
+        if (card) card.style.transform = '';
+    }, true);
+    document.addEventListener('mouseout', (e) => {
+        const card = e.target.closest('.card, .stat-card');
+        if (!card) return;
+        if (!card.contains(e.relatedTarget)) {
+            card.style.transform = '';
+        }
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Empty State SVG Illustrations
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const EMPTY_ILLUSTRATIONS = {
+    inventory: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="20" y="30" width="80" height="60" rx="6" opacity="0.3"/>
+        <rect x="30" y="42" width="25" height="4" rx="2" opacity="0.5"/>
+        <rect x="30" y="52" width="40" height="4" rx="2" opacity="0.4"/>
+        <rect x="30" y="62" width="20" height="4" rx="2" opacity="0.3"/>
+        <line x1="75" y1="45" x2="85" y2="45" opacity="0.4"/>
+        <line x1="75" y1="55" x2="85" y2="55" opacity="0.3"/>
+        <circle cx="80" cy="75" r="12" opacity="0.2" fill="currentColor"/>
+        <line x1="75" y1="75" x2="85" y2="75" opacity="0.6"/>
+        <line x1="80" y1="70" x2="80" y2="80" opacity="0.6"/>
+    </svg>`,
+    playbooks: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M35 25h50a5 5 0 015 5v60a5 5 0 01-5 5H35a5 5 0 01-5-5V30a5 5 0 015-5z" opacity="0.3"/>
+        <path d="M30 30h5v60h-5" opacity="0.2" fill="currentColor"/>
+        <rect x="42" y="40" width="35" height="3" rx="1.5" opacity="0.5"/>
+        <rect x="42" y="50" width="25" height="3" rx="1.5" opacity="0.4"/>
+        <rect x="42" y="60" width="30" height="3" rx="1.5" opacity="0.3"/>
+        <rect x="42" y="70" width="20" height="3" rx="1.5" opacity="0.25"/>
+        <circle cx="80" cy="80" r="12" opacity="0.2" fill="currentColor"/>
+        <line x1="75" y1="80" x2="85" y2="80" opacity="0.6"/>
+        <line x1="80" y1="75" x2="80" y2="85" opacity="0.6"/>
+    </svg>`,
+    jobs: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="60,20 95,40 95,80 60,100 25,80 25,40" opacity="0.2"/>
+        <polygon points="60,20 95,40 60,60 25,40" opacity="0.15" fill="currentColor"/>
+        <line x1="60" y1="60" x2="60" y2="100" opacity="0.3"/>
+        <line x1="25" y1="40" x2="60" y2="60" opacity="0.3"/>
+        <line x1="95" y1="40" x2="60" y2="60" opacity="0.3"/>
+        <circle cx="60" cy="58" r="10" opacity="0.3"/>
+        <polyline points="55,58 59,62 66,54" opacity="0.5"/>
+    </svg>`,
+    templates: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="25" y="25" width="70" height="70" rx="6" opacity="0.2"/>
+        <line x1="25" y1="45" x2="95" y2="45" opacity="0.2"/>
+        <line x1="55" y1="45" x2="55" y2="95" opacity="0.2"/>
+        <rect x="30" y="30" width="20" height="4" rx="2" opacity="0.4"/>
+        <rect x="35" y="55" width="12" height="8" rx="2" opacity="0.15" fill="currentColor"/>
+        <rect x="65" y="55" width="20" height="8" rx="2" opacity="0.15" fill="currentColor"/>
+        <rect x="35" y="72" width="12" height="8" rx="2" opacity="0.1" fill="currentColor"/>
+        <rect x="65" y="72" width="20" height="8" rx="2" opacity="0.1" fill="currentColor"/>
+    </svg>`,
+    credentials: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="25" y="45" width="70" height="40" rx="6" opacity="0.3"/>
+        <path d="M60 45V35a12 12 0 0124 0v10" opacity="0.3"/>
+        <circle cx="60" cy="62" r="5" opacity="0.4"/>
+        <line x1="60" y1="67" x2="60" y2="75" opacity="0.4"/>
+    </svg>`,
+    default: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="60" cy="50" r="25" opacity="0.2"/>
+        <line x1="60" y1="40" x2="60" y2="55" opacity="0.4"/>
+        <circle cx="60" cy="62" r="2" opacity="0.4" fill="currentColor"/>
+        <rect x="35" y="85" width="50" height="4" rx="2" opacity="0.15"/>
+        <rect x="42" y="93" width="36" height="4" rx="2" opacity="0.1"/>
+    </svg>`,
+    converter: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="15" y="35" width="35" height="50" rx="4" opacity="0.25"/>
+        <rect x="70" y="35" width="35" height="50" rx="4" opacity="0.25"/>
+        <polyline points="55,52 63,60 55,68" opacity="0.5"/>
+        <line x1="42" y1="60" x2="63" y2="60" opacity="0.4"/>
+        <rect x="22" y="45" width="18" height="3" rx="1.5" opacity="0.35"/>
+        <rect x="22" y="53" width="12" height="3" rx="1.5" opacity="0.25"/>
+        <rect x="77" y="45" width="18" height="3" rx="1.5" opacity="0.35"/>
+        <rect x="77" y="53" width="12" height="3" rx="1.5" opacity="0.25"/>
+    </svg>`,
+};
+
+function getEmptyIllustration(type) {
+    return EMPTY_ILLUSTRATIONS[type] || EMPTY_ILLUSTRATIONS.default;
+}
+
+function emptyStateHTML(message, type, actionBtn) {
+    return `<div class="empty-state">
+        <div class="empty-state-illustration">${getEmptyIllustration(type)}</div>
+        <div class="empty-state-title">${message}</div>
+        <div class="empty-state-text">Get started by creating your first ${type === 'converter' ? 'conversion' : type.replace(/s$/, '')}.</div>
+        ${actionBtn || ''}
+    </div>`;
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2871,6 +3571,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     initSidebar();
     initLoginParticles();
     initLoginForm();
+    initListPageControls();
+    initKeyboardShortcuts();
+    initCardTilt();
 
     try {
         const status = await api.getAuthStatus();

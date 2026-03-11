@@ -607,6 +607,63 @@ async def get_all_groups() -> list[dict]:
         await db.close()
 
 
+async def get_all_groups_with_hosts() -> list[dict]:
+    """Return all groups with embedded host arrays using a single query."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT
+                g.id AS group_id,
+                g.name AS group_name,
+                g.description AS group_description,
+                h.id AS host_id,
+                h.group_id AS host_group_id,
+                h.hostname AS host_hostname,
+                h.ip_address AS host_ip_address,
+                h.device_type AS host_device_type,
+                h.status AS host_status,
+                h.last_seen AS host_last_seen
+            FROM inventory_groups g
+            LEFT JOIN hosts h ON h.group_id = g.id
+            ORDER BY g.name, h.ip_address
+        """)
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    groups: list[dict] = []
+    by_group_id: dict[int, dict] = {}
+    for row in rows:
+        gid = int(row["group_id"])
+        group = by_group_id.get(gid)
+        if group is None:
+            group = {
+                "id": gid,
+                "name": row["group_name"],
+                "description": row["group_description"] or "",
+                "host_count": 0,
+                "hosts": [],
+            }
+            by_group_id[gid] = group
+            groups.append(group)
+
+        host_id = row["host_id"]
+        if host_id is None:
+            continue
+        group["hosts"].append({
+            "id": host_id,
+            "group_id": row["host_group_id"],
+            "hostname": row["host_hostname"],
+            "ip_address": row["host_ip_address"],
+            "device_type": row["host_device_type"],
+            "status": row["host_status"],
+            "last_seen": row["host_last_seen"],
+        })
+        group["host_count"] += 1
+
+    return groups
+
+
 async def get_group(group_id: int) -> dict | None:
     db = await get_db()
     try:
