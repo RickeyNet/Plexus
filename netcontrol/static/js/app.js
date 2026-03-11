@@ -368,7 +368,7 @@ async function loadConverter() {
     // ── Recent sessions list ──────────────────────────────────────────────
     async function loadRecentSessions() {
         if (!recentSessions) return;
-        recentSessions.innerHTML = '<div class="loading">Loading...</div>';
+        recentSessions.innerHTML = skeletonCards(2);
         try {
             const resp = await fetch('/api/converter-sessions');
             const data = await resp.json();
@@ -673,11 +673,11 @@ async function loadDashboard() {
         const data = await api.getDashboard();
         dashboardData = data;
 
-        // Update stats
-        document.getElementById('stat-groups').textContent = data.stats?.total_groups || 0;
-        document.getElementById('stat-hosts').textContent = data.stats?.total_hosts || 0;
-        document.getElementById('stat-playbooks').textContent = data.stats?.total_playbooks || 0;
-        document.getElementById('stat-jobs').textContent = data.stats?.total_jobs || 0;
+        // Animate stats
+        animateCounter('stat-groups', data.stats?.total_groups || 0);
+        animateCounter('stat-hosts', data.stats?.total_hosts || 0);
+        animateCounter('stat-playbooks', data.stats?.total_playbooks || 0);
+        animateCounter('stat-jobs', data.stats?.total_jobs || 0);
 
         // Render recent jobs
         renderRecentJobs(data.recent_jobs || []);
@@ -689,6 +689,28 @@ async function loadDashboard() {
     }
 }
 
+function animateCounter(elementId, target) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    const num = parseInt(target, 10) || 0;
+    if (num === 0) { el.textContent = '0'; return; }
+    const duration = 600;
+    const start = performance.now();
+    function step(now) {
+        const progress = Math.min((now - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        el.textContent = Math.round(eased * num);
+        if (progress < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+}
+
+function skeletonCards(count = 3) {
+    return Array.from({length: count}, () =>
+        '<div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>'
+    ).join('');
+}
+
 function renderRecentJobs(jobs) {
     const container = document.getElementById('recent-jobs');
     if (!jobs.length) {
@@ -696,8 +718,8 @@ function renderRecentJobs(jobs) {
         return;
     }
 
-    container.innerHTML = jobs.map(job => `
-        <div class="job-item">
+    container.innerHTML = jobs.map((job, i) => `
+        <div class="job-item animate-in" style="animation-delay: ${i * 0.06}s">
             <div class="job-info">
                 <div class="job-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
                 <div class="job-meta">
@@ -718,8 +740,8 @@ function renderGroupsOverview(groups) {
         return;
     }
 
-    container.innerHTML = groups.map(group => `
-        <div class="card card-clickable" onclick="goToInventory()">
+    container.innerHTML = groups.map((group, i) => `
+        <div class="card card-clickable animate-in" style="animation-delay: ${i * 0.06}s" onclick="goToInventory()">
             <div class="card-title">${escapeHtml(group.name)}</div>
             <div class="card-description">${escapeHtml(group.description || '')}</div>
             <div class="card-description" style="margin-top: 0.5rem;">
@@ -739,7 +761,7 @@ window.goToInventory = function() {
 
 async function loadInventory() {
     const container = document.getElementById('inventory-groups');
-    container.innerHTML = '<div class="loading">Loading...</div>';
+    container.innerHTML = skeletonCards(4);
 
     try {
         const groups = await api.getInventoryGroups();
@@ -764,8 +786,8 @@ async function loadInventory() {
 
 function renderInventoryGroups(groups) {
     const container = document.getElementById('inventory-groups');
-    container.innerHTML = groups.map(group => `
-        <div class="card">
+    container.innerHTML = groups.map((group, i) => `
+        <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
             <div class="card-header">
                 <div>
                     <div class="card-title">${escapeHtml(group.name)}</div>
@@ -819,7 +841,7 @@ function renderInventoryGroups(groups) {
 
 async function loadPlaybooks() {
     const container = document.getElementById('playbooks-list');
-    container.innerHTML = '<div class="loading">Loading...</div>';
+    container.innerHTML = skeletonCards(3);
 
     try {
         const playbooks = await api.getPlaybooks();
@@ -828,7 +850,7 @@ async function loadPlaybooks() {
             return;
         }
 
-        container.innerHTML = playbooks.map(pb => {
+        container.innerHTML = playbooks.map((pb, i) => {
             // Tags are already parsed as an array by the backend
             let tags = pb.tags;
             if (typeof tags === 'string') {
@@ -843,7 +865,7 @@ async function loadPlaybooks() {
             }
             
             return `
-            <div class="card">
+            <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
                 <div class="card-header">
                     <div>
                         <div class="card-title">${escapeHtml(pb.name)}</div>
@@ -874,7 +896,7 @@ async function loadPlaybooks() {
 
 async function loadJobs() {
     const container = document.getElementById('jobs-list');
-    container.innerHTML = '<div class="loading">Loading...</div>';
+    container.innerHTML = skeletonCards(5);
 
     try {
         const jobs = await api.getJobs(100);
@@ -883,8 +905,8 @@ async function loadJobs() {
             return;
         }
 
-        container.innerHTML = jobs.map(job => `
-            <div class="job-item">
+        container.innerHTML = jobs.map((job, i) => `
+            <div class="job-item animate-in" style="animation-delay: ${i * 0.06}s">
                 <div class="job-info">
                     <div class="job-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
                     <div class="job-meta">
@@ -908,7 +930,7 @@ async function loadJobs() {
 
 async function loadTemplates() {
     const container = document.getElementById('templates-list');
-    container.innerHTML = '<div class="loading">Loading...</div>';
+    container.innerHTML = skeletonCards(3);
 
     try {
         const templates = await api.getTemplates();
@@ -917,8 +939,8 @@ async function loadTemplates() {
             return;
         }
 
-        container.innerHTML = templates.map(template => `
-            <div class="card">
+        container.innerHTML = templates.map((template, i) => `
+            <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
                 <div class="card-header">
                     <div>
                         <div class="card-title">${escapeHtml(template.name)}</div>
@@ -943,7 +965,7 @@ async function loadTemplates() {
 
 async function loadCredentials() {
     const container = document.getElementById('credentials-list');
-    container.innerHTML = '<div class="loading">Loading...</div>';
+    container.innerHTML = skeletonCards(3);
 
     try {
         const credentials = await api.getCredentials();
@@ -952,8 +974,8 @@ async function loadCredentials() {
             return;
         }
 
-        container.innerHTML = credentials.map(cred => `
-            <div class="credential-card" data-cred-id="${cred.id}">
+        container.innerHTML = credentials.map((cred, i) => `
+            <div class="credential-card animate-in" style="animation-delay: ${i * 0.06}s" data-cred-id="${cred.id}">
                 <div class="credential-fields">
                     <div class="credential-field">
                         <label class="credential-label">Name</label>
