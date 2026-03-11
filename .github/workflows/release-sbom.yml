@@ -1,0 +1,43 @@
+name: Release SBOM
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-sbom:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install sbom tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-audit
+
+      - name: Generate release SBOM (CycloneDX)
+        run: |
+          pip-audit -r requirements-lock.txt -f cyclonedx-json -o sbom.cdx.json --progress-spinner off --no-deps
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-sbom-cyclonedx
+          path: sbom.cdx.json
+
+      - name: Attach SBOM to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sbom.cdx.json
