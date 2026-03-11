@@ -37,5 +37,11 @@ jobs:
       - name: Type check (mypy)
         run: mypy netcontrol templates Firewall_converter
 
-      - name: Tests
-        run: pytest
+      - name: Security audit (pip-audit)
+        run: pip-audit --progress-spinner off
+
+      - name: Static security checks (bandit)
+        run: bandit -q -r netcontrol routes Firewall_converter templates -ll -ii
+
+      - name: Tests with coverage gate
+        run: pytest --cov=netcontrol --cov=routes --cov-report=term-missing --cov-fail-under=49

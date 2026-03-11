@@ -356,6 +356,72 @@ async def test_converter_pipeline_convert_import_cleanup_mocked(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_converter_pipeline_convert_diff_import_with_artifact_validation(monkeypatch):
+    def fake_run(args, cwd, capture_output, text):
+        if converter.CONVERTER_PATH in args:
+            _write_minimal_artifacts(cwd)
+            return SimpleNamespace(returncode=0, stdout="converted ok", stderr="")
+        if converter.IMPORTER_PATH in args:
+            import_output = (
+                "Service Objects 0.40s [OK]\n"
+                "Service Groups 0.20s [OK]\n"
+            )
+            return SimpleNamespace(returncode=0, stdout=import_output, stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="unexpected command")
+
+    monkeypatch.setattr(converter.subprocess, "run", fake_run)
+
+    upload = UploadFile(filename="sample.yaml", file=BytesIO(b"config: value"))
+    convert_resp = await converter.convert_only(upload, target_model="ftd-3110", source_model="")
+    convert_data = json.loads(convert_resp.body)
+    session_id = convert_data["session_id"]
+    session_dir = converter._sessions[session_id]["session_dir"]
+    base = converter._sessions[session_id]["base"]
+
+    service_objects_path = os.path.join(session_dir, f"{base}_service_objects.json")
+    with open(service_objects_path, "w", encoding="utf-8") as handle:
+        json.dump([{"name": "svc-week6", "protocol": "tcp"}], handle)
+
+    diff_resp = await converter.converter_session_diff(
+        session_id=session_id,
+        filename=f"{base}_service_objects.json",
+    )
+    diff_data = json.loads(diff_resp.body)
+
+    assert diff_data["ok"] is True
+    assert diff_data["has_changes"] is True
+    assert "svc-week6" in diff_data["diff"]
+
+    import_req = converter.ImportRequest(
+        session_id=session_id,
+        ftd_host="1.2.3.4",
+        ftd_username="admin",
+        ftd_password="pass",
+        only_flags=["services"],
+    )
+    import_resp = await converter.import_fortigate(import_req)
+    import_data = json.loads(import_resp.body)
+
+    assert import_data["ok"] is True
+    assert "checkpoint" in import_data
+    assert "Service Objects" in import_data["checkpoint"]["completed_stages"]
+
+    download_resp = await converter.converter_session_download(session_id=session_id)
+    chunks = []
+    async for chunk in download_resp.body_iterator:
+        chunks.append(chunk)
+    archive_bytes = b"".join(chunks)
+
+    with zipfile.ZipFile(BytesIO(archive_bytes), "r") as archive:
+        names = archive.namelist()
+        assert f"{base}_metadata.json" in names
+        assert f"{base}_service_objects.json" in names
+        archived_service_objects = json.loads(archive.read(f"{base}_service_objects.json").decode("utf-8"))
+
+    assert archived_service_objects[0]["name"] == "svc-week6"
+
+
+@pytest.mark.asyncio
 async def test_convert_only_returns_500_on_converter_failure(monkeypatch):
     def fake_run(_args, _cwd, capture_output, text):
         return SimpleNamespace(returncode=1, stdout="", stderr="bad yaml")
