@@ -37,34 +37,35 @@ netcontrol/
 ```
 
 ## Quick Start
-CD to repository folder
+
+From the repository root, use a single `.venv` workflow:
+
 ```bash
-cd plexus
+# create venv
+python -m venv .venv
+
+# activate (PowerShell)
+.\.venv\Scripts\Activate.ps1
+
+# install runtime dependencies
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+# run app
+python templates/run.py --host 127.0.0.1 --port 8080
 ```
 
-Create the virtual enviroment
+Common run options:
+
 ```bash
-py -3.14 -m venv venv
+python templates/run.py --help
 ```
 
-Activate venv
-```bash
-.\venv\scripts\activate
-```
-
-Install requirements
-```bash
-cd templates
-pip install -r requirements.txt
-python run.py --https
-options:
-  -h, --help            show this help message and exit
-  --host HOST           Bind address (default: 127.0.0.1)
-  --port PORT           Port number
-  --reload              Auto-reload on changes
-  --https               Enable HTTPS with self-signed cert
-  --expose              Bind to 0.0.0.0 (network accessible)
-```
+- `--host HOST` bind address (default `127.0.0.1`)
+- `--port PORT` port number
+- `--reload` auto-reload on changes
+- `--https` enable HTTPS with self-signed cert
+- `--expose` bind to `0.0.0.0`
 
 The server starts on `http://localhost:8080`. On first launch it auto-seeds
 the database with demo inventory groups, playbooks, templates, and a
@@ -73,14 +74,34 @@ default credential.
 ## Running locally (venv)
 
 1) Copy `.env.example` to `.env` and adjust values (host, port, https, defaults).
-  - Set `APP_API_TOKEN` to enable token-based API auth via `X-API-Token` or `Authorization: Bearer <token>`.
-  - Set `APP_REQUIRE_API_TOKEN=true` to fail startup when no token is configured.
-2) Create/activate venv and install deps from `templates/requirements.txt` (as above).
-3) Start the server from the repo root:
+- Set `APP_API_TOKEN` to enable token-based API auth via `X-API-Token` or `Authorization: Bearer <token>`.
+- Set `APP_REQUIRE_API_TOKEN=true` to fail startup when no token is configured.
+2) Activate `.venv`:
+
+```bash
+# PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# cmd.exe
+.\.venv\Scripts\activate.bat
+
+# bash/zsh
+source .venv/bin/activate
+```
+
+3) Install dependencies:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+4) Start server:
+
 ```bash
 python templates/run.py --host 0.0.0.0 --port 8080
 ```
-4) Visit `http://localhost:8080/docs`.
+
+5) Visit `http://localhost:8080/docs`.
 
 ## Running with Docker
 
