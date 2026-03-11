@@ -97,6 +97,35 @@ async def test_get_audit_events_filter_by_category(tmp_path, monkeypatch):
     assert all(r["category"] == "auth" for r in auth_rows)
 
 
+@pytest.mark.asyncio
+async def test_get_db_applies_busy_timeout_pragma(tmp_path, monkeypatch):
+    """get_db should apply configured busy_timeout to reduce lock churn."""
+    db_path = str(tmp_path / "sqlite_tuning.db")
+    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+    monkeypatch.setattr(db_module, "SQLITE_BUSY_TIMEOUT_MS", 12000)
+
+    conn = await db_module.get_db()
+    try:
+        cur = await conn.execute("PRAGMA busy_timeout")
+        busy_timeout_row = await cur.fetchone()
+        assert busy_timeout_row[0] == 12000
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_get_db_creates_parent_directory(tmp_path, monkeypatch):
+    """get_db should create parent directories for APP_DB_PATH-style locations."""
+    nested_db = tmp_path / "nested" / "db" / "plexus.db"
+    monkeypatch.setattr(db_module, "DB_PATH", str(nested_db))
+
+    conn = await db_module.get_db()
+    try:
+        assert nested_db.parent.exists()
+    finally:
+        await conn.close()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 2. Correlation-ID middleware
 # ═════════════════════════════════════════════════════════════════════════════
