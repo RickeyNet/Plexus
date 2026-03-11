@@ -41,8 +41,8 @@
 - [x] Add end-to-end smoke tests for convert -> diff -> import workflow with artifact validation.
 - [x] Enforce minimum test coverage threshold in CI and fail on critical-module regression.
 - [x] Add CI security gates (`pip-audit`, `bandit`, optional CodeQL) and publish SBOM artifacts for releases.
-- [ ] Add release automation to validate changelog/version consistency and publish container images.
-- [ ] Refine README setup steps (`.venv` consistency, run commands) and add incident-response runbook scenarios.
+- [x] Add release automation to validate changelog/version consistency and publish container images.
+- [x] Refine README setup steps (`.venv` consistency, run commands) and add incident-response runbook scenarios.
 
 ## UI/UX Modernization
 - [x] Sidebar navigation: collapsible icon+label sidebar replacing top navbar.
