@@ -1,8 +1,8 @@
-import pytest
-from fastapi import HTTPException, Request
 from typing import cast
 
 import netcontrol.app as app_module
+import pytest
+from fastapi import HTTPException, Request
 
 
 def test_expand_scan_targets_deduplicates_and_respects_limit():

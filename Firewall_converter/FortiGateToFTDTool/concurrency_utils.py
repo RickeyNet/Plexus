@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import random
 import time
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Iterable, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")

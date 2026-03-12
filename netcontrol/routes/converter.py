@@ -15,10 +15,9 @@ from io import BytesIO
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+from routes.database import add_audit_event
 
 from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value
-
-from routes.database import add_audit_event
 
 
 async def _safe_audit(category: str, action: str, user: str, detail: str, correlation_id: str) -> None:
@@ -89,7 +88,7 @@ def _read_checkpoint(session_dir: str) -> dict:
     path = os.path.join(session_dir, _CHECKPOINT_FILE)
     if os.path.isfile(path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             return {}

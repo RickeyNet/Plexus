@@ -18,13 +18,11 @@ import re
 from typing import cast
 from unittest.mock import AsyncMock, patch
 
-import pytest
-from fastapi import Request
-
 import netcontrol.app as app_module
+import pytest
 import routes.database as db_module
+from fastapi import Request
 from netcontrol.routes import converter as conv_module
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -250,7 +248,7 @@ def test_no_stray_print_in_web_module(rel_path):
     """Web-facing modules should use LOGGER, not print()."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     abs_path = os.path.join(project_root, rel_path)
-    with open(abs_path, "r", encoding="utf-8") as f:
+    with open(abs_path, encoding="utf-8") as f:
         source = f.read()
     matches = _PRINT_PATTERN.findall(source)
     assert len(matches) == 0, f"Found {len(matches)} stray print() call(s) in {rel_path}"

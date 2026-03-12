@@ -4,11 +4,6 @@ import json
 
 from Firewall_converter.converter_v2.address_groups import convert_address_groups_v2
 from Firewall_converter.converter_v2.addresses import convert_addresses_v2
-from Firewall_converter.converter_v2.interfaces import convert_interfaces_v2
-from Firewall_converter.converter_v2.policies import convert_policies_v2
-from Firewall_converter.converter_v2.routes import convert_routes_v2
-from Firewall_converter.converter_v2.service_groups import convert_service_groups_v2
-from Firewall_converter.converter_v2.services import convert_services_v2
 from Firewall_converter.converter_v2.core.address_converter import AddressConverter
 from Firewall_converter.converter_v2.core.address_group_converter import AddressGroupConverter
 from Firewall_converter.converter_v2.core.interface_converter import InterfaceConverter
@@ -16,6 +11,11 @@ from Firewall_converter.converter_v2.core.policy_converter import PolicyConverte
 from Firewall_converter.converter_v2.core.route_converter import RouteConverter
 from Firewall_converter.converter_v2.core.service_converter import ServiceConverter
 from Firewall_converter.converter_v2.core.service_group_converter import ServiceGroupConverter
+from Firewall_converter.converter_v2.interfaces import convert_interfaces_v2
+from Firewall_converter.converter_v2.policies import convert_policies_v2
+from Firewall_converter.converter_v2.routes import convert_routes_v2
+from Firewall_converter.converter_v2.service_groups import convert_service_groups_v2
+from Firewall_converter.converter_v2.services import convert_services_v2
 
 
 def _normalized(items: list[dict]) -> list[tuple[str, str, str, str, str]]:
