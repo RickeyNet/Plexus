@@ -10,12 +10,17 @@ services:
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: 8080
+      APP_DB_ENGINE: ${APP_DB_ENGINE:-sqlite}
+      APP_DATABASE_URL: ${APP_DATABASE_URL:-postgresql://plexus:plexus@postgres:5432/plexus}
     ports:
       - "8080:8080"
     volumes:
       - plexus-data:/app/netcontrol/converter_sessions
       - plexus-db:/app/routes
       - plexus-certs:/app/certs
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
       interval: 30s
@@ -23,7 +28,25 @@ services:
       retries: 3
       start_period: 20s
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: plexus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-plexus}
+      POSTGRES_USER: ${POSTGRES_USER:-plexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-plexus}
+    volumes:
+      - plexus-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-plexus} -d ${POSTGRES_DB:-plexus}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
 volumes:
   plexus-data:
   plexus-db:
   plexus-certs:
+  plexus-postgres:

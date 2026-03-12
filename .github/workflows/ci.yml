@@ -57,3 +57,45 @@ jobs:
 
       - name: Critical module regression gate
         run: python tools/coverage_gate.py coverage.json
+
+  postgres-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: plexus
+          POSTGRES_USER: plexus
+          POSTGRES_PASSWORD: plexus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U plexus -d plexus"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      APP_DB_ENGINE: postgres
+      APP_DATABASE_URL: postgresql://plexus:plexus@localhost:5432/plexus
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Postgres backend smoke tests
+        run: pytest tests/test_postgres_backend.py -q
