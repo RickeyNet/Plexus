@@ -144,6 +144,58 @@ export async function deleteHost(groupId, hostId) {
     });
 }
 
+export async function bulkDeleteHosts(hostIds) {
+    return apiRequest('/hosts/bulk-delete', {
+        method: 'POST',
+        body: { host_ids: hostIds },
+    });
+}
+
+export async function moveHosts(hostIds, targetGroupId) {
+    return apiRequest('/hosts/move', {
+        method: 'POST',
+        body: { host_ids: hostIds, target_group_id: targetGroupId },
+    });
+}
+
+export async function scanInventoryGroup(groupId, cidrs, options = {}) {
+    return apiRequest(`/inventory/${groupId}/discovery/scan`, {
+        method: 'POST',
+        body: {
+            cidrs,
+            timeout_seconds: options.timeoutSeconds,
+            max_hosts: options.maxHosts,
+            device_type: options.deviceType,
+            hostname_prefix: options.hostnamePrefix,
+            use_snmp: options.useSnmp !== false,
+        },
+    });
+}
+
+export async function syncInventoryGroup(groupId, cidrs, options = {}) {
+    return apiRequest(`/inventory/${groupId}/discovery/sync`, {
+        method: 'POST',
+        body: {
+            cidrs,
+            timeout_seconds: options.timeoutSeconds,
+            max_hosts: options.maxHosts,
+            device_type: options.deviceType,
+            hostname_prefix: options.hostnamePrefix,
+            use_snmp: options.useSnmp !== false,
+            remove_absent: !!options.removeAbsent,
+        },
+    });
+}
+
+export async function onboardDiscoveredHosts(groupId, discoveredHosts) {
+    return apiRequest(`/inventory/${groupId}/discovery/onboard`, {
+        method: 'POST',
+        body: {
+            discovered_hosts: discoveredHosts,
+        },
+    });
+}
+
 // Playbooks
 export async function getPlaybooks() {
     return apiRequest('/playbooks');
@@ -362,5 +414,51 @@ export async function updateAuthConfig(payload) {
     return apiRequest('/admin/auth-config', {
         method: 'PUT',
         body: payload,
+    });
+}
+
+export async function getDiscoverySyncConfig() {
+    return apiRequest('/admin/discovery-sync');
+}
+
+export async function updateDiscoverySyncConfig(payload) {
+    return apiRequest('/admin/discovery-sync', {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function runDiscoverySyncNow() {
+    return apiRequest('/admin/discovery-sync/run-now', {
+        method: 'POST',
+    });
+}
+
+export async function getSnmpDiscoveryConfig() {
+    return apiRequest('/admin/snmp-discovery');
+}
+
+export async function updateSnmpDiscoveryConfig(payload) {
+    return apiRequest('/admin/snmp-discovery', {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function getGroupSnmpDiscoveryProfile(groupId) {
+    return apiRequest(`/inventory/${groupId}/snmp-discovery-profile`);
+}
+
+export async function updateGroupSnmpDiscoveryProfile(groupId, payload) {
+    return apiRequest(`/inventory/${groupId}/snmp-discovery-profile`, {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function testGroupSnmpProfile(groupId, targetIp) {
+    return apiRequest(`/inventory/${groupId}/snmp-discovery-profile/test`, {
+        method: 'POST',
+        body: { target_ip: targetIp },
     });
 }
