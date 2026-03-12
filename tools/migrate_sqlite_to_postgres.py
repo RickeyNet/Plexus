@@ -15,12 +15,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import importlib
 import os
 import sqlite3
 from collections import OrderedDict
 from collections.abc import Iterable
-
-import asyncpg
+from typing import Any
 
 TABLE_ORDER = [
     "users",
@@ -89,13 +89,23 @@ def _render_placeholders(count: int) -> str:
     return ", ".join(f"${i}" for i in range(1, count + 1))
 
 
-async def _truncate_target(conn: asyncpg.Connection) -> None:
+def _load_asyncpg() -> Any:
+    try:
+        return importlib.import_module("asyncpg")
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Missing dependency 'asyncpg'. Install requirements in your active environment. "
+            "Note: Python 3.14 may require C++ build tools for source builds; Python 3.12/3.13 is recommended."
+        ) from exc
+
+
+async def _truncate_target(conn: Any) -> None:
     tables = ", ".join(TABLE_ORDER)
     await conn.execute(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE")
 
 
 async def _insert_rows(
-    conn: asyncpg.Connection,
+    conn: Any,
     table: str,
     columns: Iterable[str],
     rows: list[tuple],
@@ -111,7 +121,7 @@ async def _insert_rows(
     return len(rows)
 
 
-async def _set_sequences(conn: asyncpg.Connection) -> None:
+async def _set_sequences(conn: Any) -> None:
     for table in SEQUENCE_TABLES:
         await conn.execute(
             """
@@ -125,12 +135,12 @@ async def _set_sequences(conn: asyncpg.Connection) -> None:
         )
 
 
-async def _count_postgres_rows(conn: asyncpg.Connection, table: str) -> int:
+async def _count_postgres_rows(conn: Any, table: str) -> int:
     return int(await conn.fetchval(f"SELECT COUNT(*) FROM {table}"))
 
 
 async def _fetch_postgres_rows(
-    conn: asyncpg.Connection,
+    conn: Any,
     table: str,
     columns: Iterable[str],
 ) -> list[tuple]:
@@ -179,6 +189,7 @@ async def migrate(sqlite_path: str, postgres_url: str, dry_run: bool, with_check
             print("Note: checksum verification is skipped in dry-run mode.")
         return 0
 
+    asyncpg = _load_asyncpg()
     conn = await asyncpg.connect(postgres_url)
     try:
         async with conn.transaction():

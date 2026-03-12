@@ -82,3 +82,36 @@
 - [x] Add SQLite -> PostgreSQL migration utility with dry-run and parity verification.
 - [x] Add CI matrix coverage for SQLite and PostgreSQL backends on critical API/database tests.
 - [x] Update README and operator runbook for PostgreSQL deployment and backup/restore procedures.
+
+## Week 8-10: Network Management Platform Maturity
+
+### Now (Core Platform)
+- [x] Add device discovery + continuous inventory sync (TCP reachability + SSH banner enrichment, inventory reconcile API, scheduled profile-based sync loop, and Inventory UI scan/sync controls; deeper SNMP/API enrichment pending).
+- [ ] Build topology visualization (L2/L3 neighbors, routing relationships, path view).
+- [ ] Add config drift detection against intended state with historical diffs.
+- [ ] Add scheduled configuration backup policies with restore validation checks.
+- [ ] Add golden templates/compliance profiles with continuous compliance scans.
+- [ ] Add pre-change risk analysis and impact simulation for policy/route/NAT changes.
+- [ ] Add maintenance windows and approval gates for production changes.
+- [ ] Add rollback orchestration with pre/post deployment checkpoints.
+
+### Next (Operations and Observability)
+- [ ] Add real-time monitoring (interfaces, CPU/memory, VPN health, route churn).
+- [ ] Add alerting engine with threshold/anomaly rules, dedup, suppression, escalation.
+- [ ] Add SLA dashboards (uptime, latency, jitter, packet loss, MTTR, MTTD).
+- [ ] Add post-change automated verification with success criteria and health checks.
+- [ ] Add capacity planning trends (bandwidth, policy scale, route table growth).
+- [ ] Improve job orchestration UX (queue visibility, priority, dependencies, resume/cancel).
+
+### Later (Enterprise and Ecosystem)
+- [ ] Add firmware/OS lifecycle management with staged upgrade workflows.
+- [ ] Add multi-vendor adapter framework with pluggable device drivers.
+- [ ] Add enterprise auth (OIDC/SAML), group-to-role mapping, and scoped permissions.
+- [ ] Add secrets vault integrations (Vault/Azure Key Vault/AWS Secrets Manager) with rotation.
+- [ ] Add multi-tenant boundaries (tenant isolation, quotas, delegated admin).
+- [ ] Add ITSM integrations (ServiceNow/Jira) for change ticket linkage.
+- [ ] Add outbound/inbound event integrations (Slack/Teams/PagerDuty/webhooks).
+- [ ] Add scheduled report builder (operator + executive reports in PDF/CSV/email).
+- [ ] Version and publish API contracts (OpenAPI, deprecation policy, compatibility tests).
+- [ ] Create a plugin SDK for custom converters, validators, and integrations.
+- [ ] Add digital twin/lab mode for safe pre-production change testing.
