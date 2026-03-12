@@ -58,7 +58,7 @@
     --secondary: #6b7280;
     --success: #6b8e6b;
     --warning: #d4a574;
-    --danger: #4a0a0a;
+    --danger: #cf5e5e;
     --bg: #0f1410;
     --bg-secondary: #141914;
     --bg-dark: #0a0f0a;
@@ -84,7 +84,7 @@
     --secondary: #6b7280;
     --success: #6b8e6b;
     --warning: #d4a574;
-    --danger: #4a0a0a;
+    --danger: #cf5e5e;
     --bg: #0f1410;
     --bg-secondary: #141914;
     --bg-dark: #0a0f0a;
@@ -427,6 +427,16 @@ body {
     z-index: 0;
 }
 
+.app-particles {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 0;
+}
+
 .login-screen::before,
 .login-screen::after {
     content: '';
@@ -555,7 +565,6 @@ body {
 .gradient-orb {
     position: absolute;
     border-radius: 50%;
-    filter: blur(100px);
     opacity: 0.35;
     will-change: transform;
 }
@@ -563,7 +572,7 @@ body {
 .orb-1 {
     width: 600px;
     height: 600px;
-    background: var(--primary);
+    background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
     top: -10%;
     left: -5%;
     animation: orb-drift-1 25s ease-in-out infinite alternate;
@@ -572,7 +581,7 @@ body {
 .orb-2 {
     width: 500px;
     height: 500px;
-    background: var(--primary-dark);
+    background: radial-gradient(circle, var(--primary-dark) 0%, transparent 70%);
     bottom: -15%;
     right: -10%;
     animation: orb-drift-2 30s ease-in-out infinite alternate;
@@ -581,7 +590,7 @@ body {
 .orb-3 {
     width: 350px;
     height: 350px;
-    background: var(--primary-light);
+    background: radial-gradient(circle, var(--primary-light) 0%, transparent 70%);
     top: 50%;
     left: 40%;
     animation: orb-drift-3 20s ease-in-out infinite alternate;
@@ -1080,12 +1089,21 @@ body {
 
 .btn {
     padding: 0.5rem 1rem;
-    border: none;
+    border: 1px solid rgba(from var(--border) r g b / 0.5);
+    background: rgba(from var(--text) r g b / 0.05);
+    color: var(--text);
     border-radius: 0.375rem;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.2s ease;
     font-size: 0.875rem;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+.btn:hover {
+    background: rgba(from var(--text) r g b / 0.1);
+    border-color: var(--border);
 }
 
 .btn-primary {
@@ -1116,6 +1134,7 @@ body {
         0 0 24px var(--primary-glow),
         inset 0 1px 0 rgba(255, 255, 255, 0.15);
     transform: translateY(-1px);
+    color: var(--bg-dark);
 }
 
 .btn-primary:hover::after {
@@ -1123,18 +1142,32 @@ body {
 }
 
 .btn-secondary {
-    background: var(--secondary);
-    color: white;
+    background: rgba(from var(--secondary) r g b / 0.15);
+    color: var(--text);
+    border: 1px solid rgba(from var(--secondary) r g b / 0.3);
+}
+
+.btn-secondary:hover {
+    background: rgba(from var(--secondary) r g b / 0.25);
+    border-color: rgba(from var(--secondary) r g b / 0.5);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .btn-danger {
-    background: var(--danger);
-    color: white;
-    transition: background 0.2s;
+    background: rgba(from var(--danger) r g b / 0.15);
+    color: var(--text);
+    border: 1px solid rgba(from var(--danger) r g b / 0.3);
 }
 
 .btn-danger:hover {
-    background: #5a0f0f;
+    background: rgba(from var(--danger) r g b / 0.3);
+    border-color: rgba(from var(--danger) r g b / 0.6);
+    box-shadow:
+        0 4px 12px rgba(0, 0, 0, 0.15),
+        0 0 16px rgba(from var(--danger) r g b / 0.3);
+    transform: translateY(-1px);
+    color: var(--text);
 }
 
 .btn-sm {
@@ -1489,7 +1522,8 @@ input[type="number"].form-input {
     border-radius: 0.375rem;
     font-family: 'JetBrains Mono', 'Courier New', monospace;
     font-size: 0.875rem;
-    max-height: 500px;
+    min-height: 450px;
+    max-height: 75vh;
     overflow-y: auto;
     white-space: pre-wrap;
     word-wrap: break-word;
@@ -2698,6 +2732,11 @@ code {
     background: var(--card-bg) !important;
 }
 
+.reduced-motion .modal-overlay {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
 .reduced-motion .card,
 .reduced-motion .stat-card,
 .reduced-motion .toast,
@@ -2748,6 +2787,7 @@ code {
     .sidebar,
     .login-card,
     .modal,
+    .modal-overlay,
     .command-palette,
     .card,
     .stat-card,
