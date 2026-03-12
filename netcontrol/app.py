@@ -185,11 +185,13 @@ CSRF_TOKEN_MAX_AGE = 86400  # 24 hours — aligned with session lifetime
 
 def _generate_csrf_token(session_user: str) -> str:
     """Create a signed, time-limited CSRF token bound to the session user."""
+    assert _csrf_serializer is not None
     return _csrf_serializer.dumps({"csrf_user": session_user})
 
 
 def _validate_csrf_token(token: str, session_user: str) -> bool:
     """Return True when the token is valid, not expired, and bound to the user."""
+    assert _csrf_serializer is not None
     try:
         data = _csrf_serializer.loads(token, max_age=CSRF_TOKEN_MAX_AGE)
         return data.get("csrf_user") == session_user
@@ -938,6 +940,7 @@ def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) ->
     """Perform a blocking RADIUS PAP authentication request."""
     if not PYRAD_AVAILABLE:
         return False, "error"
+    assert RadiusClient is not None and RadiusDictionary is not None and radius_packet is not None
     if not radius_cfg.get("server") or not radius_cfg.get("secret"):
         return False, "error"
 
@@ -2285,6 +2288,15 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     """Returns device info dict on success, None on no response, raises on auth/config errors."""
     if not PYSMNP_AVAILABLE:
         raise RuntimeError("pysnmp library is not available")
+    assert (
+        CommunityData is not None and ContextData is not None and ObjectIdentity is not None
+        and ObjectType is not None and SnmpEngine is not None and UdpTransportTarget is not None
+        and UsmUserData is not None and get_cmd is not None
+        and usmAesCfb128Protocol is not None and usmAesCfb192Protocol is not None
+        and usmAesCfb256Protocol is not None and usmDESPrivProtocol is not None
+        and usmHMACMD5AuthProtocol is not None and usmHMACSHAAuthProtocol is not None
+        and usmHMAC192SHA256AuthProtocol is not None and usmHMAC384SHA512AuthProtocol is not None
+    )
     if not snmp_config.get("enabled", False):
         return None
 
