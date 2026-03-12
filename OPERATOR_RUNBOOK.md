@@ -58,6 +58,20 @@ Run these checks after import completes and before issuing a deploy.
 4. Correct source config or object mappings.
 5. Re-apply in a maintenance window.
 
+## SQLite to PostgreSQL Migration (Deployment Upgrade)
+
+Use this when moving from local/dev SQLite persistence to PostgreSQL-backed runtime.
+
+1. Stop Plexus writes (maintenance window).
+2. Backup SQLite DB file (`routes/netcontrol.db`) and PostgreSQL volume/snapshot.
+3. Run dry-run validation:
+  - `python tools/migrate_sqlite_to_postgres.py --dry-run`
+4. Run migration:
+  - `python tools/migrate_sqlite_to_postgres.py --sqlite-path routes/netcontrol.db --postgres-url postgresql://plexus:plexus@localhost:5432/plexus`
+5. Verify parity report shows `[OK]` for all tables.
+6. Set `APP_DB_ENGINE=postgres` and restart Plexus.
+7. Validate `GET /api/health`, login, inventory, and recent jobs pages.
+
 ---
 
 ## Partial Import Failure Recovery Playbook
