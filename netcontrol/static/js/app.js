@@ -30,6 +30,44 @@ const DEFAULT_THEME = 'forest';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
 const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter'];
 const pageCacheMeta = {};
+
+// ── Utility: debounce ──────────────────────────────────────────────────────────
+function debounce(fn, delay) {
+    let timer;
+    return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+    };
+}
+
+// ── Utility: batched streaming renderer ───────────────────────────────────────
+// Buffers decoded chunks and flushes to the DOM once per animation frame,
+// preventing a layout reflow on every streamed byte.
+function createStreamHandler(el) {
+    const decoder = new TextDecoder();
+    let pending = '';
+    let rafId = null;
+
+    function flush() {
+        if (pending) {
+            el.textContent += pending;
+            pending = '';
+        }
+        el.scrollTop = el.scrollHeight;
+        rafId = null;
+    }
+
+    return {
+        write(value) {
+            pending += decoder.decode(value, { stream: true });
+            if (!rafId) rafId = requestAnimationFrame(flush);
+        },
+        done() {
+            if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+            flush();
+        },
+    };
+}
 const listViewState = {
     inventory: { items: [], query: '', sort: 'name_asc' },
     playbooks: { items: [], query: '', sort: 'name_asc' },
@@ -710,13 +748,13 @@ async function loadConverter(options = {}) {
             }
 
             const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
+            const stream = createStreamHandler(importOutput);
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
-                importOutput.textContent += decoder.decode(value, { stream: true });
-                importOutput.scrollTop = importOutput.scrollHeight;
+                stream.write(value);
             }
+            stream.done();
         } catch (err) {
             importOutput.textContent += '\nError: ' + err.message;
         }
@@ -761,13 +799,13 @@ async function loadConverter(options = {}) {
                 }
 
                 const reader = resp.body.getReader();
-                const decoder = new TextDecoder();
+                const stream = createStreamHandler(cleanupOutput);
                 while (true) {
                     const { value, done } = await reader.read();
                     if (done) break;
-                    cleanupOutput.textContent += decoder.decode(value, { stream: true });
-                    cleanupOutput.scrollTop = cleanupOutput.scrollHeight;
+                    stream.write(value);
                 }
+                stream.done();
             } catch (err) {
                 if (cleanupOutput) cleanupOutput.textContent = 'Error: ' + err.message;
             }
@@ -908,12 +946,12 @@ function renderRecentJobs(jobs) {
     }
 
     container.innerHTML = jobs.map((job, i) => `
-        <div class="job-item animate-in" style="animation-delay: ${i * 0.06}s">
+        <div class="job-item animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
             <div class="job-info">
                 <div class="job-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
                 <div class="job-meta">
-                    Group: ${escapeHtml(job.group_name || 'Unknown')} • 
-                    ${formatDate(job.started_at)} • 
+                    Group: ${escapeHtml(job.group_name || 'Unknown')} •
+                    ${formatDate(job.started_at)} •
                     <span class="status-badge status-${job.status}">${job.status}</span>
                 </div>
             </div>
@@ -1048,26 +1086,28 @@ function bindListControl(id, handler) {
 }
 
 function initListPageControls() {
-    bindListControl('inventory-search', (e) => {
+    // Search inputs: debounced to avoid re-rendering on every keystroke
+    bindListControl('inventory-search', debounce((e) => {
         listViewState.inventory.query = e.target.value;
         renderInventoryGroups(applyInventoryFilters());
-    });
+    }, 300));
+    // Sort/filter dropdowns: instant response
     bindListControl('inventory-sort', (e) => {
         listViewState.inventory.sort = e.target.value;
         renderInventoryGroups(applyInventoryFilters());
     });
-    bindListControl('playbooks-search', (e) => {
+    bindListControl('playbooks-search', debounce((e) => {
         listViewState.playbooks.query = e.target.value;
         renderPlaybooksList(applyPlaybookFilters());
-    });
+    }, 300));
     bindListControl('playbooks-sort', (e) => {
         listViewState.playbooks.sort = e.target.value;
         renderPlaybooksList(applyPlaybookFilters());
     });
-    bindListControl('jobs-search', (e) => {
+    bindListControl('jobs-search', debounce((e) => {
         listViewState.jobs.query = e.target.value;
         renderJobsList(applyJobFilters());
-    });
+    }, 300));
     bindListControl('jobs-sort', (e) => {
         listViewState.jobs.sort = e.target.value;
         renderJobsList(applyJobFilters());
@@ -1084,18 +1124,18 @@ function initListPageControls() {
         listViewState.jobs.dateRange = e.target.value;
         renderJobsList(applyJobFilters());
     });
-    bindListControl('templates-search', (e) => {
+    bindListControl('templates-search', debounce((e) => {
         listViewState.templates.query = e.target.value;
         renderTemplatesList(applyTemplateFilters());
-    });
+    }, 300));
     bindListControl('templates-sort', (e) => {
         listViewState.templates.sort = e.target.value;
         renderTemplatesList(applyTemplateFilters());
     });
-    bindListControl('credentials-search', (e) => {
+    bindListControl('credentials-search', debounce((e) => {
         listViewState.credentials.query = e.target.value;
         renderCredentialsList(applyCredentialFilters());
-    });
+    }, 300));
     bindListControl('credentials-sort', (e) => {
         listViewState.credentials.sort = e.target.value;
         renderCredentialsList(applyCredentialFilters());
@@ -1137,7 +1177,7 @@ function renderInventoryGroups(groups) {
         // When searching, sort matching hosts to the top
         const sortedHosts = query ? [...hosts].sort((a, b) => (hostMatchesQuery(b) ? 1 : 0) - (hostMatchesQuery(a) ? 1 : 0)) : hosts;
         return `
-        <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
+        <div class="card animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
             <div class="card-header">
                 <div>
                     <div class="card-title">${escapeHtml(group.name)}</div>
@@ -1681,7 +1721,7 @@ function renderPlaybooksList(playbooks) {
         }
 
         return `
-            <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
+            <div class="card animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
                 <div class="card-header">
                     <div>
                         <div class="card-title">${escapeHtml(pb.name)}</div>
@@ -1734,7 +1774,7 @@ function renderJobsList(jobs) {
         return;
     }
     container.innerHTML = jobs.map((job, i) => `
-        <div class="job-item animate-in" style="animation-delay: ${i * 0.06}s">
+        <div class="job-item animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
             <div class="job-info">
                 <div class="job-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
                 <div class="job-meta">
@@ -1786,7 +1826,7 @@ function renderTemplatesList(templates) {
         const isLong = lines.length > 3;
         const preview = lines.slice(0, 3).join('\n');
         return `
-        <div class="card animate-in" style="animation-delay: ${i * 0.06}s">
+        <div class="card animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
             <div class="card-header">
                 <div>
                     <div class="card-title">${escapeHtml(template.name)}</div>
@@ -1865,7 +1905,7 @@ function renderCredentialsList(credentials) {
         return;
     }
     container.innerHTML = credentials.map((cred, i) => `
-        <div class="credential-card animate-in" style="animation-delay: ${i * 0.06}s" data-cred-id="${cred.id}">
+        <div class="credential-card animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s" data-cred-id="${cred.id}">
             <div class="credential-fields">
                 <div class="credential-field">
                     <label class="credential-label">Name</label>
@@ -1897,6 +1937,9 @@ function initCredentialChangeTracking() {
         const inputs = card.querySelectorAll('.credential-input');
         const saveBtn = card.querySelector('.credential-save-btn');
         const originals = {};
+        // Track which fields are dirty without iterating all inputs on each keystroke
+        const dirtyFields = new Set();
+
         inputs.forEach(input => {
             originals[input.dataset.field] = input.value;
         });
@@ -1904,15 +1947,14 @@ function initCredentialChangeTracking() {
 
         inputs.forEach(input => {
             input.addEventListener('input', () => {
-                let changed = false;
-                inputs.forEach(inp => {
-                    if (inp.dataset.field === 'password' || inp.dataset.field === 'secret') {
-                        if (inp.value.length > 0) changed = true;
-                    } else {
-                        if (inp.value !== originals[inp.dataset.field]) changed = true;
-                    }
-                });
-                saveBtn.style.display = changed ? '' : 'none';
+                const field = input.dataset.field;
+                const isPasswordField = field === 'password' || field === 'secret';
+                if (isPasswordField ? input.value.length > 0 : input.value !== originals[field]) {
+                    dirtyFields.add(field);
+                } else {
+                    dirtyFields.delete(field);
+                }
+                saveBtn.style.display = dirtyFields.size > 0 ? '' : 'none';
             });
         });
     });
@@ -3809,18 +3851,23 @@ function initLoginParticles() {
     const particles = [];
     const PARTICLE_COUNT = 50;
 
+    let cachedColor = '#7fa07f';
+    function updateColor() {
+        const style = getComputedStyle(document.documentElement);
+        cachedColor = style.getPropertyValue('--primary-light').trim() || '#7fa07f';
+    }
+
     function resize() {
         canvas.width = canvas.offsetWidth;
         canvas.height = canvas.offsetHeight;
+        updateColor();
     }
     resize();
     window.addEventListener('resize', resize);
-
-    // Read primary colour from theme CSS variable
-    function getColor() {
-        const style = getComputedStyle(document.documentElement);
-        return style.getPropertyValue('--primary-light').trim() || '#7fa07f';
-    }
+    
+    // Also observe theme changes if attributes change on html
+    const themeObserver = new MutationObserver(updateColor);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
         particles.push({
@@ -3835,7 +3882,7 @@ function initLoginParticles() {
 
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const color = getColor();
+        const color = cachedColor;
         // Draw connecting lines for nearby particles
         for (let i = 0; i < particles.length; i++) {
             for (let j = i + 1; j < particles.length; j++) {
@@ -3880,6 +3927,97 @@ function initLoginParticles() {
         }
     });
     observer.observe(document.getElementById('login-screen'), { attributes: true, attributeFilter: ['style'] });
+}
+
+function initAppParticles() {
+    const canvas = document.getElementById('app-particles');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let animId;
+    const particles = [];
+    const PARTICLE_COUNT = 35; // slightly fewer for the app to not clutter
+
+    let cachedColor = '#7fa07f';
+    function updateColor() {
+        const style = getComputedStyle(document.documentElement);
+        cachedColor = style.getPropertyValue('--primary-light').trim() || '#7fa07f';
+    }
+
+    function resize() {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        updateColor();
+    }
+    resize();
+    window.addEventListener('resize', resize);
+    
+    const themeObserver = new MutationObserver(updateColor);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        particles.push({
+            x: Math.random() * (canvas.width || window.innerWidth),
+            y: Math.random() * (canvas.height || window.innerHeight),
+            r: Math.random() * 2 + 0.5,
+            dx: (Math.random() - 0.5) * 0.3,
+            dy: (Math.random() - 0.5) * 0.3,
+            opacity: Math.random() * 0.4 + 0.1,
+        });
+    }
+
+    let isRunning = false;
+
+    function draw() {
+        if (!isRunning) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const color = cachedColor;
+        
+        for (let i = 0; i < particles.length; i++) {
+            for (let j = i + 1; j < particles.length; j++) {
+                const dx = particles[i].x - particles[j].x;
+                const dy = particles[i].y - particles[j].y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 150) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = color;
+                    ctx.globalAlpha = (1 - dist / 150) * 0.08;
+                    ctx.lineWidth = 0.5;
+                    ctx.moveTo(particles[i].x, particles[i].y);
+                    ctx.lineTo(particles[j].x, particles[j].y);
+                    ctx.stroke();
+                }
+            }
+        }
+        
+        for (const p of particles) {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.globalAlpha = p.opacity;
+            ctx.fill();
+            p.x += p.dx;
+            p.y += p.dy;
+            if (p.x < 0 || p.x > canvas.width) p.dx *= -1;
+            if (p.y < 0 || p.y > canvas.height) p.dy *= -1;
+        }
+        ctx.globalAlpha = 1;
+        if (!isReducedMotion()) animId = requestAnimationFrame(draw);
+    }
+
+    // Only run when app is visible
+    const observer = new MutationObserver(() => {
+        const screen = document.getElementById('app-container');
+        const isVisible = screen && screen.style.display !== 'none';
+        if (isVisible && !isRunning) {
+            isRunning = true;
+            resize(); // Ensure canvas has dimensions once shown
+            if (!isReducedMotion()) draw();
+        } else if (!isVisible && isRunning) {
+            isRunning = false;
+            cancelAnimationFrame(animId);
+        }
+    });
+    observer.observe(document.getElementById('app-container'), { attributes: true, attributeFilter: ['style'] });
 }
 
 function initSidebar() {
@@ -4338,6 +4476,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initPerformanceMode();
     initSidebar();
     initLoginParticles();
+    initAppParticles();
     initLoginForm();
     initListPageControls();
     initKeyboardShortcuts();
