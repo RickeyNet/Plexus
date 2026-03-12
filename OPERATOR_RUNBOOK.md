@@ -67,8 +67,8 @@ Use this when moving from local/dev SQLite persistence to PostgreSQL-backed runt
 3. Run dry-run validation:
   - `python tools/migrate_sqlite_to_postgres.py --dry-run`
 4. Run migration:
-  - `python tools/migrate_sqlite_to_postgres.py --sqlite-path routes/netcontrol.db --postgres-url postgresql://plexus:plexus@localhost:5432/plexus`
-5. Verify parity report shows `[OK]` for all tables.
+  - `python tools/migrate_sqlite_to_postgres.py --sqlite-path routes/netcontrol.db --postgres-url postgresql://plexus:plexus@localhost:5432/plexus --with-checksums`
+5. Verify parity report shows `[OK]` for all tables and checksum verification shows no mismatches.
 6. Set `APP_DB_ENGINE=postgres` and restart Plexus.
 7. Validate `GET /api/health`, login, inventory, and recent jobs pages.
 
