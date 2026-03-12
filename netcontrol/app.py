@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import secrets
+import uuid
 import socket
 import sys
 import traceback
@@ -20,7 +21,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 # Ensure project root is on path for imports
@@ -476,6 +477,8 @@ AUTH_CONFIG = dict(AUTH_CONFIG_DEFAULTS)
 DISCOVERY_SYNC_CONFIG = dict(DISCOVERY_SYNC_DEFAULTS)
 SNMP_DISCOVERY_CONFIG = dict(SNMP_DISCOVERY_DEFAULTS)
 SNMP_DISCOVERY_PROFILES: dict[int, dict] = {}
+SNMP_PROFILES: dict[str, dict] = {}
+GROUP_SNMP_ASSIGNMENTS: dict[int, str] = {}
 JOB_RETENTION_MIN_DAYS = 30
 JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
 CONVERTER_SESSION_RETENTION_MIN_DAYS = 1
@@ -703,10 +706,89 @@ def _sanitize_snmp_discovery_profiles(data: dict | None) -> dict[int, dict]:
     return profiles
 
 
+def _sanitize_snmp_profile(profile_id: str, data: dict | None) -> dict:
+    cfg = {
+        "id": str(profile_id),
+        "name": "",
+        "enabled": False,
+        "version": "2c",
+        "community": "",
+        "port": 161,
+        "timeout_seconds": 1.2,
+        "retries": 0,
+        "v3": {
+            "username": "",
+            "auth_protocol": "sha",
+            "auth_password": "",
+            "priv_protocol": "aes128",
+            "priv_password": "",
+        },
+    }
+    if isinstance(data, dict):
+        cfg["name"] = str(data.get("name", cfg["name"])).strip()
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        version = str(data.get("version", cfg["version"])).strip().lower()
+        if version in {"2c", "3"}:
+            cfg["version"] = version
+        cfg["community"] = str(data.get("community", cfg["community"]))
+        cfg["port"] = int(data.get("port", cfg["port"]))
+        cfg["timeout_seconds"] = float(data.get("timeout_seconds", cfg["timeout_seconds"]))
+        cfg["retries"] = int(data.get("retries", cfg["retries"]))
+        if isinstance(data.get("v3"), dict):
+            v3 = data["v3"]
+            cfg["v3"]["username"] = str(v3.get("username", cfg["v3"]["username"]))
+            cfg["v3"]["auth_protocol"] = str(v3.get("auth_protocol", cfg["v3"]["auth_protocol"])).lower()
+            cfg["v3"]["auth_password"] = str(v3.get("auth_password", cfg["v3"]["auth_password"]))
+            cfg["v3"]["priv_protocol"] = str(v3.get("priv_protocol", cfg["v3"]["priv_protocol"])).lower()
+            cfg["v3"]["priv_password"] = str(v3.get("priv_password", cfg["v3"]["priv_password"]))
+    cfg["port"] = max(1, min(65535, cfg["port"]))
+    cfg["timeout_seconds"] = max(0.2, min(10.0, cfg["timeout_seconds"]))
+    cfg["retries"] = max(0, min(5, cfg["retries"]))
+    if cfg["v3"]["auth_protocol"] not in {"md5", "sha", "sha256", "sha512"}:
+        cfg["v3"]["auth_protocol"] = "sha"
+    if cfg["v3"]["priv_protocol"] not in {"des", "aes128", "aes192", "aes256"}:
+        cfg["v3"]["priv_protocol"] = "aes128"
+    return cfg
+
+
+def _sanitize_snmp_profiles(data: dict | None) -> dict[str, dict]:
+    if not isinstance(data, dict):
+        return {}
+    profiles: dict[str, dict] = {}
+    for key, value in data.items():
+        pid = str(key).strip()
+        if not pid:
+            continue
+        profiles[pid] = _sanitize_snmp_profile(pid, value)
+    return profiles
+
+
+def _sanitize_group_snmp_assignments(data: dict | None) -> dict[int, str]:
+    if not isinstance(data, dict):
+        return {}
+    assignments: dict[int, str] = {}
+    for key, value in data.items():
+        try:
+            group_id = int(key)
+        except Exception:
+            continue
+        if group_id <= 0:
+            continue
+        pid = str(value).strip()
+        if pid:
+            assignments[group_id] = pid
+    return assignments
+
+
 def _resolve_snmp_discovery_config(group_id: int | None = None) -> dict:
     effective = _sanitize_snmp_discovery_config(SNMP_DISCOVERY_CONFIG)
     if group_id is None:
         return effective
+    # New: check named profile assignment first
+    profile_id = GROUP_SNMP_ASSIGNMENTS.get(int(group_id))
+    if profile_id and profile_id in SNMP_PROFILES:
+        return _sanitize_snmp_discovery_config(SNMP_PROFILES[profile_id])
+    # Legacy: fall back to old per-group profiles
     profile = SNMP_DISCOVERY_PROFILES.get(int(group_id))
     if not profile:
         return effective
@@ -953,16 +1035,21 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 
 async def _load_persisted_security_settings():
     global LOGIN_RULES, AUTH_CONFIG, DISCOVERY_SYNC_CONFIG, SNMP_DISCOVERY_CONFIG, SNMP_DISCOVERY_PROFILES
+    global SNMP_PROFILES, GROUP_SNMP_ASSIGNMENTS
     login_rules = await db.get_auth_setting("login_rules")
     auth_config = await db.get_auth_setting("auth_config")
     discovery_sync = await db.get_auth_setting("discovery_sync")
     snmp_discovery = await db.get_auth_setting("snmp_discovery")
     snmp_discovery_profiles = await db.get_auth_setting("snmp_discovery_profiles")
+    snmp_profiles = await db.get_auth_setting("snmp_profiles")
+    group_snmp_assignments = await db.get_auth_setting("group_snmp_assignments")
     LOGIN_RULES = _sanitize_login_rules(login_rules)
     AUTH_CONFIG = _sanitize_auth_config(auth_config)
     DISCOVERY_SYNC_CONFIG = _sanitize_discovery_sync_config(discovery_sync)
     SNMP_DISCOVERY_CONFIG = _sanitize_snmp_discovery_config(snmp_discovery)
     SNMP_DISCOVERY_PROFILES = _sanitize_snmp_discovery_profiles(snmp_discovery_profiles)
+    SNMP_PROFILES = _sanitize_snmp_profiles(snmp_profiles)
+    GROUP_SNMP_ASSIGNMENTS = _sanitize_group_snmp_assignments(group_snmp_assignments)
 
 
 async def _get_user_features(user: dict) -> list[str]:
@@ -1781,6 +1868,86 @@ async def admin_get_snmp_discovery_profiles():
     return SNMP_DISCOVERY_PROFILES
 
 
+# ── Named SNMP Profiles CRUD ─────────────────────────────────────────────────
+
+@app.get("/api/admin/snmp-profiles", dependencies=[Depends(require_auth)])
+async def admin_list_snmp_profiles():
+    return list(SNMP_PROFILES.values())
+
+
+@app.post("/api/admin/snmp-profiles", dependencies=[Depends(require_admin)])
+async def admin_create_snmp_profile(body: dict):
+    global SNMP_PROFILES
+    profile_id = str(uuid.uuid4())
+    profile = _sanitize_snmp_profile(profile_id, body)
+    if not profile["name"]:
+        raise HTTPException(400, "Profile name is required")
+    SNMP_PROFILES[profile_id] = profile
+    await db.set_auth_setting("snmp_profiles", SNMP_PROFILES)
+    return profile
+
+
+@app.put("/api/admin/snmp-profiles/{profile_id}", dependencies=[Depends(require_admin)])
+async def admin_update_snmp_profile(profile_id: str, body: dict):
+    global SNMP_PROFILES
+    if profile_id not in SNMP_PROFILES:
+        raise HTTPException(404, "Profile not found")
+    profile = _sanitize_snmp_profile(profile_id, body)
+    if not profile["name"]:
+        raise HTTPException(400, "Profile name is required")
+    SNMP_PROFILES[profile_id] = profile
+    await db.set_auth_setting("snmp_profiles", SNMP_PROFILES)
+    return profile
+
+
+@app.delete("/api/admin/snmp-profiles/{profile_id}", dependencies=[Depends(require_admin)])
+async def admin_delete_snmp_profile(profile_id: str):
+    global SNMP_PROFILES, GROUP_SNMP_ASSIGNMENTS
+    if profile_id not in SNMP_PROFILES:
+        raise HTTPException(404, "Profile not found")
+    del SNMP_PROFILES[profile_id]
+    # Unassign any groups using this profile
+    changed = False
+    for gid in list(GROUP_SNMP_ASSIGNMENTS):
+        if GROUP_SNMP_ASSIGNMENTS[gid] == profile_id:
+            del GROUP_SNMP_ASSIGNMENTS[gid]
+            changed = True
+    await db.set_auth_setting("snmp_profiles", SNMP_PROFILES)
+    if changed:
+        await db.set_auth_setting("group_snmp_assignments", GROUP_SNMP_ASSIGNMENTS)
+    return {"ok": True}
+
+
+# ── Group SNMP Profile Assignment ────────────────────────────────────────────
+
+@app.get("/api/inventory/{group_id}/snmp-profile-assignment", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def get_group_snmp_profile_assignment(group_id: int):
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    profile_id = GROUP_SNMP_ASSIGNMENTS.get(group_id, "")
+    profile = SNMP_PROFILES.get(profile_id) if profile_id else None
+    return {"group_id": group_id, "snmp_profile_id": profile_id, "profile_name": profile["name"] if profile else ""}
+
+
+@app.put("/api/inventory/{group_id}/snmp-profile-assignment", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def update_group_snmp_profile_assignment(group_id: int, body: dict):
+    global GROUP_SNMP_ASSIGNMENTS
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    profile_id = str(body.get("snmp_profile_id", "")).strip()
+    if profile_id and profile_id not in SNMP_PROFILES:
+        raise HTTPException(400, "SNMP profile not found")
+    if profile_id:
+        GROUP_SNMP_ASSIGNMENTS[group_id] = profile_id
+    else:
+        GROUP_SNMP_ASSIGNMENTS.pop(group_id, None)
+    await db.set_auth_setting("group_snmp_assignments", GROUP_SNMP_ASSIGNMENTS)
+    profile = SNMP_PROFILES.get(profile_id) if profile_id else None
+    return {"group_id": group_id, "snmp_profile_id": profile_id, "profile_name": profile["name"] if profile else ""}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Pydantic Models
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2304,6 +2471,51 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest):
         "discovered_count": len(discovered),
         "discovered_hosts": discovered,
     }
+
+
+@app.post("/api/inventory/{group_id}/discovery/scan/stream", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
+async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest):
+    """SSE streaming scan — yields per-host results as they complete."""
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+
+    targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+    total = len(targets)
+    semaphore = asyncio.Semaphore(max(1, DISCOVERY_MAX_CONCURRENT_PROBES))
+    snmp_cfg = _resolve_snmp_discovery_config(group_id)
+
+    async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
+        async with semaphore:
+            result = await _probe_discovery_target(
+                ip_address=ip_address,
+                timeout_seconds=body.timeout_seconds,
+                device_type=body.device_type,
+                hostname_prefix=body.hostname_prefix,
+                use_snmp=body.use_snmp,
+                snmp_config=snmp_cfg,
+            )
+            return ip_address, result
+
+    async def event_generator():
+        # Send initial metadata
+        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
+
+        scanned = 0
+        discovered = []
+        tasks = [asyncio.create_task(_scan_one(ip)) for ip in targets]
+
+        for coro in asyncio.as_completed(tasks):
+            ip_address, result = await coro
+            scanned += 1
+            if result is not None:
+                discovered.append(result)
+            yield f"data: {json.dumps({'type': 'progress', 'scanned': scanned, 'total': total, 'ip': ip_address, 'found': result is not None, 'host': result})}\n\n"
+
+        discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
+        yield f"data: {json.dumps({'type': 'done', 'scanned_hosts': total, 'discovered_count': len(discovered), 'discovered_hosts': discovered})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/api/inventory/{group_id}/snmp-discovery-profile", dependencies=[Depends(require_auth), Depends(require_feature("inventory"))])
