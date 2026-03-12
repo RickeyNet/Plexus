@@ -887,7 +887,7 @@ body {
     position: sticky;
     top: 0;
     z-index: 10;
-    background: rgba(from var(--bg) r g b / 0.85);
+    background: rgba(from var(--bg) r g b / 0.45);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     padding: 0.75rem 0;
@@ -1201,6 +1201,11 @@ body {
     font-family: inherit;
     background: var(--bg-secondary);
     color: var(--text);
+}
+
+input[type="search"].form-input {
+    -webkit-appearance: none;
+    appearance: none;
 }
 
 .form-textarea {

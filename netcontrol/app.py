@@ -2169,10 +2169,11 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         auth_data = CommunityData(community, mpModel=1)
 
     engine = SnmpEngine()
+    transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
     error_indication, error_status, _error_index, var_binds = await get_cmd(
         engine,
         auth_data,
-        UdpTransportTarget((ip_address, port), timeout=timeout, retries=retries),
+        transport,
         ContextData(),
         ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),
         ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),
