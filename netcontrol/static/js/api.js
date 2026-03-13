@@ -172,6 +172,50 @@ export async function scanInventoryGroup(groupId, cidrs, options = {}) {
     });
 }
 
+export async function scanInventoryGroupStream(groupId, cidrs, options = {}, onEvent) {
+    const url = `${API_BASE}/inventory/${groupId}/discovery/scan/stream`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            cidrs,
+            timeout_seconds: options.timeoutSeconds,
+            max_hosts: options.maxHosts,
+            device_type: options.deviceType,
+            hostname_prefix: options.hostnamePrefix,
+            use_snmp: options.useSnmp !== false,
+        }),
+    });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                try {
+                    const event = JSON.parse(line.slice(6));
+                    onEvent(event);
+                } catch { /* skip malformed */ }
+            }
+        }
+    }
+}
+
 export async function syncInventoryGroup(groupId, cidrs, options = {}) {
     return apiRequest(`/inventory/${groupId}/discovery/sync`, {
         method: 'POST',
@@ -460,5 +504,42 @@ export async function testGroupSnmpProfile(groupId, targetIp) {
     return apiRequest(`/inventory/${groupId}/snmp-discovery-profile/test`, {
         method: 'POST',
         body: { target_ip: targetIp },
+    });
+}
+
+// ── Named SNMP Profiles ──────────────────────────────────────────────────────
+
+export async function listSnmpProfiles() {
+    return apiRequest('/admin/snmp-profiles');
+}
+
+export async function createSnmpProfile(payload) {
+    return apiRequest('/admin/snmp-profiles', {
+        method: 'POST',
+        body: payload,
+    });
+}
+
+export async function updateSnmpProfile(profileId, payload) {
+    return apiRequest(`/admin/snmp-profiles/${profileId}`, {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function deleteSnmpProfile(profileId) {
+    return apiRequest(`/admin/snmp-profiles/${profileId}`, {
+        method: 'DELETE',
+    });
+}
+
+export async function getGroupSnmpAssignment(groupId) {
+    return apiRequest(`/inventory/${groupId}/snmp-profile-assignment`);
+}
+
+export async function updateGroupSnmpAssignment(groupId, profileId) {
+    return apiRequest(`/inventory/${groupId}/snmp-profile-assignment`, {
+        method: 'PUT',
+        body: { snmp_profile_id: profileId },
     });
 }
