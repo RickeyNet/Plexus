@@ -12,7 +12,7 @@
     <div id="login-screen" class="login-screen">
         <canvas id="login-particles" class="login-particles"></canvas>
         <div class="login-card">
-            <img src="/static/img/logo.png" alt="Plexus Logo" class="login-logo">
+            <div class="login-orb" aria-hidden="true"></div>
             <h1 class="login-title">Plexus</h1>
             <p class="login-subtitle">Network Automation Hub</p>
             <form id="login-form">
@@ -79,7 +79,7 @@
         <nav class="sidebar" id="sidebar">
             <div class="sidebar-top">
                 <div class="nav-brand">
-                    <img src="/static/img/logo.png" alt="Plexus Logo" class="nav-logo">
+                    <div class="nav-orb" aria-hidden="true"></div>
                     <span class="nav-brand-text">Plexus</span>
                 </div>
                 <button class="sidebar-toggle" id="sidebar-toggle" title="Collapse sidebar">
@@ -430,7 +430,8 @@
                 <div class="page-header">
                     <h2>Inventory Management</h2>
                     <div style="display:flex; gap:0.5rem;">
-                        <button class="btn btn-secondary" onclick="showSnmpDiscoverySettingsModal()">SNMP Discovery Settings</button>
+                        <button class="btn btn-secondary" onclick="showSnmpProfilesModal()">SNMP Profiles</button>
+                        <button class="btn btn-secondary" onclick="showGlobalDiscoveryModal()">Discover Devices</button>
                         <button class="btn btn-primary" onclick="showCreateGroupModal()">+ New Group</button>
                     </div>
                 </div>
