@@ -18,6 +18,7 @@ import re
 from datetime import UTC, datetime
 
 import aiosqlite
+
 try:
     import asyncpg
 except Exception:  # pragma: no cover - optional dependency for postgres mode

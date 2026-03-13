@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import pytest
-from fastapi.testclient import TestClient
-
 import netcontrol.app as app_module
+import pytest
 import routes.database as db_module
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

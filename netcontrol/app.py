@@ -60,10 +60,10 @@ try:
         usmAesCfb192Protocol,
         usmAesCfb256Protocol,
         usmDESPrivProtocol,
-        usmHMACMD5AuthProtocol,
-        usmHMACSHAAuthProtocol,
         usmHMAC192SHA256AuthProtocol,
         usmHMAC384SHA512AuthProtocol,
+        usmHMACMD5AuthProtocol,
+        usmHMACSHAAuthProtocol,
     )
     PYSMNP_AVAILABLE = True
 except Exception:
