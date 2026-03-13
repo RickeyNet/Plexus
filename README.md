@@ -51,6 +51,9 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
+# (optional) install with PostgreSQL support (Linux/production)
+python -m pip install -r requirements-postgres.txt
+
 # run app
 python templates/run.py --host 127.0.0.1 --port 8080
 ```
@@ -92,7 +95,11 @@ source .venv/bin/activate
 3) Install dependencies:
 
 ```bash
+# core (SQLite only — works on Windows and Linux)
 python -m pip install -r requirements.txt
+
+# with PostgreSQL support (Linux/production)
+python -m pip install -r requirements-postgres.txt
 ```
 
 4) Start server:
@@ -149,16 +156,19 @@ Notes:
 
 ## Database Backends
 
-Plexus currently uses SQLite by default. PostgreSQL optional deployment work is planned and tracked in `POSTGRESQL_MIGRATION_PLAN.md`.
+Plexus supports two database backends: **SQLite** (default) and **PostgreSQL** (production).
 
-- Docker remains the primary deployment approach for both modes.
-- SQLite mode remains supported for local/dev workflows.
-- PostgreSQL mode is targeted for VM/production reliability where storage contention is common.
+| Backend    | Requirements file          | Use case                    |
+|------------|----------------------------|-----------------------------|
+| SQLite     | `requirements.txt`         | Local dev, Windows, demos   |
+| PostgreSQL | `requirements-postgres.txt`| Linux production, VM deploy |
 
-Planned backend env selectors:
+`requirements-postgres.txt` includes `asyncpg`, which requires a C compiler to build on Windows. On Linux, prebuilt wheels are available so it installs without issues.
+
+Environment variables:
 
 - `APP_DB_ENGINE=sqlite|postgres`
-- `APP_DATABASE_URL=postgresql://<user>:<pass>@postgres:5432/<db>`
+- `APP_DATABASE_URL=postgresql://<user>:<pass>@postgres:5432/<db>` (required when engine is `postgres`)
 
 SQLite to PostgreSQL migration utility:
 
