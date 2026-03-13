@@ -13,7 +13,11 @@
       "Bash(c:/Users/rickey.cornett/code/Plexus/venv/Scripts/python.exe -c \"import pysnmp; print\\(pysnmp.__version__\\)\")",
       "Bash(c:/Users/rickey.cornett/code/Plexus/.venv/Scripts/python.exe -c \"import pysnmp; print\\(pysnmp.__version__\\)\")",
       "Bash(node -c netcontrol/static/js/app.js)",
-      "Bash(node -c netcontrol/static/js/api.js)"
+      "Bash(node -c netcontrol/static/js/api.js)",
+      "Bash(python -m pytest tests/test_topology.py -v --tb=short)",
+      "Bash(python -m pytest tests/ --tb=no -q)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(python -m pytest tests/ -q)"
     ]
   }
 }

@@ -10,6 +10,9 @@ Tables:
     jobs              — execution history
     job_events        — per-host log lines for each job
     audit_events      — immutable audit trail for auth, CRUD, and operational actions
+    topology_links    — discovered L2/L3 neighbor relationships between devices
+    interface_stats   — SNMP interface counter snapshots for utilization calculation
+    topology_changes  — detected topology differences between discovery runs
 """
 
 import json
@@ -49,6 +52,9 @@ _INSERT_ID_TABLES = {
     "credentials",
     "jobs",
     "audit_events",
+    "topology_links",
+    "interface_stats",
+    "topology_changes",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -171,6 +177,57 @@ CREATE TABLE IF NOT EXISTS audit_events (
     user            TEXT    NOT NULL DEFAULT '',
     detail          TEXT    DEFAULT '',
     correlation_id  TEXT    DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS topology_links (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_host_id      INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    source_ip           TEXT    NOT NULL,
+    source_interface    TEXT    NOT NULL DEFAULT '',
+    target_host_id      INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    target_ip           TEXT    DEFAULT '',
+    target_device_name  TEXT    NOT NULL DEFAULT '',
+    target_interface    TEXT    NOT NULL DEFAULT '',
+    protocol            TEXT    NOT NULL DEFAULT 'cdp',
+    target_platform     TEXT    DEFAULT '',
+    discovered_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source_host_id, source_interface, target_device_name, target_interface)
+);
+
+CREATE TABLE IF NOT EXISTS interface_stats (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id             INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    if_index            INTEGER NOT NULL,
+    if_name             TEXT    NOT NULL DEFAULT '',
+    if_speed_mbps       INTEGER DEFAULT 0,
+    in_octets           INTEGER DEFAULT 0,
+    out_octets          INTEGER DEFAULT 0,
+    prev_in_octets      INTEGER DEFAULT 0,
+    prev_out_octets     INTEGER DEFAULT 0,
+    polled_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+    prev_polled_at      TEXT    DEFAULT NULL,
+    UNIQUE(host_id, if_index)
+);
+
+CREATE TABLE IF NOT EXISTS topology_changes (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    change_type         TEXT    NOT NULL,
+    source_host_id      INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    source_hostname     TEXT    DEFAULT '',
+    source_interface    TEXT    DEFAULT '',
+    target_device_name  TEXT    DEFAULT '',
+    target_interface    TEXT    DEFAULT '',
+    target_ip           TEXT    DEFAULT '',
+    protocol            TEXT    DEFAULT '',
+    detected_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+    acknowledged        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS topology_node_positions (
+    node_id             TEXT    PRIMARY KEY,
+    x                   REAL    NOT NULL DEFAULT 0,
+    y                   REAL    NOT NULL DEFAULT 0,
+    updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -907,6 +964,16 @@ async def delete_group(group_id: int):
 # Hosts
 # ═════════════════════════════════════════════════════════════════════════════
 
+async def get_host(host_id: int) -> dict | None:
+    """Get a single host by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM hosts WHERE id = ?", (host_id,))
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
 async def get_hosts_for_group(group_id: int) -> list[dict]:
     db = await get_db()
     try:
@@ -1486,3 +1553,337 @@ async def get_audit_events(
         return rows_to_list(await cursor.fetchall())
     finally:
         await conn.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Topology Links
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def upsert_topology_link(
+    source_host_id: int,
+    source_ip: str,
+    source_interface: str,
+    target_host_id: int | None,
+    target_ip: str,
+    target_device_name: str,
+    target_interface: str,
+    protocol: str = "cdp",
+    target_platform: str = "",
+) -> int:
+    """Insert or replace a topology link (deduplicated by source+interfaces+target)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO topology_links
+               (source_host_id, source_ip, source_interface,
+                target_host_id, target_ip, target_device_name,
+                target_interface, protocol, target_platform, discovered_at)
+               VALUES (?,?,?,?,?,?,?,?,?, datetime('now'))
+               ON CONFLICT(source_host_id, source_interface, target_device_name, target_interface)
+               DO UPDATE SET
+                   target_host_id = excluded.target_host_id,
+                   target_ip = excluded.target_ip,
+                   protocol = excluded.protocol,
+                   target_platform = excluded.target_platform,
+                   discovered_at = excluded.discovered_at""",
+            (source_host_id, source_ip, source_interface,
+             target_host_id, target_ip, target_device_name,
+             target_interface, protocol, target_platform),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_topology_links(group_id: int | None = None) -> list[dict]:
+    """Return topology links, optionally filtered by source host group."""
+    db = await get_db()
+    try:
+        if group_id is not None:
+            cursor = await db.execute(
+                """SELECT tl.*, h.hostname AS source_hostname, h.device_type AS source_device_type,
+                          h.status AS source_status, h.group_id AS source_group_id
+                   FROM topology_links tl
+                   JOIN hosts h ON tl.source_host_id = h.id
+                   WHERE h.group_id = ?
+                   ORDER BY tl.source_host_id, tl.source_interface""",
+                (group_id,),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT tl.*, h.hostname AS source_hostname, h.device_type AS source_device_type,
+                          h.status AS source_status, h.group_id AS source_group_id
+                   FROM topology_links tl
+                   JOIN hosts h ON tl.source_host_id = h.id
+                   ORDER BY tl.source_host_id, tl.source_interface"""
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_topology_links_for_host(host_id: int) -> list[dict]:
+    """Return all topology links where the given host is source or resolved target."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT tl.*, h.hostname AS source_hostname, h.device_type AS source_device_type,
+                      h.status AS source_status, h.group_id AS source_group_id
+               FROM topology_links tl
+               JOIN hosts h ON tl.source_host_id = h.id
+               WHERE tl.source_host_id = ? OR tl.target_host_id = ?
+               ORDER BY tl.source_host_id, tl.source_interface""",
+            (host_id, host_id),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_topology_links_for_host(host_id: int) -> int:
+    """Delete all topology links where the given host is the source."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM topology_links WHERE source_host_id = ?", (host_id,)
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def delete_all_topology_links() -> int:
+    """Delete all topology links."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM topology_links")
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def resolve_topology_target_host_ids() -> int:
+    """Match unresolved target_host_ids by looking up target_ip or target_device_name in hosts."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """UPDATE topology_links
+               SET target_host_id = (
+                   SELECT h.id FROM hosts h
+                   WHERE h.ip_address = topology_links.target_ip
+                      OR LOWER(h.hostname) = LOWER(topology_links.target_device_name)
+                   LIMIT 1
+               )
+               WHERE target_host_id IS NULL
+                 AND (target_ip != '' OR target_device_name != '')"""
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Interface Stats (utilization tracking)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def upsert_interface_stat(
+    host_id: int,
+    if_index: int,
+    if_name: str,
+    if_speed_mbps: int,
+    in_octets: int,
+    out_octets: int,
+) -> int:
+    """Insert or update interface counters, shifting current values to prev_*."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO interface_stats
+               (host_id, if_index, if_name, if_speed_mbps, in_octets, out_octets, polled_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(host_id, if_index)
+               DO UPDATE SET
+                   if_name = excluded.if_name,
+                   if_speed_mbps = CASE WHEN excluded.if_speed_mbps > 0
+                                        THEN excluded.if_speed_mbps
+                                        ELSE interface_stats.if_speed_mbps END,
+                   prev_in_octets = interface_stats.in_octets,
+                   prev_out_octets = interface_stats.out_octets,
+                   prev_polled_at = interface_stats.polled_at,
+                   in_octets = excluded.in_octets,
+                   out_octets = excluded.out_octets,
+                   polled_at = excluded.polled_at""",
+            (host_id, if_index, if_name, if_speed_mbps, in_octets, out_octets),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_interface_stats_for_host(host_id: int) -> list[dict]:
+    """Return all interface stats for a host."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM interface_stats WHERE host_id = ? ORDER BY if_index",
+            (host_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_interface_stats_by_hosts(host_ids: list[int]) -> list[dict]:
+    """Return interface stats for multiple hosts."""
+    if not host_ids:
+        return []
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" for _ in host_ids)
+        cursor = await db.execute(
+            f"SELECT * FROM interface_stats WHERE host_id IN ({placeholders}) ORDER BY host_id, if_index",
+            tuple(host_ids),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Topology Changes (diff detection)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def insert_topology_change(
+    change_type: str,
+    source_host_id: int | None,
+    source_hostname: str = "",
+    source_interface: str = "",
+    target_device_name: str = "",
+    target_interface: str = "",
+    target_ip: str = "",
+    protocol: str = "",
+) -> int:
+    """Record a topology change (added/removed link)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO topology_changes
+               (change_type, source_host_id, source_hostname, source_interface,
+                target_device_name, target_interface, target_ip, protocol, detected_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (change_type, source_host_id, source_hostname, source_interface,
+             target_device_name, target_interface, target_ip, protocol),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_topology_changes(unacknowledged_only: bool = False,
+                               limit: int = 100) -> list[dict]:
+    """Return recent topology changes."""
+    db = await get_db()
+    try:
+        where = "WHERE acknowledged = 0" if unacknowledged_only else ""
+        cursor = await db.execute(
+            f"SELECT * FROM topology_changes {where} ORDER BY detected_at DESC LIMIT ?",
+            (limit,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_topology_changes_count(unacknowledged_only: bool = True) -> int:
+    """Return count of topology changes."""
+    db = await get_db()
+    try:
+        where = "WHERE acknowledged = 0" if unacknowledged_only else ""
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM topology_changes {where}"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+    finally:
+        await db.close()
+
+
+async def acknowledge_topology_changes() -> int:
+    """Mark all unacknowledged changes as acknowledged."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE topology_changes SET acknowledged = 1 WHERE acknowledged = 0"
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def delete_old_topology_changes(days: int = 30) -> int:
+    """Delete topology changes older than N days."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM topology_changes WHERE detected_at < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ── Topology Node Positions ──────────────────────────────────────────────────
+
+async def get_topology_positions() -> dict:
+    """Return all saved node positions as {node_id: {x, y}}."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT node_id, x, y FROM topology_node_positions")
+        rows = await cursor.fetchall()
+        return {row[0]: {"x": row[1], "y": row[2]} for row in rows}
+    finally:
+        await db.close()
+
+
+async def save_topology_positions(positions: dict) -> int:
+    """Upsert node positions. positions = {node_id: {x, y}}."""
+    if not positions:
+        return 0
+    db = await get_db()
+    try:
+        count = 0
+        for node_id, pos in positions.items():
+            await db.execute(
+                """INSERT INTO topology_node_positions (node_id, x, y, updated_at)
+                   VALUES (?, ?, ?, datetime('now'))
+                   ON CONFLICT(node_id) DO UPDATE SET
+                       x = excluded.x,
+                       y = excluded.y,
+                       updated_at = datetime('now')""",
+                (str(node_id), pos["x"], pos["y"]),
+            )
+            count += 1
+        await db.commit()
+        return count
+    finally:
+        await db.close()
+
+
+async def delete_topology_positions() -> int:
+    """Delete all saved node positions."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM topology_node_positions")
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()

@@ -115,6 +115,10 @@
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>
                     <span class="nav-label">Converter</span>
                 </a>
+                <a href="#" data-page="topology" class="nav-link">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="18" r="3"></circle><line x1="9" y1="6" x2="15" y2="6"></line><line x1="18" y1="9" x2="18" y2="15"></line><line x1="9" y1="18" x2="15" y2="18"></line><line x1="6" y1="9" x2="6" y2="15"></line></svg>
+                    <span class="nav-label">Topology</span>
+                </a>
                 <a href="#" data-page="settings" class="nav-link">
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     <span class="nav-label">Settings</span>
@@ -552,6 +556,83 @@
                 </div>
             </div>
 
+            <!-- Topology Page -->
+            <div id="page-topology" class="page">
+                <div class="page-header">
+                    <h2>Network Topology</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <div class="topology-search-wrap">
+                            <input type="text" id="topology-search" class="form-input" placeholder="Search nodes..." autocomplete="off">
+                            <div id="topology-search-results" class="topology-search-results" style="display:none;"></div>
+                        </div>
+                        <select id="topology-group-filter" class="form-select" style="min-width:160px;">
+                            <option value="">All Groups</option>
+                        </select>
+                        <select id="topology-layout" class="form-select" style="min-width:140px;">
+                            <option value="physics">Force-Directed</option>
+                            <option value="hierarchical">Hierarchical</option>
+                        </select>
+                        <button class="btn btn-secondary" id="topology-discover-btn" onclick="discoverTopology()">Discover Neighbors</button>
+                        <button class="btn btn-secondary" onclick="refreshTopology()">Refresh</button>
+                        <button class="btn btn-secondary" id="topology-fit-btn" onclick="fitTopology()" title="Fit graph to view">Fit</button>
+                        <button class="btn btn-secondary" id="topology-path-btn" onclick="togglePathMode()" title="Find shortest path between two nodes">Path</button>
+                        <button class="btn btn-secondary" id="topology-util-btn" onclick="toggleUtilizationOverlay()" title="Toggle interface utilization overlay">Util</button>
+                        <button class="btn btn-secondary topology-changes-btn" id="topology-changes-btn" onclick="showTopologyChanges()" title="View topology changes">
+                            Changes <span id="topology-change-badge" class="topology-change-badge" style="display:none;">0</span>
+                        </button>
+                        <button class="btn btn-secondary" id="topology-reset-pos-btn" onclick="resetTopologyPositions()" title="Reset all saved node positions">Reset Layout</button>
+                        <div class="topology-export-group">
+                            <button class="btn btn-secondary" onclick="exportTopologyPNG()" title="Export as PNG image">PNG</button>
+                            <button class="btn btn-secondary" onclick="exportTopologyJSON()" title="Export as JSON data">JSON</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="topology-path-bar" class="topology-path-bar" style="display:none;">
+                    <span id="topology-path-status">Click a source node to start path tracing...</span>
+                    <button class="btn btn-secondary btn-sm" onclick="clearPathMode()">Cancel</button>
+                </div>
+                <div class="topology-container">
+                    <div id="topology-canvas" class="topology-canvas"></div>
+                    <div id="topology-details" class="topology-details" style="display:none;">
+                        <div class="topology-details-header">
+                            <h3 id="topology-details-title">Node Details</h3>
+                            <button class="btn-icon" onclick="closeTopologyDetails()" title="Close">&times;</button>
+                        </div>
+                        <div id="topology-details-content"></div>
+                    </div>
+                </div>
+                <div id="topology-legend" class="topology-legend">
+                    <span class="topology-legend-item"><span class="topology-legend-dot" style="background:#42a5f5; color:#42a5f5;"></span> Inventory Device</span>
+                    <span class="topology-legend-item"><span class="topology-legend-dot topology-legend-dot-dashed"></span> External Neighbor</span>
+                    <span class="topology-legend-item"><span class="topology-legend-line" style="background:#00b0ff; color:#00b0ff;"></span> CDP</span>
+                    <span class="topology-legend-item"><span class="topology-legend-line" style="background:#00e676; color:#00e676;"></span> LLDP</span>
+                    <span class="topology-legend-item"><span class="topology-legend-line" style="background:#ffab40; color:#ffab40;"></span> OSPF</span>
+                    <span class="topology-legend-item"><span class="topology-legend-line" style="background:#e040fb; color:#e040fb;"></span> BGP</span>
+                    <span class="topology-legend-item topology-legend-util" id="topology-legend-util" style="display:none;">
+                        <span class="topology-legend-gradient"></span> Utilization (0-100%)
+                    </span>
+                </div>
+                <div id="topology-empty" class="empty-state" style="display:none;">
+                    <svg width="140" height="140" viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <filter id="topo-glow">
+                                <feGaussianBlur stdDeviation="3" result="blur"/>
+                                <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                            </filter>
+                        </defs>
+                        <line x1="44" y1="35" x2="96" y2="35" stroke="#00b0ff" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.5" filter="url(#topo-glow)"/>
+                        <line x1="38" y1="45" x2="62" y2="95" stroke="#00e676" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.4" filter="url(#topo-glow)"/>
+                        <line x1="102" y1="45" x2="78" y2="95" stroke="#00b0ff" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.4" filter="url(#topo-glow)"/>
+                        <circle cx="30" cy="35" r="14" stroke="#42a5f5" stroke-width="2" fill="rgba(0,176,255,0.08)" filter="url(#topo-glow)"/>
+                        <circle cx="110" cy="35" r="14" stroke="#00e676" stroke-width="2" fill="rgba(0,230,118,0.06)" filter="url(#topo-glow)"/>
+                        <circle cx="70" cy="105" r="14" stroke="#546e7a" stroke-width="2" fill="rgba(84,110,122,0.08)" stroke-dasharray="4 3"/>
+                    </svg>
+                    <h3>No Topology Data</h3>
+                    <p style="color:rgba(180,210,240,0.6); margin-bottom:1rem;">Run neighbor discovery on your inventory groups to map network connections.</p>
+                    <button class="btn btn-primary btn-sm" onclick="discoverTopology()">Discover Neighbors</button>
+                </div>
+            </div>
+
             <!-- Settings Page -->
             <div id="page-settings" class="page">
                 <h2>Admin Settings</h2>
@@ -663,6 +744,22 @@
                         </div>
                     </form>
                 </div>
+                <div class="section">
+                    <h3>Scheduled Topology Discovery</h3>
+                    <p style="color: var(--text-muted); margin-bottom: 0.75rem; font-size: 0.85rem;">
+                        Automatically run neighbor discovery on all SNMP-enabled groups at a regular interval to keep the topology map current.
+                    </p>
+                    <form id="admin-topology-discovery-form" style="display: grid; grid-template-columns: auto 1fr; gap: 0.75rem 1rem; max-width: 480px; align-items: center;">
+                        <label class="form-label" style="margin:0;">Enabled</label>
+                        <label><input type="checkbox" id="topo-disc-enabled"> Enable scheduled discovery</label>
+                        <label class="form-label" for="topo-disc-interval" style="margin:0;">Interval (seconds)</label>
+                        <input type="number" id="topo-disc-interval" class="form-input" min="300" max="86400" step="60" value="3600">
+                        <div style="grid-column: 1 / -1; display:flex; gap:0.5rem;">
+                            <button type="submit" class="btn btn-primary">Save</button>
+                            <button type="button" class="btn btn-secondary" onclick="runTopologyDiscoveryNow()">Run Now</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </main>
     </div>
@@ -740,6 +837,7 @@
         </div>
     </div>
 
+    <script src="/static/js/vis-network.min.js"></script>
     <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

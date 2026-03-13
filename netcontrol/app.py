@@ -57,6 +57,7 @@ try:
         UdpTransportTarget,
         UsmUserData,
         get_cmd,
+        walk_cmd,
         usmAesCfb128Protocol,
         usmAesCfb192Protocol,
         usmAesCfb256Protocol,
@@ -76,6 +77,7 @@ except Exception:
     UdpTransportTarget = None
     UsmUserData = None
     get_cmd = None
+    walk_cmd = None
     usmAesCfb128Protocol = None
     usmAesCfb192Protocol = None
     usmAesCfb256Protocol = None
@@ -175,6 +177,13 @@ DISCOVERY_SYNC_DEFAULTS = {
 }
 DISCOVERY_SYNC_MIN_INTERVAL_SECONDS = 60
 DISCOVERY_SYNC_MAX_INTERVAL_SECONDS = 86400
+
+TOPOLOGY_DISCOVERY_DEFAULTS = {
+    "enabled": False,
+    "interval_seconds": 3600,
+}
+TOPOLOGY_DISCOVERY_MIN_INTERVAL = 300
+TOPOLOGY_DISCOVERY_MAX_INTERVAL = 86400
 
 
 # ── CSRF token helpers ───────────────────────────────────────────────────────
@@ -454,6 +463,7 @@ FEATURE_FLAGS = [
     "templates",
     "credentials",
     "converter",
+    "topology",
 ]
 
 AUTH_CONFIG_DEFAULTS = {
@@ -481,6 +491,7 @@ SNMP_DISCOVERY_CONFIG = dict(SNMP_DISCOVERY_DEFAULTS)
 SNMP_DISCOVERY_PROFILES: dict[int, dict] = {}
 SNMP_PROFILES: dict[str, dict] = {}
 GROUP_SNMP_ASSIGNMENTS: dict[int, str] = {}
+TOPOLOGY_DISCOVERY_CONFIG = dict(TOPOLOGY_DISCOVERY_DEFAULTS)
 JOB_RETENTION_MIN_DAYS = 30
 JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
 CONVERTER_SESSION_RETENTION_MIN_DAYS = 1
@@ -615,6 +626,21 @@ def _sanitize_discovery_sync_config(data: dict | None) -> dict:
         sanitized_profiles.append(profile_obj)
 
     cfg["profiles"] = sanitized_profiles
+    return cfg
+
+
+def _sanitize_topology_discovery_config(data: dict | None) -> dict:
+    cfg = {
+        "enabled": bool(TOPOLOGY_DISCOVERY_DEFAULTS["enabled"]),
+        "interval_seconds": int(TOPOLOGY_DISCOVERY_DEFAULTS["interval_seconds"]),
+    }
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
+        cfg["interval_seconds"] = max(
+            TOPOLOGY_DISCOVERY_MIN_INTERVAL,
+            min(TOPOLOGY_DISCOVERY_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
     return cfg
 
 
@@ -921,6 +947,113 @@ async def _discovery_sync_loop() -> None:
             await asyncio.sleep(DISCOVERY_SYNC_DEFAULTS["interval_seconds"])
 
 
+async def _run_topology_discovery_once() -> dict:
+    """Run neighbor discovery across all SNMP-enabled groups."""
+    if not TOPOLOGY_DISCOVERY_CONFIG.get("enabled"):
+        return {"enabled": False, "groups_scanned": 0, "links_discovered": 0, "errors": 0}
+
+    groups = await db.get_all_groups()
+    total_links = 0
+    total_errors = 0
+    groups_scanned = 0
+
+    for group in groups:
+        snmp_cfg = _resolve_snmp_discovery_config(group["id"])
+        if not snmp_cfg.get("enabled", False):
+            continue
+        hosts = await db.get_hosts_for_group(group["id"])
+        if not hosts:
+            continue
+
+        groups_scanned += 1
+        semaphore = asyncio.Semaphore(max(1, DISCOVERY_MAX_CONCURRENT_PROBES))
+
+        async def _walk_host(host: dict, _cfg=snmp_cfg) -> tuple[dict, list[dict] | None, list[dict]]:
+            async with semaphore:
+                try:
+                    neighbors, if_stats = await _discover_neighbors(
+                        host["id"], host["ip_address"], _cfg, timeout_seconds=5.0,
+                    )
+                    return host, neighbors, if_stats
+                except Exception as exc:
+                    LOGGER.warning("topology scheduled: discovery failed for %s: %s",
+                                   host["ip_address"], exc)
+                    return host, None, []
+
+        walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
+
+        for host, neighbors, if_stats in walk_results:
+            if neighbors is None:
+                total_errors += 1
+                continue
+            try:
+                # Snapshot old links for change detection
+                old_links = await db.get_topology_links_for_host(host["id"])
+                old_link_keys = {
+                    (l["source_host_id"], l["source_interface"], l["target_device_name"], l["target_interface"])
+                    for l in old_links if l["source_host_id"] == host["id"]
+                }
+                new_link_keys = {
+                    (n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"])
+                    for n in neighbors
+                }
+
+                await db.delete_topology_links_for_host(host["id"])
+                for n in neighbors:
+                    await db.upsert_topology_link(
+                        source_host_id=n["source_host_id"],
+                        source_ip=n["source_ip"],
+                        source_interface=n["local_interface"],
+                        target_host_id=None,
+                        target_ip=n.get("remote_ip", ""),
+                        target_device_name=n["remote_device_name"],
+                        target_interface=n["remote_interface"],
+                        protocol=n["protocol"],
+                        target_platform=n.get("remote_platform", ""),
+                    )
+                # Store interface stats
+                for stat in if_stats:
+                    await db.upsert_interface_stat(**stat)
+                # Record topology changes (only if there were previous links)
+                if old_link_keys:
+                    await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
+                total_links += len(neighbors)
+            except Exception as exc:
+                LOGGER.warning("topology scheduled: DB write failed for %s: %s",
+                               host["ip_address"], exc)
+                total_errors += 1
+
+    if groups_scanned > 0:
+        try:
+            await db.resolve_topology_target_host_ids()
+        except Exception:
+            pass
+        LOGGER.info("topology scheduled: scanned %d groups, %d links discovered, %d errors",
+                     groups_scanned, total_links, total_errors)
+        increment_metric("topology.discovery.scheduled.success")
+
+    return {
+        "enabled": True,
+        "groups_scanned": groups_scanned,
+        "links_discovered": total_links,
+        "errors": total_errors,
+    }
+
+
+async def _topology_discovery_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(int(TOPOLOGY_DISCOVERY_CONFIG.get(
+                "interval_seconds", TOPOLOGY_DISCOVERY_DEFAULTS["interval_seconds"])))
+            await _run_topology_discovery_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("topology discovery loop failure: %s", redact_value(str(exc)))
+            increment_metric("topology.discovery.scheduled.failed")
+            await asyncio.sleep(TOPOLOGY_DISCOVERY_DEFAULTS["interval_seconds"])
+
+
 def _ensure_radius_dictionary_file() -> str:
     """Create a minimal RADIUS dictionary if one does not exist."""
     if os.path.isfile(RADIUS_DICTIONARY_FILE):
@@ -1038,7 +1171,7 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 
 async def _load_persisted_security_settings():
     global LOGIN_RULES, AUTH_CONFIG, DISCOVERY_SYNC_CONFIG, SNMP_DISCOVERY_CONFIG, SNMP_DISCOVERY_PROFILES
-    global SNMP_PROFILES, GROUP_SNMP_ASSIGNMENTS
+    global SNMP_PROFILES, GROUP_SNMP_ASSIGNMENTS, TOPOLOGY_DISCOVERY_CONFIG
     login_rules = await db.get_auth_setting("login_rules")
     auth_config = await db.get_auth_setting("auth_config")
     discovery_sync = await db.get_auth_setting("discovery_sync")
@@ -1046,6 +1179,7 @@ async def _load_persisted_security_settings():
     snmp_discovery_profiles = await db.get_auth_setting("snmp_discovery_profiles")
     snmp_profiles = await db.get_auth_setting("snmp_profiles")
     group_snmp_assignments = await db.get_auth_setting("group_snmp_assignments")
+    topology_discovery = await db.get_auth_setting("topology_discovery")
     LOGIN_RULES = _sanitize_login_rules(login_rules)
     AUTH_CONFIG = _sanitize_auth_config(auth_config)
     DISCOVERY_SYNC_CONFIG = _sanitize_discovery_sync_config(discovery_sync)
@@ -1053,6 +1187,7 @@ async def _load_persisted_security_settings():
     SNMP_DISCOVERY_PROFILES = _sanitize_snmp_discovery_profiles(snmp_discovery_profiles)
     SNMP_PROFILES = _sanitize_snmp_profiles(snmp_profiles)
     GROUP_SNMP_ASSIGNMENTS = _sanitize_group_snmp_assignments(group_snmp_assignments)
+    TOPOLOGY_DISCOVERY_CONFIG = _sanitize_topology_discovery_config(topology_discovery)
 
 
 async def _get_user_features(user: dict) -> list[str]:
@@ -1116,17 +1251,23 @@ async def lifespan(app: FastAPI):
     await _run_discovery_sync_once()
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
     discovery_sync_task = asyncio.create_task(_discovery_sync_loop())
+    topology_discovery_task = asyncio.create_task(_topology_discovery_loop())
     try:
         yield
     finally:
         retention_task.cancel()
         discovery_sync_task.cancel()
+        topology_discovery_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
             pass
         try:
             await discovery_sync_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await topology_discovery_task
         except asyncio.CancelledError:
             pass
 
@@ -1853,6 +1994,25 @@ async def admin_run_discovery_sync_now():
     return {"ok": True, "result": result}
 
 
+@app.get("/api/admin/topology-discovery", dependencies=[Depends(require_admin)])
+async def admin_get_topology_discovery_config():
+    return TOPOLOGY_DISCOVERY_CONFIG
+
+
+@app.put("/api/admin/topology-discovery", dependencies=[Depends(require_admin)])
+async def admin_update_topology_discovery_config(body: dict):
+    global TOPOLOGY_DISCOVERY_CONFIG
+    TOPOLOGY_DISCOVERY_CONFIG = _sanitize_topology_discovery_config(body)
+    await db.set_auth_setting("topology_discovery", TOPOLOGY_DISCOVERY_CONFIG)
+    return TOPOLOGY_DISCOVERY_CONFIG
+
+
+@app.post("/api/admin/topology-discovery/run-now", dependencies=[Depends(require_admin)])
+async def admin_run_topology_discovery_now():
+    result = await _run_topology_discovery_once()
+    return {"ok": True, "result": result}
+
+
 @app.get("/api/admin/snmp-discovery", dependencies=[Depends(require_admin)])
 async def admin_get_snmp_discovery_config():
     return SNMP_DISCOVERY_CONFIG
@@ -2389,6 +2549,373 @@ async def _probe_discovery_target_snmp(ip_address: str, timeout_seconds: float, 
         return await _snmp_get(ip_address, timeout_seconds, snmp_config)
     except Exception:
         return None
+
+
+# ── SNMP Walk & Topology Neighbor Discovery ─────────────────────────────────
+
+def _build_snmp_auth(snmp_config: dict):
+    """Build pysnmp auth_data from config dict. Returns (auth_data, version, port, timeout, retries) or None."""
+    if not PYSMNP_AVAILABLE:
+        return None
+    cfg = snmp_config
+    if not cfg.get("enabled", False):
+        return None
+    version = str(cfg.get("version", "2c"))
+    port = int(cfg.get("port", 161))
+    retries = int(cfg.get("retries", 0))
+    timeout = float(cfg.get("timeout_seconds", 2.0))
+
+    if version == "3":
+        v3 = cfg.get("v3", {})
+        username = str(v3.get("username", "")).strip()
+        auth_password = str(v3.get("auth_password", "")).strip()
+        priv_password = str(v3.get("priv_password", "")).strip()
+        if not username or not auth_password:
+            return None
+        auth_map = {
+            "md5": usmHMACMD5AuthProtocol, "sha": usmHMACSHAAuthProtocol,
+            "sha256": usmHMAC192SHA256AuthProtocol, "sha512": usmHMAC384SHA512AuthProtocol,
+        }
+        priv_map = {
+            "des": usmDESPrivProtocol, "aes128": usmAesCfb128Protocol,
+            "aes192": usmAesCfb192Protocol, "aes256": usmAesCfb256Protocol,
+        }
+        auth_proto = auth_map.get(str(v3.get("auth_protocol", "sha")).lower(), usmHMACSHAAuthProtocol)
+        priv_proto = priv_map.get(str(v3.get("priv_protocol", "aes128")).lower(), usmAesCfb128Protocol)
+        if priv_password:
+            auth_data = UsmUserData(username, authKey=auth_password, privKey=priv_password,
+                                    authProtocol=auth_proto, privProtocol=priv_proto)
+        else:
+            auth_data = UsmUserData(username, authKey=auth_password, authProtocol=auth_proto)
+    else:
+        community = str(cfg.get("community", "public")).strip()
+        if not community:
+            return None
+        auth_data = CommunityData(community, mpModel=1)
+
+    return auth_data, version, port, timeout, retries
+
+
+async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
+                     base_oid: str, max_rows: int = 500) -> dict[str, str]:
+    """Walk an SNMP OID subtree and return {oid: value} dict."""
+    auth_tuple = _build_snmp_auth(snmp_config)
+    if auth_tuple is None:
+        return {}
+    auth_data, _version, port, timeout, retries = auth_tuple
+    timeout = max(timeout, timeout_seconds)
+
+    engine = SnmpEngine()
+    transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
+    results: dict[str, str] = {}
+    row_count = 0
+    try:
+        async for error_indication, error_status, _error_index, var_binds in walk_cmd(
+            engine, auth_data, transport, ContextData(),
+            ObjectType(ObjectIdentity(base_oid)),
+            lexicographicMode=False,
+        ):
+            if error_indication or error_status:
+                break
+            for name, value in var_binds:
+                oid_str = str(name)
+                results[oid_str] = value
+            row_count += 1
+            if row_count >= max_rows:
+                break
+    finally:
+        engine.close_dispatcher()
+    return results
+
+
+def _parse_cdp_address(raw_value) -> str:
+    """Convert CDP cdpCacheAddress (binary) to dotted IPv4 string."""
+    try:
+        raw_bytes = bytes(raw_value)
+        if len(raw_bytes) == 4:
+            return socket.inet_ntoa(raw_bytes)
+        return raw_bytes.hex()
+    except Exception:
+        return str(raw_value)
+
+
+async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
+                              timeout_seconds: float = 5.0) -> tuple[list[dict], list[dict]]:
+    """Discover CDP/LLDP/OSPF/BGP neighbors and poll interface counters.
+
+    Returns (neighbors_list, interface_stats_list).
+    All independent SNMP walks run in parallel for speed.
+    """
+    neighbors: list[dict] = []
+    _walk = lambda oid: _snmp_walk(ip_address, timeout_seconds, snmp_config, oid)
+
+    # ── Phase 1: Parallel walk of ALL OID groups ──
+    # ifName / ifDescr (need ifName first, ifDescr as fallback)
+    if_name_oid = "1.3.6.1.2.1.31.1.1.1.1"
+    if_descr_oid = "1.3.6.1.2.1.2.2.1.2"
+
+    # Interface counters
+    if_hc_in_oid = "1.3.6.1.2.1.31.1.1.1.6"          # ifHCInOctets (64-bit)
+    if_hc_out_oid = "1.3.6.1.2.1.31.1.1.1.10"        # ifHCOutOctets (64-bit)
+    if_in_octets_oid = "1.3.6.1.2.1.2.2.1.10"         # ifInOctets (32-bit fallback)
+    if_out_octets_oid = "1.3.6.1.2.1.2.2.1.16"        # ifOutOctets (32-bit fallback)
+    if_high_speed_oid = "1.3.6.1.2.1.31.1.1.1.15"     # ifHighSpeed (Mbps)
+    if_speed_oid = "1.3.6.1.2.1.2.2.1.5"              # ifSpeed (bps)
+
+    # CDP OIDs
+    cdp_device_id_base = "1.3.6.1.4.1.9.9.23.1.2.1.1.6"
+    cdp_address_base = "1.3.6.1.4.1.9.9.23.1.2.1.1.4"
+    cdp_port_base = "1.3.6.1.4.1.9.9.23.1.2.1.1.7"
+    cdp_platform_base = "1.3.6.1.4.1.9.9.23.1.2.1.1.8"
+
+    # LLDP OIDs
+    lldp_sys_name_base = "1.0.8802.1.1.2.1.4.1.1.9"
+    lldp_port_id_base = "1.0.8802.1.1.2.1.4.1.1.7"
+    lldp_port_desc_base = "1.0.8802.1.1.2.1.4.1.1.8"
+    lldp_sys_desc_base = "1.0.8802.1.1.2.1.4.1.1.10"
+    lldp_man_addr_base = "1.0.8802.1.1.2.1.4.2.1.4"
+
+    # OSPF OIDs
+    ospf_nbr_rtr_id_base = "1.3.6.1.2.1.14.10.1.3"
+    ospf_nbr_state_base = "1.3.6.1.2.1.14.10.1.6"
+
+    # BGP OIDs
+    bgp_peer_state_base = "1.3.6.1.2.1.15.3.1.2"
+    bgp_peer_remote_as_base = "1.3.6.1.2.1.15.3.1.9"
+
+    LOGGER.info("topology: starting parallel SNMP walks for %s (%s)", ip_address, host_id)
+
+    # Fire ALL walks in parallel — one round-trip instead of 17 sequential ones
+    (if_names, if_descr,
+     hc_in, hc_out, lo_in, lo_out, high_speed_raw, speed_raw,
+     cdp_device_ids, cdp_addresses, cdp_ports, cdp_platforms,
+     lldp_names, lldp_port_ids, lldp_port_descs, lldp_sys_descs, lldp_man_addrs,
+     ospf_rtr_ids, ospf_states,
+     bgp_states, bgp_remote_as,
+    ) = await asyncio.gather(
+        _walk(if_name_oid), _walk(if_descr_oid),
+        _walk(if_hc_in_oid), _walk(if_hc_out_oid),
+        _walk(if_in_octets_oid), _walk(if_out_octets_oid),
+        _walk(if_high_speed_oid), _walk(if_speed_oid),
+        _walk(cdp_device_id_base), _walk(cdp_address_base),
+        _walk(cdp_port_base), _walk(cdp_platform_base),
+        _walk(lldp_sys_name_base), _walk(lldp_port_id_base),
+        _walk(lldp_port_desc_base), _walk(lldp_sys_desc_base), _walk(lldp_man_addr_base),
+        _walk(ospf_nbr_rtr_id_base), _walk(ospf_nbr_state_base),
+        _walk(bgp_peer_state_base), _walk(bgp_peer_remote_as_base),
+    )
+
+    LOGGER.info("topology: SNMP walks complete for %s — CDP:%d LLDP:%d OSPF:%d BGP:%d ifStats:%d",
+                ip_address, len(cdp_device_ids), len(lldp_names),
+                len(ospf_rtr_ids), len(bgp_states), len(hc_in) or len(lo_in))
+
+    # ── Build ifIndex -> interface name map ──
+    effective_if_names = if_names or if_descr
+    if_index_map: dict[str, str] = {}
+    for oid, val in effective_if_names.items():
+        parts = oid.rsplit(".", 1)
+        if len(parts) == 2:
+            if_index_map[parts[1]] = str(val)
+
+    # ── Interface counter stats ──
+    # Prefer 64-bit counters, fall back to 32-bit
+    in_octets_raw = hc_in or lo_in
+    out_octets_raw = hc_out or lo_out
+    # Prefer ifHighSpeed (Mbps), fall back to ifSpeed (bps -> Mbps)
+    if not high_speed_raw:
+        effective_speed = speed_raw
+    else:
+        effective_speed = high_speed_raw
+
+    if_stats: list[dict] = []
+    all_if_indexes = set()
+    for oid in list(in_octets_raw.keys()) + list(out_octets_raw.keys()):
+        idx = oid.rsplit(".", 1)[-1] if "." in oid else ""
+        if idx:
+            all_if_indexes.add(idx)
+
+    for idx in all_if_indexes:
+        in_val = 0
+        out_val = 0
+        speed_mbps = 0
+        for oid, val in in_octets_raw.items():
+            if oid.endswith("." + idx):
+                try:
+                    in_val = int(val)
+                except (ValueError, TypeError):
+                    pass
+                break
+        for oid, val in out_octets_raw.items():
+            if oid.endswith("." + idx):
+                try:
+                    out_val = int(val)
+                except (ValueError, TypeError):
+                    pass
+                break
+        for oid, val in effective_speed.items():
+            if oid.endswith("." + idx):
+                try:
+                    raw_speed = int(val)
+                    speed_mbps = raw_speed if high_speed_raw else raw_speed // 1_000_000
+                except (ValueError, TypeError):
+                    pass
+                break
+
+        if_stats.append({
+            "host_id": host_id,
+            "if_index": int(idx),
+            "if_name": if_index_map.get(idx, f"ifIndex-{idx}"),
+            "if_speed_mbps": speed_mbps,
+            "in_octets": in_val,
+            "out_octets": out_val,
+        })
+
+    # ── CDP Neighbor Parsing ──
+    for oid, device_name_val in cdp_device_ids.items():
+        suffix = oid[len(cdp_device_id_base):]
+        if not suffix:
+            continue
+        parts = suffix.lstrip(".").split(".")
+        if_index = parts[0] if parts else ""
+        local_iface = if_index_map.get(if_index, f"ifIndex-{if_index}")
+
+        remote_name = str(device_name_val).strip()
+        if "(" in remote_name:
+            remote_name = remote_name.split("(")[0].strip()
+
+        addr_oid = cdp_address_base + suffix
+        port_oid = cdp_port_base + suffix
+        plat_oid = cdp_platform_base + suffix
+
+        remote_ip = ""
+        if addr_oid in cdp_addresses:
+            remote_ip = _parse_cdp_address(cdp_addresses[addr_oid])
+
+        remote_port = str(cdp_ports.get(port_oid, "")).strip()
+        platform = str(cdp_platforms.get(plat_oid, "")).strip()
+
+        neighbors.append({
+            "source_host_id": host_id,
+            "source_ip": ip_address,
+            "local_interface": local_iface,
+            "remote_device_name": remote_name,
+            "remote_ip": remote_ip,
+            "remote_interface": remote_port,
+            "protocol": "cdp",
+            "remote_platform": platform,
+        })
+
+    # ── LLDP Neighbor Parsing ──
+    lldp_addr_map: dict[str, str] = {}
+    for oid, val in lldp_man_addrs.items():
+        suffix = oid[len(lldp_man_addr_base):]
+        parts = suffix.lstrip(".").split(".")
+        if len(parts) >= 3:
+            key = f"{parts[0]}.{parts[1]}.{parts[2]}"
+            try:
+                raw = bytes(val)
+                if len(raw) == 4:
+                    lldp_addr_map[key] = socket.inet_ntoa(raw)
+            except Exception:
+                pass
+
+    for oid, sys_name_val in lldp_names.items():
+        suffix = oid[len(lldp_sys_name_base):]
+        if not suffix:
+            continue
+        parts = suffix.lstrip(".").split(".")
+        local_port_num = parts[1] if len(parts) >= 2 else ""
+        lldp_key = ".".join(parts[:3]) if len(parts) >= 3 else suffix.lstrip(".")
+
+        local_iface = if_index_map.get(local_port_num, f"port-{local_port_num}")
+        remote_name = str(sys_name_val).strip()
+
+        port_id_oid = lldp_port_id_base + suffix
+        port_desc_oid = lldp_port_desc_base + suffix
+        sys_desc_oid = lldp_sys_desc_base + suffix
+
+        remote_port_raw = str(lldp_port_ids.get(port_id_oid, "")).strip()
+        remote_port_desc = str(lldp_port_descs.get(port_desc_oid, "")).strip()
+        remote_port = remote_port_desc or remote_port_raw
+
+        sys_desc = str(lldp_sys_descs.get(sys_desc_oid, "")).strip()
+        remote_ip = lldp_addr_map.get(lldp_key, "")
+
+        already_found = any(
+            n["remote_device_name"].lower() == remote_name.lower()
+            and n["local_interface"] == local_iface
+            for n in neighbors
+        )
+        if already_found:
+            continue
+
+        neighbors.append({
+            "source_host_id": host_id,
+            "source_ip": ip_address,
+            "local_interface": local_iface,
+            "remote_device_name": remote_name or f"lldp-{remote_port_raw}",
+            "remote_ip": remote_ip,
+            "remote_interface": remote_port,
+            "protocol": "lldp",
+            "remote_platform": sys_desc[:200] if sys_desc else "",
+        })
+
+    # ── OSPF Neighbor Parsing ──
+    for oid, rtr_id_val in ospf_rtr_ids.items():
+        suffix = oid[len(ospf_nbr_rtr_id_base):].lstrip(".")
+        parts = suffix.split(".")
+        if len(parts) >= 4:
+            nbr_ip = ".".join(parts[:4])
+        else:
+            continue
+
+        rtr_id = str(rtr_id_val).strip()
+        state_oid = ospf_nbr_state_base + "." + suffix
+        state_val = str(ospf_states.get(state_oid, "")).strip()
+
+        already_found = any(n["remote_ip"] == nbr_ip for n in neighbors)
+        if already_found:
+            continue
+
+        neighbors.append({
+            "source_host_id": host_id,
+            "source_ip": ip_address,
+            "local_interface": "",
+            "remote_device_name": rtr_id or nbr_ip,
+            "remote_ip": nbr_ip,
+            "remote_interface": "",
+            "protocol": "ospf",
+            "remote_platform": f"OSPF state={state_val}" if state_val else "",
+        })
+
+    # ── BGP Peer Parsing ──
+    for oid, state_val in bgp_states.items():
+        suffix = oid[len(bgp_peer_state_base):].lstrip(".")
+        parts = suffix.split(".")
+        if len(parts) >= 4:
+            peer_ip = ".".join(parts[:4])
+        else:
+            continue
+
+        as_oid = bgp_peer_remote_as_base + "." + suffix
+        remote_as = str(bgp_remote_as.get(as_oid, "")).strip()
+
+        already_found = any(n["remote_ip"] == peer_ip for n in neighbors)
+        if already_found:
+            continue
+
+        neighbors.append({
+            "source_host_id": host_id,
+            "source_ip": ip_address,
+            "local_interface": "",
+            "remote_device_name": f"AS{remote_as}" if remote_as else peer_ip,
+            "remote_ip": peer_ip,
+            "remote_interface": "",
+            "protocol": "bgp",
+            "remote_platform": f"AS {remote_as}, state={state_val}" if remote_as else "",
+        })
+
+    return neighbors, if_stats
 
 
 async def _discover_hosts(request: DiscoveryScanRequest, group_id: int | None = None) -> tuple[int, list[dict]]:
@@ -3117,6 +3644,564 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     except WebSocketDisconnect:
         if job_id in _job_sockets and websocket in _job_sockets[job_id]:
             _job_sockets[job_id].remove(websocket)
+
+
+# ── WebSocket for live converter job streaming (import / cleanup) ─────────────
+
+@app.websocket("/ws/converter-jobs/{job_id}")
+async def websocket_converter_job(websocket: WebSocket, job_id: str):
+    """
+    Stream converter import/cleanup job output in real-time.
+
+    1. Client connects to /ws/converter-jobs/{job_id}
+    2. Server immediately sends all accumulated output lines
+    3. If job is already complete, sends job_complete and closes
+    4. Otherwise streams new lines as they arrive, then sends job_complete
+    """
+    from netcontrol.routes.converter import _converter_jobs, _converter_job_sockets
+
+    token = websocket.cookies.get("session")
+    session = verify_session_token(token) if token else None
+    if not session:
+        await websocket.close(code=1008)
+        return
+
+    user = await db.get_user_by_id(session["user_id"])
+    if not user:
+        await websocket.close(code=1008)
+        return
+
+    features = await _get_user_features(user)
+    if user.get("role") != "admin" and "converter" not in features:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+
+    job = _converter_jobs.get(job_id)
+    if not job:
+        await websocket.send_json({"type": "error", "message": "Job not found"})
+        await websocket.close()
+        return
+
+    # Replay all accumulated output so reconnecting clients catch up
+    for line in list(job.get("output_lines", [])):
+        await websocket.send_json({"type": "line", "text": line})
+
+    # If job is already done, notify and close immediately
+    if job["status"] not in ("running", "pending"):
+        await websocket.send_json({"type": "job_complete", "job_id": job_id, "status": job["status"]})
+        await websocket.close()
+        return
+
+    # Subscribe to live events
+    if job_id not in _converter_job_sockets:
+        _converter_job_sockets[job_id] = []
+    _converter_job_sockets[job_id].append(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        if job_id in _converter_job_sockets and websocket in _converter_job_sockets[job_id]:
+            _converter_job_sockets[job_id].remove(websocket)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Topology
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def _record_topology_changes(
+    host: dict,
+    old_link_keys: set[tuple],
+    new_link_keys: set[tuple],
+    new_neighbors: list[dict],
+    old_links: list[dict],
+) -> None:
+    """Compare old vs new link keys and record added/removed changes."""
+    hostname = host.get("hostname", "")
+
+    # Links that were removed (present before, gone now)
+    removed_keys = old_link_keys - new_link_keys
+    for key in removed_keys:
+        _src_id, src_iface, tgt_name, tgt_iface = key
+        # Find protocol from old links
+        protocol = ""
+        target_ip = ""
+        for ol in old_links:
+            if (ol["source_host_id"] == key[0] and ol["source_interface"] == src_iface
+                    and ol["target_device_name"] == tgt_name and ol["target_interface"] == tgt_iface):
+                protocol = ol.get("protocol", "")
+                target_ip = ol.get("target_ip", "")
+                break
+        await db.insert_topology_change(
+            change_type="removed",
+            source_host_id=host["id"],
+            source_hostname=hostname,
+            source_interface=src_iface,
+            target_device_name=tgt_name,
+            target_interface=tgt_iface,
+            target_ip=target_ip,
+            protocol=protocol,
+        )
+
+    # Links that were added (not present before, present now)
+    added_keys = new_link_keys - old_link_keys
+    for key in added_keys:
+        _src_id, src_iface, tgt_name, tgt_iface = key
+        protocol = ""
+        target_ip = ""
+        for n in new_neighbors:
+            if (n["source_host_id"] == key[0] and n["local_interface"] == src_iface
+                    and n["remote_device_name"] == tgt_name and n["remote_interface"] == tgt_iface):
+                protocol = n.get("protocol", "")
+                target_ip = n.get("remote_ip", "")
+                break
+        await db.insert_topology_change(
+            change_type="added",
+            source_host_id=host["id"],
+            source_hostname=hostname,
+            source_interface=src_iface,
+            target_device_name=tgt_name,
+            target_interface=tgt_iface,
+            target_ip=target_ip,
+            protocol=protocol,
+        )
+
+
+def _calc_interface_utilization(stat: dict) -> dict | None:
+    """Calculate utilization percentage from two counter snapshots."""
+    if not stat.get("prev_polled_at") or not stat.get("polled_at"):
+        return None
+    try:
+        from datetime import datetime as _dt
+        t1 = _dt.fromisoformat(stat["prev_polled_at"])
+        t2 = _dt.fromisoformat(stat["polled_at"])
+        delta_sec = (t2 - t1).total_seconds()
+        if delta_sec <= 0:
+            return None
+        speed_bps = (stat.get("if_speed_mbps") or 0) * 1_000_000
+        if speed_bps <= 0:
+            return None
+
+        in_delta = stat["in_octets"] - stat["prev_in_octets"]
+        out_delta = stat["out_octets"] - stat["prev_out_octets"]
+        # Handle 32/64-bit counter wraps
+        if in_delta < 0:
+            in_delta += 2**32
+        if out_delta < 0:
+            out_delta += 2**32
+
+        in_bps = (in_delta * 8) / delta_sec
+        out_bps = (out_delta * 8) / delta_sec
+        in_pct = min(100.0, (in_bps / speed_bps) * 100)
+        out_pct = min(100.0, (out_bps / speed_bps) * 100)
+        util_pct = max(in_pct, out_pct)
+
+        return {
+            "in_bps": round(in_bps),
+            "out_bps": round(out_bps),
+            "in_pct": round(in_pct, 1),
+            "out_pct": round(out_pct, 1),
+            "utilization_pct": round(util_pct, 1),
+            "speed_mbps": stat.get("if_speed_mbps", 0),
+        }
+    except Exception:
+        return None
+
+
+@app.get("/api/topology", dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def get_topology(group_id: int | None = Query(default=None)):
+    """Return topology graph data (nodes + edges) for vis-network rendering."""
+    try:
+        links = await db.get_topology_links(group_id)
+
+        # Build node set from hosts in groups + external neighbors
+        nodes_by_id: dict[str | int, dict] = {}
+        edges: list[dict] = []
+
+        # Gather all host IDs referenced as sources
+        source_host_ids = {link["source_host_id"] for link in links}
+        # Also gather resolved target host IDs
+        target_host_ids = {link["target_host_id"] for link in links if link.get("target_host_id")}
+        all_host_ids = source_host_ids | target_host_ids
+
+        # Fetch all referenced inventory hosts
+        if all_host_ids:
+            hosts = await db.get_hosts_by_ids(list(all_host_ids))
+        else:
+            hosts = []
+
+        # If filtering by group, also include all hosts in that group as nodes
+        if group_id is not None:
+            group_hosts = await db.get_hosts_for_group(group_id)
+            for h in group_hosts:
+                if h["id"] not in {hh["id"] for hh in hosts}:
+                    hosts.append(h)
+
+        # Fetch group names
+        groups = await db.get_all_groups()
+        group_name_map = {g["id"]: g["name"] for g in groups}
+
+        # Build inventory nodes
+        for h in hosts:
+            nodes_by_id[h["id"]] = {
+                "id": h["id"],
+                "label": h["hostname"],
+                "ip": h["ip_address"],
+                "device_type": h["device_type"],
+                "group_id": h["group_id"],
+                "group_name": group_name_map.get(h["group_id"], ""),
+                "status": h["status"],
+                "in_inventory": True,
+            }
+
+        # Fetch interface stats for utilization overlay
+        all_stats = await db.get_interface_stats_by_hosts(list(all_host_ids)) if all_host_ids else []
+        # Build lookup: (host_id, if_name) -> utilization data
+        util_map: dict[tuple[int, str], dict] = {}
+        for stat in all_stats:
+            util = _calc_interface_utilization(stat)
+            if util:
+                util_map[(stat["host_id"], stat["if_name"])] = util
+
+        # Fetch unacknowledged change count
+        change_count = await db.get_topology_changes_count(unacknowledged_only=True)
+
+        # Build edges + external nodes
+        for link in links:
+            src_id = link["source_host_id"]
+            tgt_host_id = link.get("target_host_id")
+            tgt_name = link.get("target_device_name", "")
+            tgt_ip = link.get("target_ip", "")
+
+            if tgt_host_id and tgt_host_id in nodes_by_id:
+                tgt_id = tgt_host_id
+            else:
+                # External neighbor — use string ID
+                ext_key = f"ext_{tgt_name}" if tgt_name else f"ext_{tgt_ip}"
+                tgt_id = ext_key
+                if ext_key not in nodes_by_id:
+                    nodes_by_id[ext_key] = {
+                        "id": ext_key,
+                        "label": tgt_name or tgt_ip or "unknown",
+                        "ip": tgt_ip,
+                        "device_type": "unknown",
+                        "group_id": None,
+                        "group_name": "",
+                        "status": "unknown",
+                        "in_inventory": False,
+                        "platform": link.get("target_platform", ""),
+                    }
+
+            src_iface = link.get("source_interface", "")
+            tgt_iface = link.get("target_interface", "")
+            label_parts = []
+            if src_iface:
+                label_parts.append(src_iface)
+            if tgt_iface:
+                label_parts.append(tgt_iface)
+            edge_label = " -- ".join(label_parts) if label_parts else ""
+
+            edge_data = {
+                "id": link["id"],
+                "from": src_id,
+                "to": tgt_id,
+                "label": edge_label,
+                "protocol": link.get("protocol", "cdp"),
+                "source_interface": src_iface,
+                "target_interface": tgt_iface,
+            }
+
+            # Attach utilization data if available (use source interface stats)
+            util = util_map.get((src_id, src_iface))
+            if util:
+                edge_data["utilization"] = util
+
+            edges.append(edge_data)
+
+        return {
+            "nodes": list(nodes_by_id.values()),
+            "edges": edges,
+            "unacknowledged_changes": change_count,
+        }
+    except Exception as exc:
+        LOGGER.error("topology: failed to build graph: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/topology/discover/{group_id}",
+          dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def discover_topology_for_group(group_id: int):
+    """Run CDP/LLDP neighbor discovery on all hosts in a group."""
+    try:
+        group = await db.get_group(group_id)
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        hosts = await db.get_hosts_for_group(group_id)
+        if not hosts:
+            return {"hosts_scanned": 0, "links_discovered": 0, "errors": 0}
+
+        snmp_cfg = _resolve_snmp_discovery_config(group_id)
+        if not snmp_cfg.get("enabled", False):
+            raise HTTPException(status_code=400,
+                                detail="SNMP is not enabled for this group. Configure an SNMP profile first.")
+
+        LOGGER.info("topology: starting discovery for group %d (%s) — %d hosts",
+                     group_id, group.get("name", "?"), len(hosts))
+
+        semaphore = asyncio.Semaphore(max(1, DISCOVERY_MAX_CONCURRENT_PROBES))
+        errors = 0
+        total_links = 0
+
+        # Phase 1: concurrent SNMP walks (no DB writes)
+        async def _walk_host(host: dict) -> tuple[dict, list[dict] | None, list[dict]]:
+            async with semaphore:
+                try:
+                    LOGGER.info("topology: walking %s (%s)...", host["hostname"], host["ip_address"])
+                    neighbors, if_stats = await _discover_neighbors(
+                        host["id"], host["ip_address"], snmp_cfg, timeout_seconds=5.0,
+                    )
+                    LOGGER.info("topology: %s done — %d neighbors, %d if_stats",
+                                host["hostname"], len(neighbors), len(if_stats))
+                    return host, neighbors, if_stats
+                except Exception as exc:
+                    LOGGER.warning("topology: neighbor discovery failed for %s (%s): %s",
+                                   host["hostname"], host["ip_address"], exc)
+                    return host, None, []
+
+        walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
+        LOGGER.info("topology: all SNMP walks complete, writing results to DB...")
+
+        # Phase 2: sequential DB writes (avoids "database is locked")
+        for host, neighbors, if_stats in walk_results:
+            if neighbors is None:
+                errors += 1
+                continue
+            try:
+                # Snapshot old links for change detection
+                old_links = await db.get_topology_links_for_host(host["id"])
+                old_link_keys = {
+                    (l["source_host_id"], l["source_interface"], l["target_device_name"], l["target_interface"])
+                    for l in old_links if l["source_host_id"] == host["id"]
+                }
+                new_link_keys = {
+                    (n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"])
+                    for n in neighbors
+                }
+
+                await db.delete_topology_links_for_host(host["id"])
+                for n in neighbors:
+                    await db.upsert_topology_link(
+                        source_host_id=n["source_host_id"],
+                        source_ip=n["source_ip"],
+                        source_interface=n["local_interface"],
+                        target_host_id=None,
+                        target_ip=n.get("remote_ip", ""),
+                        target_device_name=n["remote_device_name"],
+                        target_interface=n["remote_interface"],
+                        protocol=n["protocol"],
+                        target_platform=n.get("remote_platform", ""),
+                    )
+                # Store interface stats
+                for stat in if_stats:
+                    await db.upsert_interface_stat(**stat)
+                # Record topology changes (only if there were previous links)
+                if old_link_keys:
+                    await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
+                total_links += len(neighbors)
+            except Exception as exc:
+                LOGGER.warning("topology: DB write failed for %s (%s): %s",
+                               host["hostname"], host["ip_address"], exc)
+                errors += 1
+
+        # Resolve target host IDs against inventory
+        resolved = await db.resolve_topology_target_host_ids()
+        LOGGER.info("topology: discovered %d links from %d hosts (group %d), resolved %d targets, %d errors",
+                     total_links, len(hosts), group_id, resolved, errors)
+
+        return {
+            "hosts_scanned": len(hosts),
+            "links_discovered": total_links,
+            "targets_resolved": resolved,
+            "errors": errors,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("topology: discovery error for group %d: %s", group_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/topology/discover",
+          dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def discover_topology_all():
+    """Run CDP/LLDP neighbor discovery on all groups."""
+    try:
+        groups = await db.get_all_groups()
+        total_hosts = 0
+        total_links = 0
+        total_errors = 0
+
+        for group in groups:
+            snmp_cfg = _resolve_snmp_discovery_config(group["id"])
+            if not snmp_cfg.get("enabled", False):
+                continue
+            hosts = await db.get_hosts_for_group(group["id"])
+            if not hosts:
+                continue
+
+            semaphore = asyncio.Semaphore(max(1, DISCOVERY_MAX_CONCURRENT_PROBES))
+
+            # Phase 1: concurrent SNMP walks (no DB writes)
+            async def _walk_host(host: dict, _cfg=snmp_cfg) -> tuple[dict, list[dict] | None, list[dict]]:
+                async with semaphore:
+                    try:
+                        neighbors, if_stats = await _discover_neighbors(
+                            host["id"], host["ip_address"], _cfg, timeout_seconds=5.0,
+                        )
+                        return host, neighbors, if_stats
+                    except Exception as exc:
+                        LOGGER.warning("topology: neighbor discovery failed for %s: %s",
+                                       host["ip_address"], exc)
+                        return host, None, []
+
+            walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
+
+            # Phase 2: sequential DB writes (avoids "database is locked")
+            for host, neighbors, if_stats in walk_results:
+                if neighbors is None:
+                    total_errors += 1
+                    continue
+                try:
+                    # Snapshot old links for change detection
+                    old_links = await db.get_topology_links_for_host(host["id"])
+                    old_link_keys = {
+                        (l["source_host_id"], l["source_interface"], l["target_device_name"], l["target_interface"])
+                        for l in old_links if l["source_host_id"] == host["id"]
+                    }
+                    new_link_keys = {
+                        (n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"])
+                        for n in neighbors
+                    }
+
+                    await db.delete_topology_links_for_host(host["id"])
+                    for n in neighbors:
+                        await db.upsert_topology_link(
+                            source_host_id=n["source_host_id"],
+                            source_ip=n["source_ip"],
+                            source_interface=n["local_interface"],
+                            target_host_id=None,
+                            target_ip=n.get("remote_ip", ""),
+                            target_device_name=n["remote_device_name"],
+                            target_interface=n["remote_interface"],
+                            protocol=n["protocol"],
+                            target_platform=n.get("remote_platform", ""),
+                        )
+                    # Store interface stats
+                    for stat in if_stats:
+                        await db.upsert_interface_stat(**stat)
+                    # Record topology changes (only if there were previous links)
+                    if old_link_keys:
+                        await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
+                    total_links += len(neighbors)
+                except Exception as exc:
+                    LOGGER.warning("topology: DB write failed for %s: %s",
+                                   host["ip_address"], exc)
+                    total_errors += 1
+            total_hosts += len(hosts)
+
+        resolved = await db.resolve_topology_target_host_ids()
+        return {
+            "hosts_scanned": total_hosts,
+            "links_discovered": total_links,
+            "targets_resolved": resolved,
+            "errors": total_errors,
+        }
+    except Exception as exc:
+        LOGGER.error("topology: full discovery error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/topology/host/{host_id}",
+         dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def get_host_topology(host_id: int):
+    """Return topology links for a specific host."""
+    try:
+        host = await db.get_host(host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="Host not found")
+        links = await db.get_topology_links_for_host(host_id)
+        return {"host": host, "links": links}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("topology: host topology error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/topology/changes",
+         dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def get_topology_changes(unacknowledged: bool = Query(default=True),
+                               limit: int = Query(default=100)):
+    """Return recent topology changes (added/removed links)."""
+    try:
+        changes = await db.get_topology_changes(
+            unacknowledged_only=unacknowledged, limit=limit)
+        count = await db.get_topology_changes_count(unacknowledged_only=True)
+        return {"changes": changes, "unacknowledged_count": count}
+    except Exception as exc:
+        LOGGER.error("topology: changes error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/topology/changes/acknowledge",
+          dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def acknowledge_topology_changes():
+    """Mark all topology changes as acknowledged."""
+    try:
+        count = await db.acknowledge_topology_changes()
+        return {"acknowledged": count}
+    except Exception as exc:
+        LOGGER.error("topology: acknowledge error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/topology/positions",
+         dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def get_topology_positions():
+    """Return saved node positions."""
+    try:
+        return await db.get_topology_positions()
+    except Exception as exc:
+        LOGGER.error("topology: get positions error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.put("/api/topology/positions",
+         dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def save_topology_positions(payload: dict):
+    """Save/update node positions. Body: {positions: {nodeId: {x, y}}}."""
+    try:
+        positions = payload.get("positions", {})
+        count = await db.save_topology_positions(positions)
+        return {"saved": count}
+    except Exception as exc:
+        LOGGER.error("topology: save positions error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.delete("/api/topology/positions",
+            dependencies=[Depends(require_auth), Depends(require_feature("topology"))])
+async def delete_topology_positions():
+    """Delete all saved node positions (reset layout)."""
+    try:
+        count = await db.delete_topology_positions()
+        return {"deleted": count}
+    except Exception as exc:
+        LOGGER.error("topology: delete positions error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ═════════════════════════════════════════════════════════════════════════════

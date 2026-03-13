@@ -42,6 +42,12 @@ os.makedirs(SESSIONS_DIR, exist_ok=True)
 _sessions: dict = {}
 SESSION_TTL = 7200  # 2 hours
 
+# Background converter job state
+# job_id -> {job_id, type, session_id, status, started_at, finished_at, output_lines}
+_converter_jobs: dict[str, dict] = {}
+# WebSocket subscribers for live streaming: job_id -> [WebSocket, ...]
+_converter_job_sockets: dict[str, list] = {}
+
 CONVERTER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/converter_v2/fortigate_converter_v2.py'))
 IMPORTER_PATH  = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_importer.py'))
 CLEANUP_PATH   = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../Firewall_converter/FortiGateToFTDTool/ftd_api_cleanup.py'))
@@ -132,6 +138,122 @@ def _cleanup_old_sessions():
             # In-memory cache eviction only; on-disk retention is handled by
             # scheduled pruning with configurable retention days.
             del _sessions[sid]
+
+
+def _new_converter_job(job_type: str, session_id: str) -> str:
+    """Create a new background job entry and return its job_id."""
+    job_id = str(uuid.uuid4())
+    _converter_jobs[job_id] = {
+        "job_id": job_id,
+        "type": job_type,
+        "session_id": session_id,
+        "status": "running",
+        "started_at": datetime.now(UTC).isoformat(),
+        "finished_at": None,
+        "output_lines": [],
+    }
+    return job_id
+
+
+async def _broadcast_converter_line(job_id: str, text: str) -> None:
+    """Send a text line to all WebSocket subscribers of a converter job."""
+    sockets = _converter_job_sockets.get(job_id, [])
+    dead = []
+    for ws in sockets:
+        try:
+            await ws.send_json({"type": "line", "text": text})
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        try:
+            sockets.remove(ws)
+        except ValueError:
+            pass
+
+
+async def _finish_converter_job(job_id: str, status: str) -> None:
+    """Mark a job done, notify all WebSocket subscribers, and remove them."""
+    job = _converter_jobs.get(job_id)
+    if job:
+        job["status"] = status
+        job["finished_at"] = datetime.now(UTC).isoformat()
+    done_msg = {"type": "job_complete", "job_id": job_id, "status": status}
+    sockets = _converter_job_sockets.pop(job_id, [])
+    for ws in sockets:
+        try:
+            await ws.send_json(done_msg)
+        except Exception:
+            pass
+
+
+async def _run_import_bg_job(job_id: str, import_args: list, session_dir: str, base: str) -> None:
+    """Background task: run the importer subprocess and stream output to WebSocket subscribers."""
+    job = _converter_jobs[job_id]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *import_args,
+            cwd=session_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            text = raw.decode("utf-8", errors="replace")
+            job["output_lines"].append(text)
+            await _broadcast_converter_line(job_id, text)
+        rc = await proc.wait()
+        if rc != 0:
+            err = f"\n[ERROR] Import failed (exit {rc}).\n"
+            job["output_lines"].append(err)
+            await _broadcast_converter_line(job_id, err)
+        full_output = "".join(job["output_lines"])
+        _emit_import_phase_metrics(full_output)
+        _write_checkpoint(session_dir, full_output)
+        await _finish_converter_job(job_id, "success" if rc == 0 else "failed")
+    except Exception as exc:
+        err = f"\n[ERROR] Job error: {exc}\n"
+        job["output_lines"].append(err)
+        await _broadcast_converter_line(job_id, err)
+        await _finish_converter_job(job_id, "failed")
+
+
+async def _run_cleanup_bg_job(job_id: str, cmd: list, session_dir: str) -> None:
+    """Background task: run the cleanup subprocess and stream output to WebSocket subscribers."""
+    job = _converter_jobs[job_id]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=session_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            text = raw.decode("utf-8", errors="replace")
+            job["output_lines"].append(text)
+            await _broadcast_converter_line(job_id, text)
+        rc = await proc.wait()
+        if rc != 0:
+            full_output = "".join(job["output_lines"])
+            if _cleanup_reported_progress(full_output):
+                warn = f"\n[WARN] Cleanup completed with warnings (exit {rc}).\n"
+                job["output_lines"].append(warn)
+                await _broadcast_converter_line(job_id, warn)
+                await _finish_converter_job(job_id, "partial")
+            else:
+                err = f"\n[ERROR] Cleanup failed (exit {rc}).\n"
+                job["output_lines"].append(err)
+                await _broadcast_converter_line(job_id, err)
+                await _finish_converter_job(job_id, "failed")
+        else:
+            await _finish_converter_job(job_id, "success")
+    except Exception as exc:
+        err = f"\n[ERROR] Job error: {exc}\n"
+        job["output_lines"].append(err)
+        await _broadcast_converter_line(job_id, err)
+        await _finish_converter_job(job_id, "failed")
 
 
 def prune_converter_sessions(session_retention_days: int, backup_retention_days: int) -> dict:
@@ -906,6 +1028,118 @@ async def converter_session_diff(session_id: str, filename: str, compare_session
         'filename': filename,
         'diff': diff_text,
         'has_changes': bool(diff_text.strip()),
+    })
+
+
+@router.post('/api/import-fortigate-bg')
+async def import_fortigate_bg(req: ImportRequest):
+    """Launch an import as a background job. Returns job_id for WebSocket streaming."""
+    corr_id = _normalize_correlation_id(req.correlation_id, req.session_id)
+    session = _get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail='Session not found. Please run Convert again.')
+
+    session_dir = session['session_dir']
+    base = session['base']
+    _log_event("info", "converter.import.bg.start", session_id=req.session_id, correlation_id=corr_id)
+
+    import_args = [
+        sys.executable, IMPORTER_PATH,
+        '--host',     req.ftd_host,
+        '--username', req.ftd_username,
+        '--password', req.ftd_password,
+        '--base',     base,
+    ]
+    if req.deploy:
+        import_args.append('--deploy')
+    if req.debug:
+        import_args.append('--debug')
+    import_args += ['--workers', str(max(1, req.workers))]
+    if req.workers_address_objects is not None:
+        import_args += ['--workers-address-objects', str(max(1, req.workers_address_objects))]
+    if req.workers_service_objects is not None:
+        import_args += ['--workers-service-objects', str(max(1, req.workers_service_objects))]
+    if req.workers_subinterfaces is not None:
+        import_args += ['--workers-subinterfaces', str(max(1, req.workers_subinterfaces))]
+    if req.retry_attempts is not None:
+        import_args += ['--retry-attempts', str(max(1, req.retry_attempts))]
+    if req.retry_attempts_address_objects is not None:
+        import_args += ['--retry-attempts-address-objects', str(max(1, req.retry_attempts_address_objects))]
+    if req.retry_attempts_service_objects is not None:
+        import_args += ['--retry-attempts-service-objects', str(max(1, req.retry_attempts_service_objects))]
+    if req.retry_attempts_subinterfaces is not None:
+        import_args += ['--retry-attempts-subinterfaces', str(max(1, req.retry_attempts_subinterfaces))]
+    if req.retry_backoff is not None:
+        import_args += ['--retry-backoff', str(max(0.0, req.retry_backoff))]
+    if req.retry_backoff_address_objects is not None:
+        import_args += ['--retry-backoff-address-objects', str(max(0.0, req.retry_backoff_address_objects))]
+    if req.retry_backoff_service_objects is not None:
+        import_args += ['--retry-backoff-service-objects', str(max(0.0, req.retry_backoff_service_objects))]
+    if req.retry_backoff_subinterfaces is not None:
+        import_args += ['--retry-backoff-subinterfaces', str(max(0.0, req.retry_backoff_subinterfaces))]
+    import_args += ['--retry-jitter-max', str(max(0.0, req.retry_jitter_max))]
+    for flag in req.only_flags:
+        import_args.append(f'--{flag}')
+
+    job_id = _new_converter_job("import", req.session_id)
+    asyncio.create_task(_run_import_bg_job(job_id, import_args, session_dir, base))
+    return JSONResponse({"ok": True, "job_id": job_id})
+
+
+@router.post('/api/cleanup-ftd-bg')
+async def cleanup_ftd_bg(req: CleanupRequest):
+    """Launch a cleanup as a background job. Returns job_id for WebSocket streaming."""
+    corr_id = _normalize_correlation_id(req.correlation_id, req.session_id)
+    if not req.delete_flags:
+        raise HTTPException(status_code=400, detail='Must select at least one item to delete.')
+
+    session = _get_session(req.session_id) if req.session_id else None
+    session_dir = session['session_dir'] if session else SESSIONS_DIR
+    target_model = session.get('target_model', '') if session else ''
+    _log_event("info", "converter.cleanup.bg.start", session_id=req.session_id, correlation_id=corr_id)
+
+    cmd = [
+        sys.executable, CLEANUP_PATH,
+        '--host',     req.ftd_host,
+        '--username', req.ftd_username,
+        '--password', req.ftd_password,
+        '--yes',
+    ]
+    if req.dry_run:
+        cmd.append('--dry-run')
+    if req.deploy:
+        cmd.append('--deploy')
+    if req.debug:
+        cmd.append('--debug')
+    if target_model:
+        cmd += ['--appliance-model', target_model]
+    if session and session.get('session_dir'):
+        metadata_path = os.path.join(session['session_dir'], f"{session['base']}_metadata.json")
+        if os.path.exists(metadata_path):
+            cmd += ['--metadata-file', metadata_path]
+    for flag in req.delete_flags:
+        cmd.append(f'--{flag}')
+
+    job_id = _new_converter_job("cleanup", req.session_id)
+    asyncio.create_task(_run_cleanup_bg_job(job_id, cmd, session_dir))
+    return JSONResponse({"ok": True, "job_id": job_id})
+
+
+@router.get('/api/converter-job/{job_id}')
+async def get_converter_job(job_id: str):
+    """Return status and accumulated output for a background converter job."""
+    job = _converter_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Job not found.')
+    return JSONResponse({
+        "ok": True,
+        "job_id": job["job_id"],
+        "type": job["type"],
+        "session_id": job["session_id"],
+        "status": job["status"],
+        "started_at": job["started_at"],
+        "finished_at": job["finished_at"],
+        "output": "".join(job["output_lines"]),
     })
 
 
