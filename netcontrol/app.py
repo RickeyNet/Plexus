@@ -2115,8 +2115,9 @@ def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
 
 
 async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) -> dict | None:
+    """Returns device info dict on success, None on no response, raises on auth/config errors."""
     if not PYSMNP_AVAILABLE:
-        return None
+        raise RuntimeError("pysnmp library is not available")
     if not snmp_config.get("enabled", False):
         return None
 
@@ -2179,8 +2180,10 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),
     )
     engine.close_dispatcher()
-    if error_indication or error_status:
-        return None
+    if error_indication:
+        raise RuntimeError(str(error_indication))
+    if error_status:
+        raise RuntimeError(f"SNMP error: {error_status.prettyPrint()}")
 
     values = {str(name): str(value) for name, value in var_binds}
     sys_descr = values.get("1.3.6.1.2.1.1.1.0", "")

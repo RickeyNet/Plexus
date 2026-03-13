@@ -6,7 +6,12 @@
       "Bash(python -c \"import pysnmp; print\\(pysnmp.__version__\\)\")",
       "Bash(python -c \":*)",
       "Bash(python -c \"from pysnmp.hlapi.v3arch import UdpTransportTarget; import inspect; print\\(inspect.signature\\(UdpTransportTarget.create\\)\\); print\\(inspect.getsource\\(UdpTransportTarget.create\\)\\)\")",
-      "Bash(ruff check:*)"
+      "Bash(ruff check:*)",
+      "Bash(grep -r \"trap\\\\|receiver\\\\|listener\" c:Usersrickey.cornettcodePlexus --include=*.py)",
+      "Bash(pip show:*)",
+      "Bash(python -c \"from pysnmp.hlapi.v3arch import CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget, UsmUserData, get_cmd, usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol, usmDESPrivProtocol, usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol, usmHMAC192SHA256AuthProtocol, usmHMAC384SHA512AuthProtocol; print\\(''Import OK''\\)\")",
+      "Bash(c:/Users/rickey.cornett/code/Plexus/venv/Scripts/python.exe -c \"import pysnmp; print\\(pysnmp.__version__\\)\")",
+      "Bash(c:/Users/rickey.cornett/code/Plexus/.venv/Scripts/python.exe -c \"import pysnmp; print\\(pysnmp.__version__\\)\")"
     ]
   }
 }
