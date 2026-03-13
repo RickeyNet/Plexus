@@ -608,3 +608,112 @@ export async function deleteTopologyPositions() {
         method: 'DELETE',
     });
 }
+
+// ── Config Drift ────────────────────────────────────────────────────────────
+
+export async function getConfigDriftSummary() {
+    return apiRequest('/config-drift/summary');
+}
+
+export async function getConfigDriftEvents(status = null, hostId = null, limit = 100) {
+    const params = new URLSearchParams();
+    if (status && status !== 'all') params.set('status', status);
+    if (hostId) params.set('host_id', hostId);
+    params.set('limit', limit);
+    return apiRequest(`/config-drift/events?${params}`);
+}
+
+export async function getConfigDriftEvent(eventId) {
+    return apiRequest(`/config-drift/events/${eventId}`);
+}
+
+export async function updateConfigDriftEventStatus(eventId, status) {
+    return apiRequest(`/config-drift/events/${eventId}/status`, {
+        method: 'PUT',
+        body: { status },
+    });
+}
+
+export async function revertDriftEvent(eventId, credentialId) {
+    return apiRequest('/config-drift/events/revert', {
+        method: 'POST',
+        body: { event_id: eventId, credential_id: credentialId },
+    });
+}
+
+export async function getConfigBaselines(hostId = null) {
+    const params = new URLSearchParams();
+    if (hostId) params.set('host_id', hostId);
+    return apiRequest(`/config-drift/baselines?${params}`);
+}
+
+export async function getConfigBaseline(baselineId) {
+    return apiRequest(`/config-drift/baselines/${baselineId}`);
+}
+
+export async function createConfigBaseline(data) {
+    return apiRequest('/config-drift/baselines', { method: 'POST', body: data });
+}
+
+export async function updateConfigBaseline(baselineId, data) {
+    return apiRequest(`/config-drift/baselines/${baselineId}`, { method: 'PUT', body: data });
+}
+
+export async function deleteConfigBaseline(baselineId) {
+    return apiRequest(`/config-drift/baselines/${baselineId}`, { method: 'DELETE' });
+}
+
+export async function getConfigSnapshots(hostId, limit = 50) {
+    return apiRequest(`/config-drift/snapshots?host_id=${hostId}&limit=${limit}`);
+}
+
+export async function getConfigSnapshot(snapshotId) {
+    return apiRequest(`/config-drift/snapshots/${snapshotId}`);
+}
+
+export async function captureConfigSnapshot(hostId, credentialId) {
+    return apiRequest('/config-drift/snapshots/capture', {
+        method: 'POST',
+        body: { host_id: hostId, credential_id: credentialId },
+    });
+}
+
+export async function captureGroupConfigSnapshots(groupId, credentialId) {
+    return apiRequest('/config-drift/snapshots/capture-group', {
+        method: 'POST',
+        body: { group_id: groupId, credential_id: credentialId },
+    });
+}
+
+export async function startCaptureJob(groupId, credentialId) {
+    return apiRequest('/config-drift/snapshots/capture-job', {
+        method: 'POST',
+        body: { group_id: groupId, credential_id: credentialId },
+    });
+}
+
+export async function startCaptureSingleJob(hostId, credentialId) {
+    return apiRequest('/config-drift/snapshots/capture-single-job', {
+        method: 'POST',
+        body: { host_id: hostId, credential_id: credentialId },
+    });
+}
+
+export async function analyzeConfigDrift(hostId) {
+    return apiRequest('/config-drift/analyze', { method: 'POST', body: { host_id: hostId } });
+}
+
+export async function analyzeGroupConfigDrift(groupId) {
+    return apiRequest('/config-drift/analyze-group', { method: 'POST', body: { group_id: groupId } });
+}
+
+export async function fullDriftCheck(hostId, credentialId) {
+    return apiRequest('/config-drift/check', {
+        method: 'POST',
+        body: { host_id: hostId, credential_id: credentialId },
+    });
+}
+
+export async function deleteConfigSnapshot(snapshotId) {
+    return apiRequest(`/config-drift/snapshots/${snapshotId}`, { method: 'DELETE' });
+}

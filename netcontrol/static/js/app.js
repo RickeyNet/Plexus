@@ -25,13 +25,14 @@ const NAV_FEATURE_MAP = {
     credentials: 'credentials',
     converter: 'converter',
     topology: 'topology',
+    'config-drift': 'config-drift',
 };
 
 const THEME_KEY = 'plexus-theme';
-const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light'];
+const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light', 'void'];
 const DEFAULT_THEME = 'forest';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'config-drift'];
 const pageCacheMeta = {};
 
 // ── Utility: debounce ──────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ const listViewState = {
     jobs: { items: [], query: '', sort: 'started_desc', status: 'all', dryRun: 'all', dateRange: 'all' },
     templates: { items: [], query: '', sort: 'name_asc' },
     credentials: { items: [], query: '', sort: 'name_asc' },
+    configDrift: { items: [], query: '', sort: 'detected_desc', status: 'open' },
 };
 
 function normalizeTheme(theme) {
@@ -228,6 +230,13 @@ function applyFeatureVisibility() {
         link.style.display = canAccessFeature(feature) ? '' : 'none';
     });
 
+    // Hide nav groups when all children are hidden
+    document.querySelectorAll('.nav-group').forEach(group => {
+        const children = group.querySelectorAll('.nav-link[data-page]');
+        const allHidden = Array.from(children).every(c => c.style.display === 'none');
+        group.style.display = allHidden ? 'none' : '';
+    });
+
     const settingsLink = document.querySelector('.nav-link[data-page="settings"]');
     if (settingsLink) {
         settingsLink.style.display = currentUserData?.role === 'admin' ? '' : 'none';
@@ -237,6 +246,34 @@ function applyFeatureVisibility() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Navigation
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// Map child pages to their nav-group id for auto-expand
+const NAV_GROUP_CHILDREN = {
+    'topology': 'network',
+    'config-drift': 'network',
+};
+
+window.toggleNavGroup = function(groupName, e) {
+    e.preventDefault();
+    const group = document.getElementById(`nav-group-${groupName}`);
+    if (group) group.classList.toggle('expanded');
+};
+
+function expandNavGroupForPage(page) {
+    const groupName = NAV_GROUP_CHILDREN[page];
+    if (groupName) {
+        const group = document.getElementById(`nav-group-${groupName}`);
+        if (group) group.classList.add('expanded');
+    }
+}
+
+function updateNavGroupActiveState() {
+    document.querySelectorAll('.nav-group').forEach(group => {
+        const hasActive = group.querySelector('.nav-link.active') !== null;
+        const toggle = group.querySelector('.nav-group-toggle');
+        if (toggle) toggle.classList.toggle('has-active-child', hasActive);
+    });
+}
 
 function initNavigation() {
     document.querySelectorAll('.nav-link[data-page]').forEach(link => {
@@ -248,7 +285,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'settings'];
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'config-drift', 'settings'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -272,6 +309,10 @@ function navigateToPage(page, { updateHash = true } = {}) {
             link.classList.add('active');
         }
     });
+
+    // Auto-expand parent nav group and update group active styling
+    expandNavGroupForPage(page);
+    updateNavGroupActiveState();
 
     // Hide all pages
     document.querySelectorAll('.page').forEach(p => {
@@ -304,6 +345,7 @@ const PAGE_LABELS = {
     credentials: 'Credentials',
     converter: 'Firewall Migration Tool',
     topology: 'Network Topology',
+    'config-drift': 'Config Drift Detection',
     settings: 'Admin Settings',
 };
 
@@ -346,6 +388,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'topology':
                 await loadTopology({ preserveContent });
+                break;
+            case 'config-drift':
+                await loadConfigDrift({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
@@ -2125,6 +2170,18 @@ function initListPageControls() {
     bindListControl('credentials-sort', (e) => {
         listViewState.credentials.sort = e.target.value;
         renderCredentialsList(applyCredentialFilters());
+    });
+    bindListControl('drift-search', debounce((e) => {
+        listViewState.configDrift.query = e.target.value;
+        renderDriftEventsList(applyDriftFilters());
+    }, 300));
+    bindListControl('drift-status-filter', (e) => {
+        listViewState.configDrift.status = e.target.value;
+        renderDriftEventsList(applyDriftFilters());
+    });
+    bindListControl('drift-sort', (e) => {
+        listViewState.configDrift.sort = e.target.value;
+        renderDriftEventsList(applyDriftFilters());
     });
 }
 
@@ -5433,6 +5490,501 @@ function renderActivityTimeline(jobs) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Config Drift Detection
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _driftEventsCache = {};
+
+async function loadConfigDrift(options = {}) {
+    const { preserveContent = false } = options;
+    const container = document.getElementById('drift-events-list');
+    if (!preserveContent && container) {
+        container.innerHTML = skeletonCards(3);
+    }
+    try {
+        const [summary, events] = await Promise.all([
+            api.getConfigDriftSummary(),
+            api.getConfigDriftEvents(
+                listViewState.configDrift.status !== 'all' ? listViewState.configDrift.status : null,
+                null, 200
+            ),
+        ]);
+        renderDriftSummary(summary);
+        listViewState.configDrift.items = events || [];
+        _driftEventsCache = {};
+        (events || []).forEach(e => { _driftEventsCache[e.id] = e; });
+        if (!events || !events.length) {
+            if (container) container.innerHTML = emptyStateHTML(
+                'No drift events detected', 'config-drift',
+                '<button class="btn btn-primary btn-sm" onclick="showSetBaselineModal()">Set a Baseline</button>'
+            );
+            return;
+        }
+        renderDriftEventsList(applyDriftFilters());
+    } catch (error) {
+        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading drift data: ${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderDriftSummary(summary) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('drift-stat-baselined', summary.total_baselined ?? '-');
+    set('drift-stat-compliant', summary.compliant ?? '-');
+    set('drift-stat-drifted', summary.drifted ?? '-');
+    set('drift-stat-open', summary.open_events ?? '-');
+}
+
+function applyDriftFilters() {
+    const state = listViewState.configDrift;
+    const query = (state.query || '').trim().toLowerCase();
+    let filtered = state.items.filter(item => {
+        const matchText = !query ||
+            textMatch(item.hostname, query) ||
+            textMatch(item.ip_address, query) ||
+            textMatch(item.device_type, query);
+        const matchStatus = !state.status || state.status === 'all' ||
+            String(item.status || '').toLowerCase() === state.status;
+        return matchText && matchStatus;
+    });
+    switch (state.sort) {
+        case 'detected_asc':
+            filtered.sort((a, b) => String(a.detected_at || '').localeCompare(String(b.detected_at || '')));
+            break;
+        case 'host_asc':
+            filtered.sort((a, b) => String(a.hostname || '').localeCompare(String(b.hostname || '')));
+            break;
+        default: // detected_desc
+            filtered.sort((a, b) => String(b.detected_at || '').localeCompare(String(a.detected_at || '')));
+    }
+    return filtered;
+}
+
+function renderDriftEventsList(events) {
+    const container = document.getElementById('drift-events-list');
+    if (!container) return;
+    if (!events.length) {
+        container.innerHTML = '<div class="card" style="text-align:center;color:var(--text-muted);padding:2rem;">No matching drift events.</div>';
+        return;
+    }
+    container.innerHTML = events.map((ev, i) => {
+        const statusColor = ev.status === 'open' ? 'var(--danger, #ef5350)' :
+            ev.status === 'accepted' ? 'var(--warning, #ffa726)' : 'var(--success, #66bb6a)';
+        const detected = ev.detected_at ? new Date(ev.detected_at + 'Z').toLocaleString() : '';
+        return `<div class="card drift-event-card animate-in" style="animation-delay:${Math.min(i * 0.04, 0.3)}s">
+            <div class="drift-event-header">
+                <div>
+                    <div class="card-title">${escapeHtml(ev.hostname || '')} <span style="color:var(--text-muted);font-weight:400;font-size:0.85rem">${escapeHtml(ev.ip_address || '')}</span></div>
+                    <div class="drift-event-meta">
+                        <span>${escapeHtml(ev.device_type || '')}</span>
+                        <span style="opacity:0.4">|</span>
+                        <span>${detected}</span>
+                    </div>
+                </div>
+                <div style="display:flex;gap:0.5rem;align-items:center;">
+                    <div class="drift-diff-stats">
+                        <span class="drift-diff-added">+${ev.diff_lines_added || 0}</span>
+                        <span class="drift-diff-removed">-${ev.diff_lines_removed || 0}</span>
+                    </div>
+                    <button class="btn btn-sm" style="background:${statusColor};color:#fff;padding:0.15rem 0.5rem;border-radius:0.25rem;font-size:0.7rem;font-weight:600;text-transform:uppercase;cursor:pointer;border:none;" onclick="showDriftDiffModal(${ev.id})">${escapeHtml(ev.status)}</button>
+                </div>
+            </div>
+            <div style="margin-top:0.75rem;display:flex;gap:0.35rem;flex-wrap:wrap">
+                <button class="btn btn-sm btn-secondary" onclick="showDriftDiffModal(${ev.id})">View Diff</button>
+                <button class="btn btn-sm btn-secondary" onclick="showHostDriftHistory(${ev.host_id})">History</button>
+                ${ev.status === 'open' ? `
+                    <button class="btn btn-sm btn-primary" onclick="acceptDriftEvent(${ev.id})">Accept</button>
+                    <button class="btn btn-sm btn-danger" onclick="showRevertDriftModal(${ev.id})">Revert</button>
+                    <button class="btn btn-sm btn-secondary" onclick="resolveDriftEvent(${ev.id})">Resolve</button>
+                ` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+window.showDriftDiffModal = async function(eventId) {
+    try {
+        const ev = await api.getConfigDriftEvent(eventId);
+        if (!ev) { showError('Drift event not found'); return; }
+        const diffHtml = _renderUnifiedDiff(ev.diff_text || '');
+        showModal('Configuration Diff — ' + escapeHtml(ev.hostname || ''), `
+            <div class="drift-event-meta" style="margin-bottom:0.75rem">
+                <span>${escapeHtml(ev.ip_address || '')}</span>
+                <span style="opacity:0.4">|</span>
+                <span>Detected: ${ev.detected_at ? new Date(ev.detected_at + 'Z').toLocaleString() : ''}</span>
+                <span style="opacity:0.4">|</span>
+                <span class="drift-diff-added">+${ev.diff_lines_added || 0}</span>
+                <span class="drift-diff-removed">-${ev.diff_lines_removed || 0}</span>
+            </div>
+            <div class="drift-diff-viewer">${diffHtml}</div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
+                <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+                ${ev.status === 'open' ? `
+                    <button class="btn btn-primary" onclick="acceptDriftEvent(${eventId});closeAllModals()">Accept</button>
+                    <button class="btn btn-danger" onclick="closeAllModals();showRevertDriftModal(${eventId})">Revert</button>
+                    <button class="btn btn-secondary" onclick="resolveDriftEvent(${eventId});closeAllModals()">Resolve</button>
+                ` : ''}
+            </div>
+        `);
+    } catch (err) {
+        showError('Failed to load drift details: ' + err.message);
+    }
+};
+
+function _renderUnifiedDiff(diffText) {
+    if (!diffText) return '<span style="color:var(--text-muted)">No differences.</span>';
+    return diffText.split('\n').map(line => {
+        const esc = escapeHtml(line);
+        if (line.startsWith('+++') || line.startsWith('---')) return `<span class="diff-meta">${esc}</span>`;
+        if (line.startsWith('@@')) return `<span class="diff-hunk">${esc}</span>`;
+        if (line.startsWith('+')) return `<span class="diff-added">${esc}</span>`;
+        if (line.startsWith('-')) return `<span class="diff-removed">${esc}</span>`;
+        return `<span class="diff-context">${esc}</span>`;
+    }).join('\n');
+}
+
+window.showSetBaselineModal = async function() {
+    let hostsOptions = '<option value="">Select a host...</option>';
+    try {
+        const groups = await api.getInventoryGroups(true);
+        for (const g of (groups || [])) {
+            for (const h of (g.hosts || [])) {
+                hostsOptions += `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)})</option>`;
+            }
+        }
+    } catch (e) { /* ignore */ }
+    showModal('Set Configuration Baseline', `
+        <form onsubmit="createBaseline(event)">
+            <div class="form-group">
+                <label class="form-label">Host</label>
+                <select class="form-select" name="host_id" required>${hostsOptions}</select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Baseline Name</label>
+                <input type="text" class="form-input" name="name" placeholder="e.g. Golden Config v1.0">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Intended Configuration</label>
+                <textarea class="form-textarea drift-baseline-textarea" name="config_text" placeholder="Paste the intended/golden running-config here..." required></textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:space-between;margin-top:1rem;flex-wrap:wrap">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="_fillFromLatestSnapshot()">Use Latest Snapshot</button>
+                <div style="display:flex;gap:0.5rem">
+                    <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Baseline</button>
+                </div>
+            </div>
+        </form>
+    `);
+};
+
+window._fillFromLatestSnapshot = async function() {
+    const hostSelect = document.querySelector('#modal-overlay select[name="host_id"]');
+    const textarea = document.querySelector('#modal-overlay textarea[name="config_text"]');
+    if (!hostSelect || !textarea || !hostSelect.value) {
+        showError('Please select a host first');
+        return;
+    }
+    try {
+        const snapshots = await api.getConfigSnapshots(parseInt(hostSelect.value), 1);
+        if (!snapshots || !snapshots.length) {
+            showError('No snapshots available for this host. Capture a config first.');
+            return;
+        }
+        const snap = await api.getConfigSnapshot(snapshots[0].id);
+        if (snap && snap.config_text) {
+            textarea.value = snap.config_text;
+            showSuccess('Loaded latest snapshot config');
+        }
+    } catch (err) {
+        showError('Failed to load snapshot: ' + err.message);
+    }
+};
+
+window.createBaseline = async function(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+        await api.createConfigBaseline({
+            host_id: parseInt(fd.get('host_id')),
+            name: fd.get('name') || '',
+            config_text: fd.get('config_text'),
+            source: 'manual',
+        });
+        closeAllModals();
+        showSuccess('Baseline saved successfully');
+        invalidatePageCache('config-drift');
+        await loadConfigDrift({ preserveContent: false });
+    } catch (err) {
+        showError('Failed to save baseline: ' + err.message);
+    }
+};
+
+window.showCaptureSnapshotModal = async function() {
+    let hostsOptions = '<option value="">Select a host...</option>';
+    let groupOptions = '<option value="">-- Or select entire group --</option>';
+    let credOptions = '<option value="">Select credentials...</option>';
+    try {
+        const [groups, creds] = await Promise.all([
+            api.getInventoryGroups(true),
+            api.getCredentials(),
+        ]);
+        for (const g of (groups || [])) {
+            groupOptions += `<option value="${g.id}">${escapeHtml(g.name)} (${(g.hosts || []).length} hosts)</option>`;
+            for (const h of (g.hosts || [])) {
+                hostsOptions += `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)})</option>`;
+            }
+        }
+        for (const c of (creds || [])) {
+            credOptions += `<option value="${c.id}">${escapeHtml(c.name)}</option>`;
+        }
+    } catch (e) { /* ignore */ }
+    showModal('Capture Running Config', `
+        <form onsubmit="captureSnapshot(event)">
+            <div class="form-group">
+                <label class="form-label">Single Host</label>
+                <select class="form-select" name="host_id">${hostsOptions}</select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Or Entire Group</label>
+                <select class="form-select" name="group_id">${groupOptions}</select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Credentials</label>
+                <select class="form-select" name="credential_id" required>${credOptions}</select>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Capture</button>
+            </div>
+        </form>
+    `);
+};
+
+window.captureSnapshot = async function(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const credId = parseInt(fd.get('credential_id'));
+    const hostId = fd.get('host_id') ? parseInt(fd.get('host_id')) : null;
+    const groupId = fd.get('group_id') ? parseInt(fd.get('group_id')) : null;
+    if (!hostId && !groupId) {
+        showError('Please select a host or group');
+        return;
+    }
+    closeAllModals();
+
+    try {
+        // Start background capture job and get job_id
+        let result;
+        if (groupId) {
+            result = await api.startCaptureJob(groupId, credId);
+        } else {
+            result = await api.startCaptureSingleJob(hostId, credId);
+        }
+        const jobId = result.job_id;
+
+        // Open job output modal with live streaming
+        const modal = document.getElementById('job-output-modal');
+        const output = document.getElementById('job-output');
+        output.innerHTML = '';
+        modal.classList.add('active');
+        activateFocusTrap('job-output-modal');
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/config-capture/${jobId}`);
+
+        ws.onmessage = (ev) => {
+            try {
+                const msg = JSON.parse(ev.data);
+                if (msg.type === 'line') {
+                    const line = document.createElement('div');
+                    line.className = 'job-output-line';
+                    // Color code success/failure lines
+                    if (msg.text.includes('✓')) line.className += ' success';
+                    else if (msg.text.includes('✗') || msg.text.includes('FAILED')) line.className += ' error';
+                    else if (msg.text.includes('Connecting')) line.className += ' info';
+                    line.textContent = msg.text.replace(/\n$/, '');
+                    output.appendChild(line);
+                    output.scrollTop = output.scrollHeight;
+                } else if (msg.type === 'job_complete') {
+                    const line = document.createElement('div');
+                    line.className = 'job-output-line success';
+                    line.textContent = `\n[Capture Job Complete] Status: ${msg.status}`;
+                    output.appendChild(line);
+                    output.scrollTop = output.scrollHeight;
+                    ws.close();
+                    // Refresh the config drift list
+                    invalidatePageCache('config-drift');
+                    loadConfigDrift({ preserveContent: false });
+                }
+            } catch (err) {
+                console.error('Error parsing capture WebSocket message:', err);
+            }
+        };
+
+        ws.onerror = () => {
+            const line = document.createElement('div');
+            line.className = 'job-output-line error';
+            line.textContent = '[Error] WebSocket connection failed';
+            output.appendChild(line);
+        };
+
+    } catch (err) {
+        showError('Capture failed: ' + err.message);
+    }
+};
+
+window.acceptDriftEvent = async function(eventId) {
+    try {
+        await api.updateConfigDriftEventStatus(eventId, 'accepted');
+        showSuccess('Drift accepted — baseline updated to match current config');
+        invalidatePageCache('config-drift');
+        await loadConfigDrift({ preserveContent: false });
+    } catch (err) {
+        showError('Failed to accept: ' + err.message);
+    }
+};
+
+window.resolveDriftEvent = async function(eventId) {
+    try {
+        await api.updateConfigDriftEventStatus(eventId, 'resolved');
+        showSuccess('Drift event resolved');
+        invalidatePageCache('config-drift');
+        await loadConfigDrift({ preserveContent: false });
+    } catch (err) {
+        showError('Failed to resolve: ' + err.message);
+    }
+};
+
+window.showRevertDriftModal = async function(eventId) {
+    const creds = await api.getCredentials();
+    if (!creds || !creds.length) {
+        showError('No credentials configured. Add credentials first.');
+        return;
+    }
+    const credOptions = creds.map(c => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.username)})</option>`).join('');
+    showModal('Revert Device to Baseline', `
+        <p style="margin-bottom:1rem;color:var(--text-muted);">This will push the baseline configuration back to the device, overwriting any unauthorized changes. The device will be re-captured afterward to verify compliance.</p>
+        <form id="revert-drift-form">
+            <input type="hidden" name="event_id" value="${eventId}">
+            <div class="form-group" style="margin-bottom:1rem;">
+                <label class="form-label">SSH Credential</label>
+                <select name="credential_id" class="form-select" required>${credOptions}</select>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-danger">Revert Device</button>
+            </div>
+        </form>
+    `);
+    document.getElementById('revert-drift-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const evId = parseInt(fd.get('event_id'));
+        const credId = parseInt(fd.get('credential_id'));
+        closeAllModals();
+        try {
+            const result = await api.revertDriftEvent(evId, credId);
+            const jobId = result.job_id;
+            // Open job output modal with WebSocket
+            const modal = document.getElementById('job-output-modal');
+            const output = document.getElementById('job-output');
+            output.innerHTML = '';
+            modal.classList.add('active');
+            activateFocusTrap('job-output-modal');
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${window.location.host}/ws/config-revert/${jobId}`);
+            ws.onmessage = (ev) => {
+                const data = JSON.parse(ev.data);
+                if (data.type === 'line') {
+                    const span = document.createElement('span');
+                    span.textContent = data.data;
+                    if (data.data.includes('FAILED')) span.style.color = 'var(--danger, #ef5350)';
+                    else if (data.data.includes('successfully') || data.data.includes('compliant') || data.data.includes('complete'))
+                        span.style.color = 'var(--success, #66bb6a)';
+                    output.appendChild(span);
+                    output.scrollTop = output.scrollHeight;
+                } else if (data.type === 'job_complete') {
+                    const done = document.createElement('div');
+                    done.style.cssText = 'margin-top:0.5rem;padding:0.5rem;font-weight:600;';
+                    done.style.color = data.status === 'completed' ? 'var(--success)' : 'var(--danger)';
+                    done.textContent = data.status === 'completed' ? 'Revert completed.' : 'Revert failed.';
+                    output.appendChild(done);
+                    output.scrollTop = output.scrollHeight;
+                    invalidatePageCache('config-drift');
+                    loadConfigDrift({ preserveContent: false });
+                }
+            };
+            ws.onerror = () => {
+                const err = document.createElement('div');
+                err.style.color = 'var(--danger)';
+                err.textContent = 'WebSocket connection error.';
+                output.appendChild(err);
+            };
+        } catch (err) {
+            showError('Revert failed: ' + err.message);
+        }
+    };
+};
+
+window.showHostDriftHistory = async function(hostId) {
+    try {
+        const snapshots = await api.getConfigSnapshots(hostId, 20);
+        if (!snapshots || !snapshots.length) {
+            showModal('Config History', '<div style="text-align:center;color:var(--text-muted);padding:2rem;">No snapshots found for this host.</div>');
+            return;
+        }
+        const rows = snapshots.map(s => `
+            <div class="card" style="margin-bottom:0.5rem;padding:0.75rem">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div>
+                        <strong>${s.captured_at ? new Date(s.captured_at + 'Z').toLocaleString() : ''}</strong>
+                        <span style="color:var(--text-muted);margin-left:0.5rem;font-size:0.8rem">${escapeHtml(s.capture_method || '')}</span>
+                    </div>
+                    <div style="display:flex;gap:0.25rem">
+                        <button class="btn btn-sm btn-secondary" onclick="viewSnapshotConfig(${s.id})">View</button>
+                    </div>
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">${s.config_length || 0} chars</div>
+            </div>
+        `).join('');
+        showModal('Config Snapshots', `
+            <div style="max-height:60vh;overflow-y:auto">${rows}</div>
+            <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+                <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+            </div>
+        `);
+    } catch (err) {
+        showError('Failed to load history: ' + err.message);
+    }
+};
+
+window.viewSnapshotConfig = async function(snapshotId) {
+    try {
+        const snap = await api.getConfigSnapshot(snapshotId);
+        if (!snap) { showError('Snapshot not found'); return; }
+        showModal('Snapshot Config', `
+            <div class="drift-event-meta" style="margin-bottom:0.75rem">
+                <span>Captured: ${snap.captured_at ? new Date(snap.captured_at + 'Z').toLocaleString() : ''}</span>
+                <span style="opacity:0.4">|</span>
+                <span>Method: ${escapeHtml(snap.capture_method || '')}</span>
+            </div>
+            <div class="drift-diff-viewer">${escapeHtml(snap.config_text || '')}</div>
+            <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+                <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+            </div>
+        `);
+    } catch (err) {
+        showError('Failed to load snapshot: ' + err.message);
+    }
+};
+
+window.refreshConfigDrift = async function() {
+    invalidatePageCache('config-drift');
+    await loadConfigDrift({ preserveContent: false });
+};
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Keyboard Shortcuts & Command Palette
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -5444,6 +5996,7 @@ const COMMAND_PALETTE_PAGES = [
     { page: 'templates',   label: 'Templates',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
     { page: 'credentials', label: 'Credentials',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' },
     { page: 'converter',   label: 'Converter',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>' },
+    { page: 'config-drift', label: 'Config Drift', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>' },
     { page: 'settings',    label: 'Settings',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
 ];
 
@@ -5726,7 +6279,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initLoginForm();
     initListPageControls();
     initKeyboardShortcuts();
-    initCardTilt();
+    // Card tilt disabled — it interfered with clicking on inventory items
 
     try {
         const status = await api.getAuthStatus();
