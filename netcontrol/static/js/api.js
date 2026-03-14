@@ -543,3 +543,68 @@ export async function updateGroupSnmpAssignment(groupId, profileId) {
         body: { snmp_profile_id: profileId },
     });
 }
+
+// ── Topology Discovery Schedule ──────────────────────────────────────────────
+
+export async function getTopologyDiscoveryConfig() {
+    return apiRequest('/admin/topology-discovery');
+}
+
+export async function updateTopologyDiscoveryConfig(payload) {
+    return apiRequest('/admin/topology-discovery', {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function runTopologyDiscoveryNow() {
+    return apiRequest('/admin/topology-discovery/run-now', {
+        method: 'POST',
+    });
+}
+
+// ── Topology ────────────────────────────────────────────────────────────────
+
+export async function getTopology(groupId = null) {
+    const params = groupId ? `?group_id=${groupId}` : '';
+    return apiRequest(`/topology${params}`);
+}
+
+export async function discoverTopologyForGroup(groupId) {
+    return apiRequest(`/topology/discover/${groupId}`, { method: 'POST' });
+}
+
+export async function discoverTopologyAll() {
+    return apiRequest('/topology/discover', { method: 'POST' });
+}
+
+export async function getHostTopology(hostId) {
+    return apiRequest(`/topology/host/${hostId}`);
+}
+
+export async function getTopologyChanges(unacknowledged = true, limit = 100) {
+    return apiRequest(`/topology/changes?unacknowledged=${unacknowledged}&limit=${limit}`);
+}
+
+export async function acknowledgeTopologyChanges() {
+    return apiRequest('/topology/changes/acknowledge', { method: 'POST' });
+}
+
+// ── Topology Node Positions ──────────────────────────────────────────────────
+
+export async function getTopologyPositions() {
+    return apiRequest('/topology/positions');
+}
+
+export async function saveTopologyPositions(positions) {
+    return apiRequest('/topology/positions', {
+        method: 'PUT',
+        body: { positions },
+    });
+}
+
+export async function deleteTopologyPositions() {
+    return apiRequest('/topology/positions', {
+        method: 'DELETE',
+    });
+}
