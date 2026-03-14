@@ -13,6 +13,9 @@ Tables:
     topology_links    — discovered L2/L3 neighbor relationships between devices
     interface_stats   — SNMP interface counter snapshots for utilization calculation
     topology_changes  — detected topology differences between discovery runs
+    config_baselines  — intended/golden configuration per host
+    config_snapshots  — timestamped running-config captures per host
+    config_drift_events — detected configuration drift instances
 """
 
 import json
@@ -55,6 +58,9 @@ _INSERT_ID_TABLES = {
     "topology_links",
     "interface_stats",
     "topology_changes",
+    "config_baselines",
+    "config_snapshots",
+    "config_drift_events",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -228,6 +234,40 @@ CREATE TABLE IF NOT EXISTS topology_node_positions (
     x                   REAL    NOT NULL DEFAULT 0,
     y                   REAL    NOT NULL DEFAULT 0,
     updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS config_baselines (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id     INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    name        TEXT    NOT NULL DEFAULT '',
+    config_text TEXT    NOT NULL DEFAULT '',
+    source      TEXT    NOT NULL DEFAULT 'manual',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    created_by  TEXT    NOT NULL DEFAULT '',
+    UNIQUE(host_id)
+);
+
+CREATE TABLE IF NOT EXISTS config_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    config_text     TEXT    NOT NULL DEFAULT '',
+    captured_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+    capture_method  TEXT    NOT NULL DEFAULT 'manual'
+);
+
+CREATE TABLE IF NOT EXISTS config_drift_events (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id            INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    snapshot_id        INTEGER NOT NULL REFERENCES config_snapshots(id) ON DELETE CASCADE,
+    baseline_id        INTEGER REFERENCES config_baselines(id) ON DELETE SET NULL,
+    status             TEXT    NOT NULL DEFAULT 'open',
+    diff_text          TEXT    NOT NULL DEFAULT '',
+    diff_lines_added   INTEGER NOT NULL DEFAULT 0,
+    diff_lines_removed INTEGER NOT NULL DEFAULT 0,
+    detected_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    resolved_at        TEXT,
+    resolved_by        TEXT    DEFAULT ''
 );
 """
 
@@ -954,6 +994,8 @@ async def update_group(group_id: int, name: str, description: str = ""):
 async def delete_group(group_id: int):
     db = await get_db()
     try:
+        # Delete jobs referencing this group (job_events cascade automatically)
+        await db.execute("DELETE FROM jobs WHERE inventory_group_id = ?", (group_id,))
         await db.execute("DELETE FROM inventory_groups WHERE id = ?", (group_id,))
         await db.commit()
     finally:
@@ -1883,6 +1925,389 @@ async def delete_topology_positions() -> int:
     db = await get_db()
     try:
         cursor = await db.execute("DELETE FROM topology_node_positions")
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ── Config Baselines ─────────────────────────────────────────────────────────
+
+
+async def create_config_baseline(
+    host_id: int,
+    name: str = "",
+    config_text: str = "",
+    source: str = "manual",
+    created_by: str = "",
+) -> int:
+    """Create or replace a config baseline for a host."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO config_baselines
+               (host_id, name, config_text, source, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+               ON CONFLICT(host_id) DO UPDATE SET
+                   name = excluded.name,
+                   config_text = excluded.config_text,
+                   source = excluded.source,
+                   updated_at = datetime('now')""",
+            (host_id, name, config_text, source, created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_config_baseline(baseline_id: int) -> dict | None:
+    """Return a single config baseline by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM config_baselines WHERE id = ?", (baseline_id,)
+        )
+        row = await cursor.fetchone()
+        return row_to_dict(row)
+    finally:
+        await db.close()
+
+
+async def get_config_baseline_for_host(host_id: int) -> dict | None:
+    """Return the config baseline for a specific host."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM config_baselines WHERE host_id = ?", (host_id,)
+        )
+        row = await cursor.fetchone()
+        return row_to_dict(row)
+    finally:
+        await db.close()
+
+
+async def get_config_baselines(
+    host_id: int | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Return config baselines, optionally filtered by host_id."""
+    db = await get_db()
+    try:
+        if host_id is not None:
+            cursor = await db.execute(
+                """SELECT b.*, h.hostname, h.ip_address
+                   FROM config_baselines b
+                   JOIN hosts h ON h.id = b.host_id
+                   WHERE b.host_id = ?
+                   ORDER BY b.updated_at DESC LIMIT ?""",
+                (host_id, limit),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT b.*, h.hostname, h.ip_address
+                   FROM config_baselines b
+                   JOIN hosts h ON h.id = b.host_id
+                   ORDER BY b.updated_at DESC LIMIT ?""",
+                (limit,),
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def update_config_baseline(
+    baseline_id: int,
+    name: str | None = None,
+    config_text: str | None = None,
+    source: str | None = None,
+) -> None:
+    """Update fields on a config baseline."""
+    db = await get_db()
+    try:
+        parts: list[str] = []
+        params: list = []
+        if name is not None:
+            parts.append("name = ?")
+            params.append(name)
+        if config_text is not None:
+            parts.append("config_text = ?")
+            params.append(config_text)
+        if source is not None:
+            parts.append("source = ?")
+            params.append(source)
+        if not parts:
+            return
+        parts.append("updated_at = datetime('now')")
+        params.append(baseline_id)
+        await db.execute(
+            f"UPDATE config_baselines SET {', '.join(parts)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_config_baseline(baseline_id: int) -> None:
+    """Delete a config baseline."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM config_baselines WHERE id = ?", (baseline_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ── Config Snapshots ─────────────────────────────────────────────────────────
+
+
+async def create_config_snapshot(
+    host_id: int,
+    config_text: str,
+    capture_method: str = "manual",
+) -> int:
+    """Store a running-config snapshot for a host."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO config_snapshots (host_id, config_text, capture_method, captured_at)
+               VALUES (?, ?, ?, datetime('now'))""",
+            (host_id, config_text, capture_method),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_config_snapshot(snapshot_id: int) -> dict | None:
+    """Return a single config snapshot by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM config_snapshots WHERE id = ?", (snapshot_id,)
+        )
+        row = await cursor.fetchone()
+        return row_to_dict(row)
+    finally:
+        await db.close()
+
+
+async def get_config_snapshots_for_host(
+    host_id: int, limit: int = 50
+) -> list[dict]:
+    """Return config snapshots for a host, newest first."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT id, host_id, capture_method, captured_at,
+                      LENGTH(config_text) as config_length
+               FROM config_snapshots
+               WHERE host_id = ?
+               ORDER BY captured_at DESC LIMIT ?""",
+            (host_id, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_latest_config_snapshot(host_id: int) -> dict | None:
+    """Return the most recent snapshot for a host."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM config_snapshots
+               WHERE host_id = ?
+               ORDER BY id DESC LIMIT 1""",
+            (host_id,),
+        )
+        row = await cursor.fetchone()
+        return row_to_dict(row)
+    finally:
+        await db.close()
+
+
+async def delete_config_snapshot(snapshot_id: int) -> None:
+    """Delete a config snapshot."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM config_snapshots WHERE id = ?", (snapshot_id,)
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_old_config_snapshots(days: int = 90) -> int:
+    """Delete config snapshots older than N days."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM config_snapshots WHERE captured_at < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ── Config Drift Events ──────────────────────────────────────────────────────
+
+
+async def create_config_drift_event(
+    host_id: int,
+    snapshot_id: int,
+    baseline_id: int | None,
+    diff_text: str,
+    diff_lines_added: int = 0,
+    diff_lines_removed: int = 0,
+) -> int:
+    """Record a detected configuration drift event."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO config_drift_events
+               (host_id, snapshot_id, baseline_id, diff_text,
+                diff_lines_added, diff_lines_removed, detected_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (host_id, snapshot_id, baseline_id, diff_text,
+             diff_lines_added, diff_lines_removed),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_config_drift_event(event_id: int) -> dict | None:
+    """Return a single drift event with host info."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT e.*, h.hostname, h.ip_address, h.device_type
+               FROM config_drift_events e
+               JOIN hosts h ON h.id = e.host_id
+               WHERE e.id = ?""",
+            (event_id,),
+        )
+        row = await cursor.fetchone()
+        return row_to_dict(row)
+    finally:
+        await db.close()
+
+
+async def get_config_drift_events(
+    status: str | None = None,
+    host_id: int | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Return drift events with optional filters."""
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if status:
+            clauses.append("e.status = ?")
+            params.append(status)
+        if host_id is not None:
+            clauses.append("e.host_id = ?")
+            params.append(host_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT e.id, e.host_id, e.snapshot_id, e.baseline_id,
+                       e.status, e.diff_lines_added, e.diff_lines_removed,
+                       e.detected_at, e.resolved_at, e.resolved_by,
+                       h.hostname, h.ip_address, h.device_type
+                FROM config_drift_events e
+                JOIN hosts h ON h.id = e.host_id
+                {where}
+                ORDER BY e.detected_at DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_config_drift_summary() -> dict:
+    """Return drift summary stats."""
+    db = await get_db()
+    try:
+        # Count hosts with baselines
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM config_baselines"
+        )
+        row = await cursor.fetchone()
+        total_baselined = row[0] if row else 0
+
+        # Count hosts with open drift events
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT host_id) FROM config_drift_events WHERE status = 'open'"
+        )
+        row = await cursor.fetchone()
+        drifted = row[0] if row else 0
+
+        # Count open events
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM config_drift_events WHERE status = 'open'"
+        )
+        row = await cursor.fetchone()
+        open_events = row[0] if row else 0
+
+        # Count accepted events
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM config_drift_events WHERE status = 'accepted'"
+        )
+        row = await cursor.fetchone()
+        accepted_events = row[0] if row else 0
+
+        return {
+            "total_baselined": total_baselined,
+            "compliant": max(0, total_baselined - drifted),
+            "drifted": drifted,
+            "open_events": open_events,
+            "accepted_events": accepted_events,
+        }
+    finally:
+        await db.close()
+
+
+async def update_config_drift_event_status(
+    event_id: int, status: str, resolved_by: str = ""
+) -> None:
+    """Update drift event status (open/resolved/accepted)."""
+    db = await get_db()
+    try:
+        if status in ("resolved", "accepted"):
+            await db.execute(
+                """UPDATE config_drift_events
+                   SET status = ?, resolved_at = datetime('now'), resolved_by = ?
+                   WHERE id = ?""",
+                (status, resolved_by, event_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE config_drift_events SET status = ? WHERE id = ?",
+                (status, event_id),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_old_config_drift_events(days: int = 90) -> int:
+    """Delete drift events older than N days."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM config_drift_events WHERE detected_at < datetime('now', ?)",
+            (f"-{days} days",),
+        )
         await db.commit()
         return cursor.rowcount
     finally:
