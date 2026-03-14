@@ -135,6 +135,14 @@
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                                 <span class="nav-label">Config Backups</span>
                             </a>
+                            <a href="#" data-page="compliance" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>
+                                <span class="nav-label">Compliance</span>
+                            </a>
+                            <a href="#" data-page="risk-analysis" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                                <span class="nav-label">Risk Analysis</span>
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -721,6 +729,85 @@
                 </div>
                 <!-- History List -->
                 <div id="backup-history-list" style="display:none;">
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+            </div>
+
+            <!-- Compliance Page -->
+            <div id="page-compliance" class="page">
+                <div class="page-header">
+                    <h2>Compliance</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="showCreateComplianceProfileModal()">+ New Profile</button>
+                        <button class="btn btn-secondary" onclick="refreshCompliance()">Refresh</button>
+                    </div>
+                </div>
+                <!-- Summary Cards -->
+                <div class="drift-summary-grid" id="compliance-summary">
+                    <div class="stat-card"><div class="stat-ring-value" id="compliance-stat-profiles">-</div><div class="stat-label">Profiles</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="compliance-stat-assignments">-</div><div class="stat-label">Active Scans</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="compliance-stat-scanned">-</div><div class="stat-label">Hosts Scanned</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="compliance-stat-violations">-</div><div class="stat-label">Non-Compliant</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="compliance-stat-last">-</div><div class="stat-label">Last Scan</div></div>
+                </div>
+                <!-- Tab Toggle -->
+                <div class="list-controls" style="margin-bottom:1rem;">
+                    <button class="btn btn-sm btn-primary" id="compliance-tab-profiles" onclick="switchComplianceTab('profiles')">Profiles</button>
+                    <button class="btn btn-sm btn-secondary" id="compliance-tab-assignments" onclick="switchComplianceTab('assignments')">Assignments</button>
+                    <button class="btn btn-sm btn-secondary" id="compliance-tab-results" onclick="switchComplianceTab('results')">Scan Results</button>
+                    <button class="btn btn-sm btn-secondary" id="compliance-tab-status" onclick="switchComplianceTab('status')">Host Status</button>
+                    <input id="compliance-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto;">
+                </div>
+                <!-- Profiles List -->
+                <div id="compliance-profiles-list">
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+                <!-- Assignments List -->
+                <div id="compliance-assignments-list" style="display:none;">
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+                <!-- Scan Results -->
+                <div id="compliance-results-list" style="display:none;">
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+                <!-- Host Status -->
+                <div id="compliance-status-list" style="display:none;">
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+            </div>
+
+            <!-- Risk Analysis Page -->
+            <div id="page-risk-analysis" class="page">
+                <div class="page-header">
+                    <h2>Risk Analysis</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="showNewRiskAnalysisModal()">+ New Analysis</button>
+                        <button class="btn btn-secondary" onclick="showOfflineRiskAnalysisModal()">Offline Analysis</button>
+                        <button class="btn btn-secondary" onclick="refreshRiskAnalysis()">Refresh</button>
+                    </div>
+                </div>
+                <!-- Summary Cards -->
+                <div class="drift-summary-grid" id="risk-summary">
+                    <div class="stat-card"><div class="stat-ring-value" id="risk-stat-total">-</div><div class="stat-label">Analyses</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="risk-stat-high">-</div><div class="stat-label">High/Critical</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="risk-stat-approved">-</div><div class="stat-label">Approved</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="risk-stat-pending">-</div><div class="stat-label">Pending</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="risk-stat-last">-</div><div class="stat-label">Last Analysis</div></div>
+                </div>
+                <!-- Filter Controls -->
+                <div class="list-controls" style="margin-bottom:1rem;">
+                    <select id="risk-filter-level" class="form-select" style="max-width:160px;" onchange="filterRiskAnalyses()">
+                        <option value="">All Levels</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                    <input id="risk-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto;">
+                </div>
+                <!-- Analyses List -->
+                <div id="risk-analyses-list">
                     <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
                     <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
                 </div>
