@@ -27,6 +27,8 @@ const NAV_FEATURE_MAP = {
     topology: 'topology',
     'config-drift': 'config-drift',
     'config-backups': 'config-backups',
+    compliance: 'compliance',
+    'risk-analysis': 'risk-analysis',
 };
 
 const THEME_KEY = 'plexus-theme';
@@ -81,6 +83,8 @@ const listViewState = {
     credentials: { items: [], query: '', sort: 'name_asc' },
     configDrift: { items: [], query: '', sort: 'detected_desc', status: 'open' },
     configBackups: { policies: [], backups: [], query: '', tab: 'policies' },
+    compliance: { profiles: [], assignments: [], results: [], statusList: [], query: '', tab: 'profiles' },
+    riskAnalysis: { items: [], query: '', levelFilter: '' },
 };
 
 function normalizeTheme(theme) {
@@ -397,6 +401,12 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'config-backups':
                 await loadConfigBackups({ preserveContent });
+                break;
+            case 'compliance':
+                await loadCompliance({ preserveContent });
+                break;
+            case 'risk-analysis':
+                await loadRiskAnalysis({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
@@ -6571,6 +6581,787 @@ document.addEventListener('DOMContentLoaded', () => {
             listViewState.configBackups.query = searchInput.value;
             renderBackupPolicies(listViewState.configBackups.policies);
             renderBackupHistory(listViewState.configBackups.backups);
+        }, 200));
+    }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Compliance Profiles & Scans
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _complianceCurrentTab = 'profiles';
+
+async function loadCompliance(options = {}) {
+    const { preserveContent = false } = options;
+    const profilesContainer = document.getElementById('compliance-profiles-list');
+    if (!preserveContent && profilesContainer) profilesContainer.innerHTML = skeletonCards(2);
+    try {
+        const [summary, profiles, assignments, results, statusList] = await Promise.all([
+            api.getComplianceSummary(),
+            api.getComplianceProfiles(),
+            api.getComplianceAssignments(),
+            api.getComplianceScanResults({ limit: 200 }),
+            api.getComplianceHostStatus(),
+        ]);
+        renderComplianceSummary(summary);
+        listViewState.compliance.profiles = profiles || [];
+        listViewState.compliance.assignments = assignments || [];
+        listViewState.compliance.results = results || [];
+        listViewState.compliance.statusList = statusList || [];
+        renderComplianceProfiles(profiles || []);
+        renderComplianceAssignments(assignments || []);
+        renderComplianceResults(results || []);
+        renderComplianceStatus(statusList || []);
+    } catch (error) {
+        if (profilesContainer) profilesContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error loading compliance data: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadCompliance = loadCompliance;
+
+function renderComplianceSummary(summary) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('compliance-stat-profiles', summary.total_profiles ?? '-');
+    set('compliance-stat-assignments', summary.active_assignments ?? '-');
+    set('compliance-stat-scanned', summary.hosts_scanned ?? '-');
+    set('compliance-stat-violations', summary.hosts_non_compliant ?? '-');
+    set('compliance-stat-last', summary.last_scan_at ? new Date(summary.last_scan_at + 'Z').toLocaleString() : 'Never');
+}
+
+function renderComplianceProfiles(profiles) {
+    const container = document.getElementById('compliance-profiles-list');
+    if (!container) return;
+    const query = (listViewState.compliance.query || '').toLowerCase();
+    const filtered = profiles.filter(p => !query || p.name.toLowerCase().includes(query) || (p.description || '').toLowerCase().includes(query));
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No compliance profiles', 'compliance',
+            '<button class="btn btn-primary btn-sm" onclick="showCreateComplianceProfileModal()">Create a Profile</button>');
+        return;
+    }
+    container.innerHTML = filtered.map(p => {
+        let rules = [];
+        try { rules = JSON.parse(p.rules || '[]'); } catch (e) { /* ignore */ }
+        const sevClass = p.severity === 'critical' ? 'danger' : p.severity === 'high' ? 'warning' : 'success';
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <strong>${escapeHtml(p.name)}</strong>
+                    <span class="badge" style="margin-left:0.5rem; background:var(--${sevClass}); color:white; font-size:0.75em; padding:2px 8px; border-radius:4px;">${escapeHtml(p.severity)}</span>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">${rules.length} rules, ${p.assignment_count || 0} assignments</span>
+                </div>
+                <div style="display:flex; gap:0.4rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="showEditComplianceProfileModal(${p.id})">Edit</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showAssignComplianceProfileModal(${p.id})">Assign</button>
+                    <button class="btn btn-sm" style="color:var(--danger)" onclick="confirmDeleteComplianceProfile(${p.id})">Delete</button>
+                </div>
+            </div>
+            ${p.description ? `<div style="margin-top:0.5rem; font-size:0.9em; color:var(--text-muted)">${escapeHtml(p.description)}</div>` : ''}
+            ${rules.length > 0 ? `<div style="margin-top:0.5rem; font-size:0.85em; color:var(--text-muted)">Rules: ${rules.map(r => escapeHtml(r.name || r.pattern || '?')).join(', ')}</div>` : ''}
+        </div>`;
+    }).join('');
+}
+
+function renderComplianceAssignments(assignments) {
+    const container = document.getElementById('compliance-assignments-list');
+    if (!container) return;
+    const query = (listViewState.compliance.query || '').toLowerCase();
+    const filtered = assignments.filter(a => !query || (a.profile_name || '').toLowerCase().includes(query) || (a.group_name || '').toLowerCase().includes(query));
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No compliance assignments', 'compliance',
+            'Assign a profile to an inventory group to start scanning.');
+        return;
+    }
+    container.innerHTML = filtered.map(a => {
+        const enabled = a.enabled ? '<span style="color:var(--success)">Enabled</span>' : '<span style="color:var(--text-muted)">Disabled</span>';
+        const interval = formatInterval(a.interval_seconds);
+        const lastScan = a.last_scan_at ? new Date(a.last_scan_at + 'Z').toLocaleString() : 'Never';
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <strong>${escapeHtml(a.profile_name || '?')}</strong>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">→ ${escapeHtml(a.group_name || '?')} (${a.host_count || 0} hosts)</span>
+                </div>
+                <div style="display:flex; gap:0.4rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="toggleComplianceAssignment(${a.id}, ${a.enabled ? 'false' : 'true'})">${a.enabled ? 'Disable' : 'Enable'}</button>
+                    <button class="btn btn-sm" style="color:var(--danger)" onclick="confirmDeleteComplianceAssignment(${a.id})">Delete</button>
+                </div>
+            </div>
+            <div style="margin-top:0.5rem; font-size:0.85em; color:var(--text-muted);">
+                ${enabled} · Every ${interval} · Last scan: ${lastScan}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderComplianceResults(results) {
+    const container = document.getElementById('compliance-results-list');
+    if (!container) return;
+    const query = (listViewState.compliance.query || '').toLowerCase();
+    const filtered = results.filter(r => !query || (r.hostname || '').toLowerCase().includes(query) || (r.profile_name || '').toLowerCase().includes(query));
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No scan results yet', 'compliance', 'Run a compliance scan to see results.');
+        return;
+    }
+    container.innerHTML = filtered.map(r => {
+        const statusColor = r.status === 'compliant' ? 'success' : r.status === 'error' ? 'danger' : 'warning';
+        const scanned = r.scanned_at ? new Date(r.scanned_at + 'Z').toLocaleString() : '-';
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <span style="color:var(--${statusColor}); font-weight:600;">${escapeHtml(r.status)}</span>
+                    <strong style="margin-left:0.5rem;">${escapeHtml(r.hostname || '?')}</strong>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">${escapeHtml(r.ip_address || '')}</span>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">Profile: ${escapeHtml(r.profile_name || '?')}</span>
+                </div>
+                <div style="font-size:0.85em; color:var(--text-muted);">
+                    ${r.passed_rules}/${r.total_rules} passed · ${scanned}
+                </div>
+            </div>
+            ${r.failed_rules > 0 ? `<div style="margin-top:0.5rem;"><button class="btn btn-sm btn-secondary" onclick="showComplianceFindings(${r.id})">View ${r.failed_rules} violation(s)</button></div>` : ''}
+        </div>`;
+    }).join('');
+}
+
+function renderComplianceStatus(statusList) {
+    const container = document.getElementById('compliance-status-list');
+    if (!container) return;
+    const query = (listViewState.compliance.query || '').toLowerCase();
+    const filtered = statusList.filter(s => !query || (s.hostname || '').toLowerCase().includes(query) || (s.profile_name || '').toLowerCase().includes(query));
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No compliance status data', 'compliance', 'Scan some hosts to see their compliance status.');
+        return;
+    }
+    container.innerHTML = filtered.map(s => {
+        const statusColor = s.status === 'compliant' ? 'success' : s.status === 'error' ? 'danger' : 'warning';
+        const scanned = s.scanned_at ? new Date(s.scanned_at + 'Z').toLocaleString() : '-';
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--${statusColor}); margin-right:0.5rem;"></span>
+                    <strong>${escapeHtml(s.hostname || '?')}</strong>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">${escapeHtml(s.ip_address || '')}</span>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">· ${escapeHtml(s.profile_name || '?')}</span>
+                </div>
+                <div style="font-size:0.85em;">
+                    <span style="color:var(--${statusColor}); font-weight:600;">${escapeHtml(s.status)}</span>
+                    · ${s.passed_rules}/${s.total_rules} passed · ${scanned}
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function switchComplianceTab(tab) {
+    _complianceCurrentTab = tab;
+    listViewState.compliance.tab = tab;
+    const tabs = ['profiles', 'assignments', 'results', 'status'];
+    tabs.forEach(t => {
+        const btn = document.getElementById(`compliance-tab-${t}`);
+        const list = document.getElementById(`compliance-${t}-list`);
+        if (btn) btn.className = t === tab ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-secondary';
+        if (list) list.style.display = t === tab ? '' : 'none';
+    });
+}
+window.switchComplianceTab = switchComplianceTab;
+
+function refreshCompliance() { loadCompliance(); }
+window.refreshCompliance = refreshCompliance;
+
+async function showCreateComplianceProfileModal() {
+    showModal('Create Compliance Profile', `
+        <label class="form-label">Profile Name</label>
+        <input id="cp-name" class="form-input" placeholder="PCI-DSS Baseline">
+        <label class="form-label" style="margin-top:0.75rem;">Description</label>
+        <input id="cp-desc" class="form-input" placeholder="Describe the compliance standard">
+        <label class="form-label" style="margin-top:0.75rem;">Severity</label>
+        <select id="cp-severity" class="form-select">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+        </select>
+        <label class="form-label" style="margin-top:0.75rem;">Rules (JSON array)</label>
+        <textarea id="cp-rules" class="form-input" rows="8" placeholder='[{"name": "NTP configured", "type": "must_contain", "pattern": "ntp server"}]'></textarea>
+        <div style="margin-top:0.5rem; font-size:0.8em; color:var(--text-muted);">
+            Rule types: <code>must_contain</code>, <code>must_not_contain</code>, <code>regex_match</code><br>
+            Each rule: <code>{"name": "...", "type": "...", "pattern": "..."}</code>
+        </div>
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitCreateComplianceProfile()">Create</button>
+        </div>
+    `);
+}
+window.showCreateComplianceProfileModal = showCreateComplianceProfileModal;
+
+async function submitCreateComplianceProfile() {
+    const name = document.getElementById('cp-name')?.value?.trim();
+    if (!name) { showError('Profile name is required'); return; }
+    let rules = [];
+    const rulesText = document.getElementById('cp-rules')?.value?.trim();
+    if (rulesText) {
+        try { rules = JSON.parse(rulesText); } catch (e) { showError('Invalid JSON for rules'); return; }
+        if (!Array.isArray(rules)) { showError('Rules must be a JSON array'); return; }
+    }
+    try {
+        await api.createComplianceProfile({
+            name,
+            description: document.getElementById('cp-desc')?.value?.trim() || '',
+            severity: document.getElementById('cp-severity')?.value || 'medium',
+            rules,
+        });
+        closeAllModals();
+        showSuccess('Compliance profile created');
+        loadCompliance();
+    } catch (e) { showError(e.message); }
+}
+window.submitCreateComplianceProfile = submitCreateComplianceProfile;
+
+let _editComplianceProfileId = null;
+async function showEditComplianceProfileModal(profileId) {
+    _editComplianceProfileId = profileId;
+    let profile;
+    try { profile = await api.getComplianceProfile(profileId); } catch (e) { showError(e.message); return; }
+    let rulesStr = '';
+    try { rulesStr = JSON.stringify(JSON.parse(profile.rules || '[]'), null, 2); } catch (e) { rulesStr = profile.rules || '[]'; }
+    showModal('Edit Compliance Profile', `
+        <label class="form-label">Profile Name</label>
+        <input id="cp-name" class="form-input" value="${escapeHtml(profile.name)}">
+        <label class="form-label" style="margin-top:0.75rem;">Description</label>
+        <input id="cp-desc" class="form-input" value="${escapeHtml(profile.description || '')}">
+        <label class="form-label" style="margin-top:0.75rem;">Severity</label>
+        <select id="cp-severity" class="form-select">
+            <option value="low" ${profile.severity === 'low' ? 'selected' : ''}>Low</option>
+            <option value="medium" ${profile.severity === 'medium' ? 'selected' : ''}>Medium</option>
+            <option value="high" ${profile.severity === 'high' ? 'selected' : ''}>High</option>
+            <option value="critical" ${profile.severity === 'critical' ? 'selected' : ''}>Critical</option>
+        </select>
+        <label class="form-label" style="margin-top:0.75rem;">Rules (JSON array)</label>
+        <textarea id="cp-rules" class="form-input" rows="8">${escapeHtml(rulesStr)}</textarea>
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitEditComplianceProfile()">Save</button>
+        </div>
+    `);
+}
+window.showEditComplianceProfileModal = showEditComplianceProfileModal;
+
+async function submitEditComplianceProfile() {
+    const profileId = _editComplianceProfileId;
+    if (!profileId) return;
+    const name = document.getElementById('cp-name')?.value?.trim();
+    if (!name) { showError('Profile name is required'); return; }
+    let rules = [];
+    const rulesText = document.getElementById('cp-rules')?.value?.trim();
+    if (rulesText) {
+        try { rules = JSON.parse(rulesText); } catch (e) { showError('Invalid JSON for rules'); return; }
+        if (!Array.isArray(rules)) { showError('Rules must be a JSON array'); return; }
+    }
+    try {
+        await api.updateComplianceProfile(profileId, {
+            name,
+            description: document.getElementById('cp-desc')?.value?.trim() || '',
+            severity: document.getElementById('cp-severity')?.value || 'medium',
+            rules,
+        });
+        closeAllModals();
+        showSuccess('Profile updated');
+        loadCompliance();
+    } catch (e) { showError(e.message); }
+}
+window.submitEditComplianceProfile = submitEditComplianceProfile;
+
+let _assignComplianceProfileId = null;
+async function showAssignComplianceProfileModal(profileId) {
+    _assignComplianceProfileId = profileId;
+    let groups = [], creds = [];
+    try {
+        [groups, creds] = await Promise.all([api.getInventoryGroups(), api.getCredentials()]);
+    } catch (e) { /* ignore */ }
+    const groupOpts = (groups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const credOpts = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    showModal('Assign Profile to Group', `
+        <label class="form-label">Inventory Group</label>
+        <select id="ca-group" class="form-select">${groupOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Credential</label>
+        <select id="ca-cred" class="form-select">${credOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Scan Interval (hours)</label>
+        <input id="ca-interval" class="form-input" type="number" value="24" min="1" max="168">
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitAssignComplianceProfile()">Assign</button>
+        </div>
+    `);
+}
+window.showAssignComplianceProfileModal = showAssignComplianceProfileModal;
+
+async function submitAssignComplianceProfile() {
+    const profileId = _assignComplianceProfileId;
+    if (!profileId) return;
+    const groupId = parseInt(document.getElementById('ca-group')?.value);
+    const credId = parseInt(document.getElementById('ca-cred')?.value);
+    const hours = parseInt(document.getElementById('ca-interval')?.value) || 24;
+    if (!groupId || !credId) { showError('Group and credential are required'); return; }
+    try {
+        await api.createComplianceAssignment({
+            profile_id: profileId,
+            group_id: groupId,
+            credential_id: credId,
+            interval_seconds: hours * 3600,
+        });
+        closeAllModals();
+        showSuccess('Profile assigned to group');
+        loadCompliance();
+    } catch (e) { showError(e.message); }
+}
+window.submitAssignComplianceProfile = submitAssignComplianceProfile;
+
+async function confirmDeleteComplianceProfile(profileId) {
+    if (!confirm('Delete this compliance profile and all its assignments and scan results?')) return;
+    try {
+        await api.deleteComplianceProfile(profileId);
+        showSuccess('Profile deleted');
+        loadCompliance();
+    } catch (e) { showError(e.message); }
+}
+window.confirmDeleteComplianceProfile = confirmDeleteComplianceProfile;
+
+async function toggleComplianceAssignment(assignmentId, enabled) {
+    try {
+        await api.updateComplianceAssignment(assignmentId, { enabled });
+        showSuccess(enabled ? 'Assignment enabled' : 'Assignment disabled');
+        loadCompliance();
+    } catch (e) { showError(e.message); }
+}
+window.toggleComplianceAssignment = toggleComplianceAssignment;
+
+async function confirmDeleteComplianceAssignment(assignmentId) {
+    if (!confirm('Delete this compliance assignment?')) return;
+    try {
+        await api.deleteComplianceAssignment(assignmentId);
+        showSuccess('Assignment deleted');
+        loadCompliance();
+    } catch (e) { showError(e.message); }
+}
+window.confirmDeleteComplianceAssignment = confirmDeleteComplianceAssignment;
+
+async function showComplianceFindings(resultId) {
+    let result;
+    try { result = await api.getComplianceScanResult(resultId); } catch (e) { showError(e.message); return; }
+    let findings = [];
+    try { findings = JSON.parse(result.findings || '[]'); } catch (e) { /* ignore */ }
+    const rows = findings.map(f => {
+        const color = f.passed ? 'success' : 'danger';
+        return `<tr>
+            <td style="color:var(--${color})">${f.passed ? 'PASS' : 'FAIL'}</td>
+            <td>${escapeHtml(f.name || '-')}</td>
+            <td><code>${escapeHtml(f.type || '-')}</code></td>
+            <td style="font-size:0.85em">${escapeHtml(f.detail || '-')}</td>
+        </tr>`;
+    }).join('');
+    showModal(`Compliance Findings — ${escapeHtml(result.hostname || '?')}`, `
+        <div style="margin-bottom:1rem;">
+            <strong>Profile:</strong> ${escapeHtml(result.profile_name || '?')} ·
+            <strong>Status:</strong> ${escapeHtml(result.status)} ·
+            <strong>Score:</strong> ${result.passed_rules}/${result.total_rules} passed
+        </div>
+        <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; font-size:0.9em;">
+                <thead><tr style="border-bottom:1px solid var(--border-color);">
+                    <th style="text-align:left; padding:0.5rem;">Result</th>
+                    <th style="text-align:left; padding:0.5rem;">Rule</th>
+                    <th style="text-align:left; padding:0.5rem;">Type</th>
+                    <th style="text-align:left; padding:0.5rem;">Detail</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+    `);
+}
+window.showComplianceFindings = showComplianceFindings;
+
+// Search handler for compliance
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('compliance-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', debounce(() => {
+            listViewState.compliance.query = searchInput.value;
+            renderComplianceProfiles(listViewState.compliance.profiles);
+            renderComplianceAssignments(listViewState.compliance.assignments);
+            renderComplianceResults(listViewState.compliance.results);
+            renderComplianceStatus(listViewState.compliance.statusList);
+        }, 200));
+    }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Risk Analysis
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadRiskAnalysis(options = {}) {
+    const { preserveContent = false } = options;
+    const container = document.getElementById('risk-analyses-list');
+    if (!preserveContent && container) container.innerHTML = skeletonCards(2);
+    try {
+        const [summary, analyses] = await Promise.all([
+            api.getRiskAnalysisSummary(),
+            api.getRiskAnalyses({ limit: 200 }),
+        ]);
+        renderRiskSummary(summary);
+        listViewState.riskAnalysis.items = analyses || [];
+        renderRiskAnalyses(analyses || []);
+    } catch (error) {
+        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading risk analyses: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadRiskAnalysis = loadRiskAnalysis;
+
+function renderRiskSummary(summary) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('risk-stat-total', summary.total ?? '-');
+    set('risk-stat-high', summary.high_risk ?? '-');
+    set('risk-stat-approved', summary.approved ?? '-');
+    set('risk-stat-pending', summary.pending ?? '-');
+    set('risk-stat-last', summary.last_analysis_at ? new Date(summary.last_analysis_at + 'Z').toLocaleString() : 'Never');
+}
+
+function renderRiskAnalyses(analyses) {
+    const container = document.getElementById('risk-analyses-list');
+    if (!container) return;
+    const query = (listViewState.riskAnalysis.query || '').toLowerCase();
+    const levelFilter = listViewState.riskAnalysis.levelFilter || '';
+    const filtered = analyses.filter(a => {
+        if (levelFilter && a.risk_level !== levelFilter) return false;
+        if (query && !(a.hostname || '').toLowerCase().includes(query)
+            && !(a.group_name || '').toLowerCase().includes(query)
+            && !(a.change_type || '').toLowerCase().includes(query)) return false;
+        return true;
+    });
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No risk analyses', 'risk-analysis',
+            '<button class="btn btn-primary btn-sm" onclick="showNewRiskAnalysisModal()">Run an Analysis</button>');
+        return;
+    }
+    container.innerHTML = filtered.map(a => {
+        const levelColors = { low: 'success', medium: 'warning', high: 'warning', critical: 'danger', unknown: 'text-muted' };
+        const levelColor = levelColors[a.risk_level] || 'text-muted';
+        const scorePercent = Math.round((a.risk_score || 0) * 100);
+        const created = a.created_at ? new Date(a.created_at + 'Z').toLocaleString() : '-';
+        const approved = a.approved ? '<span style="color:var(--success)">Approved</span>' : '<span style="color:var(--text-muted)">Pending</span>';
+        let affectedAreas = [];
+        try { affectedAreas = JSON.parse(a.affected_areas || '[]'); } catch (e) { /* ignore */ }
+        const target = a.hostname ? `${escapeHtml(a.hostname)} (${escapeHtml(a.ip_address || '')})` : (a.group_name ? `Group: ${escapeHtml(a.group_name)}` : 'N/A');
+
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <span class="badge" style="background:var(--${levelColor}); color:white; font-size:0.8em; padding:3px 10px; border-radius:4px; text-transform:uppercase; font-weight:600;">${escapeHtml(a.risk_level)}</span>
+                    <span style="margin-left:0.5rem; font-size:0.9em; color:var(--text-muted)">Score: ${scorePercent}%</span>
+                    <strong style="margin-left:0.75rem;">${target}</strong>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">Type: ${escapeHtml(a.change_type || '?')}</span>
+                </div>
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                    ${approved}
+                    <button class="btn btn-sm btn-secondary" onclick="showRiskAnalysisDetail(${a.id})">Details</button>
+                    ${!a.approved ? `<button class="btn btn-sm btn-primary" onclick="approveRiskAnalysis(${a.id})">Approve</button>` : ''}
+                    <button class="btn btn-sm" style="color:var(--danger)" onclick="confirmDeleteRiskAnalysis(${a.id})">Delete</button>
+                </div>
+            </div>
+            <div style="margin-top:0.5rem; font-size:0.85em; color:var(--text-muted);">
+                ${affectedAreas.length > 0 ? `Areas: ${affectedAreas.map(a => escapeHtml(a)).join(', ')} · ` : ''}${created}${a.created_by ? ` by ${escapeHtml(a.created_by)}` : ''}
+            </div>
+            <!-- Risk score bar -->
+            <div style="margin-top:0.5rem; background:var(--bg-secondary); border-radius:4px; height:6px; overflow:hidden;">
+                <div style="width:${scorePercent}%; height:100%; background:var(--${levelColor}); border-radius:4px; transition:width 0.3s;"></div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function filterRiskAnalyses() {
+    listViewState.riskAnalysis.levelFilter = document.getElementById('risk-filter-level')?.value || '';
+    renderRiskAnalyses(listViewState.riskAnalysis.items);
+}
+window.filterRiskAnalyses = filterRiskAnalyses;
+
+function refreshRiskAnalysis() { loadRiskAnalysis(); }
+window.refreshRiskAnalysis = refreshRiskAnalysis;
+
+async function showNewRiskAnalysisModal() {
+    let groups = [], creds = [], templates = [];
+    try {
+        [groups, creds, templates] = await Promise.all([
+            api.getInventoryGroups(), api.getCredentials(), api.getTemplates(),
+        ]);
+    } catch (e) { /* ignore */ }
+    const groupOpts = (groups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const credOpts = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    const tplOpts = `<option value="">-- Enter commands manually --</option>` +
+        (templates || []).map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+    showModal('Pre-Change Risk Analysis', `
+        <label class="form-label">Change Type</label>
+        <select id="ra-type" class="form-select">
+            <option value="template">Template</option>
+            <option value="policy">Policy / ACL</option>
+            <option value="route">Route</option>
+            <option value="nat">NAT</option>
+            <option value="manual">Manual</option>
+        </select>
+        <label class="form-label" style="margin-top:0.75rem;">Target Group</label>
+        <select id="ra-group" class="form-select">${groupOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Credential</label>
+        <select id="ra-cred" class="form-select">${credOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Source</label>
+        <select id="ra-template" class="form-select" onchange="toggleRiskCommands()">${tplOpts}</select>
+        <div id="ra-commands-section">
+            <label class="form-label" style="margin-top:0.75rem;">Proposed Commands (one per line)</label>
+            <textarea id="ra-commands" class="form-input" rows="8" placeholder="ip route 10.0.0.0 255.0.0.0 192.168.1.1
+access-list 101 permit ip any 10.0.0.0 0.255.255.255
+ip nat inside source list 1 interface GigabitEthernet0/1 overload"></textarea>
+        </div>
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitRiskAnalysis()">Analyze Risk</button>
+        </div>
+    `);
+}
+window.showNewRiskAnalysisModal = showNewRiskAnalysisModal;
+
+function toggleRiskCommands() {
+    const tplSelect = document.getElementById('ra-template');
+    const cmdSection = document.getElementById('ra-commands-section');
+    if (cmdSection) cmdSection.style.display = tplSelect?.value ? 'none' : '';
+}
+window.toggleRiskCommands = toggleRiskCommands;
+
+async function submitRiskAnalysis() {
+    const group_id = parseInt(document.getElementById('ra-group')?.value);
+    const credential_id = parseInt(document.getElementById('ra-cred')?.value);
+    const template_id = document.getElementById('ra-template')?.value ? parseInt(document.getElementById('ra-template').value) : null;
+    const change_type = document.getElementById('ra-type')?.value || 'template';
+
+    if (!credential_id) { showError('Credential is required'); return; }
+
+    let proposed_commands = [];
+    if (!template_id) {
+        const cmdText = document.getElementById('ra-commands')?.value?.trim() || '';
+        if (!cmdText) { showError('Enter proposed commands or select a template'); return; }
+        proposed_commands = cmdText.split('\n').filter(l => l.trim());
+    }
+
+    closeAllModals();
+    showSuccess('Running risk analysis...');
+
+    try {
+        const result = await api.runRiskAnalysis({
+            change_type,
+            group_id: group_id || undefined,
+            credential_id,
+            template_id: template_id || undefined,
+            proposed_commands,
+        });
+        loadRiskAnalysis();
+        // Show result summary
+        const levelColors = { low: 'success', medium: 'warning', high: 'warning', critical: 'danger' };
+        const color = levelColors[result.risk_level] || 'text-muted';
+        showModal('Risk Analysis Complete', `
+            <div style="text-align:center; margin-bottom:1rem;">
+                <div style="font-size:2em; font-weight:700; color:var(--${color}); text-transform:uppercase;">${escapeHtml(result.risk_level)}</div>
+                <div style="font-size:1.2em; color:var(--text-muted);">Score: ${Math.round((result.risk_score || 0) * 100)}%</div>
+            </div>
+            <div style="margin-bottom:0.75rem;">
+                <strong>Hosts analyzed:</strong> ${result.hosts_analyzed || 0}<br>
+                <strong>Compliance violations:</strong> ${result.total_compliance_violations || 0}<br>
+                <strong>Affected areas:</strong> ${(result.affected_areas || []).join(', ') || 'None'}
+            </div>
+            ${result.host_results && result.host_results.length > 0 ? `
+                <div style="margin-top:1rem;">
+                    <strong>Per-host results:</strong>
+                    ${result.host_results.map(hr => {
+                        const hcolor = levelColors[hr.risk_level] || 'text-muted';
+                        return `<div style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-secondary); border-radius:6px;">
+                            <span style="color:var(--${hcolor}); font-weight:600; text-transform:uppercase;">${escapeHtml(hr.risk_level || '?')}</span>
+                            <strong style="margin-left:0.5rem;">${escapeHtml(hr.hostname || '?')}</strong>
+                            <span style="font-size:0.85em; color:var(--text-muted); margin-left:0.5rem;">Score: ${Math.round((hr.risk_score || 0) * 100)}%</span>
+                            ${hr.affected_areas && hr.affected_areas.length ? `<div style="font-size:0.8em; color:var(--text-muted); margin-top:0.25rem;">Areas: ${hr.affected_areas.join(', ')}</div>` : ''}
+                        </div>`;
+                    }).join('')}
+                </div>
+            ` : ''}
+            <div style="margin-top:1rem; text-align:right;">
+                <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+                <button class="btn btn-primary" onclick="closeAllModals(); showRiskAnalysisDetail(${result.id})">View Full Details</button>
+            </div>
+        `);
+    } catch (e) { showError('Risk analysis failed: ' + e.message); }
+}
+window.submitRiskAnalysis = submitRiskAnalysis;
+
+async function showOfflineRiskAnalysisModal() {
+    showModal('Offline Risk Analysis', `
+        <p style="font-size:0.9em; color:var(--text-muted); margin-bottom:1rem;">
+            Analyze risk without connecting to devices. Paste the current config and proposed commands.
+        </p>
+        <label class="form-label">Change Type</label>
+        <select id="ora-type" class="form-select">
+            <option value="policy">Policy / ACL</option>
+            <option value="route">Route</option>
+            <option value="nat">NAT</option>
+            <option value="manual">Manual</option>
+        </select>
+        <label class="form-label" style="margin-top:0.75rem;">Current Running Config</label>
+        <textarea id="ora-config" class="form-input" rows="8" placeholder="Paste current running-config here..."></textarea>
+        <label class="form-label" style="margin-top:0.75rem;">Proposed Commands (one per line)</label>
+        <textarea id="ora-commands" class="form-input" rows="6" placeholder="ip route 10.0.0.0 255.0.0.0 192.168.1.1
+no ip route 172.16.0.0 255.240.0.0 192.168.1.254"></textarea>
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitOfflineRiskAnalysis()">Analyze</button>
+        </div>
+    `);
+}
+window.showOfflineRiskAnalysisModal = showOfflineRiskAnalysisModal;
+
+async function submitOfflineRiskAnalysis() {
+    const config = document.getElementById('ora-config')?.value?.trim() || '';
+    const cmdText = document.getElementById('ora-commands')?.value?.trim() || '';
+    const changeType = document.getElementById('ora-type')?.value || 'manual';
+    if (!config) { showError('Current config is required'); return; }
+    if (!cmdText) { showError('Proposed commands are required'); return; }
+    const commands = cmdText.split('\n').filter(l => l.trim());
+    closeAllModals();
+    showSuccess('Running offline analysis...');
+    try {
+        const result = await api.runOfflineRiskAnalysis({
+            change_type: changeType,
+            current_config: config,
+            proposed_commands: commands,
+        });
+        loadRiskAnalysis();
+        const levelColors = { low: 'success', medium: 'warning', high: 'warning', critical: 'danger' };
+        const color = levelColors[result.risk_level] || 'text-muted';
+        showModal('Offline Analysis Complete', `
+            <div style="text-align:center; margin-bottom:1rem;">
+                <div style="font-size:2em; font-weight:700; color:var(--${color}); text-transform:uppercase;">${escapeHtml(result.risk_level)}</div>
+                <div style="font-size:1.2em; color:var(--text-muted);">Score: ${Math.round((result.risk_score || 0) * 100)}%</div>
+            </div>
+            <div><strong>Affected areas:</strong> ${(result.affected_areas || []).join(', ') || 'None'}</div>
+            ${result.analysis?.risk_factors?.length ? `<div style="margin-top:0.5rem;"><strong>Risk factors:</strong><ul style="margin:0.25rem 0 0 1.5rem;">${result.analysis.risk_factors.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div>` : ''}
+            ${result.proposed_diff ? `<div style="margin-top:1rem;"><strong>Predicted diff:</strong><pre style="background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:300px; overflow:auto; white-space:pre-wrap;">${escapeHtml(result.proposed_diff)}</pre></div>` : ''}
+            <div style="margin-top:1rem; text-align:right;">
+                <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+            </div>
+        `);
+    } catch (e) { showError('Offline analysis failed: ' + e.message); }
+}
+window.submitOfflineRiskAnalysis = submitOfflineRiskAnalysis;
+
+async function showRiskAnalysisDetail(analysisId) {
+    let analysis;
+    try { analysis = await api.getRiskAnalysis(analysisId); } catch (e) { showError(e.message); return; }
+
+    const levelColors = { low: 'success', medium: 'warning', high: 'warning', critical: 'danger' };
+    const color = levelColors[analysis.risk_level] || 'text-muted';
+    const scorePercent = Math.round((analysis.risk_score || 0) * 100);
+
+    let analysisObj = {};
+    try { analysisObj = JSON.parse(analysis.analysis || '{}'); } catch (e) { /* ignore */ }
+    let complianceImpact = [];
+    try { complianceImpact = JSON.parse(analysis.compliance_impact || '[]'); } catch (e) { /* ignore */ }
+    let affectedAreas = [];
+    try { affectedAreas = JSON.parse(analysis.affected_areas || '[]'); } catch (e) { /* ignore */ }
+
+    const riskFactors = analysisObj.risk_factors || [];
+    const changeVolume = analysisObj.change_volume || {};
+
+    showModal('Risk Analysis Details', `
+        <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+            <div style="text-align:center;">
+                <div style="font-size:2em; font-weight:700; color:var(--${color}); text-transform:uppercase;">${escapeHtml(analysis.risk_level)}</div>
+                <div style="font-size:1.1em; color:var(--text-muted);">Risk Score: ${scorePercent}%</div>
+                <div style="margin-top:0.5rem; width:120px; background:var(--bg-secondary); border-radius:4px; height:8px; overflow:hidden;">
+                    <div style="width:${scorePercent}%; height:100%; background:var(--${color}); border-radius:4px;"></div>
+                </div>
+            </div>
+            <div style="flex:1; min-width:200px;">
+                <div><strong>Target:</strong> ${analysis.hostname ? `${escapeHtml(analysis.hostname)} (${escapeHtml(analysis.ip_address || '')})` : (analysis.group_name ? `Group: ${escapeHtml(analysis.group_name)}` : 'N/A')}</div>
+                <div><strong>Change type:</strong> ${escapeHtml(analysis.change_type || '?')}</div>
+                <div><strong>Status:</strong> ${analysis.approved ? `<span style="color:var(--success)">Approved</span> by ${escapeHtml(analysis.approved_by || '?')}` : '<span style="color:var(--text-muted)">Pending approval</span>'}</div>
+                <div><strong>Created:</strong> ${analysis.created_at ? new Date(analysis.created_at + 'Z').toLocaleString() : '-'}${analysis.created_by ? ` by ${escapeHtml(analysis.created_by)}` : ''}</div>
+            </div>
+        </div>
+
+        ${affectedAreas.length ? `<div style="margin-bottom:1rem;"><strong>Affected Areas:</strong> ${affectedAreas.map(a => `<span class="badge" style="background:var(--bg-secondary); padding:2px 8px; border-radius:4px; margin-right:0.25rem; font-size:0.85em;">${escapeHtml(a)}</span>`).join('')}</div>` : ''}
+
+        ${riskFactors.length ? `<div style="margin-bottom:1rem;"><strong>Risk Factors:</strong><ul style="margin:0.25rem 0 0 1.5rem;">${riskFactors.map(f => `<li style="margin-bottom:0.25rem;">${escapeHtml(f)}</li>`).join('')}</ul></div>` : ''}
+
+        ${changeVolume.total_commands ? `<div style="margin-bottom:1rem;"><strong>Change Volume:</strong> ${changeVolume.total_commands} commands, +${changeVolume.diff_lines_added || 0} / -${changeVolume.diff_lines_removed || 0} lines</div>` : ''}
+
+        ${complianceImpact.length ? `
+            <div style="margin-bottom:1rem;">
+                <strong>Compliance Impact:</strong>
+                ${complianceImpact.map(ci => `
+                    <div style="margin-top:0.5rem; padding:0.5rem; background:var(--bg-secondary); border-radius:6px;">
+                        <strong>${escapeHtml(ci.profile_name || '?')}</strong>
+                        <span style="margin-left:0.5rem; font-size:0.85em;">
+                            ${ci.new_violations > 0 ? `<span style="color:var(--danger)">+${ci.new_violations} violation(s)</span>` : ''}
+                            ${ci.improvements > 0 ? `<span style="color:var(--success); margin-left:0.5rem;">+${ci.improvements} improvement(s)</span>` : ''}
+                        </span>
+                        ${ci.changed_rules ? `<div style="margin-top:0.25rem; font-size:0.8em;">${ci.changed_rules.map(r => `<div style="margin-left:1rem;"><span style="color:var(--${r.impact === 'regression' ? 'danger' : 'success'})">${r.impact === 'regression' ? 'REGRESS' : 'IMPROVE'}</span> ${escapeHtml(r.name)}: ${r.before} → ${r.after}</div>`).join('')}</div>` : ''}
+                    </div>
+                `).join('')}
+            </div>
+        ` : ''}
+
+        ${analysis.proposed_commands ? `
+            <details style="margin-bottom:1rem;">
+                <summary style="cursor:pointer; font-weight:600;">Proposed Commands</summary>
+                <pre style="background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:200px; overflow:auto; margin-top:0.5rem; white-space:pre-wrap;">${escapeHtml(analysis.proposed_commands)}</pre>
+            </details>
+        ` : ''}
+
+        ${analysis.proposed_diff ? `
+            <details style="margin-bottom:1rem;">
+                <summary style="cursor:pointer; font-weight:600;">Predicted Config Diff</summary>
+                <pre style="background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:300px; overflow:auto; margin-top:0.5rem; white-space:pre-wrap;">${escapeHtml(analysis.proposed_diff)}</pre>
+            </details>
+        ` : ''}
+
+        <div style="margin-top:1rem; text-align:right;">
+            ${!analysis.approved ? `<button class="btn btn-primary" onclick="approveRiskAnalysis(${analysis.id}); closeAllModals();">Approve Change</button>` : ''}
+            <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+        </div>
+    `);
+}
+window.showRiskAnalysisDetail = showRiskAnalysisDetail;
+
+async function approveRiskAnalysis(analysisId) {
+    try {
+        await api.approveRiskAnalysis(analysisId);
+        showSuccess('Risk analysis approved');
+        loadRiskAnalysis();
+    } catch (e) { showError(e.message); }
+}
+window.approveRiskAnalysis = approveRiskAnalysis;
+
+async function confirmDeleteRiskAnalysis(analysisId) {
+    if (!confirm('Delete this risk analysis?')) return;
+    try {
+        await api.deleteRiskAnalysis(analysisId);
+        showSuccess('Risk analysis deleted');
+        loadRiskAnalysis();
+    } catch (e) { showError(e.message); }
+}
+window.confirmDeleteRiskAnalysis = confirmDeleteRiskAnalysis;
+
+// Search handler for risk analysis
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('risk-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', debounce(() => {
+            listViewState.riskAnalysis.query = searchInput.value;
+            renderRiskAnalyses(listViewState.riskAnalysis.items);
         }, 200));
     }
 });

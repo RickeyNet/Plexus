@@ -212,6 +212,17 @@ CONFIG_BACKUP_POLICY_MIN_RETENTION = 1
 CONFIG_BACKUP_POLICY_MAX_RETENTION = 365
 CONFIG_BACKUP_CONFIG = dict(CONFIG_BACKUP_DEFAULTS)
 
+COMPLIANCE_CHECK_DEFAULTS = {
+    "enabled": False,
+    "interval_seconds": 300,
+    "retention_days": 90,
+}
+COMPLIANCE_CHECK_MIN_INTERVAL = 60
+COMPLIANCE_CHECK_MAX_INTERVAL = 86400
+COMPLIANCE_ASSIGNMENT_MIN_INTERVAL = 3600
+COMPLIANCE_ASSIGNMENT_MAX_INTERVAL = 604800
+COMPLIANCE_CHECK_CONFIG = dict(COMPLIANCE_CHECK_DEFAULTS)
+
 
 # ── CSRF token helpers ───────────────────────────────────────────────────────
 
@@ -493,6 +504,8 @@ FEATURE_FLAGS = [
     "topology",
     "config-drift",
     "config-backups",
+    "compliance",
+    "risk-analysis",
 ]
 
 AUTH_CONFIG_DEFAULTS = {
@@ -704,6 +717,25 @@ def _sanitize_config_backup_config(data: dict | None) -> dict:
         cfg["interval_seconds"] = max(
             CONFIG_BACKUP_MIN_INTERVAL,
             min(CONFIG_BACKUP_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
+    return cfg
+
+
+def _sanitize_compliance_check_config(data: dict | None) -> dict:
+    cfg = {
+        "enabled": bool(COMPLIANCE_CHECK_DEFAULTS["enabled"]),
+        "interval_seconds": int(COMPLIANCE_CHECK_DEFAULTS["interval_seconds"]),
+        "retention_days": int(COMPLIANCE_CHECK_DEFAULTS["retention_days"]),
+    }
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
+        cfg["interval_seconds"] = max(
+            COMPLIANCE_CHECK_MIN_INTERVAL,
+            min(COMPLIANCE_CHECK_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
+        cfg["retention_days"] = max(
+            1, min(365, int(data.get("retention_days", cfg["retention_days"])))
         )
     return cfg
 
@@ -1266,6 +1298,202 @@ async def _config_backup_loop() -> None:
             await asyncio.sleep(CONFIG_BACKUP_DEFAULTS["interval_seconds"])
 
 
+# ── Compliance Check Background Loop ─────────────────────────────────────────
+
+
+def _evaluate_rule(rule: dict, config_text: str) -> dict:
+    """Evaluate a single compliance rule against running config.
+
+    Rule types:
+      - must_contain: config must contain the pattern (substring or regex)
+      - must_not_contain: config must NOT contain the pattern
+      - regex_match: config must match the regex pattern
+    """
+    import re as _re
+
+    rule_type = rule.get("type", "must_contain")
+    pattern = rule.get("pattern", "")
+    name = rule.get("name", pattern[:60])
+    result = {"name": name, "type": rule_type, "pattern": pattern, "passed": False, "detail": ""}
+
+    if not pattern:
+        result["passed"] = True
+        result["detail"] = "Empty pattern — auto-pass"
+        return result
+
+    if rule_type == "must_contain":
+        found = pattern.lower() in config_text.lower()
+        result["passed"] = found
+        result["detail"] = "Pattern found" if found else f"Missing: {pattern}"
+    elif rule_type == "must_not_contain":
+        found = pattern.lower() in config_text.lower()
+        result["passed"] = not found
+        result["detail"] = "Pattern absent (good)" if not found else f"Prohibited pattern found: {pattern}"
+    elif rule_type == "regex_match":
+        try:
+            match = _re.search(pattern, config_text, _re.MULTILINE | _re.IGNORECASE)
+            result["passed"] = match is not None
+            result["detail"] = "Regex matched" if match else f"Regex not matched: {pattern}"
+        except _re.error as e:
+            result["passed"] = False
+            result["detail"] = f"Invalid regex: {e}"
+    else:
+        result["passed"] = False
+        result["detail"] = f"Unknown rule type: {rule_type}"
+
+    return result
+
+
+async def _evaluate_host_compliance(host: dict, profile: dict, credentials: dict) -> dict:
+    """Evaluate a host against a compliance profile's rules.
+
+    Returns {status, total_rules, passed_rules, failed_rules, findings, config_snippet}.
+    """
+    try:
+        config_text = await _capture_running_config(host, credentials)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "total_rules": 0,
+            "passed_rules": 0,
+            "failed_rules": 0,
+            "findings": json.dumps([{"name": "config_capture", "passed": False, "detail": str(exc)}]),
+            "config_snippet": "",
+        }
+
+    rules_json = profile.get("rules") or profile.get("profile_rules") or "[]"
+    if isinstance(rules_json, str):
+        try:
+            rules = json.loads(rules_json)
+        except json.JSONDecodeError:
+            rules = []
+    else:
+        rules = rules_json
+
+    findings = []
+    passed = 0
+    failed = 0
+    for rule in rules:
+        result = _evaluate_rule(rule, config_text)
+        findings.append(result)
+        if result["passed"]:
+            passed += 1
+        else:
+            failed += 1
+
+    total = len(rules)
+    status = "compliant" if failed == 0 else "non-compliant"
+    # Truncate config snippet for storage
+    snippet = config_text[:2000] if len(config_text) > 2000 else config_text
+
+    return {
+        "status": status,
+        "total_rules": total,
+        "passed_rules": passed,
+        "failed_rules": failed,
+        "findings": json.dumps(findings),
+        "config_snippet": snippet,
+    }
+
+
+async def _run_compliance_check_once() -> dict:
+    """Run compliance scans for all due assignments."""
+    if not COMPLIANCE_CHECK_CONFIG.get("enabled"):
+        return {"enabled": False, "assignments_run": 0, "hosts_scanned": 0, "violations": 0, "errors": 0}
+
+    due_assignments = await db.get_compliance_assignments_due()
+    assignments_run = 0
+    hosts_scanned = 0
+    violations = 0
+    errors = 0
+
+    sem = asyncio.Semaphore(4)
+
+    for assignment in due_assignments:
+        try:
+            hosts = await db.get_hosts_for_group(assignment["group_id"])
+            cred = await db.get_credential_raw(assignment["credential_id"])
+            if not cred:
+                LOGGER.warning("compliance: credential %s not found for assignment %s",
+                               assignment["credential_id"], assignment["id"])
+                errors += 1
+                continue
+
+            profile = await db.get_compliance_profile(assignment["profile_id"])
+            if not profile:
+                errors += 1
+                continue
+
+            async def _scan_host(h, prof, cred_data, asgn_id, prof_id):
+                async with sem:
+                    try:
+                        result = await _evaluate_host_compliance(h, prof, cred_data)
+                        await db.create_compliance_scan_result(
+                            assignment_id=asgn_id,
+                            profile_id=prof_id,
+                            host_id=h["id"],
+                            **result,
+                        )
+                        return result["status"]
+                    except Exception as exc:
+                        LOGGER.warning("compliance: scan failed host_id=%s: %s", h["id"], exc)
+                        return "error"
+
+            tasks = [_scan_host(h, profile, cred, assignment["id"], assignment["profile_id"]) for h in hosts]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, str):
+                    hosts_scanned += 1
+                    if r == "non-compliant":
+                        violations += 1
+                    elif r == "error":
+                        errors += 1
+                else:
+                    errors += 1
+
+            await db.update_compliance_assignment_last_scan(assignment["id"])
+            assignments_run += 1
+
+        except Exception as exc:
+            errors += 1
+            LOGGER.warning("compliance: assignment %s failed: %s", assignment["id"], exc)
+
+    # Retention cleanup
+    retention_days = int(COMPLIANCE_CHECK_CONFIG.get("retention_days", COMPLIANCE_CHECK_DEFAULTS["retention_days"]))
+    try:
+        await db.delete_old_compliance_scan_results(retention_days)
+    except Exception:
+        pass
+
+    if assignments_run > 0:
+        LOGGER.info("compliance: ran %d assignments, scanned %d hosts, %d violations, %d errors",
+                     assignments_run, hosts_scanned, violations, errors)
+        increment_metric("compliance.check.scheduled.success")
+
+    return {
+        "enabled": True,
+        "assignments_run": assignments_run,
+        "hosts_scanned": hosts_scanned,
+        "violations": violations,
+        "errors": errors,
+    }
+
+
+async def _compliance_check_loop() -> None:
+    """Infinite loop that checks for due compliance scans."""
+    while True:
+        try:
+            await asyncio.sleep(int(COMPLIANCE_CHECK_CONFIG.get(
+                "interval_seconds", COMPLIANCE_CHECK_DEFAULTS["interval_seconds"])))
+            await _run_compliance_check_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("compliance check loop failure: %s", redact_value(str(exc)))
+            increment_metric("compliance.check.scheduled.failed")
+            await asyncio.sleep(COMPLIANCE_CHECK_DEFAULTS["interval_seconds"])
+
+
 def _ensure_radius_dictionary_file() -> str:
     """Create a minimal RADIUS dictionary if one does not exist."""
     if os.path.isfile(RADIUS_DICTIONARY_FILE):
@@ -1384,7 +1612,7 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 async def _load_persisted_security_settings():
     global LOGIN_RULES, AUTH_CONFIG, DISCOVERY_SYNC_CONFIG, SNMP_DISCOVERY_CONFIG, SNMP_DISCOVERY_PROFILES
     global SNMP_PROFILES, GROUP_SNMP_ASSIGNMENTS, TOPOLOGY_DISCOVERY_CONFIG, CONFIG_DRIFT_CHECK_CONFIG
-    global CONFIG_BACKUP_CONFIG
+    global CONFIG_BACKUP_CONFIG, COMPLIANCE_CHECK_CONFIG
     login_rules = await db.get_auth_setting("login_rules")
     auth_config = await db.get_auth_setting("auth_config")
     discovery_sync = await db.get_auth_setting("discovery_sync")
@@ -1405,6 +1633,8 @@ async def _load_persisted_security_settings():
     CONFIG_DRIFT_CHECK_CONFIG = _sanitize_config_drift_check_config(config_drift_check)
     config_backup = await db.get_auth_setting("config_backup")
     CONFIG_BACKUP_CONFIG = _sanitize_config_backup_config(config_backup)
+    compliance_check = await db.get_auth_setting("compliance_check")
+    COMPLIANCE_CHECK_CONFIG = _sanitize_compliance_check_config(compliance_check)
 
 
 async def _get_user_features(user: dict) -> list[str]:
@@ -1471,6 +1701,7 @@ async def lifespan(app: FastAPI):
     topology_discovery_task = asyncio.create_task(_topology_discovery_loop())
     config_drift_task = asyncio.create_task(_config_drift_check_loop())
     config_backup_task = asyncio.create_task(_config_backup_loop())
+    compliance_check_task = asyncio.create_task(_compliance_check_loop())
     try:
         yield
     finally:
@@ -1479,6 +1710,7 @@ async def lifespan(app: FastAPI):
         topology_discovery_task.cancel()
         config_drift_task.cancel()
         config_backup_task.cancel()
+        compliance_check_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -1497,6 +1729,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await config_backup_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await compliance_check_task
         except asyncio.CancelledError:
             pass
 
@@ -2503,6 +2739,50 @@ class ConfigBackupRestoreRequest(BaseModel):
     credential_id: int
 
 
+class ComplianceProfileCreate(BaseModel):
+    name: str
+    description: str = ""
+    rules: list[dict] = []
+    severity: str = "medium"
+
+
+class ComplianceProfileUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    rules: list[dict] | None = None
+    severity: str | None = None
+
+
+class ComplianceAssignmentCreate(BaseModel):
+    profile_id: int
+    group_id: int
+    credential_id: int
+    interval_seconds: int = 86400
+
+
+class ComplianceAssignmentUpdate(BaseModel):
+    enabled: bool | None = None
+    credential_id: int | None = None
+    interval_seconds: int | None = None
+
+
+class ComplianceScanRequest(BaseModel):
+    host_id: int
+    profile_id: int
+    credential_id: int
+
+
+class RiskAnalysisRequest(BaseModel):
+    """Request to analyze risk of proposed configuration changes."""
+    change_type: str = "template"  # template, manual, policy, route, nat
+    host_id: int | None = None
+    group_id: int | None = None
+    host_ids: list[int] | None = None
+    credential_id: int
+    proposed_commands: list[str] = []
+    template_id: int | None = None
+
+
 # ── Config Drift helpers ─────────────────────────────────────────────────────
 
 
@@ -2549,6 +2829,318 @@ async def _capture_running_config(host: dict, credentials: dict) -> str:
         return config
 
     return await asyncio.to_thread(_do_capture)
+
+
+# ── Risk Analysis Engine ─────────────────────────────────────────────────────
+
+# Keywords that indicate high-impact config sections
+_CRITICAL_PATTERNS = {
+    "routing": {
+        "keywords": [
+            "router ospf", "router bgp", "router eigrp", "router rip",
+            "ip route", "ipv6 route", "network ", "redistribute",
+            "route-map", "prefix-list", "as-path",
+        ],
+        "label": "Routing",
+        "weight": 0.25,
+    },
+    "acl_policy": {
+        "keywords": [
+            "access-list", "ip access-list", "permit ", "deny ",
+            "access-group", "policy-map", "class-map", "service-policy",
+        ],
+        "label": "ACL / Policy",
+        "weight": 0.20,
+    },
+    "nat": {
+        "keywords": [
+            "ip nat ", "nat ", "object network", "nat (", "static (",
+            "pat-pool", "xlate",
+        ],
+        "label": "NAT",
+        "weight": 0.20,
+    },
+    "interface": {
+        "keywords": [
+            "interface ", "shutdown", "no shutdown", "ip address",
+            "switchport", "channel-group", "vlan ",
+        ],
+        "label": "Interface",
+        "weight": 0.15,
+    },
+    "security": {
+        "keywords": [
+            "crypto ", "ipsec ", "ikev2", "tunnel ", "aaa ",
+            "radius", "tacacs", "enable secret", "username ",
+            "snmp-server community", "line vty", "ssh ",
+        ],
+        "label": "Security / AAA",
+        "weight": 0.20,
+    },
+}
+
+
+def _classify_change_areas(commands: list[str]) -> list[dict]:
+    """Classify proposed commands into affected infrastructure areas."""
+    areas = []
+    commands_lower = [c.lower().strip() for c in commands]
+
+    for area_key, area_def in _CRITICAL_PATTERNS.items():
+        matched_commands = []
+        for i, cmd_lower in enumerate(commands_lower):
+            for kw in area_def["keywords"]:
+                if kw in cmd_lower:
+                    matched_commands.append(commands[i])
+                    break
+        if matched_commands:
+            areas.append({
+                "area": area_key,
+                "label": area_def["label"],
+                "weight": area_def["weight"],
+                "matched_count": len(matched_commands),
+                "matched_commands": matched_commands[:10],  # cap for storage
+            })
+    return areas
+
+
+def _simulate_config_change(current_config: str, commands: list[str]) -> str:
+    """Simulate applying commands to a config by appending them.
+
+    This is a best-effort simulation — real device behavior may differ.
+    For 'no <command>' lines, we attempt to remove the matching line.
+    """
+    lines = current_config.splitlines()
+    result_lines = list(lines)
+
+    for cmd in commands:
+        stripped = cmd.strip()
+        if not stripped or stripped.startswith("!") or stripped.startswith("#"):
+            continue
+
+        if stripped.lower().startswith("no "):
+            # Try to remove the matching positive form
+            positive = stripped[3:].strip()
+            result_lines = [
+                line for line in result_lines
+                if positive.lower() not in line.lower().strip()
+            ]
+        else:
+            # Append the command (simplified — real IOS merges into sections)
+            result_lines.append(stripped)
+
+    return "\n".join(result_lines)
+
+
+def _compute_risk_score(
+    commands: list[str],
+    affected_areas: list[dict],
+    diff_added: int,
+    diff_removed: int,
+    compliance_violations: int,
+) -> tuple[float, str]:
+    """Compute a 0.0-1.0 risk score and risk level.
+
+    Factors:
+      - Volume of changes (more lines = higher risk)
+      - Critical areas touched (routing, NAT, security = higher weight)
+      - Lines removed (destructive changes are riskier)
+      - Compliance violations introduced
+    """
+    score = 0.0
+
+    # Volume factor (0-0.2): more commands = more risk
+    cmd_count = len(commands)
+    if cmd_count > 50:
+        score += 0.20
+    elif cmd_count > 20:
+        score += 0.15
+    elif cmd_count > 10:
+        score += 0.10
+    elif cmd_count > 5:
+        score += 0.05
+
+    # Critical area factor (0-0.4): weighted by area importance
+    area_score = sum(a["weight"] * min(1.0, a["matched_count"] / 3.0) for a in affected_areas)
+    score += min(0.40, area_score)
+
+    # Destructive change factor (0-0.2): removals are riskier
+    if diff_removed > 20:
+        score += 0.20
+    elif diff_removed > 10:
+        score += 0.15
+    elif diff_removed > 5:
+        score += 0.10
+    elif diff_removed > 0:
+        score += 0.05
+
+    # Compliance violation factor (0-0.2)
+    if compliance_violations > 5:
+        score += 0.20
+    elif compliance_violations > 2:
+        score += 0.15
+    elif compliance_violations > 0:
+        score += 0.10
+
+    score = min(1.0, score)
+
+    if score >= 0.7:
+        level = "critical"
+    elif score >= 0.5:
+        level = "high"
+    elif score >= 0.3:
+        level = "medium"
+    else:
+        level = "low"
+
+    return round(score, 3), level
+
+
+async def _run_risk_analysis_for_host(
+    host: dict,
+    commands: list[str],
+    credentials: dict,
+    change_type: str = "template",
+) -> dict:
+    """Run a full risk analysis for proposed commands against a single host.
+
+    Steps:
+      1. Capture current running config
+      2. Classify affected areas
+      3. Simulate the config change
+      4. Compute diff between current and simulated
+      5. Check compliance impact (run assigned profiles against simulated config)
+      6. Calculate risk score
+    """
+    # 1. Capture current config
+    try:
+        current_config = await _capture_running_config(host, credentials)
+    except Exception as exc:
+        return {
+            "host_id": host["id"],
+            "hostname": host.get("hostname", ""),
+            "status": "error",
+            "error": f"Failed to capture config: {exc}",
+            "risk_level": "unknown",
+            "risk_score": 0.0,
+        }
+
+    # 2. Classify affected areas
+    affected_areas = _classify_change_areas(commands)
+
+    # 3. Simulate config change
+    simulated_config = _simulate_config_change(current_config, commands)
+
+    # 4. Compute diff
+    diff_text, diff_added, diff_removed = _compute_config_diff(
+        current_config, simulated_config,
+        baseline_label="current", actual_label="after-change",
+    )
+
+    # 5. Check compliance impact
+    compliance_impact = []
+    compliance_violations = 0
+    try:
+        host_obj = await db.get_host(host["id"])
+        if host_obj and host_obj.get("group_id"):
+            assignments = await db.get_compliance_assignments(group_id=host_obj["group_id"])
+            for assignment in assignments:
+                if not assignment.get("enabled"):
+                    continue
+                profile = await db.get_compliance_profile(assignment["profile_id"])
+                if not profile:
+                    continue
+                rules_json = profile.get("rules") or "[]"
+                if isinstance(rules_json, str):
+                    try:
+                        rules = json.loads(rules_json)
+                    except json.JSONDecodeError:
+                        rules = []
+                else:
+                    rules = rules_json
+
+                # Evaluate rules against current and simulated configs
+                findings_before = []
+                findings_after = []
+                for rule in rules:
+                    before_result = _evaluate_rule(rule, current_config)
+                    after_result = _evaluate_rule(rule, simulated_config)
+                    findings_before.append(before_result)
+                    findings_after.append(after_result)
+
+                before_failures = sum(1 for f in findings_before if not f["passed"])
+                after_failures = sum(1 for f in findings_after if not f["passed"])
+                new_violations = after_failures - before_failures
+
+                if new_violations > 0:
+                    compliance_violations += new_violations
+
+                changed_rules = []
+                for i, rule in enumerate(rules):
+                    before = findings_before[i]["passed"]
+                    after = findings_after[i]["passed"]
+                    if before != after:
+                        changed_rules.append({
+                            "name": rule.get("name", rule.get("pattern", "?")),
+                            "before": "pass" if before else "fail",
+                            "after": "pass" if after else "fail",
+                            "impact": "regression" if before and not after else "improvement",
+                        })
+
+                if changed_rules:
+                    compliance_impact.append({
+                        "profile_name": profile["name"],
+                        "profile_id": profile["id"],
+                        "before_failures": before_failures,
+                        "after_failures": after_failures,
+                        "new_violations": max(0, new_violations),
+                        "improvements": sum(1 for c in changed_rules if c["impact"] == "improvement"),
+                        "changed_rules": changed_rules,
+                    })
+    except Exception as exc:
+        LOGGER.warning("risk-analysis: compliance impact check failed for host %s: %s", host["id"], exc)
+
+    # 6. Calculate risk score
+    risk_score, risk_level = _compute_risk_score(
+        commands, affected_areas, diff_added, diff_removed, compliance_violations,
+    )
+
+    analysis_detail = {
+        "change_volume": {
+            "total_commands": len(commands),
+            "diff_lines_added": diff_added,
+            "diff_lines_removed": diff_removed,
+        },
+        "affected_areas": affected_areas,
+        "compliance_impact": compliance_impact,
+        "compliance_violations_introduced": compliance_violations,
+        "risk_factors": [],
+    }
+
+    # Build human-readable risk factors
+    if affected_areas:
+        area_labels = [a["label"] for a in affected_areas]
+        analysis_detail["risk_factors"].append(f"Touches critical areas: {', '.join(area_labels)}")
+    if diff_removed > 0:
+        analysis_detail["risk_factors"].append(f"Removes {diff_removed} line(s) from running config")
+    if compliance_violations > 0:
+        analysis_detail["risk_factors"].append(f"Introduces {compliance_violations} new compliance violation(s)")
+    if len(commands) > 20:
+        analysis_detail["risk_factors"].append(f"Large change set ({len(commands)} commands)")
+
+    return {
+        "host_id": host["id"],
+        "hostname": host.get("hostname", ""),
+        "ip_address": host.get("ip_address", ""),
+        "status": "analyzed",
+        "risk_level": risk_level,
+        "risk_score": risk_score,
+        "proposed_diff": diff_text,
+        "current_config": current_config[:3000],
+        "simulated_config": simulated_config[:3000],
+        "analysis": analysis_detail,
+        "compliance_impact": compliance_impact,
+        "affected_areas": [a["label"] for a in affected_areas],
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -5712,6 +6304,547 @@ async def admin_run_config_backups_now(request: Request):
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "result": result}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Compliance Profiles & Scans
+# ═════════════════════════════════════════════════════════════════════════════
+
+_COMPLIANCE_DEPS = [Depends(require_auth), Depends(require_feature("compliance"))]
+
+
+# ── Compliance Profile CRUD ──────────────────────────────────────────────────
+
+
+@app.get("/api/compliance/profiles", dependencies=_COMPLIANCE_DEPS)
+async def list_compliance_profiles():
+    return await db.get_compliance_profiles()
+
+
+@app.post("/api/compliance/profiles", status_code=201, dependencies=_COMPLIANCE_DEPS)
+async def create_compliance_profile(body: ComplianceProfileCreate, request: Request):
+    if body.severity not in ("low", "medium", "high", "critical"):
+        raise HTTPException(status_code=400, detail="Severity must be low, medium, high, or critical")
+    session = _get_session(request)
+    profile_id = await db.create_compliance_profile(
+        name=body.name,
+        description=body.description,
+        rules=json.dumps(body.rules),
+        severity=body.severity,
+        created_by=session["user"] if session else "",
+    )
+    await _audit(
+        "compliance", "profile.created",
+        user=session["user"] if session else "",
+        detail=f"profile_id={profile_id} name={body.name} rules={len(body.rules)}",
+        correlation_id=_corr_id(request),
+    )
+    return {"id": profile_id}
+
+
+@app.get("/api/compliance/profiles/{profile_id}", dependencies=_COMPLIANCE_DEPS)
+async def get_compliance_profile(profile_id: int):
+    profile = await db.get_compliance_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Compliance profile not found")
+    return profile
+
+
+@app.put("/api/compliance/profiles/{profile_id}", dependencies=_COMPLIANCE_DEPS)
+async def update_compliance_profile(profile_id: int, body: ComplianceProfileUpdate, request: Request):
+    profile = await db.get_compliance_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Compliance profile not found")
+    updates = {}
+    if body.name is not None:
+        updates["name"] = body.name
+    if body.description is not None:
+        updates["description"] = body.description
+    if body.rules is not None:
+        updates["rules"] = json.dumps(body.rules)
+    if body.severity is not None:
+        if body.severity not in ("low", "medium", "high", "critical"):
+            raise HTTPException(status_code=400, detail="Severity must be low, medium, high, or critical")
+        updates["severity"] = body.severity
+    await db.update_compliance_profile(profile_id, **updates)
+    session = _get_session(request)
+    await _audit(
+        "compliance", "profile.updated",
+        user=session["user"] if session else "",
+        detail=f"profile_id={profile_id} fields={list(updates.keys())}",
+        correlation_id=_corr_id(request),
+    )
+    return await db.get_compliance_profile(profile_id)
+
+
+@app.delete("/api/compliance/profiles/{profile_id}", dependencies=_COMPLIANCE_DEPS)
+async def delete_compliance_profile(profile_id: int, request: Request):
+    profile = await db.get_compliance_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Compliance profile not found")
+    await db.delete_compliance_profile(profile_id)
+    session = _get_session(request)
+    await _audit(
+        "compliance", "profile.deleted",
+        user=session["user"] if session else "",
+        detail=f"profile_id={profile_id} name={profile['name']}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
+
+
+# ── Compliance Assignments ──────────────────────────────────────────────────
+
+
+@app.get("/api/compliance/assignments", dependencies=_COMPLIANCE_DEPS)
+async def list_compliance_assignments(
+    profile_id: int | None = Query(default=None),
+    group_id: int | None = Query(default=None),
+):
+    return await db.get_compliance_assignments(profile_id=profile_id, group_id=group_id)
+
+
+@app.post("/api/compliance/assignments", status_code=201, dependencies=_COMPLIANCE_DEPS)
+async def create_compliance_assignment(body: ComplianceAssignmentCreate, request: Request):
+    profile = await db.get_compliance_profile(body.profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Compliance profile not found")
+    group = await db.get_group(body.group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Inventory group not found")
+    cred = await db.get_credential_raw(body.credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    interval = max(COMPLIANCE_ASSIGNMENT_MIN_INTERVAL, min(COMPLIANCE_ASSIGNMENT_MAX_INTERVAL, body.interval_seconds))
+    session = _get_session(request)
+    assignment_id = await db.create_compliance_assignment(
+        profile_id=body.profile_id,
+        group_id=body.group_id,
+        credential_id=body.credential_id,
+        interval_seconds=interval,
+        assigned_by=session["user"] if session else "",
+    )
+    await _audit(
+        "compliance", "assignment.created",
+        user=session["user"] if session else "",
+        detail=f"assignment_id={assignment_id} profile={body.profile_id} group={body.group_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"id": assignment_id}
+
+
+@app.put("/api/compliance/assignments/{assignment_id}", dependencies=_COMPLIANCE_DEPS)
+async def update_compliance_assignment(assignment_id: int, body: ComplianceAssignmentUpdate, request: Request):
+    assignment = await db.get_compliance_assignment(assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    updates = {}
+    if body.enabled is not None:
+        updates["enabled"] = 1 if body.enabled else 0
+    if body.credential_id is not None:
+        updates["credential_id"] = body.credential_id
+    if body.interval_seconds is not None:
+        updates["interval_seconds"] = max(COMPLIANCE_ASSIGNMENT_MIN_INTERVAL,
+                                          min(COMPLIANCE_ASSIGNMENT_MAX_INTERVAL, body.interval_seconds))
+    await db.update_compliance_assignment(assignment_id, **updates)
+    session = _get_session(request)
+    await _audit(
+        "compliance", "assignment.updated",
+        user=session["user"] if session else "",
+        detail=f"assignment_id={assignment_id} fields={list(updates.keys())}",
+        correlation_id=_corr_id(request),
+    )
+    return await db.get_compliance_assignment(assignment_id)
+
+
+@app.delete("/api/compliance/assignments/{assignment_id}", dependencies=_COMPLIANCE_DEPS)
+async def delete_compliance_assignment(assignment_id: int, request: Request):
+    assignment = await db.get_compliance_assignment(assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    await db.delete_compliance_assignment(assignment_id)
+    session = _get_session(request)
+    await _audit(
+        "compliance", "assignment.deleted",
+        user=session["user"] if session else "",
+        detail=f"assignment_id={assignment_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
+
+
+# ── Compliance Scan Results ──────────────────────────────────────────────────
+
+
+@app.get("/api/compliance/results", dependencies=_COMPLIANCE_DEPS)
+async def list_compliance_scan_results(
+    host_id: int | None = Query(default=None),
+    profile_id: int | None = Query(default=None),
+    assignment_id: int | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=200, le=1000),
+):
+    return await db.get_compliance_scan_results(
+        host_id=host_id, profile_id=profile_id,
+        assignment_id=assignment_id, status=status, limit=limit,
+    )
+
+
+@app.get("/api/compliance/results/{result_id}", dependencies=_COMPLIANCE_DEPS)
+async def get_compliance_scan_result(result_id: int):
+    result = await db.get_compliance_scan_result(result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Scan result not found")
+    return result
+
+
+@app.delete("/api/compliance/results/{result_id}", dependencies=_COMPLIANCE_DEPS)
+async def delete_compliance_scan_result(result_id: int, request: Request):
+    result = await db.get_compliance_scan_result(result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Scan result not found")
+    await db.delete_compliance_scan_result(result_id)
+    session = _get_session(request)
+    await _audit(
+        "compliance", "result.deleted",
+        user=session["user"] if session else "",
+        detail=f"result_id={result_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
+
+
+# ── Compliance Host Status & Summary ─────────────────────────────────────────
+
+
+@app.get("/api/compliance/status", dependencies=_COMPLIANCE_DEPS)
+async def get_compliance_host_status(profile_id: int | None = Query(default=None)):
+    """Get latest compliance status per host."""
+    return await db.get_compliance_host_status(profile_id=profile_id)
+
+
+@app.get("/api/compliance/summary", dependencies=_COMPLIANCE_DEPS)
+async def get_compliance_summary():
+    """Return compliance summary stats."""
+    return await db.get_compliance_summary()
+
+
+# ── On-demand Compliance Scan ────────────────────────────────────────────────
+
+
+@app.post("/api/compliance/scan", dependencies=_COMPLIANCE_DEPS)
+async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
+    """Run an on-demand compliance scan for a single host against a profile."""
+    host = await db.get_host(body.host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Host not found")
+    profile = await db.get_compliance_profile(body.profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Compliance profile not found")
+    cred = await db.get_credential_raw(body.credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    result = await _evaluate_host_compliance(host, profile, cred)
+    result_id = await db.create_compliance_scan_result(
+        assignment_id=None,
+        profile_id=body.profile_id,
+        host_id=body.host_id,
+        **result,
+    )
+    session = _get_session(request)
+    await _audit(
+        "compliance", "scan.manual",
+        user=session["user"] if session else "",
+        detail=f"host_id={body.host_id} profile_id={body.profile_id} status={result['status']}",
+        correlation_id=_corr_id(request),
+    )
+    return {"id": result_id, **result}
+
+
+# ── Admin Compliance Schedule ────────────────────────────────────────────────
+
+
+@app.get("/api/admin/compliance", dependencies=[Depends(require_admin)])
+async def admin_get_compliance_config():
+    return COMPLIANCE_CHECK_CONFIG
+
+
+@app.put("/api/admin/compliance", dependencies=[Depends(require_admin)])
+async def admin_update_compliance_config(body: dict, request: Request):
+    global COMPLIANCE_CHECK_CONFIG
+    COMPLIANCE_CHECK_CONFIG = _sanitize_compliance_check_config(body)
+    await db.set_auth_setting("compliance_check", COMPLIANCE_CHECK_CONFIG)
+    session = _get_session(request)
+    await _audit(
+        "compliance", "config.updated",
+        user=session["user"] if session else "",
+        detail=f"enabled={COMPLIANCE_CHECK_CONFIG['enabled']} interval={COMPLIANCE_CHECK_CONFIG['interval_seconds']}s",
+        correlation_id=_corr_id(request),
+    )
+    return COMPLIANCE_CHECK_CONFIG
+
+
+@app.post("/api/admin/compliance/run-now", dependencies=[Depends(require_admin)])
+async def admin_run_compliance_check_now(request: Request):
+    result = await _run_compliance_check_once()
+    session = _get_session(request)
+    await _audit(
+        "compliance", "check.manual",
+        user=session["user"] if session else "",
+        detail=f"assignments_run={result.get('assignments_run', 0)} hosts_scanned={result.get('hosts_scanned', 0)}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "result": result}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Risk Analysis
+# ═════════════════════════════════════════════════════════════════════════════
+
+_RISK_DEPS = [Depends(require_auth), Depends(require_feature("risk-analysis"))]
+
+
+@app.post("/api/risk-analysis/analyze", dependencies=_RISK_DEPS)
+async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
+    """Run pre-change risk analysis for proposed commands against target hosts."""
+    session = _get_session(request)
+
+    # Resolve credentials
+    cred = await db.get_credential_raw(body.credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    credentials = {
+        "username": cred["username"],
+        "password": decrypt(cred["password"]),
+        "secret": decrypt(cred["secret"]) if cred["secret"] else "",
+    }
+
+    # Resolve proposed commands — from body or from template
+    commands = list(body.proposed_commands)
+    if body.template_id and not commands:
+        tpl = await db.get_template(body.template_id)
+        if not tpl:
+            raise HTTPException(status_code=404, detail="Template not found")
+        commands = [
+            line.rstrip() for line in tpl["content"].splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+    if not commands:
+        raise HTTPException(status_code=400, detail="No proposed commands provided")
+
+    # Resolve target hosts
+    hosts = []
+    group_id = body.group_id
+    if body.host_ids and len(body.host_ids) > 0:
+        hosts = await db.get_hosts_by_ids(body.host_ids)
+        if hosts and not group_id:
+            group_id = hosts[0].get("group_id")
+    elif body.host_id:
+        host = await db.get_host(body.host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="Host not found")
+        hosts = [host]
+        if not group_id:
+            group_id = host.get("group_id")
+    elif body.group_id:
+        hosts = await db.get_hosts_for_group(body.group_id)
+    if not hosts:
+        raise HTTPException(status_code=400, detail="No target hosts found")
+
+    # Run analysis for each host (with bounded concurrency)
+    sem = asyncio.Semaphore(4)
+    results = []
+
+    async def _analyze_one(h):
+        async with sem:
+            return await _run_risk_analysis_for_host(h, commands, credentials, body.change_type)
+
+    tasks = [_analyze_one(h) for h in hosts]
+    host_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    max_risk_score = 0.0
+    max_risk_level = "low"
+    total_compliance_violations = 0
+    all_affected_areas = set()
+
+    for r in host_results:
+        if isinstance(r, Exception):
+            results.append({"status": "error", "error": str(r), "risk_level": "unknown", "risk_score": 0.0})
+        else:
+            results.append(r)
+            if r.get("risk_score", 0) > max_risk_score:
+                max_risk_score = r["risk_score"]
+                max_risk_level = r.get("risk_level", "low")
+            for ci in r.get("compliance_impact", []):
+                total_compliance_violations += ci.get("new_violations", 0)
+            for area in r.get("affected_areas", []):
+                all_affected_areas.add(area)
+
+    # Persist the analysis for the first host as the primary record
+    first = results[0] if results else {}
+    analysis_id = await db.create_risk_analysis(
+        change_type=body.change_type,
+        host_id=body.host_id or (hosts[0]["id"] if hosts else None),
+        group_id=group_id,
+        risk_level=max_risk_level,
+        risk_score=max_risk_score,
+        proposed_commands="\n".join(commands),
+        proposed_diff=first.get("proposed_diff", "")[:10000],
+        current_config=first.get("current_config", "")[:5000],
+        simulated_config=first.get("simulated_config", "")[:5000],
+        analysis=json.dumps(first.get("analysis", {})),
+        compliance_impact=json.dumps(first.get("compliance_impact", [])),
+        affected_areas=json.dumps(list(all_affected_areas)),
+        created_by=session["user"] if session else "",
+    )
+
+    await _audit(
+        "risk-analysis", "analysis.created",
+        user=session["user"] if session else "",
+        detail=f"id={analysis_id} hosts={len(hosts)} risk={max_risk_level} score={max_risk_score}",
+        correlation_id=_corr_id(request),
+    )
+
+    return {
+        "id": analysis_id,
+        "risk_level": max_risk_level,
+        "risk_score": max_risk_score,
+        "hosts_analyzed": len(results),
+        "total_compliance_violations": total_compliance_violations,
+        "affected_areas": list(all_affected_areas),
+        "host_results": results,
+    }
+
+
+@app.get("/api/risk-analysis", dependencies=_RISK_DEPS)
+async def list_risk_analyses(
+    host_id: int | None = Query(default=None),
+    group_id: int | None = Query(default=None),
+    risk_level: str | None = Query(default=None),
+    limit: int = Query(default=100, le=500),
+):
+    return await db.get_risk_analyses(host_id=host_id, group_id=group_id, risk_level=risk_level, limit=limit)
+
+
+@app.get("/api/risk-analysis/summary", dependencies=_RISK_DEPS)
+async def get_risk_analysis_summary_endpoint():
+    return await db.get_risk_analysis_summary()
+
+
+@app.get("/api/risk-analysis/{analysis_id}", dependencies=_RISK_DEPS)
+async def get_risk_analysis(analysis_id: int):
+    analysis = await db.get_risk_analysis(analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Risk analysis not found")
+    return analysis
+
+
+@app.post("/api/risk-analysis/{analysis_id}/approve", dependencies=_RISK_DEPS)
+async def approve_risk_analysis(analysis_id: int, request: Request):
+    analysis = await db.get_risk_analysis(analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Risk analysis not found")
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    await db.approve_risk_analysis(analysis_id, approved_by=user)
+    await _audit(
+        "risk-analysis", "analysis.approved",
+        user=user,
+        detail=f"id={analysis_id} risk_level={analysis['risk_level']}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/risk-analysis/{analysis_id}", dependencies=_RISK_DEPS)
+async def delete_risk_analysis(analysis_id: int, request: Request):
+    analysis = await db.get_risk_analysis(analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Risk analysis not found")
+    await db.delete_risk_analysis(analysis_id)
+    session = _get_session(request)
+    await _audit(
+        "risk-analysis", "analysis.deleted",
+        user=session["user"] if session else "",
+        detail=f"id={analysis_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
+
+
+# ── Offline Risk Analysis (no device connection) ────────────────────────────
+
+
+@app.post("/api/risk-analysis/analyze-offline", dependencies=_RISK_DEPS)
+async def run_offline_risk_analysis(request: Request):
+    """Analyze risk without connecting to devices — uses provided config text."""
+    body = await request.json()
+    commands = body.get("proposed_commands", [])
+    current_config = body.get("current_config", "")
+    if not commands:
+        raise HTTPException(status_code=400, detail="No proposed commands provided")
+    if not current_config:
+        raise HTTPException(status_code=400, detail="No current config provided")
+
+    affected_areas = _classify_change_areas(commands)
+    simulated_config = _simulate_config_change(current_config, commands)
+    diff_text, diff_added, diff_removed = _compute_config_diff(
+        current_config, simulated_config,
+        baseline_label="current", actual_label="after-change",
+    )
+
+    risk_score, risk_level = _compute_risk_score(
+        commands, affected_areas, diff_added, diff_removed, 0,
+    )
+
+    analysis = {
+        "change_volume": {
+            "total_commands": len(commands),
+            "diff_lines_added": diff_added,
+            "diff_lines_removed": diff_removed,
+        },
+        "affected_areas": affected_areas,
+        "risk_factors": [],
+    }
+
+    if affected_areas:
+        analysis["risk_factors"].append(f"Touches critical areas: {', '.join(a['label'] for a in affected_areas)}")
+    if diff_removed > 0:
+        analysis["risk_factors"].append(f"Removes {diff_removed} line(s) from running config")
+    if len(commands) > 20:
+        analysis["risk_factors"].append(f"Large change set ({len(commands)} commands)")
+
+    session = _get_session(request)
+    analysis_id = await db.create_risk_analysis(
+        change_type=body.get("change_type", "manual"),
+        risk_level=risk_level,
+        risk_score=risk_score,
+        proposed_commands="\n".join(commands),
+        proposed_diff=diff_text[:10000],
+        current_config=current_config[:5000],
+        simulated_config=simulated_config[:5000],
+        analysis=json.dumps(analysis),
+        affected_areas=json.dumps([a["label"] for a in affected_areas]),
+        created_by=session["user"] if session else "",
+    )
+
+    await _audit(
+        "risk-analysis", "analysis.offline",
+        user=session["user"] if session else "",
+        detail=f"id={analysis_id} risk={risk_level} score={risk_score}",
+        correlation_id=_corr_id(request),
+    )
+
+    return {
+        "id": analysis_id,
+        "risk_level": risk_level,
+        "risk_score": risk_score,
+        "proposed_diff": diff_text,
+        "simulated_config": simulated_config[:3000],
+        "analysis": analysis,
+        "affected_areas": [a["label"] for a in affected_areas],
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
