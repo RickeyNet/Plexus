@@ -18,6 +18,10 @@ Tables:
     config_drift_events — detected configuration drift instances
     config_backup_policies — scheduled configuration backup policies per group
     config_backups     — stored configuration backup records
+    compliance_profiles — golden template compliance rule sets
+    compliance_profile_assignments — profile-to-group bindings with scan schedule
+    compliance_scan_results — per-host compliance scan findings
+    risk_analyses          — pre-change risk analysis records
 """
 
 import json
@@ -65,6 +69,10 @@ _INSERT_ID_TABLES = {
     "config_drift_events",
     "config_backup_policies",
     "config_backups",
+    "compliance_profiles",
+    "compliance_profile_assignments",
+    "compliance_scan_results",
+    "risk_analyses",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -297,6 +305,65 @@ CREATE TABLE IF NOT EXISTS config_backups (
     status          TEXT    NOT NULL DEFAULT 'success',
     error_message   TEXT    DEFAULT '',
     captured_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS compliance_profiles (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    description TEXT    DEFAULT '',
+    rules       TEXT    NOT NULL DEFAULT '[]',
+    severity    TEXT    NOT NULL DEFAULT 'medium',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    created_by  TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS compliance_profile_assignments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id  INTEGER NOT NULL REFERENCES compliance_profiles(id) ON DELETE CASCADE,
+    group_id    INTEGER NOT NULL REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    credential_id INTEGER NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    interval_seconds INTEGER NOT NULL DEFAULT 86400,
+    last_scan_at TEXT,
+    assigned_at TEXT    NOT NULL DEFAULT (datetime('now')),
+    assigned_by TEXT    NOT NULL DEFAULT '',
+    UNIQUE(profile_id, group_id)
+);
+
+CREATE TABLE IF NOT EXISTS compliance_scan_results (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    assignment_id   INTEGER REFERENCES compliance_profile_assignments(id) ON DELETE SET NULL,
+    profile_id      INTEGER NOT NULL REFERENCES compliance_profiles(id) ON DELETE CASCADE,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    status          TEXT    NOT NULL DEFAULT 'compliant',
+    total_rules     INTEGER NOT NULL DEFAULT 0,
+    passed_rules    INTEGER NOT NULL DEFAULT 0,
+    failed_rules    INTEGER NOT NULL DEFAULT 0,
+    findings        TEXT    NOT NULL DEFAULT '[]',
+    config_snippet  TEXT    NOT NULL DEFAULT '',
+    scanned_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS risk_analyses (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    change_type         TEXT    NOT NULL DEFAULT 'template',
+    host_id             INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    group_id            INTEGER REFERENCES inventory_groups(id) ON DELETE SET NULL,
+    risk_level          TEXT    NOT NULL DEFAULT 'low',
+    risk_score          REAL    NOT NULL DEFAULT 0.0,
+    proposed_commands   TEXT    NOT NULL DEFAULT '',
+    proposed_diff       TEXT    NOT NULL DEFAULT '',
+    current_config      TEXT    NOT NULL DEFAULT '',
+    simulated_config    TEXT    NOT NULL DEFAULT '',
+    analysis            TEXT    NOT NULL DEFAULT '{}',
+    compliance_impact   TEXT    NOT NULL DEFAULT '[]',
+    affected_areas      TEXT    NOT NULL DEFAULT '[]',
+    approved            INTEGER NOT NULL DEFAULT 0,
+    approved_by         TEXT    DEFAULT '',
+    approved_at         TEXT,
+    created_by          TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -2604,6 +2671,554 @@ async def get_config_backup_summary() -> dict:
             "total_backups": total_backups,
             "hosts_backed_up": hosts_backed_up,
             "last_backup_at": last_backup_at,
+        }
+    finally:
+        await db.close()
+
+
+# ── Compliance Profiles ─────────────────────────────────────────────────────
+
+
+async def create_compliance_profile(
+    name: str,
+    description: str = "",
+    rules: str = "[]",
+    severity: str = "medium",
+    created_by: str = "",
+) -> int:
+    """Create a new compliance profile with rules JSON."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO compliance_profiles
+               (name, description, rules, severity, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+            (name, description, rules, severity, created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_compliance_profiles() -> list[dict]:
+    """List all compliance profiles."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT p.*,
+                      (SELECT COUNT(*) FROM compliance_profile_assignments WHERE profile_id = p.id) as assignment_count
+               FROM compliance_profiles p
+               ORDER BY p.name"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_compliance_profile(profile_id: int) -> dict | None:
+    """Get a single compliance profile by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM compliance_profiles WHERE id = ?", (profile_id,))
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_compliance_profile(profile_id: int, **kwargs) -> None:
+    """Update a compliance profile. Pass only the fields to change."""
+    allowed = {"name", "description", "rules", "severity"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return
+    sets = []
+    params = []
+    for k, v in updates.items():
+        sets.append(f"{k} = ?")
+        params.append(v)
+    sets.append("updated_at = datetime('now')")
+    params.append(profile_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE compliance_profiles SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_compliance_profile(profile_id: int) -> None:
+    """Delete a compliance profile and its assignments/results."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM compliance_profiles WHERE id = ?", (profile_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ── Compliance Profile Assignments ──────────────────────────────────────────
+
+
+async def create_compliance_assignment(
+    profile_id: int,
+    group_id: int,
+    credential_id: int,
+    interval_seconds: int = 86400,
+    assigned_by: str = "",
+) -> int:
+    """Assign a compliance profile to an inventory group."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO compliance_profile_assignments
+               (profile_id, group_id, credential_id, interval_seconds, assigned_by, assigned_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+            (profile_id, group_id, credential_id, interval_seconds, assigned_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_compliance_assignments(profile_id: int | None = None, group_id: int | None = None) -> list[dict]:
+    """List compliance assignments, optionally filtered."""
+    db = await get_db()
+    try:
+        where_clauses = []
+        params = []
+        if profile_id is not None:
+            where_clauses.append("a.profile_id = ?")
+            params.append(profile_id)
+        if group_id is not None:
+            where_clauses.append("a.group_id = ?")
+            params.append(group_id)
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        cursor = await db.execute(
+            f"""SELECT a.*, p.name as profile_name, p.severity as profile_severity,
+                       g.name as group_name,
+                       (SELECT COUNT(*) FROM hosts WHERE group_id = a.group_id) as host_count
+                FROM compliance_profile_assignments a
+                LEFT JOIN compliance_profiles p ON p.id = a.profile_id
+                LEFT JOIN inventory_groups g ON g.id = a.group_id
+                {where_sql}
+                ORDER BY a.assigned_at DESC""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_compliance_assignment(assignment_id: int) -> dict | None:
+    """Get a single compliance assignment by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT a.*, p.name as profile_name, g.name as group_name
+               FROM compliance_profile_assignments a
+               LEFT JOIN compliance_profiles p ON p.id = a.profile_id
+               LEFT JOIN inventory_groups g ON g.id = a.group_id
+               WHERE a.id = ?""",
+            (assignment_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_compliance_assignment(assignment_id: int, **kwargs) -> None:
+    """Update an assignment. Pass only the fields to change."""
+    allowed = {"enabled", "credential_id", "interval_seconds"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return
+    sets = []
+    params = []
+    for k, v in updates.items():
+        sets.append(f"{k} = ?")
+        params.append(v)
+    params.append(assignment_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE compliance_profile_assignments SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_compliance_assignment(assignment_id: int) -> None:
+    """Delete a compliance assignment."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM compliance_profile_assignments WHERE id = ?", (assignment_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_compliance_assignments_due() -> list[dict]:
+    """Get enabled assignments that are due for a compliance scan."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT a.*, p.name as profile_name, p.rules as profile_rules,
+                      p.severity as profile_severity, g.name as group_name
+               FROM compliance_profile_assignments a
+               LEFT JOIN compliance_profiles p ON p.id = a.profile_id
+               LEFT JOIN inventory_groups g ON g.id = a.group_id
+               WHERE a.enabled = 1
+                 AND (a.last_scan_at IS NULL
+                      OR datetime(a.last_scan_at, '+' || a.interval_seconds || ' seconds') < datetime('now'))"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def update_compliance_assignment_last_scan(assignment_id: int) -> None:
+    """Mark an assignment as just having been scanned."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE compliance_profile_assignments SET last_scan_at = datetime('now') WHERE id = ?",
+            (assignment_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ── Compliance Scan Results ─────────────────────────────────────────────────
+
+
+async def create_compliance_scan_result(
+    assignment_id: int | None,
+    profile_id: int,
+    host_id: int,
+    status: str = "compliant",
+    total_rules: int = 0,
+    passed_rules: int = 0,
+    failed_rules: int = 0,
+    findings: str = "[]",
+    config_snippet: str = "",
+) -> int:
+    """Store a compliance scan result for a host."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO compliance_scan_results
+               (assignment_id, profile_id, host_id, status, total_rules, passed_rules,
+                failed_rules, findings, config_snippet, scanned_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (assignment_id, profile_id, host_id, status, total_rules, passed_rules,
+             failed_rules, findings, config_snippet),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_compliance_scan_results(
+    host_id: int | None = None,
+    profile_id: int | None = None,
+    assignment_id: int | None = None,
+    status: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """List compliance scan results with optional filters."""
+    db = await get_db()
+    try:
+        where_clauses = []
+        params: list = []
+        if host_id is not None:
+            where_clauses.append("r.host_id = ?")
+            params.append(host_id)
+        if profile_id is not None:
+            where_clauses.append("r.profile_id = ?")
+            params.append(profile_id)
+        if assignment_id is not None:
+            where_clauses.append("r.assignment_id = ?")
+            params.append(assignment_id)
+        if status is not None:
+            where_clauses.append("r.status = ?")
+            params.append(status)
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT r.*, p.name as profile_name, h.hostname, h.ip_address
+                FROM compliance_scan_results r
+                LEFT JOIN compliance_profiles p ON p.id = r.profile_id
+                LEFT JOIN hosts h ON h.id = r.host_id
+                {where_sql}
+                ORDER BY r.scanned_at DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_compliance_scan_result(result_id: int) -> dict | None:
+    """Get a single scan result by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT r.*, p.name as profile_name, h.hostname, h.ip_address
+               FROM compliance_scan_results r
+               LEFT JOIN compliance_profiles p ON p.id = r.profile_id
+               LEFT JOIN hosts h ON h.id = r.host_id
+               WHERE r.id = ?""",
+            (result_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def delete_compliance_scan_result(result_id: int) -> None:
+    """Delete a single scan result."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM compliance_scan_results WHERE id = ?", (result_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_old_compliance_scan_results(days: int = 90) -> int:
+    """Delete compliance scan results older than N days."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM compliance_scan_results WHERE scanned_at < datetime('now', '-' || ? || ' days')",
+            (days,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def get_compliance_summary() -> dict:
+    """Return summary stats for compliance scanning."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM compliance_profiles")
+        row = await cursor.fetchone()
+        total_profiles = row[0] if row else 0
+
+        cursor = await db.execute("SELECT COUNT(*) FROM compliance_profile_assignments WHERE enabled = 1")
+        row = await cursor.fetchone()
+        active_assignments = row[0] if row else 0
+
+        cursor = await db.execute("SELECT COUNT(DISTINCT host_id) FROM compliance_scan_results")
+        row = await cursor.fetchone()
+        hosts_scanned = row[0] if row else 0
+
+        cursor = await db.execute(
+            """SELECT COUNT(DISTINCT host_id) FROM compliance_scan_results
+               WHERE status = 'non-compliant'
+                 AND id IN (SELECT MAX(id) FROM compliance_scan_results GROUP BY host_id, profile_id)"""
+        )
+        row = await cursor.fetchone()
+        hosts_non_compliant = row[0] if row else 0
+
+        cursor = await db.execute("SELECT MAX(scanned_at) FROM compliance_scan_results")
+        row = await cursor.fetchone()
+        last_scan_at = row[0] if row else None
+
+        return {
+            "total_profiles": total_profiles,
+            "active_assignments": active_assignments,
+            "hosts_scanned": hosts_scanned,
+            "hosts_non_compliant": hosts_non_compliant,
+            "last_scan_at": last_scan_at,
+        }
+    finally:
+        await db.close()
+
+
+async def get_compliance_host_status(profile_id: int | None = None) -> list[dict]:
+    """Get latest compliance status per host (optionally filtered by profile)."""
+    db = await get_db()
+    try:
+        where_clause = "WHERE r.profile_id = ?" if profile_id is not None else ""
+        params = (profile_id,) if profile_id is not None else ()
+        cursor = await db.execute(
+            f"""SELECT r.host_id, h.hostname, h.ip_address, r.profile_id,
+                       p.name as profile_name, r.status, r.total_rules,
+                       r.passed_rules, r.failed_rules, r.scanned_at
+                FROM compliance_scan_results r
+                INNER JOIN (
+                    SELECT host_id, profile_id, MAX(id) as max_id
+                    FROM compliance_scan_results
+                    GROUP BY host_id, profile_id
+                ) latest ON r.id = latest.max_id
+                LEFT JOIN hosts h ON h.id = r.host_id
+                LEFT JOIN compliance_profiles p ON p.id = r.profile_id
+                {where_clause}
+                ORDER BY r.status DESC, h.hostname""",
+            params,
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ── Risk Analyses ───────────────────────────────────────────────────────────
+
+
+async def create_risk_analysis(
+    change_type: str = "template",
+    host_id: int | None = None,
+    group_id: int | None = None,
+    risk_level: str = "low",
+    risk_score: float = 0.0,
+    proposed_commands: str = "",
+    proposed_diff: str = "",
+    current_config: str = "",
+    simulated_config: str = "",
+    analysis: str = "{}",
+    compliance_impact: str = "[]",
+    affected_areas: str = "[]",
+    created_by: str = "",
+) -> int:
+    """Create a new risk analysis record."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO risk_analyses
+               (change_type, host_id, group_id, risk_level, risk_score,
+                proposed_commands, proposed_diff, current_config, simulated_config,
+                analysis, compliance_impact, affected_areas, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (change_type, host_id, group_id, risk_level, risk_score,
+             proposed_commands, proposed_diff, current_config, simulated_config,
+             analysis, compliance_impact, affected_areas, created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_risk_analyses(
+    host_id: int | None = None,
+    group_id: int | None = None,
+    risk_level: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """List risk analyses with optional filters."""
+    db = await get_db()
+    try:
+        where_clauses = []
+        params: list = []
+        if host_id is not None:
+            where_clauses.append("r.host_id = ?")
+            params.append(host_id)
+        if group_id is not None:
+            where_clauses.append("r.group_id = ?")
+            params.append(group_id)
+        if risk_level is not None:
+            where_clauses.append("r.risk_level = ?")
+            params.append(risk_level)
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT r.*, h.hostname, h.ip_address, g.name as group_name
+                FROM risk_analyses r
+                LEFT JOIN hosts h ON h.id = r.host_id
+                LEFT JOIN inventory_groups g ON g.id = r.group_id
+                {where_sql}
+                ORDER BY r.created_at DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_risk_analysis(analysis_id: int) -> dict | None:
+    """Get a single risk analysis by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT r.*, h.hostname, h.ip_address, g.name as group_name
+               FROM risk_analyses r
+               LEFT JOIN hosts h ON h.id = r.host_id
+               LEFT JOIN inventory_groups g ON g.id = r.group_id
+               WHERE r.id = ?""",
+            (analysis_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def approve_risk_analysis(analysis_id: int, approved_by: str) -> None:
+    """Mark a risk analysis as approved."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE risk_analyses SET approved = 1, approved_by = ?, approved_at = datetime('now') WHERE id = ?",
+            (approved_by, analysis_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_risk_analysis(analysis_id: int) -> None:
+    """Delete a risk analysis."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM risk_analyses WHERE id = ?", (analysis_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_risk_analysis_summary() -> dict:
+    """Return summary stats for risk analyses."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses")
+        row = await cursor.fetchone()
+        total = row[0] if row else 0
+
+        cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses WHERE risk_level IN ('high', 'critical')")
+        row = await cursor.fetchone()
+        high_risk = row[0] if row else 0
+
+        cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses WHERE approved = 1")
+        row = await cursor.fetchone()
+        approved = row[0] if row else 0
+
+        cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses WHERE approved = 0")
+        row = await cursor.fetchone()
+        pending = row[0] if row else 0
+
+        cursor = await db.execute("SELECT MAX(created_at) FROM risk_analyses")
+        row = await cursor.fetchone()
+        last_analysis_at = row[0] if row else None
+
+        return {
+            "total": total,
+            "high_risk": high_risk,
+            "approved": approved,
+            "pending": pending,
+            "last_analysis_at": last_analysis_at,
         }
     finally:
         await db.close()

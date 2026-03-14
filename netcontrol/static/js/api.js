@@ -765,3 +765,112 @@ export async function restoreConfigBackup(data) {
 export async function getConfigBackupSummary() {
     return apiRequest('/config-backups/summary');
 }
+
+// ── Compliance Profiles & Scans ──────────────────────────────────────────────
+
+export async function getComplianceProfiles() {
+    return apiRequest('/compliance/profiles');
+}
+
+export async function createComplianceProfile(data) {
+    return apiRequest('/compliance/profiles', { method: 'POST', body: data });
+}
+
+export async function getComplianceProfile(id) {
+    return apiRequest(`/compliance/profiles/${id}`);
+}
+
+export async function updateComplianceProfile(id, data) {
+    return apiRequest(`/compliance/profiles/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteComplianceProfile(id) {
+    return apiRequest(`/compliance/profiles/${id}`, { method: 'DELETE' });
+}
+
+export async function getComplianceAssignments(profileId = null, groupId = null) {
+    const params = new URLSearchParams();
+    if (profileId) params.set('profile_id', profileId);
+    if (groupId) params.set('group_id', groupId);
+    const qs = params.toString();
+    return apiRequest(`/compliance/assignments${qs ? '?' + qs : ''}`);
+}
+
+export async function createComplianceAssignment(data) {
+    return apiRequest('/compliance/assignments', { method: 'POST', body: data });
+}
+
+export async function updateComplianceAssignment(id, data) {
+    return apiRequest(`/compliance/assignments/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteComplianceAssignment(id) {
+    return apiRequest(`/compliance/assignments/${id}`, { method: 'DELETE' });
+}
+
+export async function getComplianceScanResults(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.hostId) qs.set('host_id', params.hostId);
+    if (params.profileId) qs.set('profile_id', params.profileId);
+    if (params.status) qs.set('status', params.status);
+    if (params.limit) qs.set('limit', params.limit);
+    const q = qs.toString();
+    return apiRequest(`/compliance/results${q ? '?' + q : ''}`);
+}
+
+export async function getComplianceScanResult(id) {
+    return apiRequest(`/compliance/results/${id}`);
+}
+
+export async function deleteComplianceScanResult(id) {
+    return apiRequest(`/compliance/results/${id}`, { method: 'DELETE' });
+}
+
+export async function getComplianceHostStatus(profileId = null) {
+    const qs = profileId ? `?profile_id=${profileId}` : '';
+    return apiRequest(`/compliance/status${qs}`);
+}
+
+export async function getComplianceSummary() {
+    return apiRequest('/compliance/summary');
+}
+
+export async function runComplianceScan(data) {
+    return apiRequest('/compliance/scan', { method: 'POST', body: data });
+}
+
+// ── Risk Analysis ────────────────────────────────────────────────────────────
+
+export async function runRiskAnalysis(data) {
+    return apiRequest('/risk-analysis/analyze', { method: 'POST', body: data });
+}
+
+export async function runOfflineRiskAnalysis(data) {
+    return apiRequest('/risk-analysis/analyze-offline', { method: 'POST', body: data });
+}
+
+export async function getRiskAnalyses(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.hostId) qs.set('host_id', params.hostId);
+    if (params.groupId) qs.set('group_id', params.groupId);
+    if (params.riskLevel) qs.set('risk_level', params.riskLevel);
+    if (params.limit) qs.set('limit', params.limit);
+    const q = qs.toString();
+    return apiRequest(`/risk-analysis${q ? '?' + q : ''}`);
+}
+
+export async function getRiskAnalysisSummary() {
+    return apiRequest('/risk-analysis/summary');
+}
+
+export async function getRiskAnalysis(id) {
+    return apiRequest(`/risk-analysis/${id}`);
+}
+
+export async function approveRiskAnalysis(id) {
+    return apiRequest(`/risk-analysis/${id}/approve`, { method: 'POST' });
+}
+
+export async function deleteRiskAnalysis(id) {
+    return apiRequest(`/risk-analysis/${id}`, { method: 'DELETE' });
+}

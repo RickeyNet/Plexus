@@ -89,9 +89,9 @@
 - [x] Add device discovery + continuous inventory sync (TCP reachability + SSH banner enrichment, inventory reconcile API, scheduled profile-based sync loop, and Inventory UI scan/sync controls; deeper SNMP/API enrichment pending).
 - [x] Build topology visualization (L2/L3 neighbors, routing relationships, path view).
 - [x] Add config drift detection against intended state with historical diffs.
-- [ ] Add scheduled configuration backup policies with restore validation checks.
-- [ ] Add golden templates/compliance profiles with continuous compliance scans.
-- [ ] Add pre-change risk analysis and impact simulation for policy/route/NAT changes.
+- [x] Add scheduled configuration backup policies with restore validation checks.
+- [x] Add golden templates/compliance profiles with continuous compliance scans.
+- [x] Add pre-change risk analysis and impact simulation for policy/route/NAT changes.
 - [ ] Add maintenance windows and approval gates for production changes.
 - [ ] Add rollback orchestration with pre/post deployment checkpoints.
 
