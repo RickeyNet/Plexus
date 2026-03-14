@@ -87,7 +87,7 @@
 
 ### Now (Core Platform)
 - [x] Add device discovery + continuous inventory sync (TCP reachability + SSH banner enrichment, inventory reconcile API, scheduled profile-based sync loop, and Inventory UI scan/sync controls; deeper SNMP/API enrichment pending).
-- [ ] Build topology visualization (L2/L3 neighbors, routing relationships, path view).
+- [x] Build topology visualization (L2/L3 neighbors, routing relationships, path view).
 - [ ] Add config drift detection against intended state with historical diffs.
 - [ ] Add scheduled configuration backup policies with restore validation checks.
 - [ ] Add golden templates/compliance profiles with continuous compliance scans.
