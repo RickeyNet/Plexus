@@ -16,6 +16,8 @@ Tables:
     config_baselines  — intended/golden configuration per host
     config_snapshots  — timestamped running-config captures per host
     config_drift_events — detected configuration drift instances
+    config_backup_policies — scheduled configuration backup policies per group
+    config_backups     — stored configuration backup records
 """
 
 import json
@@ -61,6 +63,8 @@ _INSERT_ID_TABLES = {
     "config_baselines",
     "config_snapshots",
     "config_drift_events",
+    "config_backup_policies",
+    "config_backups",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -268,6 +272,31 @@ CREATE TABLE IF NOT EXISTS config_drift_events (
     detected_at        TEXT    NOT NULL DEFAULT (datetime('now')),
     resolved_at        TEXT,
     resolved_by        TEXT    DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS config_backup_policies (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    group_id        INTEGER NOT NULL REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    credential_id   INTEGER NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    interval_seconds INTEGER NOT NULL DEFAULT 86400,
+    retention_days  INTEGER NOT NULL DEFAULT 30,
+    last_run_at     TEXT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    created_by      TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS config_backups (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_id       INTEGER REFERENCES config_backup_policies(id) ON DELETE SET NULL,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    config_text     TEXT    NOT NULL DEFAULT '',
+    capture_method  TEXT    NOT NULL DEFAULT 'scheduled',
+    status          TEXT    NOT NULL DEFAULT 'success',
+    error_message   TEXT    DEFAULT '',
+    captured_at     TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -2310,5 +2339,271 @@ async def delete_old_config_drift_events(days: int = 90) -> int:
         )
         await db.commit()
         return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ── Config Backup Policies ──────────────────────────────────────────────────
+
+
+async def create_config_backup_policy(
+    name: str,
+    group_id: int,
+    credential_id: int,
+    interval_seconds: int = 86400,
+    retention_days: int = 30,
+    created_by: str = "",
+) -> int:
+    """Create a new config backup policy."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO config_backup_policies
+               (name, group_id, credential_id, interval_seconds, retention_days, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+            (name, group_id, credential_id, interval_seconds, retention_days, created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_config_backup_policies(group_id: int | None = None) -> list[dict]:
+    """List all backup policies, optionally filtered by group."""
+    db = await get_db()
+    try:
+        if group_id is not None:
+            cursor = await db.execute(
+                """SELECT p.*, g.name as group_name,
+                          (SELECT COUNT(*) FROM hosts WHERE group_id = p.group_id) as host_count
+                   FROM config_backup_policies p
+                   LEFT JOIN inventory_groups g ON g.id = p.group_id
+                   WHERE p.group_id = ?
+                   ORDER BY p.name""",
+                (group_id,),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT p.*, g.name as group_name,
+                          (SELECT COUNT(*) FROM hosts WHERE group_id = p.group_id) as host_count
+                   FROM config_backup_policies p
+                   LEFT JOIN inventory_groups g ON g.id = p.group_id
+                   ORDER BY p.name"""
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_config_backup_policy(policy_id: int) -> dict | None:
+    """Get a single backup policy by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT p.*, g.name as group_name,
+                      (SELECT COUNT(*) FROM hosts WHERE group_id = p.group_id) as host_count
+               FROM config_backup_policies p
+               LEFT JOIN inventory_groups g ON g.id = p.group_id
+               WHERE p.id = ?""",
+            (policy_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_config_backup_policy(policy_id: int, **kwargs) -> None:
+    """Update a backup policy. Pass only the fields to change."""
+    allowed = {"name", "enabled", "credential_id", "interval_seconds", "retention_days"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return
+    updates["updated_at"] = "datetime('now')"
+    sets = []
+    params = []
+    for k, v in updates.items():
+        if k == "updated_at":
+            sets.append("updated_at = datetime('now')")
+        else:
+            sets.append(f"{k} = ?")
+            params.append(v)
+    params.append(policy_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE config_backup_policies SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_config_backup_policy(policy_id: int) -> None:
+    """Delete a backup policy."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM config_backup_policies WHERE id = ?", (policy_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_config_backup_policies_due() -> list[dict]:
+    """Get enabled policies that are due for a backup run."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT p.*, g.name as group_name
+               FROM config_backup_policies p
+               LEFT JOIN inventory_groups g ON g.id = p.group_id
+               WHERE p.enabled = 1
+                 AND (p.last_run_at IS NULL
+                      OR datetime(p.last_run_at, '+' || p.interval_seconds || ' seconds') < datetime('now'))"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def update_config_backup_policy_last_run(policy_id: int) -> None:
+    """Mark a policy as just having been run."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE config_backup_policies SET last_run_at = datetime('now') WHERE id = ?",
+            (policy_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ── Config Backups ───────────────────────────────────────────────────────────
+
+
+async def create_config_backup(
+    policy_id: int | None,
+    host_id: int,
+    config_text: str,
+    capture_method: str = "scheduled",
+    status: str = "success",
+    error_message: str = "",
+) -> int:
+    """Store a config backup record."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO config_backups
+               (policy_id, host_id, config_text, capture_method, status, error_message, captured_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (policy_id, host_id, config_text, capture_method, status, error_message),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_config_backups(
+    host_id: int | None = None,
+    policy_id: int | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """List backups with host info, optionally filtered."""
+    db = await get_db()
+    try:
+        conditions = []
+        params: list = []
+        if host_id is not None:
+            conditions.append("b.host_id = ?")
+            params.append(host_id)
+        if policy_id is not None:
+            conditions.append("b.policy_id = ?")
+            params.append(policy_id)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT b.id, b.policy_id, b.host_id, b.capture_method, b.status,
+                       b.error_message, b.captured_at, LENGTH(b.config_text) as config_length,
+                       h.hostname, h.ip_address, h.device_type
+                FROM config_backups b
+                LEFT JOIN hosts h ON h.id = b.host_id
+                {where}
+                ORDER BY b.captured_at DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_config_backup(backup_id: int) -> dict | None:
+    """Get a single backup record including config text."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT b.*, h.hostname, h.ip_address, h.device_type
+               FROM config_backups b
+               LEFT JOIN hosts h ON h.id = b.host_id
+               WHERE b.id = ?""",
+            (backup_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def delete_config_backup(backup_id: int) -> None:
+    """Delete a single backup."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM config_backups WHERE id = ?", (backup_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_old_config_backups(days: int = 30) -> int:
+    """Delete backups older than N days (retention cleanup)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM config_backups WHERE captured_at < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def get_config_backup_summary() -> dict:
+    """Return summary stats for config backups."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM config_backup_policies")
+        row = await cursor.fetchone()
+        total_policies = row[0] if row else 0
+
+        cursor = await db.execute("SELECT COUNT(*) FROM config_backups")
+        row = await cursor.fetchone()
+        total_backups = row[0] if row else 0
+
+        cursor = await db.execute("SELECT COUNT(DISTINCT host_id) FROM config_backups WHERE status = 'success'")
+        row = await cursor.fetchone()
+        hosts_backed_up = row[0] if row else 0
+
+        cursor = await db.execute("SELECT MAX(captured_at) FROM config_backups")
+        row = await cursor.fetchone()
+        last_backup_at = row[0] if row else None
+
+        return {
+            "total_policies": total_policies,
+            "total_backups": total_backups,
+            "hosts_backed_up": hosts_backed_up,
+            "last_backup_at": last_backup_at,
+        }
     finally:
         await db.close()

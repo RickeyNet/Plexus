@@ -717,3 +717,51 @@ export async function fullDriftCheck(hostId, credentialId) {
 export async function deleteConfigSnapshot(snapshotId) {
     return apiRequest(`/config-drift/snapshots/${snapshotId}`, { method: 'DELETE' });
 }
+
+// ── Config Backups ──────────────────────────────────────────────────────────
+
+export async function getConfigBackupPolicies(groupId = null) {
+    const params = new URLSearchParams();
+    if (groupId) params.set('group_id', groupId);
+    return apiRequest(`/config-backups/policies?${params}`);
+}
+
+export async function createConfigBackupPolicy(data) {
+    return apiRequest('/config-backups/policies', { method: 'POST', body: data });
+}
+
+export async function updateConfigBackupPolicy(id, data) {
+    return apiRequest(`/config-backups/policies/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteConfigBackupPolicy(id) {
+    return apiRequest(`/config-backups/policies/${id}`, { method: 'DELETE' });
+}
+
+export async function runConfigBackupPolicy(id) {
+    return apiRequest(`/config-backups/policies/${id}/run-now`, { method: 'POST' });
+}
+
+export async function getConfigBackups(hostId = null, policyId = null, limit = 100) {
+    const params = new URLSearchParams();
+    if (hostId) params.set('host_id', hostId);
+    if (policyId) params.set('policy_id', policyId);
+    if (limit) params.set('limit', limit);
+    return apiRequest(`/config-backups?${params}`);
+}
+
+export async function getConfigBackup(id) {
+    return apiRequest(`/config-backups/${id}`);
+}
+
+export async function deleteConfigBackup(id) {
+    return apiRequest(`/config-backups/${id}`, { method: 'DELETE' });
+}
+
+export async function restoreConfigBackup(data) {
+    return apiRequest('/config-backups/restore', { method: 'POST', body: data });
+}
+
+export async function getConfigBackupSummary() {
+    return apiRequest('/config-backups/summary');
+}

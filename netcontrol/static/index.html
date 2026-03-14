@@ -131,6 +131,10 @@
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
                                 <span class="nav-label">Config Drift</span>
                             </a>
+                            <a href="#" data-page="config-backups" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                <span class="nav-label">Config Backups</span>
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -683,6 +687,40 @@
                 <!-- Events List -->
                 <div id="drift-events-list">
                     <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+            </div>
+
+            <!-- Config Backups Page -->
+            <div id="page-config-backups" class="page">
+                <div class="page-header">
+                    <h2>Config Backups</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="showCreateBackupPolicyModal()">+ New Policy</button>
+                        <button class="btn btn-secondary" onclick="refreshConfigBackups()">Refresh</button>
+                    </div>
+                </div>
+                <!-- Summary Cards -->
+                <div class="drift-summary-grid" id="backup-summary">
+                    <div class="stat-card"><div class="stat-ring-value" id="backup-stat-policies">-</div><div class="stat-label">Policies</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="backup-stat-backups">-</div><div class="stat-label">Total Backups</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="backup-stat-hosts">-</div><div class="stat-label">Hosts Covered</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="backup-stat-last">-</div><div class="stat-label">Last Backup</div></div>
+                </div>
+                <!-- Tab Toggle -->
+                <div class="list-controls" style="margin-bottom:1rem;">
+                    <button class="btn btn-sm btn-primary" id="backup-tab-policies" onclick="switchBackupTab('policies')">Policies</button>
+                    <button class="btn btn-sm btn-secondary" id="backup-tab-history" onclick="switchBackupTab('history')">Backup History</button>
+                    <input id="backup-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto;">
+                </div>
+                <!-- Policies List -->
+                <div id="backup-policies-list">
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+                <!-- History List -->
+                <div id="backup-history-list" style="display:none;">
                     <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
                     <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
                 </div>
