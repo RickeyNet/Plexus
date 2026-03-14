@@ -26,13 +26,14 @@ const NAV_FEATURE_MAP = {
     converter: 'converter',
     topology: 'topology',
     'config-drift': 'config-drift',
+    'config-backups': 'config-backups',
 };
 
 const THEME_KEY = 'plexus-theme';
 const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light', 'void'];
 const DEFAULT_THEME = 'forest';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'config-drift'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'config-drift', 'config-backups'];
 const pageCacheMeta = {};
 
 // ── Utility: debounce ──────────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ const listViewState = {
     templates: { items: [], query: '', sort: 'name_asc' },
     credentials: { items: [], query: '', sort: 'name_asc' },
     configDrift: { items: [], query: '', sort: 'detected_desc', status: 'open' },
+    configBackups: { policies: [], backups: [], query: '', tab: 'policies' },
 };
 
 function normalizeTheme(theme) {
@@ -251,6 +253,7 @@ function applyFeatureVisibility() {
 const NAV_GROUP_CHILDREN = {
     'topology': 'network',
     'config-drift': 'network',
+    'config-backups': 'network',
 };
 
 window.toggleNavGroup = function(groupName, e) {
@@ -285,7 +288,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'config-drift', 'settings'];
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'config-drift', 'config-backups', 'settings'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -391,6 +394,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'config-drift':
                 await loadConfigDrift({ preserveContent });
+                break;
+            case 'config-backups':
+                await loadConfigBackups({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
@@ -6261,6 +6267,314 @@ function emptyStateHTML(message, type, actionBtn) {
         ${actionBtn || ''}
     </div>`;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Config Backups
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _backupCurrentTab = 'policies';
+
+async function loadConfigBackups(options = {}) {
+    const { preserveContent = false } = options;
+    const policiesContainer = document.getElementById('backup-policies-list');
+    const historyContainer = document.getElementById('backup-history-list');
+    if (!preserveContent && policiesContainer) policiesContainer.innerHTML = skeletonCards(2);
+    try {
+        const [summary, policies, backups] = await Promise.all([
+            api.getConfigBackupSummary(),
+            api.getConfigBackupPolicies(),
+            api.getConfigBackups(),
+        ]);
+        renderBackupSummary(summary);
+        listViewState.configBackups.policies = policies || [];
+        listViewState.configBackups.backups = backups || [];
+        renderBackupPolicies(policies || []);
+        renderBackupHistory(backups || []);
+    } catch (error) {
+        if (policiesContainer) policiesContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error loading backup data: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadConfigBackups = loadConfigBackups;
+
+function renderBackupSummary(summary) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('backup-stat-policies', summary.total_policies ?? '-');
+    set('backup-stat-backups', summary.total_backups ?? '-');
+    set('backup-stat-hosts', summary.hosts_backed_up ?? '-');
+    set('backup-stat-last', summary.last_backup_at ? new Date(summary.last_backup_at + 'Z').toLocaleString() : 'Never');
+}
+
+function renderBackupPolicies(policies) {
+    const container = document.getElementById('backup-policies-list');
+    if (!container) return;
+    const query = (listViewState.configBackups.query || '').toLowerCase();
+    const filtered = policies.filter(p => !query || p.name.toLowerCase().includes(query) || (p.group_name || '').toLowerCase().includes(query));
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No backup policies', 'config-backups',
+            '<button class="btn btn-primary btn-sm" onclick="showCreateBackupPolicyModal()">Create a Policy</button>');
+        return;
+    }
+    container.innerHTML = filtered.map(p => {
+        const enabled = p.enabled ? '<span style="color:var(--success)">Enabled</span>' : '<span style="color:var(--text-muted)">Disabled</span>';
+        const interval = formatInterval(p.interval_seconds);
+        const lastRun = p.last_run_at ? new Date(p.last_run_at + 'Z').toLocaleString() : 'Never';
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <strong>${escapeHtml(p.name)}</strong>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">Group: ${escapeHtml(p.group_name || '?')} (${p.host_count || 0} hosts)</span>
+                </div>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    ${enabled}
+                    <button class="btn btn-sm btn-secondary" onclick="runBackupPolicyNow(${p.id})">Run Now</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showEditBackupPolicyModal(${p.id})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="confirmDeleteBackupPolicy(${p.id}, '${escapeHtml(p.name)}')">Delete</button>
+                </div>
+            </div>
+            <div style="margin-top:0.5rem; font-size:0.85em; color:var(--text-muted);">
+                Interval: ${interval} &bull; Retention: ${p.retention_days}d &bull; Last Run: ${lastRun}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderBackupHistory(backups) {
+    const container = document.getElementById('backup-history-list');
+    if (!container) return;
+    const query = (listViewState.configBackups.query || '').toLowerCase();
+    const filtered = backups.filter(b => !query || (b.hostname || '').toLowerCase().includes(query) || (b.ip_address || '').toLowerCase().includes(query));
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No backups yet', 'config-backups');
+        return;
+    }
+    container.innerHTML = filtered.map(b => {
+        const statusColor = b.status === 'success' ? 'var(--success)' : 'var(--danger)';
+        const time = new Date(b.captured_at + 'Z').toLocaleString();
+        const size = b.config_length ? `${(b.config_length / 1024).toFixed(1)} KB` : '-';
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <strong>${escapeHtml(b.hostname || b.ip_address || '?')}</strong>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">${b.ip_address || ''}</span>
+                </div>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <span style="color:${statusColor}; font-size:0.85em;">${b.status}</span>
+                    <button class="btn btn-sm btn-secondary" onclick="viewBackupDetail(${b.id})">View</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showRestoreBackupModal(${b.id})">Restore</button>
+                    <button class="btn btn-sm btn-danger" onclick="confirmDeleteBackup(${b.id})">Delete</button>
+                </div>
+            </div>
+            <div style="margin-top:0.5rem; font-size:0.85em; color:var(--text-muted);">
+                ${time} &bull; ${b.capture_method} &bull; ${size}
+                ${b.error_message ? ' &bull; <span style="color:var(--danger)">' + escapeHtml(b.error_message) + '</span>' : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function formatInterval(seconds) {
+    if (seconds >= 86400) return `${Math.round(seconds / 86400)}d`;
+    if (seconds >= 3600) return `${Math.round(seconds / 3600)}h`;
+    return `${Math.round(seconds / 60)}m`;
+}
+
+function switchBackupTab(tab) {
+    _backupCurrentTab = tab;
+    listViewState.configBackups.tab = tab;
+    const policiesBtn = document.getElementById('backup-tab-policies');
+    const historyBtn = document.getElementById('backup-tab-history');
+    const policiesList = document.getElementById('backup-policies-list');
+    const historyList = document.getElementById('backup-history-list');
+    if (tab === 'policies') {
+        if (policiesBtn) { policiesBtn.className = 'btn btn-sm btn-primary'; }
+        if (historyBtn) { historyBtn.className = 'btn btn-sm btn-secondary'; }
+        if (policiesList) policiesList.style.display = '';
+        if (historyList) historyList.style.display = 'none';
+    } else {
+        if (policiesBtn) { policiesBtn.className = 'btn btn-sm btn-secondary'; }
+        if (historyBtn) { historyBtn.className = 'btn btn-sm btn-primary'; }
+        if (policiesList) policiesList.style.display = 'none';
+        if (historyList) historyList.style.display = '';
+    }
+}
+window.switchBackupTab = switchBackupTab;
+
+function refreshConfigBackups() { loadConfigBackups(); }
+window.refreshConfigBackups = refreshConfigBackups;
+
+async function showCreateBackupPolicyModal() {
+    let groups = [], creds = [];
+    try {
+        [groups, creds] = await Promise.all([api.getInventoryGroups(), api.getCredentials()]);
+    } catch (e) { /* ignore */ }
+    const groupOpts = (groups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const credOpts = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    showModal('Create Backup Policy', `
+        <label class="form-label">Policy Name</label>
+        <input id="bp-name" class="form-input" placeholder="Daily backup">
+        <label class="form-label" style="margin-top:0.75rem;">Inventory Group</label>
+        <select id="bp-group" class="form-select">${groupOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Credential</label>
+        <select id="bp-cred" class="form-select">${credOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Interval (hours)</label>
+        <input id="bp-interval" class="form-input" type="number" value="24" min="1" max="168">
+        <label class="form-label" style="margin-top:0.75rem;">Retention (days)</label>
+        <input id="bp-retention" class="form-input" type="number" value="30" min="1" max="365">
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitCreateBackupPolicy()">Create</button>
+        </div>
+    `);
+}
+window.showCreateBackupPolicyModal = showCreateBackupPolicyModal;
+
+async function submitCreateBackupPolicy() {
+    const name = document.getElementById('bp-name').value.trim();
+    const group_id = parseInt(document.getElementById('bp-group').value);
+    const credential_id = parseInt(document.getElementById('bp-cred').value);
+    const interval_seconds = parseInt(document.getElementById('bp-interval').value || '24') * 3600;
+    const retention_days = parseInt(document.getElementById('bp-retention').value || '30');
+    if (!name) return alert('Name is required');
+    try {
+        await api.createConfigBackupPolicy({ name, group_id, credential_id, interval_seconds, retention_days });
+        closeAllModals();
+        loadConfigBackups();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+window.submitCreateBackupPolicy = submitCreateBackupPolicy;
+
+async function showEditBackupPolicyModal(policyId) {
+    let policy, creds = [];
+    try {
+        [policy, creds] = await Promise.all([api.getConfigBackupPolicies(), api.getCredentials()]);
+        policy = (policy || []).find(p => p.id === policyId);
+    } catch (e) { return alert('Error loading policy'); }
+    if (!policy) return alert('Policy not found');
+    const credOpts = (creds || []).map(c => `<option value="${c.id}" ${c.id === policy.credential_id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+    showModal('Edit Backup Policy', `
+        <input type="hidden" id="bp-edit-id" value="${policyId}">
+        <label class="form-label">Policy Name</label>
+        <input id="bp-edit-name" class="form-input" value="${escapeHtml(policy.name)}">
+        <label class="form-label" style="margin-top:0.75rem;">Enabled</label>
+        <select id="bp-edit-enabled" class="form-select">
+            <option value="true" ${policy.enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!policy.enabled ? 'selected' : ''}>Disabled</option>
+        </select>
+        <label class="form-label" style="margin-top:0.75rem;">Credential</label>
+        <select id="bp-edit-cred" class="form-select">${credOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Interval (hours)</label>
+        <input id="bp-edit-interval" class="form-input" type="number" value="${Math.round(policy.interval_seconds / 3600)}" min="1" max="168">
+        <label class="form-label" style="margin-top:0.75rem;">Retention (days)</label>
+        <input id="bp-edit-retention" class="form-input" type="number" value="${policy.retention_days}" min="1" max="365">
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitEditBackupPolicy()">Save</button>
+        </div>
+    `);
+}
+window.showEditBackupPolicyModal = showEditBackupPolicyModal;
+
+async function submitEditBackupPolicy() {
+    const policyId = parseInt(document.getElementById('bp-edit-id').value);
+    try {
+        await api.updateConfigBackupPolicy(policyId, {
+            name: document.getElementById('bp-edit-name').value.trim(),
+            enabled: document.getElementById('bp-edit-enabled').value === 'true',
+            credential_id: parseInt(document.getElementById('bp-edit-cred').value),
+            interval_seconds: parseInt(document.getElementById('bp-edit-interval').value || '24') * 3600,
+            retention_days: parseInt(document.getElementById('bp-edit-retention').value || '30'),
+        });
+        closeAllModals();
+        loadConfigBackups();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+window.submitEditBackupPolicy = submitEditBackupPolicy;
+
+async function confirmDeleteBackupPolicy(id, name) {
+    if (!confirm(`Delete backup policy "${name}"?`)) return;
+    try {
+        await api.deleteConfigBackupPolicy(id);
+        loadConfigBackups();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+window.confirmDeleteBackupPolicy = confirmDeleteBackupPolicy;
+
+async function runBackupPolicyNow(id) {
+    try {
+        const result = await api.runConfigBackupPolicy(id);
+        alert(`Backup complete: ${result.backed_up} succeeded, ${result.errors} errors`);
+        loadConfigBackups();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+window.runBackupPolicyNow = runBackupPolicyNow;
+
+async function viewBackupDetail(id) {
+    try {
+        const backup = await api.getConfigBackup(id);
+        showModal(`Backup Detail — ${escapeHtml(backup.hostname || backup.ip_address)}`, `
+            <div style="font-size:0.85em; margin-bottom:0.75rem; color:var(--text-muted);">
+                Captured: ${new Date(backup.captured_at + 'Z').toLocaleString()} &bull;
+                Method: ${backup.capture_method} &bull; Status: ${backup.status}
+            </div>
+            <pre class="code-block" style="max-height:400px; overflow:auto; font-size:0.8em; white-space:pre-wrap;">${escapeHtml(backup.config_text || '(empty)')}</pre>
+        `);
+    } catch (e) { alert('Error: ' + e.message); }
+}
+window.viewBackupDetail = viewBackupDetail;
+
+async function showRestoreBackupModal(backupId) {
+    let creds = [];
+    try { creds = await api.getCredentials(); } catch (e) { /* ignore */ }
+    const credOpts = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    showModal('Restore from Backup', `
+        <p style="color:var(--warning); margin-bottom:1rem;">This will push the backup configuration to the device and validate the result.</p>
+        <input type="hidden" id="restore-backup-id" value="${backupId}">
+        <label class="form-label">Credential for SSH</label>
+        <select id="restore-cred" class="form-select">${credOpts}</select>
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitRestoreBackup()">Restore</button>
+        </div>
+    `);
+}
+window.showRestoreBackupModal = showRestoreBackupModal;
+
+async function submitRestoreBackup() {
+    const backupId = parseInt(document.getElementById('restore-backup-id').value);
+    const credential_id = parseInt(document.getElementById('restore-cred').value);
+    try {
+        const result = await api.restoreConfigBackup({ backup_id: backupId, credential_id });
+        closeAllModals();
+        const msg = result.validated
+            ? `Restore validated successfully for ${result.hostname}. No config differences detected.`
+            : `Restore completed for ${result.hostname} but validation found ${result.lines_changed} line(s) changed.\n\n${result.diff_text || ''}`;
+        alert(msg);
+        loadConfigBackups();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+window.submitRestoreBackup = submitRestoreBackup;
+
+async function confirmDeleteBackup(id) {
+    if (!confirm('Delete this backup?')) return;
+    try {
+        await api.deleteConfigBackup(id);
+        loadConfigBackups();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+window.confirmDeleteBackup = confirmDeleteBackup;
+
+// Search handler for config backups
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('backup-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', debounce(() => {
+            listViewState.configBackups.query = searchInput.value;
+            renderBackupPolicies(listViewState.configBackups.policies);
+            renderBackupHistory(listViewState.configBackups.backups);
+        }, 200));
+    }
+});
+
 
 // ── Hash-based routing: back/forward button support ─────────────────────────
 window.addEventListener('popstate', () => {
