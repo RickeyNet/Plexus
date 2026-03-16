@@ -89,6 +89,8 @@ _INSERT_ID_TABLES = {
     "route_snapshots",
     "alert_rules",
     "alert_suppressions",
+    "sla_targets",
+    "sla_metrics",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -186,8 +188,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     template_id     INTEGER REFERENCES templates(id),
     dry_run         INTEGER NOT NULL DEFAULT 1,
     status          TEXT    NOT NULL DEFAULT 'pending',
+    priority        INTEGER NOT NULL DEFAULT 2,
+    depends_on      TEXT    NOT NULL DEFAULT '[]',
+    queued_at       TEXT,
     started_at      TEXT,
     finished_at     TEXT,
+    cancelled_at    TEXT,
+    cancelled_by    TEXT    DEFAULT '',
     hosts_ok        INTEGER DEFAULT 0,
     hosts_failed    INTEGER DEFAULT 0,
     hosts_skipped   INTEGER DEFAULT 0,
@@ -442,6 +449,8 @@ CREATE TABLE IF NOT EXISTS monitoring_polls (
     route_snapshot  TEXT    NOT NULL DEFAULT '',
     poll_status     TEXT    NOT NULL DEFAULT 'ok',
     poll_error      TEXT    DEFAULT '',
+    response_time_ms REAL   DEFAULT NULL,
+    packet_loss_pct  REAL   DEFAULT NULL,
     polled_at       TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -509,6 +518,32 @@ CREATE TABLE IF NOT EXISTS alert_suppressions (
     starts_at       TEXT    NOT NULL DEFAULT (datetime('now')),
     ends_at         TEXT    NOT NULL,
     created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS sla_targets (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL DEFAULT '',
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    group_id        INTEGER REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    metric          TEXT    NOT NULL DEFAULT 'uptime',
+    target_value    REAL    NOT NULL DEFAULT 99.9,
+    warning_value   REAL    NOT NULL DEFAULT 99.0,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS sla_metrics (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    metric          TEXT    NOT NULL DEFAULT 'uptime',
+    time_window     TEXT    NOT NULL DEFAULT 'hourly',
+    value           REAL    NOT NULL DEFAULT 0,
+    sample_count    INTEGER NOT NULL DEFAULT 0,
+    period_start    TEXT    NOT NULL,
+    period_end      TEXT    NOT NULL,
     created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 """
@@ -1670,17 +1705,20 @@ async def create_job(playbook_id: int, inventory_group_id: int,
                      credential_id: int | None = None,
                      template_id: int | None = None,
                      dry_run: bool = True,
-                     launched_by: str = "admin") -> int:
+                     launched_by: str = "admin",
+                     priority: int = 2,
+                     depends_on: list[int] | None = None) -> int:
     db = await get_db()
     try:
+        deps_json = json.dumps(depends_on or [])
+        now = datetime.now(UTC).isoformat()
         cursor = await db.execute(
             """INSERT INTO jobs
                (playbook_id, inventory_group_id, credential_id, template_id,
-                dry_run, status, started_at, launched_by)
-               VALUES (?,?,?,?,?,?,?,?)""",
+                dry_run, status, priority, depends_on, queued_at, launched_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (playbook_id, inventory_group_id, credential_id, template_id,
-             1 if dry_run else 0, "running",
-             datetime.now(UTC).isoformat(), launched_by),
+             1 if dry_run else 0, "queued", priority, deps_json, now, launched_by),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1735,9 +1773,9 @@ async def delete_expired_jobs(retention_days: int) -> int:
             cursor = await db.execute(
                 """
                 DELETE FROM jobs
-                WHERE status IN ('success', 'failed')
-                  AND started_at IS NOT NULL
-                  AND COALESCE(finished_at, started_at)::timestamp <= (NOW() - (?::int * INTERVAL '1 day'))
+                WHERE status IN ('success', 'failed', 'cancelled')
+                  AND COALESCE(finished_at, started_at, queued_at) IS NOT NULL
+                  AND COALESCE(finished_at, started_at, queued_at)::timestamp <= (NOW() - (?::int * INTERVAL '1 day'))
                 """,
                 (safe_days,),
             )
@@ -1745,14 +1783,122 @@ async def delete_expired_jobs(retention_days: int) -> int:
             cursor = await db.execute(
                 """
                 DELETE FROM jobs
-                WHERE status IN ('success', 'failed')
-                  AND started_at IS NOT NULL
-                  AND julianday(COALESCE(finished_at, started_at)) <= julianday('now') - ?
+                WHERE status IN ('success', 'failed', 'cancelled')
+                  AND COALESCE(finished_at, started_at, queued_at) IS NOT NULL
+                  AND julianday(COALESCE(finished_at, started_at, queued_at)) <= julianday('now') - ?
                 """,
                 (safe_days,),
             )
         await db.commit()
         return cursor.rowcount or 0
+    finally:
+        await db.close()
+
+
+async def start_job(job_id: int) -> None:
+    """Transition a queued job to running status with started_at timestamp."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'",
+            (datetime.now(UTC).isoformat(), job_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def cancel_job(job_id: int, cancelled_by: str = "") -> bool:
+    """Cancel a queued or running job. Returns True if the job was updated."""
+    db = await get_db()
+    try:
+        now = datetime.now(UTC).isoformat()
+        cursor = await db.execute(
+            """UPDATE jobs SET status = 'cancelled', cancelled_at = ?, cancelled_by = ?,
+               finished_at = COALESCE(finished_at, ?)
+               WHERE id = ? AND status IN ('queued', 'running')""",
+            (now, cancelled_by, now, job_id),
+        )
+        await db.commit()
+        return (cursor.rowcount or 0) > 0
+    finally:
+        await db.close()
+
+
+async def update_job_priority(job_id: int, priority: int) -> bool:
+    """Update the priority of a queued job."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE jobs SET priority = ? WHERE id = ? AND status = 'queued'",
+            (max(0, min(4, priority)), job_id),
+        )
+        await db.commit()
+        return (cursor.rowcount or 0) > 0
+    finally:
+        await db.close()
+
+
+async def get_job_queue() -> list[dict]:
+    """Get all queued and running jobs ordered by priority (desc) then queued_at (asc)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT j.*, p.name AS playbook_name, g.name AS group_name
+               FROM jobs j
+               JOIN playbooks p ON p.id = j.playbook_id
+               JOIN inventory_groups g ON g.id = j.inventory_group_id
+               WHERE j.status IN ('queued', 'running')
+               ORDER BY j.status = 'running' DESC, j.priority DESC, j.queued_at ASC"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_next_queued_job() -> dict | None:
+    """Get the next job to run: highest priority first, then earliest queued."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT j.* FROM jobs j
+               WHERE j.status = 'queued'
+               ORDER BY j.priority DESC, j.queued_at ASC
+               LIMIT 1"""
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def check_job_dependencies_met(job_id: int) -> bool:
+    """Check if all dependency jobs have completed successfully."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT depends_on FROM jobs WHERE id = ?", (job_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return True
+        deps = json.loads(row[0] or "[]")
+        if not deps:
+            return True
+        placeholders = ",".join("?" for _ in deps)
+        cursor = await db.execute(
+            f"""SELECT COUNT(*) FROM jobs
+                WHERE id IN ({placeholders}) AND status != 'success'""",
+            tuple(deps),
+        )
+        unmet = (await cursor.fetchone())[0]
+        return unmet == 0
+    finally:
+        await db.close()
+
+
+async def get_running_job_count() -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM jobs WHERE status = 'running'")
+        return (await cursor.fetchone())[0]
     finally:
         await db.close()
 
@@ -3652,6 +3798,8 @@ async def create_monitoring_poll(
     route_snapshot: str = "",
     poll_status: str = "ok",
     poll_error: str = "",
+    response_time_ms: float | None = None,
+    packet_loss_pct: float | None = None,
 ) -> int:
     db = await get_db()
     try:
@@ -3660,12 +3808,14 @@ async def create_monitoring_poll(
                (host_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
                 uptime_seconds, if_up_count, if_down_count, if_admin_down, if_details,
                 vpn_tunnels_up, vpn_tunnels_down, vpn_details,
-                route_count, route_snapshot, poll_status, poll_error, polled_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                route_count, route_snapshot, poll_status, poll_error,
+                response_time_ms, packet_loss_pct, polled_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
             (host_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
              uptime_seconds, if_up_count, if_down_count, if_admin_down, if_details,
              vpn_tunnels_up, vpn_tunnels_down, vpn_details,
-             route_count, route_snapshot, poll_status, poll_error),
+             route_count, route_snapshot, poll_status, poll_error,
+             response_time_ms, packet_loss_pct),
         )
         await db.commit()
         return cursor.lastrowid
@@ -4284,6 +4434,345 @@ async def bulk_acknowledge_alerts(alert_ids: list[int], acknowledged_by: str) ->
                 SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
                 WHERE id IN ({placeholders}) AND acknowledged = 0""",
             (acknowledged_by, *alert_ids),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ── SLA Targets ──────────────────────────────────────────────────────────────
+
+
+async def get_sla_targets(
+    host_id: int | None = None,
+    group_id: int | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        where = ["1=1"]
+        params: list = []
+        if host_id is not None:
+            where.append("t.host_id = ?")
+            params.append(host_id)
+        if group_id is not None:
+            where.append("t.group_id = ?")
+            params.append(group_id)
+        cursor = await db.execute(
+            f"""SELECT t.*,
+                       h.hostname AS host_name,
+                       g.name AS group_name
+                FROM sla_targets t
+                LEFT JOIN hosts h ON h.id = t.host_id
+                LEFT JOIN inventory_groups g ON g.id = t.group_id
+                WHERE {' AND '.join(where)}
+                ORDER BY t.name""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_sla_target(target_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT t.*, h.hostname AS host_name, g.name AS group_name
+               FROM sla_targets t
+               LEFT JOIN hosts h ON h.id = t.host_id
+               LEFT JOIN inventory_groups g ON g.id = t.group_id
+               WHERE t.id = ?""",
+            (target_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def create_sla_target(
+    name: str,
+    metric: str,
+    target_value: float,
+    warning_value: float,
+    host_id: int | None = None,
+    group_id: int | None = None,
+    created_by: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO sla_targets
+               (name, metric, target_value, warning_value, host_id, group_id, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (name, metric, target_value, warning_value, host_id, group_id, created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def update_sla_target(target_id: int, **kwargs) -> None:
+    allowed = {"name", "metric", "target_value", "warning_value", "enabled", "host_id", "group_id"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not fields:
+        return
+    fields["updated_at"] = datetime.now(UTC).isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE sla_targets SET {set_clause} WHERE id = ?",
+            (*fields.values(), target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_sla_target(target_id: int) -> None:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM sla_targets WHERE id = ?", (target_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ── SLA Summary & Host Detail ────────────────────────────────────────────────
+
+
+async def get_sla_summary(
+    group_id: int | None = None,
+    days: int = 30,
+) -> dict:
+    """Compute SLA summary from monitoring_polls data directly."""
+    db = await get_db()
+    try:
+        group_filter = ""
+        params: list = [days]
+        if group_id is not None:
+            group_filter = "AND h.group_id = ?"
+            params.append(group_id)
+
+        # Per-host uptime (% of polls with status='ok'), latency, packet loss
+        cursor = await db.execute(
+            f"""SELECT h.id AS host_id, h.hostname, h.ip_address, h.group_id,
+                       COUNT(*) AS total_polls,
+                       SUM(CASE WHEN p.poll_status = 'ok' THEN 1 ELSE 0 END) AS ok_polls,
+                       AVG(p.response_time_ms) AS avg_latency,
+                       AVG(p.packet_loss_pct) AS avg_packet_loss
+                FROM monitoring_polls p
+                JOIN hosts h ON h.id = p.host_id
+                WHERE p.polled_at >= datetime('now', '-' || ? || ' days')
+                {group_filter}
+                GROUP BY h.id
+                ORDER BY h.hostname""",
+            tuple(params),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+
+        hosts = []
+        total_uptime = 0.0
+        total_latency = 0.0
+        total_packet_loss = 0.0
+        latency_count = 0
+        pkt_count = 0
+
+        for r in rows:
+            total = r["total_polls"] or 1
+            ok = r["ok_polls"] or 0
+            uptime_pct = round(ok / total * 100, 3)
+            lat = round(r["avg_latency"], 2) if r["avg_latency"] is not None else None
+            pkt = round(r["avg_packet_loss"], 2) if r["avg_packet_loss"] is not None else None
+
+            total_uptime += uptime_pct
+            if lat is not None:
+                total_latency += lat
+                latency_count += 1
+            if pkt is not None:
+                total_packet_loss += pkt
+                pkt_count += 1
+
+            hosts.append({
+                "host_id": r["host_id"],
+                "hostname": r["hostname"],
+                "ip_address": r["ip_address"],
+                "group_id": r["group_id"],
+                "total_polls": total,
+                "ok_polls": ok,
+                "uptime_pct": uptime_pct,
+                "avg_latency_ms": lat,
+                "avg_packet_loss_pct": pkt,
+            })
+
+        host_count = len(hosts) or 1
+
+        # Compute jitter per host from response_time_ms variance
+        for h in hosts:
+            jcursor = await db.execute(
+                f"""SELECT AVG(p.response_time_ms) AS mean_rt,
+                           AVG(p.response_time_ms * p.response_time_ms) AS mean_sq_rt
+                    FROM monitoring_polls p
+                    WHERE p.host_id = ? AND p.response_time_ms IS NOT NULL
+                      AND p.polled_at >= datetime('now', '-' || ? || ' days')""",
+                (h["host_id"], days),
+            )
+            jr = await jcursor.fetchone()
+            if jr and jr[0] is not None and jr[1] is not None:
+                variance = jr[1] - (jr[0] ** 2)
+                h["jitter_ms"] = round(max(0, variance) ** 0.5, 2)
+            else:
+                h["jitter_ms"] = None
+
+        # MTTR / MTTD from alerts
+        cursor = await db.execute(
+            f"""SELECT
+                   AVG(CASE WHEN a.acknowledged = 1 AND a.acknowledged_at IS NOT NULL
+                        THEN (julianday(a.acknowledged_at) - julianday(a.created_at)) * 1440
+                        ELSE NULL END) AS avg_mttr_minutes,
+                   COUNT(CASE WHEN a.acknowledged = 1 THEN 1 END) AS resolved_alerts,
+                   COUNT(*) AS total_alerts
+                FROM monitoring_alerts a
+                JOIN hosts h ON h.id = a.host_id
+                WHERE a.created_at >= datetime('now', '-' || ? || ' days')
+                {group_filter}""",
+            tuple(params),
+        )
+        alert_row = await cursor.fetchone()
+        mttr = round(alert_row[0], 1) if alert_row and alert_row[0] is not None else None
+        resolved_alerts = alert_row[1] if alert_row else 0
+        total_alerts = alert_row[2] if alert_row else 0
+
+        # MTTD: time from first failed poll to alert creation
+        cursor = await db.execute(
+            f"""SELECT AVG(
+                    (julianday(a.created_at) -
+                     julianday(COALESCE(
+                        (SELECT MIN(p2.polled_at) FROM monitoring_polls p2
+                         WHERE p2.host_id = a.host_id AND p2.poll_status = 'error'
+                           AND p2.polled_at <= a.created_at
+                           AND p2.polled_at >= datetime(a.created_at, '-1 day')),
+                        a.created_at))
+                    ) * 1440) AS avg_mttd_minutes
+                FROM monitoring_alerts a
+                JOIN hosts h ON h.id = a.host_id
+                WHERE a.created_at >= datetime('now', '-' || ? || ' days')
+                {group_filter}""",
+            tuple(params),
+        )
+        mttd_row = await cursor.fetchone()
+        mttd = round(mttd_row[0], 1) if mttd_row and mttd_row[0] is not None else None
+
+        avg_jitter_vals = [h["jitter_ms"] for h in hosts if h["jitter_ms"] is not None]
+        avg_jitter = round(sum(avg_jitter_vals) / len(avg_jitter_vals), 2) if avg_jitter_vals else None
+
+        return {
+            "period_days": days,
+            "host_count": len(hosts),
+            "avg_uptime_pct": round(total_uptime / host_count, 3),
+            "avg_latency_ms": round(total_latency / latency_count, 2) if latency_count else None,
+            "avg_jitter_ms": avg_jitter,
+            "avg_packet_loss_pct": round(total_packet_loss / pkt_count, 2) if pkt_count else None,
+            "mttr_minutes": mttr,
+            "mttd_minutes": mttd,
+            "total_alerts": total_alerts,
+            "resolved_alerts": resolved_alerts,
+            "hosts": hosts,
+        }
+    finally:
+        await db.close()
+
+
+async def get_sla_host_detail(
+    host_id: int,
+    days: int = 30,
+) -> dict:
+    """Detailed SLA metrics for a single host over time."""
+    db = await get_db()
+    try:
+        # Daily uptime/latency/packet_loss trend
+        cursor = await db.execute(
+            """SELECT date(p.polled_at) AS day,
+                      COUNT(*) AS total_polls,
+                      SUM(CASE WHEN p.poll_status = 'ok' THEN 1 ELSE 0 END) AS ok_polls,
+                      AVG(p.response_time_ms) AS avg_latency,
+                      AVG(p.packet_loss_pct) AS avg_packet_loss,
+                      AVG(p.response_time_ms * p.response_time_ms) AS mean_sq_rt,
+                      AVG(p.response_time_ms) AS mean_rt
+               FROM monitoring_polls p
+               WHERE p.host_id = ?
+                 AND p.polled_at >= datetime('now', '-' || ? || ' days')
+               GROUP BY date(p.polled_at)
+               ORDER BY day ASC""",
+            (host_id, days),
+        )
+        daily = []
+        for r in rows_to_list(await cursor.fetchall()):
+            total = r["total_polls"] or 1
+            ok = r["ok_polls"] or 0
+            mean = r["mean_rt"]
+            mean_sq = r["mean_sq_rt"]
+            jitter = None
+            if mean is not None and mean_sq is not None:
+                variance = mean_sq - (mean ** 2)
+                jitter = round(max(0, variance) ** 0.5, 2)
+            daily.append({
+                "day": r["day"],
+                "uptime_pct": round(ok / total * 100, 3),
+                "avg_latency_ms": round(r["avg_latency"], 2) if r["avg_latency"] is not None else None,
+                "avg_packet_loss_pct": round(r["avg_packet_loss"], 2) if r["avg_packet_loss"] is not None else None,
+                "jitter_ms": jitter,
+                "total_polls": total,
+                "ok_polls": ok,
+            })
+
+        # MTTR for this host
+        cursor = await db.execute(
+            """SELECT
+                   AVG(CASE WHEN a.acknowledged = 1 AND a.acknowledged_at IS NOT NULL
+                        THEN (julianday(a.acknowledged_at) - julianday(a.created_at)) * 1440
+                        ELSE NULL END) AS avg_mttr_minutes,
+                   COUNT(CASE WHEN a.acknowledged = 1 THEN 1 END) AS resolved,
+                   COUNT(*) AS total
+               FROM monitoring_alerts a
+               WHERE a.host_id = ?
+                 AND a.created_at >= datetime('now', '-' || ? || ' days')""",
+            (host_id, days),
+        )
+        ar = await cursor.fetchone()
+
+        # Host info
+        cursor = await db.execute(
+            "SELECT hostname, ip_address, device_type, group_id FROM hosts WHERE id = ?",
+            (host_id,),
+        )
+        host_row = await cursor.fetchone()
+
+        return {
+            "host_id": host_id,
+            "hostname": host_row[0] if host_row else "",
+            "ip_address": host_row[1] if host_row else "",
+            "device_type": host_row[2] if host_row else "",
+            "group_id": host_row[3] if host_row else None,
+            "period_days": days,
+            "daily": daily,
+            "mttr_minutes": round(ar[0], 1) if ar and ar[0] is not None else None,
+            "resolved_alerts": ar[1] if ar else 0,
+            "total_alerts": ar[2] if ar else 0,
+        }
+    finally:
+        await db.close()
+
+
+async def delete_old_sla_metrics(retention_days: int) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM sla_metrics WHERE period_start < datetime('now', '-' || ? || ' days')",
+            (retention_days,),
         )
         await db.commit()
         return cursor.rowcount

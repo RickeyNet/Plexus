@@ -151,6 +151,10 @@
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>
                                 <span class="nav-label">Deployments</span>
                             </a>
+                            <a href="#" data-page="sla" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"></path><path d="M18 20V4"></path><path d="M6 20v-4"></path></svg>
+                                <span class="nav-label">SLA</span>
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -518,13 +522,24 @@
                     <h2>Job Execution</h2>
                     <button class="btn btn-primary" onclick="showLaunchJobModal()">Launch Job</button>
                 </div>
+                <!-- Queue Status Panel -->
+                <div id="jobs-queue-panel" class="card jobs-queue-panel" style="margin-bottom:1rem; padding:0.75rem 1rem; display:none;">
+                    <div style="display:flex; align-items:center; gap:1.5rem; flex-wrap:wrap;">
+                        <div style="font-weight:600; font-size:0.9em;">Queue</div>
+                        <div><span style="color:var(--text-muted); font-size:0.85em;">Running:</span> <strong id="jobs-q-running">0</strong><span style="color:var(--text-muted); font-size:0.8em;">/<span id="jobs-q-max">4</span></span></div>
+                        <div><span style="color:var(--text-muted); font-size:0.85em;">Queued:</span> <strong id="jobs-q-queued">0</strong></div>
+                        <div id="jobs-q-items" style="display:flex; gap:0.4rem; flex-wrap:wrap; flex:1;"></div>
+                    </div>
+                </div>
                 <div class="list-controls list-controls-jobs">
                     <input id="jobs-search" class="form-input list-control-search" type="search" placeholder="Search playbook, group, status">
                     <select id="jobs-status-filter" class="form-select list-control-select">
                         <option value="all">Status: All</option>
+                        <option value="queued">Status: Queued</option>
                         <option value="running">Status: Running</option>
                         <option value="success">Status: Success</option>
                         <option value="failed">Status: Failed</option>
+                        <option value="cancelled">Status: Cancelled</option>
                     </select>
                     <select id="jobs-dryrun-filter" class="form-select list-control-select">
                         <option value="all">Dry Run: All</option>
@@ -941,6 +956,180 @@
                 </div>
             </div>
 
+            <!-- SLA Dashboards Page -->
+            <div id="page-sla" class="page">
+                <div class="page-header">
+                    <h2>SLA Dashboards</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <select id="sla-period-select" class="form-select" style="max-width:160px;" onchange="loadSla()">
+                            <option value="7">Last 7 days</option>
+                            <option value="30" selected>Last 30 days</option>
+                            <option value="90">Last 90 days</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="loadSla()">Refresh</button>
+                    </div>
+                </div>
+                <!-- Summary Cards -->
+                <div class="drift-summary-grid" id="sla-summary-cards">
+                    <div class="stat-card sla-gauge-card">
+                        <div class="sla-gauge" id="sla-gauge-uptime">
+                            <svg viewBox="0 0 120 120" class="sla-gauge-svg">
+                                <circle cx="60" cy="60" r="52" class="sla-gauge-bg"></circle>
+                                <circle cx="60" cy="60" r="52" class="sla-gauge-fill" id="sla-gauge-uptime-fill" stroke-dasharray="0 327"></circle>
+                            </svg>
+                            <div class="sla-gauge-value" id="sla-val-uptime">-</div>
+                        </div>
+                        <div class="stat-label">Uptime</div>
+                    </div>
+                    <div class="stat-card sla-gauge-card">
+                        <div class="sla-gauge" id="sla-gauge-latency">
+                            <svg viewBox="0 0 120 120" class="sla-gauge-svg">
+                                <circle cx="60" cy="60" r="52" class="sla-gauge-bg"></circle>
+                                <circle cx="60" cy="60" r="52" class="sla-gauge-fill sla-gauge-latency" id="sla-gauge-latency-fill" stroke-dasharray="0 327"></circle>
+                            </svg>
+                            <div class="sla-gauge-value" id="sla-val-latency">-</div>
+                        </div>
+                        <div class="stat-label">Latency</div>
+                    </div>
+                    <div class="stat-card sla-gauge-card">
+                        <div class="sla-gauge" id="sla-gauge-jitter">
+                            <svg viewBox="0 0 120 120" class="sla-gauge-svg">
+                                <circle cx="60" cy="60" r="52" class="sla-gauge-bg"></circle>
+                                <circle cx="60" cy="60" r="52" class="sla-gauge-fill sla-gauge-jitter" id="sla-gauge-jitter-fill" stroke-dasharray="0 327"></circle>
+                            </svg>
+                            <div class="sla-gauge-value" id="sla-val-jitter">-</div>
+                        </div>
+                        <div class="stat-label">Jitter</div>
+                    </div>
+                    <div class="stat-card sla-gauge-card">
+                        <div class="sla-gauge" id="sla-gauge-pktloss">
+                            <svg viewBox="0 0 120 120" class="sla-gauge-svg">
+                                <circle cx="60" cy="60" r="52" class="sla-gauge-bg"></circle>
+                                <circle cx="60" cy="60" r="52" class="sla-gauge-fill sla-gauge-pktloss" id="sla-gauge-pktloss-fill" stroke-dasharray="0 327"></circle>
+                            </svg>
+                            <div class="sla-gauge-value" id="sla-val-pktloss">-</div>
+                        </div>
+                        <div class="stat-label">Packet Loss</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-ring-value" id="sla-val-mttr">-</div>
+                        <div class="stat-label">MTTR</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-ring-value" id="sla-val-mttd">-</div>
+                        <div class="stat-label">MTTD</div>
+                    </div>
+                </div>
+                <!-- Tab Controls -->
+                <div class="list-controls" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                    <button class="btn btn-sm btn-secondary sla-tab-btn active" data-sla-tab="hosts" onclick="switchSlaTab('hosts')">Host SLAs</button>
+                    <button class="btn btn-sm btn-secondary sla-tab-btn" data-sla-tab="trends" onclick="switchSlaTab('trends')">Trends</button>
+                    <button class="btn btn-sm btn-secondary sla-tab-btn" data-sla-tab="incidents" onclick="switchSlaTab('incidents')">Incidents</button>
+                    <button class="btn btn-sm btn-secondary sla-tab-btn" data-sla-tab="targets" onclick="switchSlaTab('targets')">Targets</button>
+                    <input id="sla-search" class="form-input list-control-search" type="search" placeholder="Search hosts..." style="margin-left:auto; max-width:220px;">
+                </div>
+                <!-- Host SLAs Tab -->
+                <div id="sla-tab-hosts" class="sla-tab">
+                    <div id="sla-hosts-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    </div>
+                </div>
+                <!-- Trends Tab -->
+                <div id="sla-tab-trends" class="sla-tab" style="display:none;">
+                    <div id="sla-trends-container">
+                        <div class="skeleton skeleton-card" style="height:300px; margin-bottom:0.75rem"></div>
+                    </div>
+                </div>
+                <!-- Incidents Tab -->
+                <div id="sla-tab-incidents" class="sla-tab" style="display:none;">
+                    <div id="sla-incidents-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    </div>
+                </div>
+                <!-- Targets Tab -->
+                <div id="sla-tab-targets" class="sla-tab" style="display:none;">
+                    <div style="margin-bottom:0.75rem; display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:var(--text-muted); font-size:0.9em;">Define SLA targets for hosts or groups.</span>
+                        <button class="btn btn-primary btn-sm" onclick="showCreateSlaTargetModal()">+ New Target</button>
+                    </div>
+                    <div id="sla-targets-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SLA Host Detail Modal -->
+            <div id="sla-host-detail-modal" class="modal" style="display:none;">
+                <div class="modal-backdrop" onclick="closeSlaHostDetailModal()"></div>
+                <div class="modal-content" style="max-width:800px;">
+                    <div class="modal-header">
+                        <h3 id="sla-host-detail-title">Host SLA Detail</h3>
+                        <button class="modal-close" onclick="closeSlaHostDetailModal()">&times;</button>
+                    </div>
+                    <div id="sla-host-detail-body" style="padding:1rem;">
+                        <div class="skeleton skeleton-card" style="height:200px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SLA Target Create/Edit Modal -->
+            <div id="sla-target-modal" class="modal" style="display:none;">
+                <div class="modal-backdrop" onclick="closeSlaTargetModal()"></div>
+                <div class="modal-content" style="max-width:500px;">
+                    <div class="modal-header">
+                        <h3 id="sla-target-modal-title">New SLA Target</h3>
+                        <button class="modal-close" onclick="closeSlaTargetModal()">&times;</button>
+                    </div>
+                    <div style="padding:1rem;">
+                        <input type="hidden" id="sla-target-edit-id">
+                        <div class="form-group" style="margin-bottom:0.75rem;">
+                            <label class="form-label">Name</label>
+                            <input id="sla-target-name" class="form-input" placeholder="e.g. Core Router Uptime SLA">
+                        </div>
+                        <div class="form-group" style="margin-bottom:0.75rem;">
+                            <label class="form-label">Metric</label>
+                            <select id="sla-target-metric" class="form-select">
+                                <option value="uptime">Uptime %</option>
+                                <option value="latency">Latency (ms)</option>
+                                <option value="jitter">Jitter (ms)</option>
+                                <option value="packet_loss">Packet Loss %</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; gap:0.75rem; margin-bottom:0.75rem;">
+                            <div class="form-group" style="flex:1;">
+                                <label class="form-label">Target Value</label>
+                                <input id="sla-target-value" class="form-input" type="number" step="0.01" value="99.9">
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label class="form-label">Warning Value</label>
+                                <input id="sla-target-warning" class="form-input" type="number" step="0.01" value="99.0">
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0.75rem;">
+                            <label class="form-label">Scope (optional)</label>
+                            <select id="sla-target-scope" class="form-select" onchange="toggleSlaTargetScope()">
+                                <option value="global">Global (all hosts)</option>
+                                <option value="group">Group</option>
+                                <option value="host">Host</option>
+                            </select>
+                        </div>
+                        <div id="sla-target-scope-group" style="display:none; margin-bottom:0.75rem;">
+                            <label class="form-label">Group</label>
+                            <select id="sla-target-group-id" class="form-select"></select>
+                        </div>
+                        <div id="sla-target-scope-host" style="display:none; margin-bottom:0.75rem;">
+                            <label class="form-label">Host</label>
+                            <select id="sla-target-host-id" class="form-select"></select>
+                        </div>
+                        <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                            <button class="btn btn-secondary" onclick="closeSlaTargetModal()">Cancel</button>
+                            <button class="btn btn-primary" onclick="saveSlaTarget()">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Settings Page -->
             <div id="page-settings" class="page">
                 <h2>Admin Settings</h2>
@@ -1091,7 +1280,13 @@
         <div class="modal modal-large" role="dialog" aria-modal="true" aria-label="Job Output" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <h3>Job Output</h3>
-                <button class="modal-close" onclick="closeJobOutputModal()" aria-label="Close dialog">&times;</button>
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                    <span id="job-output-status" class="status-badge" style="display:none;"></span>
+                    <span id="job-output-priority" class="job-priority-badge" style="display:none;"></span>
+                    <button id="job-output-cancel-btn" class="btn btn-sm btn-danger" onclick="cancelCurrentJob()" style="display:none;">Cancel</button>
+                    <button id="job-output-retry-btn" class="btn btn-sm btn-primary" onclick="retryCurrentJob()" style="display:none;">Retry</button>
+                    <button class="modal-close" onclick="closeJobOutputModal()" aria-label="Close dialog">&times;</button>
+                </div>
             </div>
             <div class="modal-body">
                 <div id="job-output" class="job-output"></div>
