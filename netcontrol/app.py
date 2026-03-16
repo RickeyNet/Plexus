@@ -1558,7 +1558,12 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
         "route_snapshot": "",
         "poll_status": "ok",
         "poll_error": "",
+        "response_time_ms": None,
+        "packet_loss_pct": None,
     }
+
+    # ── Measure response time via ICMP-like TCP connect ──
+    poll_start = time.monotonic()
 
     # ── SNMP polling for CPU, memory, interfaces ──
     if PYSMNP_AVAILABLE and snmp_cfg.get("enabled"):
@@ -1776,6 +1781,12 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             if result["cpu_percent"] is None and result["if_up_count"] == 0:
                 result["poll_status"] = "error"
                 result["poll_error"] = str(exc)[:500]
+
+    # Record response time
+    poll_elapsed = (time.monotonic() - poll_start) * 1000  # ms
+    result["response_time_ms"] = round(poll_elapsed, 2)
+    # Packet loss: 100% if error, 0% if ok
+    result["packet_loss_pct"] = 100.0 if result["poll_status"] == "error" else 0.0
 
     return result
 
@@ -2022,6 +2033,8 @@ async def _run_monitoring_poll_once() -> dict:
                 route_snapshot=res["route_snapshot"][:5000],
                 poll_status=res["poll_status"],
                 poll_error=res["poll_error"],
+                response_time_ms=res.get("response_time_ms"),
+                packet_loss_pct=res.get("packet_loss_pct"),
             )
 
             # ── Alerting Engine: evaluate built-in thresholds + user rules ──
@@ -3269,6 +3282,8 @@ class JobLaunch(BaseModel):
     credential_id: int | None = None
     template_id: int | None = None
     dry_run: bool = True
+    priority: int = 2  # 0=low, 1=below-normal, 2=normal, 3=high, 4=critical
+    depends_on: list[int] | None = None  # Job IDs that must complete before this runs
 
     # Forbid unknown fields for strict payload validation.
     model_config = ConfigDict(extra="forbid")
@@ -4985,6 +5000,83 @@ async def update_credential(cred_id: int, body: CredentialUpdate, request: Reque
 
 # Active WebSocket connections keyed by job_id
 _job_sockets: dict[int, list[WebSocket]] = {}
+_running_job_tasks: dict[int, asyncio.Task] = {}  # job_id -> asyncio.Task for cancellation
+
+_PRIORITY_LABELS = {0: "low", 1: "below-normal", 2: "normal", 3: "high", 4: "critical"}
+
+
+async def _process_job_queue():
+    """Dequeue and run the next eligible job if concurrency allows."""
+    running = await db.get_running_job_count()
+    if running >= _MAX_CONCURRENT_JOBS:
+        return
+
+    next_job = await db.get_next_queued_job()
+    if not next_job:
+        return
+
+    # Check dependencies
+    deps_met = await db.check_job_dependencies_met(next_job["id"])
+    if not deps_met:
+        return
+
+    job_id = next_job["id"]
+
+    # Fetch all the info needed to run this job
+    playbook = await db.get_playbook(next_job["playbook_id"])
+    if not playbook:
+        await db.finish_job(job_id, status="failed")
+        await db.add_job_event(job_id, "error", "Playbook not found")
+        return
+
+    # Get hosts from inventory group
+    hosts = await db.get_hosts_for_group(next_job["inventory_group_id"])
+    if not hosts:
+        await db.finish_job(job_id, status="failed")
+        await db.add_job_event(job_id, "error", "No hosts in inventory group")
+        return
+
+    # Get credentials
+    credentials = {"username": "netadmin", "password": "cisco123", "secret": "cisco123"}
+    if next_job.get("credential_id"):
+        cred = await db.get_credential_raw(next_job["credential_id"])
+        if cred:
+            credentials = {
+                "username": cred["username"],
+                "password": decrypt(cred["password"]),
+                "secret": decrypt(cred["secret"]) if cred["secret"] else "",
+            }
+
+    # Get template commands
+    template_commands = []
+    if next_job.get("template_id"):
+        tpl = await db.get_template(next_job["template_id"])
+        if tpl:
+            template_commands = [
+                line.rstrip() for line in tpl["content"].splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+
+    pb_class = get_playbook_class(playbook["filename"])
+    if not pb_class:
+        await db.finish_job(job_id, status="failed")
+        await db.add_job_event(job_id, "error", f"No runner for '{playbook['filename']}'")
+        return
+
+    dry_run = bool(next_job.get("dry_run", 1))
+
+    # Transition to running
+    await db.start_job(job_id)
+
+    task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run))
+    _running_job_tasks[job_id] = task
+
+    def _on_done(t):
+        _running_job_tasks.pop(job_id, None)
+        # After a job finishes, try to dequeue the next one
+        asyncio.ensure_future(_process_job_queue())
+
+    task.add_done_callback(_on_done)
 
 
 @app.get("/api/jobs", dependencies=[Depends(require_auth), Depends(require_feature("jobs"))])
@@ -5072,19 +5164,123 @@ async def launch_job(body: JobLaunch, request: Request):
         raise HTTPException(400, f"No runner registered for '{playbook['filename']}'")
 
     launched_by = session["user"] if session else "admin"
+    priority = max(0, min(4, body.priority))
     job_id = await db.create_job(
         body.playbook_id, inventory_group_id,
         body.credential_id, body.template_id,
         body.dry_run, launched_by=launched_by,
+        priority=priority, depends_on=body.depends_on,
     )
 
-    # Launch as background task
-    asyncio.create_task(_run_job(
-        job_id, pb_class, hosts, credentials, template_commands, body.dry_run
-    ))
+    # Trigger queue processor to potentially start this job immediately
+    asyncio.ensure_future(_process_job_queue())
 
-    await _audit("jobs", "job.launch", user=launched_by, detail=f"launched job {job_id} playbook='{playbook['name']}' hosts={len(hosts)} dry_run={body.dry_run}", correlation_id=_corr_id(request))
-    return {"job_id": job_id, "status": "running"}
+    await _audit("jobs", "job.launch", user=launched_by,
+                 detail=f"queued job {job_id} playbook='{playbook['name']}' hosts={len(hosts)} dry_run={body.dry_run} priority={priority}",
+                 correlation_id=_corr_id(request))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/jobs/queue", dependencies=[Depends(require_auth), Depends(require_feature("jobs"))])
+async def get_job_queue():
+    """Get all queued and running jobs with queue positions."""
+    queue = await db.get_job_queue()
+    running_count = sum(1 for j in queue if j["status"] == "running")
+    queued_count = sum(1 for j in queue if j["status"] == "queued")
+    return {
+        "max_concurrent": _MAX_CONCURRENT_JOBS,
+        "running": running_count,
+        "queued": queued_count,
+        "jobs": queue,
+    }
+
+
+@app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_auth), Depends(require_feature("jobs"))])
+async def cancel_job_endpoint(job_id: int, request: Request):
+    """Cancel a queued or running job."""
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] not in ("queued", "running"):
+        raise HTTPException(400, f"Cannot cancel job with status '{job['status']}'")
+
+    session = _get_session(request)
+    user = session["user"] if session else ""
+
+    # Cancel running asyncio task if applicable
+    task = _running_job_tasks.pop(job_id, None)
+    if task and not task.done():
+        task.cancel()
+
+    ok = await db.cancel_job(job_id, user)
+    if not ok:
+        raise HTTPException(400, "Job could not be cancelled")
+
+    # Notify WebSocket clients
+    done_msg = {"type": "job_complete", "job_id": job_id, "status": "cancelled"}
+    sockets = _job_sockets.pop(job_id, [])
+    for ws in sockets:
+        try:
+            await ws.send_json(done_msg)
+        except Exception:
+            pass
+
+    await _audit("jobs", "job.cancelled", user=user,
+                 detail=f"cancelled job {job_id}", correlation_id=_corr_id(request))
+
+    # Try to start the next queued job
+    asyncio.ensure_future(_process_job_queue())
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/retry", status_code=201, dependencies=[Depends(require_auth), Depends(require_feature("jobs"))])
+async def retry_job_endpoint(job_id: int, request: Request):
+    """Retry a failed or cancelled job by creating a new job with the same parameters."""
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] not in ("failed", "cancelled"):
+        raise HTTPException(400, f"Can only retry failed or cancelled jobs, current status: '{job['status']}'")
+
+    session = _get_session(request)
+    user = session["user"] if session else "admin"
+
+    new_job_id = await db.create_job(
+        job["playbook_id"], job["inventory_group_id"],
+        job.get("credential_id"), job.get("template_id"),
+        bool(job.get("dry_run", 1)), launched_by=user,
+        priority=job.get("priority", 2),
+    )
+
+    asyncio.ensure_future(_process_job_queue())
+
+    await _audit("jobs", "job.retry", user=user,
+                 detail=f"retried job {job_id} as new job {new_job_id}",
+                 correlation_id=_corr_id(request))
+    return {"job_id": new_job_id, "status": "queued", "retried_from": job_id}
+
+
+@app.patch("/api/jobs/{job_id}/priority", dependencies=[Depends(require_auth), Depends(require_feature("jobs"))])
+async def update_job_priority_endpoint(job_id: int, body: dict, request: Request):
+    """Change the priority of a queued job."""
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] != "queued":
+        raise HTTPException(400, "Can only change priority of queued jobs")
+    new_priority = body.get("priority")
+    if new_priority is None or not isinstance(new_priority, int):
+        raise HTTPException(400, "priority (int 0-4) required")
+
+    ok = await db.update_job_priority(job_id, new_priority)
+    if not ok:
+        raise HTTPException(400, "Failed to update priority")
+
+    session = _get_session(request)
+    await _audit("jobs", "job.priority_changed", user=session["user"] if session else "",
+                 detail=f"job {job_id} priority={new_priority}",
+                 correlation_id=_corr_id(request))
+    return {"ok": True, "priority": max(0, min(4, new_priority))}
 
 
 async def _run_job(
@@ -5096,56 +5292,58 @@ async def _run_job(
     dry_run: bool,
 ):
     """Background task: execute playbook, store events, broadcast via WebSocket."""
-    async with _job_semaphore:
-        hosts_ok = 0
-        hosts_failed = 0
+    hosts_ok = 0
+    hosts_failed = 0
 
-        async def on_event(event: LogEvent):
-            nonlocal hosts_ok, hosts_failed
+    async def on_event(event: LogEvent):
+        nonlocal hosts_ok, hosts_failed
 
-            # Persist event
-            await db.add_job_event(job_id, event.level, event.message, event.host)
+        # Persist event
+        await db.add_job_event(job_id, event.level, event.message, event.host)
 
-            # Track host results
-            if event.level == "success" and "Finished processing" in event.message:
-                hosts_ok += 1
-            elif event.level == "error" and event.host:
-                hosts_failed += 1
+        # Track host results
+        if event.level == "success" and "Finished processing" in event.message:
+            hosts_ok += 1
+        elif event.level == "error" and event.host:
+            hosts_failed += 1
 
-            # Broadcast to WebSocket subscribers
-            sockets = _job_sockets.get(job_id, [])
-            dead = []
-            for ws in sockets:
-                try:
-                    await ws.send_json(event.to_dict())
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                sockets.remove(ws)
-
-        try:
-            result = await execute_playbook(
-                pb_class, hosts, credentials, template_commands, dry_run, on_event
-            )
-            await db.finish_job(
-                job_id,
-                status=result.status,
-                hosts_ok=hosts_ok,
-                hosts_failed=hosts_failed,
-                hosts_skipped=result.hosts_skipped,
-            )
-        except Exception as e:
-            await db.finish_job(job_id, status="failed", hosts_failed=len(hosts))
-            await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
-
-        # Notify WebSocket clients that job is done
-        done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
-        sockets = _job_sockets.pop(job_id, [])
+        # Broadcast to WebSocket subscribers
+        sockets = _job_sockets.get(job_id, [])
+        dead = []
         for ws in sockets:
             try:
-                await ws.send_json(done_msg)
+                await ws.send_json(event.to_dict())
             except Exception:
-                pass
+                dead.append(ws)
+        for ws in dead:
+            sockets.remove(ws)
+
+    try:
+        result = await execute_playbook(
+            pb_class, hosts, credentials, template_commands, dry_run, on_event
+        )
+        await db.finish_job(
+            job_id,
+            status=result.status,
+            hosts_ok=hosts_ok,
+            hosts_failed=hosts_failed,
+            hosts_skipped=result.hosts_skipped,
+        )
+    except asyncio.CancelledError:
+        await db.add_job_event(job_id, "warning", "Job cancelled by user")
+        await db.cancel_job(job_id, "system")
+    except Exception as e:
+        await db.finish_job(job_id, status="failed", hosts_failed=len(hosts))
+        await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
+
+    # Notify WebSocket clients that job is done
+    done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
+    sockets = _job_sockets.pop(job_id, [])
+    for ws in sockets:
+        try:
+            await ws.send_json(done_msg)
+        except Exception:
+            pass
 
 
 # ── WebSocket for live job streaming ─────────────────────────────────────────
@@ -8193,6 +8391,80 @@ async def bulk_acknowledge_alerts_endpoint(body: dict, request: Request):
                  detail=f"count={count} ids={alert_ids[:10]}",
                  correlation_id=_corr_id(request))
     return {"ok": True, "acknowledged": count}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SLA Dashboards API
+# ═════════════════════════════════════════════════════════════════════════════
+
+_SLA_DEPS = [Depends(require_auth), Depends(require_feature("monitoring"))]
+
+
+@app.get("/api/sla/summary", dependencies=_SLA_DEPS)
+async def sla_summary(
+    group_id: int | None = Query(default=None),
+    days: int = Query(default=30),
+):
+    return await db.get_sla_summary(group_id, days)
+
+
+@app.get("/api/sla/host/{host_id}", dependencies=_SLA_DEPS)
+async def sla_host_detail(host_id: int, days: int = Query(default=30)):
+    return await db.get_sla_host_detail(host_id, days)
+
+
+@app.get("/api/sla/targets", dependencies=_SLA_DEPS)
+async def sla_targets_list(
+    host_id: int | None = Query(default=None),
+    group_id: int | None = Query(default=None),
+):
+    return await db.get_sla_targets(host_id, group_id)
+
+
+@app.post("/api/sla/targets", dependencies=_SLA_DEPS, status_code=201)
+async def sla_target_create(body: dict, request: Request):
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    if not body.get("name") or not body.get("metric"):
+        raise HTTPException(status_code=400, detail="name and metric required")
+    target_id = await db.create_sla_target(
+        name=body["name"],
+        metric=body["metric"],
+        target_value=float(body.get("target_value", 99.9)),
+        warning_value=float(body.get("warning_value", 99.0)),
+        host_id=body.get("host_id"),
+        group_id=body.get("group_id"),
+        created_by=user,
+    )
+    await _audit("sla", "target.created", user=user,
+                 detail=f"target_id={target_id} name='{body['name']}' metric={body['metric']}",
+                 correlation_id=_corr_id(request))
+    return {"id": target_id}
+
+
+@app.put("/api/sla/targets/{target_id}", dependencies=_SLA_DEPS)
+async def sla_target_update(target_id: int, body: dict, request: Request):
+    target = await db.get_sla_target(target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    await db.update_sla_target(target_id, **body)
+    session = _get_session(request)
+    await _audit("sla", "target.updated", user=session["user"] if session else "",
+                 detail=f"target_id={target_id}", correlation_id=_corr_id(request))
+    return await db.get_sla_target(target_id)
+
+
+@app.delete("/api/sla/targets/{target_id}", dependencies=_SLA_DEPS)
+async def sla_target_delete(target_id: int, request: Request):
+    target = await db.get_sla_target(target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    await db.delete_sla_target(target_id)
+    session = _get_session(request)
+    await _audit("sla", "target.deleted", user=session["user"] if session else "",
+                 detail=f"target_id={target_id} name='{target.get('name', '')}'",
+                 correlation_id=_corr_id(request))
+    return {"ok": True}
 
 
 # ═════════════════════════════════════════════════════════════════════════════

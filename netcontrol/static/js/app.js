@@ -31,6 +31,7 @@ const NAV_FEATURE_MAP = {
     'risk-analysis': 'risk-analysis',
     deployments: 'deployments',
     monitoring: 'monitoring',
+    sla: 'monitoring',
 };
 
 const THEME_KEY = 'plexus-theme';
@@ -89,6 +90,7 @@ const listViewState = {
     riskAnalysis: { items: [], query: '', levelFilter: '' },
     deployments: { items: [], query: '', statusFilter: '' },
     monitoring: { polls: [], alerts: [], query: '', tab: 'devices' },
+    sla: { summary: null, hosts: [], query: '', tab: 'hosts' },
 };
 
 function normalizeTheme(theme) {
@@ -263,6 +265,10 @@ const NAV_GROUP_CHILDREN = {
     'config-drift': 'network',
     'config-backups': 'network',
     'monitoring': 'network',
+    'compliance': 'network',
+    'risk-analysis': 'network',
+    'deployments': 'network',
+    'sla': 'network',
 };
 
 window.toggleNavGroup = function(groupName, e) {
@@ -358,6 +364,7 @@ const PAGE_LABELS = {
     converter: 'Firewall Migration Tool',
     topology: 'Network Topology',
     'config-drift': 'Config Drift Detection',
+    sla: 'SLA Dashboards',
     settings: 'Admin Settings',
 };
 
@@ -418,6 +425,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'monitoring':
                 await loadMonitoring({ preserveContent });
+                break;
+            case 'sla':
+                await loadSla({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
@@ -2094,8 +2104,9 @@ function applyJobFilters() {
         const isDry = Boolean(job.dry_run);
         const matchesDryRun = state.dryRun === 'all' || (state.dryRun === 'yes' && isDry) || (state.dryRun === 'no' && !isDry);
         let matchesDate = true;
-        if (state.dateRange !== 'all' && job.started_at) {
-            const jobDate = new Date(job.started_at);
+        const jobDateStr = job.started_at || job.queued_at;
+        if (state.dateRange !== 'all' && jobDateStr) {
+            const jobDate = new Date(jobDateStr);
             const diffMs = now - jobDate;
             const diffDays = diffMs / (1000 * 60 * 60 * 24);
             if (state.dateRange === 'today') matchesDate = diffDays < 1;
@@ -2104,8 +2115,9 @@ function applyJobFilters() {
         }
         return matchesText && matchesStatus && matchesDryRun && matchesDate;
     });
-    if (state.sort === 'started_asc') filtered.sort((a, b) => String(a.started_at || '').localeCompare(String(b.started_at || '')));
-    else filtered.sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')));
+    const sortKey = (j) => j.started_at || j.queued_at || '';
+    if (state.sort === 'started_asc') filtered.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+    else filtered.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
     return filtered;
 }
 
@@ -3028,6 +3040,9 @@ function renderPlaybooksList(playbooks) {
 // Jobs
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const JOB_PRIORITY_LABELS = { 0: 'Low', 1: 'Below Normal', 2: 'Normal', 3: 'High', 4: 'Critical' };
+const JOB_PRIORITY_COLORS = { 0: 'text-muted', 1: 'text-muted', 2: 'primary', 3: 'warning', 4: 'danger' };
+
 async function loadJobs(options = {}) {
     const { preserveContent = false } = options;
     const container = document.getElementById('jobs-list');
@@ -3036,8 +3051,12 @@ async function loadJobs(options = {}) {
     }
 
     try {
-        const jobs = await api.getJobs(100);
+        const [jobs, queueData] = await Promise.all([
+            api.getJobs(100),
+            api.getJobQueue(),
+        ]);
         listViewState.jobs.items = jobs || [];
+        renderJobsQueuePanel(queueData);
         if (!jobs.length) {
             container.innerHTML = emptyStateHTML('No jobs yet', 'jobs', '<button class="btn btn-primary btn-sm" onclick="showLaunchJobModal()">Launch Job</button>');
             return;
@@ -3048,26 +3067,73 @@ async function loadJobs(options = {}) {
     }
 }
 
+function renderJobsQueuePanel(q) {
+    const panel = document.getElementById('jobs-queue-panel');
+    if (!panel || !q) return;
+    const hasActivity = q.running > 0 || q.queued > 0;
+    panel.style.display = hasActivity ? '' : 'none';
+
+    const setT = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setT('jobs-q-running', q.running);
+    setT('jobs-q-max', q.max_concurrent);
+    setT('jobs-q-queued', q.queued);
+
+    const items = document.getElementById('jobs-q-items');
+    if (items) {
+        items.innerHTML = (q.jobs || []).map(j => {
+            const isRunning = j.status === 'running';
+            const pColor = JOB_PRIORITY_COLORS[j.priority] || 'text-muted';
+            return `<span class="job-queue-chip ${isRunning ? 'job-queue-chip-running' : ''}" title="${escapeHtml(j.playbook_name || '')} — ${JOB_PRIORITY_LABELS[j.priority] || 'Normal'}">
+                <span class="job-queue-chip-dot" style="background:var(--${isRunning ? 'success' : pColor});"></span>
+                ${escapeHtml((j.playbook_name || 'Job').substring(0, 20))}
+                ${!isRunning ? `<span class="job-queue-chip-pri">${JOB_PRIORITY_LABELS[j.priority] || 'Normal'}</span>` : ''}
+            </span>`;
+        }).join('');
+    }
+}
+
 function renderJobsList(jobs) {
     const container = document.getElementById('jobs-list');
     if (!jobs.length) {
         container.innerHTML = emptyStateHTML('No matching jobs', 'jobs');
         return;
     }
-    container.innerHTML = jobs.map((job, i) => `
-        <div class="job-item animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
+    container.innerHTML = jobs.map((job, i) => {
+        const priLabel = JOB_PRIORITY_LABELS[job.priority] || 'Normal';
+        const priColor = JOB_PRIORITY_COLORS[job.priority] || 'text-muted';
+        const showPri = job.priority != null && job.priority !== 2;
+        const deps = (() => { try { return JSON.parse(job.depends_on || '[]'); } catch { return []; } })();
+        const hasDeps = deps.length > 0;
+        const timeLabel = job.started_at ? `Started: ${formatDate(job.started_at)}` :
+                          job.queued_at ? `Queued: ${formatDate(job.queued_at)}` : '';
+
+        const actions = [];
+        if (job.status === 'running' || job.status === 'queued') {
+            actions.push(`<button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); cancelJobFromList(${job.id})">Cancel</button>`);
+        }
+        if (job.status === 'failed' || job.status === 'cancelled') {
+            actions.push(`<button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); retryJobFromList(${job.id})">Retry</button>`);
+        }
+        actions.push(`<button class="btn btn-sm btn-secondary" onclick="viewJobOutput(${job.id})">View Output</button>`);
+
+        return `<div class="job-item animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
             <div class="job-info">
-                <div class="job-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
+                <div class="job-title">
+                    ${escapeHtml(job.playbook_name || 'Unknown')}
+                    ${showPri ? `<span class="job-priority-badge job-priority-${priColor}" title="Priority: ${priLabel}">${priLabel}</span>` : ''}
+                    ${hasDeps ? `<span class="job-dep-badge" title="Depends on job(s): ${deps.join(', ')}">deps: ${deps.join(', ')}</span>` : ''}
+                </div>
                 <div class="job-meta">
                     Group: ${escapeHtml(job.group_name || 'Unknown')} •
-                    Started: ${formatDate(job.started_at)} •
+                    ${timeLabel} •
                     <span class="status-badge status-${job.status}">${job.status}</span>
                     ${job.dry_run ? ' • <span style="color: var(--warning);">DRY RUN</span>' : ''}
+                    ${job.launched_by ? ` • <span style="color:var(--text-muted);">by ${escapeHtml(job.launched_by)}</span>` : ''}
                 </div>
             </div>
-            <button class="btn btn-sm btn-secondary" onclick="viewJobOutput(${job.id})">View Output</button>
-        </div>
-    `).join('');
+            <div style="display:flex; gap:0.4rem;">${actions.join('')}</div>
+        </div>`;
+    }).join('');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4119,6 +4185,22 @@ window.showLaunchJobModal = async function() {
                     </select>
                     <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.25rem;">If the selected playbook expects a template (e.g., VLAN 1 remediation), choose one here.</small>
                 </div>
+                <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                    <div class="form-group" style="flex:1; min-width:140px;">
+                        <label class="form-label">Priority</label>
+                        <select class="form-select" name="priority">
+                            <option value="0">Low</option>
+                            <option value="1">Below Normal</option>
+                            <option value="2" selected>Normal</option>
+                            <option value="3">High</option>
+                            <option value="4">Critical</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex:1; min-width:140px;">
+                        <label class="form-label">Depends On (Job IDs)</label>
+                        <input type="text" class="form-input" name="depends_on" placeholder="e.g. 12, 15" title="Comma-separated job IDs that must complete first">
+                    </div>
+                </div>
                 <div class="form-group">
                     <label>
                         <input type="checkbox" name="dry_run" checked> Dry Run (simulation)
@@ -4171,20 +4253,23 @@ window.launchJob = async function(e) {
         const credentialId = formData.get('credential_id') ? parseInt(formData.get('credential_id')) : null;
         const templateId = formData.get('template_id') ? parseInt(formData.get('template_id')) : null;
         const dryRun = formData.get('dry_run') === 'on';
-        
-        console.log('Job parameters:', { playbookId, credentialId, templateId, dryRun, hostIds });
-        
+        const priority = parseInt(formData.get('priority') || '2');
+        const depsStr = (formData.get('depends_on') || '').trim();
+        const dependsOn = depsStr ? depsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : null;
+
         const job = await api.launchJob(
             playbookId,
             null, // No longer using inventory_group_id
             credentialId,
             templateId,
             dryRun,
-            hostIds
+            hostIds,
+            priority,
+            dependsOn
         );
         closeAllModals();
         await loadJobs();
-        showSuccess(`Job launched successfully on ${hostIds.length} host(s)`);
+        showSuccess(`Job queued successfully on ${hostIds.length} host(s)`);
         setTimeout(() => viewJobOutput(job.job_id), 500);
     } catch (error) {
         console.error('Job launch error:', error);
@@ -4710,24 +4795,53 @@ window.deleteCredential = async function(credentialId) {
 // Job Output Viewer
 // ═══════════════════════════════════════════════════════════════════════════════
 
+let _currentViewJobId = null;
+
 window.viewJobOutput = async function(jobId) {
+    _currentViewJobId = jobId;
     const modal = document.getElementById('job-output-modal');
     const output = document.getElementById('job-output');
-    
+
     output.innerHTML = '<div class="loading">Loading...</div>';
     modal.classList.add('active');
     activateFocusTrap('job-output-modal');
 
+    // Hide action buttons initially
+    const cancelBtn = document.getElementById('job-output-cancel-btn');
+    const retryBtn = document.getElementById('job-output-retry-btn');
+    const statusBadge = document.getElementById('job-output-status');
+    const priBadge = document.getElementById('job-output-priority');
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (retryBtn) retryBtn.style.display = 'none';
+    if (statusBadge) statusBadge.style.display = 'none';
+    if (priBadge) priBadge.style.display = 'none';
+
     // Load historical events
     try {
-        const events = await api.getJobEvents(jobId);
-        output.innerHTML = events.map(e => 
+        const [events, job] = await Promise.all([
+            api.getJobEvents(jobId),
+            api.getJob(jobId),
+        ]);
+        output.innerHTML = events.map(e =>
             `<div class="job-output-line ${e.level}">[${formatTime(e.timestamp)}] ${e.host ? e.host + ': ' : ''}${escapeHtml(e.message)}</div>`
         ).join('');
 
+        // Update modal controls based on job state
+        if (statusBadge) {
+            statusBadge.textContent = job.status;
+            statusBadge.className = `status-badge status-${job.status}`;
+            statusBadge.style.display = '';
+        }
+        if (priBadge && job.priority != null && job.priority !== 2) {
+            priBadge.textContent = JOB_PRIORITY_LABELS[job.priority] || 'Normal';
+            priBadge.className = `job-priority-badge job-priority-${JOB_PRIORITY_COLORS[job.priority] || 'text-muted'}`;
+            priBadge.style.display = '';
+        }
+        if (cancelBtn) cancelBtn.style.display = (job.status === 'running' || job.status === 'queued') ? '' : 'none';
+        if (retryBtn) retryBtn.style.display = (job.status === 'failed' || job.status === 'cancelled') ? '' : 'none';
+
         // Connect WebSocket for live updates
-        const job = await api.getJob(jobId);
-        if (job.status === 'running' || job.status === 'pending') {
+        if (job.status === 'running' || job.status === 'queued') {
             connectJobWebSocket(
                 jobId,
                 (data) => {
@@ -4743,6 +4857,10 @@ window.viewJobOutput = async function(jobId) {
                     line.textContent = `\n[Job Complete] Status: ${data.status}`;
                     output.appendChild(line);
                     output.scrollTop = output.scrollHeight;
+                    // Update buttons
+                    if (cancelBtn) cancelBtn.style.display = 'none';
+                    if (retryBtn) retryBtn.style.display = '';
+                    if (statusBadge) { statusBadge.textContent = data.status; statusBadge.className = `status-badge status-${data.status}`; }
                 },
                 (error) => {
                     const line = document.createElement('div');
@@ -4761,6 +4879,54 @@ window.closeJobOutputModal = function() {
     document.getElementById('job-output-modal').classList.remove('active');
     disconnectJobWebSocket();
     deactivateFocusTrap('job-output-modal');
+    _currentViewJobId = null;
+};
+
+window.cancelCurrentJob = async function() {
+    if (!_currentViewJobId) return;
+    if (!confirm('Cancel this job?')) return;
+    try {
+        await api.cancelJob(_currentViewJobId);
+        showSuccess('Job cancelled');
+        closeJobOutputModal();
+        loadJobs();
+    } catch (error) {
+        showError('Failed to cancel: ' + error.message);
+    }
+};
+
+window.retryCurrentJob = async function() {
+    if (!_currentViewJobId) return;
+    try {
+        const result = await api.retryJob(_currentViewJobId);
+        showSuccess(`Job retried as #${result.job_id}`);
+        closeJobOutputModal();
+        await loadJobs();
+        setTimeout(() => viewJobOutput(result.job_id), 500);
+    } catch (error) {
+        showError('Failed to retry: ' + error.message);
+    }
+};
+
+window.cancelJobFromList = async function(jobId) {
+    if (!confirm('Cancel this job?')) return;
+    try {
+        await api.cancelJob(jobId);
+        showSuccess('Job cancelled');
+        loadJobs();
+    } catch (error) {
+        showError('Failed to cancel: ' + error.message);
+    }
+};
+
+window.retryJobFromList = async function(jobId) {
+    try {
+        const result = await api.retryJob(jobId);
+        showSuccess(`Job retried as #${result.job_id}`);
+        loadJobs();
+    } catch (error) {
+        showError('Failed to retry: ' + error.message);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -6026,6 +6192,7 @@ const COMMAND_PALETTE_PAGES = [
     { page: 'monitoring',   label: 'Monitoring',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
     { page: 'config-drift', label: 'Config Drift', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>' },
     { page: 'deployments', label: 'Deployments',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>' },
+    { page: 'sla',         label: 'SLA Dashboards', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>' },
     { page: 'settings',    label: 'Settings',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
 ];
 
@@ -8113,6 +8280,541 @@ document.addEventListener('DOMContentLoaded', () => {
             const tab = listViewState.monitoring.tab;
             if (tab === 'devices') renderMonitoringDevices(listViewState.monitoring.polls);
             else if (tab === 'alerts') renderMonitoringAlerts(listViewState.monitoring.alerts);
+        });
+    }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SLA Dashboards
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadSla(options = {}) {
+    const { preserveContent = false } = options;
+    const container = document.getElementById('sla-hosts-list');
+    if (!preserveContent && container) container.innerHTML = skeletonCards(2);
+    try {
+        const days = parseInt(document.getElementById('sla-period-select')?.value || '30', 10);
+        const [summary, targets] = await Promise.all([
+            api.getSlaSummary(null, days),
+            api.getSlaTargets(),
+        ]);
+        listViewState.sla.summary = summary;
+        listViewState.sla.targets = targets || [];
+        renderSlaSummary(summary);
+        renderSlaHosts(summary.hosts || [], targets || []);
+        renderSlaIncidents(summary);
+    } catch (error) {
+        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading SLA data: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadSla = loadSla;
+
+function renderSlaSummary(s) {
+    const CIRC = 2 * Math.PI * 52; // ~326.73
+
+    // Uptime gauge
+    const uptimeVal = s.avg_uptime_pct != null ? s.avg_uptime_pct : 0;
+    const uptimeFill = document.getElementById('sla-gauge-uptime-fill');
+    if (uptimeFill) {
+        const pct = Math.min(uptimeVal, 100) / 100;
+        uptimeFill.setAttribute('stroke-dasharray', `${pct * CIRC} ${CIRC}`);
+        uptimeFill.classList.remove('sla-gauge-warn', 'sla-gauge-danger');
+        if (uptimeVal < 99) uptimeFill.classList.add('sla-gauge-danger');
+        else if (uptimeVal < 99.9) uptimeFill.classList.add('sla-gauge-warn');
+    }
+    const uptimeEl = document.getElementById('sla-val-uptime');
+    if (uptimeEl) uptimeEl.textContent = s.avg_uptime_pct != null ? s.avg_uptime_pct.toFixed(2) + '%' : '-';
+
+    // Latency gauge (scale: 0-500ms maps to full circle)
+    const latVal = s.avg_latency_ms != null ? s.avg_latency_ms : 0;
+    const latFill = document.getElementById('sla-gauge-latency-fill');
+    if (latFill) {
+        const pct = Math.min(latVal / 500, 1);
+        latFill.setAttribute('stroke-dasharray', `${pct * CIRC} ${CIRC}`);
+    }
+    const latEl = document.getElementById('sla-val-latency');
+    if (latEl) latEl.textContent = s.avg_latency_ms != null ? s.avg_latency_ms.toFixed(1) + 'ms' : '-';
+
+    // Jitter gauge (scale: 0-100ms)
+    const jitVal = s.avg_jitter_ms != null ? s.avg_jitter_ms : 0;
+    const jitFill = document.getElementById('sla-gauge-jitter-fill');
+    if (jitFill) {
+        const pct = Math.min(jitVal / 100, 1);
+        jitFill.setAttribute('stroke-dasharray', `${pct * CIRC} ${CIRC}`);
+    }
+    const jitEl = document.getElementById('sla-val-jitter');
+    if (jitEl) jitEl.textContent = s.avg_jitter_ms != null ? s.avg_jitter_ms.toFixed(1) + 'ms' : '-';
+
+    // Packet loss gauge (scale: 0-100%)
+    const pktVal = s.avg_packet_loss_pct != null ? s.avg_packet_loss_pct : 0;
+    const pktFill = document.getElementById('sla-gauge-pktloss-fill');
+    if (pktFill) {
+        const pct = Math.min(pktVal / 100, 1);
+        pktFill.setAttribute('stroke-dasharray', `${pct * CIRC} ${CIRC}`);
+    }
+    const pktEl = document.getElementById('sla-val-pktloss');
+    if (pktEl) pktEl.textContent = s.avg_packet_loss_pct != null ? s.avg_packet_loss_pct.toFixed(2) + '%' : '-';
+
+    // MTTR / MTTD
+    const mttrEl = document.getElementById('sla-val-mttr');
+    if (mttrEl) mttrEl.textContent = s.mttr_minutes != null ? formatMinutes(s.mttr_minutes) : '-';
+    const mttdEl = document.getElementById('sla-val-mttd');
+    if (mttdEl) mttdEl.textContent = s.mttd_minutes != null ? formatMinutes(s.mttd_minutes) : '-';
+}
+
+function formatMinutes(m) {
+    if (m == null) return '-';
+    if (m < 1) return '<1m';
+    if (m < 60) return Math.round(m) + 'm';
+    const h = Math.floor(m / 60);
+    const rem = Math.round(m % 60);
+    return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
+}
+
+function getHostSlaCompliance(host, targets) {
+    // Find applicable targets for this host
+    const applicable = targets.filter(t =>
+        t.enabled && (
+            (!t.host_id && !t.group_id) ||
+            (t.host_id && t.host_id === host.host_id) ||
+            (t.group_id && t.group_id === host.group_id)
+        )
+    );
+    if (!applicable.length) return { status: 'none', worst: null };
+
+    let worst = 'met';
+    for (const t of applicable) {
+        let actual = null;
+        if (t.metric === 'uptime') actual = host.uptime_pct;
+        else if (t.metric === 'latency') actual = host.avg_latency_ms;
+        else if (t.metric === 'jitter') actual = host.jitter_ms;
+        else if (t.metric === 'packet_loss') actual = host.avg_packet_loss_pct;
+        if (actual == null) continue;
+
+        // For uptime: higher is better; for latency/jitter/packet_loss: lower is better
+        const higherIsBetter = t.metric === 'uptime';
+        if (higherIsBetter) {
+            if (actual < t.target_value) worst = 'breach';
+            else if (actual < t.warning_value && worst !== 'breach') worst = 'warn';
+        } else {
+            if (actual > t.target_value) worst = 'breach';
+            else if (actual > t.warning_value && worst !== 'breach') worst = 'warn';
+        }
+    }
+    return { status: worst };
+}
+
+function renderSlaHosts(hosts, targets) {
+    const container = document.getElementById('sla-hosts-list');
+    if (!container) return;
+    const query = (listViewState.sla.query || '').toLowerCase();
+    const filtered = hosts.filter(h => {
+        if (query && !(h.hostname || '').toLowerCase().includes(query)
+            && !(h.ip_address || '').toLowerCase().includes(query)) return false;
+        return true;
+    });
+
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No SLA data available', 'sla',
+            '<p style="color:var(--text-muted); font-size:0.9em;">SLA metrics are computed from monitoring polls. Enable monitoring and run polls to see data.</p>');
+        return;
+    }
+
+    const header = `<div class="card" style="padding:0; overflow:hidden;">
+        <div class="sla-host-row sla-host-header">
+            <div>Host</div>
+            <div>Uptime</div>
+            <div>Latency</div>
+            <div>Jitter</div>
+            <div>Pkt Loss</div>
+            <div>Status</div>
+        </div>`;
+
+    const rows = filtered.map(h => {
+        const compliance = getHostSlaCompliance(h, targets);
+        const uptimeColor = h.uptime_pct >= 99.9 ? 'success' : h.uptime_pct >= 99 ? 'warning' : 'danger';
+        const badgeClass = compliance.status === 'met' ? 'met' : compliance.status === 'warn' ? 'warn' : compliance.status === 'breach' ? 'breach' : 'met';
+        const badgeLabel = compliance.status === 'none' ? 'No Target' : compliance.status === 'met' ? 'Met' : compliance.status === 'warn' ? 'Warning' : 'Breach';
+
+        return `<div class="sla-host-row" onclick="showSlaHostDetail(${h.host_id})">
+            <div>
+                <strong>${escapeHtml(h.hostname || 'Unknown')}</strong>
+                <span style="color:var(--text-muted); font-size:0.8em; margin-left:0.4rem;">${escapeHtml(h.ip_address || '')}</span>
+            </div>
+            <div style="color:var(--${uptimeColor}); font-weight:600;">${h.uptime_pct != null ? h.uptime_pct.toFixed(2) + '%' : '-'}</div>
+            <div>${h.avg_latency_ms != null ? h.avg_latency_ms.toFixed(1) + 'ms' : '-'}</div>
+            <div>${h.jitter_ms != null ? h.jitter_ms.toFixed(1) + 'ms' : '-'}</div>
+            <div>${h.avg_packet_loss_pct != null ? h.avg_packet_loss_pct.toFixed(2) + '%' : '-'}</div>
+            <div><span class="sla-compliance-badge ${badgeClass}">${badgeLabel}</span></div>
+        </div>`;
+    }).join('');
+
+    container.innerHTML = header + rows + '</div>';
+}
+
+function renderSlaIncidents(summary) {
+    const container = document.getElementById('sla-incidents-list');
+    if (!container) return;
+
+    const alerts_info = {
+        total: summary.total_alerts || 0,
+        resolved: summary.resolved_alerts || 0,
+        mttr: summary.mttr_minutes,
+        mttd: summary.mttd_minutes,
+    };
+
+    // Show incident stats
+    const open = alerts_info.total - alerts_info.resolved;
+    container.innerHTML = `<div class="card" style="padding:1rem;">
+        <div style="display:flex; gap:2rem; flex-wrap:wrap; margin-bottom:1rem;">
+            <div><span style="color:var(--text-muted);">Total Alerts:</span> <strong>${alerts_info.total}</strong></div>
+            <div><span style="color:var(--text-muted);">Resolved:</span> <strong style="color:var(--success);">${alerts_info.resolved}</strong></div>
+            <div><span style="color:var(--text-muted);">Open:</span> <strong style="color:${open > 0 ? 'var(--danger)' : 'var(--success)'};">${open}</strong></div>
+            <div><span style="color:var(--text-muted);">Avg MTTR:</span> <strong>${alerts_info.mttr != null ? formatMinutes(alerts_info.mttr) : '-'}</strong></div>
+            <div><span style="color:var(--text-muted);">Avg MTTD:</span> <strong>${alerts_info.mttd != null ? formatMinutes(alerts_info.mttd) : '-'}</strong></div>
+        </div>
+        <div style="font-size:0.85em; color:var(--text-muted);">
+            <p><strong>MTTR</strong> (Mean Time To Repair): Average time from alert creation to acknowledgement.</p>
+            <p><strong>MTTD</strong> (Mean Time To Detect): Average time from first failure to alert creation.</p>
+        </div>
+    </div>`;
+}
+
+function switchSlaTab(tab) {
+    listViewState.sla.tab = tab;
+    document.querySelectorAll('.sla-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-sla-tab') === tab));
+    document.querySelectorAll('.sla-tab').forEach(t => t.style.display = 'none');
+    const target = document.getElementById(`sla-tab-${tab}`);
+    if (target) target.style.display = '';
+
+    if (tab === 'trends') loadSlaTrends();
+    if (tab === 'targets') loadSlaTargets();
+}
+window.switchSlaTab = switchSlaTab;
+
+// ── SLA Trends (SVG charts) ────────────────────────────────────────────────
+
+async function loadSlaTrends() {
+    const container = document.getElementById('sla-trends-container');
+    if (!container) return;
+    container.innerHTML = '<div class="skeleton skeleton-card" style="height:300px;"></div>';
+
+    try {
+        const days = parseInt(document.getElementById('sla-period-select')?.value || '30', 10);
+        const summary = listViewState.sla.summary;
+        if (!summary || !summary.hosts || !summary.hosts.length) {
+            container.innerHTML = '<div class="card" style="padding:1rem; color:var(--text-muted);">No trend data available. Run monitoring polls to collect SLA metrics.</div>';
+            return;
+        }
+
+        // Get detailed daily data for first host (or aggregate)
+        // Use first host with data for detailed trend
+        const hostId = summary.hosts[0].host_id;
+        const detail = await api.getSlaHostDetail(hostId, days);
+
+        let html = '';
+        if (detail.daily && detail.daily.length) {
+            html += renderSlaChart(detail.daily, 'uptime_pct', 'Uptime %', 'var(--success)', 95, 100);
+            html += renderSlaChart(detail.daily, 'avg_latency_ms', 'Latency (ms)', 'var(--primary)', 0, null);
+            html += renderSlaChart(detail.daily, 'jitter_ms', 'Jitter (ms)', 'var(--warning)', 0, null);
+            html += renderSlaChart(detail.daily, 'avg_packet_loss_pct', 'Packet Loss %', 'var(--danger)', 0, null);
+        }
+        html += `<div style="font-size:0.8em; color:var(--text-muted); margin-top:0.5rem;">
+            Showing trends for <strong>${escapeHtml(detail.hostname || 'Host #' + hostId)}</strong>.
+            Click a host in the Host SLAs tab to view its specific trends.
+        </div>`;
+        container.innerHTML = html;
+    } catch (error) {
+        container.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderSlaChart(daily, field, label, color, minY, maxY) {
+    if (!daily || !daily.length) return '';
+
+    const values = daily.map(d => d[field]).filter(v => v != null);
+    if (!values.length) return `<div class="card" style="padding:1rem;"><div class="sla-chart-label">${escapeHtml(label)}</div><div style="color:var(--text-muted); font-size:0.9em;">No data</div></div>`;
+
+    const W = 700, H = 200, PAD_L = 55, PAD_R = 20, PAD_T = 30, PAD_B = 35;
+    const chartW = W - PAD_L - PAD_R;
+    const chartH = H - PAD_T - PAD_B;
+
+    const dataMin = Math.min(...values);
+    const dataMax = Math.max(...values);
+    const yMin = minY != null ? Math.min(minY, dataMin) : dataMin - (dataMax - dataMin) * 0.1;
+    const yMax = maxY != null ? Math.max(maxY, dataMax) : dataMax + (dataMax - dataMin) * 0.1 || 1;
+    const yRange = yMax - yMin || 1;
+
+    const points = daily.map((d, i) => {
+        const v = d[field];
+        if (v == null) return null;
+        const x = PAD_L + (i / Math.max(daily.length - 1, 1)) * chartW;
+        const y = PAD_T + chartH - ((v - yMin) / yRange) * chartH;
+        return { x, y, v, day: d.day };
+    }).filter(Boolean);
+
+    if (!points.length) return '';
+
+    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const areaPath = linePath + ` L${points[points.length - 1].x.toFixed(1)},${PAD_T + chartH} L${points[0].x.toFixed(1)},${PAD_T + chartH} Z`;
+
+    // Grid lines (4 horizontal)
+    let gridLines = '';
+    for (let i = 0; i <= 4; i++) {
+        const y = PAD_T + (i / 4) * chartH;
+        const val = yMax - (i / 4) * yRange;
+        gridLines += `<line x1="${PAD_L}" y1="${y}" x2="${W - PAD_R}" y2="${y}" class="sla-chart-grid-line"/>`;
+        gridLines += `<text x="${PAD_L - 8}" y="${y + 3}" text-anchor="end" class="sla-chart-axis-label">${val.toFixed(val < 10 ? 1 : 0)}</text>`;
+    }
+
+    // X-axis labels (show ~5 labels)
+    let xLabels = '';
+    const step = Math.max(1, Math.floor(daily.length / 5));
+    for (let i = 0; i < daily.length; i += step) {
+        const x = PAD_L + (i / Math.max(daily.length - 1, 1)) * chartW;
+        const d = daily[i].day || '';
+        const short = d.slice(5); // MM-DD
+        xLabels += `<text x="${x}" y="${H - 5}" text-anchor="middle" class="sla-chart-axis-label">${short}</text>`;
+    }
+
+    const dots = points.map(p =>
+        `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" class="sla-chart-dot" stroke="${color}">
+            <title>${p.day}: ${p.v.toFixed(2)}</title>
+        </circle>`
+    ).join('');
+
+    return `<div class="card" style="padding:1rem; margin-bottom:1rem;">
+        <div class="sla-chart-label">${escapeHtml(label)}</div>
+        <div class="sla-chart-container">
+            <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+                ${gridLines}
+                ${xLabels}
+                <path d="${areaPath}" class="sla-chart-area" fill="${color}"/>
+                <path d="${linePath}" class="sla-chart-line" stroke="${color}"/>
+                ${dots}
+            </svg>
+        </div>
+    </div>`;
+}
+
+// ── SLA Host Detail Modal ────────────────────────────────────────────────────
+
+async function showSlaHostDetail(hostId) {
+    const modal = document.getElementById('sla-host-detail-modal');
+    const body = document.getElementById('sla-host-detail-body');
+    const title = document.getElementById('sla-host-detail-title');
+    if (!modal || !body) return;
+    modal.style.display = 'block';
+    body.innerHTML = '<div class="skeleton skeleton-card" style="height:200px;"></div>';
+
+    try {
+        const days = parseInt(document.getElementById('sla-period-select')?.value || '30', 10);
+        const detail = await api.getSlaHostDetail(hostId, days);
+        if (title) title.textContent = `SLA Detail: ${detail.hostname || 'Host #' + hostId}`;
+
+        let html = `<div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:1rem; font-size:0.9em;">
+            <div><span style="color:var(--text-muted);">Host:</span> <strong>${escapeHtml(detail.hostname)}</strong></div>
+            <div><span style="color:var(--text-muted);">IP:</span> ${escapeHtml(detail.ip_address)}</div>
+            <div><span style="color:var(--text-muted);">Type:</span> ${escapeHtml(detail.device_type || '-')}</div>
+            <div><span style="color:var(--text-muted);">Period:</span> ${detail.period_days} days</div>
+            <div><span style="color:var(--text-muted);">Alerts:</span> ${detail.total_alerts} (${detail.resolved_alerts} resolved)</div>
+            <div><span style="color:var(--text-muted);">MTTR:</span> ${detail.mttr_minutes != null ? formatMinutes(detail.mttr_minutes) : '-'}</div>
+        </div>`;
+
+        if (detail.daily && detail.daily.length) {
+            html += renderSlaChart(detail.daily, 'uptime_pct', 'Daily Uptime %', 'var(--success)', 95, 100);
+            html += renderSlaChart(detail.daily, 'avg_latency_ms', 'Daily Latency (ms)', 'var(--primary)', 0, null);
+            html += renderSlaChart(detail.daily, 'jitter_ms', 'Daily Jitter (ms)', 'var(--warning)', 0, null);
+            html += renderSlaChart(detail.daily, 'avg_packet_loss_pct', 'Daily Packet Loss %', 'var(--danger)', 0, null);
+        } else {
+            html += '<div style="color:var(--text-muted);">No daily trend data available.</div>';
+        }
+
+        body.innerHTML = html;
+    } catch (error) {
+        body.innerHTML = `<div style="color:var(--danger)">Error: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.showSlaHostDetail = showSlaHostDetail;
+
+function closeSlaHostDetailModal() {
+    const modal = document.getElementById('sla-host-detail-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closeSlaHostDetailModal = closeSlaHostDetailModal;
+
+// ── SLA Targets CRUD ─────────────────────────────────────────────────────────
+
+async function loadSlaTargets() {
+    const container = document.getElementById('sla-targets-list');
+    if (!container) return;
+    container.innerHTML = skeletonCards(1);
+    try {
+        const targets = await api.getSlaTargets();
+        listViewState.sla.targets = targets || [];
+        renderSlaTargets(targets || []);
+    } catch (error) {
+        container.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderSlaTargets(targets) {
+    const container = document.getElementById('sla-targets-list');
+    if (!container) return;
+    if (!targets.length) {
+        container.innerHTML = emptyStateHTML('No SLA targets defined', 'sla',
+            '<button class="btn btn-primary btn-sm" onclick="showCreateSlaTargetModal()">Create First Target</button>');
+        return;
+    }
+
+    const metricLabels = { uptime: 'Uptime %', latency: 'Latency (ms)', jitter: 'Jitter (ms)', packet_loss: 'Packet Loss %' };
+
+    container.innerHTML = targets.map(t => {
+        const scope = t.host_name ? `Host: ${escapeHtml(t.host_name)}` :
+                       t.group_name ? `Group: ${escapeHtml(t.group_name)}` : 'Global';
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <strong>${escapeHtml(t.name)}</strong>
+                    ${!t.enabled ? '<span style="color:var(--text-muted); font-size:0.8em; margin-left:0.5rem;">(disabled)</span>' : ''}
+                </div>
+                <div style="display:flex; gap:0.4rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="editSlaTarget(${t.id})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteSlaTarget(${t.id})">Delete</button>
+                </div>
+            </div>
+            <div style="display:flex; gap:1.5rem; margin-top:0.5rem; font-size:0.9em; flex-wrap:wrap;">
+                <div><span style="color:var(--text-muted);">Metric:</span> ${metricLabels[t.metric] || t.metric}</div>
+                <div><span style="color:var(--text-muted);">Target:</span> <strong style="color:var(--success);">${t.target_value}</strong></div>
+                <div><span style="color:var(--text-muted);">Warning:</span> <strong style="color:var(--warning);">${t.warning_value}</strong></div>
+                <div><span style="color:var(--text-muted);">Scope:</span> ${scope}</div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function showCreateSlaTargetModal(editTarget = null) {
+    const modal = document.getElementById('sla-target-modal');
+    const titleEl = document.getElementById('sla-target-modal-title');
+    if (!modal) return;
+
+    // Reset form
+    document.getElementById('sla-target-edit-id').value = editTarget ? editTarget.id : '';
+    document.getElementById('sla-target-name').value = editTarget ? editTarget.name : '';
+    document.getElementById('sla-target-metric').value = editTarget ? editTarget.metric : 'uptime';
+    document.getElementById('sla-target-value').value = editTarget ? editTarget.target_value : 99.9;
+    document.getElementById('sla-target-warning').value = editTarget ? editTarget.warning_value : 99.0;
+
+    // Scope
+    const scopeSelect = document.getElementById('sla-target-scope');
+    if (editTarget?.host_id) scopeSelect.value = 'host';
+    else if (editTarget?.group_id) scopeSelect.value = 'group';
+    else scopeSelect.value = 'global';
+    toggleSlaTargetScope();
+
+    // Populate group/host selects
+    try {
+        const groups = await api.getGroups();
+        const groupSelect = document.getElementById('sla-target-group-id');
+        groupSelect.innerHTML = groups.map(g => `<option value="${g.id}" ${editTarget?.group_id === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('');
+
+        // For hosts, flatten from groups
+        const hostSelect = document.getElementById('sla-target-host-id');
+        let hostOptions = '';
+        for (const g of groups) {
+            const hosts = g.hosts || [];
+            for (const h of hosts) {
+                hostOptions += `<option value="${h.id}" ${editTarget?.host_id === h.id ? 'selected' : ''}>${escapeHtml(h.hostname || h.ip_address)} (${escapeHtml(g.name)})</option>`;
+            }
+        }
+        hostSelect.innerHTML = hostOptions || '<option value="">No hosts</option>';
+    } catch { /* ignore populate errors */ }
+
+    if (titleEl) titleEl.textContent = editTarget ? 'Edit SLA Target' : 'New SLA Target';
+    modal.style.display = 'block';
+}
+window.showCreateSlaTargetModal = showCreateSlaTargetModal;
+
+function toggleSlaTargetScope() {
+    const scope = document.getElementById('sla-target-scope')?.value || 'global';
+    document.getElementById('sla-target-scope-group').style.display = scope === 'group' ? '' : 'none';
+    document.getElementById('sla-target-scope-host').style.display = scope === 'host' ? '' : 'none';
+}
+window.toggleSlaTargetScope = toggleSlaTargetScope;
+
+function closeSlaTargetModal() {
+    const modal = document.getElementById('sla-target-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closeSlaTargetModal = closeSlaTargetModal;
+
+async function saveSlaTarget() {
+    const editId = document.getElementById('sla-target-edit-id')?.value;
+    const name = document.getElementById('sla-target-name')?.value?.trim();
+    const metric = document.getElementById('sla-target-metric')?.value;
+    const targetValue = parseFloat(document.getElementById('sla-target-value')?.value);
+    const warningValue = parseFloat(document.getElementById('sla-target-warning')?.value);
+    const scope = document.getElementById('sla-target-scope')?.value || 'global';
+
+    if (!name) { showError('Name is required'); return; }
+
+    const data = {
+        name,
+        metric,
+        target_value: targetValue,
+        warning_value: warningValue,
+        host_id: scope === 'host' ? parseInt(document.getElementById('sla-target-host-id')?.value) || null : null,
+        group_id: scope === 'group' ? parseInt(document.getElementById('sla-target-group-id')?.value) || null : null,
+    };
+
+    try {
+        if (editId) {
+            await api.updateSlaTarget(parseInt(editId), data);
+            showSuccess('SLA target updated');
+        } else {
+            await api.createSlaTarget(data);
+            showSuccess('SLA target created');
+        }
+        closeSlaTargetModal();
+        loadSlaTargets();
+    } catch (error) {
+        showError('Failed to save target: ' + error.message);
+    }
+}
+window.saveSlaTarget = saveSlaTarget;
+
+async function editSlaTarget(id) {
+    const targets = listViewState.sla.targets || [];
+    const target = targets.find(t => t.id === id);
+    if (target) {
+        showCreateSlaTargetModal(target);
+    }
+}
+window.editSlaTarget = editSlaTarget;
+
+async function deleteSlaTarget(id) {
+    if (!confirm('Delete this SLA target?')) return;
+    try {
+        await api.deleteSlaTarget(id);
+        showSuccess('SLA target deleted');
+        loadSlaTargets();
+    } catch (error) {
+        showError('Failed to delete: ' + error.message);
+    }
+}
+window.deleteSlaTarget = deleteSlaTarget;
+
+// Wire up SLA search
+document.addEventListener('DOMContentLoaded', () => {
+    const slaSearch = document.getElementById('sla-search');
+    if (slaSearch) {
+        slaSearch.addEventListener('input', () => {
+            listViewState.sla.query = slaSearch.value;
+            const summary = listViewState.sla.summary;
+            if (summary && summary.hosts) {
+                renderSlaHosts(summary.hosts, listViewState.sla.targets || []);
+            }
         });
     }
 });
