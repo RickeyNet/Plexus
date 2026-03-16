@@ -127,6 +127,10 @@
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="18" r="3"></circle><line x1="9" y1="6" x2="15" y2="6"></line><line x1="18" y1="9" x2="18" y2="15"></line><line x1="9" y1="18" x2="15" y2="18"></line><line x1="6" y1="9" x2="6" y2="15"></line></svg>
                                 <span class="nav-label">Topology</span>
                             </a>
+                            <a href="#" data-page="monitoring" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                                <span class="nav-label">Monitoring</span>
+                            </a>
                             <a href="#" data-page="config-drift" class="nav-link nav-child-link">
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
                                 <span class="nav-label">Config Drift</span>
@@ -142,6 +146,10 @@
                             <a href="#" data-page="risk-analysis" class="nav-link nav-child-link">
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
                                 <span class="nav-label">Risk Analysis</span>
+                            </a>
+                            <a href="#" data-page="deployments" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>
+                                <span class="nav-label">Deployments</span>
                             </a>
                         </div>
                     </div>
@@ -810,6 +818,126 @@
                 <div id="risk-analyses-list">
                     <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
                     <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+            </div>
+
+            <!-- Deployments Page -->
+            <div id="page-deployments" class="page">
+                <div class="page-header">
+                    <h2>Deployments</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="showNewDeploymentModal()">+ New Deployment</button>
+                        <button class="btn btn-secondary" onclick="refreshDeployments()">Refresh</button>
+                    </div>
+                </div>
+                <!-- Summary Cards -->
+                <div class="drift-summary-grid" id="deploy-summary">
+                    <div class="stat-card"><div class="stat-ring-value" id="deploy-stat-total">-</div><div class="stat-label">Total</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="deploy-stat-completed">-</div><div class="stat-label">Completed</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="deploy-stat-active">-</div><div class="stat-label">Active</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="deploy-stat-rolled-back">-</div><div class="stat-label">Rolled Back</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="deploy-stat-failed">-</div><div class="stat-label">Failed</div></div>
+                </div>
+                <!-- Filter Controls -->
+                <div class="list-controls" style="margin-bottom:1rem;">
+                    <select id="deploy-filter-status" class="form-select" style="max-width:180px;" onchange="filterDeployments()">
+                        <option value="">All Statuses</option>
+                        <option value="planning">Planning</option>
+                        <option value="executing">Executing</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                        <option value="rolled-back">Rolled Back</option>
+                    </select>
+                    <input id="deploy-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto;">
+                </div>
+                <!-- Deployments List -->
+                <div id="deployments-list">
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                </div>
+            </div>
+
+            <!-- Monitoring Page -->
+            <div id="page-monitoring" class="page">
+                <div class="page-header">
+                    <h2>Real-Time Monitoring</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="runMonitoringPollNow()">Poll Now</button>
+                        <button class="btn btn-secondary" onclick="refreshMonitoring()">Refresh</button>
+                    </div>
+                </div>
+                <!-- Summary Cards -->
+                <div class="drift-summary-grid" id="monitoring-summary">
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-hosts">-</div><div class="stat-label">Monitored</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-cpu">-</div><div class="stat-label">Avg CPU</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-mem">-</div><div class="stat-label">Avg Memory</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-if-up">-</div><div class="stat-label">IF Up</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-if-down">-</div><div class="stat-label">IF Down</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-vpn-up">-</div><div class="stat-label">VPN Up</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-vpn-down">-</div><div class="stat-label">VPN Down</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-routes">-</div><div class="stat-label">Routes</div></div>
+                    <div class="stat-card"><div class="stat-ring-value" id="mon-stat-alerts">-</div><div class="stat-label">Open Alerts</div></div>
+                </div>
+                <!-- Tab Controls -->
+                <div class="list-controls" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                    <button class="btn btn-sm btn-secondary mon-tab-btn active" data-mon-tab="devices" onclick="switchMonitoringTab('devices')">Devices</button>
+                    <button class="btn btn-sm btn-secondary mon-tab-btn" data-mon-tab="alerts" onclick="switchMonitoringTab('alerts')">Alerts</button>
+                    <button class="btn btn-sm btn-secondary mon-tab-btn" data-mon-tab="routes" onclick="switchMonitoringTab('routes')">Route Churn</button>
+                    <button class="btn btn-sm btn-secondary mon-tab-btn" data-mon-tab="rules" onclick="switchMonitoringTab('rules')">Rules</button>
+                    <button class="btn btn-sm btn-secondary mon-tab-btn" data-mon-tab="suppressions" onclick="switchMonitoringTab('suppressions')">Suppressions</button>
+                    <input id="monitoring-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto; max-width:220px;">
+                </div>
+                <!-- Devices Tab -->
+                <div id="monitoring-tab-devices" class="monitoring-tab">
+                    <div id="monitoring-devices-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    </div>
+                </div>
+                <!-- Alerts Tab -->
+                <div id="monitoring-tab-alerts" class="monitoring-tab" style="display:none;">
+                    <div style="margin-bottom:0.75rem; display:flex; gap:0.5rem; align-items:center;">
+                        <select id="mon-alert-filter-severity" class="form-select" style="max-width:150px;" onchange="filterMonitoringAlerts()">
+                            <option value="">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                        </select>
+                        <select id="mon-alert-filter-ack" class="form-select" style="max-width:150px;" onchange="filterMonitoringAlerts()">
+                            <option value="false">Open</option>
+                            <option value="">All</option>
+                            <option value="true">Acknowledged</option>
+                        </select>
+                    </div>
+                    <div id="monitoring-alerts-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    </div>
+                </div>
+                <!-- Route Churn Tab -->
+                <div id="monitoring-tab-routes" class="monitoring-tab" style="display:none;">
+                    <div id="monitoring-routes-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    </div>
+                </div>
+                <!-- Rules Tab -->
+                <div id="monitoring-tab-rules" class="monitoring-tab" style="display:none;">
+                    <div style="margin-bottom:0.75rem; display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:var(--text-muted); font-size:0.9em;">Define custom alert rules for metrics and thresholds.</span>
+                        <button class="btn btn-primary btn-sm" onclick="showCreateAlertRuleModal()">+ New Rule</button>
+                    </div>
+                    <div id="monitoring-rules-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    </div>
+                </div>
+                <!-- Suppressions Tab -->
+                <div id="monitoring-tab-suppressions" class="monitoring-tab" style="display:none;">
+                    <div style="margin-bottom:0.75rem; display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:var(--text-muted); font-size:0.9em;">Suppress alerts during maintenance windows.</span>
+                        <button class="btn btn-primary btn-sm" onclick="showCreateSuppressionModal()">+ New Suppression</button>
+                    </div>
+                    <div id="monitoring-suppressions-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom:0.75rem"></div>
+                    </div>
                 </div>
             </div>
 
