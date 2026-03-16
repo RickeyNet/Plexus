@@ -278,32 +278,33 @@ export async function getJob(jobId) {
     return apiRequest(`/jobs/${jobId}`);
 }
 
-export async function launchJob(playbookId, inventoryGroupId = null, credentialId = null, templateId = null, dryRun = true, hostIds = null) {
+export async function launchJob(playbookId, inventoryGroupId = null, credentialId = null, templateId = null, dryRun = true, hostIds = null, priority = 2, dependsOn = null) {
     const body = {
         playbook_id: playbookId,
         dry_run: dryRun,
+        priority: priority,
     };
-    
-    // Only include fields if they have values (Pydantic Optional fields can be omitted)
+
     if (hostIds && Array.isArray(hostIds) && hostIds.length > 0) {
-        // Ensure all IDs are integers
         body.host_ids = hostIds.map(id => parseInt(id)).filter(id => !isNaN(id));
     }
-    
+
     if (inventoryGroupId !== null && inventoryGroupId !== undefined) {
         body.inventory_group_id = parseInt(inventoryGroupId);
     }
-    
+
     if (credentialId !== null && credentialId !== undefined) {
         body.credential_id = parseInt(credentialId);
     }
-    
+
     if (templateId !== null && templateId !== undefined) {
         body.template_id = parseInt(templateId);
     }
-    
-    console.log('Sending job launch request:', JSON.stringify(body, null, 2));
-    
+
+    if (dependsOn && Array.isArray(dependsOn) && dependsOn.length > 0) {
+        body.depends_on = dependsOn;
+    }
+
     return apiRequest('/jobs/launch', {
         method: 'POST',
         body: body,
@@ -312,6 +313,22 @@ export async function launchJob(playbookId, inventoryGroupId = null, credentialI
 
 export async function getJobEvents(jobId) {
     return apiRequest(`/jobs/${jobId}/events`);
+}
+
+export async function getJobQueue() {
+    return apiRequest('/jobs/queue');
+}
+
+export async function cancelJob(jobId) {
+    return apiRequest(`/jobs/${jobId}/cancel`, { method: 'POST' });
+}
+
+export async function retryJob(jobId) {
+    return apiRequest(`/jobs/${jobId}/retry`, { method: 'POST' });
+}
+
+export async function updateJobPriority(jobId, priority) {
+    return apiRequest(`/jobs/${jobId}/priority`, { method: 'PATCH', body: { priority } });
 }
 
 // Templates
@@ -1008,4 +1025,36 @@ export async function bulkAcknowledgeAlerts(alertIds) {
         method: 'POST',
         body: { alert_ids: alertIds },
     });
+}
+
+// ── SLA Dashboards ──────────────────────────────────────────────────────────
+
+export async function getSlaSummary(groupId = null, days = 30) {
+    const params = [`days=${days}`];
+    if (groupId) params.push(`group_id=${groupId}`);
+    return apiRequest(`/sla/summary?${params.join('&')}`);
+}
+
+export async function getSlaHostDetail(hostId, days = 30) {
+    return apiRequest(`/sla/host/${hostId}?days=${days}`);
+}
+
+export async function getSlaTargets(hostId = null, groupId = null) {
+    const params = [];
+    if (hostId) params.push(`host_id=${hostId}`);
+    if (groupId) params.push(`group_id=${groupId}`);
+    const qs = params.length ? '?' + params.join('&') : '';
+    return apiRequest(`/sla/targets${qs}`);
+}
+
+export async function createSlaTarget(data) {
+    return apiRequest('/sla/targets', { method: 'POST', body: data });
+}
+
+export async function updateSlaTarget(id, data) {
+    return apiRequest(`/sla/targets/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteSlaTarget(id) {
+    return apiRequest(`/sla/targets/${id}`, { method: 'DELETE' });
 }

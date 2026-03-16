@@ -98,10 +98,10 @@
 ### Next (Operations and Observability)
 - [x] Add real-time monitoring (interfaces, CPU/memory, VPN health, route churn).
 - [x] Add alerting engine with threshold/anomaly rules, dedup, suppression, escalation.
-- [ ] Add SLA dashboards (uptime, latency, jitter, packet loss, MTTR, MTTD).
+- [x] Add SLA dashboards (uptime, latency, jitter, packet loss, MTTR, MTTD).
 - [ ] Add post-change automated verification with success criteria and health checks.
 - [ ] Add capacity planning trends (bandwidth, policy scale, route table growth).
-- [ ] Improve job orchestration UX (queue visibility, priority, dependencies, resume/cancel).
+- [x] Improve job orchestration UX (queue visibility, priority, dependencies, resume/cancel).
 
 ### Later (Enterprise and Ecosystem)
 - [ ] Add firmware/OS lifecycle management with staged upgrade workflows.
