@@ -93,11 +93,11 @@
 - [x] Add golden templates/compliance profiles with continuous compliance scans.
 - [x] Add pre-change risk analysis and impact simulation for policy/route/NAT changes.
 - [ ] Add maintenance windows and approval gates for production changes.
-- [ ] Add rollback orchestration with pre/post deployment checkpoints.
+- [x] Add rollback orchestration with pre/post deployment checkpoints.
 
 ### Next (Operations and Observability)
-- [ ] Add real-time monitoring (interfaces, CPU/memory, VPN health, route churn).
-- [ ] Add alerting engine with threshold/anomaly rules, dedup, suppression, escalation.
+- [x] Add real-time monitoring (interfaces, CPU/memory, VPN health, route churn).
+- [x] Add alerting engine with threshold/anomaly rules, dedup, suppression, escalation.
 - [ ] Add SLA dashboards (uptime, latency, jitter, packet loss, MTTR, MTTD).
 - [ ] Add post-change automated verification with success criteria and health checks.
 - [ ] Add capacity planning trends (bandwidth, policy scale, route table growth).

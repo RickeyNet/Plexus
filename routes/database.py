@@ -22,6 +22,14 @@ Tables:
     compliance_profile_assignments — profile-to-group bindings with scan schedule
     compliance_scan_results — per-host compliance scan findings
     risk_analyses          — pre-change risk analysis records
+    deployments            — deployment orchestration records with rollback support
+    deployment_checkpoints — pre/post deployment validation checks
+    deployment_snapshots   — per-host config snapshots captured before/after deployment
+    monitoring_polls       — periodic device health poll snapshots (CPU/mem/interfaces/VPN/routes)
+    monitoring_alerts      — threshold violations and anomaly alerts (with dedup/escalation)
+    route_snapshots        — route table captures for churn detection
+    alert_rules            — user-defined threshold/anomaly alert rules
+    alert_suppressions     — time-windowed alert suppression entries
 """
 
 import json
@@ -73,6 +81,14 @@ _INSERT_ID_TABLES = {
     "compliance_profile_assignments",
     "compliance_scan_results",
     "risk_analyses",
+    "deployments",
+    "deployment_checkpoints",
+    "deployment_snapshots",
+    "monitoring_polls",
+    "monitoring_alerts",
+    "route_snapshots",
+    "alert_rules",
+    "alert_suppressions",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -364,6 +380,136 @@ CREATE TABLE IF NOT EXISTS risk_analyses (
     approved_at         TEXT,
     created_by          TEXT    NOT NULL DEFAULT '',
     created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS deployments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    description     TEXT    DEFAULT '',
+    group_id        INTEGER NOT NULL REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    credential_id   INTEGER NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
+    change_type     TEXT    NOT NULL DEFAULT 'template',
+    proposed_commands TEXT  NOT NULL DEFAULT '',
+    template_id     INTEGER REFERENCES templates(id) ON DELETE SET NULL,
+    risk_analysis_id INTEGER REFERENCES risk_analyses(id) ON DELETE SET NULL,
+    status          TEXT    NOT NULL DEFAULT 'planning',
+    rollback_status TEXT    DEFAULT '',
+    host_ids        TEXT    NOT NULL DEFAULT '[]',
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    started_at      TEXT,
+    finished_at     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS deployment_checkpoints (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id   INTEGER NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+    phase           TEXT    NOT NULL DEFAULT 'pre',
+    check_name      TEXT    NOT NULL,
+    check_type      TEXT    NOT NULL DEFAULT 'config_capture',
+    status          TEXT    NOT NULL DEFAULT 'pending',
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    result          TEXT    NOT NULL DEFAULT '{}',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    executed_at     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS deployment_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id   INTEGER NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    phase           TEXT    NOT NULL DEFAULT 'pre',
+    config_text     TEXT    NOT NULL DEFAULT '',
+    captured_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS monitoring_polls (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    cpu_percent     REAL    DEFAULT NULL,
+    memory_percent  REAL    DEFAULT NULL,
+    memory_used_mb  REAL    DEFAULT NULL,
+    memory_total_mb REAL    DEFAULT NULL,
+    uptime_seconds  INTEGER DEFAULT NULL,
+    if_up_count     INTEGER DEFAULT 0,
+    if_down_count   INTEGER DEFAULT 0,
+    if_admin_down   INTEGER DEFAULT 0,
+    if_details      TEXT    NOT NULL DEFAULT '[]',
+    vpn_tunnels_up  INTEGER DEFAULT 0,
+    vpn_tunnels_down INTEGER DEFAULT 0,
+    vpn_details     TEXT    NOT NULL DEFAULT '[]',
+    route_count     INTEGER DEFAULT 0,
+    route_snapshot  TEXT    NOT NULL DEFAULT '',
+    poll_status     TEXT    NOT NULL DEFAULT 'ok',
+    poll_error      TEXT    DEFAULT '',
+    polled_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS monitoring_alerts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    poll_id         INTEGER REFERENCES monitoring_polls(id) ON DELETE SET NULL,
+    rule_id         INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
+    alert_type      TEXT    NOT NULL DEFAULT 'threshold',
+    metric          TEXT    NOT NULL DEFAULT '',
+    message         TEXT    NOT NULL DEFAULT '',
+    severity        TEXT    NOT NULL DEFAULT 'warning',
+    original_severity TEXT  NOT NULL DEFAULT '',
+    value           REAL    DEFAULT NULL,
+    threshold       REAL    DEFAULT NULL,
+    dedup_key       TEXT    NOT NULL DEFAULT '',
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    last_seen_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    acknowledged    INTEGER NOT NULL DEFAULT 0,
+    acknowledged_by TEXT    DEFAULT '',
+    acknowledged_at TEXT,
+    escalated       INTEGER NOT NULL DEFAULT 0,
+    escalation_count INTEGER NOT NULL DEFAULT 0,
+    escalated_at    TEXT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS route_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    route_count     INTEGER NOT NULL DEFAULT 0,
+    routes_text     TEXT    NOT NULL DEFAULT '',
+    routes_hash     TEXT    NOT NULL DEFAULT '',
+    captured_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL DEFAULT '',
+    description     TEXT    NOT NULL DEFAULT '',
+    metric          TEXT    NOT NULL DEFAULT '',
+    rule_type       TEXT    NOT NULL DEFAULT 'threshold',
+    operator        TEXT    NOT NULL DEFAULT '>=',
+    value           REAL    NOT NULL DEFAULT 0,
+    severity        TEXT    NOT NULL DEFAULT 'warning',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    consecutive     INTEGER NOT NULL DEFAULT 1,
+    cooldown_minutes INTEGER NOT NULL DEFAULT 15,
+    escalate_after_minutes INTEGER NOT NULL DEFAULT 0,
+    escalate_to     TEXT    NOT NULL DEFAULT 'critical',
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    group_id        INTEGER REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS alert_suppressions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL DEFAULT '',
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    group_id        INTEGER REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    metric          TEXT    NOT NULL DEFAULT '',
+    reason          TEXT    NOT NULL DEFAULT '',
+    starts_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+    ends_at         TEXT    NOT NULL,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -3220,5 +3366,926 @@ async def get_risk_analysis_summary() -> dict:
             "pending": pending,
             "last_analysis_at": last_analysis_at,
         }
+    finally:
+        await db.close()
+
+
+# ── Deployments ──────────────────────────────────────────────────────────────
+
+
+async def create_deployment(
+    name: str,
+    group_id: int,
+    credential_id: int,
+    change_type: str = "template",
+    proposed_commands: str = "",
+    template_id: int | None = None,
+    risk_analysis_id: int | None = None,
+    host_ids: str = "[]",
+    description: str = "",
+    created_by: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO deployments
+               (name, description, group_id, credential_id, change_type,
+                proposed_commands, template_id, risk_analysis_id, host_ids,
+                created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (name, description, group_id, credential_id, change_type,
+             proposed_commands, template_id, risk_analysis_id, host_ids,
+             created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_deployments(
+    status: str | None = None,
+    group_id: int | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        where_clauses = []
+        params: list = []
+        if status:
+            where_clauses.append("d.status = ?")
+            params.append(status)
+        if group_id is not None:
+            where_clauses.append("d.group_id = ?")
+            params.append(group_id)
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT d.*, g.name as group_name
+                FROM deployments d
+                LEFT JOIN inventory_groups g ON g.id = d.group_id
+                {where_sql}
+                ORDER BY d.created_at DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_deployment(deployment_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT d.*, g.name as group_name
+               FROM deployments d
+               LEFT JOIN inventory_groups g ON g.id = d.group_id
+               WHERE d.id = ?""",
+            (deployment_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_deployment_status(
+    deployment_id: int, status: str,
+    rollback_status: str | None = None,
+) -> None:
+    db = await get_db()
+    try:
+        if rollback_status is not None:
+            await db.execute(
+                "UPDATE deployments SET status = ?, rollback_status = ? WHERE id = ?",
+                (status, rollback_status, deployment_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE deployments SET status = ? WHERE id = ?",
+                (status, deployment_id),
+            )
+        if status in ("executing",) :
+            await db.execute(
+                "UPDATE deployments SET started_at = datetime('now') WHERE id = ? AND started_at IS NULL",
+                (deployment_id,),
+            )
+        if status in ("completed", "failed", "rolled-back"):
+            await db.execute(
+                "UPDATE deployments SET finished_at = datetime('now') WHERE id = ?",
+                (deployment_id,),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_deployment(deployment_id: int) -> None:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM deployments WHERE id = ?", (deployment_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_deployment_summary() -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM deployments")
+        total = (await cursor.fetchone())[0]
+
+        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'completed'")
+        completed = (await cursor.fetchone())[0]
+
+        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status IN ('executing', 'pre-check', 'post-check')")
+        active = (await cursor.fetchone())[0]
+
+        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'rolled-back'")
+        rolled_back = (await cursor.fetchone())[0]
+
+        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'failed'")
+        failed = (await cursor.fetchone())[0]
+
+        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'planning'")
+        planning = (await cursor.fetchone())[0]
+
+        return {
+            "total": total,
+            "completed": completed,
+            "active": active,
+            "rolled_back": rolled_back,
+            "failed": failed,
+            "planning": planning,
+        }
+    finally:
+        await db.close()
+
+
+# ── Deployment Checkpoints ───────────────────────────────────────────────────
+
+
+async def create_deployment_checkpoint(
+    deployment_id: int,
+    phase: str,
+    check_name: str,
+    check_type: str = "config_capture",
+    host_id: int | None = None,
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO deployment_checkpoints
+               (deployment_id, phase, check_name, check_type, host_id, created_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+            (deployment_id, phase, check_name, check_type, host_id),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def update_deployment_checkpoint(
+    checkpoint_id: int, status: str, result: str = "{}",
+) -> None:
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE deployment_checkpoints
+               SET status = ?, result = ?, executed_at = datetime('now')
+               WHERE id = ?""",
+            (status, result, checkpoint_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_deployment_checkpoints(deployment_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT c.*, h.hostname, h.ip_address
+               FROM deployment_checkpoints c
+               LEFT JOIN hosts h ON h.id = c.host_id
+               WHERE c.deployment_id = ?
+               ORDER BY c.phase, c.id""",
+            (deployment_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ── Deployment Snapshots ─────────────────────────────────────────────────────
+
+
+async def create_deployment_snapshot(
+    deployment_id: int,
+    host_id: int,
+    phase: str,
+    config_text: str,
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO deployment_snapshots
+               (deployment_id, host_id, phase, config_text, captured_at)
+               VALUES (?, ?, ?, ?, datetime('now'))""",
+            (deployment_id, host_id, phase, config_text),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_deployment_snapshots(
+    deployment_id: int, phase: str | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        if phase:
+            cursor = await db.execute(
+                """SELECT s.*, h.hostname, h.ip_address
+                   FROM deployment_snapshots s
+                   LEFT JOIN hosts h ON h.id = s.host_id
+                   WHERE s.deployment_id = ? AND s.phase = ?
+                   ORDER BY s.id""",
+                (deployment_id, phase),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT s.*, h.hostname, h.ip_address
+                   FROM deployment_snapshots s
+                   LEFT JOIN hosts h ON h.id = s.host_id
+                   WHERE s.deployment_id = ?
+                   ORDER BY s.phase, s.id""",
+                (deployment_id,),
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Monitoring Polls
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_monitoring_poll(
+    host_id: int,
+    cpu_percent: float | None = None,
+    memory_percent: float | None = None,
+    memory_used_mb: float | None = None,
+    memory_total_mb: float | None = None,
+    uptime_seconds: int | None = None,
+    if_up_count: int = 0,
+    if_down_count: int = 0,
+    if_admin_down: int = 0,
+    if_details: str = "[]",
+    vpn_tunnels_up: int = 0,
+    vpn_tunnels_down: int = 0,
+    vpn_details: str = "[]",
+    route_count: int = 0,
+    route_snapshot: str = "",
+    poll_status: str = "ok",
+    poll_error: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO monitoring_polls
+               (host_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
+                uptime_seconds, if_up_count, if_down_count, if_admin_down, if_details,
+                vpn_tunnels_up, vpn_tunnels_down, vpn_details,
+                route_count, route_snapshot, poll_status, poll_error, polled_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (host_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
+             uptime_seconds, if_up_count, if_down_count, if_admin_down, if_details,
+             vpn_tunnels_up, vpn_tunnels_down, vpn_details,
+             route_count, route_snapshot, poll_status, poll_error),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_latest_monitoring_polls(
+    group_id: int | None = None, limit: int = 200,
+) -> list[dict]:
+    """Return the most recent poll per host, with host info joined."""
+    db = await get_db()
+    try:
+        if group_id is not None:
+            cursor = await db.execute(
+                """SELECT p.*, h.hostname, h.ip_address, h.device_type, h.group_id
+                   FROM monitoring_polls p
+                   JOIN hosts h ON h.id = p.host_id
+                   WHERE h.group_id = ?
+                     AND p.id = (SELECT MAX(p2.id) FROM monitoring_polls p2 WHERE p2.host_id = p.host_id)
+                   ORDER BY h.hostname
+                   LIMIT ?""",
+                (group_id, limit),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT p.*, h.hostname, h.ip_address, h.device_type, h.group_id
+                   FROM monitoring_polls p
+                   JOIN hosts h ON h.id = p.host_id
+                   WHERE p.id = (SELECT MAX(p2.id) FROM monitoring_polls p2 WHERE p2.host_id = p.host_id)
+                   ORDER BY h.hostname
+                   LIMIT ?""",
+                (limit,),
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_monitoring_poll_history(
+    host_id: int, limit: int = 100,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT p.*, h.hostname, h.ip_address
+               FROM monitoring_polls p
+               JOIN hosts h ON h.id = p.host_id
+               WHERE p.host_id = ?
+               ORDER BY p.polled_at DESC
+               LIMIT ?""",
+            (host_id, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_old_monitoring_polls(retention_days: int) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM monitoring_polls WHERE polled_at < datetime('now', '-' || ? || ' days')",
+            (retention_days,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def get_monitoring_summary(group_id: int | None = None) -> dict:
+    db = await get_db()
+    try:
+        group_filter = ""
+        params: list = []
+        if group_id is not None:
+            group_filter = "AND h.group_id = ?"
+            params.append(group_id)
+
+        cursor = await db.execute(
+            f"""SELECT COUNT(DISTINCT p.host_id) FROM monitoring_polls p
+                JOIN hosts h ON h.id = p.host_id WHERE 1=1 {group_filter}""",
+            tuple(params),
+        )
+        monitored_hosts = (await cursor.fetchone())[0]
+
+        cursor = await db.execute(
+            f"""SELECT p.* FROM monitoring_polls p
+                JOIN hosts h ON h.id = p.host_id
+                WHERE p.id = (SELECT MAX(p2.id) FROM monitoring_polls p2 WHERE p2.host_id = p.host_id)
+                {group_filter}""",
+            tuple(params),
+        )
+        latest_polls = rows_to_list(await cursor.fetchall())
+
+        total_cpu = 0.0
+        cpu_count = 0
+        total_mem = 0.0
+        mem_count = 0
+        total_if_up = 0
+        total_if_down = 0
+        total_vpn_up = 0
+        total_vpn_down = 0
+        total_routes = 0
+        error_hosts = 0
+        high_cpu_hosts = 0
+        high_mem_hosts = 0
+
+        for p in latest_polls:
+            if p.get("cpu_percent") is not None:
+                total_cpu += p["cpu_percent"]
+                cpu_count += 1
+                if p["cpu_percent"] >= 80:
+                    high_cpu_hosts += 1
+            if p.get("memory_percent") is not None:
+                total_mem += p["memory_percent"]
+                mem_count += 1
+                if p["memory_percent"] >= 80:
+                    high_mem_hosts += 1
+            total_if_up += p.get("if_up_count", 0)
+            total_if_down += p.get("if_down_count", 0)
+            total_vpn_up += p.get("vpn_tunnels_up", 0)
+            total_vpn_down += p.get("vpn_tunnels_down", 0)
+            total_routes += p.get("route_count", 0)
+            if p.get("poll_status") == "error":
+                error_hosts += 1
+
+        a_params = list(params)
+        cursor = await db.execute(
+            f"""SELECT COUNT(*) FROM monitoring_alerts a
+                JOIN hosts h ON h.id = a.host_id
+                WHERE a.acknowledged = 0 {group_filter}""",
+            tuple(a_params),
+        )
+        open_alerts = (await cursor.fetchone())[0]
+
+        cursor = await db.execute(
+            f"""SELECT MAX(p.polled_at) FROM monitoring_polls p
+                JOIN hosts h ON h.id = p.host_id WHERE 1=1 {group_filter}""",
+            tuple(params),
+        )
+        row = await cursor.fetchone()
+        last_poll_at = row[0] if row else None
+
+        return {
+            "monitored_hosts": monitored_hosts,
+            "avg_cpu": round(total_cpu / cpu_count, 1) if cpu_count else None,
+            "avg_memory": round(total_mem / mem_count, 1) if mem_count else None,
+            "high_cpu_hosts": high_cpu_hosts,
+            "high_mem_hosts": high_mem_hosts,
+            "interfaces_up": total_if_up,
+            "interfaces_down": total_if_down,
+            "vpn_tunnels_up": total_vpn_up,
+            "vpn_tunnels_down": total_vpn_down,
+            "total_routes": total_routes,
+            "error_hosts": error_hosts,
+            "open_alerts": open_alerts,
+            "last_poll_at": last_poll_at,
+        }
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Monitoring Alerts
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_monitoring_alert(
+    host_id: int,
+    poll_id: int | None,
+    alert_type: str,
+    metric: str,
+    message: str,
+    severity: str = "warning",
+    value: float | None = None,
+    threshold: float | None = None,
+    rule_id: int | None = None,
+    dedup_key: str = "",
+) -> int:
+    """Create or deduplicate a monitoring alert.
+
+    If dedup_key is provided and an unacknowledged alert with the same key exists,
+    bump its occurrence_count and update last_seen_at instead of creating a new one.
+    Returns the alert ID (existing or new).
+    """
+    db = await get_db()
+    try:
+        # Dedup check
+        if dedup_key:
+            cursor = await db.execute(
+                """SELECT id, occurrence_count FROM monitoring_alerts
+                   WHERE dedup_key = ? AND acknowledged = 0
+                   ORDER BY id DESC LIMIT 1""",
+                (dedup_key,),
+            )
+            existing = await cursor.fetchone()
+            if existing:
+                eid = existing[0] if isinstance(existing, (list, tuple)) else existing["id"]
+                cnt = (existing[1] if isinstance(existing, (list, tuple)) else existing["occurrence_count"]) + 1
+                await db.execute(
+                    """UPDATE monitoring_alerts
+                       SET occurrence_count = ?, last_seen_at = datetime('now'),
+                           value = ?, poll_id = ?, message = ?
+                       WHERE id = ?""",
+                    (cnt, value, poll_id, message, eid),
+                )
+                await db.commit()
+                return eid
+
+        if not dedup_key:
+            dedup_key = f"{host_id}:{metric}:{alert_type}"
+
+        cursor = await db.execute(
+            """INSERT INTO monitoring_alerts
+               (host_id, poll_id, rule_id, alert_type, metric, message,
+                severity, original_severity, value, threshold,
+                dedup_key, occurrence_count, last_seen_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))""",
+            (host_id, poll_id, rule_id, alert_type, metric, message,
+             severity, severity, value, threshold, dedup_key),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_monitoring_alerts(
+    host_id: int | None = None,
+    acknowledged: bool | None = None,
+    severity: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses = []
+        params: list = []
+        if host_id is not None:
+            clauses.append("a.host_id = ?")
+            params.append(host_id)
+        if acknowledged is not None:
+            clauses.append("a.acknowledged = ?")
+            params.append(1 if acknowledged else 0)
+        if severity:
+            clauses.append("a.severity = ?")
+            params.append(severity)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT a.*, h.hostname, h.ip_address, h.device_type
+                FROM monitoring_alerts a
+                JOIN hosts h ON h.id = a.host_id
+                {where}
+                ORDER BY a.created_at DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def acknowledge_monitoring_alert(
+    alert_id: int, acknowledged_by: str,
+) -> None:
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE monitoring_alerts
+               SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
+               WHERE id = ?""",
+            (acknowledged_by, alert_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_old_monitoring_alerts(retention_days: int) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM monitoring_alerts WHERE created_at < datetime('now', '-' || ? || ' days')",
+            (retention_days,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Route Snapshots (churn detection)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_route_snapshot(
+    host_id: int, route_count: int, routes_text: str, routes_hash: str,
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO route_snapshots
+               (host_id, route_count, routes_text, routes_hash, captured_at)
+               VALUES (?, ?, ?, ?, datetime('now'))""",
+            (host_id, route_count, routes_text, routes_hash),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_route_snapshots(
+    host_id: int, limit: int = 50,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT r.*, h.hostname, h.ip_address
+               FROM route_snapshots r
+               JOIN hosts h ON h.id = r.host_id
+               WHERE r.host_id = ?
+               ORDER BY r.captured_at DESC LIMIT ?""",
+            (host_id, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_latest_route_snapshot(host_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM route_snapshots WHERE host_id = ? ORDER BY id DESC LIMIT 1",
+            (host_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def delete_old_route_snapshots(retention_days: int) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM route_snapshots WHERE captured_at < datetime('now', '-' || ? || ' days')",
+            (retention_days,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Alert Rules
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_alert_rule(
+    name: str,
+    metric: str,
+    rule_type: str = "threshold",
+    operator: str = ">=",
+    value: float = 0,
+    severity: str = "warning",
+    consecutive: int = 1,
+    cooldown_minutes: int = 15,
+    escalate_after_minutes: int = 0,
+    escalate_to: str = "critical",
+    host_id: int | None = None,
+    group_id: int | None = None,
+    description: str = "",
+    created_by: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO alert_rules
+               (name, description, metric, rule_type, operator, value, severity,
+                consecutive, cooldown_minutes, escalate_after_minutes, escalate_to,
+                host_id, group_id, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+            (name, description, metric, rule_type, operator, value, severity,
+             consecutive, cooldown_minutes, escalate_after_minutes, escalate_to,
+             host_id, group_id, created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_alert_rules(enabled_only: bool = False) -> list[dict]:
+    db = await get_db()
+    try:
+        where = "WHERE r.enabled = 1" if enabled_only else ""
+        cursor = await db.execute(
+            f"""SELECT r.*, h.hostname, h.ip_address, g.name as group_name
+                FROM alert_rules r
+                LEFT JOIN hosts h ON h.id = r.host_id
+                LEFT JOIN inventory_groups g ON g.id = r.group_id
+                {where}
+                ORDER BY r.created_at DESC""",
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_alert_rule(rule_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT r.*, h.hostname, h.ip_address, g.name as group_name
+               FROM alert_rules r
+               LEFT JOIN hosts h ON h.id = r.host_id
+               LEFT JOIN inventory_groups g ON g.id = r.group_id
+               WHERE r.id = ?""",
+            (rule_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_alert_rule(rule_id: int, **kwargs) -> None:
+    allowed = {"name", "description", "metric", "rule_type", "operator", "value",
+               "severity", "enabled", "consecutive", "cooldown_minutes",
+               "escalate_after_minutes", "escalate_to", "host_id", "group_id"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return
+    updates["updated_at"] = "datetime('now')"
+    set_parts = []
+    params: list = []
+    for k, v in updates.items():
+        if v == "datetime('now')":
+            set_parts.append(f"{k} = datetime('now')")
+        else:
+            set_parts.append(f"{k} = ?")
+            params.append(v)
+    params.append(rule_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE alert_rules SET {', '.join(set_parts)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_alert_rule(rule_id: int) -> None:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Alert Suppressions
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_alert_suppression(
+    name: str,
+    ends_at: str,
+    host_id: int | None = None,
+    group_id: int | None = None,
+    metric: str = "",
+    reason: str = "",
+    starts_at: str = "",
+    created_by: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        starts = starts_at if starts_at else "datetime('now')"
+        if starts_at:
+            cursor = await db.execute(
+                """INSERT INTO alert_suppressions
+                   (name, host_id, group_id, metric, reason, starts_at, ends_at, created_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                (name, host_id, group_id, metric, reason, starts_at, ends_at, created_by),
+            )
+        else:
+            cursor = await db.execute(
+                """INSERT INTO alert_suppressions
+                   (name, host_id, group_id, metric, reason, starts_at, ends_at, created_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'), ?, ?, datetime('now'))""",
+                (name, host_id, group_id, metric, reason, ends_at, created_by),
+            )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_alert_suppressions(active_only: bool = False) -> list[dict]:
+    db = await get_db()
+    try:
+        where = "WHERE s.ends_at > datetime('now')" if active_only else ""
+        cursor = await db.execute(
+            f"""SELECT s.*, h.hostname, h.ip_address, g.name as group_name
+                FROM alert_suppressions s
+                LEFT JOIN hosts h ON h.id = s.host_id
+                LEFT JOIN inventory_groups g ON g.id = s.group_id
+                {where}
+                ORDER BY s.ends_at DESC""",
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def is_alert_suppressed(
+    host_id: int, metric: str, group_id: int | None = None,
+) -> bool:
+    """Check if alerts for this host+metric are currently suppressed."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT COUNT(*) FROM alert_suppressions
+               WHERE starts_at <= datetime('now') AND ends_at > datetime('now')
+                 AND (
+                     (host_id IS NULL AND group_id IS NULL AND metric = '')
+                     OR (host_id = ? AND (metric = '' OR metric = ?))
+                     OR (group_id = ? AND (metric = '' OR metric = ?))
+                     OR (host_id IS NULL AND group_id IS NULL AND metric = ?)
+                 )""",
+            (host_id, metric, group_id or 0, metric, metric),
+        )
+        count = (await cursor.fetchone())[0]
+        return count > 0
+    finally:
+        await db.close()
+
+
+async def delete_alert_suppression(suppression_id: int) -> None:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM alert_suppressions WHERE id = ?", (suppression_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_expired_suppressions() -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM alert_suppressions WHERE ends_at < datetime('now', '-7 days')",
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Alert Escalation Queries
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def get_alerts_for_escalation(escalate_after_minutes: int) -> list[dict]:
+    """Return unacknowledged, non-escalated alerts older than the escalation threshold."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT a.*, h.hostname, h.ip_address
+               FROM monitoring_alerts a
+               JOIN hosts h ON h.id = a.host_id
+               WHERE a.acknowledged = 0
+                 AND a.escalated = 0
+                 AND a.severity != 'critical'
+                 AND a.created_at < datetime('now', '-' || ? || ' minutes')
+               ORDER BY a.created_at ASC""",
+            (escalate_after_minutes,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def escalate_alert(alert_id: int, new_severity: str) -> None:
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE monitoring_alerts
+               SET severity = ?, escalated = 1,
+                   escalation_count = escalation_count + 1,
+                   escalated_at = datetime('now')
+               WHERE id = ?""",
+            (new_severity, alert_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def bulk_acknowledge_alerts(alert_ids: list[int], acknowledged_by: str) -> int:
+    """Acknowledge multiple alerts at once. Returns count updated."""
+    if not alert_ids:
+        return 0
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" for _ in alert_ids)
+        cursor = await db.execute(
+            f"""UPDATE monitoring_alerts
+                SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
+                WHERE id IN ({placeholders}) AND acknowledged = 0""",
+            (acknowledged_by, *alert_ids),
+        )
+        await db.commit()
+        return cursor.rowcount
     finally:
         await db.close()

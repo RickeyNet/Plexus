@@ -18,7 +18,8 @@
       "Bash(python -m pytest tests/ --tb=no -q)",
       "Bash(python -m pytest tests/ -x -q)",
       "Bash(python -m pytest tests/ -q)",
-      "Bash(cd C:/Users/18652/code/plexus && python -m py_compile netcontrol/app.py && echo \"App OK\" && python -m py_compile routes/database.py && echo \"DB OK\")"
+      "Bash(cd C:/Users/18652/code/plexus && python -m py_compile netcontrol/app.py && echo \"App OK\" && python -m py_compile routes/database.py && echo \"DB OK\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('routes/database.py', doraise=True\\); py_compile.compile\\('netcontrol/app.py', doraise=True\\); print\\('OK'\\)\")"
     ]
   }
 }

@@ -874,3 +874,138 @@ export async function approveRiskAnalysis(id) {
 export async function deleteRiskAnalysis(id) {
     return apiRequest(`/risk-analysis/${id}`, { method: 'DELETE' });
 }
+
+// ── Deployments / Rollback ──────────────────────────────────────────────────
+
+export async function createDeployment(data) {
+    return apiRequest('/deployments', { method: 'POST', body: data });
+}
+
+export async function getDeployments(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.groupId) qs.set('group_id', params.groupId);
+    if (params.limit) qs.set('limit', params.limit);
+    const q = qs.toString();
+    return apiRequest(`/deployments${q ? '?' + q : ''}`);
+}
+
+export async function getDeploymentSummary() {
+    return apiRequest('/deployments/summary');
+}
+
+export async function getDeployment(id) {
+    return apiRequest(`/deployments/${id}`);
+}
+
+export async function executeDeployment(id) {
+    return apiRequest(`/deployments/${id}/execute`, { method: 'POST' });
+}
+
+export async function rollbackDeployment(id) {
+    return apiRequest(`/deployments/${id}/rollback`, { method: 'POST' });
+}
+
+export async function deleteDeployment(id) {
+    return apiRequest(`/deployments/${id}`, { method: 'DELETE' });
+}
+
+export async function getDeploymentJobStatus(jobId) {
+    return apiRequest(`/deployments/job/${jobId}/status`);
+}
+
+// ── Real-Time Monitoring ────────────────────────────────────────────────────
+
+export async function getMonitoringSummary(groupId = null) {
+    const params = new URLSearchParams();
+    if (groupId) params.set('group_id', groupId);
+    const qs = params.toString();
+    return apiRequest(`/monitoring/summary${qs ? '?' + qs : ''}`);
+}
+
+export async function getMonitoringPolls(groupId = null, limit = 200) {
+    const params = new URLSearchParams();
+    if (groupId) params.set('group_id', groupId);
+    if (limit) params.set('limit', limit);
+    return apiRequest(`/monitoring/polls?${params}`);
+}
+
+export async function getMonitoringPollHistory(hostId, limit = 100) {
+    return apiRequest(`/monitoring/polls/${hostId}/history?limit=${limit}`);
+}
+
+export async function getMonitoringAlerts(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.hostId) qs.set('host_id', params.hostId);
+    if (params.acknowledged !== undefined && params.acknowledged !== null) qs.set('acknowledged', params.acknowledged);
+    if (params.severity) qs.set('severity', params.severity);
+    if (params.limit) qs.set('limit', params.limit);
+    const q = qs.toString();
+    return apiRequest(`/monitoring/alerts${q ? '?' + q : ''}`);
+}
+
+export async function acknowledgeMonitoringAlert(alertId) {
+    return apiRequest(`/monitoring/alerts/${alertId}/acknowledge`, { method: 'POST' });
+}
+
+export async function getMonitoringRouteSnapshots(hostId, limit = 50) {
+    return apiRequest(`/monitoring/routes/${hostId}?limit=${limit}`);
+}
+
+export async function runMonitoringPollNow() {
+    return apiRequest('/monitoring/poll-now', { method: 'POST' });
+}
+
+export async function getMonitoringConfig() {
+    return apiRequest('/admin/monitoring');
+}
+
+export async function updateMonitoringConfig(data) {
+    return apiRequest('/admin/monitoring', { method: 'PUT', body: data });
+}
+
+// ── Alert Rules ─────────────────────────────────────────────────────────────
+
+export async function getAlertRules() {
+    return apiRequest('/monitoring/rules');
+}
+
+export async function createAlertRule(data) {
+    return apiRequest('/monitoring/rules', { method: 'POST', body: data });
+}
+
+export async function getAlertRule(id) {
+    return apiRequest(`/monitoring/rules/${id}`);
+}
+
+export async function updateAlertRule(id, data) {
+    return apiRequest(`/monitoring/rules/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteAlertRule(id) {
+    return apiRequest(`/monitoring/rules/${id}`, { method: 'DELETE' });
+}
+
+// ── Alert Suppressions ──────────────────────────────────────────────────────
+
+export async function getAlertSuppressions(activeOnly = false) {
+    const qs = activeOnly ? '?active_only=true' : '';
+    return apiRequest(`/monitoring/suppressions${qs}`);
+}
+
+export async function createAlertSuppression(data) {
+    return apiRequest('/monitoring/suppressions', { method: 'POST', body: data });
+}
+
+export async function deleteAlertSuppression(id) {
+    return apiRequest(`/monitoring/suppressions/${id}`, { method: 'DELETE' });
+}
+
+// ── Bulk Alert Operations ───────────────────────────────────────────────────
+
+export async function bulkAcknowledgeAlerts(alertIds) {
+    return apiRequest('/monitoring/alerts/bulk-acknowledge', {
+        method: 'POST',
+        body: { alert_ids: alertIds },
+    });
+}

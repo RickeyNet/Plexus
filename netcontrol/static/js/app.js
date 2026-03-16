@@ -29,6 +29,8 @@ const NAV_FEATURE_MAP = {
     'config-backups': 'config-backups',
     compliance: 'compliance',
     'risk-analysis': 'risk-analysis',
+    deployments: 'deployments',
+    monitoring: 'monitoring',
 };
 
 const THEME_KEY = 'plexus-theme';
@@ -85,6 +87,8 @@ const listViewState = {
     configBackups: { policies: [], backups: [], query: '', tab: 'policies' },
     compliance: { profiles: [], assignments: [], results: [], statusList: [], query: '', tab: 'profiles' },
     riskAnalysis: { items: [], query: '', levelFilter: '' },
+    deployments: { items: [], query: '', statusFilter: '' },
+    monitoring: { polls: [], alerts: [], query: '', tab: 'devices' },
 };
 
 function normalizeTheme(theme) {
@@ -258,6 +262,7 @@ const NAV_GROUP_CHILDREN = {
     'topology': 'network',
     'config-drift': 'network',
     'config-backups': 'network',
+    'monitoring': 'network',
 };
 
 window.toggleNavGroup = function(groupName, e) {
@@ -292,7 +297,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'config-drift', 'config-backups', 'settings'];
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'monitoring', 'config-drift', 'config-backups', 'settings'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -407,6 +412,12 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'risk-analysis':
                 await loadRiskAnalysis({ preserveContent });
+                break;
+            case 'deployments':
+                await loadDeployments({ preserveContent });
+                break;
+            case 'monitoring':
+                await loadMonitoring({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
@@ -6012,7 +6023,9 @@ const COMMAND_PALETTE_PAGES = [
     { page: 'templates',   label: 'Templates',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
     { page: 'credentials', label: 'Credentials',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' },
     { page: 'converter',   label: 'Converter',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>' },
+    { page: 'monitoring',   label: 'Monitoring',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
     { page: 'config-drift', label: 'Config Drift', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>' },
+    { page: 'deployments', label: 'Deployments',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>' },
     { page: 'settings',    label: 'Settings',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
 ];
 
@@ -7362,6 +7375,1081 @@ document.addEventListener('DOMContentLoaded', () => {
         searchInput.addEventListener('input', debounce(() => {
             listViewState.riskAnalysis.query = searchInput.value;
             renderRiskAnalyses(listViewState.riskAnalysis.items);
+        }, 200));
+    }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Real-Time Monitoring
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadMonitoring(options = {}) {
+    const { preserveContent = false } = options;
+    const devContainer = document.getElementById('monitoring-devices-list');
+    if (!preserveContent && devContainer) devContainer.innerHTML = skeletonCards(2);
+    try {
+        const [summary, polls, alerts] = await Promise.all([
+            api.getMonitoringSummary(),
+            api.getMonitoringPolls(),
+            api.getMonitoringAlerts({ acknowledged: false, limit: 200 }),
+        ]);
+        renderMonitoringSummary(summary);
+        listViewState.monitoring.polls = polls || [];
+        listViewState.monitoring.alerts = alerts || [];
+        renderMonitoringDevices(polls || []);
+        renderMonitoringAlerts(alerts || []);
+    } catch (error) {
+        if (devContainer) devContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error loading monitoring: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadMonitoring = loadMonitoring;
+
+function renderMonitoringSummary(s) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('mon-stat-hosts', s.monitored_hosts ?? '-');
+    set('mon-stat-cpu', s.avg_cpu != null ? s.avg_cpu + '%' : '-');
+    set('mon-stat-mem', s.avg_memory != null ? s.avg_memory + '%' : '-');
+    set('mon-stat-if-up', s.interfaces_up ?? '-');
+    set('mon-stat-if-down', s.interfaces_down ?? '-');
+    set('mon-stat-vpn-up', s.vpn_tunnels_up ?? '-');
+    set('mon-stat-vpn-down', s.vpn_tunnels_down ?? '-');
+    set('mon-stat-routes', s.total_routes ?? '-');
+    set('mon-stat-alerts', s.open_alerts ?? '-');
+
+    // Highlight problem stats
+    const cpuEl = document.getElementById('mon-stat-cpu');
+    if (cpuEl) cpuEl.style.color = (s.avg_cpu != null && s.avg_cpu >= 80) ? 'var(--danger)' : '';
+    const memEl = document.getElementById('mon-stat-mem');
+    if (memEl) memEl.style.color = (s.avg_memory != null && s.avg_memory >= 80) ? 'var(--danger)' : '';
+    const ifDownEl = document.getElementById('mon-stat-if-down');
+    if (ifDownEl) ifDownEl.style.color = (s.interfaces_down > 0) ? 'var(--warning)' : '';
+    const vpnDownEl = document.getElementById('mon-stat-vpn-down');
+    if (vpnDownEl) vpnDownEl.style.color = (s.vpn_tunnels_down > 0) ? 'var(--warning)' : '';
+    const alertsEl = document.getElementById('mon-stat-alerts');
+    if (alertsEl) alertsEl.style.color = (s.open_alerts > 0) ? 'var(--danger)' : '';
+}
+
+function renderMonitoringDevices(polls) {
+    const container = document.getElementById('monitoring-devices-list');
+    if (!container) return;
+    const query = (listViewState.monitoring.query || '').toLowerCase();
+    const filtered = polls.filter(p => {
+        if (query && !(p.hostname || '').toLowerCase().includes(query)
+            && !(p.ip_address || '').toLowerCase().includes(query)) return false;
+        return true;
+    });
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No monitoring data', 'monitoring',
+            '<button class="btn btn-primary btn-sm" onclick="runMonitoringPollNow()">Run First Poll</button>');
+        return;
+    }
+    container.innerHTML = filtered.map(p => {
+        const cpuColor = p.cpu_percent == null ? 'text-muted' : (p.cpu_percent >= 90 ? 'danger' : (p.cpu_percent >= 70 ? 'warning' : 'success'));
+        const memColor = p.memory_percent == null ? 'text-muted' : (p.memory_percent >= 90 ? 'danger' : (p.memory_percent >= 70 ? 'warning' : 'success'));
+        const cpuVal = p.cpu_percent != null ? p.cpu_percent + '%' : 'N/A';
+        const memVal = p.memory_percent != null ? p.memory_percent + '%' : 'N/A';
+        const polled = p.polled_at ? new Date(p.polled_at + 'Z').toLocaleString() : '-';
+        const statusDot = p.poll_status === 'error' ? 'danger' : 'success';
+        const uptime = p.uptime_seconds != null ? formatUptime(p.uptime_seconds) : 'N/A';
+
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                    <span style="width:8px; height:8px; border-radius:50%; background:var(--${statusDot}); display:inline-block;"></span>
+                    <strong>${escapeHtml(p.hostname || 'Unknown')}</strong>
+                    <span style="color:var(--text-muted); font-size:0.85em;">${escapeHtml(p.ip_address || '')}</span>
+                    <span style="color:var(--text-muted); font-size:0.8em;">${escapeHtml(p.device_type || '')}</span>
+                </div>
+                <div style="display:flex; gap:0.4rem;">
+                    <button class="btn btn-sm btn-secondary" onclick="showMonitoringHostDetail(${p.host_id})">Details</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showMonitoringHostHistory(${p.host_id}, '${escapeHtml(p.hostname || '')}')">History</button>
+                </div>
+            </div>
+            <div style="display:flex; gap:1.5rem; margin-top:0.75rem; flex-wrap:wrap; font-size:0.9em;">
+                <div><span style="color:var(--text-muted);">CPU:</span> <span style="color:var(--${cpuColor}); font-weight:600;">${cpuVal}</span></div>
+                <div><span style="color:var(--text-muted);">Memory:</span> <span style="color:var(--${memColor}); font-weight:600;">${memVal}</span>${p.memory_used_mb != null && p.memory_total_mb != null ? ` <span style="font-size:0.8em; color:var(--text-muted);">(${p.memory_used_mb}/${p.memory_total_mb} MB)</span>` : ''}</div>
+                <div><span style="color:var(--text-muted);">Interfaces:</span> <span style="color:var(--success);">${p.if_up_count} up</span>${p.if_down_count > 0 ? ` / <span style="color:var(--danger);">${p.if_down_count} down</span>` : ''}${p.if_admin_down > 0 ? ` / <span style="color:var(--text-muted);">${p.if_admin_down} admin-down</span>` : ''}</div>
+                <div><span style="color:var(--text-muted);">VPN:</span> <span style="color:var(--success);">${p.vpn_tunnels_up} up</span>${p.vpn_tunnels_down > 0 ? ` / <span style="color:var(--danger);">${p.vpn_tunnels_down} down</span>` : ''}</div>
+                <div><span style="color:var(--text-muted);">Routes:</span> ${p.route_count}</div>
+                <div><span style="color:var(--text-muted);">Uptime:</span> ${uptime}</div>
+            </div>
+            ${p.cpu_percent != null ? `<div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+                <div style="flex:1; background:var(--bg-secondary); border-radius:4px; height:6px; overflow:hidden;" title="CPU ${cpuVal}">
+                    <div style="width:${Math.min(p.cpu_percent, 100)}%; height:100%; background:var(--${cpuColor}); border-radius:4px; transition:width 0.3s;"></div>
+                </div>
+                <div style="flex:1; background:var(--bg-secondary); border-radius:4px; height:6px; overflow:hidden;" title="Memory ${memVal}">
+                    <div style="width:${Math.min(p.memory_percent || 0, 100)}%; height:100%; background:var(--${memColor}); border-radius:4px; transition:width 0.3s;"></div>
+                </div>
+            </div>` : ''}
+            <div style="margin-top:0.4rem; font-size:0.8em; color:var(--text-muted);">Last poll: ${polled}</div>
+        </div>`;
+    }).join('');
+}
+
+function formatUptime(seconds) {
+    if (seconds == null) return 'N/A';
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+}
+
+function renderMonitoringAlerts(alerts) {
+    const container = document.getElementById('monitoring-alerts-list');
+    if (!container) return;
+    const query = (listViewState.monitoring.query || '').toLowerCase();
+    const sevFilter = document.getElementById('mon-alert-filter-severity')?.value || '';
+    const ackFilter = document.getElementById('mon-alert-filter-ack')?.value;
+
+    let filtered = alerts;
+    if (sevFilter) filtered = filtered.filter(a => a.severity === sevFilter);
+    if (ackFilter === 'true') filtered = filtered.filter(a => a.acknowledged);
+    else if (ackFilter === 'false') filtered = filtered.filter(a => !a.acknowledged);
+    if (query) filtered = filtered.filter(a =>
+        (a.hostname || '').toLowerCase().includes(query) ||
+        (a.message || '').toLowerCase().includes(query) ||
+        (a.metric || '').toLowerCase().includes(query));
+
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No alerts', 'monitoring', '');
+        return;
+    }
+
+    // Bulk acknowledge button for unacknowledged alerts
+    const unackedIds = filtered.filter(a => !a.acknowledged).map(a => a.id);
+    const bulkBtn = unackedIds.length > 1
+        ? `<div style="margin-bottom:0.5rem;"><button class="btn btn-sm btn-secondary" onclick="bulkAcknowledgeAlerts([${unackedIds.join(',')}])">Acknowledge All (${unackedIds.length})</button></div>`
+        : '';
+
+    container.innerHTML = bulkBtn + filtered.map(a => {
+        const sevColors = { critical: 'danger', warning: 'warning', info: 'primary' };
+        const sevColor = sevColors[a.severity] || 'text-muted';
+        const created = a.created_at ? new Date(a.created_at + 'Z').toLocaleString() : '-';
+        const lastSeen = a.last_seen_at ? new Date(a.last_seen_at + 'Z').toLocaleString() : created;
+        const ackBadge = a.acknowledged
+            ? `<span style="color:var(--success); font-size:0.8em;">Acknowledged${a.acknowledged_by ? ` by ${escapeHtml(a.acknowledged_by)}` : ''}</span>`
+            : `<button class="btn btn-sm btn-secondary" onclick="acknowledgeMonitoringAlert(${a.id})">Acknowledge</button>`;
+
+        // Dedup badge
+        const occurrences = (a.occurrence_count || 1);
+        const dedupBadge = occurrences > 1
+            ? `<span style="background:var(--bg-secondary); color:var(--text-muted); font-size:0.75em; padding:2px 6px; border-radius:3px; margin-left:0.3rem;" title="Deduplicated: seen ${occurrences} times">${occurrences}x</span>`
+            : '';
+
+        // Escalation badge
+        const escalationBadge = a.escalated
+            ? `<span style="background:var(--danger); color:white; font-size:0.7em; padding:2px 6px; border-radius:3px; margin-left:0.3rem;" title="Escalated from ${escapeHtml(a.original_severity || '')}">ESCALATED</span>`
+            : '';
+
+        return `<div class="card" style="margin-bottom:0.5rem; padding:0.75rem 1rem; border-left:3px solid var(--${sevColor});">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.4rem;">
+                <div>
+                    <span class="badge" style="background:var(--${sevColor}); color:white; font-size:0.75em; padding:2px 8px; border-radius:3px; text-transform:uppercase;">${escapeHtml(a.severity)}</span>
+                    ${escalationBadge}${dedupBadge}
+                    <strong style="margin-left:0.4rem;">${escapeHtml(a.hostname || '')}</strong>
+                    <span style="color:var(--text-muted); font-size:0.85em; margin-left:0.4rem;">${escapeHtml(a.metric || '')}</span>
+                </div>
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                    ${ackBadge}
+                </div>
+            </div>
+            <div style="margin-top:0.3rem; font-size:0.9em;">${escapeHtml(a.message)}</div>
+            <div style="margin-top:0.2rem; font-size:0.8em; color:var(--text-muted);">
+                Created: ${created}${occurrences > 1 ? ` · Last seen: ${lastSeen}` : ''}${a.rule_id ? ` · Rule #${a.rule_id}` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+window.bulkAcknowledgeAlerts = async function(alertIds) {
+    try {
+        const result = await api.bulkAcknowledgeAlerts(alertIds);
+        showSuccess(`${result.acknowledged} alert(s) acknowledged`);
+        loadMonitoring();
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.switchMonitoringTab = function(tab) {
+    listViewState.monitoring.tab = tab;
+    document.querySelectorAll('.mon-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-mon-tab') === tab));
+    document.querySelectorAll('.monitoring-tab').forEach(t => t.style.display = 'none');
+    const target = document.getElementById(`monitoring-tab-${tab}`);
+    if (target) target.style.display = '';
+
+    if (tab === 'routes' && !document.getElementById('monitoring-routes-list')?.dataset.loaded) {
+        loadMonitoringRouteChurn();
+    }
+    if (tab === 'rules') loadMonitoringRules();
+    if (tab === 'suppressions') loadMonitoringSuppressions();
+};
+
+async function loadMonitoringRouteChurn() {
+    const container = document.getElementById('monitoring-routes-list');
+    if (!container) return;
+    container.innerHTML = skeletonCards(2);
+    try {
+        // Get latest polls that have route data
+        const polls = listViewState.monitoring.polls.filter(p => p.route_count > 0);
+        if (!polls.length) {
+            container.innerHTML = emptyStateHTML('No route data collected', 'monitoring', '');
+            container.dataset.loaded = '1';
+            return;
+        }
+        // For each host with routes, get the last 2 route snapshots
+        const routeAlerts = (listViewState.monitoring.alerts || []).filter(a => a.metric === 'route_churn');
+        if (!routeAlerts.length) {
+            container.innerHTML = `<div class="card" style="padding:1rem;">
+                <p style="color:var(--text-muted);">No route churn events detected. Routes are stable across ${polls.length} monitored device(s).</p>
+                <p style="color:var(--text-muted); font-size:0.85em;">Route churn alerts are generated when the route table changes between polling cycles.</p>
+            </div>`;
+        } else {
+            container.innerHTML = routeAlerts.map(a => {
+                const created = a.created_at ? new Date(a.created_at + 'Z').toLocaleString() : '-';
+                return `<div class="card" style="margin-bottom:0.5rem; padding:0.75rem 1rem; border-left:3px solid var(--warning);">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <strong>${escapeHtml(a.hostname || '')}</strong>
+                            <span style="color:var(--text-muted); margin-left:0.5rem; font-size:0.85em;">${escapeHtml(a.ip_address || '')}</span>
+                        </div>
+                        <button class="btn btn-sm btn-secondary" onclick="showRouteSnapshotHistory(${a.host_id}, '${escapeHtml(a.hostname || '')}')">View History</button>
+                    </div>
+                    <div style="margin-top:0.3rem; font-size:0.9em;">${escapeHtml(a.message)}</div>
+                    <div style="margin-top:0.2rem; font-size:0.8em; color:var(--text-muted);">${created}</div>
+                </div>`;
+            }).join('');
+        }
+        container.dataset.loaded = '1';
+    } catch (e) {
+        container.innerHTML = `<div class="card" style="color:var(--danger);">Error: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+window.acknowledgeMonitoringAlert = async function(alertId) {
+    try {
+        await api.acknowledgeMonitoringAlert(alertId);
+        showSuccess('Alert acknowledged');
+        loadMonitoring();
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.runMonitoringPollNow = async function() {
+    try {
+        showSuccess('Starting monitoring poll...');
+        const result = await api.runMonitoringPollNow();
+        showSuccess(`Poll complete: ${result.hosts_polled} hosts, ${result.alerts_created} alerts`);
+        loadMonitoring();
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.refreshMonitoring = function() { loadMonitoring(); };
+
+window.filterMonitoringAlerts = function() {
+    renderMonitoringAlerts(listViewState.monitoring.alerts);
+};
+
+window.showMonitoringHostDetail = async function(hostId) {
+    try {
+        const polls = listViewState.monitoring.polls;
+        const poll = polls.find(p => p.host_id === hostId);
+        if (!poll) { showError('No poll data for this host'); return; }
+
+        let ifDetails = [];
+        try { ifDetails = JSON.parse(poll.if_details || '[]'); } catch (e) { /* ignore */ }
+        let vpnDetails = [];
+        try { vpnDetails = JSON.parse(poll.vpn_details || '[]'); } catch (e) { /* ignore */ }
+
+        const ifTable = ifDetails.length ? `
+            <h4 style="margin-top:1rem;">Interfaces (${ifDetails.length})</h4>
+            <div style="max-height:300px; overflow:auto;">
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+                <tr style="border-bottom:1px solid var(--border-color);">
+                    <th style="text-align:left; padding:4px 8px;">Name</th>
+                    <th style="text-align:left; padding:4px 8px;">Status</th>
+                    <th style="text-align:right; padding:4px 8px;">Speed</th>
+                    <th style="text-align:right; padding:4px 8px;">In Octets</th>
+                    <th style="text-align:right; padding:4px 8px;">Out Octets</th>
+                </tr>
+                ${ifDetails.map(i => {
+                    const sColor = i.status === 'up' ? 'success' : (i.status === 'admin_down' ? 'text-muted' : 'danger');
+                    return `<tr style="border-bottom:1px solid var(--border-color);">
+                        <td style="padding:4px 8px;">${escapeHtml(i.name)}</td>
+                        <td style="padding:4px 8px; color:var(--${sColor});">${i.status}</td>
+                        <td style="padding:4px 8px; text-align:right;">${i.speed_mbps ? i.speed_mbps + ' Mbps' : '-'}</td>
+                        <td style="padding:4px 8px; text-align:right;">${i.in_octets?.toLocaleString() || '0'}</td>
+                        <td style="padding:4px 8px; text-align:right;">${i.out_octets?.toLocaleString() || '0'}</td>
+                    </tr>`;
+                }).join('')}
+            </table>
+            </div>` : '<p style="color:var(--text-muted);">No interface data available.</p>';
+
+        const vpnTable = vpnDetails.length ? `
+            <h4 style="margin-top:1rem;">VPN Tunnels (${vpnDetails.length})</h4>
+            <div style="max-height:200px; overflow:auto;">
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+                <tr style="border-bottom:1px solid var(--border-color);">
+                    <th style="text-align:left; padding:4px 8px;">Peer</th>
+                    <th style="text-align:left; padding:4px 8px;">Status</th>
+                </tr>
+                ${vpnDetails.map(v => {
+                    const vColor = v.status === 'up' ? 'success' : 'danger';
+                    return `<tr style="border-bottom:1px solid var(--border-color);">
+                        <td style="padding:4px 8px;">${escapeHtml(v.peer || '')}</td>
+                        <td style="padding:4px 8px; color:var(--${vColor});">${v.status}</td>
+                    </tr>`;
+                }).join('')}
+            </table>
+            </div>` : '<p style="color:var(--text-muted);">No VPN data available.</p>';
+
+        const uptime = poll.uptime_seconds != null ? formatUptime(poll.uptime_seconds) : 'N/A';
+        const polled = poll.polled_at ? new Date(poll.polled_at + 'Z').toLocaleString() : '-';
+
+        showModal(`${escapeHtml(poll.hostname || 'Device')} - Monitoring Detail`, `
+            <div style="display:flex; gap:2rem; flex-wrap:wrap; margin-bottom:1rem;">
+                <div><strong>CPU:</strong> ${poll.cpu_percent != null ? poll.cpu_percent + '%' : 'N/A'}</div>
+                <div><strong>Memory:</strong> ${poll.memory_percent != null ? poll.memory_percent + '%' : 'N/A'}${poll.memory_used_mb != null ? ` (${poll.memory_used_mb}/${poll.memory_total_mb} MB)` : ''}</div>
+                <div><strong>Uptime:</strong> ${uptime}</div>
+                <div><strong>Routes:</strong> ${poll.route_count}</div>
+                <div><strong>Last Poll:</strong> ${polled}</div>
+            </div>
+            ${poll.poll_status === 'error' ? `<div style="color:var(--danger); margin-bottom:0.5rem;">Poll Error: ${escapeHtml(poll.poll_error || '')}</div>` : ''}
+            ${ifTable}
+            ${vpnTable}
+        `);
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.showMonitoringHostHistory = async function(hostId, hostname) {
+    try {
+        const history = await api.getMonitoringPollHistory(hostId, 50);
+        if (!history.length) { showError('No history available'); return; }
+
+        const rows = history.map(p => {
+            const ts = p.polled_at ? new Date(p.polled_at + 'Z').toLocaleString() : '-';
+            return `<tr style="border-bottom:1px solid var(--border-color);">
+                <td style="padding:4px 8px; font-size:0.85em;">${ts}</td>
+                <td style="padding:4px 8px; text-align:right;">${p.cpu_percent != null ? p.cpu_percent + '%' : '-'}</td>
+                <td style="padding:4px 8px; text-align:right;">${p.memory_percent != null ? p.memory_percent + '%' : '-'}</td>
+                <td style="padding:4px 8px; text-align:center;">${p.if_up_count}/${p.if_down_count}</td>
+                <td style="padding:4px 8px; text-align:center;">${p.vpn_tunnels_up}/${p.vpn_tunnels_down}</td>
+                <td style="padding:4px 8px; text-align:right;">${p.route_count}</td>
+                <td style="padding:4px 8px; text-align:center;">${p.poll_status === 'error' ? '<span style="color:var(--danger);">err</span>' : '<span style="color:var(--success);">ok</span>'}</td>
+            </tr>`;
+        }).join('');
+
+        showModal(`${escapeHtml(hostname)} - Poll History`, `
+            <div style="max-height:400px; overflow:auto;">
+            <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+                <tr style="border-bottom:2px solid var(--border-color);">
+                    <th style="text-align:left; padding:4px 8px;">Time</th>
+                    <th style="text-align:right; padding:4px 8px;">CPU</th>
+                    <th style="text-align:right; padding:4px 8px;">Memory</th>
+                    <th style="text-align:center; padding:4px 8px;">IF Up/Down</th>
+                    <th style="text-align:center; padding:4px 8px;">VPN Up/Down</th>
+                    <th style="text-align:right; padding:4px 8px;">Routes</th>
+                    <th style="text-align:center; padding:4px 8px;">Status</th>
+                </tr>
+                ${rows}
+            </table>
+            </div>
+        `);
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.showRouteSnapshotHistory = async function(hostId, hostname) {
+    try {
+        const snapshots = await api.getMonitoringRouteSnapshots(hostId, 10);
+        if (!snapshots.length) { showError('No route snapshots available'); return; }
+
+        const items = snapshots.map((s, i) => {
+            const ts = s.captured_at ? new Date(s.captured_at + 'Z').toLocaleString() : '-';
+            const prev = snapshots[i + 1];
+            const delta = prev ? s.route_count - prev.route_count : 0;
+            const deltaStr = delta > 0 ? `<span style="color:var(--success);">+${delta}</span>` : (delta < 0 ? `<span style="color:var(--danger);">${delta}</span>` : '<span style="color:var(--text-muted);">0</span>');
+            return `<div class="card" style="margin-bottom:0.5rem; padding:0.5rem 0.75rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <span style="font-size:0.85em; color:var(--text-muted);">${ts}</span>
+                        <span style="margin-left:0.75rem;">Routes: <strong>${s.route_count}</strong></span>
+                        <span style="margin-left:0.5rem; font-size:0.85em;">Delta: ${deltaStr}</span>
+                    </div>
+                    <button class="btn btn-sm btn-secondary" onclick="showRouteSnapshotDetail('${escapeHtml(s.routes_text || '').replace(/'/g, "\\'")}', '${ts}')">View</button>
+                </div>
+            </div>`;
+        }).join('');
+
+        showModal(`${escapeHtml(hostname)} - Route Snapshots`, `<div style="max-height:400px; overflow:auto;">${items}</div>`);
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.showRouteSnapshotDetail = function(routesText, timestamp) {
+    showModal(`Route Table - ${timestamp}`, `<pre style="max-height:400px; overflow:auto; font-size:0.8em; white-space:pre-wrap;">${escapeHtml(routesText)}</pre>`);
+};
+
+// ── Alert Rules Management ──────────────────────────────────────────────────
+
+async function loadMonitoringRules() {
+    const container = document.getElementById('monitoring-rules-list');
+    if (!container) return;
+    container.innerHTML = skeletonCards(2);
+    try {
+        const rules = await api.getAlertRules();
+        if (!rules.length) {
+            container.innerHTML = emptyStateHTML('No alert rules defined', 'monitoring',
+                '<button class="btn btn-primary btn-sm" onclick="showCreateAlertRuleModal()">Create First Rule</button>');
+            return;
+        }
+        container.innerHTML = rules.map(r => {
+            const sevColors = { critical: 'danger', warning: 'warning', info: 'primary' };
+            const sevColor = sevColors[r.severity] || 'text-muted';
+            const scope = r.hostname ? `Host: ${escapeHtml(r.hostname)}` : (r.group_name ? `Group: ${escapeHtml(r.group_name)}` : 'All hosts');
+            const escalation = r.escalate_after_minutes > 0
+                ? `<span style="font-size:0.8em; color:var(--text-muted);">Escalate to ${escapeHtml(r.escalate_to)} after ${r.escalate_after_minutes}m</span>`
+                : '';
+            return `<div class="card" style="margin-bottom:0.5rem; padding:0.75rem 1rem; opacity:${r.enabled ? 1 : 0.5};">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.4rem;">
+                    <div>
+                        <span class="badge" style="background:var(--${sevColor}); color:white; font-size:0.75em; padding:2px 8px; border-radius:3px; text-transform:uppercase;">${escapeHtml(r.severity)}</span>
+                        <strong style="margin-left:0.4rem;">${escapeHtml(r.name || 'Unnamed')}</strong>
+                        <span style="color:var(--text-muted); font-size:0.85em; margin-left:0.5rem;">${escapeHtml(r.metric)} ${escapeHtml(r.operator)} ${r.value}</span>
+                        ${!r.enabled ? '<span style="color:var(--text-muted); font-size:0.75em; margin-left:0.3rem;">(disabled)</span>' : ''}
+                    </div>
+                    <div style="display:flex; gap:0.4rem;">
+                        <button class="btn btn-sm btn-secondary" onclick="toggleAlertRule(${r.id}, ${r.enabled ? 0 : 1})">${r.enabled ? 'Disable' : 'Enable'}</button>
+                        <button class="btn btn-sm" style="color:var(--danger);" onclick="confirmDeleteAlertRule(${r.id}, '${escapeHtml(r.name || '')}')">Delete</button>
+                    </div>
+                </div>
+                <div style="margin-top:0.3rem; font-size:0.85em; color:var(--text-muted);">
+                    ${scope} · Cooldown: ${r.cooldown_minutes}m ${escalation ? '· ' + escalation : ''}
+                    ${r.description ? `<br>${escapeHtml(r.description)}` : ''}
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<div class="card" style="color:var(--danger);">Error: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+window.showCreateAlertRuleModal = async function() {
+    let groups = [], hosts = [];
+    try {
+        const inv = await api.getInventoryGroups(true);
+        groups = inv || [];
+        hosts = groups.flatMap(g => (g.hosts || []).map(h => ({ ...h, group_name: g.name })));
+    } catch (e) { /* ignore */ }
+
+    const groupOpts = `<option value="">All Groups</option>` + groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const hostOpts = `<option value="">All Hosts</option>` + hosts.map(h => `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)})</option>`).join('');
+
+    showModal('Create Alert Rule', `
+        <label class="form-label">Rule Name</label>
+        <input type="text" class="form-input" id="ar-name" placeholder="e.g. High CPU Warning" required>
+        <label class="form-label" style="margin-top:0.75rem;">Metric</label>
+        <select id="ar-metric" class="form-select">
+            <option value="cpu">CPU %</option>
+            <option value="memory">Memory %</option>
+            <option value="interface_down">Interfaces Down</option>
+            <option value="vpn_down">VPN Tunnels Down</option>
+            <option value="route_count">Route Count</option>
+            <option value="uptime">Uptime (seconds)</option>
+        </select>
+        <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
+            <div style="flex:1;">
+                <label class="form-label">Operator</label>
+                <select id="ar-operator" class="form-select">
+                    <option value=">=">>= (greater or equal)</option>
+                    <option value=">">  > (greater)</option>
+                    <option value="<="><= (less or equal)</option>
+                    <option value="<">  < (less)</option>
+                </select>
+            </div>
+            <div style="flex:1;">
+                <label class="form-label">Value</label>
+                <input type="number" class="form-input" id="ar-value" value="90" step="0.1">
+            </div>
+        </div>
+        <label class="form-label" style="margin-top:0.75rem;">Severity</label>
+        <select id="ar-severity" class="form-select">
+            <option value="warning">Warning</option>
+            <option value="critical">Critical</option>
+        </select>
+        <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
+            <div style="flex:1;">
+                <label class="form-label">Cooldown (minutes)</label>
+                <input type="number" class="form-input" id="ar-cooldown" value="15" min="1" max="1440">
+            </div>
+            <div style="flex:1;">
+                <label class="form-label">Escalate After (min, 0=off)</label>
+                <input type="number" class="form-input" id="ar-escalate-after" value="0" min="0" max="1440">
+            </div>
+        </div>
+        <label class="form-label" style="margin-top:0.75rem;">Scope: Group</label>
+        <select id="ar-group" class="form-select">${groupOpts}</select>
+        <label class="form-label" style="margin-top:0.5rem;">Scope: Host (overrides group)</label>
+        <select id="ar-host" class="form-select">${hostOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Description</label>
+        <textarea class="form-input" id="ar-description" rows="2" placeholder="Optional description..."></textarea>
+        <button class="btn btn-primary" style="margin-top:1rem; width:100%;" onclick="submitCreateAlertRule()">Create Rule</button>
+    `);
+};
+
+window.submitCreateAlertRule = async function() {
+    try {
+        const data = {
+            name: document.getElementById('ar-name').value,
+            metric: document.getElementById('ar-metric').value,
+            operator: document.getElementById('ar-operator').value,
+            value: parseFloat(document.getElementById('ar-value').value) || 0,
+            severity: document.getElementById('ar-severity').value,
+            cooldown_minutes: parseInt(document.getElementById('ar-cooldown').value) || 15,
+            escalate_after_minutes: parseInt(document.getElementById('ar-escalate-after').value) || 0,
+            escalate_to: 'critical',
+            description: document.getElementById('ar-description').value,
+        };
+        const hostId = document.getElementById('ar-host').value;
+        const groupId = document.getElementById('ar-group').value;
+        if (hostId) data.host_id = parseInt(hostId);
+        else if (groupId) data.group_id = parseInt(groupId);
+
+        await api.createAlertRule(data);
+        closeModal();
+        showSuccess('Alert rule created');
+        loadMonitoringRules();
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.toggleAlertRule = async function(ruleId, enabled) {
+    try {
+        await api.updateAlertRule(ruleId, { enabled });
+        showSuccess(enabled ? 'Rule enabled' : 'Rule disabled');
+        loadMonitoringRules();
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.confirmDeleteAlertRule = function(ruleId, name) {
+    showModal('Delete Rule', `
+        <p>Delete rule <strong>${escapeHtml(name)}</strong>?</p>
+        <div style="display:flex; gap:0.5rem; margin-top:1rem;">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn" style="background:var(--danger); color:white;" onclick="deleteAlertRuleConfirmed(${ruleId})">Delete</button>
+        </div>
+    `);
+};
+
+window.deleteAlertRuleConfirmed = async function(ruleId) {
+    try {
+        await api.deleteAlertRule(ruleId);
+        closeModal();
+        showSuccess('Rule deleted');
+        loadMonitoringRules();
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+// ── Alert Suppressions Management ───────────────────────────────────────────
+
+async function loadMonitoringSuppressions() {
+    const container = document.getElementById('monitoring-suppressions-list');
+    if (!container) return;
+    container.innerHTML = skeletonCards(2);
+    try {
+        const suppressions = await api.getAlertSuppressions();
+        if (!suppressions.length) {
+            container.innerHTML = emptyStateHTML('No suppressions', 'monitoring',
+                '<button class="btn btn-primary btn-sm" onclick="showCreateSuppressionModal()">Create Suppression</button>');
+            return;
+        }
+        const now = new Date();
+        container.innerHTML = suppressions.map(s => {
+            const ends = new Date(s.ends_at + 'Z');
+            const isActive = ends > now && new Date(s.starts_at + 'Z') <= now;
+            const statusColor = isActive ? 'success' : 'text-muted';
+            const statusLabel = isActive ? 'Active' : (ends <= now ? 'Expired' : 'Scheduled');
+            const scope = s.hostname ? `Host: ${escapeHtml(s.hostname)}` : (s.group_name ? `Group: ${escapeHtml(s.group_name)}` : 'Global');
+            const metricLabel = s.metric ? `Metric: ${escapeHtml(s.metric)}` : 'All metrics';
+            const startsStr = s.starts_at ? new Date(s.starts_at + 'Z').toLocaleString() : '-';
+            const endsStr = s.ends_at ? new Date(s.ends_at + 'Z').toLocaleString() : '-';
+
+            return `<div class="card" style="margin-bottom:0.5rem; padding:0.75rem 1rem; opacity:${isActive ? 1 : 0.5};">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.4rem;">
+                    <div>
+                        <span style="color:var(--${statusColor}); font-size:0.8em; font-weight:600; text-transform:uppercase;">${statusLabel}</span>
+                        <strong style="margin-left:0.4rem;">${escapeHtml(s.name || 'Unnamed')}</strong>
+                        <span style="color:var(--text-muted); font-size:0.85em; margin-left:0.5rem;">${scope} · ${metricLabel}</span>
+                    </div>
+                    <button class="btn btn-sm" style="color:var(--danger);" onclick="confirmDeleteSuppression(${s.id}, '${escapeHtml(s.name || '')}')">Delete</button>
+                </div>
+                <div style="margin-top:0.3rem; font-size:0.85em; color:var(--text-muted);">
+                    ${startsStr} — ${endsStr}${s.reason ? ` · Reason: ${escapeHtml(s.reason)}` : ''}${s.created_by ? ` · By ${escapeHtml(s.created_by)}` : ''}
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<div class="card" style="color:var(--danger);">Error: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+window.showCreateSuppressionModal = async function() {
+    let groups = [], hosts = [];
+    try {
+        const inv = await api.getInventoryGroups(true);
+        groups = inv || [];
+        hosts = groups.flatMap(g => (g.hosts || []).map(h => ({ ...h, group_name: g.name })));
+    } catch (e) { /* ignore */ }
+
+    const groupOpts = `<option value="">All Groups</option>` + groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const hostOpts = `<option value="">All Hosts</option>` + hosts.map(h => `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)})</option>`).join('');
+
+    // Default: 2 hours from now
+    const now = new Date();
+    const endsDefault = new Date(now.getTime() + 2 * 3600000);
+    const toLocal = d => d.toISOString().slice(0, 16);
+
+    showModal('Create Alert Suppression', `
+        <label class="form-label">Name</label>
+        <input type="text" class="form-input" id="sup-name" placeholder="e.g. Maintenance Window - Switch Upgrade" required>
+        <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
+            <div style="flex:1;">
+                <label class="form-label">Starts At</label>
+                <input type="datetime-local" class="form-input" id="sup-starts" value="${toLocal(now)}">
+            </div>
+            <div style="flex:1;">
+                <label class="form-label">Ends At</label>
+                <input type="datetime-local" class="form-input" id="sup-ends" value="${toLocal(endsDefault)}">
+            </div>
+        </div>
+        <label class="form-label" style="margin-top:0.75rem;">Scope: Group</label>
+        <select id="sup-group" class="form-select">${groupOpts}</select>
+        <label class="form-label" style="margin-top:0.5rem;">Scope: Host (overrides group)</label>
+        <select id="sup-host" class="form-select">${hostOpts}</select>
+        <label class="form-label" style="margin-top:0.75rem;">Metric (blank = all metrics)</label>
+        <select id="sup-metric" class="form-select">
+            <option value="">All Metrics</option>
+            <option value="cpu">CPU</option>
+            <option value="memory">Memory</option>
+            <option value="interface_down">Interfaces Down</option>
+            <option value="vpn_down">VPN Down</option>
+            <option value="route_churn">Route Churn</option>
+        </select>
+        <label class="form-label" style="margin-top:0.75rem;">Reason</label>
+        <textarea class="form-input" id="sup-reason" rows="2" placeholder="Optional reason..."></textarea>
+        <button class="btn btn-primary" style="margin-top:1rem; width:100%;" onclick="submitCreateSuppression()">Create Suppression</button>
+    `);
+};
+
+window.submitCreateSuppression = async function() {
+    try {
+        const startsVal = document.getElementById('sup-starts').value;
+        const endsVal = document.getElementById('sup-ends').value;
+        if (!endsVal) { showError('End time is required'); return; }
+
+        const data = {
+            name: document.getElementById('sup-name').value,
+            starts_at: startsVal ? new Date(startsVal).toISOString().replace('T', ' ').slice(0, 19) : '',
+            ends_at: new Date(endsVal).toISOString().replace('T', ' ').slice(0, 19),
+            metric: document.getElementById('sup-metric').value,
+            reason: document.getElementById('sup-reason').value,
+        };
+        const hostId = document.getElementById('sup-host').value;
+        const groupId = document.getElementById('sup-group').value;
+        if (hostId) data.host_id = parseInt(hostId);
+        else if (groupId) data.group_id = parseInt(groupId);
+
+        await api.createAlertSuppression(data);
+        closeModal();
+        showSuccess('Suppression created');
+        loadMonitoringSuppressions();
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+window.confirmDeleteSuppression = function(supId, name) {
+    showModal('Delete Suppression', `
+        <p>Delete suppression <strong>${escapeHtml(name)}</strong>?</p>
+        <div style="display:flex; gap:0.5rem; margin-top:1rem;">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn" style="background:var(--danger); color:white;" onclick="deleteSuppressionConfirmed(${supId})">Delete</button>
+        </div>
+    `);
+};
+
+window.deleteSuppressionConfirmed = async function(supId) {
+    try {
+        await api.deleteAlertSuppression(supId);
+        closeModal();
+        showSuccess('Suppression deleted');
+        loadMonitoringSuppressions();
+    } catch (e) {
+        showError(e.message);
+    }
+};
+
+// Wire up monitoring search
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('monitoring-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            listViewState.monitoring.query = searchInput.value;
+            const tab = listViewState.monitoring.tab;
+            if (tab === 'devices') renderMonitoringDevices(listViewState.monitoring.polls);
+            else if (tab === 'alerts') renderMonitoringAlerts(listViewState.monitoring.alerts);
+        });
+    }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Deployments / Rollback Orchestration
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadDeployments(options = {}) {
+    const { preserveContent = false } = options;
+    const container = document.getElementById('deployments-list');
+    if (!preserveContent && container) container.innerHTML = skeletonCards(2);
+    try {
+        const [summary, deployments] = await Promise.all([
+            api.getDeploymentSummary(),
+            api.getDeployments({ limit: 200 }),
+        ]);
+        renderDeploymentSummary(summary);
+        listViewState.deployments.items = deployments || [];
+        renderDeployments(deployments || []);
+    } catch (error) {
+        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading deployments: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadDeployments = loadDeployments;
+
+function renderDeploymentSummary(summary) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('deploy-stat-total', summary.total ?? '-');
+    set('deploy-stat-completed', summary.completed ?? '-');
+    set('deploy-stat-active', summary.active ?? '-');
+    set('deploy-stat-rolled-back', summary.rolled_back ?? '-');
+    set('deploy-stat-failed', summary.failed ?? '-');
+}
+
+function renderDeployments(deployments) {
+    const container = document.getElementById('deployments-list');
+    if (!container) return;
+    const query = (listViewState.deployments.query || '').toLowerCase();
+    const statusFilter = listViewState.deployments.statusFilter || '';
+    const filtered = deployments.filter(d => {
+        if (statusFilter && d.status !== statusFilter) return false;
+        if (query && !(d.name || '').toLowerCase().includes(query)
+            && !(d.group_name || '').toLowerCase().includes(query)
+            && !(d.description || '').toLowerCase().includes(query)) return false;
+        return true;
+    });
+    if (!filtered.length) {
+        container.innerHTML = emptyStateHTML('No deployments', 'deployments',
+            '<button class="btn btn-primary btn-sm" onclick="showNewDeploymentModal()">Create Deployment</button>');
+        return;
+    }
+    container.innerHTML = filtered.map(d => {
+        const statusColors = {
+            planning: 'text-muted', 'pre-check': 'warning', executing: 'warning',
+            'post-check': 'warning', completed: 'success', failed: 'danger',
+            'rolled-back': 'warning', 'rolling-back': 'warning',
+        };
+        const statusColor = statusColors[d.status] || 'text-muted';
+        const created = d.created_at ? new Date(d.created_at + 'Z').toLocaleString() : '-';
+        const finished = d.finished_at ? new Date(d.finished_at + 'Z').toLocaleString() : '';
+
+        let actions = `<button class="btn btn-sm btn-secondary" onclick="showDeploymentDetail(${d.id})">Details</button>`;
+        if (d.status === 'planning' || d.status === 'failed') {
+            actions += ` <button class="btn btn-sm btn-primary" onclick="executeDeploymentAction(${d.id})">Execute</button>`;
+        }
+        if (d.status === 'completed' || d.status === 'failed') {
+            actions += ` <button class="btn btn-sm" style="color:var(--warning);border:1px solid var(--warning);" onclick="rollbackDeploymentAction(${d.id})">Rollback</button>`;
+        }
+        if (['planning', 'completed', 'failed', 'rolled-back'].includes(d.status)) {
+            actions += ` <button class="btn btn-sm" style="color:var(--danger)" onclick="confirmDeleteDeployment(${d.id})">Delete</button>`;
+        }
+
+        const rollbackBadge = d.rollback_status ? ` <span style="font-size:0.75em; color:var(--${d.rollback_status === 'completed' ? 'success' : d.rollback_status === 'failed' ? 'danger' : 'warning'});">(rollback: ${escapeHtml(d.rollback_status)})</span>` : '';
+
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <span class="badge" style="background:var(--${statusColor}); color:white; font-size:0.8em; padding:3px 10px; border-radius:4px; text-transform:uppercase; font-weight:600;">${escapeHtml(d.status)}</span>${rollbackBadge}
+                    <strong style="margin-left:0.75rem;">${escapeHtml(d.name)}</strong>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">Group: ${escapeHtml(d.group_name || 'N/A')}</span>
+                </div>
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                    ${actions}
+                </div>
+            </div>
+            <div style="margin-top:0.5rem; font-size:0.85em; color:var(--text-muted);">
+                ${d.description ? escapeHtml(d.description) + ' · ' : ''}Type: ${escapeHtml(d.change_type || '?')} · ${created}${d.created_by ? ` by ${escapeHtml(d.created_by)}` : ''}${finished ? ` · Finished: ${finished}` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function filterDeployments() {
+    listViewState.deployments.statusFilter = document.getElementById('deploy-filter-status')?.value || '';
+    renderDeployments(listViewState.deployments.items);
+}
+window.filterDeployments = filterDeployments;
+
+function refreshDeployments() { loadDeployments(); }
+window.refreshDeployments = refreshDeployments;
+
+async function showNewDeploymentModal() {
+    let groups = [], creds = [], templates = [], riskAnalyses = [];
+    try {
+        [groups, creds, templates, riskAnalyses] = await Promise.all([
+            api.getInventoryGroups(), api.getCredentials(), api.getTemplates(),
+            api.getRiskAnalyses({ limit: 50 }),
+        ]);
+    } catch (e) { /* ignore */ }
+    const groupOpts = (groups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const credOpts = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    const tplOpts = '<option value="">— None (manual commands) —</option>' +
+        (templates || []).map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+    const raOpts = '<option value="">— None —</option>' +
+        (riskAnalyses || []).filter(r => r.approved).map(r => `<option value="${r.id}">#${r.id} ${escapeHtml(r.risk_level)} — ${escapeHtml(r.hostname || r.group_name || '')}</option>`).join('');
+
+    showModal('New Deployment', `
+        <div style="display:flex; flex-direction:column; gap:0.75rem;">
+            <div><label class="form-label">Name</label>
+                <input id="deploy-name" class="form-input" placeholder="e.g. ACL Update Production" /></div>
+            <div><label class="form-label">Description</label>
+                <input id="deploy-desc" class="form-input" placeholder="Optional description" /></div>
+            <div><label class="form-label">Inventory Group</label>
+                <select id="deploy-group" class="form-select">${groupOpts}</select></div>
+            <div><label class="form-label">Credential</label>
+                <select id="deploy-cred" class="form-select">${credOpts}</select></div>
+            <div><label class="form-label">Change Type</label>
+                <select id="deploy-change-type" class="form-select">
+                    <option value="template">Template</option><option value="manual">Manual</option>
+                    <option value="policy">Policy</option><option value="route">Route</option>
+                    <option value="nat">NAT</option>
+                </select></div>
+            <div><label class="form-label">Template (optional)</label>
+                <select id="deploy-template" class="form-select">${tplOpts}</select></div>
+            <div><label class="form-label">Linked Risk Analysis (optional)</label>
+                <select id="deploy-risk-analysis" class="form-select">${raOpts}</select></div>
+            <div><label class="form-label">Proposed Commands (one per line, or leave empty if using template)</label>
+                <textarea id="deploy-commands" class="form-input" rows="5" style="font-family:var(--font-mono); font-size:0.85rem;" placeholder="interface GigabitEthernet0/1\n no shutdown"></textarea></div>
+            <button class="btn btn-primary" onclick="submitNewDeployment()">Create Deployment</button>
+        </div>
+    `);
+}
+window.showNewDeploymentModal = showNewDeploymentModal;
+
+async function submitNewDeployment() {
+    const name = document.getElementById('deploy-name')?.value?.trim();
+    if (!name) { showError('Deployment name is required'); return; }
+    const data = {
+        name,
+        description: document.getElementById('deploy-desc')?.value?.trim() || '',
+        group_id: parseInt(document.getElementById('deploy-group')?.value),
+        credential_id: parseInt(document.getElementById('deploy-cred')?.value),
+        change_type: document.getElementById('deploy-change-type')?.value || 'template',
+        proposed_commands: (document.getElementById('deploy-commands')?.value || '').split('\n').filter(l => l.trim()),
+        template_id: parseInt(document.getElementById('deploy-template')?.value) || null,
+        risk_analysis_id: parseInt(document.getElementById('deploy-risk-analysis')?.value) || null,
+    };
+    try {
+        const result = await api.createDeployment(data);
+        closeModal();
+        showSuccess(`Deployment #${result.id} created`);
+        loadDeployments();
+    } catch (e) { showError(e.message); }
+}
+window.submitNewDeployment = submitNewDeployment;
+
+async function executeDeploymentAction(deploymentId) {
+    if (!confirm('Execute this deployment? Pre-deployment snapshots will be captured before pushing config changes.')) return;
+    try {
+        const result = await api.executeDeployment(deploymentId);
+        showDeploymentJobStream(result.job_id, deploymentId, 'Executing Deployment');
+    } catch (e) { showError(e.message); }
+}
+window.executeDeploymentAction = executeDeploymentAction;
+
+async function rollbackDeploymentAction(deploymentId) {
+    if (!confirm('Roll back this deployment? Pre-deployment config snapshots will be restored to all hosts.')) return;
+    try {
+        const result = await api.rollbackDeployment(deploymentId);
+        showDeploymentJobStream(result.job_id, deploymentId, 'Rolling Back Deployment');
+    } catch (e) { showError(e.message); }
+}
+window.rollbackDeploymentAction = rollbackDeploymentAction;
+
+function showDeploymentJobStream(jobId, deploymentId, title) {
+    showModal(title, `
+        <div style="display:flex; flex-direction:column; gap:0.75rem;">
+            <div style="font-size:0.85em; color:var(--text-muted);">Deployment #${deploymentId} · Job: ${escapeHtml(jobId)}</div>
+            <pre id="deploy-job-output" style="background:var(--bg-secondary); padding:1rem; border-radius:8px; max-height:400px; overflow-y:auto; font-family:var(--font-mono); font-size:0.82rem; white-space:pre-wrap; line-height:1.5;"></pre>
+            <div id="deploy-job-status" style="text-align:center; color:var(--text-muted);">Connecting...</div>
+        </div>
+    `);
+
+    const output = document.getElementById('deploy-job-output');
+    const statusEl = document.getElementById('deploy-job-status');
+
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${location.host}/ws/deployment/${jobId}`);
+
+    ws.onopen = () => { if (statusEl) statusEl.textContent = 'Connected — streaming output...'; };
+    ws.onmessage = (event) => {
+        try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'line' && output) {
+                output.textContent += msg.data;
+                output.scrollTop = output.scrollHeight;
+            } else if (msg.type === 'job_complete') {
+                if (statusEl) {
+                    const color = msg.status === 'completed' ? 'var(--success)' : 'var(--danger)';
+                    statusEl.innerHTML = `<span style="color:${color}; font-weight:600;">${msg.status === 'completed' ? 'Completed' : 'Failed'}</span>`;
+                }
+                ws.close();
+                loadDeployments();
+            }
+        } catch (e) { /* ignore */ }
+    };
+    ws.onerror = () => { if (statusEl) statusEl.textContent = 'WebSocket error'; };
+    ws.onclose = () => { if (statusEl && statusEl.textContent === 'Connected — streaming output...') statusEl.textContent = 'Disconnected'; };
+}
+
+async function showDeploymentDetail(deploymentId) {
+    let dep;
+    try { dep = await api.getDeployment(deploymentId); } catch (e) { showError(e.message); return; }
+
+    const statusColors = {
+        planning: 'text-muted', 'pre-check': 'warning', executing: 'warning',
+        'post-check': 'warning', completed: 'success', failed: 'danger',
+        'rolled-back': 'warning', 'rolling-back': 'warning',
+    };
+    const statusColor = statusColors[dep.status] || 'text-muted';
+    const created = dep.created_at ? new Date(dep.created_at + 'Z').toLocaleString() : '-';
+    const started = dep.started_at ? new Date(dep.started_at + 'Z').toLocaleString() : '-';
+    const finished = dep.finished_at ? new Date(dep.finished_at + 'Z').toLocaleString() : '-';
+
+    const checkpoints = dep.checkpoints || [];
+    const snapshots = dep.snapshots || [];
+
+    // Group checkpoints by phase
+    const preChecks = checkpoints.filter(c => c.phase === 'pre');
+    const postChecks = checkpoints.filter(c => c.phase === 'post');
+    const rollbackChecks = checkpoints.filter(c => c.phase === 'rollback');
+
+    function renderCheckpointTable(checks, label) {
+        if (!checks.length) return `<div style="color:var(--text-muted); font-size:0.85em;">No ${label} checkpoints.</div>`;
+        return `<table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+            <thead><tr style="text-align:left; border-bottom:1px solid var(--border);">
+                <th style="padding:4px 8px;">Host</th><th style="padding:4px 8px;">Check</th>
+                <th style="padding:4px 8px;">Status</th><th style="padding:4px 8px;">Time</th>
+            </tr></thead>
+            <tbody>${checks.map(c => {
+                const cpColor = c.status === 'passed' ? 'success' : c.status === 'failed' ? 'danger' : 'text-muted';
+                const cpTime = c.executed_at ? new Date(c.executed_at + 'Z').toLocaleTimeString() : '-';
+                return `<tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 8px;">${escapeHtml(c.hostname || c.ip_address || '-')}</td>
+                    <td style="padding:4px 8px;">${escapeHtml(c.check_type)}</td>
+                    <td style="padding:4px 8px;"><span style="color:var(--${cpColor}); font-weight:600; text-transform:uppercase;">${escapeHtml(c.status)}</span></td>
+                    <td style="padding:4px 8px;">${cpTime}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table>`;
+    }
+
+    const preSnaps = snapshots.filter(s => s.phase === 'pre');
+    const postSnaps = snapshots.filter(s => s.phase === 'post');
+
+    let actions = '';
+    if (dep.status === 'planning' || dep.status === 'failed') {
+        actions += `<button class="btn btn-primary" onclick="closeModal(); executeDeploymentAction(${dep.id})">Execute</button> `;
+    }
+    if (dep.status === 'completed' || dep.status === 'failed') {
+        actions += `<button class="btn btn-secondary" style="border:1px solid var(--warning); color:var(--warning);" onclick="closeModal(); rollbackDeploymentAction(${dep.id})">Rollback</button> `;
+    }
+
+    showModal(`Deployment #${dep.id} — ${escapeHtml(dep.name)}`, `
+        <div style="display:flex; flex-direction:column; gap:1rem;">
+            <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+                <div><strong>Status:</strong> <span style="color:var(--${statusColor}); font-weight:600; text-transform:uppercase;">${escapeHtml(dep.status)}</span></div>
+                <div><strong>Group:</strong> ${escapeHtml(dep.group_name || 'N/A')}</div>
+                <div><strong>Type:</strong> ${escapeHtml(dep.change_type)}</div>
+                ${dep.rollback_status ? `<div><strong>Rollback:</strong> ${escapeHtml(dep.rollback_status)}</div>` : ''}
+            </div>
+            <div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.85em; color:var(--text-muted);">
+                <span>Created: ${created}</span>
+                <span>Started: ${started}</span>
+                <span>Finished: ${finished}</span>
+                ${dep.created_by ? `<span>By: ${escapeHtml(dep.created_by)}</span>` : ''}
+            </div>
+            ${dep.description ? `<div style="font-size:0.9em;">${escapeHtml(dep.description)}</div>` : ''}
+
+            <details>
+                <summary style="cursor:pointer; font-weight:600;">Proposed Commands (${(dep.proposed_commands || '').split('\\n').filter(l => l.trim()).length})</summary>
+                <pre style="background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.82rem; max-height:200px; overflow-y:auto; margin-top:0.5rem;">${escapeHtml(dep.proposed_commands || '')}</pre>
+            </details>
+
+            <div>
+                <h4 style="margin:0 0 0.5rem;">Pre-Deployment Checkpoints</h4>
+                ${renderCheckpointTable(preChecks, 'pre-deployment')}
+            </div>
+            <div>
+                <h4 style="margin:0 0 0.5rem;">Post-Deployment Checkpoints</h4>
+                ${renderCheckpointTable(postChecks, 'post-deployment')}
+            </div>
+            ${rollbackChecks.length > 0 ? `<div>
+                <h4 style="margin:0 0 0.5rem;">Rollback Checkpoints</h4>
+                ${renderCheckpointTable(rollbackChecks, 'rollback')}
+            </div>` : ''}
+
+            <div style="display:flex; gap:0.75rem; font-size:0.85em; color:var(--text-muted);">
+                <span>Pre-snapshots: ${preSnaps.length}</span>
+                <span>Post-snapshots: ${postSnaps.length}</span>
+            </div>
+
+            ${actions ? `<div style="display:flex; gap:0.5rem; margin-top:0.5rem;">${actions}</div>` : ''}
+        </div>
+    `);
+}
+window.showDeploymentDetail = showDeploymentDetail;
+
+async function confirmDeleteDeployment(deploymentId) {
+    if (!confirm('Delete this deployment and all its checkpoints/snapshots?')) return;
+    try {
+        await api.deleteDeployment(deploymentId);
+        showSuccess('Deployment deleted');
+        loadDeployments();
+    } catch (e) { showError(e.message); }
+}
+window.confirmDeleteDeployment = confirmDeleteDeployment;
+
+// Search handler for deployments
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('deploy-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', debounce(() => {
+            listViewState.deployments.query = searchInput.value;
+            renderDeployments(listViewState.deployments.items);
         }, 200));
     }
 });
