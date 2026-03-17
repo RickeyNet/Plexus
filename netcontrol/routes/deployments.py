@@ -22,6 +22,7 @@ from netcontrol.routes.shared import (
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
+ws_router = APIRouter()  # WebSocket routes — registered without HTTP auth dependency
 LOGGER = configure_logging("plexus.deployments")
 
 # ── Late-binding auth dependencies (injected by app.py) ──────────────────────
@@ -577,7 +578,7 @@ async def get_deployment_job_status(job_id: str):
     }
 
 
-@router.websocket("/ws/deployment/{job_id}")
+@ws_router.websocket("/ws/deployment/{job_id}")
 async def ws_deployment(websocket: WebSocket, job_id: str):
     """WebSocket for streaming deployment/rollback job output."""
     await websocket.accept()

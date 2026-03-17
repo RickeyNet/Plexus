@@ -41,13 +41,13 @@ from netcontrol.routes.templates import router as templates_router
 from netcontrol.routes.credentials import router as credentials_router
 from netcontrol.routes.playbooks import router as playbooks_router
 from netcontrol.routes.jobs import (
-    router as jobs_router, init_jobs,
+    router as jobs_router, ws_router as jobs_ws_router, init_jobs,
     _MAX_CONCURRENT_JOBS as _jobs_MAX_CONCURRENT_JOBS,
     _job_semaphore as _jobs_job_semaphore,
     _process_job_queue,
 )
 from netcontrol.routes.config_drift import (
-    router as config_drift_router, init_config_drift,
+    router as config_drift_router, ws_router as config_drift_ws_router, init_config_drift,
     _config_drift_check_loop, _run_config_drift_check_once,
     _analyze_drift_for_host, _capture_jobs, _capture_job_sockets,
     ConfigDriftStatusUpdate,
@@ -129,7 +129,7 @@ from netcontrol.routes.risk_analysis import (
     _compute_risk_score, _run_risk_analysis_for_host,
 )
 from netcontrol.routes.deployments import (
-    router as deployments_router,
+    router as deployments_router, ws_router as deployments_ws_router,
     init_deployments,
     DeploymentCreate, DeploymentExecute, DeploymentRollback,
     _deployment_jobs, _deployment_job_sockets,
@@ -856,6 +856,7 @@ app.include_router(
     jobs_router,
     dependencies=[Depends(require_auth), Depends(require_feature("jobs"))],
 )
+app.include_router(jobs_ws_router)  # WebSocket — handles its own auth
 # Inventory + admin
 app.include_router(
     inventory_router,
@@ -879,6 +880,7 @@ app.include_router(
     config_drift_router,
     dependencies=[Depends(require_auth), Depends(require_feature("config-drift"))],
 )
+app.include_router(config_drift_ws_router)  # WebSocket — handles its own auth
 # Config Backups + admin
 app.include_router(
     config_backups_router,
@@ -903,6 +905,7 @@ app.include_router(
     deployments_router,
     dependencies=[Depends(require_auth), Depends(require_feature("deployments"))],
 )
+app.include_router(deployments_ws_router)  # WebSocket — handles its own auth
 # Monitoring + SLA + admin
 app.include_router(
     monitoring_router,

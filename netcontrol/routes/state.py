@@ -162,6 +162,7 @@ DEFAULT_LOGIN_RULES = {
 
 AUTH_CONFIG_DEFAULTS = {
     "provider": "local",
+    "default_credential_id": None,
     "job_retention_days": 30,
     "converter_session_retention_days": 30,
     "converter_backup_retention_days": 30,
@@ -250,6 +251,9 @@ def _sanitize_auth_config(data: dict | None) -> dict:
             cfg["converter_backup_retention_days"] = int(
                 data.get("converter_backup_retention_days", cfg["converter_backup_retention_days"])
             )
+        if "default_credential_id" in data:
+            val = data.get("default_credential_id")
+            cfg["default_credential_id"] = int(val) if val is not None else None
         radius = data.get("radius")
         if isinstance(radius, dict):
             cfg["radius"].update({

@@ -95,7 +95,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 _walk(mem_used_oid), _walk(mem_free_oid),
                 _walk(if_oper_status_oid), _walk(if_admin_status_oid),
                 _walk(if_name_oid), _walk(if_descr_oid), _walk(if_high_speed_oid),
-                _walk(hc_in_oid), _walk(hc_out_oid),
+                _walk(if_hc_in_oid), _walk(if_hc_out_oid),
                 _walk(sysuptime_oid),
             )
 
@@ -480,15 +480,17 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     # Pre-load user-defined alert rules for this cycle
     alert_rules_cache = await db.get_alert_rules(enabled_only=True)
 
+    # Resolve app-wide default credential for SSH polling
+    default_cred_id = state.AUTH_CONFIG.get("default_credential_id")
+    default_cred = await db.get_credential_raw(default_cred_id) if default_cred_id else None
+
     for group in groups:
         snmp_cfg = _resolve_snmp_discovery_config(group["id"])
         hosts = await db.get_hosts_for_group(group["id"])
         if not hosts:
             continue
 
-        # Get credential for SSH polling
-        creds = await db.get_credentials_for_group(group["id"])
-        cred = creds[0] if creds else None
+        cred = default_cred
 
         async def _poll_one(h, c, s):
             async with sem:
