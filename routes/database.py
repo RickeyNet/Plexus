@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS playbooks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT    NOT NULL UNIQUE,
     filename    TEXT    NOT NULL,
+    type        TEXT    NOT NULL DEFAULT 'python',
     description TEXT    DEFAULT '',
     tags        TEXT    DEFAULT '[]',
     content     TEXT    DEFAULT '',
@@ -694,6 +695,7 @@ async def _init_postgres(db) -> None:
     # Idempotent startup migrations for already-created databases.
     await db.execute("ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS content TEXT DEFAULT ''")
     await db.execute("ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS updated_at TEXT")
+    await db.execute("ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'python'")
     await db.execute("UPDATE playbooks SET updated_at = NOW()::text WHERE updated_at IS NULL")
 
     await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")
@@ -752,6 +754,12 @@ async def init_db():
                 await db.execute("UPDATE playbooks SET updated_at = datetime('now') WHERE updated_at IS NULL")
                 await db.commit()
                 _LOGGER.info("migration: added 'updated_at' column successfully")
+
+            if 'type' not in columns:
+                _LOGGER.info("migration: adding 'type' column to playbooks table")
+                await db.execute("ALTER TABLE playbooks ADD COLUMN type TEXT NOT NULL DEFAULT 'python'")
+                await db.commit()
+                _LOGGER.info("migration: added 'type' column successfully")
         except Exception as e:
             _LOGGER.error("migration: playbooks migration error: %s", e, exc_info=True)
 
@@ -843,6 +851,26 @@ async def init_db():
                 _LOGGER.info("migration: added 'must_change_password' column successfully")
         except Exception as e:
             _LOGGER.error("migration: must_change_password migration error: %s", e, exc_info=True)
+
+        # Migration: Add missing columns to jobs table if they don't exist
+        try:
+            cursor = await db.execute("PRAGMA table_info(jobs)")
+            columns = [row[1] for row in await cursor.fetchall()]
+            for col_name, col_def in [
+                ("queued_at", "TEXT"),
+                ("cancelled_at", "TEXT"),
+                ("cancelled_by", "TEXT DEFAULT ''"),
+                ("priority", "INTEGER NOT NULL DEFAULT 2"),
+                ("depends_on", "TEXT NOT NULL DEFAULT '[]'"),
+                ("launched_by", "TEXT DEFAULT 'admin'"),
+            ]:
+                if col_name not in columns:
+                    _LOGGER.info("migration: adding '%s' column to jobs table", col_name)
+                    await db.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
+                    await db.commit()
+                    _LOGGER.info("migration: added '%s' column to jobs table successfully", col_name)
+        except Exception as e:
+            _LOGGER.error("migration: jobs table migration error: %s", e, exc_info=True)
     finally:
         await db.close()
 
@@ -1436,12 +1464,13 @@ async def get_playbook(playbook_id: int) -> dict | None:
 
 
 async def create_playbook(name: str, filename: str, description: str = "",
-                          tags: list[str] | None = None, content: str = "") -> int:
+                          tags: list[str] | None = None, content: str = "",
+                          type: str = "python") -> int:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO playbooks (name, filename, description, tags, content) VALUES (?,?,?,?,?)",
-            (name, filename, description, json.dumps(tags or []), content),
+            "INSERT INTO playbooks (name, filename, description, tags, content, type) VALUES (?,?,?,?,?,?)",
+            (name, filename, description, json.dumps(tags or []), content, type),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1475,13 +1504,13 @@ async def sync_playbook_filename(name: str, filename: str):
 
 async def update_playbook(playbook_id: int, name: str = None, filename: str = None,
                           description: str = None, tags: list[str] | None = None,
-                          content: str = None):
+                          content: str = None, type: str = None):
     """Update playbook fields. None values are not updated."""
     db = await get_db()
     try:
         updates = []
         params = []
-        
+
         if name is not None:
             updates.append("name = ?")
             params.append(name)
@@ -1497,6 +1526,9 @@ async def update_playbook(playbook_id: int, name: str = None, filename: str = No
         if content is not None:
             updates.append("content = ?")
             params.append(content)
+        if type is not None:
+            updates.append("type = ?")
+            params.append(type)
         
         if updates:
             updates.append("updated_at = NOW()::text" if DB_ENGINE == "postgres" else "updated_at = datetime('now')")

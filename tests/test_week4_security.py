@@ -13,6 +13,7 @@ from typing import cast
 from unittest.mock import patch
 
 import netcontrol.app as app_module
+import netcontrol.routes.playbooks as playbooks_module
 import pytest
 from fastapi import Request
 
@@ -233,6 +234,7 @@ class TestSanitizePlaybookFilename:
 def test_write_playbook_file_prevents_escape(tmp_path, monkeypatch):
     """write_playbook_file must reject filenames that would escape the playbooks dir."""
     monkeypatch.setattr(app_module, "project_root", str(tmp_path))
+    monkeypatch.setattr(playbooks_module, "project_root", str(tmp_path))
     playbooks_dir = tmp_path / "templates" / "playbooks"
     playbooks_dir.mkdir(parents=True)
 
@@ -246,6 +248,7 @@ def test_write_playbook_file_prevents_escape(tmp_path, monkeypatch):
 def test_write_playbook_file_succeeds_for_valid_name(tmp_path, monkeypatch):
     """write_playbook_file should write to the correct location for valid filenames."""
     monkeypatch.setattr(app_module, "project_root", str(tmp_path))
+    monkeypatch.setattr(playbooks_module, "project_root", str(tmp_path))
     playbooks_dir = tmp_path / "templates" / "playbooks"
     playbooks_dir.mkdir(parents=True)
 

@@ -249,10 +249,10 @@ export async function getPlaybook(playbookId) {
     return apiRequest(`/playbooks/${playbookId}`);
 }
 
-export async function createPlaybook(name, filename, description = '', tags = [], content = '') {
+export async function createPlaybook(name, filename, description = '', tags = [], content = '', type = 'python') {
     return apiRequest('/playbooks', {
         method: 'POST',
-        body: { name, filename, description, tags, content },
+        body: { name, filename, description, tags, content, type },
     });
 }
 
