@@ -20,6 +20,7 @@ from netcontrol.telemetry import configure_logging, increment_metric, redact_val
 LOGGER = configure_logging("plexus.config_drift")
 
 router = APIRouter()
+ws_router = APIRouter()  # WebSocket routes — registered without HTTP auth dependency
 
 # ── Late-binding auth dependencies ────────────────────────────────────────────
 
@@ -683,7 +684,7 @@ async def get_capture_job(job_id: str):
     }
 
 
-@router.websocket("/ws/config-capture/{job_id}")
+@ws_router.websocket("/ws/config-capture/{job_id}")
 async def websocket_config_capture(websocket: WebSocket, job_id: str):
     """Stream config capture job output in real-time."""
     token = websocket.cookies.get("session")
@@ -839,7 +840,7 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
     return {"job_id": job_id}
 
 
-@router.websocket("/ws/config-revert/{job_id}")
+@ws_router.websocket("/ws/config-revert/{job_id}")
 async def ws_config_revert(websocket: WebSocket, job_id: str):
     """WebSocket for streaming revert job output."""
     await websocket.accept()

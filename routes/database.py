@@ -196,6 +196,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at     TEXT,
     cancelled_at    TEXT,
     cancelled_by    TEXT    DEFAULT '',
+    host_ids        TEXT    DEFAULT NULL,
     hosts_ok        INTEGER DEFAULT 0,
     hosts_failed    INTEGER DEFAULT 0,
     hosts_skipped   INTEGER DEFAULT 0,
@@ -705,6 +706,7 @@ async def _init_postgres(db) -> None:
     )
 
     await db.execute("ALTER TABLE credentials ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id)")
+    await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS host_ids TEXT DEFAULT NULL")
 
     cursor = await db.execute("SELECT COUNT(*) FROM credentials WHERE owner_id IS NULL")
     orphan_count_row = await cursor.fetchone()
@@ -863,6 +865,7 @@ async def init_db():
                 ("priority", "INTEGER NOT NULL DEFAULT 2"),
                 ("depends_on", "TEXT NOT NULL DEFAULT '[]'"),
                 ("launched_by", "TEXT DEFAULT 'admin'"),
+                ("host_ids", "TEXT DEFAULT NULL"),
             ]:
                 if col_name not in columns:
                     _LOGGER.info("migration: adding '%s' column to jobs table", col_name)
@@ -1629,6 +1632,22 @@ async def get_all_credentials(owner_id: int | None = None) -> list[dict]:
         await db.close()
 
 
+async def get_credentials_for_group(group_id: int) -> list[dict]:
+    """Return raw credentials available for a group.
+
+    There is no group-credential mapping table yet, so this returns all
+    credentials.  The caller picks the first match.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM credentials ORDER BY id"
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def get_credential_raw(cred_id: int) -> dict | None:
     """Return full credential including encrypted password/secret."""
     db = await get_db()
@@ -1739,18 +1758,21 @@ async def create_job(playbook_id: int, inventory_group_id: int,
                      dry_run: bool = True,
                      launched_by: str = "admin",
                      priority: int = 2,
-                     depends_on: list[int] | None = None) -> int:
+                     depends_on: list[int] | None = None,
+                     host_ids: list[int] | None = None) -> int:
     db = await get_db()
     try:
         deps_json = json.dumps(depends_on or [])
+        host_ids_json = json.dumps(host_ids) if host_ids else None
         now = datetime.now(UTC).isoformat()
         cursor = await db.execute(
             """INSERT INTO jobs
                (playbook_id, inventory_group_id, credential_id, template_id,
-                dry_run, status, priority, depends_on, queued_at, launched_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                dry_run, status, priority, depends_on, queued_at, launched_by, host_ids)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (playbook_id, inventory_group_id, credential_id, template_id,
-             1 if dry_run else 0, "queued", priority, deps_json, now, launched_by),
+             1 if dry_run else 0, "queued", priority, deps_json, now, launched_by,
+             host_ids_json),
         )
         await db.commit()
         return cursor.lastrowid
