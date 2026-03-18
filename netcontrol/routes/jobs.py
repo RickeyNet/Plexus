@@ -139,7 +139,16 @@ async def _process_job_queue():
                 if line.strip() and not line.strip().startswith("#")
             ]
 
-    dry_run = bool(next_job.get("dry_run", 1))
+    # Resolve dry_run: the DB stores 1/0; treat NULL or missing as dry-run (safe default)
+    raw_dry_run = next_job.get("dry_run")
+    dry_run = raw_dry_run != 0  # Only False when explicitly stored as 0
+    LOGGER.info("job %s: dry_run raw=%r resolved=%s playbook=%s hosts=%d",
+                job_id, raw_dry_run, dry_run, playbook.get("name", "?"), len(hosts))
+
+    # Record the mode as the first job event so it's always visible in output
+    mode_label = "DRY-RUN (simulation only — no changes will be made)" if dry_run else "LIVE MODE — changes WILL be applied"
+    await db.add_job_event(job_id, "info", f"Job mode: {mode_label}")
+
     pb_type = playbook.get("type", "python")
 
     if pb_type == "ansible":
