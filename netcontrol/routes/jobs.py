@@ -3,6 +3,7 @@ jobs.py -- Job orchestration routes: launch, cancel, retry, priority, queue, Web
 """
 
 import asyncio
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 import routes.database as db
 from routes.crypto import decrypt
 from routes.runner import LogEvent, execute_playbook, get_playbook_class
+import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 
@@ -22,6 +24,7 @@ except ImportError:
 LOGGER = configure_logging("plexus.jobs")
 
 router = APIRouter()
+ws_router = APIRouter()  # WebSocket routes — registered without HTTP auth dependency
 
 # ── Late-binding auth dependencies ────────────────────────────────────────────
 
@@ -93,23 +96,38 @@ async def _process_job_queue():
         await db.add_job_event(job_id, "error", "Playbook not found")
         return
 
-    # Get hosts from inventory group
-    hosts = await db.get_hosts_for_group(next_job["inventory_group_id"])
+    # Get hosts — use stored host_ids (specific selection) or fall back to full group
+    stored_host_ids = None
+    if next_job.get("host_ids"):
+        try:
+            stored_host_ids = json.loads(next_job["host_ids"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if stored_host_ids:
+        hosts = await db.get_hosts_by_ids(stored_host_ids)
+    else:
+        hosts = await db.get_hosts_for_group(next_job["inventory_group_id"])
     if not hosts:
         await db.finish_job(job_id, status="failed")
-        await db.add_job_event(job_id, "error", "No hosts in inventory group")
+        await db.add_job_event(job_id, "error", "No hosts found for this job")
         return
 
-    # Get credentials
-    credentials = {"username": "netadmin", "password": "cisco123", "secret": "cisco123"}
-    if next_job.get("credential_id"):
-        cred = await db.get_credential_raw(next_job["credential_id"])
+    # Get credentials — use job-specific, then app-wide default
+    credentials = None
+    cred_id = next_job.get("credential_id") or state.AUTH_CONFIG.get("default_credential_id")
+    if cred_id:
+        cred = await db.get_credential_raw(cred_id)
         if cred:
             credentials = {
                 "username": cred["username"],
                 "password": decrypt(cred["password"]),
                 "secret": decrypt(cred["secret"]) if cred["secret"] else "",
             }
+    if not credentials:
+        await db.update_job_status(job_id, "failed")
+        await db.add_job_event(job_id, "error", "No credential configured — set a default credential in Settings or select one when launching the job")
+        return
 
     # Get template commands
     template_commands = []
@@ -353,20 +371,22 @@ async def launch_job(body: JobLaunch, request: Request):
     else:
         raise HTTPException(400, "Must specify either host_ids or inventory_group_id")
 
-    # Get credentials — verify the user owns the selected credential
-    credentials = {"username": "netadmin", "password": "cisco123", "secret": "cisco123"}
-    if body.credential_id:
-        cred = await db.get_credential_raw(body.credential_id)
+    # Get credentials — use job-specific, then app-wide default
+    credentials = None
+    cred_id = body.credential_id or state.AUTH_CONFIG.get("default_credential_id")
+    if cred_id:
+        cred = await db.get_credential_raw(cred_id)
         if not cred:
             raise HTTPException(404, "Credential not found")
-        if cred.get("owner_id") and session and cred["owner_id"] != session["user_id"]:
+        if body.credential_id and cred.get("owner_id") and session and cred["owner_id"] != session["user_id"]:
             raise HTTPException(403, "You can only use your own credentials")
-        if cred:
-            credentials = {
-                "username": cred["username"],
-                "password": decrypt(cred["password"]),
-                "secret": decrypt(cred["secret"]) if cred["secret"] else "",
-            }
+        credentials = {
+            "username": cred["username"],
+            "password": decrypt(cred["password"]),
+            "secret": decrypt(cred["secret"]) if cred["secret"] else "",
+        }
+    if not credentials:
+        raise HTTPException(400, "No credential configured — set a default credential in Settings or select one when launching the job")
 
     # Get template commands
     template_commands = []
@@ -392,11 +412,14 @@ async def launch_job(body: JobLaunch, request: Request):
 
     launched_by = session["user"] if session else "admin"
     priority = max(0, min(4, body.priority))
+    # Store specific host_ids so the queue processor targets only selected hosts
+    selected_host_ids = [h["id"] for h in hosts] if body.host_ids else None
     job_id = await db.create_job(
         body.playbook_id, inventory_group_id,
         body.credential_id, body.template_id,
         body.dry_run, launched_by=launched_by,
         priority=priority, depends_on=body.depends_on,
+        host_ids=selected_host_ids,
     )
 
     # Trigger queue processor to potentially start this job immediately
@@ -498,7 +521,7 @@ async def update_job_priority_endpoint(job_id: int, body: dict, request: Request
 
 # ── WebSocket for live job streaming ─────────────────────────────────────────
 
-@router.websocket("/ws/jobs/{job_id}")
+@ws_router.websocket("/ws/jobs/{job_id}")
 async def websocket_job(websocket: WebSocket, job_id: int):
     """
     Stream job events in real-time.

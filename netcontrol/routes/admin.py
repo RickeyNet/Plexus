@@ -112,6 +112,7 @@ class RadiusConfigRequest(BaseModel):
 
 class AuthConfigRequest(BaseModel):
     provider: str = "local"
+    default_credential_id: int | None = None
     job_retention_days: int = Field(default=30, ge=30)
     converter_session_retention_days: int = Field(default=30, ge=1)
     converter_backup_retention_days: int = Field(default=30, ge=1)

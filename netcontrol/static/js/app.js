@@ -3495,8 +3495,10 @@ function bindAuthConfigForm() {
                 showError('Job retention must be at least 30 days');
                 return;
             }
+            const credVal = document.getElementById('default-credential-id').value;
             const payload = {
                 provider: document.getElementById('auth-provider').value,
+                default_credential_id: credVal ? Number(credVal) : null,
                 job_retention_days: retentionDays,
                 radius: {
                     enabled: document.getElementById('radius-enabled').checked,
@@ -3527,7 +3529,7 @@ function bindAuthConfigForm() {
     }
 }
 
-function renderAuthConfig() {
+async function renderAuthConfig() {
     if (!adminState.authConfig) return;
     const cfg = adminState.authConfig;
     document.getElementById('auth-provider').value = cfg.provider || 'local';
@@ -3542,6 +3544,18 @@ function renderAuthConfig() {
     const radiusPanel = document.getElementById('radius-config-panel');
     if (radiusPanel) {
         radiusPanel.style.display = cfg.provider === 'radius' ? '' : 'none';
+    }
+    // Populate default credential dropdown
+    const credSelect = document.getElementById('default-credential-id');
+    if (credSelect) {
+        try {
+            const creds = await api.getCredentials();
+            credSelect.innerHTML = '<option value="">-- None --</option>' +
+                creds.map(c => `<option value="${c.id}">${c.name} (${c.username})</option>`).join('');
+            credSelect.value = cfg.default_credential_id || '';
+        } catch (_) {
+            credSelect.value = cfg.default_credential_id || '';
+        }
     }
 }
 
