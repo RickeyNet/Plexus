@@ -18,6 +18,10 @@ from typing import cast
 from unittest.mock import AsyncMock, patch
 
 import netcontrol.app as app_module
+import netcontrol.routes.snmp as snmp_module
+import netcontrol.routes.state as state_module
+import netcontrol.routes.topology as topology_module
+import netcontrol.routes.inventory as inventory_module
 import pytest
 import routes.database as db_module
 from fastapi import Request
@@ -175,6 +179,7 @@ async def test_discover_neighbors_cdp(monkeypatch):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
+    monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
         host_id=10, ip_address="10.0.0.1",
@@ -231,6 +236,7 @@ async def test_discover_neighbors_lldp(monkeypatch):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
+    monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
         host_id=20, ip_address="10.0.0.2",
@@ -254,6 +260,7 @@ async def test_discover_neighbors_empty_walks(monkeypatch):
         return {}
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
+    monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
         host_id=1, ip_address="10.0.0.1",
@@ -299,6 +306,7 @@ async def test_discover_neighbors_ospf(monkeypatch):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
+    monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
         host_id=1, ip_address="10.0.0.1",
@@ -348,6 +356,7 @@ async def test_discover_neighbors_bgp(monkeypatch):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
+    monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
         host_id=1, ip_address="10.0.0.1",
@@ -398,6 +407,7 @@ async def test_discover_neighbors_deduplicates_cdp_lldp(monkeypatch):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
+    monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
         host_id=1, ip_address="10.0.0.1",
@@ -613,8 +623,9 @@ async def test_get_topology_builds_graph(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_all_groups", AsyncMock(return_value=fake_groups))
     monkeypatch.setattr(app_module.db, "get_interface_stats_by_hosts", AsyncMock(return_value=[]))
     monkeypatch.setattr(app_module.db, "get_topology_changes_count", AsyncMock(return_value=0))
+    monkeypatch.setattr(topology_module, "db", app_module.db)
 
-    result = await app_module.get_topology(group_id=None)
+    result = await topology_module.get_topology(group_id=None)
 
     assert "nodes" in result
     assert "edges" in result
@@ -647,8 +658,9 @@ async def test_get_topology_empty(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_all_groups", AsyncMock(return_value=[]))
     monkeypatch.setattr(app_module.db, "get_interface_stats_by_hosts", AsyncMock(return_value=[]))
     monkeypatch.setattr(app_module.db, "get_topology_changes_count", AsyncMock(return_value=0))
+    monkeypatch.setattr(topology_module, "db", app_module.db)
 
-    result = await app_module.get_topology(group_id=None)
+    result = await topology_module.get_topology(group_id=None)
     assert result == {"nodes": [], "edges": [], "unacknowledged_changes": 0}
 
 
@@ -668,8 +680,9 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
 
     monkeypatch.setattr(app_module.db, "get_group", AsyncMock(return_value=fake_group))
     monkeypatch.setattr(app_module.db, "get_hosts_for_group", AsyncMock(return_value=fake_hosts))
-    monkeypatch.setattr(app_module, "_resolve_snmp_discovery_config",
-                        lambda gid: {"enabled": True, "version": "2c", "community": "public"})
+    resolve_snmp_fn = lambda gid: {"enabled": True, "version": "2c", "community": "public"}
+    monkeypatch.setattr(app_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
+    monkeypatch.setattr(state_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
 
     # Track call order to verify sequential DB writes
     call_log = []
@@ -695,12 +708,14 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
         return 0
 
     monkeypatch.setattr(app_module, "_discover_neighbors", fake_discover)
+    monkeypatch.setattr(topology_module, "_discover_neighbors", fake_discover)
     monkeypatch.setattr(app_module.db, "delete_topology_links_for_host", fake_delete)
     monkeypatch.setattr(app_module.db, "upsert_topology_link", fake_upsert)
     monkeypatch.setattr(app_module.db, "resolve_topology_target_host_ids", fake_resolve)
     monkeypatch.setattr(app_module.db, "get_topology_links_for_host", AsyncMock(return_value=[]))
+    monkeypatch.setattr(topology_module, "db", app_module.db)
 
-    result = await app_module.discover_topology_for_group(1)
+    result = await topology_module.discover_topology_for_group(1)
 
     assert result["hosts_scanned"] == 2
     assert result["links_discovered"] == 2
@@ -720,16 +735,19 @@ async def test_discover_topology_for_group_handles_snmp_errors(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_hosts_for_group", AsyncMock(return_value=[
         {"id": 100, "hostname": "sw1", "ip_address": "10.0.0.1", "device_type": "cisco_ios", "status": "online"},
     ]))
-    monkeypatch.setattr(app_module, "_resolve_snmp_discovery_config",
-                        lambda gid: {"enabled": True, "version": "2c", "community": "public"})
+    resolve_snmp_fn = lambda gid: {"enabled": True, "version": "2c", "community": "public"}
+    monkeypatch.setattr(app_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
+    monkeypatch.setattr(state_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
 
     async def failing_discover(*args, **kwargs):
         raise TimeoutError("SNMP timeout")
 
     monkeypatch.setattr(app_module, "_discover_neighbors", failing_discover)
+    monkeypatch.setattr(topology_module, "_discover_neighbors", failing_discover)
     monkeypatch.setattr(app_module.db, "resolve_topology_target_host_ids", AsyncMock(return_value=0))
+    monkeypatch.setattr(topology_module, "db", app_module.db)
 
-    result = await app_module.discover_topology_for_group(1)
+    result = await topology_module.discover_topology_for_group(1)
     assert result["errors"] == 1
     assert result["links_discovered"] == 0
 
@@ -749,8 +767,9 @@ async def test_get_host_topology(monkeypatch):
 
     monkeypatch.setattr(app_module.db, "get_host", AsyncMock(return_value=fake_host))
     monkeypatch.setattr(app_module.db, "get_topology_links_for_host", AsyncMock(return_value=fake_links))
+    monkeypatch.setattr(topology_module, "db", app_module.db)
 
-    result = await app_module.get_host_topology(100)
+    result = await topology_module.get_host_topology(100)
     assert result["host"]["hostname"] == "sw1"
     assert len(result["links"]) == 1
 
@@ -758,8 +777,9 @@ async def test_get_host_topology(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_host_topology_not_found(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_host", AsyncMock(return_value=None))
+    monkeypatch.setattr(topology_module, "db", app_module.db)
 
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
-        await app_module.get_host_topology(999)
+        await topology_module.get_host_topology(999)
     assert exc.value.status_code == 404

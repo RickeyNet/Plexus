@@ -11,3 +11,4 @@ urllib3==2.6.3
 netmiko==4.6.0
 pyrad==2.5.4
 pysnmp>=7.1,<8
+ansible-runner>=2.4,<3
