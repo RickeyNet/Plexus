@@ -1,6 +1,8 @@
 from typing import cast
 
 import netcontrol.app as app_module
+import netcontrol.routes.state as state_module
+import netcontrol.routes.inventory as inventory_module
 import pytest
 from fastapi import HTTPException, Request
 
@@ -79,8 +81,9 @@ async def test_sync_group_hosts_adds_updates_and_removes(monkeypatch):
     monkeypatch.setattr(app_module.db, "update_host", fake_update_host)
     monkeypatch.setattr(app_module.db, "remove_host", fake_remove_host)
     monkeypatch.setattr(app_module.db, "update_host_status", fake_update_host_status)
+    monkeypatch.setattr(inventory_module, "db", app_module.db)
 
-    result = await app_module._sync_group_hosts(77, discovered_hosts, remove_absent=True)
+    result = await inventory_module._sync_group_hosts(77, discovered_hosts, remove_absent=True)
 
     assert result["added"] == 1
     assert result["updated"] == 1
@@ -117,15 +120,13 @@ def test_sanitize_discovery_sync_config_filters_invalid_profiles():
 
 @pytest.mark.asyncio
 async def test_run_discovery_sync_once_runs_profiles(monkeypatch):
-    monkeypatch.setattr(
-        app_module,
-        "DISCOVERY_SYNC_CONFIG",
-        {
-            "enabled": True,
-            "interval_seconds": 900,
-            "profiles": [{"group_id": 9, "cidrs": ["10.9.0.0/24"], "remove_absent": False}],
-        },
-    )
+    sync_cfg = {
+        "enabled": True,
+        "interval_seconds": 900,
+        "profiles": [{"group_id": 9, "cidrs": ["10.9.0.0/24"], "remove_absent": False}],
+    }
+    monkeypatch.setattr(app_module, "DISCOVERY_SYNC_CONFIG", sync_cfg)
+    monkeypatch.setattr(state_module, "DISCOVERY_SYNC_CONFIG", sync_cfg)
 
     async def fake_get_group(group_id):
         assert group_id == 9
@@ -142,10 +143,13 @@ async def test_run_discovery_sync_once_runs_profiles(monkeypatch):
         return {"added": 1, "updated": 0, "removed": 0}
 
     monkeypatch.setattr(app_module.db, "get_group", fake_get_group)
+    monkeypatch.setattr(inventory_module, "db", app_module.db)
     monkeypatch.setattr(app_module, "_discover_hosts", fake_discover)
+    monkeypatch.setattr(inventory_module, "_discover_hosts", fake_discover)
     monkeypatch.setattr(app_module, "_sync_group_hosts", fake_sync_group_hosts)
+    monkeypatch.setattr(inventory_module, "_sync_group_hosts", fake_sync_group_hosts)
 
-    result = await app_module._run_discovery_sync_once()
+    result = await inventory_module._run_discovery_sync_once()
     assert result["enabled"] is True
     assert result["profiles"] == 1
     assert result["synced_groups"] == 1
@@ -180,41 +184,37 @@ def test_sanitize_snmp_discovery_config_bounds_and_defaults():
 
 
 def test_resolve_snmp_discovery_config_prefers_group_profile(monkeypatch):
-    monkeypatch.setattr(
-        app_module,
-        "SNMP_DISCOVERY_CONFIG",
-        app_module._sanitize_snmp_discovery_config(
+    snmp_cfg = app_module._sanitize_snmp_discovery_config(
+        {
+            "enabled": True,
+            "version": "2c",
+            "community": "global-public",
+            "port": 161,
+            "timeout_seconds": 1.2,
+            "retries": 0,
+        }
+    )
+    monkeypatch.setattr(app_module, "SNMP_DISCOVERY_CONFIG", snmp_cfg)
+    monkeypatch.setattr(state_module, "SNMP_DISCOVERY_CONFIG", snmp_cfg)
+    snmp_profiles = {
+        5: app_module._sanitize_snmp_discovery_profile(
+            5,
             {
                 "enabled": True,
-                "version": "2c",
-                "community": "global-public",
-                "port": 161,
-                "timeout_seconds": 1.2,
-                "retries": 0,
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "SNMP_DISCOVERY_PROFILES",
-        {
-            5: app_module._sanitize_snmp_discovery_profile(
-                5,
-                {
-                    "enabled": True,
-                    "version": "3",
-                    "community": "",
-                    "v3": {
-                        "username": "siteops",
-                        "auth_protocol": "sha",
-                        "auth_password": "x",
-                        "priv_protocol": "aes256",
-                        "priv_password": "y",
-                    },
+                "version": "3",
+                "community": "",
+                "v3": {
+                    "username": "siteops",
+                    "auth_protocol": "sha",
+                    "auth_password": "x",
+                    "priv_protocol": "aes256",
+                    "priv_password": "y",
                 },
-            )
-        },
-    )
+            },
+        )
+    }
+    monkeypatch.setattr(app_module, "SNMP_DISCOVERY_PROFILES", snmp_profiles)
+    monkeypatch.setattr(state_module, "SNMP_DISCOVERY_PROFILES", snmp_profiles)
 
     effective = app_module._resolve_snmp_discovery_config(5)
     assert effective["version"] == "3"
@@ -246,13 +246,16 @@ async def test_discovery_onboard_returns_sync_summary(monkeypatch):
             self.state = type("S", (), {"correlation_id": "corr-1"})()
 
     monkeypatch.setattr(app_module.db, "get_group", fake_get_group)
+    monkeypatch.setattr(inventory_module, "db", app_module.db)
     monkeypatch.setattr(app_module, "_sync_group_hosts", fake_sync_group_hosts)
+    monkeypatch.setattr(inventory_module, "_sync_group_hosts", fake_sync_group_hosts)
     monkeypatch.setattr(app_module, "_audit", fake_audit)
+    monkeypatch.setattr(inventory_module, "_audit", fake_audit)
 
     body = app_module.DiscoveryOnboardRequest(
         discovered_hosts=[{"hostname": "sw1", "ip_address": "10.0.0.10", "device_type": "cisco_ios"}]
     )
-    result = await app_module.discovery_onboard(22, body, cast(Request, DummyRequest()))
+    result = await inventory_module.discovery_onboard(22, body, cast(Request, DummyRequest()))
     assert result["group_id"] == 22
     assert result["provided_count"] == 1
     assert result["sync"]["added"] == 1
@@ -269,9 +272,10 @@ async def test_discovery_onboard_rejects_empty_payload(monkeypatch):
             self.state = type("S", (), {"correlation_id": "corr-1"})()
 
     monkeypatch.setattr(app_module.db, "get_group", fake_get_group)
+    monkeypatch.setattr(inventory_module, "db", app_module.db)
 
     with pytest.raises(HTTPException) as exc:
-        await app_module.discovery_onboard(
+        await inventory_module.discovery_onboard(
             22,
             app_module.DiscoveryOnboardRequest(discovered_hosts=[]),
             cast(Request, DummyRequest()),

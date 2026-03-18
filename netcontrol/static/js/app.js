@@ -3013,11 +3013,16 @@ function renderPlaybooksList(playbooks) {
             tags = [];
         }
 
+        const pbType = pb.type || 'python';
+        const typeBadge = pbType === 'ansible'
+            ? '<span class="status-badge" style="background: var(--info); color: #fff; margin-right: 0.5rem;">Ansible</span>'
+            : '<span class="status-badge" style="background: var(--primary); color: #fff; margin-right: 0.5rem;">Python</span>';
+
         return `
             <div class="card animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
                 <div class="card-header">
                     <div>
-                        <div class="card-title">${escapeHtml(pb.name)}</div>
+                        <div class="card-title">${typeBadge}${escapeHtml(pb.name)}</div>
                         <div class="card-description">${escapeHtml(pb.description || '')}</div>
                         <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-muted);">
                             File: ${escapeHtml(pb.filename)}
@@ -4136,9 +4141,12 @@ window.showLaunchJobModal = async function() {
             <form onsubmit="launchJob(event)">
                 <div class="form-group">
                     <label class="form-label">Playbook</label>
-                    <select class="form-select" name="playbook_id" id="job-playbook-select" required>
+                    <select class="form-select" name="playbook_id" id="job-playbook-select" required onchange="window._onJobPlaybookChange(this.value)">
                         <option value="">Select a playbook...</option>
-                        ${playbooks.map(pb => `<option value="${pb.id}">${escapeHtml(pb.name)}</option>`).join('')}
+                        ${playbooks.map(pb => {
+                            const typeTag = pb.type === 'ansible' ? ' [Ansible]' : '';
+                            return `<option value="${pb.id}" data-type="${pb.type || 'python'}">${escapeHtml(pb.name)}${typeTag}</option>`;
+                        }).join('')}
                     </select>
                 </div>
                 <div class="form-group">
@@ -4177,7 +4185,7 @@ window.showLaunchJobModal = async function() {
                         ${credentials.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}
                     </select>
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="job-template-group">
                     <label class="form-label">Template (optional)</label>
                     <select class="form-select" name="template_id">
                         <option value="">None</option>
@@ -4230,6 +4238,15 @@ window.toggleJobGroup = function(groupId, checked) {
 
 window.updateJobGroupHosts = function(groupId) {
     // This function is no longer needed but kept for compatibility
+};
+
+window._onJobPlaybookChange = function(playbookId) {
+    const select = document.getElementById('job-playbook-select');
+    const templateGroup = document.getElementById('job-template-group');
+    if (!select || !templateGroup) return;
+    const option = select.querySelector(`option[value="${playbookId}"]`);
+    const pbType = option ? option.getAttribute('data-type') : 'python';
+    templateGroup.style.display = pbType === 'ansible' ? 'none' : '';
 };
 
 window.launchJob = async function(e) {
@@ -4399,7 +4416,7 @@ window.createCredential = async function(e) {
 
 // Create Playbook Modal
 window.showCreatePlaybookModal = function() {
-    const defaultContent = `"""
+    const pythonDefault = `"""
 Your playbook description here.
 
 This playbook will be executed on all hosts in the selected inventory group.
@@ -4431,20 +4448,19 @@ class MyPlaybook(BasePlaybook):
 
     async def run(self, hosts, credentials, template_commands=None, dry_run=True):
         yield self.log_info(f"My Playbook — targeting {len(hosts)} device(s)")
-        
+
         if dry_run:
             yield self.log_warn("*** DRY-RUN MODE — no changes will be made ***")
-        
+
         for host_info in hosts:
             ip = host_info["ip_address"]
             hostname = host_info.get("hostname", ip)
             device_type = host_info.get("device_type", "cisco_ios")
-            
+
             yield self.log_sep()
             yield self.log_info(f"Processing {hostname} ({ip})...", host=hostname)
-            
+
             if NETMIKO_AVAILABLE:
-                # Real device connection code here
                 device = {
                     "device_type": device_type,
                     "host": ip,
@@ -4453,20 +4469,13 @@ class MyPlaybook(BasePlaybook):
                     "secret": credentials.get("secret", credentials["password"]),
                     "timeout": 30,
                 }
-                
+
                 try:
                     conn = await asyncio.to_thread(ConnectHandler, **device)
                     try:
                         if not conn.check_enable_mode():
                             await asyncio.to_thread(conn.enable)
-                        
-                        # Your playbook logic here
                         yield self.log_success(f"Connected to {hostname}", host=hostname)
-                        
-                        # Example: Run a command
-                        # output = await asyncio.to_thread(conn.send_command, "show version")
-                        # yield self.log_info(f"Output: {output[:100]}...", host=hostname)
-                        
                     finally:
                         conn.disconnect()
                 except NetmikoTimeoutException:
@@ -4478,23 +4487,53 @@ class MyPlaybook(BasePlaybook):
             else:
                 yield self.log_warn("Netmiko not available — running in simulation mode", host=hostname)
                 await asyncio.sleep(0.5)
-            
+
             yield self.log_success(f"Finished processing {hostname} ({ip})", host=hostname)
-        
+
         yield self.log_sep()
         yield self.log_success("Playbook execution complete")
 `;
 
+    const ansibleDefault = `---
+- name: My Ansible Playbook
+  hosts: all
+  gather_facts: false
+  connection: ansible.netcommon.network_cli
+
+  tasks:
+    - name: Gather device facts
+      cisco.ios.ios_facts:
+        gather_subset: min
+      register: facts
+
+    - name: Show version
+      cisco.ios.ios_command:
+        commands:
+          - show version
+      register: result
+
+    - name: Display output
+      debug:
+        var: result.stdout_lines
+`;
+
     showModal('Create Playbook', `
         <form onsubmit="createPlaybook(event)">
+            <div class="form-group">
+                <label class="form-label">Type</label>
+                <select class="form-select" name="type" id="create-pb-type" onchange="window._toggleCreatePbType(this.value)">
+                    <option value="python">Python (Netmiko)</option>
+                    <option value="ansible">Ansible (YAML)</option>
+                </select>
+            </div>
             <div class="form-group">
                 <label class="form-label">Playbook Name</label>
                 <input type="text" class="form-input" name="name" placeholder="My Playbook" required>
             </div>
             <div class="form-group">
                 <label class="form-label">Filename</label>
-                <input type="text" class="form-input" name="filename" placeholder="my_playbook.py" required>
-                <small style="color: var(--text-muted); font-size: 0.75rem;">Must end with .py</small>
+                <input type="text" class="form-input" name="filename" id="create-pb-filename" placeholder="my_playbook.py" required>
+                <small id="create-pb-ext-hint" style="color: var(--text-muted); font-size: 0.75rem;">Must end with .py</small>
             </div>
             <div class="form-group">
                 <label class="form-label">Description</label>
@@ -4505,8 +4544,8 @@ class MyPlaybook(BasePlaybook):
                 <input type="text" class="form-input" name="tags" placeholder="example, automation">
             </div>
             <div class="form-group">
-                <label class="form-label">Python Code</label>
-                <textarea class="form-textarea code-editor" name="content" wrap="off" spellcheck="false" style="min-height: 500px; font-family: 'Courier New', monospace;" required>${defaultContent}</textarea>
+                <label class="form-label" id="create-pb-code-label">Python Code</label>
+                <textarea class="form-textarea code-editor" name="content" id="create-pb-content" wrap="off" spellcheck="false" style="min-height: 500px; font-family: 'Courier New', monospace;" required>${pythonDefault}</textarea>
             </div>
             <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                 <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
@@ -4514,6 +4553,33 @@ class MyPlaybook(BasePlaybook):
             </div>
         </form>
     `);
+
+    // Store defaults for toggling
+    window._pbDefaults = { python: pythonDefault, ansible: ansibleDefault };
+    window._pbContentModified = false;
+    const contentEl = document.getElementById('create-pb-content');
+    if (contentEl) {
+        contentEl.addEventListener('input', () => { window._pbContentModified = true; }, { once: true });
+    }
+};
+
+window._toggleCreatePbType = function(type) {
+    const filenameInput = document.getElementById('create-pb-filename');
+    const extHint = document.getElementById('create-pb-ext-hint');
+    const codeLabel = document.getElementById('create-pb-code-label');
+    const contentEl = document.getElementById('create-pb-content');
+
+    if (type === 'ansible') {
+        if (filenameInput) filenameInput.placeholder = 'my_playbook.yml';
+        if (extHint) extHint.textContent = 'Must end with .yml or .yaml';
+        if (codeLabel) codeLabel.textContent = 'Ansible YAML';
+        if (contentEl && !window._pbContentModified) contentEl.value = window._pbDefaults.ansible;
+    } else {
+        if (filenameInput) filenameInput.placeholder = 'my_playbook.py';
+        if (extHint) extHint.textContent = 'Must end with .py';
+        if (codeLabel) codeLabel.textContent = 'Python Code';
+        if (contentEl && !window._pbContentModified) contentEl.value = window._pbDefaults.python;
+    }
 };
 
 window.createPlaybook = async function(e) {
@@ -4521,19 +4587,27 @@ window.createPlaybook = async function(e) {
     const formData = new FormData(e.target);
     const tagsStr = formData.get('tags') || '';
     const tags = tagsStr.split(',').map(t => t.trim()).filter(t => t);
-    
+    const pbType = formData.get('type') || 'python';
+
     try {
         let filename = formData.get('filename');
-        if (!filename.endsWith('.py')) {
-            filename += '.py';
+        if (pbType === 'ansible') {
+            if (!filename.endsWith('.yml') && !filename.endsWith('.yaml')) {
+                filename += '.yml';
+            }
+        } else {
+            if (!filename.endsWith('.py')) {
+                filename += '.py';
+            }
         }
-        
+
         await api.createPlaybook(
             formData.get('name'),
             filename,
             formData.get('description') || '',
             tags,
-            formData.get('content')
+            formData.get('content'),
+            pbType
         );
         closeAllModals();
         await loadPlaybooks();
@@ -4566,8 +4640,20 @@ window.editPlaybook = async function(playbookId) {
         const playbookContent = playbook.content || '';
         console.log('Final content to set, length:', playbookContent.length);
         
+        const pbType = playbook.type || 'python';
+        const isAnsible = pbType === 'ansible';
+        const extHint = isAnsible ? 'Must end with .yml or .yaml' : 'Must end with .py';
+        const codeLabel = isAnsible ? 'Ansible YAML' : 'Python Code';
+
         showModal('Edit Playbook', `
             <form onsubmit="updatePlaybook(event, ${playbookId})">
+                <input type="hidden" name="type" value="${pbType}">
+                <div class="form-group">
+                    <label class="form-label">Type</label>
+                    <div style="padding: 0.5rem 0;">
+                        <span class="status-badge" style="background: var(${isAnsible ? '--info' : '--primary'}); color: #fff;">${isAnsible ? 'Ansible' : 'Python'}</span>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label class="form-label">Playbook Name</label>
                     <input type="text" class="form-input" name="name" value="${escapeHtml(playbook.name || '')}" required>
@@ -4575,7 +4661,7 @@ window.editPlaybook = async function(playbookId) {
                 <div class="form-group">
                     <label class="form-label">Filename</label>
                     <input type="text" class="form-input" name="filename" value="${escapeHtml(playbook.filename || '')}" required>
-                    <small style="color: var(--text-muted); font-size: 0.75rem;">Must end with .py</small>
+                    <small style="color: var(--text-muted); font-size: 0.75rem;">${extHint}</small>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Description</label>
@@ -4586,7 +4672,7 @@ window.editPlaybook = async function(playbookId) {
                     <input type="text" class="form-input" name="tags" value="${escapeHtml(tags.join(', '))}">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Python Code</label>
+                    <label class="form-label">${codeLabel}</label>
                     <textarea id="playbook-content-textarea" class="form-textarea code-editor" name="content" wrap="off" spellcheck="false" style="min-height: 500px; font-family: 'Courier New', monospace;" required></textarea>
                 </div>
                 <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
@@ -4625,19 +4711,27 @@ window.updatePlaybook = async function(e, playbookId) {
     const formData = new FormData(e.target);
     const tagsStr = formData.get('tags') || '';
     const tags = tagsStr.split(',').map(t => t.trim()).filter(t => t);
-    
+    const pbType = formData.get('type') || 'python';
+
     try {
         let filename = formData.get('filename');
-        if (!filename.endsWith('.py')) {
-            filename += '.py';
+        if (pbType === 'ansible') {
+            if (!filename.endsWith('.yml') && !filename.endsWith('.yaml')) {
+                filename += '.yml';
+            }
+        } else {
+            if (!filename.endsWith('.py')) {
+                filename += '.py';
+            }
         }
-        
+
         await api.updatePlaybook(playbookId, {
             name: formData.get('name'),
             filename: filename,
             description: formData.get('description') || '',
             tags: tags,
-            content: formData.get('content')
+            content: formData.get('content'),
+            type: pbType,
         });
         closeAllModals();
         await loadPlaybooks();
