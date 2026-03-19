@@ -4935,6 +4935,15 @@ window.viewJobOutput = async function(jobId) {
         ).join('');
 
         // Update modal controls based on job state
+        const dryrunBadge = document.getElementById('job-output-dryrun');
+        if (dryrunBadge) {
+            const isDry = Boolean(job.dry_run);
+            dryrunBadge.textContent = isDry ? 'DRY RUN' : 'LIVE';
+            dryrunBadge.style.cssText = isDry
+                ? 'background: var(--warning); color: #000; font-weight: 600;'
+                : 'background: var(--danger, #dc3545); color: #fff; font-weight: 600;';
+            dryrunBadge.style.display = '';
+        }
         if (statusBadge) {
             statusBadge.textContent = job.status;
             statusBadge.className = `status-badge status-${job.status}`;
