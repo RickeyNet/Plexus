@@ -16,6 +16,11 @@ import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import _snmp_walk, PYSMNP_AVAILABLE
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
+from netcontrol.routes.metrics_engine import (
+    emit_metric_samples_from_poll,
+    store_interface_ts_from_poll,
+    run_retention_cleanup as metrics_retention_cleanup,
+)
 
 router = APIRouter()
 admin_router = APIRouter()
@@ -71,13 +76,20 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
     # ── SNMP polling for CPU, memory, interfaces ──
     if PYSMNP_AVAILABLE and snmp_cfg.get("enabled"):
         try:
+            from netcontrol.routes.metrics_engine import resolve_oids_for_device
             _walk = lambda oid: _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid)
 
-            # SNMP OIDs
-            cpu_oid = "1.3.6.1.4.1.9.9.109.1.1.1.1.8"           # cpmCPUTotal5minRev
-            cpu_old_oid = "1.3.6.1.4.1.9.2.1.58.0"               # avgBusy5 (older IOS)
-            mem_used_oid = "1.3.6.1.4.1.9.9.48.1.1.1.5"          # ciscoMemoryPoolUsed
-            mem_free_oid = "1.3.6.1.4.1.9.9.48.1.1.1.6"          # ciscoMemoryPoolFree
+            # Resolve vendor-specific OIDs (DB overrides → built-in map → fallback)
+            device_type = host.get("device_type", "cisco_ios")
+            oid_map = await resolve_oids_for_device(device_type)
+            cpu_oid = oid_map.get("cpu_oid", "1.3.6.1.4.1.9.9.109.1.1.1.1.8")
+            cpu_old_oid = "1.3.6.1.4.1.9.2.1.58.0"               # avgBusy5 (Cisco legacy fallback)
+            mem_used_oid = oid_map.get("mem_used_oid", "1.3.6.1.4.1.9.9.48.1.1.1.5")
+            mem_free_oid = oid_map.get("mem_free_oid", "1.3.6.1.4.1.9.9.48.1.1.1.6")
+            mem_total_oid = oid_map.get("mem_total_oid", "")
+            uptime_oid = oid_map.get("uptime_oid", "1.3.6.1.2.1.1.3")
+
+            # Interface OIDs are standard MIB-II / IF-MIB — vendor-independent
             if_oper_status_oid = "1.3.6.1.2.1.2.2.1.8"           # ifOperStatus
             if_admin_status_oid = "1.3.6.1.2.1.2.2.1.7"          # ifAdminStatus
             if_name_oid = "1.3.6.1.2.1.31.1.1.1.1"               # ifName
@@ -85,19 +97,40 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             if_high_speed_oid = "1.3.6.1.2.1.31.1.1.1.15"        # ifHighSpeed
             if_hc_in_oid = "1.3.6.1.2.1.31.1.1.1.6"              # ifHCInOctets
             if_hc_out_oid = "1.3.6.1.2.1.31.1.1.1.10"            # ifHCOutOctets
-            sysuptime_oid = "1.3.6.1.2.1.1.3"                     # sysUpTime (timeticks)
 
-            (cpu_vals, cpu_old_vals, mem_used_vals, mem_free_vals,
-             if_oper, if_admin, if_names, if_descrs, if_speeds,
-             hc_in, hc_out, uptime_vals,
-            ) = await asyncio.gather(
-                _walk(cpu_oid), _walk(cpu_old_oid),
-                _walk(mem_used_oid), _walk(mem_free_oid),
+            # Build walk list — skip empty OIDs
+            async def _empty_walk():
+                return {}
+
+            walk_targets = [
+                _walk(cpu_oid) if cpu_oid else _empty_walk(),
+                _walk(cpu_old_oid),
+                _walk(mem_used_oid) if mem_used_oid else _empty_walk(),
+                _walk(mem_free_oid) if mem_free_oid else _empty_walk(),
                 _walk(if_oper_status_oid), _walk(if_admin_status_oid),
                 _walk(if_name_oid), _walk(if_descr_oid), _walk(if_high_speed_oid),
                 _walk(if_hc_in_oid), _walk(if_hc_out_oid),
-                _walk(sysuptime_oid),
-            )
+                _walk(uptime_oid),
+            ]
+            # Also walk mem_total if the vendor provides a total OID
+            if mem_total_oid:
+                walk_targets.append(_walk(mem_total_oid))
+
+            walk_results = await asyncio.gather(*walk_targets)
+
+            cpu_vals = walk_results[0]
+            cpu_old_vals = walk_results[1]
+            mem_used_vals = walk_results[2]
+            mem_free_vals = walk_results[3]
+            if_oper = walk_results[4]
+            if_admin = walk_results[5]
+            if_names = walk_results[6]
+            if_descrs = walk_results[7]
+            if_speeds = walk_results[8]
+            hc_in = walk_results[9]
+            hc_out = walk_results[10]
+            uptime_vals = walk_results[11]
+            mem_total_vals = walk_results[12] if len(walk_results) > 12 else {}
 
             # CPU
             if cpu_vals:
@@ -115,7 +148,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     except (ValueError, TypeError):
                         pass
 
-            # Memory
+            # Memory — supports two patterns:
+            #   Cisco:  used + free OIDs (bytes) → compute total
+            #   HOST-RESOURCES / Fortinet:  used + total OIDs (allocation units or %)
             if mem_used_vals and mem_free_vals:
                 try:
                     used = int(next(iter(mem_used_vals.values())))
@@ -125,6 +160,24 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         result["memory_used_mb"] = round(used / 1048576, 1)
                         result["memory_total_mb"] = round(total / 1048576, 1)
                         result["memory_percent"] = round(used / total * 100, 1)
+                except (ValueError, TypeError, StopIteration):
+                    pass
+            elif mem_used_vals and mem_total_vals:
+                try:
+                    used = int(next(iter(mem_used_vals.values())))
+                    total = int(next(iter(mem_total_vals.values())))
+                    if total > 0:
+                        result["memory_used_mb"] = round(used / 1048576, 1)
+                        result["memory_total_mb"] = round(total / 1048576, 1)
+                        result["memory_percent"] = round(used / total * 100, 1)
+                except (ValueError, TypeError, StopIteration):
+                    pass
+            elif mem_used_vals:
+                # Fortinet fgSysMemUsage returns usage as a percentage directly
+                try:
+                    pct = float(int(next(iter(mem_used_vals.values()))))
+                    if 0 <= pct <= 100:
+                        result["memory_percent"] = pct
                 except (ValueError, TypeError, StopIteration):
                     pass
 
@@ -535,6 +588,14 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
             alerts_created += await _evaluate_alerts_for_poll(
                 res, poll_id, h.get("group_id"), alert_rules_cache)
 
+            # ── Metrics Engine: emit flexible metric samples + interface TS ──
+            try:
+                await emit_metric_samples_from_poll(res)
+                await store_interface_ts_from_poll(res["host_id"], res.get("if_details", []))
+            except Exception as exc:
+                LOGGER.debug("metrics: emission error for host %s: %s",
+                             res["host_id"], redact_value(str(exc)))
+
             # Route churn detection
             if res["route_snapshot"]:
                 route_hash = hashlib.sha256(res["route_snapshot"].encode()).hexdigest()[:16]
@@ -568,6 +629,7 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
         await db.delete_old_monitoring_alerts(retention_days)
         await db.delete_old_route_snapshots(retention_days)
         await db.delete_expired_suppressions()
+        await metrics_retention_cleanup()
     except Exception:
         pass
 

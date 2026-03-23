@@ -72,17 +72,61 @@ _deployment_job_sockets: dict[str, list] = {}
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _build_revert_commands(diff_text: str) -> list[str]:
+def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]:
     """Parse a unified diff and build the minimal set of config commands to revert drift.
 
     In the diff (baseline -> running-config):
       - Lines starting with '-' (not '---') = in baseline but missing from device -> re-add them
       - Lines starting with '+' (not '+++') = on device but not in baseline -> negate with 'no' prefix
+
+    Context lines (unchanged, starting with ' ') are tracked so that indented
+    sub-commands are emitted inside their correct config section (e.g.
+    'interface GigabitEthernet0/1').  The optional *baseline_text* provides a
+    fallback section lookup when the diff context window is too small.
     """
+    # Build a section map from baseline text: indented line -> parent section header
+    _section_map: dict[str, str] = {}
+    if baseline_text:
+        _cur = None
+        for bline in baseline_text.splitlines():
+            s = bline.strip()
+            if not s or s.startswith("!") or s == "end":
+                continue
+            if not bline[0:1].isspace():
+                _cur = bline.rstrip()
+            elif _cur:
+                _section_map[s] = _cur
+
     commands: list[str] = []
+    current_section: str | None = None
+    section_emitted = False
+
+    def _ensure_section(cmd: str) -> None:
+        """Emit the section header before an indented sub-command if needed."""
+        nonlocal current_section, section_emitted
+        if not (cmd and cmd[0].isspace()):
+            return
+        section = current_section or _section_map.get(cmd.strip())
+        if section and not section_emitted:
+            commands.append(section)
+            section_emitted = True
+            if not current_section:
+                current_section = section
+
     for line in diff_text.splitlines():
         if line.startswith("---") or line.startswith("+++") or line.startswith("@@"):
+            current_section = None
+            section_emitted = False
             continue
+
+        # Context line — track section headers for proper config hierarchy
+        if line.startswith(" "):
+            ctx = line[1:]  # strip the leading diff space
+            if ctx and not ctx[0].isspace():
+                current_section = ctx.rstrip()
+                section_emitted = False
+            continue
+
         if line.startswith("-"):
             # Missing from device — re-add the baseline line
             cmd = line[1:]  # strip the leading '-'
@@ -91,7 +135,13 @@ def _build_revert_commands(diff_text: str) -> list[str]:
                 continue
             if stripped.startswith("Building configuration") or stripped.startswith("Current configuration"):
                 continue
-            commands.append(cmd)
+            # A non-indented command is itself a section header
+            if not cmd[0:1].isspace():
+                current_section = cmd.rstrip()
+                section_emitted = True  # the command itself enters the section
+            else:
+                _ensure_section(cmd)
+            commands.append(cmd.rstrip())
         elif line.startswith("+"):
             # Present on device but not in baseline — negate it
             cmd = line[1:]  # strip the leading '+'
@@ -100,6 +150,7 @@ def _build_revert_commands(diff_text: str) -> list[str]:
                 continue
             if stripped.startswith("Building configuration") or stripped.startswith("Current configuration"):
                 continue
+            _ensure_section(cmd)
             # Add 'no' prefix to remove the line, preserving indentation
             indent = cmd[: len(cmd) - len(cmd.lstrip())]
             if stripped.startswith("no "):
@@ -323,7 +374,7 @@ async def _run_rollback_job(
                         snap["config_text"], current_config,
                         baseline_label="pre-deployment", actual_label="current",
                     )
-                    revert_commands = _build_revert_commands(diff_text)
+                    revert_commands = _build_revert_commands(diff_text, snap.get("config_text", ""))
 
                     if not revert_commands:
                         await _broadcast_deploy_line(job_id,

@@ -99,9 +99,37 @@
 - [x] Add real-time monitoring (interfaces, CPU/memory, VPN health, route churn).
 - [x] Add alerting engine with threshold/anomaly rules, dedup, suppression, escalation.
 - [x] Add SLA dashboards (uptime, latency, jitter, packet loss, MTTR, MTTD).
+- [x] Improve job orchestration UX (queue visibility, priority, dependencies, resume/cancel).
+
+### Metrics Engine (Prometheus Parity) -- Phase 1 Complete
+- [x] Add multi-vendor OID registry with HOST-RESOURCES-MIB fallback (Cisco, Juniper, Arista, Fortinet, Palo Alto, generic).
+- [x] Add per-interface time-series storage with rate calculation and counter-wrap handling.
+- [x] Add flexible metric_samples table (Prometheus-style gauge model with labels).
+- [x] Add 3-tier data downsampling engine (raw 48h → hourly 30d → daily 365d with min/avg/max/p95).
+- [x] Add structured metrics query API with auto-resolution (`/api/metrics/query`).
+- [x] Add SNMP trap and syslog UDP receivers with host correlation.
+
+### Dashboarding & Visualization (Grafana Parity)
+- [ ] Adopt a charting library (ECharts or Chart.js) for line, bar, gauge, heatmap, and table panels.
+- [ ] Add per-device detail page with CPU/memory graphs, interface utilization, alert history, compliance status.
+- [ ] Add global time range selector (1h / 6h / 24h / 7d / 30d / custom) for all metric views.
+- [ ] Add user-defined dashboards with configurable panels (metric query + chart type + grid position).
+- [ ] Add dashboard template variables ($group, $host) with dropdown selectors for filtering all panels.
+- [ ] Add annotation support to overlay deployment/config change events on metric charts.
+
+### Network Monitoring Breadth (LibreNMS Parity)
+- [ ] Add per-port utilization graphs with historical in/out bps time-series.
+- [ ] Add availability tracking with up/down state transitions and uptime % calculation.
+- [ ] Add topology weathermap (color edges green → yellow → red by utilization %).
+- [ ] Add custom SNMP OID profiles (user-defined OID → metric mappings with vendor defaults).
+- [ ] Add syslog integration (correlate syslog source IP → device, display in device detail page).
+- [ ] Add reporting and export (availability, compliance reports with CSV export).
+
+### Closed-Loop Differentiation (Unique to Plexus)
+- [ ] Add correlation views linking config changes → metric anomalies → alerts → rollbacks.
+- [ ] Add deployment annotations on metric charts (auto-annotate when deployments execute).
 - [ ] Add post-change automated verification with success criteria and health checks.
 - [ ] Add capacity planning trends (bandwidth, policy scale, route table growth).
-- [x] Improve job orchestration UX (queue visibility, priority, dependencies, resume/cancel).
 
 ### Later (Enterprise and Ecosystem)
 - [ ] Add firmware/OS lifecycle management with staged upgrade workflows.

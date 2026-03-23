@@ -6,6 +6,7 @@ Provides audit logging, config capture/push/diff, and session helpers.
 
 import asyncio
 import difflib
+import re
 
 import routes.database as db
 from netcontrol.telemetry import configure_logging
@@ -57,6 +58,27 @@ def _get_session(request) -> dict | None:
 
 # ── Config capture/push/diff ────────────────────────────────────────────────
 
+# Patterns matching volatile IOS/NX-OS metadata lines that change between
+# captures but do not represent actual configuration drift.
+_VOLATILE_LINE_RES = [
+    re.compile(r"^Current configuration\s*:\s*\d+\s*bytes", re.IGNORECASE),
+    re.compile(r"^Building configuration\.\.\.", re.IGNORECASE),
+    re.compile(r"^! Last configuration change at\b"),
+    re.compile(r"^! NVRAM config last updated at\b"),
+    re.compile(r"^! No configuration change since last restart", re.IGNORECASE),
+    re.compile(r"^ntp clock-period\s+\d+"),
+]
+
+
+def _normalize_config(text: str) -> str:
+    """Strip volatile metadata lines so they don't appear as drift."""
+    lines = text.splitlines(keepends=True)
+    return "".join(
+        line for line in lines
+        if not any(pat.search(line.strip()) for pat in _VOLATILE_LINE_RES)
+    )
+
+
 def _compute_config_diff(
     baseline_text: str,
     actual_text: str,
@@ -65,10 +87,13 @@ def _compute_config_diff(
 ) -> tuple[str, int, int]:
     """Compute unified diff between baseline and actual config.
 
+    Volatile metadata lines (byte counts, timestamps, ntp clock-period) are
+    stripped before comparison so they never show up as false drift.
+
     Returns (diff_text, lines_added, lines_removed).
     """
-    baseline_lines = baseline_text.splitlines(keepends=True)
-    actual_lines = actual_text.splitlines(keepends=True)
+    baseline_lines = _normalize_config(baseline_text).splitlines(keepends=True)
+    actual_lines = _normalize_config(actual_text).splitlines(keepends=True)
     diff = list(difflib.unified_diff(
         baseline_lines, actual_lines,
         fromfile=baseline_label, tofile=actual_label,
