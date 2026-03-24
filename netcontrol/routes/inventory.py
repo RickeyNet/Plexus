@@ -3,6 +3,8 @@ inventory.py -- Inventory group/host CRUD, discovery, and SNMP profile routes.
 """
 
 import asyncio
+import csv
+import io
 import ipaddress
 import json
 import socket
@@ -227,9 +229,13 @@ async def _sync_group_hosts(
 
     for ip, discovered in normalized_discovered.items():
         existing = existing_by_ip.get(ip)
+        model = discovered.get("model", "")
+        sw_version = discovered.get("software_version", "")
         if existing is None:
             new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
             await db.update_host_status(new_id, discovered["status"])
+            if model or sw_version:
+                await db.update_host_device_info(new_id, model, sw_version)
             added += 1
             continue
 
@@ -239,6 +245,8 @@ async def _sync_group_hosts(
         ):
             await db.update_host(existing["id"], discovered["hostname"], discovered["ip_address"], discovered["device_type"])
             updated += 1
+        if model or sw_version:
+            await db.update_host_device_info(existing["id"], model, sw_version)
         await db.update_host_status(existing["id"], discovered["status"])
 
     if remove_absent:
@@ -460,6 +468,30 @@ async def list_groups(include_hosts: bool = Query(default=False)):
     if include_hosts:
         return await db.get_all_groups_with_hosts()
     return await db.get_all_groups()
+
+
+@router.get("/api/inventory/export/csv")
+async def export_inventory_csv():
+    """Export all inventory hosts as a CSV file."""
+    rows = await db.get_all_hosts_for_export()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Hostname", "IP Address", "Model", "Software Version", "Device Type", "Status", "Group"])
+    for r in rows:
+        writer.writerow([
+            r.get("hostname", ""),
+            r.get("ip_address", ""),
+            r.get("model", ""),
+            r.get("software_version", ""),
+            r.get("device_type", ""),
+            r.get("status", ""),
+            r.get("group_name", ""),
+        ])
+    return StreamingResponse(
+        io.StringIO(output.getvalue()),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inventory_export.csv"},
+    )
 
 
 @router.post("/api/inventory", status_code=201)

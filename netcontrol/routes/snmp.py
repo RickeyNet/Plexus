@@ -7,6 +7,7 @@ and topology route modules.
 """
 
 import asyncio
+import re
 import socket
 
 from netcontrol.routes.state import _resolve_snmp_discovery_config  # noqa: F401
@@ -92,6 +93,51 @@ def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
         os_name = "fortios"
 
     return vendor, detected_type, os_name
+
+
+def _parse_model_and_version(sys_descr: str) -> tuple[str, str]:
+    """Extract hardware model and software version from an SNMP sysDescr string."""
+    model = ""
+    version = ""
+    if not sys_descr:
+        return model, version
+
+    # Cisco IOS / IOS-XE: "Cisco IOS Software, C3750E Software (C3750E-UNIVERSALK9-M), Version 15.2(4)E10, ..."
+    # Also handles: "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, ..."
+    m = re.search(r"Version\s+([\d.()a-zA-Z]+)", sys_descr)
+    if m:
+        version = m.group(1)
+
+    # Try to grab the model from the software image name in parens, e.g. "(C3750E-UNIVERSALK9-M)"
+    m = re.search(r"\(([A-Z0-9][\w-]+)\)", sys_descr)
+    if m:
+        model = m.group(1)
+
+    # Cisco NX-OS: "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 10.3(2), ..."
+    if not model:
+        m = re.search(r"Cisco\s+\S+\s+([\w-]+)", sys_descr)
+        if m and m.group(1).lower() not in ("ios", "software", "nx-os(tm)"):
+            model = m.group(1)
+
+    # Juniper: "Juniper Networks, Inc. ex4300-48t ..."
+    if "juniper" in sys_descr.lower():
+        m = re.search(r"Juniper\s+Networks,?\s+Inc\.?\s+([\w-]+)", sys_descr, re.IGNORECASE)
+        if m:
+            model = m.group(1)
+        m = re.search(r"JUNOS\s+([\d.A-Za-z-]+)", sys_descr)
+        if m:
+            version = m.group(1)
+
+    # Arista: "Arista Networks EOS version 4.28.3M running on an Arista Networks DCS-7050TX-64"
+    if "arista" in sys_descr.lower():
+        m = re.search(r"version\s+([\d.]+\w*)", sys_descr, re.IGNORECASE)
+        if m:
+            version = m.group(1)
+        m = re.search(r"(DCS-[\w-]+)", sys_descr)
+        if m:
+            model = m.group(1)
+
+    return model, version
 
 
 # ── SNMP Get ─────────────────────────────────────────────────────────────────
@@ -180,12 +226,22 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     values = {str(name): str(value) for name, value in var_binds}
     sys_descr = values.get("1.3.6.1.2.1.1.1.0", "")
     sys_name = values.get("1.3.6.1.2.1.1.5.0", "")
+
+    # pysnmp returns special objects (NoSuchInstance, NoSuchObject, endOfMibView)
+    # that str() converts to long descriptive strings — treat those as empty.
+    if sys_name and any(m in sys_name.lower() for m in _SNMP_BAD_MARKERS):
+        sys_name = ""
+    if sys_descr and any(m in sys_descr.lower() for m in _SNMP_BAD_MARKERS):
+        sys_descr = ""
     vendor, detected_type, os_name = _infer_vendor_os_from_text(sys_descr)
+    hw_model, sw_version = _parse_model_and_version(sys_descr)
     return {
         "hostname": sys_name or f"snmp-{ip_address.replace('.', '-')}",
         "ip_address": ip_address,
         "device_type": detected_type,
         "status": "online",
+        "model": hw_model,
+        "software_version": sw_version,
         "discovery": {
             "protocol": f"snmpv{version}",
             "port": port,
@@ -283,6 +339,18 @@ async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
 
 
 # ── CDP Address Parser ───────────────────────────────────────────────────────
+
+
+_SNMP_BAD_MARKERS = ("no such instance", "no such object", "endofmibview")
+
+
+def _snmp_str(raw_value) -> str:
+    """Convert an SNMP value to a clean string, returning '' for pysnmp
+    sentinel values (NoSuchInstance, NoSuchObject, endOfMibView)."""
+    s = str(raw_value).strip()
+    if s and any(m in s.lower() for m in _SNMP_BAD_MARKERS):
+        return ""
+    return s
 
 
 def _parse_cdp_address(raw_value) -> str:
@@ -439,7 +507,7 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         if_index = parts[0] if parts else ""
         local_iface = if_index_map.get(if_index, f"ifIndex-{if_index}")
 
-        remote_name = str(device_name_val).strip()
+        remote_name = _snmp_str(device_name_val)
         if "(" in remote_name:
             remote_name = remote_name.split("(")[0].strip()
 
@@ -451,8 +519,8 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         if addr_oid in cdp_addresses:
             remote_ip = _parse_cdp_address(cdp_addresses[addr_oid])
 
-        remote_port = str(cdp_ports.get(port_oid, "")).strip()
-        platform = str(cdp_platforms.get(plat_oid, "")).strip()
+        remote_port = _snmp_str(cdp_ports.get(port_oid, ""))
+        platform = _snmp_str(cdp_platforms.get(plat_oid, ""))
 
         neighbors.append({
             "source_host_id": host_id,
@@ -488,17 +556,17 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         lldp_key = ".".join(parts[:3]) if len(parts) >= 3 else suffix.lstrip(".")
 
         local_iface = if_index_map.get(local_port_num, f"port-{local_port_num}")
-        remote_name = str(sys_name_val).strip()
+        remote_name = _snmp_str(sys_name_val)
 
         port_id_oid = lldp_port_id_base + suffix
         port_desc_oid = lldp_port_desc_base + suffix
         sys_desc_oid = lldp_sys_desc_base + suffix
 
-        remote_port_raw = str(lldp_port_ids.get(port_id_oid, "")).strip()
-        remote_port_desc = str(lldp_port_descs.get(port_desc_oid, "")).strip()
+        remote_port_raw = _snmp_str(lldp_port_ids.get(port_id_oid, ""))
+        remote_port_desc = _snmp_str(lldp_port_descs.get(port_desc_oid, ""))
         remote_port = remote_port_desc or remote_port_raw
 
-        sys_desc = str(lldp_sys_descs.get(sys_desc_oid, "")).strip()
+        sys_desc = _snmp_str(lldp_sys_descs.get(sys_desc_oid, ""))
         remote_ip = lldp_addr_map.get(lldp_key, "")
 
         already_found = any(
@@ -529,9 +597,9 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         else:
             continue
 
-        rtr_id = str(rtr_id_val).strip()
+        rtr_id = _snmp_str(rtr_id_val)
         state_oid = ospf_nbr_state_base + "." + suffix
-        state_val = str(ospf_states.get(state_oid, "")).strip()
+        state_val = _snmp_str(ospf_states.get(state_oid, ""))
 
         already_found = any(n["remote_ip"] == nbr_ip for n in neighbors)
         if already_found:
@@ -558,7 +626,7 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
             continue
 
         as_oid = bgp_peer_remote_as_base + "." + suffix
-        remote_as = str(bgp_remote_as.get(as_oid, "")).strip()
+        remote_as = _snmp_str(bgp_remote_as.get(as_oid, ""))
 
         already_found = any(n["remote_ip"] == peer_ip for n in neighbors)
         if already_found:

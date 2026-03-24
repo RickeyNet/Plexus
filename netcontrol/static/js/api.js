@@ -278,7 +278,7 @@ export async function getJob(jobId) {
     return apiRequest(`/jobs/${jobId}`);
 }
 
-export async function launchJob(playbookId, inventoryGroupId = null, credentialId = null, templateId = null, dryRun = true, hostIds = null, priority = 2, dependsOn = null) {
+export async function launchJob(playbookId, inventoryGroupId = null, credentialId = null, templateId = null, dryRun = true, hostIds = null, priority = 2, dependsOn = null, adHocIps = null) {
     const body = {
         playbook_id: playbookId,
         dry_run: dryRun,
@@ -303,6 +303,10 @@ export async function launchJob(playbookId, inventoryGroupId = null, credentialI
 
     if (dependsOn && Array.isArray(dependsOn) && dependsOn.length > 0) {
         body.depends_on = dependsOn;
+    }
+
+    if (adHocIps && Array.isArray(adHocIps) && adHocIps.length > 0) {
+        body.ad_hoc_ips = adHocIps;
     }
 
     return apiRequest('/jobs/launch', {
