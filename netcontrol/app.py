@@ -152,6 +152,7 @@ from netcontrol.routes.metrics_engine import (
     _downsampling_loop,
 )
 from netcontrol.routes.dashboards import router as dashboards_router
+from netcontrol.routes.reporting import router as reporting_router
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -941,6 +942,11 @@ app.include_router(
 # Dashboards & Annotations
 app.include_router(
     dashboards_router,
+    dependencies=[Depends(require_auth)],
+)
+
+app.include_router(
+    reporting_router,
     dependencies=[Depends(require_auth)],
 )
 

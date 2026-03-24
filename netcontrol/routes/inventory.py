@@ -656,6 +656,14 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
     if not group:
         raise HTTPException(404, "Group not found")
 
+    # If no CIDRs provided, auto-populate from the group's existing host IPs
+    if not body.cidrs:
+        existing_hosts = await db.get_hosts_for_group(group_id)
+        host_ips = [str(h["ip_address"]) for h in existing_hosts if h.get("ip_address")]
+        if not host_ips:
+            raise HTTPException(400, "Group has no hosts to sync. Add hosts first or provide CIDR targets.")
+        body.cidrs = host_ips
+
     scanned_count, discovered = await _discover_hosts(body, group_id=group_id)
     sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
     session = _get_session(request)

@@ -155,6 +155,22 @@
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"></path><path d="M18 20V4"></path><path d="M6 20v-4"></path></svg>
                                 <span class="nav-label">SLA</span>
                             </a>
+                            <a href="#" data-page="availability" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                                <span class="nav-label">Availability</span>
+                            </a>
+                            <a href="#" data-page="syslog" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                                <span class="nav-label">Syslog</span>
+                            </a>
+                            <a href="#" data-page="oid-profiles" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><line x1="4" y1="10" x2="20" y2="10"></line><line x1="10" y1="4" x2="10" y2="20"></line></svg>
+                                <span class="nav-label">OID Profiles</span>
+                            </a>
+                            <a href="#" data-page="reports" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                <span class="nav-label">Reports</span>
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -1187,6 +1203,169 @@
                 </div>
             </div>
 
+            <!-- Availability Page -->
+            <div id="page-availability" class="page">
+                <div class="page-header">
+                    <h2>Availability Tracking</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                        <select id="availability-group-filter" class="form-select" style="max-width:200px;" onchange="loadAvailability()">
+                            <option value="">All Groups</option>
+                        </select>
+                        <select id="availability-period" class="form-select" style="max-width:140px;" onchange="loadAvailability()">
+                            <option value="1">Last 24h</option>
+                            <option value="7" selected>Last 7d</option>
+                            <option value="30">Last 30d</option>
+                            <option value="90">Last 90d</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="drift-summary-grid" id="availability-summary-cards"></div>
+                <div class="list-controls" style="margin-bottom:1rem;">
+                    <button class="btn btn-sm btn-secondary avail-tab-btn active" data-avail-tab="hosts" onclick="switchAvailTab('hosts')">Host Availability</button>
+                    <button class="btn btn-sm btn-secondary avail-tab-btn" data-avail-tab="outages" onclick="switchAvailTab('outages')">Outage History</button>
+                    <button class="btn btn-sm btn-secondary avail-tab-btn" data-avail-tab="transitions" onclick="switchAvailTab('transitions')">State Transitions</button>
+                    <input id="availability-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto; max-width:220px;">
+                </div>
+                <div id="avail-tab-hosts" class="avail-tab">
+                    <div id="availability-hosts-list"></div>
+                </div>
+                <div id="avail-tab-outages" class="avail-tab" style="display:none;">
+                    <div id="availability-outages-list"></div>
+                </div>
+                <div id="avail-tab-transitions" class="avail-tab" style="display:none;">
+                    <div id="availability-transitions-list"></div>
+                </div>
+            </div>
+
+            <!-- Syslog Page -->
+            <div id="page-syslog" class="page">
+                <div class="page-header">
+                    <h2>Syslog Events</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                        <select id="syslog-severity-filter" class="form-select" style="max-width:140px;" onchange="loadSyslog()">
+                            <option value="">All Severities</option>
+                            <option value="emergency">Emergency</option>
+                            <option value="alert">Alert</option>
+                            <option value="critical">Critical</option>
+                            <option value="error">Error</option>
+                            <option value="warning">Warning</option>
+                            <option value="notice">Notice</option>
+                            <option value="info">Info</option>
+                            <option value="debug">Debug</option>
+                        </select>
+                        <select id="syslog-type-filter" class="form-select" style="max-width:140px;" onchange="loadSyslog()">
+                            <option value="">All Types</option>
+                            <option value="syslog">Syslog</option>
+                            <option value="trap">SNMP Trap</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="loadSyslog({force:true})">Refresh</button>
+                    </div>
+                </div>
+                <div class="drift-summary-grid" id="syslog-summary-cards"></div>
+                <input id="syslog-search" class="form-input" type="search" placeholder="Search messages..." style="max-width:400px; margin-bottom:1rem;">
+                <div id="syslog-events-list"></div>
+            </div>
+
+            <!-- OID Profiles Page -->
+            <div id="page-oid-profiles" class="page">
+                <div class="page-header">
+                    <h2>Custom SNMP OID Profiles</h2>
+                    <div style="display:flex; gap:0.5rem;">
+                        <select id="oid-vendor-filter" class="form-select" style="max-width:180px;" onchange="loadOidProfiles()">
+                            <option value="">All Vendors</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="showCreateOidProfile()">+ New Profile</button>
+                    </div>
+                </div>
+                <div id="oid-profiles-list"></div>
+
+                <h3 style="margin-top:2rem;">Built-in Vendor OID Defaults</h3>
+                <div id="vendor-oid-defaults-list"></div>
+            </div>
+
+            <!-- OID Profile Modal -->
+            <div id="oid-profile-modal" class="modal" style="display:none;">
+                <div class="modal-backdrop" onclick="closeOidProfileModal()"></div>
+                <div class="modal-content" style="max-width:600px;">
+                    <div class="modal-header">
+                        <h3 id="oid-profile-modal-title">New OID Profile</h3>
+                        <button class="modal-close" onclick="closeOidProfileModal()">&times;</button>
+                    </div>
+                    <div style="padding:1rem;">
+                        <input type="hidden" id="oid-profile-edit-id">
+                        <div class="form-group"><label class="form-label">Name</label>
+                            <input id="oid-profile-name" class="form-input" placeholder="e.g. Cisco Catalyst 9300"></div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+                            <div class="form-group"><label class="form-label">Vendor</label>
+                                <input id="oid-profile-vendor" class="form-input" placeholder="e.g. Cisco"></div>
+                            <div class="form-group"><label class="form-label">Device Type</label>
+                                <input id="oid-profile-device-type" class="form-input" placeholder="e.g. cisco_ios"></div>
+                        </div>
+                        <div class="form-group"><label class="form-label">Description</label>
+                            <textarea id="oid-profile-description" class="form-input" rows="2"></textarea></div>
+                        <div class="form-group"><label class="form-label">OID Mappings (JSON)</label>
+                            <textarea id="oid-profile-oids" class="form-input" rows="8" placeholder='[{"oid":"1.3.6.1.4.1.9.9.109.1.1.1.1.8","metric_name":"cpu_percent","label":"CPU 5min","type":"gauge"}]'></textarea></div>
+                        <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
+                            <button class="btn btn-secondary" onclick="closeOidProfileModal()">Cancel</button>
+                            <button class="btn btn-primary" onclick="saveOidProfile()">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reports Page -->
+            <div id="page-reports" class="page">
+                <div class="page-header">
+                    <h2>Reports & Export</h2>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-primary" onclick="showGenerateReport()">Generate Report</button>
+                    </div>
+                </div>
+                <div class="list-controls" style="margin-bottom:1rem;">
+                    <button class="btn btn-sm btn-secondary report-tab-btn active" data-report-tab="generate" onclick="switchReportTab('generate')">Generate</button>
+                    <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="history" onclick="switchReportTab('history')">Report History</button>
+                    <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="export" onclick="switchReportTab('export')">Quick Export</button>
+                </div>
+                <div id="report-tab-generate" class="report-tab">
+                    <div class="card" style="padding:1.5rem; max-width:600px;">
+                        <div class="form-group"><label class="form-label">Report Type</label>
+                            <select id="report-type" class="form-select" onchange="updateReportParams()">
+                                <option value="availability">Availability Report</option>
+                                <option value="compliance">Compliance Report</option>
+                                <option value="interface">Interface Utilization Report</option>
+                            </select></div>
+                        <div class="form-group"><label class="form-label">Group (optional)</label>
+                            <select id="report-group" class="form-select">
+                                <option value="">All Groups</option>
+                            </select></div>
+                        <div class="form-group" id="report-days-group"><label class="form-label">Period (days)</label>
+                            <select id="report-days" class="form-select">
+                                <option value="1">Last 24 hours</option>
+                                <option value="7">Last 7 days</option>
+                                <option value="30" selected>Last 30 days</option>
+                                <option value="90">Last 90 days</option>
+                            </select></div>
+                        <div style="display:flex; gap:0.5rem; margin-top:1rem;">
+                            <button class="btn btn-primary" onclick="generateAndShowReport()">Generate</button>
+                        </div>
+                    </div>
+                    <div id="report-result" style="margin-top:1.5rem;"></div>
+                </div>
+                <div id="report-tab-history" class="report-tab" style="display:none;">
+                    <div id="report-runs-list"></div>
+                </div>
+                <div id="report-tab-export" class="report-tab" style="display:none;">
+                    <div class="card" style="padding:1.5rem; max-width:500px;">
+                        <h3 style="margin-bottom:1rem;">Quick CSV Export</h3>
+                        <div style="display:flex; flex-direction:column; gap:0.75rem;">
+                            <a class="btn btn-secondary" href="/api/reports/export/availability?days=30" download>Availability Report (30d)</a>
+                            <a class="btn btn-secondary" href="/api/reports/export/compliance" download>Compliance Report</a>
+                            <a class="btn btn-secondary" href="/api/reports/export/interface?days=1" download>Interface Utilization (24h)</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Device Detail Page -->
             <div id="page-device-detail" class="page">
                 <div class="page-header">
@@ -1201,6 +1380,7 @@
                     <button class="btn btn-sm btn-secondary dev-tab-btn active" data-dev-tab="overview" onclick="switchDeviceTab('overview')">Overview</button>
                     <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="interfaces" onclick="switchDeviceTab('interfaces')">Interfaces</button>
                     <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="alerts" onclick="switchDeviceTab('alerts')">Alert History</button>
+                    <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="syslog" onclick="switchDeviceTab('syslog')">Syslog</button>
                     <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="compliance" onclick="switchDeviceTab('compliance')">Compliance</button>
                 </div>
                 <div id="device-tab-overview" class="device-tab">
@@ -1219,6 +1399,9 @@
                 </div>
                 <div id="device-tab-alerts" class="device-tab" style="display:none;">
                     <div id="device-alert-history"></div>
+                </div>
+                <div id="device-tab-syslog" class="device-tab" style="display:none;">
+                    <div id="device-syslog-events"></div>
                 </div>
                 <div id="device-tab-compliance" class="device-tab" style="display:none;">
                     <div id="device-compliance-status"></div>

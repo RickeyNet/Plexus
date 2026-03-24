@@ -1132,3 +1132,110 @@ export async function updateDashboardPanel(dashboardId, panelId, data) {
 export async function deleteDashboardPanel(dashboardId, panelId) {
     return apiRequest(`/dashboards/${dashboardId}/panels/${panelId}`, { method: 'DELETE' });
 }
+
+// ── Availability Tracking ───────────────────────────────────────────────────
+
+export async function getAvailabilitySummary(groupId = null, days = 30) {
+    const params = [`days=${days}`];
+    if (groupId) params.push(`group_id=${groupId}`);
+    return apiRequest(`/availability/summary?${params.join('&')}`);
+}
+
+export async function getAvailabilityTransitions(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.hostId) qs.set('host_id', params.hostId);
+    if (params.entityType) qs.set('entity_type', params.entityType);
+    if (params.start) qs.set('start', params.start);
+    if (params.end) qs.set('end', params.end);
+    if (params.limit) qs.set('limit', params.limit);
+    return apiRequest(`/availability/transitions?${qs}`);
+}
+
+export async function getAvailabilityOutages(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.hostId) qs.set('host_id', params.hostId);
+    if (params.groupId) qs.set('group_id', params.groupId);
+    if (params.days) qs.set('days', params.days);
+    if (params.limit) qs.set('limit', params.limit);
+    return apiRequest(`/availability/outages?${qs}`);
+}
+
+// ── Per-Port Utilization ────────────────────────────────────────────────────
+
+export async function getInterfaceUtilizationSummary(hostId, days = 1) {
+    return apiRequest(`/interfaces/${hostId}/summary?days=${days}`);
+}
+
+export async function getPortDetail(hostId, ifIndex, start = null, end = null) {
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    const qs = params.toString();
+    return apiRequest(`/interfaces/${hostId}/port/${ifIndex}${qs ? '?' + qs : ''}`);
+}
+
+// ── Custom OID Profiles ─────────────────────────────────────────────────────
+
+export async function getOidProfiles(vendor = null) {
+    const qs = vendor ? `?vendor=${encodeURIComponent(vendor)}` : '';
+    return apiRequest(`/oid-profiles${qs}`);
+}
+
+export async function getOidProfile(id) {
+    return apiRequest(`/oid-profiles/${id}`);
+}
+
+export async function createOidProfile(data) {
+    return apiRequest('/oid-profiles', { method: 'POST', body: data });
+}
+
+export async function updateOidProfile(id, data) {
+    return apiRequest(`/oid-profiles/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteOidProfile(id) {
+    return apiRequest(`/oid-profiles/${id}`, { method: 'DELETE' });
+}
+
+// ── Syslog Events ───────────────────────────────────────────────────────────
+
+export async function getSyslogEvents(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.hostId) qs.set('host_id', params.hostId);
+    if (params.severity) qs.set('severity', params.severity);
+    if (params.limit) qs.set('limit', params.limit);
+    qs.set('event_type', params.eventType || 'syslog');
+    return apiRequest(`/metrics/events?${qs}`);
+}
+
+// ── Reporting & Export ──────────────────────────────────────────────────────
+
+export async function getReports() {
+    return apiRequest('/reports');
+}
+
+export async function createReport(data) {
+    return apiRequest('/reports', { method: 'POST', body: data });
+}
+
+export async function deleteReport(id) {
+    return apiRequest(`/reports/${id}`, { method: 'DELETE' });
+}
+
+export async function generateReport(data) {
+    return apiRequest('/reports/generate', { method: 'POST', body: data });
+}
+
+export async function getReportRuns(reportId = null) {
+    const qs = reportId ? `?report_id=${reportId}` : '';
+    return apiRequest(`/reports/runs${qs}`);
+}
+
+export async function getReportRun(runId) {
+    return apiRequest(`/reports/runs/${runId}`);
+}
+
+export function getExportUrl(type, params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return `/api/reports/export/${type}${qs ? '?' + qs : ''}`;
+}

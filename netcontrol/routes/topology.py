@@ -79,6 +79,42 @@ async def _record_topology_changes(
         )
 
 
+def _weathermap_color(utilization_pct: float) -> str:
+    """Map utilization % to a hex color: green → yellow → orange → red."""
+    pct = max(0, min(100, utilization_pct))
+    if pct < 1:
+        return "#808080"    # grey — idle / no traffic
+    if pct < 25:
+        return "#00cc00"    # green
+    if pct < 50:
+        return "#92d050"    # light green
+    if pct < 60:
+        return "#ffff00"    # yellow
+    if pct < 70:
+        return "#ffc000"    # amber
+    if pct < 80:
+        return "#ff8000"    # orange
+    if pct < 90:
+        return "#ff4000"    # red-orange
+    return "#ff0000"        # red — near saturation
+
+
+def _weathermap_width(utilization_pct: float) -> int:
+    """Map utilization % to an edge width (1–8)."""
+    pct = max(0, min(100, utilization_pct))
+    if pct < 10:
+        return 1
+    if pct < 30:
+        return 2
+    if pct < 50:
+        return 3
+    if pct < 70:
+        return 4
+    if pct < 85:
+        return 6
+    return 8
+
+
 def _calc_interface_utilization(stat: dict) -> dict | None:
     """Calculate utilization percentage from two counter snapshots."""
     if not stat.get("prev_polled_at") or not stat.get("polled_at"):
@@ -115,6 +151,8 @@ def _calc_interface_utilization(stat: dict) -> dict | None:
             "out_pct": round(out_pct, 1),
             "utilization_pct": round(util_pct, 1),
             "speed_mbps": stat.get("if_speed_mbps", 0),
+            "color": _weathermap_color(util_pct),
+            "width": _weathermap_width(util_pct),
         }
     except Exception:
         return None
@@ -361,10 +399,15 @@ async def get_topology(group_id: int | None = Query(default=None)):
                 "target_interface": tgt_iface,
             }
 
-            # Attach utilization data if available (use source interface stats)
+            # Attach utilization + weathermap data (use source interface stats)
             util = util_map.get((src_id, src_iface))
             if util:
                 edge_data["utilization"] = util
+                edge_data["color"] = util.get("color", "#808080")
+                edge_data["width"] = util.get("width", 1)
+            else:
+                edge_data["color"] = "#808080"
+                edge_data["width"] = 1
 
             edges.append(edge_data)
 

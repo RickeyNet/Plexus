@@ -91,6 +91,10 @@ _INSERT_ID_TABLES = {
     "alert_suppressions",
     "sla_targets",
     "sla_metrics",
+    "availability_transitions",
+    "custom_oid_profiles",
+    "report_definitions",
+    "report_runs",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -659,6 +663,57 @@ CREATE TABLE IF NOT EXISTS dashboard_panels (
 
 CREATE INDEX IF NOT EXISTS idx_dashboard_panels_dashboard
     ON dashboard_panels (dashboard_id);
+
+CREATE TABLE IF NOT EXISTS availability_transitions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    entity_type     TEXT    NOT NULL DEFAULT 'host',
+    entity_id       TEXT    NOT NULL DEFAULT '',
+    old_state       TEXT    NOT NULL DEFAULT 'unknown',
+    new_state       TEXT    NOT NULL DEFAULT 'unknown',
+    transition_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    poll_id         INTEGER REFERENCES monitoring_polls(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_avail_transitions_host
+    ON availability_transitions (host_id, entity_type, transition_at);
+
+CREATE TABLE IF NOT EXISTS custom_oid_profiles (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    vendor          TEXT    NOT NULL DEFAULT '',
+    device_type     TEXT    NOT NULL DEFAULT '',
+    description     TEXT    NOT NULL DEFAULT '',
+    oids_json       TEXT    NOT NULL DEFAULT '[]',
+    is_default      INTEGER NOT NULL DEFAULT 0,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS report_definitions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    report_type     TEXT    NOT NULL DEFAULT 'availability',
+    parameters_json TEXT    NOT NULL DEFAULT '{}',
+    schedule        TEXT    NOT NULL DEFAULT '',
+    last_run_at     TEXT    DEFAULT NULL,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS report_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id       INTEGER REFERENCES report_definitions(id) ON DELETE CASCADE,
+    report_type     TEXT    NOT NULL DEFAULT 'availability',
+    parameters_json TEXT    NOT NULL DEFAULT '{}',
+    status          TEXT    NOT NULL DEFAULT 'running',
+    result_json     TEXT    NOT NULL DEFAULT '{}',
+    row_count       INTEGER NOT NULL DEFAULT 0,
+    started_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    completed_at    TEXT    DEFAULT NULL
+);
 """
 
 
@@ -5593,5 +5648,772 @@ async def get_annotations_in_range(
                 })
 
         return results
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Availability Tracking
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def record_availability_transition(
+    host_id: int,
+    entity_type: str,
+    entity_id: str,
+    old_state: str,
+    new_state: str,
+    poll_id: int | None = None,
+) -> int:
+    """Record a state transition (up/down) for a host or interface."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO availability_transitions
+               (host_id, entity_type, entity_id, old_state, new_state, poll_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (host_id, entity_type, entity_id, old_state, new_state, poll_id),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_last_availability_state(
+    host_id: int, entity_type: str = "host", entity_id: str = "",
+) -> dict | None:
+    """Get the most recent availability transition for an entity."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM availability_transitions
+               WHERE host_id = ? AND entity_type = ? AND entity_id = ?
+               ORDER BY transition_at DESC LIMIT 1""",
+            (host_id, entity_type, entity_id),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def get_availability_transitions(
+    host_id: int | None = None,
+    entity_type: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses = ["1=1"]
+        params: list = []
+        if host_id is not None:
+            clauses.append("a.host_id = ?")
+            params.append(host_id)
+        if entity_type:
+            clauses.append("a.entity_type = ?")
+            params.append(entity_type)
+        if start:
+            clauses.append("a.transition_at >= ?")
+            params.append(start)
+        if end:
+            clauses.append("a.transition_at <= ?")
+            params.append(end)
+        where = " AND ".join(clauses)
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT a.*, h.hostname, h.ip_address
+                FROM availability_transitions a
+                JOIN hosts h ON h.id = a.host_id
+                WHERE {where}
+                ORDER BY a.transition_at DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_availability_summary(
+    group_id: int | None = None,
+    days: int = 30,
+) -> dict:
+    """Compute availability summary with outage counts and uptime % from transitions."""
+    db = await get_db()
+    try:
+        group_filter = ""
+        params: list = [days]
+        if group_id is not None:
+            group_filter = "AND h.group_id = ?"
+            params.append(group_id)
+
+        # Get all hosts and their transitions in the window
+        cursor = await db.execute(
+            f"""SELECT h.id AS host_id, h.hostname, h.ip_address, h.status,
+                       h.group_id,
+                       (SELECT COUNT(*) FROM availability_transitions t
+                        WHERE t.host_id = h.id AND t.entity_type = 'host'
+                          AND t.new_state = 'down'
+                          AND t.transition_at >= datetime('now', '-' || ? || ' days')
+                       ) AS outage_count
+                FROM hosts h
+                WHERE 1=1 {group_filter}
+                ORDER BY h.hostname""",
+            tuple(params),
+        )
+        hosts_raw = rows_to_list(await cursor.fetchall())
+
+        hosts = []
+        for h in hosts_raw:
+            # Compute uptime from transitions
+            tcursor = await db.execute(
+                """SELECT transition_at, new_state FROM availability_transitions
+                   WHERE host_id = ? AND entity_type = 'host'
+                     AND transition_at >= datetime('now', '-' || ? || ' days')
+                   ORDER BY transition_at ASC""",
+                (h["host_id"], days),
+            )
+            transitions = rows_to_list(await tcursor.fetchall())
+
+            # Also get the state before the window started
+            pcursor = await db.execute(
+                """SELECT new_state FROM availability_transitions
+                   WHERE host_id = ? AND entity_type = 'host'
+                     AND transition_at < datetime('now', '-' || ? || ' days')
+                   ORDER BY transition_at DESC LIMIT 1""",
+                (h["host_id"], days),
+            )
+            prev = await pcursor.fetchone()
+            initial_state = dict(prev)["new_state"] if prev else "up"
+
+            # Calculate downtime seconds in window
+            total_seconds = days * 86400
+            down_seconds = 0
+            current_state = initial_state
+            window_start = None  # We'll approximate with relative positions
+
+            if transitions:
+                # Walk through transitions accumulating down time
+                last_ts = None
+                for t in transitions:
+                    ts = t["transition_at"]
+                    if current_state == "down" and last_ts is not None:
+                        # Approximate duration between transitions
+                        try:
+                            from datetime import datetime as dt
+                            fmt = "%Y-%m-%d %H:%M:%S"
+                            t1 = dt.strptime(last_ts[:19], fmt)
+                            t2 = dt.strptime(ts[:19], fmt)
+                            down_seconds += (t2 - t1).total_seconds()
+                        except Exception:
+                            pass
+                    current_state = t["new_state"]
+                    last_ts = ts
+
+                # If still down at end of window, add remaining time
+                if current_state == "down" and last_ts:
+                    try:
+                        from datetime import datetime as dt
+                        fmt = "%Y-%m-%d %H:%M:%S"
+                        t1 = dt.strptime(last_ts[:19], fmt)
+                        now = dt.utcnow()
+                        down_seconds += (now - t1).total_seconds()
+                    except Exception:
+                        pass
+            elif initial_state == "down":
+                down_seconds = total_seconds
+
+            uptime_pct = round(max(0, (1 - down_seconds / max(total_seconds, 1))) * 100, 3)
+
+            # Get last outage duration
+            last_outage = None
+            ocursor = await db.execute(
+                """SELECT t1.transition_at AS down_at,
+                          (SELECT MIN(t2.transition_at) FROM availability_transitions t2
+                           WHERE t2.host_id = t1.host_id AND t2.entity_type = 'host'
+                             AND t2.new_state = 'up' AND t2.transition_at > t1.transition_at
+                          ) AS up_at
+                   FROM availability_transitions t1
+                   WHERE t1.host_id = ? AND t1.entity_type = 'host' AND t1.new_state = 'down'
+                   ORDER BY t1.transition_at DESC LIMIT 1""",
+                (h["host_id"],),
+            )
+            orow = await ocursor.fetchone()
+            if orow:
+                odict = dict(orow)
+                last_outage = {
+                    "down_at": odict.get("down_at"),
+                    "up_at": odict.get("up_at"),
+                }
+
+            hosts.append({
+                "host_id": h["host_id"],
+                "hostname": h["hostname"],
+                "ip_address": h["ip_address"],
+                "group_id": h["group_id"],
+                "current_state": h["status"],
+                "uptime_pct": uptime_pct,
+                "outage_count": h["outage_count"] or 0,
+                "down_seconds": round(down_seconds),
+                "last_outage": last_outage,
+            })
+
+        total_hosts = len(hosts) or 1
+        avg_uptime = round(sum(h["uptime_pct"] for h in hosts) / total_hosts, 3)
+        total_outages = sum(h["outage_count"] for h in hosts)
+        currently_down = sum(1 for h in hosts if h["current_state"] in ("down", "error", "unreachable"))
+
+        return {
+            "period_days": days,
+            "host_count": len(hosts),
+            "avg_uptime_pct": avg_uptime,
+            "total_outages": total_outages,
+            "currently_down": currently_down,
+            "hosts": hosts,
+        }
+    finally:
+        await db.close()
+
+
+async def get_outage_history(
+    host_id: int | None = None,
+    group_id: int | None = None,
+    days: int = 30,
+    limit: int = 200,
+) -> list[dict]:
+    """Get outage records (down transitions paired with recovery)."""
+    db = await get_db()
+    try:
+        group_filter = ""
+        params: list = [days]
+        if host_id is not None:
+            group_filter += " AND t1.host_id = ?"
+            params.append(host_id)
+        if group_id is not None:
+            group_filter += " AND h.group_id = ?"
+            params.append(group_id)
+        params.append(limit)
+
+        cursor = await db.execute(
+            f"""SELECT t1.id, t1.host_id, h.hostname, h.ip_address,
+                       t1.entity_type, t1.entity_id,
+                       t1.transition_at AS down_at,
+                       (SELECT MIN(t2.transition_at) FROM availability_transitions t2
+                        WHERE t2.host_id = t1.host_id AND t2.entity_type = t1.entity_type
+                          AND t2.entity_id = t1.entity_id
+                          AND t2.new_state = 'up' AND t2.transition_at > t1.transition_at
+                       ) AS up_at
+                FROM availability_transitions t1
+                JOIN hosts h ON h.id = t1.host_id
+                WHERE t1.new_state = 'down'
+                  AND t1.transition_at >= datetime('now', '-' || ? || ' days')
+                  {group_filter}
+                ORDER BY t1.transition_at DESC LIMIT ?""",
+            tuple(params),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+        for r in rows:
+            if r.get("down_at") and r.get("up_at"):
+                try:
+                    from datetime import datetime as dt
+                    fmt = "%Y-%m-%d %H:%M:%S"
+                    d = dt.strptime(r["down_at"][:19], fmt)
+                    u = dt.strptime(r["up_at"][:19], fmt)
+                    r["duration_seconds"] = int((u - d).total_seconds())
+                except Exception:
+                    r["duration_seconds"] = None
+            else:
+                r["duration_seconds"] = None
+                if r.get("down_at") and not r.get("up_at"):
+                    r["ongoing"] = True
+        return rows
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Per-Port Utilization (95th Percentile)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def get_interface_utilization_summary(
+    host_id: int,
+    days: int = 1,
+) -> list[dict]:
+    """Per-interface utilization summary with avg, peak, and 95th percentile."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT if_index, if_name, if_speed_mbps,
+                      COUNT(*) AS sample_count,
+                      AVG(in_rate_bps) AS avg_in_bps,
+                      AVG(out_rate_bps) AS avg_out_bps,
+                      MAX(in_rate_bps) AS peak_in_bps,
+                      MAX(out_rate_bps) AS peak_out_bps,
+                      AVG(utilization_pct) AS avg_util,
+                      MAX(utilization_pct) AS peak_util
+               FROM interface_ts
+               WHERE host_id = ?
+                 AND sampled_at >= datetime('now', '-' || ? || ' days')
+                 AND in_rate_bps IS NOT NULL
+               GROUP BY if_index
+               ORDER BY if_name""",
+            (host_id, days),
+        )
+        interfaces = rows_to_list(await cursor.fetchall())
+
+        # Compute 95th percentile per interface
+        for iface in interfaces:
+            pcursor = await db.execute(
+                """SELECT utilization_pct FROM interface_ts
+                   WHERE host_id = ? AND if_index = ?
+                     AND sampled_at >= datetime('now', '-' || ? || ' days')
+                     AND utilization_pct IS NOT NULL
+                   ORDER BY utilization_pct ASC""",
+                (host_id, iface["if_index"], days),
+            )
+            values = [r[0] for r in await pcursor.fetchall() if r[0] is not None]
+            if values:
+                idx = int(len(values) * 0.95)
+                idx = min(idx, len(values) - 1)
+                iface["p95_util"] = round(values[idx], 2)
+
+                # Also 95th for in/out bps
+                for direction in ("in", "out"):
+                    bcursor = await db.execute(
+                        f"""SELECT {direction}_rate_bps FROM interface_ts
+                            WHERE host_id = ? AND if_index = ?
+                              AND sampled_at >= datetime('now', '-' || ? || ' days')
+                              AND {direction}_rate_bps IS NOT NULL
+                            ORDER BY {direction}_rate_bps ASC""",
+                        (host_id, iface["if_index"], days),
+                    )
+                    bvals = [r[0] for r in await bcursor.fetchall() if r[0] is not None]
+                    if bvals:
+                        bidx = int(len(bvals) * 0.95)
+                        bidx = min(bidx, len(bvals) - 1)
+                        iface[f"p95_{direction}_bps"] = round(bvals[bidx], 2)
+                    else:
+                        iface[f"p95_{direction}_bps"] = None
+            else:
+                iface["p95_util"] = None
+                iface["p95_in_bps"] = None
+                iface["p95_out_bps"] = None
+
+            # Round numeric fields
+            for k in ("avg_in_bps", "avg_out_bps", "peak_in_bps", "peak_out_bps", "avg_util", "peak_util"):
+                if iface.get(k) is not None:
+                    iface[k] = round(iface[k], 2)
+
+        return interfaces
+    finally:
+        await db.close()
+
+
+async def get_port_detail_ts(
+    host_id: int,
+    if_index: int,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 5000,
+) -> dict:
+    """Detailed time-series for a single port with summary stats."""
+    db = await get_db()
+    try:
+        clauses = ["host_id = ?", "if_index = ?"]
+        params: list = [host_id, if_index]
+        if start:
+            clauses.append("sampled_at >= ?")
+            params.append(start)
+        if end:
+            clauses.append("sampled_at <= ?")
+            params.append(end)
+        where = " AND ".join(clauses)
+        params.append(limit)
+        cursor = await db.execute(
+            f"SELECT * FROM interface_ts WHERE {where} ORDER BY sampled_at ASC LIMIT ?",
+            tuple(params),
+        )
+        samples = rows_to_list(await cursor.fetchall())
+
+        # Compute summary
+        in_rates = [s["in_rate_bps"] for s in samples if s.get("in_rate_bps") is not None]
+        out_rates = [s["out_rate_bps"] for s in samples if s.get("out_rate_bps") is not None]
+        utils = [s["utilization_pct"] for s in samples if s.get("utilization_pct") is not None]
+
+        def percentile(vals, pct):
+            if not vals:
+                return None
+            sorted_v = sorted(vals)
+            idx = min(int(len(sorted_v) * pct / 100), len(sorted_v) - 1)
+            return round(sorted_v[idx], 2)
+
+        summary = {
+            "sample_count": len(samples),
+            "avg_in_bps": round(sum(in_rates) / len(in_rates), 2) if in_rates else None,
+            "avg_out_bps": round(sum(out_rates) / len(out_rates), 2) if out_rates else None,
+            "peak_in_bps": round(max(in_rates), 2) if in_rates else None,
+            "peak_out_bps": round(max(out_rates), 2) if out_rates else None,
+            "p95_in_bps": percentile(in_rates, 95),
+            "p95_out_bps": percentile(out_rates, 95),
+            "avg_util": round(sum(utils) / len(utils), 2) if utils else None,
+            "peak_util": round(max(utils), 2) if utils else None,
+            "p95_util": percentile(utils, 95),
+        }
+        if samples:
+            summary["if_name"] = samples[0].get("if_name", "")
+            summary["if_speed_mbps"] = samples[0].get("if_speed_mbps", 0)
+
+        return {"summary": summary, "samples": samples}
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Custom OID Profiles
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def get_custom_oid_profiles(
+    vendor: str | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        if vendor:
+            cursor = await db.execute(
+                "SELECT * FROM custom_oid_profiles WHERE vendor = ? ORDER BY name",
+                (vendor,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM custom_oid_profiles ORDER BY vendor, name"
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_custom_oid_profile(profile_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM custom_oid_profiles WHERE id = ?", (profile_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def create_custom_oid_profile(
+    name: str, vendor: str = "", device_type: str = "",
+    description: str = "", oids_json: str = "[]",
+    is_default: int = 0, created_by: str = "",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO custom_oid_profiles
+               (name, vendor, device_type, description, oids_json, is_default, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (name, vendor, device_type, description, oids_json, is_default, created_by),
+        )
+        await db.commit()
+        return await get_custom_oid_profile(cursor.lastrowid) or {}
+    finally:
+        await db.close()
+
+
+async def update_custom_oid_profile(profile_id: int, **kwargs) -> dict | None:
+    db = await get_db()
+    try:
+        existing = await get_custom_oid_profile(profile_id)
+        if not existing:
+            return None
+        fields = []
+        params: list = []
+        for key in ("name", "vendor", "device_type", "description", "oids_json", "is_default"):
+            if key in kwargs and kwargs[key] is not None:
+                fields.append(f"{key} = ?")
+                params.append(kwargs[key])
+        if not fields:
+            return existing
+        fields.append("updated_at = datetime('now')")
+        params.append(profile_id)
+        await db.execute(
+            f"UPDATE custom_oid_profiles SET {', '.join(fields)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+        return await get_custom_oid_profile(profile_id)
+    finally:
+        await db.close()
+
+
+async def delete_custom_oid_profile(profile_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM custom_oid_profiles WHERE id = ?", (profile_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Reporting & Export
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_report_definition(
+    name: str, report_type: str = "availability",
+    parameters_json: str = "{}", schedule: str = "",
+    created_by: str = "",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO report_definitions
+               (name, report_type, parameters_json, schedule, created_by)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, report_type, parameters_json, schedule, created_by),
+        )
+        await db.commit()
+        rid = cursor.lastrowid
+        return (await get_report_definition(rid)) or {}
+    finally:
+        await db.close()
+
+
+async def get_report_definition(report_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM report_definitions WHERE id = ?", (report_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def list_report_definitions() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM report_definitions ORDER BY updated_at DESC"
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_report_definition(report_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM report_definitions WHERE id = ?", (report_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def create_report_run(
+    report_id: int | None, report_type: str,
+    parameters_json: str = "{}",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO report_runs
+               (report_id, report_type, parameters_json, status)
+               VALUES (?, ?, ?, 'running')""",
+            (report_id, report_type, parameters_json),
+        )
+        await db.commit()
+        rid = cursor.lastrowid
+        rcursor = await db.execute("SELECT * FROM report_runs WHERE id = ?", (rid,))
+        row = await rcursor.fetchone()
+        return dict(row) if row else {}
+    finally:
+        await db.close()
+
+
+async def complete_report_run(
+    run_id: int, result_json: str, row_count: int, status: str = "completed",
+) -> None:
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE report_runs
+               SET result_json = ?, row_count = ?, status = ?,
+                   completed_at = datetime('now')
+               WHERE id = ?""",
+            (result_json, row_count, status, run_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_report_runs(report_id: int | None = None, limit: int = 50) -> list[dict]:
+    db = await get_db()
+    try:
+        if report_id is not None:
+            cursor = await db.execute(
+                "SELECT * FROM report_runs WHERE report_id = ? ORDER BY started_at DESC LIMIT ?",
+                (report_id, limit),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM report_runs ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_report_run(run_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM report_runs WHERE id = ?", (run_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def generate_availability_report_data(
+    group_id: int | None = None,
+    days: int = 30,
+) -> list[dict]:
+    """Generate availability report rows for CSV export."""
+    db = await get_db()
+    try:
+        group_filter = ""
+        params: list = [days]
+        if group_id is not None:
+            group_filter = "AND h.group_id = ?"
+            params.append(group_id)
+
+        cursor = await db.execute(
+            f"""SELECT h.id AS host_id, h.hostname, h.ip_address, h.device_type,
+                       ig.name AS group_name,
+                       COUNT(p.id) AS total_polls,
+                       SUM(CASE WHEN p.poll_status = 'ok' THEN 1 ELSE 0 END) AS ok_polls,
+                       AVG(p.response_time_ms) AS avg_latency_ms,
+                       MAX(p.response_time_ms) AS max_latency_ms,
+                       AVG(p.packet_loss_pct) AS avg_packet_loss_pct,
+                       AVG(p.cpu_percent) AS avg_cpu,
+                       AVG(p.memory_percent) AS avg_memory,
+                       (SELECT COUNT(*) FROM availability_transitions t
+                        WHERE t.host_id = h.id AND t.entity_type = 'host'
+                          AND t.new_state = 'down'
+                          AND t.transition_at >= datetime('now', '-' || ? || ' days')
+                       ) AS outage_count
+                FROM hosts h
+                LEFT JOIN monitoring_polls p ON p.host_id = h.id
+                  AND p.polled_at >= datetime('now', '-' || ? || ' days')
+                LEFT JOIN inventory_groups ig ON ig.id = h.group_id
+                WHERE 1=1 {group_filter}
+                GROUP BY h.id
+                ORDER BY h.hostname""",
+            tuple(params + [days]),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+        for r in rows:
+            total = r["total_polls"] or 1
+            ok = r["ok_polls"] or 0
+            r["uptime_pct"] = round(ok / total * 100, 3)
+            for k in ("avg_latency_ms", "max_latency_ms", "avg_packet_loss_pct", "avg_cpu", "avg_memory"):
+                if r.get(k) is not None:
+                    r[k] = round(r[k], 2)
+        return rows
+    finally:
+        await db.close()
+
+
+async def generate_compliance_report_data(
+    group_id: int | None = None,
+) -> list[dict]:
+    """Generate compliance report rows for CSV export."""
+    db = await get_db()
+    try:
+        group_filter = ""
+        params: list = []
+        if group_id is not None:
+            group_filter = "WHERE h.group_id = ?"
+            params.append(group_id)
+
+        cursor = await db.execute(
+            f"""SELECT h.id AS host_id, h.hostname, h.ip_address, h.device_type,
+                       ig.name AS group_name,
+                       csr.profile_id, cp.name AS profile_name,
+                       csr.status, csr.total_rules, csr.passed_rules, csr.failed_rules,
+                       csr.scanned_at
+                FROM compliance_scan_results csr
+                JOIN hosts h ON h.id = csr.host_id
+                LEFT JOIN inventory_groups ig ON ig.id = h.group_id
+                LEFT JOIN compliance_profiles cp ON cp.id = csr.profile_id
+                {group_filter}
+                ORDER BY csr.scanned_at DESC""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def generate_interface_report_data(
+    host_id: int | None = None,
+    group_id: int | None = None,
+    days: int = 1,
+) -> list[dict]:
+    """Generate interface utilization report rows for CSV export."""
+    db = await get_db()
+    try:
+        clauses = ["1=1"]
+        params: list = [days]
+        if host_id is not None:
+            clauses.append("h.id = ?")
+            params.append(host_id)
+        if group_id is not None:
+            clauses.append("h.group_id = ?")
+            params.append(group_id)
+        where = " AND ".join(clauses)
+
+        cursor = await db.execute(
+            f"""SELECT h.hostname, h.ip_address,
+                       its.if_index, its.if_name, its.if_speed_mbps,
+                       COUNT(*) AS samples,
+                       AVG(its.in_rate_bps) AS avg_in_bps,
+                       AVG(its.out_rate_bps) AS avg_out_bps,
+                       MAX(its.in_rate_bps) AS peak_in_bps,
+                       MAX(its.out_rate_bps) AS peak_out_bps,
+                       AVG(its.utilization_pct) AS avg_util,
+                       MAX(its.utilization_pct) AS peak_util
+                FROM interface_ts its
+                JOIN hosts h ON h.id = its.host_id
+                WHERE its.sampled_at >= datetime('now', '-' || ? || ' days')
+                  AND {where}
+                GROUP BY its.host_id, its.if_index
+                ORDER BY h.hostname, its.if_name""",
+            tuple(params),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+        for r in rows:
+            for k in ("avg_in_bps", "avg_out_bps", "peak_in_bps", "peak_out_bps", "avg_util", "peak_util"):
+                if r.get(k) is not None:
+                    r[k] = round(r[k], 2)
+        return rows
     finally:
         await db.close()

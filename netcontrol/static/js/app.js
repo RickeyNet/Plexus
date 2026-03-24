@@ -593,6 +593,9 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
 
         // Compliance tab
         renderDeviceComplianceTab(hostId);
+
+        // Syslog tab
+        renderDeviceSyslogTab(hostId);
     } catch (e) {
         console.error('Device detail load error:', e);
         showError(`Failed to load device detail: ${e.message}`);
@@ -1334,6 +1337,10 @@ const NAV_GROUP_CHILDREN = {
     'risk-analysis': 'network',
     'deployments': 'network',
     'sla': 'network',
+    'availability': 'network',
+    'syslog': 'network',
+    'oid-profiles': 'network',
+    'reports': 'network',
 };
 
 window.toggleNavGroup = function(groupName, e) {
@@ -1485,6 +1492,10 @@ const PAGE_LABELS = {
     deployments: 'Deployments',
     monitoring: 'Monitoring',
     sla: 'SLA Dashboards',
+    availability: 'Availability Tracking',
+    syslog: 'Syslog Events',
+    'oid-profiles': 'SNMP OID Profiles',
+    reports: 'Reports & Export',
     'device-detail': 'Device Detail',
     settings: 'Admin Settings',
 };
@@ -1664,6 +1675,18 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'sla':
                 await loadSla({ preserveContent });
+                break;
+            case 'availability':
+                await loadAvailability({ preserveContent });
+                break;
+            case 'syslog':
+                await loadSyslog({ preserveContent });
+                break;
+            case 'oid-profiles':
+                await loadOidProfiles({ preserveContent });
+                break;
+            case 'reports':
+                await loadReports({ preserveContent });
                 break;
             case 'device-detail':
                 await loadDeviceDetail({ preserveContent });
@@ -2480,8 +2503,9 @@ function _buildVisEdge(e) {
     const util = e.utilization;
     const hasUtil = _topoUtilOverlay && util && util.utilization_pct != null;
     const utilPct = hasUtil ? util.utilization_pct : 0;
-    const utilWidth = hasUtil ? 2 + (utilPct / 100) * 6 : 2;
-    const utilColor = hasUtil ? _utilColor(utilPct) : null;
+    // Use weathermap color/width from API if available, fallback to local calculation
+    const utilWidth = hasUtil ? (util.width || (2 + (utilPct / 100) * 6)) : 2;
+    const utilColor = hasUtil ? (util.color || _utilColor(utilPct)) : null;
     let edgeLabel = e.label || '';
     if (hasUtil) edgeLabel = `${edgeLabel ? edgeLabel + ' ' : ''}(${utilPct}%)`;
     return {
@@ -3569,6 +3593,7 @@ function renderInventoryGroups(groups) {
             id: group.id,
             name: group.name,
             description: group.description || '',
+            hosts: group.hosts || [],
         };
     });
 }
@@ -3883,12 +3908,19 @@ window.showDiscoveryModal = function(mode, groupId) {
     }
     const isSync = mode === 'sync';
     const title = isSync ? `Discovery Sync: ${group.name}` : `Discovery Scan: ${group.name}`;
+
+    // For sync mode, pre-populate with the group's existing host IPs
+    let prefillCidrs = '';
+    if (isSync && group.hosts && group.hosts.length) {
+        prefillCidrs = group.hosts.map(h => h.ip_address).filter(Boolean).join('\n');
+    }
+
     showModal(title, `
         <form onsubmit="runInventoryDiscovery(event, ${groupId}, '${isSync ? 'sync' : 'scan'}')">
             <div class="form-group">
                 <label class="form-label">CIDR Targets</label>
-                <textarea class="form-textarea" name="cidrs" placeholder="10.0.0.0/24\n10.0.1.0/24" required></textarea>
-                <div class="form-help">One CIDR per line or comma-separated.</div>
+                <textarea class="form-textarea" name="cidrs" placeholder="10.0.0.0/24\n10.0.1.0/24" ${isSync ? '' : 'required'}>${isSync ? escapeHtml(prefillCidrs) : ''}</textarea>
+                <div class="form-help">${isSync ? 'Pre-filled with group host IPs. Leave as-is to sync existing hosts, or edit to scan different targets.' : 'One CIDR per line or comma-separated.'}</div>
             </div>
             <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
                 <div>
@@ -3935,7 +3967,7 @@ window.runInventoryDiscovery = async function(e, groupId, mode) {
         .map((value) => value.trim())
         .filter(Boolean);
 
-    if (!cidrs.length) {
+    if (!cidrs.length && mode !== 'sync') {
         showError('At least one CIDR target is required');
         return;
     }
@@ -7695,6 +7727,10 @@ const COMMAND_PALETTE_PAGES = [
     { page: 'config-drift', label: 'Config Drift', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>' },
     { page: 'deployments', label: 'Deployments',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>' },
     { page: 'sla',         label: 'SLA Dashboards', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>' },
+    { page: 'availability', label: 'Availability', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' },
+    { page: 'syslog',     label: 'Syslog',        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
+    { page: 'oid-profiles', label: 'OID Profiles', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="10" y1="4" x2="10" y2="20"/></svg>' },
+    { page: 'reports',     label: 'Reports',       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' },
     { page: 'settings',    label: 'Settings',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
 ];
 
@@ -10711,6 +10747,507 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Availability Tracking Page
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadAvailability(options = {}) {
+    const { preserveContent = false } = options;
+    const container = document.getElementById('availability-hosts-list');
+    if (!preserveContent && container) container.innerHTML = skeletonCards(2);
+    try {
+        const groupId = document.getElementById('availability-group-filter')?.value || '';
+        const days = parseInt(document.getElementById('availability-period')?.value || '7', 10);
+
+        // Populate group filter on first load
+        const groupSelect = document.getElementById('availability-group-filter');
+        if (groupSelect && groupSelect.options.length <= 1) {
+            try {
+                const inv = await api.getInventoryGroups(false);
+                const groups = inv?.groups || inv || [];
+                groups.forEach(g => {
+                    const opt = document.createElement('option');
+                    opt.value = g.id;
+                    opt.textContent = g.name;
+                    groupSelect.appendChild(opt);
+                });
+            } catch (_) { /* ignore */ }
+        }
+
+        const [summary, outages, transitions] = await Promise.all([
+            api.getAvailabilitySummary(groupId || null, days),
+            api.getAvailabilityOutages({ groupId: groupId || null, days, limit: 200 }),
+            api.getAvailabilityTransitions({ entityType: 'host', limit: 200 }),
+        ]);
+
+        // Summary cards
+        const cardsEl = document.getElementById('availability-summary-cards');
+        if (cardsEl) {
+            const hosts = summary?.hosts || [];
+            const totalHosts = hosts.length;
+            const upHosts = hosts.filter(h => h.current_state === 'up').length;
+            const avgUptime = totalHosts > 0 ? (hosts.reduce((s, h) => s + (h.uptime_pct || 0), 0) / totalHosts) : 0;
+            const totalOutages = (outages?.outages || outages || []).length;
+            cardsEl.innerHTML = `
+                <div class="drift-summary-card"><div class="drift-summary-value">${upHosts}/${totalHosts}</div><div class="drift-summary-label">Hosts Up</div></div>
+                <div class="drift-summary-card"><div class="drift-summary-value">${avgUptime.toFixed(2)}%</div><div class="drift-summary-label">Avg Uptime</div></div>
+                <div class="drift-summary-card"><div class="drift-summary-value">${totalOutages}</div><div class="drift-summary-label">Outages (${days}d)</div></div>
+                <div class="drift-summary-card"><div class="drift-summary-value">${(transitions?.transitions || []).length}</div><div class="drift-summary-label">Transitions</div></div>
+            `;
+        }
+
+        // Hosts tab
+        const hosts = summary?.hosts || [];
+        if (container) {
+            if (!hosts.length) {
+                container.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">No availability data yet. Enable monitoring to start tracking.</p></div>';
+            } else {
+                container.innerHTML = `<table class="chart-table">
+                    <thead><tr><th>Host</th><th>State</th><th>Uptime %</th><th>Total Up</th><th>Total Down</th><th>Transitions</th></tr></thead>
+                    <tbody>${hosts.map(h => `<tr>
+                        <td>${escapeHtml(h.hostname || `Host #${h.host_id}`)}</td>
+                        <td><span class="badge badge-${h.current_state === 'up' ? 'success' : h.current_state === 'down' ? 'danger' : 'warning'}">${escapeHtml(h.current_state || 'unknown')}</span></td>
+                        <td>${h.uptime_pct != null ? h.uptime_pct.toFixed(2) + '%' : 'N/A'}</td>
+                        <td>${h.total_up_seconds != null ? formatDuration(h.total_up_seconds) : '-'}</td>
+                        <td>${h.total_down_seconds != null ? formatDuration(h.total_down_seconds) : '-'}</td>
+                        <td>${h.transition_count ?? '-'}</td>
+                    </tr>`).join('')}</tbody>
+                </table>`;
+            }
+        }
+
+        // Outages tab
+        const outageList = outages?.outages || outages || [];
+        const outagesEl = document.getElementById('availability-outages-list');
+        if (outagesEl) {
+            if (!outageList.length) {
+                outagesEl.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">No outages recorded.</p></div>';
+            } else {
+                outagesEl.innerHTML = `<table class="chart-table">
+                    <thead><tr><th>Host</th><th>Started</th><th>Ended</th><th>Duration</th></tr></thead>
+                    <tbody>${outageList.map(o => `<tr>
+                        <td>${escapeHtml(o.hostname || `Host #${o.host_id}`)}</td>
+                        <td>${o.down_at ? new Date(o.down_at).toLocaleString() : '-'}</td>
+                        <td>${o.up_at ? new Date(o.up_at).toLocaleString() : 'Ongoing'}</td>
+                        <td>${o.duration_seconds != null ? formatDuration(o.duration_seconds) : 'Ongoing'}</td>
+                    </tr>`).join('')}</tbody>
+                </table>`;
+            }
+        }
+
+        // Transitions tab
+        const transList = transitions?.transitions || transitions || [];
+        const transEl = document.getElementById('availability-transitions-list');
+        if (transEl) {
+            if (!transList.length) {
+                transEl.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">No state transitions recorded.</p></div>';
+            } else {
+                transEl.innerHTML = `<table class="chart-table">
+                    <thead><tr><th>Host</th><th>Entity</th><th>From</th><th>To</th><th>Time</th></tr></thead>
+                    <tbody>${transList.map(t => `<tr>
+                        <td>${escapeHtml(t.hostname || `Host #${t.host_id}`)}</td>
+                        <td>${escapeHtml(t.entity_type || '')}${t.entity_id ? ' ' + escapeHtml(t.entity_id) : ''}</td>
+                        <td><span class="badge badge-${t.old_state === 'up' ? 'success' : t.old_state === 'down' ? 'danger' : 'warning'}">${escapeHtml(t.old_state)}</span></td>
+                        <td><span class="badge badge-${t.new_state === 'up' ? 'success' : t.new_state === 'down' ? 'danger' : 'warning'}">${escapeHtml(t.new_state)}</span></td>
+                        <td>${t.transition_at ? new Date(t.transition_at).toLocaleString() : '-'}</td>
+                    </tr>`).join('')}</tbody>
+                </table>`;
+            }
+        }
+    } catch (error) {
+        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading availability: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadAvailability = loadAvailability;
+
+function formatDuration(seconds) {
+    if (seconds == null) return '-';
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h < 24) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    const d = Math.floor(h / 24);
+    const rh = h % 24;
+    return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+}
+
+function switchAvailTab(tab) {
+    document.querySelectorAll('.avail-tab').forEach(t => t.style.display = 'none');
+    document.querySelectorAll('.avail-tab-btn').forEach(b => b.classList.remove('active'));
+    const tabEl = document.getElementById(`avail-tab-${tab}`);
+    if (tabEl) tabEl.style.display = '';
+    const btn = document.querySelector(`.avail-tab-btn[data-avail-tab="${tab}"]`);
+    if (btn) btn.classList.add('active');
+}
+window.switchAvailTab = switchAvailTab;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Syslog Events Page
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadSyslog(options = {}) {
+    const { preserveContent = false } = options;
+    const container = document.getElementById('syslog-events-list');
+    if (!preserveContent && container) container.innerHTML = skeletonCards(2);
+    try {
+        const severity = document.getElementById('syslog-severity-filter')?.value || '';
+        const eventType = document.getElementById('syslog-type-filter')?.value || '';
+        const events = await api.getSyslogEvents({
+            severity: severity || undefined,
+            eventType: eventType || undefined,
+            limit: 500,
+        });
+        const items = events?.events || events || [];
+
+        // Summary cards
+        const cardsEl = document.getElementById('syslog-summary-cards');
+        if (cardsEl) {
+            const total = items.length;
+            const critCount = items.filter(e => ['emergency', 'alert', 'critical'].includes(e.severity)).length;
+            const errCount = items.filter(e => e.severity === 'error').length;
+            const warnCount = items.filter(e => e.severity === 'warning').length;
+            cardsEl.innerHTML = `
+                <div class="drift-summary-card"><div class="drift-summary-value">${total}</div><div class="drift-summary-label">Total Events</div></div>
+                <div class="drift-summary-card"><div class="drift-summary-value" style="color:var(--danger)">${critCount}</div><div class="drift-summary-label">Critical+</div></div>
+                <div class="drift-summary-card"><div class="drift-summary-value" style="color:var(--danger)">${errCount}</div><div class="drift-summary-label">Errors</div></div>
+                <div class="drift-summary-card"><div class="drift-summary-value" style="color:var(--warning)">${warnCount}</div><div class="drift-summary-label">Warnings</div></div>
+            `;
+        }
+
+        if (container) {
+            if (!items.length) {
+                container.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">No syslog events found.</p></div>';
+            } else {
+                container.innerHTML = `<table class="chart-table">
+                    <thead><tr><th>Time</th><th>Host</th><th>Severity</th><th>Type</th><th>Message</th></tr></thead>
+                    <tbody>${items.map(e => {
+                        const sevClass = ['emergency', 'alert', 'critical'].includes(e.severity) ? 'danger' : e.severity === 'error' ? 'danger' : e.severity === 'warning' ? 'warning' : 'info';
+                        return `<tr>
+                            <td style="white-space:nowrap;">${e.timestamp ? new Date(e.timestamp).toLocaleString() : '-'}</td>
+                            <td>${escapeHtml(e.hostname || e.host_id || '-')}</td>
+                            <td><span class="badge badge-${sevClass}">${escapeHtml(e.severity || '-')}</span></td>
+                            <td>${escapeHtml(e.event_type || '-')}</td>
+                            <td style="max-width:400px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.message || e.event_data || '-')}</td>
+                        </tr>`;
+                    }).join('')}</tbody>
+                </table>`;
+            }
+        }
+
+        // Wire up search filter
+        const searchInput = document.getElementById('syslog-search');
+        if (searchInput) {
+            searchInput.oninput = debounce(() => {
+                const q = searchInput.value.toLowerCase();
+                const rows = container?.querySelectorAll('tbody tr') || [];
+                rows.forEach(row => {
+                    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+                });
+            }, 200);
+        }
+    } catch (error) {
+        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading syslog: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadSyslog = loadSyslog;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Custom OID Profiles Page
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadOidProfiles(options = {}) {
+    const { preserveContent = false } = options;
+    const container = document.getElementById('oid-profiles-list');
+    if (!preserveContent && container) container.innerHTML = skeletonCards(2);
+    try {
+        const vendor = document.getElementById('oid-vendor-filter')?.value || '';
+        const result = await api.getOidProfiles(vendor || null);
+        const profiles = result?.profiles || result || [];
+
+        // Populate vendor filter
+        const vendorSelect = document.getElementById('oid-vendor-filter');
+        if (vendorSelect && vendorSelect.options.length <= 1) {
+            const vendors = [...new Set(profiles.map(p => p.vendor).filter(Boolean))];
+            vendors.forEach(v => {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = v;
+                vendorSelect.appendChild(opt);
+            });
+        }
+
+        if (container) {
+            if (!profiles.length) {
+                container.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">No custom OID profiles. Click "+ New Profile" to create one.</p></div>';
+            } else {
+                container.innerHTML = profiles.map(p => {
+                    let oidCount = 0;
+                    try { oidCount = JSON.parse(p.oids_json || '[]').length; } catch (_) {}
+                    return `<div class="card" style="padding:1rem; margin-bottom:0.75rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <strong>${escapeHtml(p.name)}</strong>
+                                ${p.vendor ? `<span class="badge badge-info" style="margin-left:0.5rem;">${escapeHtml(p.vendor)}</span>` : ''}
+                                ${p.device_type ? `<span class="text-muted" style="margin-left:0.5rem;">${escapeHtml(p.device_type)}</span>` : ''}
+                                ${p.is_default ? '<span class="badge badge-success" style="margin-left:0.5rem;">Default</span>' : ''}
+                            </div>
+                            <div style="display:flex; gap:0.5rem;">
+                                <button class="btn btn-sm btn-secondary" onclick="editOidProfile(${p.id})">Edit</button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteOidProfile(${p.id})">Delete</button>
+                            </div>
+                        </div>
+                        <div class="text-muted" style="font-size:0.85em; margin-top:0.25rem;">
+                            ${escapeHtml(p.description || '')} &middot; ${oidCount} OID mapping${oidCount !== 1 ? 's' : ''}
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+        }
+
+        // Built-in vendor defaults (informational)
+        const defaultsEl = document.getElementById('vendor-oid-defaults-list');
+        if (defaultsEl) {
+            defaultsEl.innerHTML = `<div class="card" style="padding:1rem;">
+                <p class="text-muted" style="margin-bottom:0.75rem;">These OIDs are polled automatically based on device type detection.</p>
+                <table class="chart-table">
+                    <thead><tr><th>Vendor</th><th>Metric</th><th>OID</th></tr></thead>
+                    <tbody>
+                        <tr><td>Cisco IOS</td><td>CPU 5min</td><td>1.3.6.1.4.1.9.9.109.1.1.1.1.8</td></tr>
+                        <tr><td>Cisco IOS</td><td>Memory Used</td><td>1.3.6.1.4.1.9.9.48.1.1.1.5</td></tr>
+                        <tr><td>Juniper</td><td>CPU</td><td>1.3.6.1.4.1.2636.3.1.13.1.8</td></tr>
+                        <tr><td>Juniper</td><td>Memory</td><td>1.3.6.1.4.1.2636.3.1.13.1.11</td></tr>
+                        <tr><td>Arista</td><td>CPU</td><td>1.3.6.1.2.1.25.3.3.1.2</td></tr>
+                        <tr><td>Generic</td><td>sysUpTime</td><td>1.3.6.1.2.1.1.3.0</td></tr>
+                        <tr><td>Generic</td><td>ifHCInOctets</td><td>1.3.6.1.2.1.31.1.1.1.6</td></tr>
+                        <tr><td>Generic</td><td>ifHCOutOctets</td><td>1.3.6.1.2.1.31.1.1.1.10</td></tr>
+                    </tbody>
+                </table>
+            </div>`;
+        }
+    } catch (error) {
+        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading OID profiles: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadOidProfiles = loadOidProfiles;
+
+function showCreateOidProfile() {
+    document.getElementById('oid-profile-edit-id').value = '';
+    document.getElementById('oid-profile-modal-title').textContent = 'New OID Profile';
+    document.getElementById('oid-profile-name').value = '';
+    document.getElementById('oid-profile-vendor').value = '';
+    document.getElementById('oid-profile-device-type').value = '';
+    document.getElementById('oid-profile-description').value = '';
+    document.getElementById('oid-profile-oids').value = '[\n  {"oid": "", "metric_name": "", "label": "", "type": "gauge"}\n]';
+    document.getElementById('oid-profile-modal').style.display = '';
+}
+window.showCreateOidProfile = showCreateOidProfile;
+
+async function editOidProfile(profileId) {
+    try {
+        const profile = await api.getOidProfile(profileId);
+        document.getElementById('oid-profile-edit-id').value = profile.id;
+        document.getElementById('oid-profile-modal-title').textContent = 'Edit OID Profile';
+        document.getElementById('oid-profile-name').value = profile.name || '';
+        document.getElementById('oid-profile-vendor').value = profile.vendor || '';
+        document.getElementById('oid-profile-device-type').value = profile.device_type || '';
+        document.getElementById('oid-profile-description').value = profile.description || '';
+        document.getElementById('oid-profile-oids').value = profile.oids_json || '[]';
+        document.getElementById('oid-profile-modal').style.display = '';
+    } catch (e) { showError(e.message); }
+}
+window.editOidProfile = editOidProfile;
+
+async function saveOidProfile() {
+    const editId = document.getElementById('oid-profile-edit-id').value;
+    const data = {
+        name: document.getElementById('oid-profile-name').value.trim(),
+        vendor: document.getElementById('oid-profile-vendor').value.trim(),
+        device_type: document.getElementById('oid-profile-device-type').value.trim(),
+        description: document.getElementById('oid-profile-description').value.trim(),
+        oids_json: document.getElementById('oid-profile-oids').value.trim(),
+    };
+    if (!data.name) { showError('Profile name is required'); return; }
+    // Validate JSON
+    try { JSON.parse(data.oids_json); } catch (_) { showError('Invalid OID JSON'); return; }
+    try {
+        if (editId) {
+            await api.updateOidProfile(editId, data);
+            showSuccess('OID profile updated');
+        } else {
+            await api.createOidProfile(data);
+            showSuccess('OID profile created');
+        }
+        closeOidProfileModal();
+        loadOidProfiles();
+    } catch (e) { showError(e.message); }
+}
+window.saveOidProfile = saveOidProfile;
+
+function closeOidProfileModal() {
+    document.getElementById('oid-profile-modal').style.display = 'none';
+}
+window.closeOidProfileModal = closeOidProfileModal;
+
+async function deleteOidProfile(profileId) {
+    if (!confirm('Delete this OID profile?')) return;
+    try {
+        await api.deleteOidProfile(profileId);
+        showSuccess('OID profile deleted');
+        loadOidProfiles();
+    } catch (e) { showError(e.message); }
+}
+window.deleteOidProfile = deleteOidProfile;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Reports & Export Page
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadReports(options = {}) {
+    const { preserveContent = false } = options;
+
+    // Populate group filter
+    const groupSelect = document.getElementById('report-group');
+    if (groupSelect && groupSelect.options.length <= 1) {
+        try {
+            const inv = await api.getInventoryGroups(false);
+            const groups = inv?.groups || inv || [];
+            groups.forEach(g => {
+                const opt = document.createElement('option');
+                opt.value = g.id;
+                opt.textContent = g.name;
+                groupSelect.appendChild(opt);
+            });
+        } catch (_) { /* ignore */ }
+    }
+
+    // Load report history
+    const histContainer = document.getElementById('report-runs-list');
+    if (!preserveContent && histContainer) histContainer.innerHTML = skeletonCards(2);
+    try {
+        const result = await api.getReportRuns();
+        const runs = result?.runs || result || [];
+        if (histContainer) {
+            if (!runs.length) {
+                histContainer.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">No reports generated yet.</p></div>';
+            } else {
+                histContainer.innerHTML = `<table class="chart-table">
+                    <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Rows</th><th>Started</th><th>Actions</th></tr></thead>
+                    <tbody>${runs.map(r => `<tr>
+                        <td>#${r.id}</td>
+                        <td>${escapeHtml(r.report_type || '')}</td>
+                        <td><span class="badge badge-${r.status === 'completed' ? 'success' : r.status === 'error' ? 'danger' : 'warning'}">${escapeHtml(r.status || '')}</span></td>
+                        <td>${r.row_count ?? '-'}</td>
+                        <td>${r.started_at ? new Date(r.started_at).toLocaleString() : '-'}</td>
+                        <td>
+                            ${r.status === 'completed' ? `<a class="btn btn-sm btn-secondary" href="/api/reports/runs/${r.id}/csv" download>CSV</a>` : ''}
+                        </td>
+                    </tr>`).join('')}</tbody>
+                </table>`;
+            }
+        }
+    } catch (error) {
+        if (histContainer) histContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error loading reports: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadReports = loadReports;
+
+function switchReportTab(tab) {
+    document.querySelectorAll('.report-tab').forEach(t => t.style.display = 'none');
+    document.querySelectorAll('.report-tab-btn').forEach(b => b.classList.remove('active'));
+    const tabEl = document.getElementById(`report-tab-${tab}`);
+    if (tabEl) tabEl.style.display = '';
+    const btn = document.querySelector(`.report-tab-btn[data-report-tab="${tab}"]`);
+    if (btn) btn.classList.add('active');
+}
+window.switchReportTab = switchReportTab;
+
+function showGenerateReport() {
+    switchReportTab('generate');
+    document.getElementById('report-result').innerHTML = '';
+}
+window.showGenerateReport = showGenerateReport;
+
+function updateReportParams() {
+    const type = document.getElementById('report-type')?.value;
+    const daysGroup = document.getElementById('report-days-group');
+    // Compliance doesn't use days
+    if (daysGroup) daysGroup.style.display = type === 'compliance' ? 'none' : '';
+}
+window.updateReportParams = updateReportParams;
+
+async function generateAndShowReport() {
+    const resultEl = document.getElementById('report-result');
+    if (!resultEl) return;
+    resultEl.innerHTML = '<div class="card" style="padding:1.5rem;">Generating report...</div>';
+
+    const reportType = document.getElementById('report-type')?.value || 'availability';
+    const groupId = document.getElementById('report-group')?.value || '';
+    const days = parseInt(document.getElementById('report-days')?.value || '30', 10);
+
+    const params = {};
+    if (groupId) params.group_id = parseInt(groupId, 10);
+    if (reportType !== 'compliance') params.days = days;
+
+    try {
+        const result = await api.generateReport({ report_type: reportType, parameters: params });
+        const rows = result?.rows || [];
+        if (!rows.length) {
+            resultEl.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">Report generated with 0 rows. No data found for the selected criteria.</p></div>';
+            return;
+        }
+        const cols = Object.keys(rows[0]);
+        resultEl.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span>${rows.length} row${rows.length !== 1 ? 's' : ''} &middot; Run #${result.run_id || '-'}</span>
+                ${result.run_id ? `<a class="btn btn-sm btn-secondary" href="/api/reports/runs/${result.run_id}/csv" download>Export CSV</a>` : ''}
+            </div>
+            <div style="overflow-x:auto;">
+                <table class="chart-table">
+                    <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+                    <tbody>${rows.slice(0, 200).map(r => `<tr>${cols.map(c => `<td>${escapeHtml(String(r[c] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody>
+                </table>
+            </div>
+            ${rows.length > 200 ? `<p class="text-muted">Showing first 200 of ${rows.length} rows. Export CSV for full data.</p>` : ''}
+        `;
+        // Refresh history tab
+        loadReports({ preserveContent: true });
+    } catch (error) {
+        resultEl.innerHTML = `<div class="card" style="color:var(--danger); padding:1.5rem;">Error: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.generateAndShowReport = generateAndShowReport;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Device Syslog Tab
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function renderDeviceSyslogTab(hostId) {
+    const container = document.getElementById('device-syslog-events');
+    if (!container) return;
+    try {
+        const events = await api.getSyslogEvents({ hostId, limit: 100 });
+        const items = events?.events || events || [];
+        if (!items.length) {
+            container.innerHTML = '<p class="text-muted">No syslog events for this device</p>';
+            return;
+        }
+        container.innerHTML = `<table class="chart-table">
+            <thead><tr><th>Time</th><th>Severity</th><th>Message</th></tr></thead>
+            <tbody>${items.map(e => {
+                const sevClass = ['emergency', 'alert', 'critical'].includes(e.severity) ? 'danger' : e.severity === 'error' ? 'danger' : e.severity === 'warning' ? 'warning' : 'info';
+                return `<tr>
+                    <td style="white-space:nowrap;">${e.timestamp ? new Date(e.timestamp).toLocaleString() : '-'}</td>
+                    <td><span class="badge badge-${sevClass}">${escapeHtml(e.severity || '-')}</span></td>
+                    <td>${escapeHtml(e.message || e.event_data || '-')}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table>`;
+    } catch (e) {
+        container.innerHTML = '<p class="text-muted">Could not load syslog events</p>';
+    }
+}
 
 // ── Hash-based routing: back/forward button support ─────────────────────────
 window.addEventListener('popstate', () => {

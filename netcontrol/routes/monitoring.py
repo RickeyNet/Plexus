@@ -584,6 +584,47 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
                 packet_loss_pct=res.get("packet_loss_pct"),
             )
 
+            # ── Availability Tracking: detect state transitions ──
+            try:
+                new_host_state = "up" if res["poll_status"] == "ok" else "down"
+                last_transition = await db.get_last_availability_state(
+                    res["host_id"], "host", "")
+                prev_state = last_transition["new_state"] if last_transition else "unknown"
+                if prev_state != new_host_state:
+                    await db.record_availability_transition(
+                        host_id=res["host_id"],
+                        entity_type="host",
+                        entity_id="",
+                        old_state=prev_state,
+                        new_state=new_host_state,
+                        poll_id=poll_id,
+                    )
+                    LOGGER.info("availability: host %s (%s) %s → %s",
+                                h.get("hostname", "?"), h.get("ip_address", "?"),
+                                prev_state, new_host_state)
+
+                # Track interface state transitions
+                for iface in res.get("if_details", []):
+                    if_idx = str(iface.get("if_index", ""))
+                    if not if_idx:
+                        continue
+                    if_state = "up" if iface.get("oper_status") == "up" else "down"
+                    last_if = await db.get_last_availability_state(
+                        res["host_id"], "interface", if_idx)
+                    prev_if_state = last_if["new_state"] if last_if else "unknown"
+                    if prev_if_state != if_state:
+                        await db.record_availability_transition(
+                            host_id=res["host_id"],
+                            entity_type="interface",
+                            entity_id=if_idx,
+                            old_state=prev_if_state,
+                            new_state=if_state,
+                            poll_id=poll_id,
+                        )
+            except Exception as exc:
+                LOGGER.debug("availability: tracking error for host %s: %s",
+                             res["host_id"], str(exc))
+
             # ── Alerting Engine: evaluate built-in thresholds + user rules ──
             alerts_created += await _evaluate_alerts_for_poll(
                 res, poll_id, h.get("group_id"), alert_rules_cache)
@@ -947,3 +988,69 @@ async def sla_target_delete(target_id: int, request: Request):
                  detail=f"target_id={target_id} name='{target.get('name', '')}'",
                  correlation_id=_corr_id(request))
     return {"ok": True}
+
+
+# ── Availability Tracking Routes ─────────────────────────────────────────────
+
+
+@router.get("/api/availability/summary")
+async def availability_summary_api(
+    group_id: int | None = Query(default=None),
+    days: int = Query(default=30),
+):
+    return await db.get_availability_summary(group_id, days)
+
+
+@router.get("/api/availability/transitions")
+async def availability_transitions_api(
+    host_id: int | None = Query(default=None),
+    entity_type: str | None = Query(default=None),
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    limit: int = Query(default=500),
+):
+    return {
+        "transitions": await db.get_availability_transitions(
+            host_id=host_id, entity_type=entity_type,
+            start=start, end=end, limit=limit,
+        )
+    }
+
+
+@router.get("/api/availability/outages")
+async def availability_outages_api(
+    host_id: int | None = Query(default=None),
+    group_id: int | None = Query(default=None),
+    days: int = Query(default=30),
+    limit: int = Query(default=200),
+):
+    return {
+        "outages": await db.get_outage_history(
+            host_id=host_id, group_id=group_id, days=days, limit=limit,
+        )
+    }
+
+
+# ── Per-Port Utilization Routes ──────────────────────────────────────────────
+
+
+@router.get("/api/interfaces/{host_id}/summary")
+async def interface_utilization_summary_api(
+    host_id: int,
+    days: int = Query(default=1),
+):
+    return {
+        "host_id": host_id,
+        "interfaces": await db.get_interface_utilization_summary(host_id, days),
+    }
+
+
+@router.get("/api/interfaces/{host_id}/port/{if_index}")
+async def port_detail_api(
+    host_id: int,
+    if_index: int,
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    limit: int = Query(default=5000),
+):
+    return await db.get_port_detail_ts(host_id, if_index, start, end, limit)
