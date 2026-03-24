@@ -332,6 +332,16 @@ function navigateToPage(page, { updateHash = true } = {}) {
     expandNavGroupForPage(page);
     updateNavGroupActiveState();
 
+    // Close any open modals before switching pages
+    // Dismiss overlay-based modals (controlled via .active class)
+    document.querySelectorAll('.modal-overlay.active').forEach(m => {
+        m.classList.remove('active');
+    });
+    // Hide standalone modals (controlled via inline display, e.g. SLA detail)
+    document.querySelectorAll('.modal[id][style*="display"]').forEach(m => {
+        if (!m.closest('.modal-overlay')) m.style.display = 'none';
+    });
+
     // Hide all pages
     document.querySelectorAll('.page').forEach(p => {
         p.classList.remove('active');
@@ -7758,10 +7768,12 @@ function renderMonitoringDevices(polls) {
                 <div><span style="color:var(--text-muted);">Routes:</span> ${p.route_count}</div>
                 <div><span style="color:var(--text-muted);">Uptime:</span> ${uptime}</div>
             </div>
-            ${p.cpu_percent != null ? `<div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+            ${p.cpu_percent != null ? `<div style="display:flex; gap:0.5rem; margin-top:0.5rem; align-items:center;">
+                <span style="font-size:0.75em; color:var(--text-muted); width:28px; text-align:right;">CPU</span>
                 <div style="flex:1; background:var(--bg-secondary); border-radius:4px; height:6px; overflow:hidden;" title="CPU ${cpuVal}">
                     <div style="width:${Math.min(p.cpu_percent, 100)}%; height:100%; background:var(--${cpuColor}); border-radius:4px; transition:width 0.3s;"></div>
                 </div>
+                <span style="font-size:0.75em; color:var(--text-muted); width:28px; text-align:right;">MEM</span>
                 <div style="flex:1; background:var(--bg-secondary); border-radius:4px; height:6px; overflow:hidden;" title="Memory ${memVal}">
                     <div style="width:${Math.min(p.memory_percent || 0, 100)}%; height:100%; background:var(--${memColor}); border-radius:4px; transition:width 0.3s;"></div>
                 </div>

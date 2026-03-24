@@ -548,6 +548,88 @@ CREATE TABLE IF NOT EXISTS sla_metrics (
     period_end      TEXT    NOT NULL,
     created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS metric_samples (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    metric_name     TEXT    NOT NULL,
+    labels_json     TEXT    NOT NULL DEFAULT '{}',
+    value           REAL    NOT NULL,
+    sampled_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS metric_rollups (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    metric_name     TEXT    NOT NULL,
+    labels_json     TEXT    NOT NULL DEFAULT '{}',
+    time_window     TEXT    NOT NULL DEFAULT 'hourly',
+    period_start    TEXT    NOT NULL,
+    period_end      TEXT    NOT NULL,
+    val_min         REAL    NOT NULL DEFAULT 0,
+    val_avg         REAL    NOT NULL DEFAULT 0,
+    val_max         REAL    NOT NULL DEFAULT 0,
+    val_p95         REAL    NOT NULL DEFAULT 0,
+    sample_count    INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS interface_ts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    if_index        INTEGER NOT NULL,
+    if_name         TEXT    NOT NULL DEFAULT '',
+    if_speed_mbps   INTEGER DEFAULT 0,
+    in_octets       INTEGER DEFAULT 0,
+    out_octets      INTEGER DEFAULT 0,
+    in_rate_bps     REAL    DEFAULT NULL,
+    out_rate_bps    REAL    DEFAULT NULL,
+    utilization_pct REAL    DEFAULT NULL,
+    sampled_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS vendor_oid_registry (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    vendor          TEXT    NOT NULL,
+    device_type     TEXT    NOT NULL DEFAULT '',
+    cpu_oid         TEXT    NOT NULL DEFAULT '',
+    cpu_walk        INTEGER NOT NULL DEFAULT 1,
+    mem_used_oid    TEXT    NOT NULL DEFAULT '',
+    mem_free_oid    TEXT    NOT NULL DEFAULT '',
+    mem_total_oid   TEXT    NOT NULL DEFAULT '',
+    uptime_oid      TEXT    NOT NULL DEFAULT '1.3.6.1.2.1.1.3',
+    notes           TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(vendor, device_type)
+);
+
+CREATE TABLE IF NOT EXISTS trap_syslog_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_ip       TEXT    NOT NULL DEFAULT '',
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    event_type      TEXT    NOT NULL DEFAULT 'trap',
+    facility        TEXT    NOT NULL DEFAULT '',
+    severity        TEXT    NOT NULL DEFAULT 'info',
+    oid             TEXT    NOT NULL DEFAULT '',
+    message         TEXT    NOT NULL DEFAULT '',
+    raw_data        TEXT    NOT NULL DEFAULT '',
+    received_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_metric_samples_lookup
+    ON metric_samples (metric_name, sampled_at);
+CREATE INDEX IF NOT EXISTS idx_metric_samples_host
+    ON metric_samples (host_id, metric_name, sampled_at);
+CREATE INDEX IF NOT EXISTS idx_metric_rollups_lookup
+    ON metric_rollups (metric_name, time_window, period_start);
+CREATE INDEX IF NOT EXISTS idx_metric_rollups_host
+    ON metric_rollups (host_id, metric_name, time_window, period_start);
+CREATE INDEX IF NOT EXISTS idx_interface_ts_lookup
+    ON interface_ts (host_id, if_index, sampled_at);
+CREATE INDEX IF NOT EXISTS idx_trap_syslog_received
+    ON trap_syslog_events (received_at);
+CREATE INDEX IF NOT EXISTS idx_trap_syslog_host
+    ON trap_syslog_events (host_id, received_at);
 """
 
 
@@ -1347,6 +1429,18 @@ async def get_hosts_by_ids(host_ids: list[int]) -> list[dict]:
             tuple(host_ids)
         )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def find_host_by_ip(ip_address: str) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM hosts WHERE ip_address = ? LIMIT 1", (ip_address,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
     finally:
         await db.close()
 
@@ -4826,6 +4920,423 @@ async def delete_old_sla_metrics(retention_days: int) -> int:
     try:
         cursor = await db.execute(
             "DELETE FROM sla_metrics WHERE period_start < datetime('now', '-' || ? || ' days')",
+            (retention_days,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Metric Samples  (Prometheus-style flexible metric storage)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_metric_sample(
+    host_id: int, metric_name: str, value: float,
+    labels_json: str = "{}",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO metric_samples (host_id, metric_name, labels_json, value)
+               VALUES (?, ?, ?, ?)""",
+            (host_id, metric_name, labels_json, value),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def create_metric_samples_batch(rows: list[tuple]) -> int:
+    """Insert many metric samples at once.  Each tuple:
+    (host_id, metric_name, labels_json, value)
+    """
+    if not rows:
+        return 0
+    db = await get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO metric_samples (host_id, metric_name, labels_json, value)
+               VALUES (?, ?, ?, ?)""",
+            rows,
+        )
+        await db.commit()
+        return len(rows)
+    finally:
+        await db.close()
+
+
+async def query_metric_samples(
+    metric_name: str,
+    host_ids: list[int] | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 5000,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses = ["metric_name = ?"]
+        params: list = [metric_name]
+        if host_ids:
+            placeholders = ",".join("?" for _ in host_ids)
+            clauses.append(f"host_id IN ({placeholders})")
+            params.extend(host_ids)
+        if start:
+            clauses.append("sampled_at >= ?")
+            params.append(start)
+        if end:
+            clauses.append("sampled_at <= ?")
+            params.append(end)
+        where = " AND ".join(clauses)
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT ms.*, h.hostname, h.ip_address
+                FROM metric_samples ms
+                JOIN hosts h ON h.id = ms.host_id
+                WHERE {where}
+                ORDER BY ms.sampled_at DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_old_metric_samples(hours: int = 48) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM metric_samples WHERE sampled_at < datetime('now', '-' || ? || ' hours')",
+            (hours,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Metric Rollups  (downsampled aggregates: hourly / daily)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_metric_rollup(
+    host_id: int, metric_name: str, time_window: str,
+    period_start: str, period_end: str,
+    val_min: float, val_avg: float, val_max: float, val_p95: float,
+    sample_count: int, labels_json: str = "{}",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO metric_rollups
+               (host_id, metric_name, labels_json, time_window,
+                period_start, period_end,
+                val_min, val_avg, val_max, val_p95, sample_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (host_id, metric_name, labels_json, time_window,
+             period_start, period_end,
+             val_min, val_avg, val_max, val_p95, sample_count),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def query_metric_rollups(
+    metric_name: str,
+    time_window: str = "hourly",
+    host_ids: list[int] | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 5000,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses = ["metric_name = ?", "time_window = ?"]
+        params: list = [metric_name, time_window]
+        if host_ids:
+            placeholders = ",".join("?" for _ in host_ids)
+            clauses.append(f"host_id IN ({placeholders})")
+            params.extend(host_ids)
+        if start:
+            clauses.append("period_start >= ?")
+            params.append(start)
+        if end:
+            clauses.append("period_end <= ?")
+            params.append(end)
+        where = " AND ".join(clauses)
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT mr.*, h.hostname, h.ip_address
+                FROM metric_rollups mr
+                JOIN hosts h ON h.id = mr.host_id
+                WHERE {where}
+                ORDER BY mr.period_start DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_raw_samples_for_rollup(
+    metric_name: str, period_start: str, period_end: str,
+) -> list[dict]:
+    """Fetch raw samples in a time range, grouped by host+labels,
+    for the downsampling engine to aggregate."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT host_id, labels_json, value
+               FROM metric_samples
+               WHERE metric_name = ? AND sampled_at >= ? AND sampled_at < ?
+               ORDER BY host_id, labels_json""",
+            (metric_name, period_start, period_end),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_old_metric_rollups(time_window: str, retention_days: int) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM metric_rollups WHERE time_window = ? AND period_start < datetime('now', '-' || ? || ' days')",
+            (time_window, retention_days),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Interface Time-Series
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_interface_ts_sample(
+    host_id: int, if_index: int, if_name: str, if_speed_mbps: int,
+    in_octets: int, out_octets: int,
+    in_rate_bps: float | None = None, out_rate_bps: float | None = None,
+    utilization_pct: float | None = None,
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO interface_ts
+               (host_id, if_index, if_name, if_speed_mbps,
+                in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (host_id, if_index, if_name, if_speed_mbps,
+             in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def create_interface_ts_batch(rows: list[tuple]) -> int:
+    """Batch insert interface time-series samples.  Each tuple:
+    (host_id, if_index, if_name, if_speed_mbps,
+     in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct)
+    """
+    if not rows:
+        return 0
+    db = await get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO interface_ts
+               (host_id, if_index, if_name, if_speed_mbps,
+                in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        await db.commit()
+        return len(rows)
+    finally:
+        await db.close()
+
+
+async def query_interface_ts(
+    host_id: int,
+    if_index: int | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 2000,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses = ["host_id = ?"]
+        params: list = [host_id]
+        if if_index is not None:
+            clauses.append("if_index = ?")
+            params.append(if_index)
+        if start:
+            clauses.append("sampled_at >= ?")
+            params.append(start)
+        if end:
+            clauses.append("sampled_at <= ?")
+            params.append(end)
+        where = " AND ".join(clauses)
+        params.append(limit)
+        cursor = await db.execute(
+            f"SELECT * FROM interface_ts WHERE {where} ORDER BY sampled_at DESC LIMIT ?",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_old_interface_ts(retention_days: int = 30) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM interface_ts WHERE sampled_at < datetime('now', '-' || ? || ' days')",
+            (retention_days,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Vendor OID Registry
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def get_vendor_oid_entries() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM vendor_oid_registry ORDER BY vendor, device_type")
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_vendor_oid_for_host(device_type: str) -> dict | None:
+    """Lookup OIDs by matching device_type substring (case-insensitive)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM vendor_oid_registry
+               WHERE ? LIKE '%' || device_type || '%' COLLATE NOCASE
+               ORDER BY LENGTH(device_type) DESC LIMIT 1""",
+            (device_type,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def upsert_vendor_oid(
+    vendor: str, device_type: str, cpu_oid: str = "",
+    cpu_walk: int = 1, mem_used_oid: str = "", mem_free_oid: str = "",
+    mem_total_oid: str = "", uptime_oid: str = "1.3.6.1.2.1.1.3",
+    notes: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO vendor_oid_registry
+               (vendor, device_type, cpu_oid, cpu_walk, mem_used_oid, mem_free_oid, mem_total_oid, uptime_oid, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(vendor, device_type) DO UPDATE SET
+                   cpu_oid=excluded.cpu_oid, cpu_walk=excluded.cpu_walk,
+                   mem_used_oid=excluded.mem_used_oid, mem_free_oid=excluded.mem_free_oid,
+                   mem_total_oid=excluded.mem_total_oid, uptime_oid=excluded.uptime_oid,
+                   notes=excluded.notes""",
+            (vendor, device_type, cpu_oid, cpu_walk, mem_used_oid, mem_free_oid, mem_total_oid, uptime_oid, notes),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def delete_vendor_oid(entry_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM vendor_oid_registry WHERE id = ?", (entry_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Trap / Syslog Events
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_trap_syslog_event(
+    source_ip: str, event_type: str = "trap", facility: str = "",
+    severity: str = "info", oid: str = "", message: str = "",
+    raw_data: str = "", host_id: int | None = None,
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO trap_syslog_events
+               (source_ip, host_id, event_type, facility, severity, oid, message, raw_data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (source_ip, host_id, event_type, facility, severity, oid, message, raw_data),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_trap_syslog_events(
+    event_type: str | None = None,
+    host_id: int | None = None,
+    severity: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if event_type:
+            clauses.append("e.event_type = ?")
+            params.append(event_type)
+        if host_id is not None:
+            clauses.append("e.host_id = ?")
+            params.append(host_id)
+        if severity:
+            clauses.append("e.severity = ?")
+            params.append(severity)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT e.*, h.hostname, h.ip_address
+                FROM trap_syslog_events e
+                LEFT JOIN hosts h ON h.id = e.host_id
+                {where}
+                ORDER BY e.received_at DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_old_trap_syslog_events(retention_days: int = 30) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM trap_syslog_events WHERE received_at < datetime('now', '-' || ? || ' days')",
             (retention_days,),
         )
         await db.commit()
