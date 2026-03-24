@@ -91,6 +91,8 @@ const listViewState = {
     deployments: { items: [], query: '', statusFilter: '' },
     monitoring: { polls: [], alerts: [], query: '', tab: 'devices' },
     sla: { summary: null, hosts: [], query: '', tab: 'hosts' },
+    deviceDetail: { hostId: null, tab: 'overview' },
+    customDashboards: { items: [], currentId: null, editMode: false },
 };
 
 function normalizeTheme(theme) {
@@ -105,6 +107,8 @@ function applyTheme(theme) {
         const select = document.getElementById(id);
         if (select) select.value = chosen;
     });
+    // Refresh ECharts theme colors
+    PlexusChart.rethemeAll();
     // Refresh topology vis-network colors for the new theme
     if (_topologyNetwork && _topologyData && _topoNodesDS && _topoEdgesDS) {
         _getTopoThemeColors();
@@ -151,6 +155,1067 @@ function initPerformanceMode() {
     const saved = localStorage.getItem(PERF_KEY);
     const enabled = saved !== null ? saved === '1' : osPrefers;
     applyPerformanceMode(enabled);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Global Time Range Selector
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const METRIC_PAGES = ['monitoring', 'sla', 'device-detail', 'dashboard'];
+
+const globalTimeRange = {
+    range: '6h',
+    customStart: null,
+    customEnd: null,
+    listeners: [],
+};
+
+function setGlobalTimeRange(range, customStart = null, customEnd = null) {
+    globalTimeRange.range = range;
+    globalTimeRange.customStart = customStart;
+    globalTimeRange.customEnd = customEnd;
+    // Update button active states
+    document.querySelectorAll('.time-range-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.range === range);
+    });
+    const customEl = document.getElementById('time-range-custom');
+    if (customEl) customEl.style.display = range === 'custom' ? 'flex' : 'none';
+    // Notify listeners
+    globalTimeRange.listeners.forEach(cb => {
+        try { cb(getTimeRangeParams()); } catch (e) { console.error('Time range listener error:', e); }
+    });
+}
+
+function onTimeRangeChange(callback) {
+    globalTimeRange.listeners.push(callback);
+}
+
+function offTimeRangeChange(callback) {
+    globalTimeRange.listeners = globalTimeRange.listeners.filter(cb => cb !== callback);
+}
+
+function getTimeRangeParams() {
+    if (globalTimeRange.range === 'custom' && globalTimeRange.customStart && globalTimeRange.customEnd) {
+        return { range: 'custom', start: globalTimeRange.customStart, end: globalTimeRange.customEnd };
+    }
+    return { range: globalTimeRange.range };
+}
+
+function updateTimeRangeBarVisibility(page) {
+    const bar = document.getElementById('time-range-bar');
+    if (bar) bar.style.display = METRIC_PAGES.includes(page) ? 'flex' : 'none';
+}
+
+function initTimeRangeBar() {
+    document.querySelectorAll('.time-range-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const range = btn.dataset.range;
+            if (range === 'custom') {
+                setGlobalTimeRange('custom', globalTimeRange.customStart, globalTimeRange.customEnd);
+            } else {
+                setGlobalTimeRange(range);
+            }
+        });
+    });
+}
+
+function applyCustomTimeRange() {
+    const start = document.getElementById('time-range-start')?.value;
+    const end = document.getElementById('time-range-end')?.value;
+    if (start && end) {
+        setGlobalTimeRange('custom', start, end);
+    } else {
+        showError('Please select both start and end times');
+    }
+}
+window.applyCustomTimeRange = applyCustomTimeRange;
+
+function refreshCurrentMetricView() {
+    if (currentPage === 'device-detail') loadDeviceDetail({ force: true });
+    else if (currentPage === 'dashboard' && listViewState.customDashboards.currentId) refreshDashboardPanels();
+    else loadPageData(currentPage, { force: true });
+}
+window.refreshCurrentMetricView = refreshCurrentMetricView;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PlexusChart — ECharts Abstraction Layer
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const PlexusChart = {
+    instances: new Map(),
+    options: new Map(),
+
+    getThemeColors() {
+        const cs = getComputedStyle(document.documentElement);
+        const get = (v) => cs.getPropertyValue(v).trim();
+        return {
+            bg: get('--card-bg') || get('--bg-secondary') || '#1a1a2e',
+            text: get('--text') || '#e0e0e0',
+            textMuted: get('--text-muted') || '#888',
+            primary: get('--primary') || '#4ade80',
+            primaryLight: get('--primary-light') || '#86efac',
+            border: get('--border') || '#333',
+            success: get('--success') || '#22c55e',
+            warning: get('--warning') || '#f59e0b',
+            danger: get('--danger') || '#ef4444',
+            gridLine: get('--border') || '#333',
+        };
+    },
+
+    getBaseOption(colors) {
+        return {
+            backgroundColor: 'transparent',
+            textStyle: { color: colors.text, fontFamily: 'Inter, system-ui, sans-serif' },
+            grid: { left: 50, right: 20, top: 30, bottom: 35, containLabel: false },
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: colors.bg,
+                borderColor: colors.border,
+                textStyle: { color: colors.text, fontSize: 12 },
+            },
+        };
+    },
+
+    create(containerId) {
+        this.destroy(containerId);
+        const container = document.getElementById(containerId);
+        if (!container) return null;
+        if (!container.offsetHeight) container.style.height = '280px';
+        const chart = echarts.init(container, null, { renderer: 'canvas' });
+        this.instances.set(containerId, chart);
+        // Resize observer
+        const ro = new ResizeObserver(() => chart.resize());
+        ro.observe(container);
+        chart._plexusRO = ro;
+        return chart;
+    },
+
+    destroy(containerId) {
+        const chart = this.instances.get(containerId);
+        if (chart) {
+            if (chart._plexusRO) { chart._plexusRO.disconnect(); chart._plexusRO = null; }
+            chart.dispose();
+            this.instances.delete(containerId);
+            this.options.delete(containerId);
+        }
+    },
+
+    destroyAll() {
+        this.instances.forEach((chart, id) => {
+            if (chart._plexusRO) { chart._plexusRO.disconnect(); chart._plexusRO = null; }
+            chart.dispose();
+        });
+        this.instances.clear();
+        this.options.clear();
+    },
+
+    rethemeAll() {
+        const colors = this.getThemeColors();
+        this.options.forEach((opt, id) => {
+            const chart = this.instances.get(id);
+            if (chart && !chart.isDisposed()) {
+                const base = this.getBaseOption(colors);
+                chart.setOption({ ...base, textStyle: base.textStyle, tooltip: base.tooltip });
+            }
+        });
+    },
+
+    timeSeries(containerId, seriesData, options = {}) {
+        const chart = this.create(containerId);
+        if (!chart) return null;
+        const colors = this.getThemeColors();
+        const base = this.getBaseOption(colors);
+        const palette = [colors.primary, colors.warning, colors.danger, colors.primaryLight, '#8b5cf6', '#06b6d4', '#f97316', '#ec4899'];
+
+        const series = seriesData.map((s, i) => ({
+            name: s.name || `Series ${i + 1}`,
+            type: 'line',
+            smooth: true,
+            symbol: 'none',
+            lineStyle: { width: 2 },
+            areaStyle: options.area ? { opacity: 0.08 } : undefined,
+            data: s.data.map(d => [new Date(d.time).getTime(), d.value]),
+            color: s.color || palette[i % palette.length],
+            markLine: undefined,
+        }));
+
+        const opt = {
+            ...base,
+            xAxis: {
+                type: 'time',
+                axisLine: { lineStyle: { color: colors.border } },
+                axisLabel: { color: colors.textMuted, fontSize: 11 },
+                splitLine: { show: false },
+            },
+            yAxis: {
+                type: 'value',
+                name: options.yAxisName || '',
+                nameTextStyle: { color: colors.textMuted, fontSize: 11 },
+                min: options.yMin ?? undefined,
+                max: options.yMax ?? undefined,
+                axisLine: { show: false },
+                axisLabel: { color: colors.textMuted, fontSize: 11 },
+                splitLine: { lineStyle: { color: colors.gridLine, opacity: 0.3 } },
+            },
+            legend: series.length > 1 ? {
+                data: series.map(s => s.name),
+                textStyle: { color: colors.textMuted, fontSize: 11 },
+                top: 0,
+            } : undefined,
+            series,
+            dataZoom: options.zoom ? [{ type: 'inside' }] : undefined,
+        };
+
+        chart.setOption(opt);
+        this.options.set(containerId, opt);
+        return chart;
+    },
+
+    gauge(containerId, value, options = {}) {
+        const chart = this.create(containerId);
+        if (!chart) return null;
+        const colors = this.getThemeColors();
+        const max = options.max || 100;
+        const opt = {
+            backgroundColor: 'transparent',
+            series: [{
+                type: 'gauge',
+                min: 0, max,
+                progress: { show: true, width: 14 },
+                axisLine: { lineStyle: { width: 14, color: [[0.6, colors.success], [0.8, colors.warning], [1, colors.danger]] } },
+                axisTick: { show: false },
+                splitLine: { show: false },
+                axisLabel: { show: false },
+                pointer: { show: false },
+                anchor: { show: false },
+                title: { show: true, offsetCenter: [0, '70%'], fontSize: 12, color: colors.textMuted },
+                detail: {
+                    valueAnimation: true, fontSize: 24, fontWeight: 700, color: colors.text,
+                    offsetCenter: [0, '0%'], formatter: options.formatter || '{value}%',
+                },
+                data: [{ value: Math.round(value * 10) / 10, name: options.title || '' }],
+            }],
+        };
+        chart.setOption(opt);
+        this.options.set(containerId, opt);
+        return chart;
+    },
+
+    bar(containerId, categories, values, options = {}) {
+        const chart = this.create(containerId);
+        if (!chart) return null;
+        const colors = this.getThemeColors();
+        const base = this.getBaseOption(colors);
+        const opt = {
+            ...base,
+            xAxis: {
+                type: options.horizontal ? 'value' : 'category',
+                data: options.horizontal ? undefined : categories,
+                axisLine: { lineStyle: { color: colors.border } },
+                axisLabel: { color: colors.textMuted, fontSize: 11, rotate: options.rotateLabels || 0 },
+            },
+            yAxis: {
+                type: options.horizontal ? 'category' : 'value',
+                data: options.horizontal ? categories : undefined,
+                axisLine: { show: false },
+                axisLabel: { color: colors.textMuted, fontSize: 11 },
+                splitLine: { lineStyle: { color: colors.gridLine, opacity: 0.3 } },
+            },
+            series: [{
+                type: 'bar',
+                data: values,
+                itemStyle: {
+                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: colors.primary },
+                        { offset: 1, color: colors.primaryLight },
+                    ]),
+                    borderRadius: [4, 4, 0, 0],
+                },
+                barMaxWidth: 40,
+            }],
+        };
+        chart.setOption(opt);
+        this.options.set(containerId, opt);
+        return chart;
+    },
+
+    heatmap(containerId, xLabels, yLabels, data, options = {}) {
+        const chart = this.create(containerId);
+        if (!chart) return null;
+        const colors = this.getThemeColors();
+        const base = this.getBaseOption(colors);
+        const opt = {
+            ...base,
+            grid: { ...base.grid, bottom: 60 },
+            xAxis: {
+                type: 'category', data: xLabels,
+                axisLabel: { color: colors.textMuted, fontSize: 10, rotate: 45 },
+                splitArea: { show: true },
+            },
+            yAxis: {
+                type: 'category', data: yLabels,
+                axisLabel: { color: colors.textMuted, fontSize: 11 },
+                splitArea: { show: true },
+            },
+            visualMap: {
+                min: options.min || 0, max: options.max || 100,
+                calculable: true, orient: 'horizontal', left: 'center', bottom: 0,
+                inRange: { color: [colors.success, colors.warning, colors.danger] },
+                textStyle: { color: colors.textMuted },
+            },
+            series: [{
+                type: 'heatmap', data,
+                label: { show: data.length < 200, color: colors.text, fontSize: 10 },
+                emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } },
+            }],
+        };
+        chart.setOption(opt);
+        this.options.set(containerId, opt);
+        return chart;
+    },
+
+    table(containerId, columns, rows) {
+        // Render as HTML table since ECharts tables aren't great
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        const escH = (s) => escapeHtml(String(s ?? ''));
+        container.style.height = 'auto';
+        container.innerHTML = `
+            <table class="chart-table">
+                <thead><tr>${columns.map(c => `<th>${escH(c.label || c.key)}</th>`).join('')}</tr></thead>
+                <tbody>${rows.map(row => `<tr>${columns.map(c => `<td>${escH(row[c.key])}</td>`).join('')}</tr>`).join('')}</tbody>
+            </table>`;
+    },
+
+    addAnnotations(containerId, events) {
+        const chart = this.instances.get(containerId);
+        if (!chart || !events?.length) return;
+        const categoryColors = { deployment: '#3b82f6', config: '#f59e0b', alert: '#ef4444', default: '#8b5cf6' };
+        const markLines = events.map(e => ({
+            xAxis: new Date(e.timestamp).getTime(),
+            label: {
+                formatter: e.title || e.action || '',
+                position: 'start', fontSize: 9, color: categoryColors[e.category] || categoryColors.default,
+            },
+            lineStyle: { color: categoryColors[e.category] || categoryColors.default, type: 'dashed', width: 1 },
+        }));
+        const opt = chart.getOption();
+        if (opt.series?.length) {
+            opt.series[0].markLine = {
+                silent: true, symbol: 'none',
+                data: markLines,
+            };
+            chart.setOption(opt);
+        }
+    },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Device Detail Page
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _deviceDetailTimeListener = null;
+
+function navigateToDeviceDetail(hostId) {
+    listViewState.deviceDetail.hostId = hostId;
+    listViewState.deviceDetail.tab = 'overview';
+    navigateToPage('device-detail');
+}
+window.navigateToDeviceDetail = navigateToDeviceDetail;
+
+function switchDeviceTab(tab) {
+    listViewState.deviceDetail.tab = tab;
+    document.querySelectorAll('.dev-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.devTab === tab));
+    document.querySelectorAll('.device-tab').forEach(t => t.style.display = 'none');
+    const target = document.getElementById(`device-tab-${tab}`);
+    if (target) target.style.display = '';
+}
+window.switchDeviceTab = switchDeviceTab;
+
+async function loadDeviceDetail({ preserveContent, force } = {}) {
+    const hostId = listViewState.deviceDetail.hostId;
+    if (!hostId) { navigateToPage('monitoring'); return; }
+
+    // Register time-range listener
+    if (_deviceDetailTimeListener) offTimeRangeChange(_deviceDetailTimeListener);
+    _deviceDetailTimeListener = () => loadDeviceDetail({ force: true });
+    onTimeRangeChange(_deviceDetailTimeListener);
+
+    const trp = getTimeRangeParams();
+    const range = trp.range === 'custom' ? '24h' : trp.range;
+
+    try {
+        // Fetch data in parallel
+        const [cpuData, memData, rtData, plData, ifData, alertsRes, pollHistory] = await Promise.allSettled([
+            api.queryMetrics('cpu_percent', String(hostId), range),
+            api.queryMetrics('memory_percent', String(hostId), range),
+            api.queryMetrics('response_time_ms', String(hostId), range),
+            api.queryMetrics('packet_loss_pct', String(hostId), range),
+            api.getInterfaceTimeSeries(hostId, range),
+            api.getMonitoringAlerts({ hostId, limit: 50 }),
+            api.getMonitoringPollHistory(hostId, 1),
+        ]);
+
+        // Info bar
+        const latestPoll = pollHistory.status === 'fulfilled' ? (pollHistory.value?.polls || pollHistory.value || [])[0] : null;
+        renderDeviceInfoBar(hostId, latestPoll);
+
+        // Title
+        const title = document.getElementById('device-detail-title');
+        if (title) title.textContent = latestPoll?.hostname || `Device #${hostId}`;
+
+        // CPU chart
+        const cpuSeries = extractMetricSeries(cpuData, 'CPU %');
+        PlexusChart.timeSeries('device-chart-cpu', cpuSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
+
+        // Memory chart
+        const memSeries = extractMetricSeries(memData, 'Memory %');
+        PlexusChart.timeSeries('device-chart-memory', memSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
+
+        // Response time chart
+        const rtSeries = extractMetricSeries(rtData, 'Response Time');
+        PlexusChart.timeSeries('device-chart-response', rtSeries, { area: true, yAxisName: 'ms' });
+
+        // Packet loss chart
+        const plSeries = extractMetricSeries(plData, 'Packet Loss');
+        PlexusChart.timeSeries('device-chart-pktloss', plSeries, { area: true, yAxisName: '%', yMin: 0 });
+
+        // Interface summary bar chart
+        if (ifData.status === 'fulfilled') {
+            renderInterfaceSummaryChart(ifData.value);
+            renderInterfaceDetailCharts(ifData.value);
+        }
+
+        // Alert history
+        if (alertsRes.status === 'fulfilled') {
+            renderDeviceAlertHistory(alertsRes.value?.alerts || alertsRes.value || []);
+        }
+
+        // Compliance tab
+        renderDeviceComplianceTab(hostId);
+    } catch (e) {
+        console.error('Device detail load error:', e);
+        showError(`Failed to load device detail: ${e.message}`);
+    }
+}
+
+function refreshDeviceDetail() {
+    loadDeviceDetail({ force: true });
+}
+window.refreshDeviceDetail = refreshDeviceDetail;
+
+function extractMetricSeries(result, name) {
+    if (result.status !== 'fulfilled') return [{ name, data: [] }];
+    const raw = result.value?.data || [];
+    return [{
+        name,
+        data: raw.map(d => ({
+            time: d.sampled_at || d.period_start || d.timestamp,
+            value: d.val_avg ?? d.value ?? 0,
+        })),
+    }];
+}
+
+function renderDeviceInfoBar(hostId, poll) {
+    const el = document.getElementById('device-detail-info');
+    if (!el) return;
+    if (!poll) { el.innerHTML = '<span class="text-muted">No poll data available</span>'; return; }
+    const uptimeStr = poll.uptime_seconds ? formatUptime(poll.uptime_seconds) : 'N/A';
+    const polledAt = poll.polled_at ? new Date(poll.polled_at).toLocaleString() : 'N/A';
+    el.innerHTML = `
+        <div class="device-info-item"><span class="device-info-label">Hostname</span><span>${escapeHtml(poll.hostname || 'Unknown')}</span></div>
+        <div class="device-info-item"><span class="device-info-label">IP</span><span>${escapeHtml(poll.ip_address || 'N/A')}</span></div>
+        <div class="device-info-item"><span class="device-info-label">Type</span><span>${escapeHtml(poll.device_type || 'N/A')}</span></div>
+        <div class="device-info-item"><span class="device-info-label">CPU</span><span>${poll.cpu_percent != null ? poll.cpu_percent.toFixed(1) + '%' : 'N/A'}</span></div>
+        <div class="device-info-item"><span class="device-info-label">Memory</span><span>${poll.memory_percent != null ? poll.memory_percent.toFixed(1) + '%' : 'N/A'}</span></div>
+        <div class="device-info-item"><span class="device-info-label">Uptime</span><span>${uptimeStr}</span></div>
+        <div class="device-info-item"><span class="device-info-label">Last Poll</span><span>${polledAt}</span></div>`;
+}
+
+function renderInterfaceSummaryChart(ifData) {
+    const interfaces = ifData?.interfaces || ifData || [];
+    if (!interfaces.length) return;
+    // Group by interface name, take latest utilization
+    const ifMap = new Map();
+    interfaces.forEach(d => {
+        const key = d.if_name || `idx-${d.if_index}`;
+        if (!ifMap.has(key) || new Date(d.sampled_at) > new Date(ifMap.get(key).sampled_at)) {
+            ifMap.set(key, d);
+        }
+    });
+    const sorted = [...ifMap.values()].sort((a, b) => (b.utilization_pct || 0) - (a.utilization_pct || 0)).slice(0, 20);
+    PlexusChart.bar('device-chart-if-summary', sorted.map(d => d.if_name || `idx-${d.if_index}`), sorted.map(d => Math.round((d.utilization_pct || 0) * 10) / 10), { rotateLabels: 45 });
+}
+
+function renderInterfaceDetailCharts(ifData) {
+    const container = document.getElementById('device-interface-charts');
+    if (!container) return;
+    const interfaces = ifData?.interfaces || ifData || [];
+    if (!interfaces.length) { container.innerHTML = '<p class="text-muted">No interface data available</p>'; return; }
+    // Group by interface
+    const grouped = {};
+    interfaces.forEach(d => {
+        const key = d.if_name || `idx-${d.if_index}`;
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(d);
+    });
+    const ifNames = Object.keys(grouped).slice(0, 12);
+    container.innerHTML = ifNames.map(name => `
+        <div class="card" style="margin-bottom:1rem;">
+            <div class="card-title">${escapeHtml(name)}</div>
+            <div id="if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}" class="chart-container"></div>
+        </div>`).join('');
+    ifNames.forEach(name => {
+        const data = grouped[name].sort((a, b) => new Date(a.sampled_at) - new Date(b.sampled_at));
+        const chartId = `if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        PlexusChart.timeSeries(chartId, [
+            { name: 'In (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.in_rate_bps || 0 })), color: '#3b82f6' },
+            { name: 'Out (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.out_rate_bps || 0 })), color: '#f59e0b' },
+        ], { area: true, yAxisName: 'bps' });
+    });
+}
+
+function renderDeviceAlertHistory(alerts) {
+    const container = document.getElementById('device-alert-history');
+    if (!container) return;
+    if (!alerts.length) { container.innerHTML = '<p class="text-muted">No alerts for this device</p>'; return; }
+    const sevClass = s => s === 'critical' ? 'danger' : s === 'warning' ? 'warning' : 'info';
+    container.innerHTML = `
+        <table class="chart-table">
+            <thead><tr><th>Time</th><th>Severity</th><th>Metric</th><th>Message</th><th>Status</th></tr></thead>
+            <tbody>${alerts.map(a => `<tr>
+                <td>${new Date(a.created_at).toLocaleString()}</td>
+                <td><span class="badge badge-${sevClass(a.severity)}">${escapeHtml(a.severity)}</span></td>
+                <td>${escapeHtml(a.metric || '')}</td>
+                <td>${escapeHtml(a.message || '')}</td>
+                <td>${a.acknowledged ? 'Ack' : 'Open'}</td>
+            </tr>`).join('')}</tbody>
+        </table>`;
+}
+
+async function renderDeviceComplianceTab(hostId) {
+    const container = document.getElementById('device-compliance-status');
+    if (!container) return;
+    try {
+        const results = await api.getComplianceScanResults({ hostId, limit: 20 });
+        const items = results?.results || results || [];
+        if (!items.length) { container.innerHTML = '<p class="text-muted">No compliance data for this device</p>'; return; }
+        container.innerHTML = `
+            <table class="chart-table">
+                <thead><tr><th>Profile</th><th>Status</th><th>Score</th><th>Scanned</th></tr></thead>
+                <tbody>${items.map(r => `<tr>
+                    <td>${escapeHtml(r.profile_name || '')}</td>
+                    <td><span class="badge badge-${r.status === 'pass' ? 'success' : r.status === 'fail' ? 'danger' : 'warning'}">${escapeHtml(r.status || '')}</span></td>
+                    <td>${r.score != null ? r.score + '%' : 'N/A'}</td>
+                    <td>${r.scanned_at ? new Date(r.scanned_at).toLocaleString() : 'N/A'}</td>
+                </tr>`).join('')}</tbody>
+            </table>`;
+    } catch (e) {
+        container.innerHTML = '<p class="text-muted">Could not load compliance data</p>';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Custom Dashboards Page
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _dashboardTimeListener = null;
+
+function setDashboardDefaultContentVisible(visible) {
+    // Hide/show the default dashboard sections (stats, jobs, timeline, groups) when viewing a custom dashboard
+    const container = document.getElementById('page-dashboard');
+    if (!container) return;
+    const marker = document.getElementById('dashboard-default-content-end');
+    if (!marker) return;
+    let el = container.firstElementChild;
+    while (el && el !== marker) {
+        el.style.display = visible ? '' : 'none';
+        el = el.nextElementSibling;
+    }
+    if (marker) marker.style.display = 'none'; // always hide the marker itself
+}
+
+async function loadCustomDashboards({ preserveContent } = {}) {
+    const listView = document.getElementById('dashboards-list-view');
+    const viewer = document.getElementById('dashboard-viewer');
+    // If we have a current dashboard, show viewer
+    if (listViewState.customDashboards.currentId) {
+        setDashboardDefaultContentVisible(false);
+        if (listView) listView.style.display = 'none';
+        if (viewer) viewer.style.display = '';
+        await viewDashboard(listViewState.customDashboards.currentId);
+        return;
+    }
+    // Show default dashboard content + dashboards list
+    setDashboardDefaultContentVisible(true);
+    if (listView) listView.style.display = '';
+    if (viewer) viewer.style.display = 'none';
+    try {
+        const data = await api.getCustomDashboards();
+        const dashboards = data?.dashboards || data || [];
+        listViewState.customDashboards.items = dashboards;
+        renderDashboardsList(dashboards);
+    } catch (e) {
+        showError('Failed to load dashboards: ' + e.message);
+    }
+}
+
+function renderDashboardsList(dashboards) {
+    const list = document.getElementById('dashboards-list');
+    const empty = document.getElementById('dashboards-empty');
+    if (!list) return;
+    if (!dashboards.length) {
+        list.innerHTML = '';
+        if (empty) empty.style.display = '';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+    list.innerHTML = dashboards.map(d => `
+        <div class="card dashboard-card" onclick="openDashboard(${d.id})">
+            <div class="card-title">${escapeHtml(d.name)}</div>
+            <p class="text-muted" style="font-size:0.85rem; margin:0.25rem 0;">${escapeHtml(d.description || 'No description')}</p>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem;">
+                <span class="text-muted" style="font-size:0.75rem;">${d.updated_at ? new Date(d.updated_at).toLocaleDateString() : ''}</span>
+                <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); confirmDeleteDashboardById(${d.id})" title="Delete">&times;</button>
+            </div>
+        </div>`).join('');
+}
+
+function openDashboard(id) {
+    listViewState.customDashboards.currentId = id;
+    loadCustomDashboards({});
+}
+window.openDashboard = openDashboard;
+
+function backToDashboardsList() {
+    listViewState.customDashboards.currentId = null;
+    listViewState.customDashboards.editMode = false;
+    if (_dashboardTimeListener) { offTimeRangeChange(_dashboardTimeListener); _dashboardTimeListener = null; }
+    PlexusChart.destroyAll();
+    loadCustomDashboards({});
+}
+window.backToDashboardsList = backToDashboardsList;
+
+async function viewDashboard(id) {
+    try {
+        const data = await api.getCustomDashboard(id);
+        const dashboard = data?.dashboard || data;
+        const panels = dashboard?.panels || data?.panels || [];
+
+        document.getElementById('dashboard-viewer-title').textContent = dashboard.name || 'Dashboard';
+
+        // Register time-range listener
+        if (_dashboardTimeListener) offTimeRangeChange(_dashboardTimeListener);
+        _dashboardTimeListener = () => renderAllDashboardPanels(panels);
+        onTimeRangeChange(_dashboardTimeListener);
+
+        // Render variable dropdowns
+        renderDashboardVariables(dashboard.variables_json ? JSON.parse(dashboard.variables_json) : []);
+
+        // Render panels
+        renderDashboardGrid(panels);
+        await renderAllDashboardPanels(panels);
+
+        // Edit mode controls
+        updateDashboardEditControls();
+    } catch (e) {
+        showError('Failed to load dashboard: ' + e.message);
+    }
+}
+
+function renderDashboardGrid(panels) {
+    const grid = document.getElementById('dashboard-grid');
+    if (!grid) return;
+    if (!panels.length) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1; padding:3rem 1rem;"><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg><h3>No Panels Yet</h3><p style="color:var(--text-muted); margin-bottom:1rem;">Click <strong>Edit</strong> then <strong>+ Add Panel</strong> to get started.</p></div>';
+        return;
+    }
+    grid.innerHTML = panels.map(p => `
+        <div class="dashboard-panel" style="grid-column: span ${p.grid_w || 6}; grid-row: span ${p.grid_h || 4};" data-panel-id="${p.id}">
+            <div class="panel-header">
+                <span class="panel-title">${escapeHtml(p.title || 'Untitled')}</span>
+                <div class="panel-actions" style="display:none;">
+                    <button class="btn btn-sm btn-secondary" onclick="editPanelModal(${p.id})" title="Edit">&#9998;</button>
+                    <button class="btn btn-sm btn-danger" onclick="confirmDeletePanel(${p.id})" title="Remove">&times;</button>
+                </div>
+            </div>
+            <div id="panel-chart-${p.id}" class="panel-chart-container"></div>
+        </div>`).join('');
+}
+
+async function renderAllDashboardPanels(panels) {
+    const variables = getCurrentDashboardVariables();
+    const trp = getTimeRangeParams();
+    const range = trp.range === 'custom' ? '24h' : trp.range;
+
+    await Promise.allSettled(panels.map(async (panel) => {
+        const query = panel.metric_query_json ? JSON.parse(panel.metric_query_json) : {};
+        const resolvedQuery = resolveVariables(query, variables);
+        const chartId = `panel-chart-${panel.id}`;
+        const chartType = panel.chart_type || 'line';
+
+        try {
+            const host = resolvedQuery.host || '*';
+            const metric = resolvedQuery.metric || 'cpu_percent';
+            const data = await api.queryMetrics(metric, host, range, 'auto', resolvedQuery.group || null);
+            const items = data?.data || [];
+
+            if (chartType === 'gauge') {
+                const avg = items.length ? items.reduce((s, d) => s + (d.val_avg ?? d.value ?? 0), 0) / items.length : 0;
+                PlexusChart.gauge(chartId, avg, { title: metric });
+            } else if (chartType === 'bar') {
+                const byHost = groupByHost(items);
+                const labels = Object.keys(byHost);
+                const values = labels.map(h => {
+                    const arr = byHost[h];
+                    return arr.length ? arr.reduce((s, d) => s + (d.val_avg ?? d.value ?? 0), 0) / arr.length : 0;
+                });
+                PlexusChart.bar(chartId, labels, values.map(v => Math.round(v * 10) / 10));
+            } else if (chartType === 'heatmap') {
+                renderHeatmapPanel(chartId, items);
+            } else if (chartType === 'table') {
+                renderTablePanel(chartId, items, metric);
+            } else {
+                // Default: line chart
+                const byHost = groupByHost(items);
+                const series = Object.entries(byHost).map(([hostname, pts]) => ({
+                    name: hostname,
+                    data: pts.map(d => ({ time: d.sampled_at || d.period_start, value: d.val_avg ?? d.value ?? 0 })),
+                }));
+                PlexusChart.timeSeries(chartId, series.length ? series : [{ name: metric, data: [] }], { area: true });
+            }
+        } catch (e) {
+            const container = document.getElementById(chartId);
+            if (container) container.innerHTML = `<p class="text-muted" style="padding:1rem;">Error: ${escapeHtml(e.message)}</p>`;
+        }
+    }));
+}
+
+function groupByHost(items) {
+    const map = {};
+    items.forEach(d => {
+        const key = d.hostname || `host-${d.host_id}`;
+        if (!map[key]) map[key] = [];
+        map[key].push(d);
+    });
+    return map;
+}
+
+function renderHeatmapPanel(chartId, items) {
+    if (!items.length) { PlexusChart.timeSeries(chartId, [{ name: 'No data', data: [] }]); return; }
+    const byHost = groupByHost(items);
+    const hostNames = Object.keys(byHost);
+    const timeSet = new Set();
+    items.forEach(d => timeSet.add(d.sampled_at || d.period_start));
+    const times = [...timeSet].sort();
+    const data = [];
+    times.forEach((t, ti) => {
+        hostNames.forEach((h, hi) => {
+            const pt = byHost[h].find(d => (d.sampled_at || d.period_start) === t);
+            data.push([ti, hi, pt ? Math.round((pt.val_avg ?? pt.value ?? 0) * 10) / 10 : 0]);
+        });
+    });
+    PlexusChart.heatmap(chartId, times.map(t => new Date(t).toLocaleTimeString()), hostNames, data);
+}
+
+function renderTablePanel(chartId, items, metric) {
+    const columns = [
+        { key: 'hostname', label: 'Host' },
+        { key: 'time', label: 'Time' },
+        { key: 'value', label: metric },
+    ];
+    const rows = items.map(d => ({
+        hostname: d.hostname || `host-${d.host_id}`,
+        time: new Date(d.sampled_at || d.period_start).toLocaleString(),
+        value: (d.val_avg ?? d.value ?? 0).toFixed(2),
+    }));
+    PlexusChart.table(chartId, columns, rows);
+}
+
+function refreshDashboardPanels() {
+    const id = listViewState.customDashboards.currentId;
+    if (id) viewDashboard(id);
+}
+window.refreshDashboardPanels = refreshDashboardPanels;
+
+// Dashboard variables
+function renderDashboardVariables(variables) {
+    const container = document.getElementById('dashboard-variables');
+    if (!container) return;
+    if (!variables?.length) { container.innerHTML = ''; return; }
+    container.innerHTML = variables.map(v => {
+        if (v.type === 'group') {
+            return `<select id="dashvar-${v.name}" class="form-select form-select-sm" onchange="onDashboardVariableChange()">
+                <option value="*">All Groups</option>
+            </select>`;
+        }
+        if (v.type === 'host') {
+            return `<select id="dashvar-${v.name}" class="form-select form-select-sm" onchange="onDashboardVariableChange()">
+                <option value="*">All Hosts</option>
+            </select>`;
+        }
+        return '';
+    }).join('');
+    // Populate selects
+    populateDashboardVariableOptions(variables);
+}
+
+async function populateDashboardVariableOptions(variables) {
+    try {
+        const groups = await api.getInventoryGroups(true);
+        const allGroups = groups?.groups || groups || [];
+        variables.forEach(v => {
+            const sel = document.getElementById(`dashvar-${v.name}`);
+            if (!sel) return;
+            if (v.type === 'group') {
+                allGroups.forEach(g => {
+                    const opt = document.createElement('option');
+                    opt.value = g.id;
+                    opt.textContent = g.name;
+                    sel.appendChild(opt);
+                });
+            } else if (v.type === 'host') {
+                allGroups.forEach(g => {
+                    (g.hosts || []).forEach(h => {
+                        const opt = document.createElement('option');
+                        opt.value = h.id;
+                        opt.textContent = `${h.hostname} (${g.name})`;
+                        sel.appendChild(opt);
+                    });
+                });
+            }
+        });
+    } catch (e) {
+        console.error('Error populating dashboard variables:', e);
+    }
+}
+
+function getCurrentDashboardVariables() {
+    const vars = {};
+    document.querySelectorAll('#dashboard-variables select').forEach(sel => {
+        const name = sel.id.replace('dashvar-', '');
+        vars[name] = sel.value;
+    });
+    return vars;
+}
+
+function onDashboardVariableChange() {
+    refreshDashboardPanels();
+}
+window.onDashboardVariableChange = onDashboardVariableChange;
+
+function resolveVariables(queryObj, variables) {
+    let queryStr = JSON.stringify(queryObj);
+    for (const [name, value] of Object.entries(variables)) {
+        queryStr = queryStr.replace(new RegExp(`\\$${name}`, 'g'), value);
+    }
+    return JSON.parse(queryStr);
+}
+
+// Dashboard CRUD
+function showCreateDashboardModal() {
+    const html = `
+        <div class="form-group"><label class="form-label">Name</label><input type="text" class="form-input" id="new-dash-name" required></div>
+        <div class="form-group"><label class="form-label">Description</label><input type="text" class="form-input" id="new-dash-desc"></div>
+        <div class="form-group">
+            <label class="form-label">Template Variables</label>
+            <div style="display:flex; gap:0.5rem;">
+                <label><input type="checkbox" id="new-dash-var-group"> $group</label>
+                <label><input type="checkbox" id="new-dash-var-host"> $host</label>
+            </div>
+        </div>`;
+    showFormModal('Create Dashboard', html, async () => {
+        const name = document.getElementById('new-dash-name').value.trim();
+        if (!name) { showError('Name is required'); return; }
+        const vars = [];
+        if (document.getElementById('new-dash-var-group')?.checked) vars.push({ name: 'group', type: 'group', default: '*' });
+        if (document.getElementById('new-dash-var-host')?.checked) vars.push({ name: 'host', type: 'host', default: '*' });
+        try {
+            await api.createCustomDashboard({
+                name,
+                description: document.getElementById('new-dash-desc').value.trim(),
+                variables_json: JSON.stringify(vars),
+            });
+            showSuccess('Dashboard created');
+            loadCustomDashboards({ preserveContent: false });
+        } catch (e) { showError('Failed to create dashboard: ' + e.message); }
+    });
+}
+window.showCreateDashboardModal = showCreateDashboardModal;
+
+function showAddPanelModal() {
+    const dashId = listViewState.customDashboards.currentId;
+    if (!dashId) return;
+    const html = `
+        <div class="form-group"><label class="form-label">Panel Title</label><input type="text" class="form-input" id="new-panel-title"></div>
+        <div class="form-group">
+            <label class="form-label">Chart Type</label>
+            <select class="form-select" id="new-panel-type">
+                <option value="line">Line</option>
+                <option value="bar">Bar</option>
+                <option value="gauge">Gauge</option>
+                <option value="heatmap">Heatmap</option>
+                <option value="table">Table</option>
+            </select>
+        </div>
+        <div class="form-group"><label class="form-label">Metric</label><input type="text" class="form-input" id="new-panel-metric" value="cpu_percent" placeholder="e.g. cpu_percent"></div>
+        <div class="form-group"><label class="form-label">Host (ID, "*", or "$host")</label><input type="text" class="form-input" id="new-panel-host" value="*"></div>
+        <div class="form-group" style="display:flex; gap:1rem;">
+            <div><label class="form-label">Width (1-12)</label><input type="number" class="form-input" id="new-panel-w" value="6" min="1" max="12"></div>
+            <div><label class="form-label">Height (rows)</label><input type="number" class="form-input" id="new-panel-h" value="4" min="1" max="12"></div>
+        </div>`;
+    showFormModal('Add Panel', html, async () => {
+        const title = document.getElementById('new-panel-title')?.value.trim() || 'Untitled';
+        const chartType = document.getElementById('new-panel-type')?.value || 'line';
+        const metric = document.getElementById('new-panel-metric')?.value.trim() || 'cpu_percent';
+        const host = document.getElementById('new-panel-host')?.value.trim() || '*';
+        const gridW = parseInt(document.getElementById('new-panel-w')?.value) || 6;
+        const gridH = parseInt(document.getElementById('new-panel-h')?.value) || 4;
+        try {
+            await api.createDashboardPanel(dashId, {
+                title, chart_type: chartType,
+                metric_query_json: JSON.stringify({ metric, host }),
+                grid_w: gridW, grid_h: gridH, grid_x: 0, grid_y: 0,
+            });
+            showSuccess('Panel added');
+            viewDashboard(dashId);
+        } catch (e) { showError('Failed to add panel: ' + e.message); }
+    });
+}
+window.showAddPanelModal = showAddPanelModal;
+
+function editPanelModal(panelId) {
+    const dashId = listViewState.customDashboards.currentId;
+    if (!dashId) return;
+    // Find panel in current DOM
+    const panelEl = document.querySelector(`[data-panel-id="${panelId}"]`);
+    const titleEl = panelEl?.querySelector('.panel-title');
+    const currentTitle = titleEl?.textContent || '';
+    const html = `
+        <div class="form-group"><label class="form-label">Panel Title</label><input type="text" class="form-input" id="edit-panel-title" value="${escapeHtml(currentTitle)}"></div>
+        <div class="form-group">
+            <label class="form-label">Chart Type</label>
+            <select class="form-select" id="edit-panel-type">
+                <option value="line">Line</option><option value="bar">Bar</option><option value="gauge">Gauge</option><option value="heatmap">Heatmap</option><option value="table">Table</option>
+            </select>
+        </div>
+        <div class="form-group"><label class="form-label">Metric</label><input type="text" class="form-input" id="edit-panel-metric" placeholder="cpu_percent"></div>
+        <div class="form-group"><label class="form-label">Host</label><input type="text" class="form-input" id="edit-panel-host" value="*"></div>
+        <div class="form-group" style="display:flex; gap:1rem;">
+            <div><label class="form-label">Width (1-12)</label><input type="number" class="form-input" id="edit-panel-w" value="6" min="1" max="12"></div>
+            <div><label class="form-label">Height (rows)</label><input type="number" class="form-input" id="edit-panel-h" value="4" min="1" max="12"></div>
+        </div>`;
+    showFormModal('Edit Panel', html, async () => {
+        const title = document.getElementById('edit-panel-title')?.value.trim() || 'Untitled';
+        const chartType = document.getElementById('edit-panel-type')?.value || 'line';
+        const metric = document.getElementById('edit-panel-metric')?.value.trim() || 'cpu_percent';
+        const host = document.getElementById('edit-panel-host')?.value.trim() || '*';
+        const gridW = parseInt(document.getElementById('edit-panel-w')?.value) || 6;
+        const gridH = parseInt(document.getElementById('edit-panel-h')?.value) || 4;
+        try {
+            await api.updateDashboardPanel(dashId, panelId, {
+                title, chart_type: chartType,
+                metric_query_json: JSON.stringify({ metric, host }),
+                grid_w: gridW, grid_h: gridH,
+            });
+            showSuccess('Panel updated');
+            viewDashboard(dashId);
+        } catch (e) { showError('Failed to update panel: ' + e.message); }
+    });
+}
+window.editPanelModal = editPanelModal;
+
+async function confirmDeletePanel(panelId) {
+    const dashId = listViewState.customDashboards.currentId;
+    if (!dashId) return;
+    const ok = await showConfirm('Delete this panel?', 'This action cannot be undone.');
+    if (!ok) return;
+    try {
+        await api.deleteDashboardPanel(dashId, panelId);
+        showSuccess('Panel deleted');
+        viewDashboard(dashId);
+    } catch (e) { showError('Failed to delete panel: ' + e.message); }
+}
+window.confirmDeletePanel = confirmDeletePanel;
+
+function toggleDashboardEditMode() {
+    listViewState.customDashboards.editMode = !listViewState.customDashboards.editMode;
+    updateDashboardEditControls();
+}
+window.toggleDashboardEditMode = toggleDashboardEditMode;
+
+function updateDashboardEditControls() {
+    const editing = listViewState.customDashboards.editMode;
+    const editBtn = document.getElementById('dashboard-edit-toggle');
+    const addBtn = document.getElementById('dashboard-add-panel-btn');
+    const delBtn = document.getElementById('dashboard-delete-btn');
+    if (editBtn) { editBtn.textContent = editing ? 'Done' : 'Edit'; editBtn.classList.toggle('btn-primary', editing); editBtn.classList.toggle('btn-secondary', !editing); }
+    if (addBtn) addBtn.style.display = editing ? '' : 'none';
+    if (delBtn) delBtn.style.display = editing ? '' : 'none';
+    document.querySelectorAll('.panel-actions').forEach(el => el.style.display = editing ? 'flex' : 'none');
+    document.querySelectorAll('.dashboard-panel').forEach(el => el.classList.toggle('editing', editing));
+}
+
+async function confirmDeleteDashboard() {
+    const id = listViewState.customDashboards.currentId;
+    if (!id) return;
+    const ok = await showConfirm('Delete this dashboard?', 'All panels will be removed. This action cannot be undone.');
+    if (!ok) return;
+    try {
+        await api.deleteCustomDashboard(id);
+        showSuccess('Dashboard deleted');
+        backToDashboardsList();
+    } catch (e) { showError('Failed to delete dashboard: ' + e.message); }
+}
+window.confirmDeleteDashboard = confirmDeleteDashboard;
+
+async function confirmDeleteDashboardById(id) {
+    const ok = await showConfirm('Delete this dashboard?', 'All panels will be removed. This action cannot be undone.');
+    if (!ok) return;
+    try {
+        await api.deleteCustomDashboard(id);
+        showSuccess('Dashboard deleted');
+        loadCustomDashboards({});
+    } catch (e) { showError('Failed to delete dashboard: ' + e.message); }
+}
+window.confirmDeleteDashboardById = confirmDeleteDashboardById;
+
+// Helper: generic form modal using the main modal overlay
+function showFormModal(title, bodyHtml, onSubmit) {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    if (!overlay || !body) return;
+
+    if (titleEl) titleEl.textContent = title;
+    body.innerHTML = `
+        <div>${bodyHtml}</div>
+        <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" id="form-modal-save">Save</button>
+        </div>`;
+    overlay.classList.add('active');
+
+    const saveBtn = document.getElementById('form-modal-save');
+    if (saveBtn) {
+        saveBtn.onclick = async () => {
+            await onSubmit();
+            overlay.classList.remove('active');
+        };
+    }
+}
+
+// ── Hash routing for device-detail ──────────────────────────────────────────
+function getPageFromHashExtended() {
+    const hash = window.location.hash.replace(/^#\/?/, '');
+    if (hash.startsWith('device-detail/')) {
+        const hostId = parseInt(hash.split('/')[1]);
+        if (!isNaN(hostId)) {
+            listViewState.deviceDetail.hostId = hostId;
+            return 'device-detail';
+        }
+    }
+    return null;
 }
 
 // ── Modal Accessibility: Focus Trap & Focus Return ──────────────────────────
@@ -303,10 +1368,18 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'monitoring', 'config-drift', 'config-backups', 'settings'];
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'monitoring', 'config-drift', 'config-backups', 'settings', 'device-detail', 'compliance', 'risk-analysis', 'deployments', 'sla'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
+    // Support device-detail/123 deep links
+    if (hash.startsWith('device-detail/')) {
+        const hostId = parseInt(hash.split('/')[1]);
+        if (!isNaN(hostId)) {
+            listViewState.deviceDetail.hostId = hostId;
+            return 'device-detail';
+        }
+    }
     return VALID_PAGES.includes(hash) ? hash : null;
 }
 
@@ -347,16 +1420,48 @@ function navigateToPage(page, { updateHash = true } = {}) {
         p.classList.remove('active');
     });
 
+    // Destroy all ECharts instances when leaving a page
+    PlexusChart.destroyAll();
+
+    // Force fresh reload when re-navigating to the same page (e.g. clicking nav or breadcrumb)
+    if (page === currentPage) {
+        invalidatePageCache(page);
+    }
+
+    // Reset custom dashboard viewer state when leaving or re-navigating to dashboard
+    if (currentPage === 'dashboard' && listViewState.customDashboards.currentId) {
+        listViewState.customDashboards.currentId = null;
+        listViewState.customDashboards.editMode = false;
+        if (_dashboardTimeListener) { offTimeRangeChange(_dashboardTimeListener); _dashboardTimeListener = null; }
+        setDashboardDefaultContentVisible(true);
+        const listView = document.getElementById('dashboards-list-view');
+        const viewer = document.getElementById('dashboard-viewer');
+        if (listView) listView.style.display = '';
+        if (viewer) viewer.style.display = 'none';
+    }
+
+    // Reset device detail state when leaving or re-navigating away
+    if (currentPage === 'device-detail' && page !== 'device-detail') {
+        listViewState.deviceDetail.hostId = null;
+        listViewState.deviceDetail.tab = 'overview';
+        if (_deviceDetailTimeListener) { offTimeRangeChange(_deviceDetailTimeListener); _deviceDetailTimeListener = null; }
+    }
+
     // Show target page
     const targetPage = document.getElementById(`page-${page}`);
     if (targetPage) {
         targetPage.classList.add('active');
         currentPage = page;
         updateBreadcrumb(page);
+        renderPageHelp(page);
+        updateTimeRangeBarVisibility(page);
         loadPageData(page);
         // Sync URL hash
         if (updateHash) {
-            const newHash = `#${page}`;
+            let newHash = `#${page}`;
+            if (page === 'device-detail' && listViewState.deviceDetail.hostId) {
+                newHash = `#device-detail/${listViewState.deviceDetail.hostId}`;
+            }
             if (window.location.hash !== newHash) {
                 history.pushState(null, '', newHash);
             }
@@ -374,14 +1479,135 @@ const PAGE_LABELS = {
     converter: 'Firewall Migration Tool',
     topology: 'Network Topology',
     'config-drift': 'Config Drift Detection',
+    'config-backups': 'Config Backups',
+    compliance: 'Compliance',
+    'risk-analysis': 'Risk Analysis',
+    deployments: 'Deployments',
+    monitoring: 'Monitoring',
     sla: 'SLA Dashboards',
+    'device-detail': 'Device Detail',
     settings: 'Admin Settings',
 };
+
+const PAGE_HELP = {
+    dashboard: {
+        title: 'Your Network at a Glance',
+        text: 'View device status, recent alerts, backup summaries, and quick stats. Scroll down to manage custom dashboards with your own metric panels.'
+    },
+    inventory: {
+        title: 'Manage Your Devices',
+        text: 'Add, edit, and organize network devices into groups. Devices added here are used across monitoring, backups, compliance, and automation features.'
+    },
+    playbooks: {
+        title: 'Automation Playbooks',
+        text: 'Create reusable automation scripts that run commands on your network devices. Playbooks can be launched as jobs from the Job Execution page.'
+    },
+    jobs: {
+        title: 'Run & Track Jobs',
+        text: 'Launch playbooks against selected devices and monitor their progress in real time. View output logs, status, and history for each job run.'
+    },
+    templates: {
+        title: 'Configuration Templates',
+        text: 'Build reusable Jinja2 config templates with variables. Render templates for specific devices and deploy consistent configurations across your network.'
+    },
+    credentials: {
+        title: 'Credential Management',
+        text: 'Securely store SSH, SNMP, and API credentials used to connect to network devices. Assign credentials to devices in the Inventory page.'
+    },
+    converter: {
+        title: 'Firewall Rule Converter',
+        text: 'Paste a firewall configuration from one vendor and convert it to another vendor\'s format. Supports common firewall platforms.'
+    },
+    topology: {
+        title: 'Interactive Network Map',
+        text: 'Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data.'
+    },
+    'config-drift': {
+        title: 'Detect Config Changes',
+        text: 'Compare current device configurations against saved baselines to find unauthorized or unexpected changes. Run scans to check for drift across your network.'
+    },
+    'config-backups': {
+        title: 'Backup & Restore Configs',
+        text: 'Schedule automatic configuration backups for your devices. Browse backup history, compare versions side-by-side, and restore previous configurations.'
+    },
+    compliance: {
+        title: 'Policy Compliance Auditing',
+        text: 'Define compliance rules and run audits against your devices. Check configurations against security policies, best practices, and industry standards.'
+    },
+    'risk-analysis': {
+        title: 'Network Risk Assessment',
+        text: 'Evaluate network risk based on device health, compliance violations, and configuration issues. View risk scores and prioritize remediation efforts.'
+    },
+    deployments: {
+        title: 'Deploy Config Changes',
+        text: 'Plan and push configuration changes to devices with staged rollouts. Track deployment status, view diffs, and roll back if needed.'
+    },
+    monitoring: {
+        title: 'Real-Time Device Monitoring',
+        text: 'Track CPU, memory, response time, packet loss, and interface status across your network. Click a device for detailed metrics and charts.'
+    },
+    sla: {
+        title: 'Service Level Tracking',
+        text: 'Monitor uptime, latency, jitter, and packet loss against SLA targets. Set thresholds per host or group and track compliance over time.'
+    },
+    settings: {
+        title: 'Application Settings',
+        text: 'Configure polling intervals, feature toggles, default credentials, and other application-wide settings. Admin access required.'
+    },
+};
+
+function renderPageHelp(page) {
+    const help = PAGE_HELP[page];
+    if (!help) return;
+    const pageEl = document.getElementById(`page-${page}`);
+    if (!pageEl) return;
+
+    // Remove any existing help banner on this page
+    const existing = pageEl.querySelector('.page-help');
+    if (existing) existing.remove();
+
+    // Check if user dismissed this page's help
+    const dismissed = JSON.parse(localStorage.getItem('plexus_help_dismissed') || '{}');
+    const isHidden = !!dismissed[page];
+
+    const banner = document.createElement('div');
+    banner.className = 'page-help' + (isHidden ? ' page-help-collapsed' : '');
+    banner.innerHTML = `<div class="page-help-content"><svg class="page-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg><div><strong>${escapeHtml(help.title)}</strong><span class="page-help-text"> &mdash; ${escapeHtml(help.text)}</span></div></div><button class="page-help-toggle" title="${isHidden ? 'Show help' : 'Hide help'}">${isHidden ? '?' : '&times;'}</button>`;
+
+    banner.querySelector('.page-help-toggle').addEventListener('click', () => {
+        const d = JSON.parse(localStorage.getItem('plexus_help_dismissed') || '{}');
+        if (banner.classList.contains('page-help-collapsed')) {
+            delete d[page];
+            banner.classList.remove('page-help-collapsed');
+            banner.querySelector('.page-help-toggle').innerHTML = '&times;';
+            banner.querySelector('.page-help-toggle').title = 'Hide help';
+        } else {
+            d[page] = true;
+            banner.classList.add('page-help-collapsed');
+            banner.querySelector('.page-help-toggle').innerHTML = '?';
+            banner.querySelector('.page-help-toggle').title = 'Show help';
+        }
+        localStorage.setItem('plexus_help_dismissed', JSON.stringify(d));
+    });
+
+    // Insert after the page-header (or as first child if no header)
+    const header = pageEl.querySelector('.page-header') || pageEl.querySelector('h2');
+    if (header) {
+        header.after(banner);
+    } else {
+        pageEl.prepend(banner);
+    }
+}
 
 function updateBreadcrumb(page) {
     const el = document.getElementById('breadcrumb-current');
     if (el) el.textContent = PAGE_LABELS[page] || page;
 }
+
+function breadcrumbCurrentClick() {
+    navigateToPage(currentPage || 'dashboard');
+}
+window.breadcrumbCurrentClick = breadcrumbCurrentClick;
 
 async function loadPageData(page, options = {}) {
     const { force = false } = options;
@@ -438,6 +1664,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'sla':
                 await loadSla({ preserveContent });
+                break;
+            case 'device-detail':
+                await loadDeviceDetail({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
@@ -1987,6 +3216,9 @@ async function loadDashboard(_options = {}) {
     } catch (error) {
         showError('Failed to load dashboard', container);
     }
+
+    // Also load custom dashboards section
+    await loadCustomDashboards(_options);
 }
 
 function isReducedMotion() {
@@ -3195,18 +4427,20 @@ function renderTemplatesList(templates) {
                     <div class="card-description">${escapeHtml(template.description || '')}</div>
                 </div>
                 <div>
+                    <button class="btn btn-sm btn-ghost" onclick="copyTemplateContent(this)" title="Copy template">${COPY_ICON_SVG}Copy</button>
                     ${isLong ? `<button class="btn btn-sm btn-ghost template-expand-btn" onclick="toggleTemplateContent(this)" data-expanded="false">Expand</button>` : ''}
                     <button class="btn btn-sm btn-secondary" onclick="editTemplate(${template.id})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteTemplate(${template.id})">Delete</button>
                 </div>
             </div>
             <div class="template-content-wrap${isLong ? ' template-content-collapsed' : ''}">
-                <pre class="template-content-pre">${isLong ? preview : content}</pre>
-                ${isLong ? `<pre class="template-content-full" style="display:none;">${content}</pre>` : ''}
+                <pre class="template-content-pre copyable-content" tabindex="0" style="user-select:text; cursor:text;">${isLong ? preview : content}</pre>
+                ${isLong ? `<pre class="template-content-full copyable-content" tabindex="0" style="display:none; user-select:text; cursor:text;">${content}</pre>` : ''}
                 ${isLong ? '<div class="template-fade"></div>' : ''}
             </div>
         </div>`;
     }).join('');
+    initCopyableBlocks();
 }
 
 function toggleTemplateContent(btn) {
@@ -3234,6 +4468,30 @@ function toggleTemplateContent(btn) {
     }
 }
 window.toggleTemplateContent = toggleTemplateContent;
+
+function copyTemplateContent(btn) {
+    const card = btn.closest('.card');
+    const full = card.querySelector('.template-content-full');
+    const pre = full || card.querySelector('.template-content-pre');
+    const text = pre ? pre.textContent : '';
+    navigator.clipboard.writeText(text).then(() => {
+        const prev = btn.innerHTML;
+        btn.innerHTML = '&#10003; Copied';
+        setTimeout(() => { btn.innerHTML = prev; }, 2000);
+    }).catch(() => {
+        const card = btn.closest('.card');
+        const pre = card.querySelector('.template-content-full') || card.querySelector('.template-content-pre');
+        if (pre) {
+            const range = document.createRange();
+            range.selectNodeContents(pre);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+        showToast('Press Ctrl+C to copy the selected text', 'info');
+    });
+}
+window.copyTemplateContent = copyTemplateContent;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Credentials
@@ -3889,6 +5147,90 @@ function closeAllModals() {
 
 // Expose to window for inline onclick handlers
 window.closeAllModals = closeAllModals;
+
+// ── Copyable Code Block Utilities ────────────────────────────────────────────
+const COPY_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+let _copyableId = 0;
+
+/**
+ * Returns HTML for a <pre> code block with a Copy button.
+ * @param {string} text - Raw text (will be escaped)
+ * @param {object} [options] - { style, label }
+ */
+function copyableCodeBlock(text, options = {}) {
+    const id = 'copyable-' + (++_copyableId);
+    const style = options.style || 'max-height:400px; overflow:auto; font-size:0.8em; white-space:pre-wrap;';
+    const label = options.label || '';
+    return `<div class="copyable-block" data-copyable-id="${id}">
+        <div style="display:flex; align-items:center; justify-content:${label ? 'space-between' : 'flex-end'}; margin-bottom:0.25rem;">
+            ${label ? `<span style="font-weight:600;">${label}</span>` : ''}
+            <button class="btn btn-sm btn-secondary copyable-copy-btn" data-copyable-target="${id}" title="Copy to clipboard">${COPY_ICON_SVG}Copy</button>
+        </div>
+        <pre class="code-block copyable-content" id="${id}" tabindex="0" style="${style}; user-select:text; cursor:text;">${escapeHtml(text)}</pre>
+    </div>`;
+}
+
+/**
+ * Returns HTML wrapping existing rendered content (e.g. a diff) with a Copy button.
+ * The raw text is stored in a hidden element for clipboard use.
+ * @param {string} innerHtml - Already-rendered HTML to display
+ * @param {string} rawText - Plain text to copy to clipboard
+ * @param {object} [options] - { style, className }
+ */
+function copyableHtmlBlock(innerHtml, rawText, options = {}) {
+    const id = 'copyable-' + (++_copyableId);
+    const className = options.className || '';
+    return `<div class="copyable-block" data-copyable-id="${id}">
+        <div style="display:flex; justify-content:flex-end; margin-bottom:0.25rem;">
+            <button class="btn btn-sm btn-secondary copyable-copy-btn" data-copyable-target="${id}" title="Copy to clipboard">${COPY_ICON_SVG}Copy</button>
+        </div>
+        <div class="${className} copyable-content" id="${id}" tabindex="0" style="user-select:text; cursor:text;">${innerHtml}</div>
+        <textarea class="copyable-raw" id="${id}-raw" style="display:none;">${escapeHtml(rawText)}</textarea>
+    </div>`;
+}
+
+/**
+ * Wire up all copyable blocks in the DOM (copy buttons + Ctrl+A scoping).
+ * Safe to call multiple times — skips already-bound elements.
+ */
+function initCopyableBlocks() {
+    document.querySelectorAll('.copyable-copy-btn:not([data-copy-bound])').forEach(btn => {
+        btn.setAttribute('data-copy-bound', '1');
+        btn.addEventListener('click', () => {
+            const targetId = btn.getAttribute('data-copyable-target');
+            // Prefer hidden raw textarea if present (for HTML-rendered blocks)
+            const rawEl = document.getElementById(targetId + '-raw');
+            const pre = document.getElementById(targetId);
+            const text = rawEl ? rawEl.value : (pre ? pre.textContent : '');
+            navigator.clipboard.writeText(text).then(() => {
+                btn.innerHTML = '&#10003; Copied';
+                setTimeout(() => { btn.innerHTML = COPY_ICON_SVG + 'Copy'; }, 2000);
+            }).catch(() => {
+                if (pre) {
+                    const range = document.createRange();
+                    range.selectNodeContents(pre);
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                }
+                showToast('Press Ctrl+C to copy the selected text', 'info');
+            });
+        });
+    });
+    document.querySelectorAll('.copyable-content:not([data-copy-bound])').forEach(el => {
+        el.setAttribute('data-copy-bound', '1');
+        el.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+                e.preventDefault();
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        });
+    });
+}
 
 // Themed confirmation dialog using the app modal styling (also accepts legacy signature showConfirm(title, message))
 function showConfirm(optionsOrTitle = {}) {
@@ -5009,6 +6351,23 @@ window.closeJobOutputModal = function() {
     _currentViewJobId = null;
 };
 
+window.copyJobOutput = function() {
+    const output = document.getElementById('job-output');
+    if (!output) return;
+    const text = output.innerText || '';
+    const btn = document.getElementById('job-output-copy-btn');
+    navigator.clipboard.writeText(text).then(() => {
+        if (btn) { const prev = btn.innerHTML; btn.innerHTML = '&#10003; Copied'; setTimeout(() => { btn.innerHTML = prev; }, 2000); }
+    }).catch(() => {
+        const range = document.createRange();
+        range.selectNodeContents(output);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        showToast('Press Ctrl+C to copy the selected text', 'info');
+    });
+};
+
 window.cancelCurrentJob = async function() {
     if (!_currentViewJobId) return;
     if (!confirm('Cancel this job?')) return;
@@ -5076,6 +6435,20 @@ function formatTime(dateString) {
     if (!dateString) return '';
     const date = new Date(dateString);
     return date.toLocaleTimeString();
+}
+
+function formatRelativeTime(date) {
+    const now = new Date();
+    const diffMs = now - date;
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return 'Just now';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    if (diffDay < 30) return `${diffDay}d ago`;
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function getToastContainer() {
@@ -5935,7 +7308,7 @@ window.showDriftDiffModal = async function(eventId) {
                 <span class="drift-diff-added">+${ev.diff_lines_added || 0}</span>
                 <span class="drift-diff-removed">-${ev.diff_lines_removed || 0}</span>
             </div>
-            <div class="drift-diff-viewer">${diffHtml}</div>
+            ${copyableHtmlBlock(diffHtml, ev.diff_text || '', { className: 'drift-diff-viewer' })}
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
                 <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
                 ${ev.status === 'open' ? `
@@ -5945,6 +7318,7 @@ window.showDriftDiffModal = async function(eventId) {
                 ` : ''}
             </div>
         `);
+        initCopyableBlocks();
     } catch (err) {
         showError('Failed to load drift details: ' + err.message);
     }
@@ -6288,11 +7662,12 @@ window.viewSnapshotConfig = async function(snapshotId) {
                 <span style="opacity:0.4">|</span>
                 <span>Method: ${escapeHtml(snap.capture_method || '')}</span>
             </div>
-            <div class="drift-diff-viewer">${escapeHtml(snap.config_text || '')}</div>
+            ${copyableCodeBlock(snap.config_text || '', { style: 'max-height:400px; overflow:auto; font-size:0.8em; white-space:pre-wrap' })}
             <div style="display:flex;justify-content:flex-end;margin-top:1rem">
                 <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
             </div>
         `);
+        initCopyableBlocks();
     } catch (err) {
         showError('Failed to load snapshot: ' + err.message);
     }
@@ -6618,7 +7993,7 @@ function renderBackupSummary(summary) {
     set('backup-stat-policies', summary.total_policies ?? '-');
     set('backup-stat-backups', summary.total_backups ?? '-');
     set('backup-stat-hosts', summary.hosts_backed_up ?? '-');
-    set('backup-stat-last', summary.last_backup_at ? new Date(summary.last_backup_at + 'Z').toLocaleString() : 'Never');
+    set('backup-stat-last', summary.last_backup_at ? formatRelativeTime(new Date(summary.last_backup_at + 'Z')) : 'Never');
 }
 
 function renderBackupPolicies(policies) {
@@ -6643,7 +8018,7 @@ function renderBackupPolicies(policies) {
                 </div>
                 <div style="display:flex; gap:0.5rem; align-items:center;">
                     ${enabled}
-                    <button class="btn btn-sm btn-secondary" onclick="runBackupPolicyNow(${p.id})">Run Now</button>
+                    <button class="btn btn-sm btn-secondary" data-run-policy="${p.id}" onclick="runBackupPolicyNow(${p.id})"${_runningBackupPolicies.has(p.id) ? ' disabled' : ''}>${_runningBackupPolicies.has(p.id) ? '<span class="backup-spinner"></span> Running…' : 'Run Now'}</button>
                     <button class="btn btn-sm btn-secondary" onclick="showEditBackupPolicyModal(${p.id})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="confirmDeleteBackupPolicy(${p.id}, '${escapeHtml(p.name)}')">Delete</button>
                 </div>
@@ -6808,20 +8183,56 @@ async function submitEditBackupPolicy() {
 window.submitEditBackupPolicy = submitEditBackupPolicy;
 
 async function confirmDeleteBackupPolicy(id, name) {
-    if (!confirm(`Delete backup policy "${name}"?`)) return;
+    const ok = await showConfirm({
+        title: 'Delete Backup Policy',
+        message: `Are you sure you want to delete the backup policy "${name}"? This cannot be undone.`,
+        confirmText: 'Delete',
+        confirmClass: 'btn-danger',
+    });
+    if (!ok) return;
     try {
         await api.deleteConfigBackupPolicy(id);
         loadConfigBackups();
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) { showToast('Error: ' + e.message, 'danger'); }
 }
 window.confirmDeleteBackupPolicy = confirmDeleteBackupPolicy;
 
+const _runningBackupPolicies = new Set();
+
 async function runBackupPolicyNow(id) {
+    if (_runningBackupPolicies.has(id)) return; // already running
+    _runningBackupPolicies.add(id);
+
+    // Update all Run Now buttons for this policy to show running state
+    const btns = document.querySelectorAll(`button[data-run-policy="${id}"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn._prevHTML = btn.innerHTML;
+        btn.innerHTML = '<span class="backup-spinner"></span> Running…';
+        btn.classList.add('btn-running');
+    });
+
     try {
         const result = await api.runConfigBackupPolicy(id);
-        alert(`Backup complete: ${result.backed_up} succeeded, ${result.errors} errors`);
+        const skipped = result.skipped || 0;
+        let msg = `Backup complete: ${result.backed_up} saved, ${result.errors} errors`;
+        if (skipped > 0) msg += `, ${skipped} unchanged (skipped)`;
+        showToast(msg, result.errors > 0 ? 'warning' : 'success');
         loadConfigBackups();
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) {
+        if (e.message && e.message.includes('already running')) {
+            showToast('This backup policy is already running.', 'warning');
+        } else {
+            showToast('Backup error: ' + e.message, 'danger');
+        }
+    } finally {
+        _runningBackupPolicies.delete(id);
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = btn._prevHTML || 'Run Now';
+            btn.classList.remove('btn-running');
+        });
+    }
 }
 window.runBackupPolicyNow = runBackupPolicyNow;
 
@@ -6833,9 +8244,10 @@ async function viewBackupDetail(id) {
                 Captured: ${new Date(backup.captured_at + 'Z').toLocaleString()} &bull;
                 Method: ${backup.capture_method} &bull; Status: ${backup.status}
             </div>
-            <pre class="code-block" style="max-height:400px; overflow:auto; font-size:0.8em; white-space:pre-wrap;">${escapeHtml(backup.config_text || '(empty)')}</pre>
+            ${copyableCodeBlock(backup.config_text || '(empty)')}
         `);
-    } catch (e) { alert('Error: ' + e.message); }
+        initCopyableBlocks();
+    } catch (e) { showToast('Error: ' + e.message, 'danger'); }
 }
 window.viewBackupDetail = viewBackupDetail;
 
@@ -6872,11 +8284,17 @@ async function submitRestoreBackup() {
 window.submitRestoreBackup = submitRestoreBackup;
 
 async function confirmDeleteBackup(id) {
-    if (!confirm('Delete this backup?')) return;
+    const ok = await showConfirm({
+        title: 'Delete Backup',
+        message: 'Are you sure you want to delete this backup? This cannot be undone.',
+        confirmText: 'Delete',
+        confirmClass: 'btn-danger',
+    });
+    if (!ok) return;
     try {
         await api.deleteConfigBackup(id);
         loadConfigBackups();
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) { showToast('Error: ' + e.message, 'danger'); }
 }
 window.confirmDeleteBackup = confirmDeleteBackup;
 
@@ -7555,11 +8973,12 @@ async function submitOfflineRiskAnalysis() {
             </div>
             <div><strong>Affected areas:</strong> ${(result.affected_areas || []).join(', ') || 'None'}</div>
             ${result.analysis?.risk_factors?.length ? `<div style="margin-top:0.5rem;"><strong>Risk factors:</strong><ul style="margin:0.25rem 0 0 1.5rem;">${result.analysis.risk_factors.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div>` : ''}
-            ${result.proposed_diff ? `<div style="margin-top:1rem;"><strong>Predicted diff:</strong><pre style="background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:300px; overflow:auto; white-space:pre-wrap;">${escapeHtml(result.proposed_diff)}</pre></div>` : ''}
+            ${result.proposed_diff ? `<div style="margin-top:1rem;"><strong>Predicted diff:</strong>${copyableCodeBlock(result.proposed_diff, { style: 'background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:300px; overflow:auto; white-space:pre-wrap' })}</div>` : ''}
             <div style="margin-top:1rem; text-align:right;">
                 <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
             </div>
         `);
+        initCopyableBlocks();
     } catch (e) { showError('Offline analysis failed: ' + e.message); }
 }
 window.submitOfflineRiskAnalysis = submitOfflineRiskAnalysis;
@@ -7624,14 +9043,14 @@ async function showRiskAnalysisDetail(analysisId) {
         ${analysis.proposed_commands ? `
             <details style="margin-bottom:1rem;">
                 <summary style="cursor:pointer; font-weight:600;">Proposed Commands</summary>
-                <pre style="background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:200px; overflow:auto; margin-top:0.5rem; white-space:pre-wrap;">${escapeHtml(analysis.proposed_commands)}</pre>
+                <div style="margin-top:0.5rem;">${copyableCodeBlock(analysis.proposed_commands, { style: 'background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:200px; overflow:auto; white-space:pre-wrap' })}</div>
             </details>
         ` : ''}
 
         ${analysis.proposed_diff ? `
             <details style="margin-bottom:1rem;">
                 <summary style="cursor:pointer; font-weight:600;">Predicted Config Diff</summary>
-                <pre style="background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:300px; overflow:auto; margin-top:0.5rem; white-space:pre-wrap;">${escapeHtml(analysis.proposed_diff)}</pre>
+                <div style="margin-top:0.5rem;">${copyableCodeBlock(analysis.proposed_diff, { style: 'background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.8em; max-height:300px; overflow:auto; white-space:pre-wrap' })}</div>
             </details>
         ` : ''}
 
@@ -7640,6 +9059,7 @@ async function showRiskAnalysisDetail(analysisId) {
             <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
         </div>
     `);
+    initCopyableBlocks();
 }
 window.showRiskAnalysisDetail = showRiskAnalysisDetail;
 
@@ -7756,7 +9176,7 @@ function renderMonitoringDevices(polls) {
                     <span style="color:var(--text-muted); font-size:0.8em;">${escapeHtml(p.device_type || '')}</span>
                 </div>
                 <div style="display:flex; gap:0.4rem;">
-                    <button class="btn btn-sm btn-secondary" onclick="showMonitoringHostDetail(${p.host_id})">Details</button>
+                    <button class="btn btn-sm btn-secondary" onclick="navigateToDeviceDetail(${p.host_id})">Details</button>
                     <button class="btn btn-sm btn-secondary" onclick="showMonitoringHostHistory(${p.host_id}, '${escapeHtml(p.hostname || '')}')">History</button>
                 </div>
             </div>
@@ -8093,7 +9513,8 @@ window.showRouteSnapshotHistory = async function(hostId, hostname) {
 };
 
 window.showRouteSnapshotDetail = function(routesText, timestamp) {
-    showModal(`Route Table - ${timestamp}`, `<pre style="max-height:400px; overflow:auto; font-size:0.8em; white-space:pre-wrap;">${escapeHtml(routesText)}</pre>`);
+    showModal(`Route Table - ${timestamp}`, copyableCodeBlock(routesText));
+    initCopyableBlocks();
 };
 
 // ── Alert Rules Management ──────────────────────────────────────────────────
@@ -9133,11 +10554,15 @@ window.rollbackDeploymentAction = rollbackDeploymentAction;
 function showDeploymentJobStream(jobId, deploymentId, title) {
     showModal(title, `
         <div style="display:flex; flex-direction:column; gap:0.75rem;">
-            <div style="font-size:0.85em; color:var(--text-muted);">Deployment #${deploymentId} · Job: ${escapeHtml(jobId)}</div>
-            <pre id="deploy-job-output" style="background:var(--bg-secondary); padding:1rem; border-radius:8px; max-height:400px; overflow-y:auto; font-family:var(--font-mono); font-size:0.82rem; white-space:pre-wrap; line-height:1.5;"></pre>
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+                <span style="font-size:0.85em; color:var(--text-muted);">Deployment #${deploymentId} · Job: ${escapeHtml(jobId)}</span>
+                <button class="btn btn-sm btn-secondary copyable-copy-btn" data-copyable-target="deploy-job-output" title="Copy output to clipboard">${COPY_ICON_SVG}Copy</button>
+            </div>
+            <pre id="deploy-job-output" class="copyable-content" tabindex="0" style="background:var(--bg-secondary); padding:1rem; border-radius:8px; max-height:400px; overflow-y:auto; font-family:var(--font-mono); font-size:0.82rem; white-space:pre-wrap; line-height:1.5; user-select:text; cursor:text;"></pre>
             <div id="deploy-job-status" style="text-align:center; color:var(--text-muted);">Connecting...</div>
         </div>
     `);
+    initCopyableBlocks();
 
     const output = document.getElementById('deploy-job-output');
     const statusEl = document.getElementById('deploy-job-status');
@@ -9237,7 +10662,7 @@ async function showDeploymentDetail(deploymentId) {
 
             <details>
                 <summary style="cursor:pointer; font-weight:600;">Proposed Commands (${(dep.proposed_commands || '').split('\\n').filter(l => l.trim()).length})</summary>
-                <pre style="background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.82rem; max-height:200px; overflow-y:auto; margin-top:0.5rem;">${escapeHtml(dep.proposed_commands || '')}</pre>
+                <div style="margin-top:0.5rem;">${copyableCodeBlock(dep.proposed_commands || '', { style: 'background:var(--bg-secondary); padding:0.75rem; border-radius:6px; font-size:0.82rem; max-height:200px; overflow-y:auto; white-space:pre-wrap' })}</div>
             </details>
 
             <div>
@@ -9261,6 +10686,7 @@ async function showDeploymentDetail(deploymentId) {
             ${actions ? `<div style="display:flex; gap:0.5rem; margin-top:0.5rem;">${actions}</div>` : ''}
         </div>
     `);
+    initCopyableBlocks();
 }
 window.showDeploymentDetail = showDeploymentDetail;
 
@@ -9298,11 +10724,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     initThemeControls();
     initPerformanceMode();
     initSidebar();
+    initTimeRangeBar();
     initLoginParticles();
     initAppParticles();
     initLoginForm();
     initListPageControls();
     initKeyboardShortcuts();
+    initCopyableBlocks();
     // Card tilt disabled — it interfered with clicking on inventory items
 
     try {

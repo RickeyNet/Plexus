@@ -541,6 +541,7 @@ async def metrics_query(
     host: str = Query(default="*", description="Host ID, comma-separated IDs, or * for all"),
     range: str = Query(default="6h", description="Time range: 1h, 6h, 24h, 7d, 30d"),
     step: str = Query(default="auto", description="Resolution: raw, hourly, daily, or auto"),
+    group: int | None = Query(default=None, description="Filter by inventory group ID"),
 ):
     """Structured metrics query — no PromQL needed.
     Returns time-series data for the requested metric across hosts."""
@@ -552,6 +553,12 @@ async def metrics_query(
             host_ids = [int(h.strip()) for h in host.split(",") if h.strip()]
         except ValueError:
             raise HTTPException(400, "Invalid host parameter — use IDs or *")
+
+    # If group is specified and host is *, resolve host IDs from group
+    if group and host == "*":
+        group_hosts = await db.get_hosts_for_group(group)
+        if group_hosts:
+            host_ids = [h["id"] for h in group_hosts]
 
     # Parse time range
     now = datetime.now(timezone.utc)

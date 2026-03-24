@@ -151,6 +151,7 @@ from netcontrol.routes.metrics_engine import (
     inject_auth as metrics_engine_inject_auth,
     _downsampling_loop,
 )
+from netcontrol.routes.dashboards import router as dashboards_router
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -936,6 +937,11 @@ app.include_router(
 app.include_router(
     metrics_engine_admin_router,
     dependencies=[Depends(require_admin)],
+)
+# Dashboards & Annotations
+app.include_router(
+    dashboards_router,
+    dependencies=[Depends(require_auth)],
 )
 
 
