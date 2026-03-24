@@ -145,6 +145,12 @@ from netcontrol.routes.monitoring import (
     _evaluate_alerts_for_poll, _run_alert_escalation,
     _alert_escalation_loop, _run_monitoring_poll_once, _monitoring_poll_loop,
 )
+from netcontrol.routes.metrics_engine import (
+    router as metrics_engine_router,
+    admin_router as metrics_engine_admin_router,
+    inject_auth as metrics_engine_inject_auth,
+    _downsampling_loop,
+)
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -573,6 +579,7 @@ async def lifespan(app: FastAPI):
     compliance_check_task = asyncio.create_task(_compliance_check_loop())
     monitoring_task = asyncio.create_task(_monitoring_poll_loop())
     escalation_task = asyncio.create_task(_alert_escalation_loop())
+    downsampling_task = asyncio.create_task(_downsampling_loop())
     try:
         yield
     finally:
@@ -584,6 +591,7 @@ async def lifespan(app: FastAPI):
         compliance_check_task.cancel()
         monitoring_task.cancel()
         escalation_task.cancel()
+        downsampling_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -614,6 +622,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await escalation_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await downsampling_task
         except asyncio.CancelledError:
             pass
 
@@ -850,6 +862,7 @@ init_compliance(require_auth, require_feature, require_admin)
 init_risk_analysis(require_auth, require_feature)
 init_deployments(require_auth, require_feature)
 init_monitoring(require_auth, require_feature, require_admin)
+metrics_engine_inject_auth(require_auth, require_admin)
 
 # Jobs
 app.include_router(
@@ -913,6 +926,15 @@ app.include_router(
 )
 app.include_router(
     monitoring_admin_router,
+    dependencies=[Depends(require_admin)],
+)
+# Metrics Engine (Prometheus-style)
+app.include_router(
+    metrics_engine_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
+)
+app.include_router(
+    metrics_engine_admin_router,
     dependencies=[Depends(require_admin)],
 )
 
