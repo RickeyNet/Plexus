@@ -2312,26 +2312,34 @@ function _getTopoThemeColors() {
     const style = getComputedStyle(document.documentElement);
     const theme = document.documentElement.getAttribute('data-theme') || 'forest';
     const isDark = !['easy', 'light'].includes(theme);
+    const v = (prop, fallback) => style.getPropertyValue(prop).trim() || fallback;
     _topoThemeColors = {
-        nodeFont: style.getPropertyValue('--text').trim() || '#c8d4c8',
+        nodeFont: v('--text', '#c8d4c8'),
         nodeFontStroke: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.7)',
-        edgeFont: style.getPropertyValue('--text-muted').trim() || '#7a8a7a',
+        edgeFont: v('--text-muted', '#7a8a7a'),
         edgeFontStroke: isDark ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.6)',
-        externalBg: isDark ? '#263238' : style.getPropertyValue('--bg-secondary').trim(),
-        externalBorder: isDark ? '#546e7a' : style.getPropertyValue('--border').trim(),
-        externalHighlightBg: isDark ? '#37474f' : style.getPropertyValue('--card-bg-hover').trim(),
-        externalHighlightBorder: isDark ? '#90a4ae' : style.getPropertyValue('--border-light').trim(),
+        externalBg: isDark ? '#263238' : v('--bg-secondary', '#edf2ea'),
+        externalBorder: isDark ? '#546e7a' : v('--border', '#d1d9d1'),
+        externalHighlightBg: isDark ? '#37474f' : v('--card-bg-hover', '#f2f5ef'),
+        externalHighlightBorder: isDark ? '#90a4ae' : v('--border-light', '#c1c9c1'),
+        // Vendor node colors
+        cisco:     { background: v('--topo-cisco-bg', '#0d47a1'), border: v('--topo-cisco-border', '#42a5f5'), highlight: { background: v('--topo-cisco-hi-bg', '#1565c0'), border: v('--topo-cisco-hi-border', '#90caf9') }, hover: { background: v('--topo-cisco-hi-bg', '#1565c0'), border: v('--topo-cisco-hi-border', '#90caf9') } },
+        juniper:   { background: v('--topo-juniper-bg', '#1b5e20'), border: v('--topo-juniper-border', '#66bb6a'), highlight: { background: v('--topo-juniper-hi-bg', '#2e7d32'), border: v('--topo-juniper-hi-border', '#a5d6a7') }, hover: { background: v('--topo-juniper-hi-bg', '#2e7d32'), border: v('--topo-juniper-hi-border', '#a5d6a7') } },
+        arista:    { background: v('--topo-arista-bg', '#e65100'), border: v('--topo-arista-border', '#ffa726'), highlight: { background: v('--topo-arista-hi-bg', '#f57c00'), border: v('--topo-arista-hi-border', '#ffcc80') }, hover: { background: v('--topo-arista-hi-bg', '#f57c00'), border: v('--topo-arista-hi-border', '#ffcc80') } },
+        fortinet:  { background: v('--topo-fortinet-bg', '#b71c1c'), border: v('--topo-fortinet-border', '#ef5350'), highlight: { background: v('--topo-fortinet-hi-bg', '#c62828'), border: v('--topo-fortinet-hi-border', '#ef9a9a') }, hover: { background: v('--topo-fortinet-hi-bg', '#c62828'), border: v('--topo-fortinet-hi-border', '#ef9a9a') } },
+        unknown:   { background: v('--topo-unknown-bg', '#37474f'), border: v('--topo-unknown-border', '#78909c'), highlight: { background: v('--topo-unknown-hi-bg', '#455a64'), border: v('--topo-unknown-hi-border', '#b0bec5') }, hover: { background: v('--topo-unknown-hi-bg', '#455a64'), border: v('--topo-unknown-hi-border', '#b0bec5') } },
+        // Edge protocol colors
+        edgeCdp:   { color: v('--topo-edge-cdp', '#00b0ff'), highlight: v('--topo-edge-cdp-hi', '#40c4ff'), hover: v('--topo-edge-cdp-hi', '#40c4ff'), opacity: 0.8 },
+        edgeLldp:  { color: v('--topo-edge-lldp', '#00e676'), highlight: v('--topo-edge-lldp-hi', '#69f0ae'), hover: v('--topo-edge-lldp-hi', '#69f0ae'), opacity: 0.8 },
+        edgeOspf:  { color: v('--topo-edge-ospf', '#ffab40'), highlight: v('--topo-edge-ospf-hi', '#ffd180'), hover: v('--topo-edge-ospf-hi', '#ffd180'), opacity: 0.8 },
+        edgeBgp:   { color: v('--topo-edge-bgp', '#e040fb'), highlight: v('--topo-edge-bgp-hi', '#ea80fc'), hover: v('--topo-edge-bgp-hi', '#ea80fc'), opacity: 0.8 },
+        // Path highlighting
+        pathGlow:  v('--topo-path-glow', 'rgba(255,255,255,0.6)'),
+        dimColor:  { background: v('--topo-dim-bg', 'rgba(40,50,60,0.4)'), border: v('--topo-dim-border', 'rgba(60,70,80,0.4)') },
+        dimEdge:   { color: v('--topo-dim-edge', 'rgba(80,90,100,0.2)'), highlight: v('--topo-dim-edge-hi', 'rgba(80,90,100,0.3)'), hover: v('--topo-dim-edge-hi', 'rgba(80,90,100,0.3)') },
     };
     return _topoThemeColors;
 }
-
-const _TOPO_NODE_COLORS = {
-    cisco_ios:     { background: '#0d47a1', border: '#42a5f5', highlight: { background: '#1565c0', border: '#90caf9' }, hover: { background: '#1565c0', border: '#90caf9' } },
-    juniper_junos: { background: '#1b5e20', border: '#66bb6a', highlight: { background: '#2e7d32', border: '#a5d6a7' }, hover: { background: '#2e7d32', border: '#a5d6a7' } },
-    arista_eos:    { background: '#e65100', border: '#ffa726', highlight: { background: '#f57c00', border: '#ffcc80' }, hover: { background: '#f57c00', border: '#ffcc80' } },
-    fortinet:      { background: '#b71c1c', border: '#ef5350', highlight: { background: '#c62828', border: '#ef9a9a' }, hover: { background: '#c62828', border: '#ef9a9a' } },
-    unknown:       { background: '#37474f', border: '#78909c', highlight: { background: '#455a64', border: '#b0bec5' }, hover: { background: '#455a64', border: '#b0bec5' } },
-};
 
 function _topoNodeShape(deviceType) {
     if (deviceType === 'fortinet') return 'triangle';
@@ -2340,18 +2348,20 @@ function _topoNodeShape(deviceType) {
 }
 
 function _topoNodeColor(node) {
+    const tc = _topoThemeColors || _getTopoThemeColors();
     if (!node.in_inventory) {
-        const tc = _topoThemeColors || _getTopoThemeColors();
         return { background: tc.externalBg, border: tc.externalBorder, highlight: { background: tc.externalHighlightBg, border: tc.externalHighlightBorder }, hover: { background: tc.externalHighlightBg, border: tc.externalHighlightBorder } };
     }
-    return _TOPO_NODE_COLORS[node.device_type] || _TOPO_NODE_COLORS.unknown;
+    const vendorMap = { cisco_ios: tc.cisco, juniper_junos: tc.juniper, arista_eos: tc.arista, fortinet: tc.fortinet };
+    return vendorMap[node.device_type] || tc.unknown;
 }
 
 function _topoEdgeColor(protocol) {
-    if (protocol === 'lldp') return { color: '#00e676', highlight: '#69f0ae', hover: '#69f0ae', opacity: 0.8 };
-    if (protocol === 'ospf') return { color: '#ffab40', highlight: '#ffd180', hover: '#ffd180', opacity: 0.8 };
-    if (protocol === 'bgp')  return { color: '#e040fb', highlight: '#ea80fc', hover: '#ea80fc', opacity: 0.8 };
-    return { color: '#00b0ff', highlight: '#40c4ff', hover: '#40c4ff', opacity: 0.8 };
+    const tc = _topoThemeColors || _getTopoThemeColors();
+    if (protocol === 'lldp') return tc.edgeLldp;
+    if (protocol === 'ospf') return tc.edgeOspf;
+    if (protocol === 'bgp')  return tc.edgeBgp;
+    return tc.edgeCdp;
 }
 
 // Utilization overlay color: green (0%) → yellow (50%) → red (100%)
@@ -2940,19 +2950,18 @@ function _highlightPath(path, nodesDS, edgesDS, data) {
 
     // Stash original colors for restore
     _topoOriginalColors = { nodes: [], edges: [] };
-    const dimColor = { background: 'rgba(40,50,60,0.4)', border: 'rgba(60,70,80,0.4)' };
-    const dimEdgeColor = { color: 'rgba(80,90,100,0.2)', highlight: 'rgba(80,90,100,0.3)', hover: 'rgba(80,90,100,0.3)' };
+    const tc = _topoThemeColors || _getTopoThemeColors();
 
     for (const node of nodesDS.get()) {
         _topoOriginalColors.nodes.push([node.id, node.color]);
         if (!pathSet.has(node.id)) {
-            nodesDS.update({ id: node.id, color: dimColor, opacity: 0.3 });
+            nodesDS.update({ id: node.id, color: tc.dimColor, opacity: 0.3 });
         } else {
             // Brighten path nodes
             nodesDS.update({
                 id: node.id,
                 borderWidth: 4,
-                shadow: { enabled: true, color: '#ffffff', size: 20, x: 0, y: 0 },
+                shadow: { enabled: true, color: tc.pathGlow, size: 20, x: 0, y: 0 },
             });
         }
     }
@@ -2960,13 +2969,13 @@ function _highlightPath(path, nodesDS, edgesDS, data) {
     for (const edge of edgesDS.get()) {
         _topoOriginalColors.edges.push([edge.id, edge.color]);
         if (!pathEdgeIds.has(edge.id)) {
-            edgesDS.update({ id: edge.id, color: dimEdgeColor, opacity: 0.15 });
+            edgesDS.update({ id: edge.id, color: tc.dimEdge, opacity: 0.15 });
         } else {
             // Brighten path edges
             edgesDS.update({
                 id: edge.id,
                 width: 4,
-                shadow: { enabled: true, color: '#ffffff', size: 12, x: 0, y: 0 },
+                shadow: { enabled: true, color: tc.pathGlow, size: 12, x: 0, y: 0 },
             });
         }
     }
@@ -3131,12 +3140,15 @@ async function showTopologyChanges() {
             <button class="btn btn-secondary btn-sm" onclick="acknowledgeTopologyChanges()">Acknowledge All</button>
         </div>`;
         html += '<div style="max-height:400px; overflow-y:auto;">';
+        const cs = getComputedStyle(document.documentElement);
+        const successColor = cs.getPropertyValue('--success').trim() || '#00e676';
+        const dangerColor = cs.getPropertyValue('--danger').trim() || '#ef5350';
 
         for (const c of changes) {
             const isAdded = c.change_type === 'added';
             const icon = isAdded ? '+' : '&minus;';
-            const color = isAdded ? '#00e676' : '#ef5350';
-            const bg = isAdded ? 'rgba(0,230,118,0.08)' : 'rgba(239,83,80,0.08)';
+            const color = isAdded ? successColor : dangerColor;
+            const bg = color + '14';
             const ackClass = c.acknowledged ? ' style="opacity:0.5;"' : '';
             const proto = { cdp: 'CDP', lldp: 'LLDP', ospf: 'OSPF', bgp: 'BGP' }[c.protocol] || c.protocol?.toUpperCase() || '';
 
