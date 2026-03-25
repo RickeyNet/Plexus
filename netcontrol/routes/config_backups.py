@@ -19,6 +19,9 @@ LOGGER = configure_logging("plexus.config_backups")
 
 router = APIRouter()
 
+# Track which policies are currently running to prevent concurrent runs
+_running_policies: set[int] = set()
+
 # ── Late-binding auth dependencies ────────────────────────────────────────────
 
 _require_auth = None
@@ -200,48 +203,62 @@ async def delete_config_backup_route(backup_id: int, request: Request):
 @router.post("/api/config-backups/policies/{policy_id}/run-now")
 async def run_config_backup_policy_now(policy_id: int, request: Request):
     """Trigger an immediate backup run for a specific policy."""
-    policy = await db.get_config_backup_policy(policy_id)
-    if not policy:
-        raise HTTPException(status_code=404, detail="Policy not found")
-    hosts = await db.get_hosts_for_group(policy["group_id"])
-    cred = await db.get_credential_raw(policy["credential_id"])
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    # Prevent concurrent runs of the same policy
+    if policy_id in _running_policies:
+        raise HTTPException(status_code=409, detail="This backup policy is already running")
+    _running_policies.add(policy_id)
 
-    backed_up = 0
-    errs = 0
-    sem = asyncio.Semaphore(4)
+    try:
+        policy = await db.get_config_backup_policy(policy_id)
+        if not policy:
+            raise HTTPException(status_code=404, detail="Policy not found")
+        hosts = await db.get_hosts_for_group(policy["group_id"])
+        cred = await db.get_credential_raw(policy["credential_id"])
+        if not cred:
+            raise HTTPException(status_code=404, detail="Credential not found")
 
-    async def _do_backup(host):
-        nonlocal backed_up, errs
-        async with sem:
-            try:
-                config_text = await _capture_running_config(host, cred)
-                await db.create_config_backup(
-                    policy_id=policy_id, host_id=host["id"],
-                    config_text=config_text, capture_method="manual",
-                    status="success", error_message="",
-                )
-                backed_up += 1
-            except Exception as exc:
-                await db.create_config_backup(
-                    policy_id=policy_id, host_id=host["id"],
-                    config_text="", capture_method="manual",
-                    status="error", error_message=str(exc),
-                )
-                errs += 1
+        backed_up = 0
+        skipped = 0
+        errs = 0
+        sem = asyncio.Semaphore(4)
 
-    await asyncio.gather(*[_do_backup(h) for h in hosts], return_exceptions=True)
-    await db.update_config_backup_policy_last_run(policy_id)
+        async def _do_backup(host):
+            nonlocal backed_up, skipped, errs
+            async with sem:
+                try:
+                    config_text = await _capture_running_config(host, cred)
+                    # Deduplicate: skip if config is identical to the last backup
+                    last = await db.get_latest_config_backup(policy_id, host["id"])
+                    if last and last.get("config_text") == config_text:
+                        skipped += 1
+                        return
+                    await db.create_config_backup(
+                        policy_id=policy_id, host_id=host["id"],
+                        config_text=config_text, capture_method="manual",
+                        status="success", error_message="",
+                    )
+                    backed_up += 1
+                except Exception as exc:
+                    await db.create_config_backup(
+                        policy_id=policy_id, host_id=host["id"],
+                        config_text="", capture_method="manual",
+                        status="error", error_message=str(exc),
+                    )
+                    errs += 1
 
-    session = _get_session(request)
-    await _audit(
-        "config-backups", "policy.run-now",
-        user=session["user"] if session else "",
-        detail=f"policy_id={policy_id} backed_up={backed_up} errors={errs}",
-        correlation_id=_corr_id(request),
-    )
-    return {"ok": True, "backed_up": backed_up, "errors": errs}
+        await asyncio.gather(*[_do_backup(h) for h in hosts], return_exceptions=True)
+        await db.update_config_backup_policy_last_run(policy_id)
+
+        session = _get_session(request)
+        await _audit(
+            "config-backups", "policy.run-now",
+            user=session["user"] if session else "",
+            detail=f"policy_id={policy_id} backed_up={backed_up} skipped={skipped} errors={errs}",
+            correlation_id=_corr_id(request),
+        )
+        return {"ok": True, "backed_up": backed_up, "skipped": skipped, "errors": errs}
+    finally:
+        _running_policies.discard(policy_id)
 
 
 @router.post("/api/config-backups/restore")
@@ -378,6 +395,10 @@ async def _run_config_backups_once() -> dict:
                 async with sem:
                     try:
                         config_text = await _capture_running_config(host, cred_data)
+                        # Deduplicate: skip if config is identical to the last backup
+                        last = await db.get_latest_config_backup(pol_id, host["id"])
+                        if last and last.get("config_text") == config_text:
+                            return "skipped"
                         await db.create_config_backup(
                             policy_id=pol_id, host_id=host["id"],
                             config_text=config_text, capture_method="scheduled",
@@ -397,6 +418,8 @@ async def _run_config_backups_once() -> dict:
             for r in results:
                 if r is True:
                     hosts_backed_up += 1
+                elif r == "skipped":
+                    pass  # unchanged config, not an error
                 else:
                     errors += 1
 

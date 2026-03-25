@@ -630,6 +630,35 @@ CREATE INDEX IF NOT EXISTS idx_trap_syslog_received
     ON trap_syslog_events (received_at);
 CREATE INDEX IF NOT EXISTS idx_trap_syslog_host
     ON trap_syslog_events (host_id, received_at);
+
+CREATE TABLE IF NOT EXISTS dashboards (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    description     TEXT    NOT NULL DEFAULT '',
+    owner           TEXT    NOT NULL DEFAULT '',
+    is_default      INTEGER NOT NULL DEFAULT 0,
+    layout_json     TEXT    NOT NULL DEFAULT '{}',
+    variables_json  TEXT    NOT NULL DEFAULT '[]',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_panels (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    dashboard_id      INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+    title             TEXT    NOT NULL DEFAULT '',
+    chart_type        TEXT    NOT NULL DEFAULT 'line',
+    metric_query_json TEXT    NOT NULL DEFAULT '{}',
+    grid_x            INTEGER NOT NULL DEFAULT 0,
+    grid_y            INTEGER NOT NULL DEFAULT 0,
+    grid_w            INTEGER NOT NULL DEFAULT 6,
+    grid_h            INTEGER NOT NULL DEFAULT 4,
+    options_json      TEXT    NOT NULL DEFAULT '{}',
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_dashboard_panels_dashboard
+    ON dashboard_panels (dashboard_id);
 """
 
 
@@ -3013,6 +3042,22 @@ async def create_config_backup(
         await db.close()
 
 
+async def get_latest_config_backup(policy_id: int, host_id: int) -> dict | None:
+    """Get the most recent successful backup for a policy+host, including config_text."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT id, config_text FROM config_backups
+               WHERE policy_id = ? AND host_id = ? AND status = 'success'
+               ORDER BY captured_at DESC LIMIT 1""",
+            (policy_id, host_id),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
 async def get_config_backups(
     host_id: int | None = None,
     policy_id: int | None = None,
@@ -5341,5 +5386,212 @@ async def delete_old_trap_syslog_events(retention_days: int = 30) -> int:
         )
         await db.commit()
         return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ── Dashboards ─────────────────────────────────────────────────────────────────
+
+async def list_dashboards(owner: str | None = None) -> list[dict]:
+    db = await get_db()
+    try:
+        if owner:
+            cursor = await db.execute(
+                "SELECT * FROM dashboards WHERE owner = ? ORDER BY updated_at DESC", (owner,)
+            )
+        else:
+            cursor = await db.execute("SELECT * FROM dashboards ORDER BY updated_at DESC")
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_dashboard(dashboard_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM dashboards WHERE id = ?", (dashboard_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        dashboard = dict(row)
+        cursor2 = await db.execute(
+            "SELECT * FROM dashboard_panels WHERE dashboard_id = ? ORDER BY grid_y, grid_x",
+            (dashboard_id,),
+        )
+        dashboard["panels"] = rows_to_list(await cursor2.fetchall())
+        return dashboard
+    finally:
+        await db.close()
+
+
+async def create_dashboard(
+    name: str, description: str = "", owner: str = "",
+    layout_json: str = "{}", variables_json: str = "[]",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO dashboards (name, description, owner, layout_json, variables_json)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, description, owner, layout_json, variables_json),
+        )
+        await db.commit()
+        new_id = cursor.lastrowid
+        cursor2 = await db.execute("SELECT * FROM dashboards WHERE id = ?", (new_id,))
+        return dict(await cursor2.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_dashboard(dashboard_id: int, **kwargs) -> dict | None:
+    allowed = {"name", "description", "layout_json", "variables_json", "is_default"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return await get_dashboard(dashboard_id)
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(dashboard_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE dashboards SET {sets}, updated_at = datetime('now') WHERE id = ?",
+            tuple(vals),
+        )
+        await db.commit()
+        return await get_dashboard(dashboard_id)
+    finally:
+        await db.close()
+
+
+async def delete_dashboard(dashboard_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM dashboards WHERE id = ?", (dashboard_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def create_dashboard_panel(
+    dashboard_id: int, title: str = "", chart_type: str = "line",
+    metric_query_json: str = "{}", grid_x: int = 0, grid_y: int = 0,
+    grid_w: int = 6, grid_h: int = 4, options_json: str = "{}",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO dashboard_panels
+               (dashboard_id, title, chart_type, metric_query_json, grid_x, grid_y, grid_w, grid_h, options_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (dashboard_id, title, chart_type, metric_query_json, grid_x, grid_y, grid_w, grid_h, options_json),
+        )
+        await db.commit()
+        # Update dashboard timestamp
+        await db.execute("UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?", (dashboard_id,))
+        await db.commit()
+        new_id = cursor.lastrowid
+        cursor2 = await db.execute("SELECT * FROM dashboard_panels WHERE id = ?", (new_id,))
+        return dict(await cursor2.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_dashboard_panel(panel_id: int, **kwargs) -> dict | None:
+    allowed = {"title", "chart_type", "metric_query_json", "grid_x", "grid_y", "grid_w", "grid_h", "options_json"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return None
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(panel_id)
+    db = await get_db()
+    try:
+        await db.execute(f"UPDATE dashboard_panels SET {sets} WHERE id = ?", tuple(vals))
+        await db.commit()
+        cursor = await db.execute("SELECT * FROM dashboard_panels WHERE id = ?", (panel_id,))
+        row = await cursor.fetchone()
+        if row:
+            # Update parent dashboard timestamp
+            await db.execute(
+                "UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?",
+                (dict(row)["dashboard_id"],),
+            )
+            await db.commit()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def delete_dashboard_panel(panel_id: int) -> bool:
+    db = await get_db()
+    try:
+        # Get dashboard_id first to update timestamp
+        cursor = await db.execute("SELECT dashboard_id FROM dashboard_panels WHERE id = ?", (panel_id,))
+        row = await cursor.fetchone()
+        cursor2 = await db.execute("DELETE FROM dashboard_panels WHERE id = ?", (panel_id,))
+        await db.commit()
+        if row:
+            await db.execute(
+                "UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?",
+                (dict(row)["dashboard_id"],),
+            )
+            await db.commit()
+        return cursor2.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ── Annotations ────────────────────────────────────────────────────────────────
+
+async def get_annotations_in_range(
+    host_id: int | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    categories: list[str] | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        results = []
+        cats = categories or ["deployment", "config", "alert"]
+
+        # Audit events
+        if any(c in cats for c in ["deployment", "config", "alert"]):
+            where = ["1=1"]
+            params: list = []
+            if start:
+                where.append("timestamp >= ?")
+                params.append(start)
+            if end:
+                where.append("timestamp <= ?")
+                params.append(end)
+            cat_filter = []
+            if "deployment" in cats:
+                cat_filter.append("category LIKE '%deploy%'")
+            if "config" in cats:
+                cat_filter.append("category LIKE '%config%'")
+            if "alert" in cats:
+                cat_filter.append("category LIKE '%alert%'")
+            if cat_filter:
+                where.append(f"({' OR '.join(cat_filter)})")
+
+            cursor = await db.execute(
+                f"SELECT * FROM audit_events WHERE {' AND '.join(where)} ORDER BY timestamp DESC LIMIT 500",
+                tuple(params),
+            )
+            for row in await cursor.fetchall():
+                r = dict(row)
+                cat = "deployment" if "deploy" in (r.get("category") or "") else \
+                      "config" if "config" in (r.get("category") or "") else \
+                      "alert" if "alert" in (r.get("category") or "") else "other"
+                results.append({
+                    "timestamp": r.get("timestamp"),
+                    "title": r.get("action", ""),
+                    "description": r.get("detail", ""),
+                    "category": cat,
+                    "user": r.get("user", ""),
+                })
+
+        return results
     finally:
         await db.close()
