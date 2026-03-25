@@ -110,12 +110,12 @@
 - [x] Add SNMP trap and syslog UDP receivers with host correlation.
 
 ### Dashboarding & Visualization (Grafana Parity)
-- [ ] Adopt a charting library (ECharts or Chart.js) for line, bar, gauge, heatmap, and table panels.
-- [ ] Add per-device detail page with CPU/memory graphs, interface utilization, alert history, compliance status.
-- [ ] Add global time range selector (1h / 6h / 24h / 7d / 30d / custom) for all metric views.
-- [ ] Add user-defined dashboards with configurable panels (metric query + chart type + grid position).
-- [ ] Add dashboard template variables ($group, $host) with dropdown selectors for filtering all panels.
-- [ ] Add annotation support to overlay deployment/config change events on metric charts.
+- [x] Adopt a charting library (ECharts or Chart.js) for line, bar, gauge, heatmap, and table panels.
+- [x] Add per-device detail page with CPU/memory graphs, interface utilization, alert history, compliance status.
+- [x] Add global time range selector (1h / 6h / 24h / 7d / 30d / custom) for all metric views.
+- [x] Add user-defined dashboards with configurable panels (metric query + chart type + grid position).
+- [x] Add dashboard template variables ($group, $host) with dropdown selectors for filtering all panels.
+- [x] Add annotation support to overlay deployment/config change events on metric charts.
 
 ### Network Monitoring Breadth (LibreNMS Parity)
 - [ ] Add per-port utilization graphs with historical in/out bps time-series.

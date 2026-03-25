@@ -1058,3 +1058,77 @@ export async function updateSlaTarget(id, data) {
 export async function deleteSlaTarget(id) {
     return apiRequest(`/sla/targets/${id}`, { method: 'DELETE' });
 }
+
+// ── Metrics Engine ──────────────────────────────────────────────────────────
+
+export async function queryMetrics(metric, host = '*', range = '6h', step = 'auto', group = null) {
+    const params = new URLSearchParams({ metric, host, range, step });
+    if (group) params.set('group', group);
+    return apiRequest(`/metrics/query?${params}`);
+}
+
+export async function getMetricNames() {
+    return apiRequest('/metrics/names');
+}
+
+export async function getInterfaceTimeSeries(hostId, range = '6h', ifIndex = null) {
+    const params = new URLSearchParams({ range });
+    if (ifIndex != null) params.set('if_index', ifIndex);
+    return apiRequest(`/metrics/interfaces/${hostId}?${params}`);
+}
+
+export async function getMetricEvents(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.eventType) qs.set('event_type', params.eventType);
+    if (params.hostId) qs.set('host_id', params.hostId);
+    if (params.severity) qs.set('severity', params.severity);
+    if (params.limit) qs.set('limit', params.limit);
+    const q = qs.toString();
+    return apiRequest(`/metrics/events${q ? '?' + q : ''}`);
+}
+
+// ── Annotations ─────────────────────────────────────────────────────────────
+
+export async function getAnnotations(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.hostId) qs.set('host_id', params.hostId);
+    if (params.start) qs.set('start', params.start);
+    if (params.end) qs.set('end', params.end);
+    if (params.categories) qs.set('categories', params.categories);
+    const q = qs.toString();
+    return apiRequest(`/annotations${q ? '?' + q : ''}`);
+}
+
+// ── Custom Dashboards ───────────────────────────────────────────────────────
+
+export async function getCustomDashboards() {
+    return apiRequest('/dashboards');
+}
+
+export async function getCustomDashboard(id) {
+    return apiRequest(`/dashboards/${id}`);
+}
+
+export async function createCustomDashboard(data) {
+    return apiRequest('/dashboards', { method: 'POST', body: data });
+}
+
+export async function updateCustomDashboard(id, data) {
+    return apiRequest(`/dashboards/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteCustomDashboard(id) {
+    return apiRequest(`/dashboards/${id}`, { method: 'DELETE' });
+}
+
+export async function createDashboardPanel(dashboardId, data) {
+    return apiRequest(`/dashboards/${dashboardId}/panels`, { method: 'POST', body: data });
+}
+
+export async function updateDashboardPanel(dashboardId, panelId, data) {
+    return apiRequest(`/dashboards/${dashboardId}/panels/${panelId}`, { method: 'PUT', body: data });
+}
+
+export async function deleteDashboardPanel(dashboardId, panelId) {
+    return apiRequest(`/dashboards/${dashboardId}/panels/${panelId}`, { method: 'DELETE' });
+}
