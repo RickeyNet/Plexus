@@ -60,6 +60,7 @@ class JobLaunch(BaseModel):
     playbook_id: int
     inventory_group_id: int | None = None  # Optional for backward compatibility
     host_ids: list[int] | None = None  # List of specific host IDs to target
+    ad_hoc_ips: list[str] | None = None  # Free-form IP addresses not in inventory
     credential_id: int | None = None
     template_id: int | None = None
     dry_run: bool = True
@@ -74,12 +75,21 @@ class JobLaunch(BaseModel):
 
 async def _process_job_queue():
     """Dequeue and run the next eligible job if concurrency allows."""
+    try:
+        await _process_job_queue_inner()
+    except Exception as exc:
+        LOGGER.exception("Queue processor error: %s", exc)
+
+
+async def _process_job_queue_inner():
     running = await db.get_running_job_count()
     if running >= _MAX_CONCURRENT_JOBS:
+        LOGGER.debug("Queue: max concurrency reached (%d/%d)", running, _MAX_CONCURRENT_JOBS)
         return
 
     next_job = await db.get_next_queued_job()
     if not next_job:
+        LOGGER.debug("Queue: no queued jobs found")
         return
 
     # Check dependencies
@@ -88,6 +98,9 @@ async def _process_job_queue():
         return
 
     job_id = next_job["id"]
+    LOGGER.info("Queue: processing job %d (playbook_id=%s, group_id=%s, host_ids=%s, ad_hoc_ips=%s)",
+                job_id, next_job.get("playbook_id"), next_job.get("inventory_group_id"),
+                next_job.get("host_ids"), next_job.get("ad_hoc_ips"))
 
     # Fetch all the info needed to run this job
     playbook = await db.get_playbook(next_job["playbook_id"])
@@ -97,6 +110,7 @@ async def _process_job_queue():
         return
 
     # Get hosts — use stored host_ids (specific selection) or fall back to full group
+    hosts = []
     stored_host_ids = None
     if next_job.get("host_ids"):
         try:
@@ -106,8 +120,24 @@ async def _process_job_queue():
 
     if stored_host_ids:
         hosts = await db.get_hosts_by_ids(stored_host_ids)
-    else:
+    elif next_job.get("inventory_group_id"):
         hosts = await db.get_hosts_for_group(next_job["inventory_group_id"])
+
+    # Reconstruct ad-hoc host dicts from stored IPs
+    if next_job.get("ad_hoc_ips"):
+        try:
+            ad_hoc_list = json.loads(next_job["ad_hoc_ips"])
+            for ip in ad_hoc_list:
+                hosts.append({
+                    "id": None,
+                    "hostname": ip,
+                    "ip_address": ip,
+                    "device_type": "cisco_ios",
+                    "group_id": None,
+                })
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     if not hosts:
         await db.finish_job(job_id, status="failed")
         await db.add_job_event(job_id, "error", "No hosts found for this job")
@@ -359,8 +389,9 @@ async def launch_job(body: JobLaunch, request: Request):
     if not playbook:
         raise HTTPException(404, "Playbook not found")
 
-    # Get hosts - either from selected host_ids or from inventory_group_id
+    # Get hosts - from selected host_ids, ad-hoc IPs, or inventory_group_id
     hosts = []
+    ad_hoc_hosts = []
     inventory_group_id = None
 
     if body.host_ids and len(body.host_ids) > 0:
@@ -377,8 +408,23 @@ async def launch_job(body: JobLaunch, request: Request):
         if not hosts:
             raise HTTPException(400, "No hosts in inventory group")
         inventory_group_id = body.inventory_group_id
-    else:
-        raise HTTPException(400, "Must specify either host_ids or inventory_group_id")
+
+    # Build synthetic host dicts for ad-hoc IPs
+    if body.ad_hoc_ips:
+        for ip in body.ad_hoc_ips:
+            ip = ip.strip()
+            if ip:
+                ad_hoc_hosts.append({
+                    "id": None,
+                    "hostname": ip,
+                    "ip_address": ip,
+                    "device_type": "cisco_ios",
+                    "group_id": None,
+                })
+        hosts = hosts + ad_hoc_hosts
+
+    if not hosts:
+        raise HTTPException(400, "Must specify host_ids, ad_hoc_ips, or inventory_group_id")
 
     # Get credentials — use job-specific, then app-wide default
     credentials = None
@@ -422,13 +468,16 @@ async def launch_job(body: JobLaunch, request: Request):
     launched_by = session["user"] if session else "admin"
     priority = max(0, min(4, body.priority))
     # Store specific host_ids so the queue processor targets only selected hosts
-    selected_host_ids = [h["id"] for h in hosts] if body.host_ids else None
+    selected_host_ids = [h["id"] for h in hosts if h.get("id") is not None] or None
+    # Store ad-hoc IPs separately so the queue processor can reconstruct them
+    stored_ad_hoc = [ip.strip() for ip in body.ad_hoc_ips if ip.strip()] if body.ad_hoc_ips else None
     job_id = await db.create_job(
         body.playbook_id, inventory_group_id,
         body.credential_id, body.template_id,
         body.dry_run, launched_by=launched_by,
         priority=priority, depends_on=body.depends_on,
         host_ids=selected_host_ids,
+        ad_hoc_ips=stored_ad_hoc,
     )
 
     # Trigger queue processor to potentially start this job immediately
@@ -490,11 +539,27 @@ async def retry_job_endpoint(job_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
+    # Carry forward host_ids and ad_hoc_ips from the original job
+    retry_host_ids = None
+    if job.get("host_ids"):
+        try:
+            retry_host_ids = json.loads(job["host_ids"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    retry_ad_hoc = None
+    if job.get("ad_hoc_ips"):
+        try:
+            retry_ad_hoc = json.loads(job["ad_hoc_ips"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     new_job_id = await db.create_job(
-        job["playbook_id"], job["inventory_group_id"],
+        job["playbook_id"], job.get("inventory_group_id"),
         job.get("credential_id"), job.get("template_id"),
         bool(job.get("dry_run", 1)), launched_by=user,
         priority=job.get("priority", 2),
+        host_ids=retry_host_ids,
+        ad_hoc_ips=retry_ad_hoc,
     )
 
     asyncio.ensure_future(_process_job_queue())

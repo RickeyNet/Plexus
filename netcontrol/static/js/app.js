@@ -3532,6 +3532,28 @@ async function loadInventory(options = {}) {
     }
 }
 
+async function exportInventoryCSV() {
+    try {
+        const resp = await fetch('/api/inventory/export/csv', { credentials: 'same-origin' });
+        if (!resp.ok) {
+            const err = await resp.text();
+            throw new Error(err || `HTTP ${resp.status}`);
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'inventory_export.csv';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        showToast('Inventory CSV exported', 'success');
+    } catch (error) {
+        showToast('CSV export failed: ' + error.message, 'error');
+    }
+}
+
 function renderInventoryGroups(groups) {
     const container = document.getElementById('inventory-groups');
     const query = (listViewState.inventory.query || '').trim().toLowerCase();
@@ -4244,7 +4266,7 @@ window.saveEditSnmpProfile = async function(e, profileId) {
 };
 
 window.deleteSnmpProfile = async function(profileId) {
-    if (!confirm('Delete this SNMP profile? Any groups using it will be unassigned.')) return;
+    if (!await showConfirm({ title: 'Delete SNMP Profile', message: 'Delete this SNMP profile? Any groups using it will be unassigned.', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
     try {
         await api.deleteSnmpProfile(profileId);
         showSuccess('SNMP profile deleted.');
@@ -5585,7 +5607,16 @@ window.showLaunchJobModal = async function() {
                         ${groupsWithHosts.length === 0 ? '<div class="empty-state">No inventory groups available</div>' : ''}
                     </div>
                     <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.5rem;">
-                        Select entire groups or individual hosts. At least one target must be selected.
+                        Select entire groups or individual hosts, and/or enter ad-hoc IPs below.
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Ad-Hoc IP Addresses</label>
+                    <textarea class="form-input" name="ad_hoc_ips" id="job-adhoc-ips" rows="3"
+                        placeholder="Enter IP addresses (one per line or comma-separated)&#10;e.g. 10.0.1.50, 192.168.1.100"
+                        style="font-family: monospace; font-size: 0.875rem; resize: vertical;"></textarea>
+                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.25rem;">
+                        Target devices not in inventory. These will run as cisco_ios by default.
                     </small>
                 </div>
                 <div class="form-group">
@@ -5662,19 +5693,26 @@ window._onJobPlaybookChange = function(playbookId) {
 window.launchJob = async function(e) {
     e.preventDefault();
     const formData = new FormData(e.target);
-    
+
     // Get selected host IDs
     const hostIds = Array.from(document.querySelectorAll('.job-host-checkbox:checked'))
         .map(cb => parseInt(cb.value))
-        .filter(id => !isNaN(id)); // Filter out any invalid IDs
-    
-    if (hostIds.length === 0) {
-        showError('Please select at least one host or group');
+        .filter(id => !isNaN(id));
+
+    // Get ad-hoc IPs from textarea
+    const adHocRaw = (formData.get('ad_hoc_ips') || '').trim();
+    const adHocIps = adHocRaw
+        ? adHocRaw.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0)
+        : [];
+
+    if (hostIds.length === 0 && adHocIps.length === 0) {
+        showError('Please select at least one host or enter an IP address');
         return;
     }
-    
-    console.log('Launching job with host IDs:', hostIds);
-    
+
+    const totalTargets = hostIds.length + adHocIps.length;
+    console.log('Launching job with host IDs:', hostIds, 'ad-hoc IPs:', adHocIps);
+
     try {
         const playbookId = parseInt(formData.get('playbook_id'));
         const credentialId = formData.get('credential_id') ? parseInt(formData.get('credential_id')) : null;
@@ -5686,17 +5724,18 @@ window.launchJob = async function(e) {
 
         const job = await api.launchJob(
             playbookId,
-            null, // No longer using inventory_group_id
+            null,
             credentialId,
             templateId,
             dryRun,
-            hostIds,
+            hostIds.length > 0 ? hostIds : null,
             priority,
-            dependsOn
+            dependsOn,
+            adHocIps.length > 0 ? adHocIps : null
         );
         closeAllModals();
         await loadJobs();
-        showSuccess(`Job queued successfully on ${hostIds.length} host(s)`);
+        showSuccess(`Job queued successfully on ${totalTargets} target(s)`);
         setTimeout(() => viewJobOutput(job.job_id), 500);
     } catch (error) {
         console.error('Job launch error:', error);
@@ -6414,7 +6453,7 @@ window.copyJobOutput = function() {
 
 window.cancelCurrentJob = async function() {
     if (!_currentViewJobId) return;
-    if (!confirm('Cancel this job?')) return;
+    if (!await showConfirm({ title: 'Cancel Job', message: 'Cancel this job?', confirmText: 'Cancel Job', confirmClass: 'btn-danger' })) return;
     try {
         await api.cancelJob(_currentViewJobId);
         showSuccess('Job cancelled');
@@ -6439,7 +6478,7 @@ window.retryCurrentJob = async function() {
 };
 
 window.cancelJobFromList = async function(jobId) {
-    if (!confirm('Cancel this job?')) return;
+    if (!await showConfirm({ title: 'Cancel Job', message: 'Cancel this job?', confirmText: 'Cancel Job', confirmClass: 'btn-danger' })) return;
     try {
         await api.cancelJob(jobId);
         showSuccess('Job cancelled');
@@ -8690,7 +8729,7 @@ async function submitAssignComplianceProfile() {
 window.submitAssignComplianceProfile = submitAssignComplianceProfile;
 
 async function confirmDeleteComplianceProfile(profileId) {
-    if (!confirm('Delete this compliance profile and all its assignments and scan results?')) return;
+    if (!await showConfirm({ title: 'Delete Compliance Profile', message: 'Delete this compliance profile and all its assignments and scan results?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
     try {
         await api.deleteComplianceProfile(profileId);
         showSuccess('Profile deleted');
@@ -8709,7 +8748,7 @@ async function toggleComplianceAssignment(assignmentId, enabled) {
 window.toggleComplianceAssignment = toggleComplianceAssignment;
 
 async function confirmDeleteComplianceAssignment(assignmentId) {
-    if (!confirm('Delete this compliance assignment?')) return;
+    if (!await showConfirm({ title: 'Delete Assignment', message: 'Delete this compliance assignment?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
     try {
         await api.deleteComplianceAssignment(assignmentId);
         showSuccess('Assignment deleted');
@@ -9121,7 +9160,7 @@ async function approveRiskAnalysis(analysisId) {
 window.approveRiskAnalysis = approveRiskAnalysis;
 
 async function confirmDeleteRiskAnalysis(analysisId) {
-    if (!confirm('Delete this risk analysis?')) return;
+    if (!await showConfirm({ title: 'Delete Risk Analysis', message: 'Delete this risk analysis?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
     try {
         await api.deleteRiskAnalysis(analysisId);
         showSuccess('Risk analysis deleted');
@@ -10392,7 +10431,7 @@ async function editSlaTarget(id) {
 window.editSlaTarget = editSlaTarget;
 
 async function deleteSlaTarget(id) {
-    if (!confirm('Delete this SLA target?')) return;
+    if (!await showConfirm({ title: 'Delete SLA Target', message: 'Delete this SLA target?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
     try {
         await api.deleteSlaTarget(id);
         showSuccess('SLA target deleted');
@@ -10582,7 +10621,7 @@ async function submitNewDeployment() {
 window.submitNewDeployment = submitNewDeployment;
 
 async function executeDeploymentAction(deploymentId) {
-    if (!confirm('Execute this deployment? Pre-deployment snapshots will be captured before pushing config changes.')) return;
+    if (!await showConfirm({ title: 'Execute Deployment', message: 'Execute this deployment? Pre-deployment snapshots will be captured before pushing config changes.', confirmText: 'Execute', confirmClass: 'btn-primary' })) return;
     try {
         const result = await api.executeDeployment(deploymentId);
         showDeploymentJobStream(result.job_id, deploymentId, 'Executing Deployment');
@@ -10591,7 +10630,7 @@ async function executeDeploymentAction(deploymentId) {
 window.executeDeploymentAction = executeDeploymentAction;
 
 async function rollbackDeploymentAction(deploymentId) {
-    if (!confirm('Roll back this deployment? Pre-deployment config snapshots will be restored to all hosts.')) return;
+    if (!await showConfirm({ title: 'Rollback Deployment', message: 'Roll back this deployment? Pre-deployment config snapshots will be restored to all hosts.', confirmText: 'Roll Back', confirmClass: 'btn-danger' })) return;
     try {
         const result = await api.rollbackDeployment(deploymentId);
         showDeploymentJobStream(result.job_id, deploymentId, 'Rolling Back Deployment');
@@ -10739,7 +10778,7 @@ async function showDeploymentDetail(deploymentId) {
 window.showDeploymentDetail = showDeploymentDetail;
 
 async function confirmDeleteDeployment(deploymentId) {
-    if (!confirm('Delete this deployment and all its checkpoints/snapshots?')) return;
+    if (!await showConfirm({ title: 'Delete Deployment', message: 'Delete this deployment and all its checkpoints/snapshots?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
     try {
         await api.deleteDeployment(deploymentId);
         showSuccess('Deployment deleted');
@@ -11103,7 +11142,7 @@ function closeOidProfileModal() {
 window.closeOidProfileModal = closeOidProfileModal;
 
 async function deleteOidProfile(profileId) {
-    if (!confirm('Delete this OID profile?')) return;
+    if (!await showConfirm({ title: 'Delete OID Profile', message: 'Delete this OID profile?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
     try {
         await api.deleteOidProfile(profileId);
         showSuccess('OID profile deleted');
