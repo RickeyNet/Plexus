@@ -725,12 +725,12 @@
                     </div>
                 </div>
                 <div id="topology-legend" class="topology-legend">
-                    <span class="topology-legend-item"><span class="topology-legend-dot" style="background:#42a5f5; color:#42a5f5;"></span> Inventory Device</span>
+                    <span class="topology-legend-item"><span class="topology-legend-dot topology-legend-dot-inventory"></span> Inventory Device</span>
                     <span class="topology-legend-item"><span class="topology-legend-dot topology-legend-dot-dashed"></span> External Neighbor</span>
-                    <span class="topology-legend-item"><span class="topology-legend-line" style="background:#00b0ff; color:#00b0ff;"></span> CDP</span>
-                    <span class="topology-legend-item"><span class="topology-legend-line" style="background:#00e676; color:#00e676;"></span> LLDP</span>
-                    <span class="topology-legend-item"><span class="topology-legend-line" style="background:#ffab40; color:#ffab40;"></span> OSPF</span>
-                    <span class="topology-legend-item"><span class="topology-legend-line" style="background:#e040fb; color:#e040fb;"></span> BGP</span>
+                    <span class="topology-legend-item"><span class="topology-legend-line topology-legend-line-cdp"></span> CDP</span>
+                    <span class="topology-legend-item"><span class="topology-legend-line topology-legend-line-lldp"></span> LLDP</span>
+                    <span class="topology-legend-item"><span class="topology-legend-line topology-legend-line-ospf"></span> OSPF</span>
+                    <span class="topology-legend-item"><span class="topology-legend-line topology-legend-line-bgp"></span> BGP</span>
                     <span class="topology-legend-item topology-legend-util" id="topology-legend-util" style="display:none;">
                         <span class="topology-legend-gradient"></span> Utilization (0-100%)
                     </span>
@@ -743,15 +743,15 @@
                                 <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
                             </filter>
                         </defs>
-                        <line x1="44" y1="35" x2="96" y2="35" stroke="#00b0ff" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.5" filter="url(#topo-glow)"/>
-                        <line x1="38" y1="45" x2="62" y2="95" stroke="#00e676" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.4" filter="url(#topo-glow)"/>
-                        <line x1="102" y1="45" x2="78" y2="95" stroke="#00b0ff" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.4" filter="url(#topo-glow)"/>
-                        <circle cx="30" cy="35" r="14" stroke="#42a5f5" stroke-width="2" fill="rgba(0,176,255,0.08)" filter="url(#topo-glow)"/>
-                        <circle cx="110" cy="35" r="14" stroke="#00e676" stroke-width="2" fill="rgba(0,230,118,0.06)" filter="url(#topo-glow)"/>
-                        <circle cx="70" cy="105" r="14" stroke="#546e7a" stroke-width="2" fill="rgba(84,110,122,0.08)" stroke-dasharray="4 3"/>
+                        <line x1="44" y1="35" x2="96" y2="35" class="topo-empty-edge-cdp" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.5" filter="url(#topo-glow)"/>
+                        <line x1="38" y1="45" x2="62" y2="95" class="topo-empty-edge-lldp" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.4" filter="url(#topo-glow)"/>
+                        <line x1="102" y1="45" x2="78" y2="95" class="topo-empty-edge-cdp" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.4" filter="url(#topo-glow)"/>
+                        <circle cx="30" cy="35" r="14" class="topo-empty-node-inv" stroke-width="2" filter="url(#topo-glow)"/>
+                        <circle cx="110" cy="35" r="14" class="topo-empty-node-inv2" stroke-width="2" filter="url(#topo-glow)"/>
+                        <circle cx="70" cy="105" r="14" class="topo-empty-node-ext" stroke-width="2" stroke-dasharray="4 3"/>
                     </svg>
                     <h3>No Topology Data</h3>
-                    <p style="color:rgba(180,210,240,0.6); margin-bottom:1rem;">Run neighbor discovery on your inventory groups to map network connections.</p>
+                    <p style="color:var(--text-muted); margin-bottom:1rem;">Run neighbor discovery on your inventory groups to map network connections.</p>
                     <button class="btn btn-primary btn-sm" onclick="discoverTopology()">Discover Neighbors</button>
                 </div>
             </div>
