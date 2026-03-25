@@ -21,6 +21,24 @@ admin_router = APIRouter()
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+def _normalize_link_key(
+    source_host_id: int,
+    source_interface: str,
+    target_device_name: str,
+    target_interface: str,
+) -> tuple:
+    """Normalize a link key so minor SNMP string variations don't cause false
+    change detections (case, domain suffix, whitespace)."""
+    # Strip domain suffixes (e.g. "switch1.domain.local" → "switch1")
+    tgt = target_device_name.strip().lower().split(".")[0]
+    return (
+        source_host_id,
+        source_interface.strip().lower(),
+        tgt,
+        target_interface.strip().lower(),
+    )
+
+
 async def _record_topology_changes(
     host: dict,
     old_link_keys: set[tuple],
@@ -35,12 +53,12 @@ async def _record_topology_changes(
     removed_keys = old_link_keys - new_link_keys
     for key in removed_keys:
         _src_id, src_iface, tgt_name, tgt_iface = key
-        # Find protocol from old links
+        # Find protocol from old links (compare normalized)
         protocol = ""
         target_ip = ""
         for ol in old_links:
-            if (ol["source_host_id"] == key[0] and ol["source_interface"] == src_iface
-                    and ol["target_device_name"] == tgt_name and ol["target_interface"] == tgt_iface):
+            if _normalize_link_key(ol["source_host_id"], ol["source_interface"],
+                                   ol["target_device_name"], ol["target_interface"]) == key:
                 protocol = ol.get("protocol", "")
                 target_ip = ol.get("target_ip", "")
                 break
@@ -62,8 +80,8 @@ async def _record_topology_changes(
         protocol = ""
         target_ip = ""
         for n in new_neighbors:
-            if (n["source_host_id"] == key[0] and n["local_interface"] == src_iface
-                    and n["remote_device_name"] == tgt_name and n["remote_interface"] == tgt_iface):
+            if _normalize_link_key(n["source_host_id"], n["local_interface"],
+                                   n["remote_device_name"], n["remote_interface"]) == key:
                 protocol = n.get("protocol", "")
                 target_ip = n.get("remote_ip", "")
                 break
@@ -204,11 +222,13 @@ async def _run_topology_discovery_once() -> dict:
                 # Snapshot old links for change detection
                 old_links = await db.get_topology_links_for_host(host["id"])
                 old_link_keys = {
-                    (l["source_host_id"], l["source_interface"], l["target_device_name"], l["target_interface"])
+                    _normalize_link_key(l["source_host_id"], l["source_interface"],
+                                        l["target_device_name"], l["target_interface"])
                     for l in old_links if l["source_host_id"] == host["id"]
                 }
                 new_link_keys = {
-                    (n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"])
+                    _normalize_link_key(n["source_host_id"], n["local_interface"],
+                                        n["remote_device_name"], n["remote_interface"])
                     for n in neighbors
                 }
 
@@ -472,11 +492,13 @@ async def discover_topology_for_group(group_id: int):
                 # Snapshot old links for change detection
                 old_links = await db.get_topology_links_for_host(host["id"])
                 old_link_keys = {
-                    (l["source_host_id"], l["source_interface"], l["target_device_name"], l["target_interface"])
+                    _normalize_link_key(l["source_host_id"], l["source_interface"],
+                                        l["target_device_name"], l["target_interface"])
                     for l in old_links if l["source_host_id"] == host["id"]
                 }
                 new_link_keys = {
-                    (n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"])
+                    _normalize_link_key(n["source_host_id"], n["local_interface"],
+                                        n["remote_device_name"], n["remote_interface"])
                     for n in neighbors
                 }
 
@@ -566,11 +588,13 @@ async def discover_topology_all():
                     # Snapshot old links for change detection
                     old_links = await db.get_topology_links_for_host(host["id"])
                     old_link_keys = {
-                        (l["source_host_id"], l["source_interface"], l["target_device_name"], l["target_interface"])
+                        _normalize_link_key(l["source_host_id"], l["source_interface"],
+                                            l["target_device_name"], l["target_interface"])
                         for l in old_links if l["source_host_id"] == host["id"]
                     }
                     new_link_keys = {
-                        (n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"])
+                        _normalize_link_key(n["source_host_id"], n["local_interface"],
+                                            n["remote_device_name"], n["remote_interface"])
                         for n in neighbors
                     }
 

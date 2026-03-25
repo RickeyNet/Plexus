@@ -151,6 +151,8 @@ CREATE TABLE IF NOT EXISTS hosts (
     device_type TEXT    NOT NULL DEFAULT 'cisco_ios',
     status      TEXT    NOT NULL DEFAULT 'unknown',
     last_seen   TEXT,
+    model       TEXT    DEFAULT '',
+    software_version TEXT DEFAULT '',
     UNIQUE(group_id, ip_address)
 );
 
@@ -188,7 +190,7 @@ CREATE TABLE IF NOT EXISTS credentials (
 CREATE TABLE IF NOT EXISTS jobs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     playbook_id     INTEGER NOT NULL REFERENCES playbooks(id),
-    inventory_group_id INTEGER NOT NULL REFERENCES inventory_groups(id),
+    inventory_group_id INTEGER REFERENCES inventory_groups(id),
     credential_id   INTEGER REFERENCES credentials(id),
     template_id     INTEGER REFERENCES templates(id),
     dry_run         INTEGER NOT NULL DEFAULT 1,
@@ -201,6 +203,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     cancelled_at    TEXT,
     cancelled_by    TEXT    DEFAULT '',
     host_ids        TEXT    DEFAULT NULL,
+    ad_hoc_ips      TEXT    DEFAULT NULL,
     hosts_ok        INTEGER DEFAULT 0,
     hosts_failed    INTEGER DEFAULT 0,
     hosts_skipped   INTEGER DEFAULT 0,
@@ -873,6 +876,11 @@ async def _init_postgres(db) -> None:
 
     await db.execute("ALTER TABLE credentials ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id)")
     await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS host_ids TEXT DEFAULT NULL")
+    await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ad_hoc_ips TEXT DEFAULT NULL")
+    await db.execute("ALTER TABLE jobs ALTER COLUMN inventory_group_id DROP NOT NULL")
+
+    await db.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS model TEXT DEFAULT ''")
+    await db.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS software_version TEXT DEFAULT ''")
 
     cursor = await db.execute("SELECT COUNT(*) FROM credentials WHERE owner_id IS NULL")
     orphan_count_row = await cursor.fetchone()
@@ -1023,7 +1031,8 @@ async def init_db():
         # Migration: Add missing columns to jobs table if they don't exist
         try:
             cursor = await db.execute("PRAGMA table_info(jobs)")
-            columns = [row[1] for row in await cursor.fetchall()]
+            columns_info = await cursor.fetchall()
+            columns = [row[1] for row in columns_info]
             for col_name, col_def in [
                 ("queued_at", "TEXT"),
                 ("cancelled_at", "TEXT"),
@@ -1032,6 +1041,7 @@ async def init_db():
                 ("depends_on", "TEXT NOT NULL DEFAULT '[]'"),
                 ("launched_by", "TEXT DEFAULT 'admin'"),
                 ("host_ids", "TEXT DEFAULT NULL"),
+                ("ad_hoc_ips", "TEXT DEFAULT NULL"),
             ]:
                 if col_name not in columns:
                     _LOGGER.info("migration: adding '%s' column to jobs table", col_name)
@@ -1040,6 +1050,108 @@ async def init_db():
                     _LOGGER.info("migration: added '%s' column to jobs table successfully", col_name)
         except Exception as e:
             _LOGGER.error("migration: jobs table migration error: %s", e, exc_info=True)
+
+        # Migration: Make inventory_group_id nullable (needed for ad-hoc IP jobs)
+        try:
+            cursor = await db.execute("PRAGMA table_info(jobs)")
+            cols = await cursor.fetchall()
+            # col format: (cid, name, type, notnull, default, pk)
+            igid_col = next((c for c in cols if c[1] == "inventory_group_id"), None)
+            if igid_col and igid_col[3] == 1:  # notnull == 1 means NOT NULL
+                _LOGGER.info("migration: making inventory_group_id nullable in jobs table")
+                await db.execute("PRAGMA foreign_keys=OFF")
+                await db.execute("ALTER TABLE jobs RENAME TO jobs_old")
+                await db.execute("""
+                    CREATE TABLE jobs (
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        playbook_id     INTEGER NOT NULL REFERENCES playbooks(id),
+                        inventory_group_id INTEGER REFERENCES inventory_groups(id),
+                        credential_id   INTEGER REFERENCES credentials(id),
+                        template_id     INTEGER REFERENCES templates(id),
+                        dry_run         INTEGER NOT NULL DEFAULT 1,
+                        status          TEXT    NOT NULL DEFAULT 'pending',
+                        priority        INTEGER NOT NULL DEFAULT 2,
+                        depends_on      TEXT    NOT NULL DEFAULT '[]',
+                        queued_at       TEXT,
+                        started_at      TEXT,
+                        finished_at     TEXT,
+                        cancelled_at    TEXT,
+                        cancelled_by    TEXT    DEFAULT '',
+                        host_ids        TEXT    DEFAULT NULL,
+                        ad_hoc_ips      TEXT    DEFAULT NULL,
+                        hosts_ok        INTEGER DEFAULT 0,
+                        hosts_failed    INTEGER DEFAULT 0,
+                        hosts_skipped   INTEGER DEFAULT 0,
+                        launched_by     TEXT    DEFAULT 'admin'
+                    )
+                """)
+                await db.execute("""
+                    INSERT INTO jobs (id, playbook_id, inventory_group_id, credential_id,
+                        template_id, dry_run, status, priority, depends_on, queued_at,
+                        started_at, finished_at, cancelled_at, cancelled_by, host_ids,
+                        hosts_ok, hosts_failed, hosts_skipped, launched_by)
+                    SELECT id, playbook_id, inventory_group_id, credential_id,
+                        template_id, dry_run, status, priority, depends_on, queued_at,
+                        started_at, finished_at, cancelled_at, cancelled_by, host_ids,
+                        hosts_ok, hosts_failed, hosts_skipped, launched_by
+                    FROM jobs_old
+                """)
+                await db.execute("DROP TABLE jobs_old")
+                await db.execute("PRAGMA foreign_keys=ON")
+                await db.commit()
+                _LOGGER.info("migration: inventory_group_id is now nullable")
+        except Exception as e:
+            _LOGGER.error("migration: jobs nullable migration error: %s", e, exc_info=True)
+
+        # Migration: Repair job_events FK after jobs table recreation
+        # When the jobs table was recreated (rename→create→copy→drop) with
+        # PRAGMA foreign_keys=ON, SQLite rewrites FKs in job_events to point at
+        # jobs_old, which no longer exists.  Detect and fix by recreating job_events.
+        try:
+            cursor = await db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='job_events'"
+            )
+            row = await cursor.fetchone()
+            if row and "jobs_old" in (row[0] or ""):
+                _LOGGER.info("migration: repairing job_events FK (still references jobs_old)")
+                await db.execute("PRAGMA foreign_keys=OFF")
+                await db.execute("ALTER TABLE job_events RENAME TO job_events_old")
+                await db.execute("""
+                    CREATE TABLE job_events (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        job_id      INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                        timestamp   TEXT    NOT NULL DEFAULT (datetime('now')),
+                        level       TEXT    NOT NULL DEFAULT 'info',
+                        host        TEXT    DEFAULT '',
+                        message     TEXT    NOT NULL DEFAULT ''
+                    )
+                """)
+                await db.execute("""
+                    INSERT INTO job_events (id, job_id, timestamp, level, host, message)
+                    SELECT id, job_id, timestamp, level, host, message FROM job_events_old
+                """)
+                await db.execute("DROP TABLE job_events_old")
+                await db.execute("PRAGMA foreign_keys=ON")
+                await db.commit()
+                _LOGGER.info("migration: job_events FK repaired")
+        except Exception as e:
+            _LOGGER.error("migration: job_events FK repair error: %s", e, exc_info=True)
+
+        # Migration: Add model and software_version columns to hosts if they don't exist
+        try:
+            cursor = await db.execute("PRAGMA table_info(hosts)")
+            columns = [row[1] for row in await cursor.fetchall()]
+            for col_name, col_def in [
+                ("model", "TEXT DEFAULT ''"),
+                ("software_version", "TEXT DEFAULT ''"),
+            ]:
+                if col_name not in columns:
+                    _LOGGER.info("migration: adding '%s' column to hosts table", col_name)
+                    await db.execute(f"ALTER TABLE hosts ADD COLUMN {col_name} {col_def}")
+                    await db.commit()
+                    _LOGGER.info("migration: added '%s' column to hosts table successfully", col_name)
+        except Exception as e:
+            _LOGGER.error("migration: hosts table migration error: %s", e, exc_info=True)
     finally:
         await db.close()
 
@@ -1389,7 +1501,9 @@ async def get_all_groups_with_hosts() -> list[dict]:
                 h.ip_address AS host_ip_address,
                 h.device_type AS host_device_type,
                 h.status AS host_status,
-                h.last_seen AS host_last_seen
+                h.last_seen AS host_last_seen,
+                h.model AS host_model,
+                h.software_version AS host_software_version
             FROM inventory_groups g
             LEFT JOIN hosts h ON h.group_id = g.id
             ORDER BY g.name, h.ip_address
@@ -1425,6 +1539,8 @@ async def get_all_groups_with_hosts() -> list[dict]:
             "device_type": row["host_device_type"],
             "status": row["host_status"],
             "last_seen": row["host_last_seen"],
+            "model": row["host_model"] or "",
+            "software_version": row["host_software_version"] or "",
         })
         group["host_count"] += 1
 
@@ -1605,6 +1721,35 @@ async def update_host_status(host_id: int, status: str):
             (status, datetime.now(UTC).isoformat(), host_id),
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_host_device_info(host_id: int, model: str, software_version: str):
+    """Update the model and software_version fields for a host."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE hosts SET model = ?, software_version = ? WHERE id = ?",
+            (model, software_version, host_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_all_hosts_for_export() -> list[dict]:
+    """Return all hosts with group name for CSV export."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT h.hostname, h.ip_address, h.device_type, h.status,
+                   h.model, h.software_version, g.name AS group_name
+            FROM hosts h
+            LEFT JOIN inventory_groups g ON g.id = h.group_id
+            ORDER BY g.name, h.hostname
+        """)
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
@@ -1907,7 +2052,7 @@ async def get_all_jobs(limit: int = 50) -> list[dict]:
             SELECT j.*, p.name AS playbook_name, g.name AS group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
-            JOIN inventory_groups g ON g.id = j.inventory_group_id
+            LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
             ORDER BY j.id DESC LIMIT ?
         """, (limit,))
         return rows_to_list(await cursor.fetchall())
@@ -1922,7 +2067,7 @@ async def get_job(job_id: int) -> dict | None:
             SELECT j.*, p.name AS playbook_name, g.name AS group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
-            JOIN inventory_groups g ON g.id = j.inventory_group_id
+            LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
             WHERE j.id = ?
         """, (job_id,))
         return row_to_dict(await cursor.fetchone())
@@ -1930,27 +2075,30 @@ async def get_job(job_id: int) -> dict | None:
         await db.close()
 
 
-async def create_job(playbook_id: int, inventory_group_id: int,
+async def create_job(playbook_id: int, inventory_group_id: int | None,
                      credential_id: int | None = None,
                      template_id: int | None = None,
                      dry_run: bool = True,
                      launched_by: str = "admin",
                      priority: int = 2,
                      depends_on: list[int] | None = None,
-                     host_ids: list[int] | None = None) -> int:
+                     host_ids: list[int] | None = None,
+                     ad_hoc_ips: list[str] | None = None) -> int:
     db = await get_db()
     try:
         deps_json = json.dumps(depends_on or [])
         host_ids_json = json.dumps(host_ids) if host_ids else None
+        ad_hoc_json = json.dumps(ad_hoc_ips) if ad_hoc_ips else None
         now = datetime.now(UTC).isoformat()
         cursor = await db.execute(
             """INSERT INTO jobs
                (playbook_id, inventory_group_id, credential_id, template_id,
-                dry_run, status, priority, depends_on, queued_at, launched_by, host_ids)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                dry_run, status, priority, depends_on, queued_at, launched_by,
+                host_ids, ad_hoc_ips)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (playbook_id, inventory_group_id, credential_id, template_id,
              1 if dry_run else 0, "queued", priority, deps_json, now, launched_by,
-             host_ids_json),
+             host_ids_json, ad_hoc_json),
         )
         await db.commit()
         return cursor.lastrowid
@@ -2079,7 +2227,7 @@ async def get_job_queue() -> list[dict]:
             """SELECT j.*, p.name AS playbook_name, g.name AS group_name
                FROM jobs j
                JOIN playbooks p ON p.id = j.playbook_id
-               JOIN inventory_groups g ON g.id = j.inventory_group_id
+               LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
                WHERE j.status IN ('queued', 'running')
                ORDER BY j.status = 'running' DESC, j.priority DESC, j.queued_at ASC"""
         )
