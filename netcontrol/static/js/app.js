@@ -293,8 +293,10 @@ const PlexusChart = {
     destroy(containerId) {
         const chart = this.instances.get(containerId);
         if (chart) {
-            if (chart._plexusRO) { chart._plexusRO.disconnect(); chart._plexusRO = null; }
-            chart.dispose();
+            try {
+                if (chart._plexusRO) { chart._plexusRO.disconnect(); chart._plexusRO = null; }
+                if (!chart.isDisposed()) chart.dispose();
+            } catch (e) { console.warn(`Chart destroy failed for ${containerId}:`, e); }
             this.instances.delete(containerId);
             this.options.delete(containerId);
         }
@@ -302,8 +304,10 @@ const PlexusChart = {
 
     destroyAll() {
         this.instances.forEach((chart, id) => {
-            if (chart._plexusRO) { chart._plexusRO.disconnect(); chart._plexusRO = null; }
-            chart.dispose();
+            try {
+                if (chart._plexusRO) { chart._plexusRO.disconnect(); chart._plexusRO = null; }
+                if (!chart.isDisposed()) chart.dispose();
+            } catch (e) { console.warn(`Chart destroy failed for ${id}:`, e); }
         });
         this.instances.clear();
         this.options.clear();
@@ -655,7 +659,7 @@ function renderDeviceInfoBar(hostId, poll) {
 }
 
 function renderInterfaceSummaryChart(ifData) {
-    const interfaces = ifData?.interfaces || ifData || [];
+    const interfaces = ifData?.data || ifData?.interfaces || ifData || [];
     if (!interfaces.length) return;
     // Group by interface name, take latest utilization
     const ifMap = new Map();
@@ -672,7 +676,7 @@ function renderInterfaceSummaryChart(ifData) {
 function renderInterfaceDetailCharts(ifData) {
     const container = document.getElementById('device-interface-charts');
     if (!container) return;
-    const interfaces = ifData?.interfaces || ifData || [];
+    const interfaces = ifData?.data || ifData?.interfaces || ifData || [];
     if (!interfaces.length) { container.innerHTML = '<p class="text-muted">No interface data available</p>'; return; }
     // Group by interface
     const grouped = {};
@@ -1499,6 +1503,7 @@ function navigateToPage(page, { updateHash = true } = {}) {
         }
     }
 }
+window.navigateToPage = navigateToPage;
 
 const PAGE_LABELS = {
     dashboard: 'Dashboard',
@@ -3621,7 +3626,7 @@ async function loadInventory(options = {}) {
     }
 }
 
-async function exportInventoryCSV() {
+window.exportInventoryCSV = async function() {
     try {
         const resp = await fetch('/api/inventory/export/csv', { credentials: 'same-origin' });
         if (!resp.ok) {
@@ -3686,23 +3691,32 @@ function renderInventoryGroups(groups) {
                         <button class="btn btn-sm btn-primary" onclick="showAddHostModal(${group.id})">+ Add Host</button>
                     </div>
                 </div>
-                ${sortedHosts.length ?
+                ${sortedHosts.length ? `
+                    <div class="host-columns-header">
+                        <span class="host-col-cb"></span>
+                        <span class="host-col-name">Hostname</span>
+                        <span class="host-col-ip">IP Address</span>
+                        <span class="host-col-type">Type</span>
+                        <span class="host-col-model">Model</span>
+                        <span class="host-col-sw">Software Version</span>
+                        <span class="host-col-actions"></span>
+                    </div>` +
                     sortedHosts.map(host => {
                         // Store host data for the edit modal
                         _hostCache[host.id] = { groupId: group.id, ...host };
                         const isMatch = hostMatchesQuery(host);
                         return `
-                        <div class="host-item"${isMatch ? ' style="background: var(--highlight-bg, rgba(59,130,246,0.08)); border-radius: 4px;"' : ''}>
-                            <div class="host-info" style="display:flex; align-items:center; gap:0.5rem;">
-                                <input type="checkbox" class="host-select" data-host-id="${host.id}" data-group-id="${group.id}" onchange="onHostSelectChange(${group.id})">
-                                <span class="host-name">${escapeHtml(host.hostname)}</span>
-                                <span class="host-ip">${escapeHtml(host.ip_address)}</span>
-                                <span class="host-type">${escapeHtml(host.device_type || 'cisco_ios')}</span>
-                            </div>
-                            <div style="display: flex; gap: 0.25rem;">
+                        <div class="host-item host-columns-row"${isMatch ? ' style="background: var(--highlight-bg, rgba(59,130,246,0.08)); border-radius: 4px;"' : ''}>
+                            <span class="host-col-cb"><input type="checkbox" class="host-select" data-host-id="${host.id}" data-group-id="${group.id}" onchange="onHostSelectChange(${group.id})"></span>
+                            <span class="host-col-name host-name">${escapeHtml(host.hostname)}</span>
+                            <span class="host-col-ip host-ip">${escapeHtml(host.ip_address)}</span>
+                            <span class="host-col-type host-type">${escapeHtml(host.device_type || 'cisco_ios')}</span>
+                            <span class="host-col-model">${escapeHtml(host.model || '—')}</span>
+                            <span class="host-col-sw">${escapeHtml(host.software_version || '—')}</span>
+                            <span class="host-col-actions">
                                 <button class="btn btn-sm btn-secondary" onclick="showEditHostModal(${host.id})">Edit</button>
                                 <button class="btn btn-sm btn-danger" onclick="deleteHost(${group.id}, ${host.id})">Delete</button>
-                            </div>
+                            </span>
                         </div>
                     `;}).join('') :
                     '<div class="empty-state" style="padding: 1rem;">No hosts</div>'
@@ -4104,6 +4118,15 @@ window.runInventoryDiscovery = async function(e, groupId, mode) {
         removeAbsent: formData.get('remove_absent') === '1',
     };
 
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    const cancelBtn = e.target.querySelector('button[type="button"]');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.dataset.origText = submitBtn.textContent;
+        submitBtn.textContent = mode === 'sync' ? 'Syncing…' : 'Scanning…';
+    }
+    if (cancelBtn) cancelBtn.disabled = true;
+
     try {
         const result = mode === 'sync'
             ? await api.syncInventoryGroup(groupId, cidrs, options)
@@ -4144,6 +4167,11 @@ window.runInventoryDiscovery = async function(e, groupId, mode) {
             </div>
         `);
     } catch (error) {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = submitBtn.dataset.origText || (mode === 'sync' ? 'Run Sync' : 'Run Scan');
+        }
+        if (cancelBtn) cancelBtn.disabled = false;
         showError(`Discovery ${mode} failed: ${error.message}`);
     }
 };
@@ -6441,10 +6469,12 @@ window.viewJobOutput = async function(jobId) {
     // Hide action buttons initially
     const cancelBtn = document.getElementById('job-output-cancel-btn');
     const retryBtn = document.getElementById('job-output-retry-btn');
+    const runLiveBtn = document.getElementById('job-output-runlive-btn');
     const statusBadge = document.getElementById('job-output-status');
     const priBadge = document.getElementById('job-output-priority');
     if (cancelBtn) cancelBtn.style.display = 'none';
     if (retryBtn) retryBtn.style.display = 'none';
+    if (runLiveBtn) runLiveBtn.style.display = 'none';
     if (statusBadge) statusBadge.style.display = 'none';
     if (priBadge) priBadge.style.display = 'none';
 
@@ -6459,9 +6489,9 @@ window.viewJobOutput = async function(jobId) {
         ).join('');
 
         // Update modal controls based on job state
+        const isDry = Boolean(job.dry_run);
         const dryrunBadge = document.getElementById('job-output-dryrun');
         if (dryrunBadge) {
-            const isDry = Boolean(job.dry_run);
             dryrunBadge.textContent = isDry ? 'DRY RUN' : 'LIVE';
             dryrunBadge.style.cssText = isDry
                 ? 'background: var(--warning); color: #000; font-weight: 600;'
@@ -6478,8 +6508,10 @@ window.viewJobOutput = async function(jobId) {
             priBadge.className = `job-priority-badge job-priority-${JOB_PRIORITY_COLORS[job.priority] || 'text-muted'}`;
             priBadge.style.display = '';
         }
-        if (cancelBtn) cancelBtn.style.display = (job.status === 'running' || job.status === 'queued') ? '' : 'none';
+        const isFinished = !['running', 'queued'].includes(job.status);
+        if (cancelBtn) cancelBtn.style.display = !isFinished ? '' : 'none';
         if (retryBtn) retryBtn.style.display = (job.status === 'failed' || job.status === 'cancelled') ? '' : 'none';
+        if (runLiveBtn) runLiveBtn.style.display = (isFinished && isDry) ? '' : 'none';
 
         // Connect WebSocket for live updates
         if (job.status === 'running' || job.status === 'queued') {
@@ -6500,7 +6532,8 @@ window.viewJobOutput = async function(jobId) {
                     output.scrollTop = output.scrollHeight;
                     // Update buttons
                     if (cancelBtn) cancelBtn.style.display = 'none';
-                    if (retryBtn) retryBtn.style.display = '';
+                    if (retryBtn) retryBtn.style.display = (data.status === 'failed' || data.status === 'cancelled') ? '' : 'none';
+                    if (runLiveBtn) runLiveBtn.style.display = isDry ? '' : 'none';
                     if (statusBadge) { statusBadge.textContent = data.status; statusBadge.className = `status-badge status-${data.status}`; }
                 },
                 (error) => {
@@ -6563,6 +6596,28 @@ window.retryCurrentJob = async function() {
         setTimeout(() => viewJobOutput(result.job_id), 500);
     } catch (error) {
         showError('Failed to retry: ' + error.message);
+    }
+};
+
+window.rerunCurrentJobLive = async function() {
+    if (!_currentViewJobId) return;
+    if (!await showConfirm({
+        title: 'Run Live',
+        message: 'This will re-run the same job with dry run disabled. Changes will be applied to devices. Continue?',
+        confirmText: 'Run Live',
+        confirmClass: 'btn-danger',
+    })) return;
+    const btn = document.getElementById('job-output-runlive-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Launching…'; }
+    try {
+        const result = await api.rerunJobLive(_currentViewJobId);
+        showSuccess(`Live job launched as #${result.job_id}`);
+        disconnectJobWebSocket();
+        loadJobs();
+        viewJobOutput(result.job_id);
+    } catch (error) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Run Live'; }
+        showError('Failed to launch live job: ' + error.message);
     }
 };
 
@@ -9534,13 +9589,64 @@ window.acknowledgeMonitoringAlert = async function(alertId) {
 };
 
 window.runMonitoringPollNow = async function() {
+    const btn = document.getElementById('poll-now-btn');
+    const progressEl = document.getElementById('poll-progress');
+    const progressBar = document.getElementById('poll-progress-bar');
+    const progressCount = document.getElementById('poll-progress-count');
+    const progressTitle = document.getElementById('poll-progress-title');
+    const progressLog = document.getElementById('poll-progress-log');
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Polling...'; }
+    if (progressEl) progressEl.style.display = '';
+    if (progressBar) progressBar.style.width = '0%';
+    if (progressCount) progressCount.textContent = '';
+    if (progressTitle) progressTitle.textContent = 'Starting poll...';
+    if (progressLog) progressLog.innerHTML = '';
+
     try {
-        showSuccess('Starting monitoring poll...');
-        const result = await api.runMonitoringPollNow();
-        showSuccess(`Poll complete: ${result.hosts_polled} hosts, ${result.alerts_created} alerts`);
-        loadMonitoring();
+        await api.runMonitoringPollStream(function(event) {
+            if (event.type === 'start') {
+                const total = event.total_hosts;
+                if (progressTitle) progressTitle.textContent = `Polling ${total} device${total !== 1 ? 's' : ''}...`;
+                if (progressCount) progressCount.textContent = `0 / ${total}`;
+            } else if (event.type === 'host_done') {
+                const pct = Math.round((event.completed / event.total_hosts) * 100);
+                if (progressBar) progressBar.style.width = pct + '%';
+                if (progressCount) progressCount.textContent = `${event.completed} / ${event.total_hosts}`;
+                const statusIcon = event.status === 'ok' ? '&#10003;' : '&#9888;';
+                const statusColor = event.status === 'ok' ? 'var(--success)' : 'var(--warning)';
+                const details = [];
+                if (event.cpu != null) details.push(`CPU ${event.cpu}%`);
+                if (event.memory != null) details.push(`Mem ${event.memory}%`);
+                if (event.alerts > 0) details.push(`<span style="color:var(--danger);">${event.alerts} alert${event.alerts !== 1 ? 's' : ''}</span>`);
+                const detailStr = details.length ? ` — ${details.join(', ')}` : '';
+                if (progressLog) {
+                    progressLog.innerHTML += `<div><span style="color:${statusColor};">${statusIcon}</span> ${escapeHtml(event.hostname)}${detailStr}</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                }
+            } else if (event.type === 'host_error') {
+                const pct = Math.round((event.completed / event.total_hosts) * 100);
+                if (progressBar) progressBar.style.width = pct + '%';
+                if (progressCount) progressCount.textContent = `${event.completed} / ${event.total_hosts}`;
+                if (progressLog) {
+                    progressLog.innerHTML += `<div><span style="color:var(--danger);">&#10007;</span> ${escapeHtml(event.hostname)} — <span style="color:var(--danger);">error</span></div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                }
+            } else if (event.type === 'done') {
+                if (progressBar) progressBar.style.width = '100%';
+                if (progressTitle) progressTitle.textContent = 'Poll complete';
+                showSuccess(`Poll complete: ${event.hosts_polled} hosts polled, ${event.alerts_created} alerts, ${event.errors} errors`);
+                loadMonitoring();
+                // Auto-hide progress after a delay
+                setTimeout(() => { if (progressEl) progressEl.style.display = 'none'; }, 8000);
+            }
+        });
     } catch (e) {
         showError(e.message);
+        if (progressTitle) progressTitle.textContent = 'Poll failed';
+        if (progressBar) progressBar.style.background = 'var(--danger)';
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Poll Now'; }
     }
 };
 

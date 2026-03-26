@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
@@ -245,6 +246,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     result["if_down_count"] += 1
 
                 if_details.append({
+                    "if_index": int(idx),
                     "name": iface_name,
                     "status": status_str,
                     "speed_mbps": speed_mbps,
@@ -610,7 +612,7 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
                     if_idx = str(iface.get("if_index", ""))
                     if not if_idx:
                         continue
-                    if_state = "up" if iface.get("oper_status") == "up" else "down"
+                    if_state = "up" if iface.get("status") == "up" else "down"
                     last_if = await db.get_last_availability_state(
                         res["host_id"], "interface", if_idx)
                     prev_if_state = last_if["new_state"] if last_if else "unknown"
@@ -788,6 +790,168 @@ async def monitoring_poll_now(request: Request):
                  detail=f"hosts={result.get('hosts_polled', 0)} alerts={result.get('alerts_created', 0)}",
                  correlation_id=_corr_id(request))
     return result
+
+
+@router.post("/api/monitoring/poll-now/stream")
+async def monitoring_poll_now_stream(request: Request):
+    """Trigger a monitoring poll with SSE progress events."""
+    session = _get_session(request)
+    user = session["user"] if session else ""
+
+    async def _event_generator():
+        from netcontrol.routes.state import _resolve_snmp_discovery_config
+
+        groups = await db.get_all_groups()
+        # Count total hosts across all groups
+        all_hosts: list[tuple[dict, dict, dict | None]] = []  # (host, snmp_cfg, cred)
+        default_cred_id = state.AUTH_CONFIG.get("default_credential_id")
+        default_cred = await db.get_credential_raw(default_cred_id) if default_cred_id else None
+        alert_rules_cache = await db.get_alert_rules(enabled_only=True)
+
+        for group in groups:
+            snmp_cfg = _resolve_snmp_discovery_config(group["id"])
+            hosts = await db.get_hosts_for_group(group["id"])
+            for h in hosts:
+                all_hosts.append((h, snmp_cfg, default_cred))
+
+        total = len(all_hosts)
+        yield f"data: {json.dumps({'type': 'start', 'total_hosts': total})}\n\n"
+
+        if total == 0:
+            yield f"data: {json.dumps({'type': 'done', 'hosts_polled': 0, 'alerts_created': 0, 'errors': 0})}\n\n"
+            return
+
+        hosts_polled = 0
+        alerts_created = 0
+        errors = 0
+        completed = 0
+        sem = asyncio.Semaphore(4)
+
+        async def _poll_one(h, cred, snmp_cfg):
+            async with sem:
+                res = await _poll_host_monitoring(h, cred, snmp_cfg)
+                return h, res
+
+        tasks = [asyncio.create_task(_poll_one(h, cred, snmp_cfg))
+                 for h, snmp_cfg, cred in all_hosts]
+
+        for coro in asyncio.as_completed(tasks):
+            try:
+                h, res = await coro
+            except Exception as exc:
+                errors += 1
+                completed += 1
+                LOGGER.warning("monitoring: poll exception: %s", redact_value(str(exc)))
+                yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': '(unknown)', 'error': str(exc)})}\n\n"
+                continue
+
+            hostname = h.get("hostname", h.get("ip_address", "unknown"))
+            hosts_polled += 1
+            completed += 1
+
+            # Store poll result
+            poll_id = await db.create_monitoring_poll(
+                host_id=res["host_id"],
+                cpu_percent=res["cpu_percent"],
+                memory_percent=res["memory_percent"],
+                memory_used_mb=res["memory_used_mb"],
+                memory_total_mb=res["memory_total_mb"],
+                uptime_seconds=res["uptime_seconds"],
+                if_up_count=res["if_up_count"],
+                if_down_count=res["if_down_count"],
+                if_admin_down=res["if_admin_down"],
+                if_details=json.dumps(res["if_details"]),
+                vpn_tunnels_up=res["vpn_tunnels_up"],
+                vpn_tunnels_down=res["vpn_tunnels_down"],
+                vpn_details=json.dumps(res["vpn_details"]),
+                route_count=res["route_count"],
+                route_snapshot=res["route_snapshot"][:5000],
+                poll_status=res["poll_status"],
+                poll_error=res["poll_error"],
+                response_time_ms=res.get("response_time_ms"),
+                packet_loss_pct=res.get("packet_loss_pct"),
+            )
+
+            # Availability tracking
+            try:
+                new_host_state = "up" if res["poll_status"] == "ok" else "down"
+                last_transition = await db.get_last_availability_state(
+                    res["host_id"], "host", "")
+                prev_state = last_transition["new_state"] if last_transition else "unknown"
+                if prev_state != new_host_state:
+                    await db.record_availability_transition(
+                        host_id=res["host_id"], entity_type="host", entity_id="",
+                        old_state=prev_state, new_state=new_host_state, poll_id=poll_id)
+                for iface in res.get("if_details", []):
+                    if_idx = str(iface.get("if_index", ""))
+                    if not if_idx:
+                        continue
+                    if_state = "up" if iface.get("status") == "up" else "down"
+                    last_if = await db.get_last_availability_state(
+                        res["host_id"], "interface", if_idx)
+                    prev_if_state = last_if["new_state"] if last_if else "unknown"
+                    if prev_if_state != if_state:
+                        await db.record_availability_transition(
+                            host_id=res["host_id"], entity_type="interface",
+                            entity_id=if_idx, old_state=prev_if_state,
+                            new_state=if_state, poll_id=poll_id)
+            except Exception:
+                pass
+
+            # Alerting
+            host_alerts = await _evaluate_alerts_for_poll(
+                res, poll_id, h.get("group_id"), alert_rules_cache)
+            alerts_created += host_alerts
+
+            # Metrics
+            try:
+                await emit_metric_samples_from_poll(res)
+                await store_interface_ts_from_poll(res["host_id"], res.get("if_details", []))
+            except Exception:
+                pass
+
+            # Route churn
+            if res["route_snapshot"]:
+                route_hash = hashlib.sha256(res["route_snapshot"].encode()).hexdigest()[:16]
+                prev_snap = await db.get_latest_route_snapshot(res["host_id"])
+                if prev_snap is None or prev_snap["routes_hash"] != route_hash:
+                    await db.create_route_snapshot(
+                        host_id=res["host_id"], route_count=res["route_count"],
+                        routes_text=res["route_snapshot"][:10000], routes_hash=route_hash)
+                    if prev_snap is not None:
+                        delta = abs(res["route_count"] - prev_snap["route_count"])
+                        suppressed = await db.is_alert_suppressed(
+                            res["host_id"], "route_churn", h.get("group_id"))
+                        if not suppressed:
+                            await db.create_monitoring_alert(
+                                host_id=res["host_id"], poll_id=poll_id,
+                                alert_type="churn", metric="route_churn",
+                                message=f"Route table changed: {prev_snap['route_count']} -> {res['route_count']} routes (delta: {delta})",
+                                severity="warning" if delta < 10 else "critical",
+                                value=float(delta),
+                                dedup_key=f"{res['host_id']}:route_churn:churn")
+                            alerts_created += 1
+
+            status_icon = "ok" if res["poll_status"] == "ok" else "error"
+            yield f"data: {json.dumps({'type': 'host_done', 'completed': completed, 'total_hosts': total, 'hostname': hostname, 'status': status_icon, 'cpu': res.get('cpu_percent'), 'memory': res.get('memory_percent'), 'alerts': host_alerts})}\n\n"
+
+        # Retention cleanup
+        retention_days = state.MONITORING_CONFIG.get("retention_days", 30)
+        try:
+            await db.delete_old_monitoring_polls(retention_days)
+            await db.delete_old_monitoring_alerts(retention_days)
+            await db.delete_old_route_snapshots(retention_days)
+            await db.delete_expired_suppressions()
+            await metrics_retention_cleanup()
+        except Exception:
+            pass
+
+        await _audit("monitoring", "poll.manual", user=user,
+                     detail=f"hosts={hosts_polled} alerts={alerts_created}")
+
+        yield f"data: {json.dumps({'type': 'done', 'hosts_polled': hosts_polled, 'alerts_created': alerts_created, 'errors': errors})}\n\n"
+
+    return StreamingResponse(_event_generator(), media_type="text/event-stream")
 
 
 # ── Admin Monitoring Routes ───────────────────────────────────────────────────

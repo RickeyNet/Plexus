@@ -570,6 +570,53 @@ async def retry_job_endpoint(job_id: int, request: Request):
     return {"job_id": new_job_id, "status": "queued", "retried_from": job_id}
 
 
+@router.post("/api/jobs/{job_id}/rerun", status_code=201)
+async def rerun_job_endpoint(job_id: int, request: Request):
+    """Re-run a completed job with dry_run disabled (live mode).
+
+    Works on any finished job (completed, failed, cancelled).  Clones the
+    original parameters but forces ``dry_run=False``.
+    """
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] in ("queued", "running"):
+        raise HTTPException(400, f"Job is still {job['status']} — wait for it to finish first")
+
+    session = _get_session(request)
+    user = session["user"] if session else "admin"
+
+    rerun_host_ids = None
+    if job.get("host_ids"):
+        try:
+            rerun_host_ids = json.loads(job["host_ids"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    rerun_ad_hoc = None
+    if job.get("ad_hoc_ips"):
+        try:
+            rerun_ad_hoc = json.loads(job["ad_hoc_ips"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    new_job_id = await db.create_job(
+        job["playbook_id"], job.get("inventory_group_id"),
+        job.get("credential_id"), job.get("template_id"),
+        False,  # dry_run = False (live mode)
+        launched_by=user,
+        priority=job.get("priority", 2),
+        host_ids=rerun_host_ids,
+        ad_hoc_ips=rerun_ad_hoc,
+    )
+
+    asyncio.ensure_future(_process_job_queue())
+
+    await _audit("jobs", "job.rerun_live", user=user,
+                 detail=f"re-ran job {job_id} as live job {new_job_id}",
+                 correlation_id=_corr_id(request))
+    return {"job_id": new_job_id, "status": "queued", "rerun_from": job_id}
+
+
 @router.patch("/api/jobs/{job_id}/priority")
 async def update_job_priority_endpoint(job_id: int, body: dict, request: Request):
     """Change the priority of a queued job."""

@@ -221,6 +221,8 @@ async def _sync_group_hosts(
             "ip_address": ip,
             "device_type": str(host.get("device_type") or "unknown").strip() or "unknown",
             "status": str(host.get("status") or "online").strip() or "online",
+            "model": str(host.get("model") or "").strip(),
+            "software_version": str(host.get("software_version") or "").strip(),
         }
 
     added = 0
@@ -239,11 +241,17 @@ async def _sync_group_hosts(
             added += 1
             continue
 
+        # Only overwrite hostname if discovery returned a real sysName
+        # (not a fallback like "snmp-x-x-x-x" or "host-x-x-x-x").
+        new_hostname = discovered["hostname"]
+        is_fallback_name = new_hostname.startswith("snmp-") or new_hostname.startswith("host-")
+        effective_hostname = existing.get("hostname") if is_fallback_name else new_hostname
+
         if (
-            existing.get("hostname") != discovered["hostname"]
+            existing.get("hostname") != effective_hostname
             or existing.get("device_type") != discovered["device_type"]
         ):
-            await db.update_host(existing["id"], discovered["hostname"], discovered["ip_address"], discovered["device_type"])
+            await db.update_host(existing["id"], effective_hostname, discovered["ip_address"], discovered["device_type"])
             updated += 1
         if model or sw_version:
             await db.update_host_device_info(existing["id"], model, sw_version)

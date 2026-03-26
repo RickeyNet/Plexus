@@ -331,6 +331,10 @@ export async function retryJob(jobId) {
     return apiRequest(`/jobs/${jobId}/retry`, { method: 'POST' });
 }
 
+export async function rerunJobLive(jobId) {
+    return apiRequest(`/jobs/${jobId}/rerun`, { method: 'POST' });
+}
+
 export async function updateJobPriority(jobId, priority) {
     return apiRequest(`/jobs/${jobId}/priority`, { method: 'PATCH', body: { priority } });
 }
@@ -1018,6 +1022,39 @@ export async function getMonitoringRouteSnapshots(hostId, limit = 50) {
 
 export async function runMonitoringPollNow() {
     return apiRequest('/monitoring/poll-now', { method: 'POST' });
+}
+
+export async function runMonitoringPollStream(onEvent) {
+    const url = `${API_BASE}/monitoring/poll-now/stream`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
+
+    const response = await fetch(url, { method: 'POST', headers });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                try {
+                    const event = JSON.parse(line.slice(6));
+                    onEvent(event);
+                } catch { /* skip malformed */ }
+            }
+        }
+    }
 }
 
 export async function getMonitoringConfig() {

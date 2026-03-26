@@ -1910,6 +1910,10 @@ input[type="number"].form-input {
     max-width: 1200px;
 }
 
+#job-output-modal {
+    z-index: 999;
+}
+
 #job-output-modal .modal {
     max-width: 95vw;
     width: 95vw;
@@ -2195,34 +2199,47 @@ input[type="number"].form-input {
     border-top: 1px solid var(--border);
 }
 
-.host-item {
-    display: flex;
-    justify-content: space-between;
+.host-columns-header,
+.host-columns-row {
+    display: grid;
+    grid-template-columns: 28px 1.5fr 1fr 0.8fr 1fr 1fr auto;
     align-items: center;
+    gap: 0.5rem;
     padding: 0.35rem 0.6rem;
+    font-size: 0.82rem;
+    line-height: 1.4;
+}
+
+.host-columns-header {
+    font-weight: 600;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.15rem;
+}
+
+.host-item {
     background: var(--bg-secondary);
     border-radius: 0.25rem;
     margin-bottom: 0.2rem;
     border: 1px solid var(--border);
     transition: background 0.2s;
-    font-size: 0.82rem;
     min-height: 0;
-    line-height: 1.4;
 }
 
 .host-item:hover {
     background: var(--card-bg);
 }
 
-.host-info {
-    display: flex;
-    gap: 0.6rem;
-    align-items: center;
-}
-
 .host-name {
     font-weight: 600;
     font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .host-ip {
@@ -2237,6 +2254,25 @@ input[type="number"].form-input {
     padding: 0.05rem 0.4rem;
     border-radius: 0.2rem;
     border: 1px solid var(--border);
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.host-col-model,
+.host-col-sw {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.host-col-actions {
+    display: flex;
+    gap: 0.25rem;
+    justify-content: flex-end;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════

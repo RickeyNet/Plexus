@@ -904,8 +904,21 @@
                 <div class="page-header">
                     <h2>Monitoring</h2>
                     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-                        <button class="btn btn-primary" onclick="runMonitoringPollNow()">Poll Now</button>
+                        <button id="poll-now-btn" class="btn btn-primary" onclick="runMonitoringPollNow()">Poll Now</button>
                         <button class="btn btn-secondary" onclick="refreshMonitoring()">Refresh</button>
+                    </div>
+                </div>
+                <!-- Poll Progress -->
+                <div id="poll-progress" style="display:none; margin-bottom:1rem;">
+                    <div class="card" style="padding:1rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                            <strong id="poll-progress-title">Polling devices...</strong>
+                            <span id="poll-progress-count" style="color:var(--text-muted); font-size:0.85em;">0 / 0</span>
+                        </div>
+                        <div style="background:var(--bg-secondary); border-radius:4px; height:8px; overflow:hidden;">
+                            <div id="poll-progress-bar" style="background:var(--primary); height:100%; width:0%; transition:width 0.3s ease; border-radius:4px;"></div>
+                        </div>
+                        <div id="poll-progress-log" style="margin-top:0.75rem; max-height:200px; overflow-y:auto; font-size:0.82em; font-family:monospace; color:var(--text-muted);"></div>
                     </div>
                 </div>
                 <!-- Summary Cards -->
@@ -1557,7 +1570,8 @@
                     <span id="job-output-status" class="status-badge" style="display:none;"></span>
                     <span id="job-output-priority" class="job-priority-badge" style="display:none;"></span>
                     <button id="job-output-cancel-btn" class="btn btn-sm btn-danger" onclick="cancelCurrentJob()" style="display:none;">Cancel</button>
-                    <button id="job-output-retry-btn" class="btn btn-sm btn-primary" onclick="retryCurrentJob()" style="display:none;">Retry</button>
+                    <button id="job-output-runlive-btn" class="btn btn-sm btn-primary" onclick="rerunCurrentJobLive()" style="display:none;">Run Live</button>
+                    <button id="job-output-retry-btn" class="btn btn-sm btn-secondary" onclick="retryCurrentJob()" style="display:none;">Retry</button>
                     <button id="job-output-copy-btn" class="btn btn-sm btn-secondary" onclick="copyJobOutput()" title="Copy output to clipboard">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>Copy
                     </button>

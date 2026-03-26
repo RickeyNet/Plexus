@@ -154,7 +154,7 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
 
     rows: list[tuple] = []
     for i, iface in enumerate(if_details):
-        if_index = i + 1  # if_details use list position as index
+        if_index = iface.get("if_index") or (i + 1)
         if_name = iface.get("name", "")
         speed_mbps = iface.get("speed_mbps", 0) or 0
         in_octets = iface.get("in_octets", 0) or 0
