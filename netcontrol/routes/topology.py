@@ -4,9 +4,9 @@ topology.py -- Topology visualization, discovery, and change-tracking routes.
 
 import asyncio
 
+import routes.database as db
 from fastapi import APIRouter, HTTPException, Query
 
-import routes.database as db
 import netcontrol.routes.state as state
 from netcontrol.routes.snmp import _discover_neighbors, _snmp_walk  # noqa: F401
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
@@ -222,9 +222,9 @@ async def _run_topology_discovery_once() -> dict:
                 # Snapshot old links for change detection
                 old_links = await db.get_topology_links_for_host(host["id"])
                 old_link_keys = {
-                    _normalize_link_key(l["source_host_id"], l["source_interface"],
-                                        l["target_device_name"], l["target_interface"])
-                    for l in old_links if l["source_host_id"] == host["id"]
+                    _normalize_link_key(link["source_host_id"], link["source_interface"],
+                                        link["target_device_name"], link["target_interface"])
+                    for link in old_links if link["source_host_id"] == host["id"]
                 }
                 new_link_keys = {
                     _normalize_link_key(n["source_host_id"], n["local_interface"],
@@ -492,9 +492,9 @@ async def discover_topology_for_group(group_id: int):
                 # Snapshot old links for change detection
                 old_links = await db.get_topology_links_for_host(host["id"])
                 old_link_keys = {
-                    _normalize_link_key(l["source_host_id"], l["source_interface"],
-                                        l["target_device_name"], l["target_interface"])
-                    for l in old_links if l["source_host_id"] == host["id"]
+                    _normalize_link_key(link["source_host_id"], link["source_interface"],
+                                        link["target_device_name"], link["target_interface"])
+                    for link in old_links if link["source_host_id"] == host["id"]
                 }
                 new_link_keys = {
                     _normalize_link_key(n["source_host_id"], n["local_interface"],
@@ -588,9 +588,9 @@ async def discover_topology_all():
                     # Snapshot old links for change detection
                     old_links = await db.get_topology_links_for_host(host["id"])
                     old_link_keys = {
-                        _normalize_link_key(l["source_host_id"], l["source_interface"],
-                                            l["target_device_name"], l["target_interface"])
-                        for l in old_links if l["source_host_id"] == host["id"]
+                        _normalize_link_key(link["source_host_id"], link["source_interface"],
+                                            link["target_device_name"], link["target_interface"])
+                        for link in old_links if link["source_host_id"] == host["id"]
                     }
                     new_link_keys = {
                         _normalize_link_key(n["source_host_id"], n["local_interface"],

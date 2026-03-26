@@ -1,8 +1,8 @@
 from typing import cast
 
 import netcontrol.app as app_module
-import netcontrol.routes.state as state_module
 import netcontrol.routes.inventory as inventory_module
+import netcontrol.routes.state as state_module
 import pytest
 from fastapi import HTTPException, Request
 

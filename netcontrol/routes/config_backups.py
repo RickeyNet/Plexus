@@ -4,14 +4,17 @@ config_backups.py -- Config backup routes: policies, backup records, restore, ad
 
 import asyncio
 
+import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-import routes.database as db
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import (
-    _audit, _corr_id, _get_session,
-    _capture_running_config, _compute_config_diff,
+    _audit,
+    _capture_running_config,
+    _compute_config_diff,
+    _corr_id,
+    _get_session,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 

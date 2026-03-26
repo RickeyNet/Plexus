@@ -18,14 +18,13 @@ from typing import cast
 from unittest.mock import AsyncMock, patch
 
 import netcontrol.app as app_module
+import netcontrol.routes.inventory as inventory_module
 import netcontrol.routes.snmp as snmp_module
 import netcontrol.routes.state as state_module
 import netcontrol.routes.topology as topology_module
-import netcontrol.routes.inventory as inventory_module
 import pytest
 import routes.database as db_module
 from fastapi import Request
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -175,7 +174,7 @@ async def test_discover_neighbors_cdp(monkeypatch):
         "1.0.8802.1.1.2.1.4.2.1.4": {},
     }
 
-    async def fake_snmp_walk(ip, timeout, cfg, base_oid, max_rows=500):
+    async def fake_snmp_walk(ip, timeout_s, cfg, base_oid, max_rows=500):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
@@ -232,7 +231,7 @@ async def test_discover_neighbors_lldp(monkeypatch):
         "1.0.8802.1.1.2.1.4.2.1.4": {},
     }
 
-    async def fake_snmp_walk(ip, timeout, cfg, base_oid, max_rows=500):
+    async def fake_snmp_walk(ip, timeout_s, cfg, base_oid, max_rows=500):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
@@ -256,7 +255,7 @@ async def test_discover_neighbors_lldp(monkeypatch):
 @pytest.mark.asyncio
 async def test_discover_neighbors_empty_walks(monkeypatch):
     """No neighbors found should return empty list."""
-    async def fake_snmp_walk(ip, timeout, cfg, base_oid, max_rows=500):
+    async def fake_snmp_walk(ip, timeout_s, cfg, base_oid, max_rows=500):
         return {}
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
@@ -302,7 +301,7 @@ async def test_discover_neighbors_ospf(monkeypatch):
         "1.3.6.1.2.1.15.3.1.9": {},
     }
 
-    async def fake_snmp_walk(ip, timeout, cfg, base_oid, max_rows=500):
+    async def fake_snmp_walk(ip, timeout_s, cfg, base_oid, max_rows=500):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
@@ -352,7 +351,7 @@ async def test_discover_neighbors_bgp(monkeypatch):
         },
     }
 
-    async def fake_snmp_walk(ip, timeout, cfg, base_oid, max_rows=500):
+    async def fake_snmp_walk(ip, timeout_s, cfg, base_oid, max_rows=500):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
@@ -403,7 +402,7 @@ async def test_discover_neighbors_deduplicates_cdp_lldp(monkeypatch):
         "1.0.8802.1.1.2.1.4.2.1.4": {},
     }
 
-    async def fake_snmp_walk(ip, timeout, cfg, base_oid, max_rows=500):
+    async def fake_snmp_walk(ip, timeout_s, cfg, base_oid, max_rows=500):
         return walk_responses.get(base_oid, {})
 
     monkeypatch.setattr(app_module, "_snmp_walk", fake_snmp_walk)
@@ -680,7 +679,8 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
 
     monkeypatch.setattr(app_module.db, "get_group", AsyncMock(return_value=fake_group))
     monkeypatch.setattr(app_module.db, "get_hosts_for_group", AsyncMock(return_value=fake_hosts))
-    resolve_snmp_fn = lambda gid: {"enabled": True, "version": "2c", "community": "public"}
+    def resolve_snmp_fn(gid):
+        return {"enabled": True, "version": "2c", "community": "public"}
     monkeypatch.setattr(app_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
     monkeypatch.setattr(state_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
 
@@ -735,7 +735,8 @@ async def test_discover_topology_for_group_handles_snmp_errors(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_hosts_for_group", AsyncMock(return_value=[
         {"id": 100, "hostname": "sw1", "ip_address": "10.0.0.1", "device_type": "cisco_ios", "status": "online"},
     ]))
-    resolve_snmp_fn = lambda gid: {"enabled": True, "version": "2c", "community": "public"}
+    def resolve_snmp_fn(gid):
+        return {"enabled": True, "version": "2c", "community": "public"}
     monkeypatch.setattr(app_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
     monkeypatch.setattr(state_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
 

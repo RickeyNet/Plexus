@@ -15,7 +15,6 @@ import netcontrol.app as app_module
 import pytest
 import routes.database as db_module
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 

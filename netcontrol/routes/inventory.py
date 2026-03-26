@@ -10,19 +10,19 @@ import json
 import socket
 import uuid
 
+import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-import routes.database as db
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import (
+    PYSMNP_AVAILABLE,  # noqa: F401
     _discover_neighbors,  # noqa: F401
     _probe_discovery_target_snmp,
     _snmp_get,
     _snmp_walk,  # noqa: F401
-    PYSMNP_AVAILABLE,  # noqa: F401
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 

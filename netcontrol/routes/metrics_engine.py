@@ -14,11 +14,11 @@ import logging
 import math
 import socket
 import struct
-from datetime import datetime, timezone, timedelta
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from datetime import UTC, datetime, timedelta, timezone
 
 import routes.database as db
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
 import netcontrol.routes.state as state
 from netcontrol.telemetry import configure_logging, redact_value
 
@@ -168,7 +168,7 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
         if prev and prev.get("polled_at"):
             try:
                 t_prev = datetime.fromisoformat(prev["polled_at"])
-                t_now = datetime.now(timezone.utc)
+                t_now = datetime.now(UTC)
                 dt_sec = (t_now - t_prev).total_seconds()
                 if dt_sec > 0:
                     delta_in = in_octets - (prev.get("in_octets") or 0)
@@ -292,7 +292,7 @@ async def _downsample_window(
 
 async def run_hourly_rollup() -> int:
     """Roll up the previous complete hour of raw samples."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     period_end = now.replace(minute=0, second=0, microsecond=0)
     period_start = period_end - timedelta(hours=1)
     return await _downsample_window(
@@ -305,7 +305,7 @@ async def run_hourly_rollup() -> int:
 async def run_daily_rollup() -> int:
     """Roll up the previous complete day of hourly rollups
     (using raw samples as source for the daily aggregate)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     period_end = now.replace(hour=0, minute=0, second=0, microsecond=0)
     period_start = period_end - timedelta(days=1)
     return await _downsample_window(
@@ -334,14 +334,14 @@ async def run_retention_cleanup() -> dict:
 async def _downsampling_loop() -> None:
     """Background loop: hourly rollup every hour, daily rollup once per day,
     retention cleanup every 6 hours."""
-    last_hourly = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    last_daily = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    last_cleanup = datetime.now(timezone.utc)
+    last_hourly = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    last_daily = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    last_cleanup = datetime.now(UTC)
 
     while True:
         try:
             await asyncio.sleep(60)  # check every minute
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             # Hourly rollup
             current_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -561,7 +561,7 @@ async def metrics_query(
             host_ids = [h["id"] for h in group_hosts]
 
     # Parse time range
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     range_map = {
         "1h": timedelta(hours=1), "6h": timedelta(hours=6),
         "12h": timedelta(hours=12), "24h": timedelta(hours=24),
@@ -621,7 +621,7 @@ async def interface_timeseries(
     range: str = Query(default="6h"),
 ):
     """Get per-interface utilization time-series for a host."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     range_map = {
         "1h": timedelta(hours=1), "6h": timedelta(hours=6),
         "24h": timedelta(hours=24), "7d": timedelta(days=7),

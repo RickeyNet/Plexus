@@ -8,19 +8,19 @@ import hashlib
 import json
 import time
 
+import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-import routes.database as db
 import netcontrol.routes.state as state
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
-from netcontrol.routes.snmp import _snmp_walk, PYSMNP_AVAILABLE
-from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 from netcontrol.routes.metrics_engine import (
     emit_metric_samples_from_poll,
-    store_interface_ts_from_poll,
     run_retention_cleanup as metrics_retention_cleanup,
+    store_interface_ts_from_poll,
 )
+from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.snmp import PYSMNP_AVAILABLE, _snmp_walk
+from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
 admin_router = APIRouter()
@@ -77,7 +77,8 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
     if PYSMNP_AVAILABLE and snmp_cfg.get("enabled"):
         try:
             from netcontrol.routes.metrics_engine import resolve_oids_for_device
-            _walk = lambda oid: _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid)
+            def _walk(oid):
+                return _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid)
 
             # Resolve vendor-specific OIDs (DB overrides → built-in map → fallback)
             device_type = host.get("device_type", "cisco_ios")
@@ -326,8 +327,8 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             # Parse route output
             routes_full = ssh_outputs.get("routes_full", "")
             if routes_full:
-                route_lines = [l for l in routes_full.strip().splitlines()
-                               if l.strip() and not l.strip().startswith(("Codes:", "Gateway", "---"))]
+                route_lines = [line for line in routes_full.strip().splitlines()
+                               if line.strip() and not line.strip().startswith(("Codes:", "Gateway", "---"))]
                 result["route_count"] = len(route_lines)
                 result["route_snapshot"] = routes_full.strip()
 

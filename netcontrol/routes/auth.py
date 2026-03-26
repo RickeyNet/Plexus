@@ -11,11 +11,11 @@ import secrets
 import sys
 import time
 
+import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-import routes.database as db
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.state import _env_flag

@@ -1,6 +1,6 @@
 """Check brace/bracket balance in app.js, stripping strings and comments."""
 
-with open('netcontrol/static/js/app.js', 'r', encoding='utf-8') as f:
+with open('netcontrol/static/js/app.js', encoding='utf-8') as f:
     content = f.read()
 
 # State machine to strip strings and comments
@@ -49,12 +49,12 @@ else:
     if braces != 0:
         for s in range(0, len(lines), 100):
             e = min(s + 100, len(lines))
-            b = sum(l.count('{') - l.count('}') for l in lines[s:e])
+            b = sum(line.count('{') - line.count('}') for line in lines[s:e])
             if b != 0:
                 print(f'  Brace L{s+1}-{e}: {b:+d}')
     if brackets != 0:
         for s in range(0, len(lines), 100):
             e = min(s + 100, len(lines))
-            b = sum(l.count('[') - l.count(']') for l in lines[s:e])
+            b = sum(line.count('[') - line.count(']') for line in lines[s:e])
             if b != 0:
                 print(f'  Bracket L{s+1}-{e}: {b:+d}')

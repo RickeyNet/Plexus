@@ -10,14 +10,18 @@ import json
 import uuid
 from datetime import UTC, datetime
 
+import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-
-import routes.database as db
 from routes.crypto import decrypt
+
 from netcontrol.routes.shared import (
-    _audit, _corr_id, _get_session,
-    _capture_running_config, _push_config_to_device, _compute_config_diff,
+    _audit,
+    _capture_running_config,
+    _compute_config_diff,
+    _corr_id,
+    _get_session,
+    _push_config_to_device,
 )
 from netcontrol.telemetry import configure_logging
 

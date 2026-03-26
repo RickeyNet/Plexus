@@ -2,11 +2,11 @@
 credentials.py -- Credential CRUD routes.
 """
 
+import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-
-import routes.database as db
 from routes.crypto import encrypt
+
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 
 router = APIRouter()

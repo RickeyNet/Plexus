@@ -10,10 +10,10 @@ import os
 import secrets
 import sys
 
+import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-import routes.database as db
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.state import _env_flag
