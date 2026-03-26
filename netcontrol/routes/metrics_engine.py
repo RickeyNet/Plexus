@@ -606,6 +606,145 @@ async def metrics_query(
         }
 
 
+@router.get("/api/metrics/capacity-planning")
+async def capacity_planning(
+    metric: str = Query(..., description="Metric name, e.g. cpu_percent"),
+    host: str = Query(default="*", description="Host ID, comma-separated IDs, or * for all"),
+    range: str = Query(default="90d", description="Time range: 30d, 90d, 365d"),
+    group: int | None = Query(default=None, description="Filter by inventory group ID"),
+    projection_days: int = Query(default=30, description="Days to project forward"),
+    threshold: float = Query(default=90.0, description="Capacity threshold for ETA calculation"),
+):
+    """Long-term capacity planning with trend projection."""
+
+    # Resolve hosts
+    host_ids = None
+    if host != "*":
+        try:
+            host_ids = [int(h.strip()) for h in host.split(",") if h.strip()]
+        except ValueError:
+            raise HTTPException(400, "Invalid host parameter")
+    if group and host == "*":
+        group_hosts = await db.get_hosts_for_group(group)
+        if group_hosts:
+            host_ids = [h["id"] for h in group_hosts]
+
+    # Parse time range
+    now = datetime.now(UTC)
+    range_map = {
+        "30d": timedelta(days=30), "90d": timedelta(days=90),
+        "180d": timedelta(days=180), "365d": timedelta(days=365),
+    }
+    delta = range_map.get(range)
+    if not delta:
+        raise HTTPException(400, f"Invalid range — use one of: {', '.join(range_map.keys())}")
+
+    start_time = (now - delta).strftime("%Y-%m-%d %H:%M:%S")
+    end_time = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Query daily rollups
+    data = await db.query_metric_rollups(
+        metric_name=metric, time_window="daily",
+        host_ids=host_ids, start=start_time, end=end_time,
+        limit=50000,
+    )
+
+    if not data:
+        return {
+            "metric": metric, "range": range, "count": 0,
+            "data": [], "trend": None, "projection": [], "per_host": [],
+        }
+
+    # Group data by host for per-host projections
+    by_host: dict[str, list[dict]] = {}
+    for d in data:
+        key = d.get("hostname") or f"host-{d.get('host_id', '?')}"
+        if key not in by_host:
+            by_host[key] = []
+        by_host[key].append(d)
+
+    per_host_results = []
+
+    for hostname, points in by_host.items():
+        # Convert to (day_offset, value) for regression
+        regression_points = []
+        for p in points:
+            ts_str = p.get("period_start", "")
+            val = p.get("val_avg")
+            if val is None or not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str).replace(tzinfo=None)
+                day_offset = (ts - (now.replace(tzinfo=None) - delta)).total_seconds() / 86400
+                regression_points.append((day_offset, val))
+            except (ValueError, TypeError):
+                continue
+
+        if len(regression_points) < 2:
+            per_host_results.append({
+                "hostname": hostname,
+                "trend": None,
+                "projection": [],
+                "threshold_eta": None,
+            })
+            continue
+
+        slope, intercept = _linear_regression(regression_points)
+        total_days = delta.days
+
+        # Generate projection points
+        projection = []
+        for d_offset in range(1, projection_days + 1):
+            future_day = total_days + d_offset
+            predicted = slope * future_day + intercept
+            future_date = (now + timedelta(days=d_offset)).strftime("%Y-%m-%d")
+            projection.append({"date": future_date, "value": round(predicted, 2)})
+
+        # Calculate threshold ETA
+        threshold_eta = None
+        if slope > 0:
+            current_val = slope * total_days + intercept
+            if current_val < threshold:
+                days_until = (threshold - current_val) / slope
+                eta_date = (now + timedelta(days=days_until)).strftime("%Y-%m-%d")
+                threshold_eta = {
+                    "date": eta_date,
+                    "days_until": round(days_until),
+                    "current_value": round(current_val, 2),
+                }
+
+        per_host_results.append({
+            "hostname": hostname,
+            "trend": {"slope": round(slope, 6), "intercept": round(intercept, 2)},
+            "projection": projection,
+            "threshold_eta": threshold_eta,
+        })
+
+    return {
+        "metric": metric, "range": range, "threshold": threshold,
+        "projection_days": projection_days,
+        "count": len(data), "data": data,
+        "per_host": per_host_results,
+    }
+
+
+def _linear_regression(points: list[tuple[float, float]]) -> tuple[float, float]:
+    """Simple least-squares linear regression. Returns (slope, intercept)."""
+    n = len(points)
+    if n < 2:
+        return (0.0, points[0][1] if points else 0.0)
+    sum_x = sum(p[0] for p in points)
+    sum_y = sum(p[1] for p in points)
+    sum_xy = sum(p[0] * p[1] for p in points)
+    sum_x2 = sum(p[0] ** 2 for p in points)
+    denom = n * sum_x2 - sum_x ** 2
+    if denom == 0:
+        return (0.0, sum_y / n)
+    slope = (n * sum_xy - sum_x * sum_y) / denom
+    intercept = (sum_y - slope * sum_x) / n
+    return (slope, intercept)
+
+
 @router.get("/api/metrics/names")
 async def metrics_names():
     """List available metric names."""

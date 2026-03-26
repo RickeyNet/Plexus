@@ -118,18 +118,18 @@
 - [x] Add annotation support to overlay deployment/config change events on metric charts.
 
 ### Network Monitoring Breadth (LibreNMS Parity)
-- [ ] Add per-port utilization graphs with historical in/out bps time-series.
-- [ ] Add availability tracking with up/down state transitions and uptime % calculation.
-- [ ] Add topology weathermap (color edges green → yellow → red by utilization %).
-- [ ] Add custom SNMP OID profiles (user-defined OID → metric mappings with vendor defaults).
-- [ ] Add syslog integration (correlate syslog source IP → device, display in device detail page).
-- [ ] Add reporting and export (availability, compliance reports with CSV export).
+- [x] Add per-port utilization graphs with historical in/out bps time-series.
+- [x] Add availability tracking with up/down state transitions and uptime % calculation.
+- [x] Add topology weathermap (color edges green → yellow → red by utilization %).
+- [x] Add custom SNMP OID profiles (user-defined OID → metric mappings with vendor defaults).
+- [x] Add syslog integration (correlate syslog source IP → device, display in device detail page).
+- [x] Add reporting and export (availability, compliance reports with CSV export).
 
 ### Closed-Loop Differentiation (Unique to Plexus)
-- [ ] Add correlation views linking config changes → metric anomalies → alerts → rollbacks.
-- [ ] Add deployment annotations on metric charts (auto-annotate when deployments execute).
-- [ ] Add post-change automated verification with success criteria and health checks.
-- [ ] Add capacity planning trends (bandwidth, policy scale, route table growth).
+- [x] Add correlation views linking config changes → metric anomalies → alerts → rollbacks.
+- [x] Add deployment annotations on metric charts (auto-annotate when deployments execute).
+- [x] Add post-change automated verification with success criteria and health checks.
+- [x] Add capacity planning trends (bandwidth, policy scale, route table growth).
 
 ### Later (Enterprise and Ecosystem)
 - [ ] Add firmware/OS lifecycle management with staged upgrade workflows.

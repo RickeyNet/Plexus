@@ -159,6 +159,10 @@
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
                                 <span class="nav-label">Availability</span>
                             </a>
+                            <a href="#" data-page="capacity-planning" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                                <span class="nav-label">Capacity Planning</span>
+                            </a>
                             <a href="#" data-page="syslog" class="nav-link nav-child-link">
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
                                 <span class="nav-label">Syslog</span>
@@ -265,22 +269,6 @@
                             <div class="stat-ring-value" id="stat-jobs">-</div>
                         </div>
                         <div class="stat-label">Total Jobs</div>
-                    </div>
-                </div>
-
-                <div class="section">
-                    <h3>Recent Jobs</h3>
-                    <div id="recent-jobs" class="jobs-list">
-                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
-                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
-                    </div>
-                </div>
-
-                <div class="section">
-                    <h3>Activity Timeline</h3>
-                    <div id="activity-timeline" class="activity-timeline">
-                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
-                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
                     </div>
                 </div>
 
@@ -1238,6 +1226,46 @@
                 </div>
             </div>
 
+            <!-- Capacity Planning Page -->
+            <div id="page-capacity-planning" class="page">
+                <div class="page-header">
+                    <h2>Capacity Planning</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <select id="cap-plan-metric" class="form-select" style="min-width:160px;" onchange="loadCapacityPlanning()">
+                            <option value="cpu_percent">CPU Utilization</option>
+                            <option value="memory_percent">Memory Utilization</option>
+                            <option value="route_count">Route Table Size</option>
+                            <option value="if_up_count">Interfaces Up</option>
+                            <option value="vpn_tunnels_up">VPN Tunnels Up</option>
+                        </select>
+                        <select id="cap-plan-group" class="form-select" style="min-width:160px;">
+                            <option value="">All Groups</option>
+                        </select>
+                        <select id="cap-plan-range" class="form-select" style="min-width:120px;" onchange="loadCapacityPlanning()">
+                            <option value="30d">30 Days</option>
+                            <option value="90d" selected>90 Days</option>
+                            <option value="180d">180 Days</option>
+                            <option value="365d">1 Year</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="loadCapacityPlanning()">Refresh</button>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr; gap:1rem;">
+                    <div class="card" style="padding:1rem;">
+                        <h4 style="margin:0 0 0.5rem;">Trend + Projection</h4>
+                        <div id="cap-plan-chart-main" style="height:350px;"></div>
+                    </div>
+                    <div class="card" style="padding:1rem;">
+                        <h4 style="margin:0 0 0.5rem;">Capacity Threshold Estimates</h4>
+                        <div id="cap-plan-thresholds"></div>
+                    </div>
+                </div>
+                <div id="cap-plan-empty" class="empty-state" style="display:none;">
+                    <h3>No Capacity Data</h3>
+                    <p style="color:var(--text-muted);">Enable monitoring and wait for daily rollups to accumulate capacity planning data.</p>
+                </div>
+            </div>
+
             <!-- Syslog Page -->
             <div id="page-syslog" class="page">
                 <div class="page-header">
@@ -1425,6 +1453,7 @@
                             <option value="easy-dark">Easy Dark</option>
                             <option value="light">Light</option>
                             <option value="void">Void</option>
+                            <option value="coral">Coral</option>
                         </select>
                     </div>
                 </div>

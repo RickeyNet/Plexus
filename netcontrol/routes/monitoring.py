@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import time
+from datetime import datetime, timedelta
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -747,6 +748,29 @@ async def acknowledge_alert(alert_id: int, request: Request):
     await _audit("monitoring", "alert.acknowledged", user=user,
                  detail=f"alert_id={alert_id}", correlation_id=_corr_id(request))
     return {"ok": True}
+
+
+@router.get("/api/monitoring/alerts/{alert_id}/correlation")
+async def get_alert_correlation(alert_id: int):
+    """Return deployments and drift events correlated to an alert."""
+    alert = await db.get_monitoring_alert(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    alert_time = alert.get("created_at", "")
+    host_id = alert.get("host_id")
+    window_start = (datetime.fromisoformat(alert_time) - timedelta(minutes=30)).isoformat() if alert_time else None
+
+    related_deployments = await db.get_deployments_for_host_in_range(
+        host_id, window_start, alert_time) if host_id and window_start else []
+    related_drift = await db.get_config_drift_events_in_range(
+        [host_id], window_start, alert_time) if host_id and window_start else []
+
+    return {
+        "alert": alert,
+        "related_deployments": related_deployments,
+        "related_drift_events": related_drift,
+    }
 
 
 @router.get("/api/monitoring/routes/{host_id}")

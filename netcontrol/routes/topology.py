@@ -3,9 +3,11 @@ topology.py -- Topology visualization, discovery, and change-tracking routes.
 """
 
 import asyncio
+import json
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 import netcontrol.routes.state as state
 from netcontrol.routes.snmp import _discover_neighbors, _snmp_walk  # noqa: F401
@@ -634,6 +636,230 @@ async def discover_topology_all():
     except Exception as exc:
         LOGGER.error("topology: full discovery error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/api/topology/discover/stream")
+async def discover_topology_stream():
+    """Run neighbor discovery on all groups, streaming progress via SSE."""
+
+    async def _event_generator():
+        try:
+            groups = await db.get_all_groups()
+            # Collect all (group, hosts, snmp_cfg) tuples for enabled groups
+            work: list[tuple[dict, list[dict], dict]] = []
+            for group in groups:
+                snmp_cfg = state._resolve_snmp_discovery_config(group["id"])
+                if not snmp_cfg.get("enabled", False):
+                    continue
+                hosts = await db.get_hosts_for_group(group["id"])
+                if hosts:
+                    work.append((group, hosts, snmp_cfg))
+
+            total_hosts = sum(len(hosts) for _, hosts, _ in work)
+            yield f"data: {json.dumps({'type': 'start', 'total_hosts': total_hosts, 'total_groups': len(work)})}\n\n"
+
+            if total_hosts == 0:
+                yield f"data: {json.dumps({'type': 'done', 'hosts_scanned': 0, 'links_discovered': 0, 'errors': 0})}\n\n"
+                return
+
+            scanned = 0
+            total_links = 0
+            total_errors = 0
+            semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
+
+            for group, hosts, snmp_cfg in work:
+                group_name = group.get("name", f"Group {group['id']}")
+                yield f"data: {json.dumps({'type': 'group_start', 'group': group_name, 'host_count': len(hosts)})}\n\n"
+
+                # Phase 1: concurrent SNMP walks with per-host progress
+                walk_results: list[tuple[dict, list[dict] | None, list[dict]]] = []
+
+                async def _walk_host(host: dict, _cfg=snmp_cfg):
+                    async with semaphore:
+                        try:
+                            neighbors, if_stats = await _discover_neighbors(
+                                host["id"], host["ip_address"], _cfg, timeout_seconds=5.0,
+                            )
+                            return host, neighbors, if_stats
+                        except Exception as exc:
+                            LOGGER.warning("topology: neighbor discovery failed for %s: %s",
+                                           host["ip_address"], exc)
+                            return host, None, []
+
+                tasks = [asyncio.create_task(_walk_host(h)) for h in hosts]
+                for coro in asyncio.as_completed(tasks):
+                    host, neighbors, if_stats = await coro
+                    walk_results.append((host, neighbors, if_stats))
+                    scanned += 1
+                    neighbor_count = len(neighbors) if neighbors is not None else 0
+                    yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
+
+                # Phase 2: sequential DB writes
+                yield f"data: {json.dumps({'type': 'db_write_start', 'group': group_name, 'host_count': len(walk_results)})}\n\n"
+
+                group_links = 0
+                for host, neighbors, if_stats in walk_results:
+                    if neighbors is None:
+                        total_errors += 1
+                        continue
+                    try:
+                        old_links = await db.get_topology_links_for_host(host["id"])
+                        old_link_keys = {
+                            _normalize_link_key(link["source_host_id"], link["source_interface"],
+                                                link["target_device_name"], link["target_interface"])
+                            for link in old_links if link["source_host_id"] == host["id"]
+                        }
+                        new_link_keys = {
+                            _normalize_link_key(n["source_host_id"], n["local_interface"],
+                                                n["remote_device_name"], n["remote_interface"])
+                            for n in neighbors
+                        }
+                        await db.delete_topology_links_for_host(host["id"])
+                        for n in neighbors:
+                            await db.upsert_topology_link(
+                                source_host_id=n["source_host_id"],
+                                source_ip=n["source_ip"],
+                                source_interface=n["local_interface"],
+                                target_host_id=None,
+                                target_ip=n.get("remote_ip", ""),
+                                target_device_name=n["remote_device_name"],
+                                target_interface=n["remote_interface"],
+                                protocol=n["protocol"],
+                                target_platform=n.get("remote_platform", ""),
+                            )
+                        for stat in if_stats:
+                            await db.upsert_interface_stat(**stat)
+                        if old_link_keys:
+                            await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
+                        group_links += len(neighbors)
+                    except Exception as exc:
+                        LOGGER.warning("topology: DB write failed for %s: %s",
+                                       host["ip_address"], exc)
+                        total_errors += 1
+
+                total_links += group_links
+                yield f"data: {json.dumps({'type': 'group_done', 'group': group_name, 'links': group_links})}\n\n"
+
+            # Resolve target host IDs
+            yield f"data: {json.dumps({'type': 'resolving'})}\n\n"
+            resolved = await db.resolve_topology_target_host_ids()
+
+            yield f"data: {json.dumps({'type': 'done', 'hosts_scanned': scanned, 'links_discovered': total_links, 'targets_resolved': resolved, 'errors': total_errors})}\n\n"
+        except Exception as exc:
+            LOGGER.error("topology: streaming discovery error: %s", exc, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(_event_generator(), media_type="text/event-stream")
+
+
+@router.post("/api/topology/discover/{group_id}/stream")
+async def discover_topology_for_group_stream(group_id: int):
+    """Run neighbor discovery on a single group, streaming progress via SSE."""
+
+    # Validate upfront before starting the stream
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+    if not snmp_cfg.get("enabled", False):
+        raise HTTPException(status_code=400,
+                            detail="SNMP is not enabled for this group. Configure an SNMP profile first.")
+    hosts = await db.get_hosts_for_group(group_id)
+
+    async def _event_generator():
+        try:
+            group_name = group.get("name", f"Group {group_id}")
+            total_hosts = len(hosts) if hosts else 0
+            yield f"data: {json.dumps({'type': 'start', 'total_hosts': total_hosts, 'total_groups': 1})}\n\n"
+
+            if not hosts:
+                yield f"data: {json.dumps({'type': 'done', 'hosts_scanned': 0, 'links_discovered': 0, 'errors': 0})}\n\n"
+                return
+
+            yield f"data: {json.dumps({'type': 'group_start', 'group': group_name, 'host_count': total_hosts})}\n\n"
+
+            semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
+            scanned = 0
+            total_links = 0
+            errors = 0
+
+            # Phase 1: concurrent SNMP walks
+            walk_results: list[tuple[dict, list[dict] | None, list[dict]]] = []
+
+            async def _walk_host(host: dict):
+                async with semaphore:
+                    try:
+                        neighbors, if_stats = await _discover_neighbors(
+                            host["id"], host["ip_address"], snmp_cfg, timeout_seconds=5.0,
+                        )
+                        return host, neighbors, if_stats
+                    except Exception as exc:
+                        LOGGER.warning("topology: neighbor discovery failed for %s (%s): %s",
+                                       host["hostname"], host["ip_address"], exc)
+                        return host, None, []
+
+            tasks = [asyncio.create_task(_walk_host(h)) for h in hosts]
+            for coro in asyncio.as_completed(tasks):
+                host, neighbors, if_stats = await coro
+                walk_results.append((host, neighbors, if_stats))
+                scanned += 1
+                neighbor_count = len(neighbors) if neighbors is not None else 0
+                yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
+
+            # Phase 2: sequential DB writes
+            yield f"data: {json.dumps({'type': 'db_write_start', 'group': group_name, 'host_count': len(walk_results)})}\n\n"
+
+            for host, neighbors, if_stats in walk_results:
+                if neighbors is None:
+                    errors += 1
+                    continue
+                try:
+                    old_links = await db.get_topology_links_for_host(host["id"])
+                    old_link_keys = {
+                        _normalize_link_key(link["source_host_id"], link["source_interface"],
+                                            link["target_device_name"], link["target_interface"])
+                        for link in old_links if link["source_host_id"] == host["id"]
+                    }
+                    new_link_keys = {
+                        _normalize_link_key(n["source_host_id"], n["local_interface"],
+                                            n["remote_device_name"], n["remote_interface"])
+                        for n in neighbors
+                    }
+                    await db.delete_topology_links_for_host(host["id"])
+                    for n in neighbors:
+                        await db.upsert_topology_link(
+                            source_host_id=n["source_host_id"],
+                            source_ip=n["source_ip"],
+                            source_interface=n["local_interface"],
+                            target_host_id=None,
+                            target_ip=n.get("remote_ip", ""),
+                            target_device_name=n["remote_device_name"],
+                            target_interface=n["remote_interface"],
+                            protocol=n["protocol"],
+                            target_platform=n.get("remote_platform", ""),
+                        )
+                    for stat in if_stats:
+                        await db.upsert_interface_stat(**stat)
+                    if old_link_keys:
+                        await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
+                    total_links += len(neighbors)
+                except Exception as exc:
+                    LOGGER.warning("topology: DB write failed for %s (%s): %s",
+                                   host["hostname"], host["ip_address"], exc)
+                    errors += 1
+
+            yield f"data: {json.dumps({'type': 'group_done', 'group': group_name, 'links': total_links})}\n\n"
+
+            # Resolve target host IDs
+            yield f"data: {json.dumps({'type': 'resolving'})}\n\n"
+            resolved = await db.resolve_topology_target_host_ids()
+
+            yield f"data: {json.dumps({'type': 'done', 'hosts_scanned': scanned, 'links_discovered': total_links, 'targets_resolved': resolved, 'errors': errors})}\n\n"
+        except Exception as exc:
+            LOGGER.error("topology: streaming discovery error for group %d: %s", group_id, exc, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(_event_generator(), media_type="text/event-stream")
 
 
 @router.get("/api/topology/host/{host_id}")

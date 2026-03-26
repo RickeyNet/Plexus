@@ -8,7 +8,7 @@ rollback via pre-deployment snapshots, and WebSocket streaming.
 import asyncio
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -23,11 +23,15 @@ from netcontrol.routes.shared import (
     _get_session,
     _push_config_to_device,
 )
+from netcontrol.routes.config_drift import _analyze_drift_for_host
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
 ws_router = APIRouter()  # WebSocket routes — registered without HTTP auth dependency
 LOGGER = configure_logging("plexus.deployments")
+
+VERIFICATION_METRICS = ["cpu_percent", "memory_percent", "packet_loss_pct", "response_time_ms"]
+VERIFICATION_DELAY_SECONDS = 60
 
 # ── Late-binding auth dependencies (injected by app.py) ──────────────────────
 
@@ -183,6 +187,134 @@ async def _finish_deploy_job(job_id: str, status: str = "completed"):
             pass
 
 
+async def _run_post_deployment_verification(
+    job_id: str, deployment_id: int, hosts: list[dict], user: str,
+):
+    """Background task: wait, then run drift checks and metric health checks on deployed hosts."""
+    try:
+        await db.update_deployment_status(deployment_id, "verifying")
+        await _broadcast_deploy_line(job_id,
+            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Post-deployment verification: "
+            f"waiting {VERIFICATION_DELAY_SECONDS}s for metrics to settle...\n")
+        await asyncio.sleep(VERIFICATION_DELAY_SECONDS)
+
+        # Retrieve pre-deployment metric baselines
+        all_checkpoints = await db.get_deployment_checkpoints(deployment_id)
+        baselines_by_host: dict[int, dict] = {}
+        for cp in all_checkpoints:
+            if cp.get("check_type") == "metric_baseline" and cp.get("phase") == "pre":
+                try:
+                    baselines_by_host[cp["host_id"]] = json.loads(cp.get("result", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        all_passed = True
+        now_iso = datetime.now(UTC).isoformat()
+        five_min_ago = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+
+        for host in hosts:
+            hostname = host.get("hostname", host["ip_address"])
+            host_passed = True
+
+            # Drift check
+            try:
+                drift_cp_id = await db.create_deployment_checkpoint(
+                    deployment_id, phase="verify", check_name=f"drift_check_{hostname}",
+                    check_type="drift_check", host_id=host["id"],
+                )
+                drift_result = await _analyze_drift_for_host(host["id"])
+                status = "passed" if not drift_result.get("drifted") else "failed"
+                if drift_result.get("drifted"):
+                    host_passed = False
+                await db.update_deployment_checkpoint(drift_cp_id, status, json.dumps(drift_result))
+                label = "compliant" if status == "passed" else f"DRIFTED ({drift_result.get('diff_summary', '')})"
+                await _broadcast_deploy_line(job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift check for {hostname}: {label}\n")
+            except Exception as exc:
+                await db.update_deployment_checkpoint(drift_cp_id, "failed",
+                    json.dumps({"error": str(exc)}))
+                await _broadcast_deploy_line(job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift check failed for {hostname}: {exc}\n")
+                host_passed = False
+
+            # Metric health check
+            try:
+                mh_cp_id = await db.create_deployment_checkpoint(
+                    deployment_id, phase="verify", check_name=f"metric_health_{hostname}",
+                    check_type="metric_health", host_id=host["id"],
+                )
+                baseline = baselines_by_host.get(host["id"], {})
+                post_metrics: dict[str, float | None] = {}
+                metric_details: list[dict] = []
+
+                for metric_name in VERIFICATION_METRICS:
+                    samples = await db.query_metric_samples(
+                        metric_name, host_ids=[host["id"]], start=five_min_ago, end=now_iso, limit=50,
+                    )
+                    if samples:
+                        avg_val = round(sum(s["value"] for s in samples) / len(samples), 2)
+                        post_metrics[metric_name] = avg_val
+                    else:
+                        post_metrics[metric_name] = None
+
+                    pre_val = baseline.get(metric_name)
+                    post_val = post_metrics[metric_name]
+                    delta = round(post_val - pre_val, 2) if pre_val is not None and post_val is not None else None
+                    # Flag concern: >20% absolute increase for percentage metrics, >50% relative for others
+                    concern = False
+                    if delta is not None and pre_val is not None:
+                        if metric_name.endswith("_pct") or metric_name.endswith("_percent"):
+                            concern = delta > 20
+                        elif pre_val > 0:
+                            concern = delta / pre_val > 0.5
+                    metric_details.append({
+                        "metric": metric_name, "pre": pre_val, "post": post_val,
+                        "delta": delta, "concern": concern,
+                    })
+
+                any_concern = any(m["concern"] for m in metric_details)
+                if any_concern:
+                    host_passed = False
+                mh_status = "passed" if not any_concern else "failed"
+                await db.update_deployment_checkpoint(mh_cp_id, mh_status,
+                    json.dumps({"baseline": baseline, "post": post_metrics, "details": metric_details}))
+
+                detail_str = ", ".join(
+                    f"{m['metric']}={m['post']}" + (f" (+{m['delta']}!)" if m["concern"] else "")
+                    for m in metric_details if m["post"] is not None
+                ) or "no metrics available"
+                icon = "OK" if not any_concern else "CONCERN"
+                await _broadcast_deploy_line(job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health for {hostname}: {icon} — {detail_str}\n")
+            except Exception as exc:
+                await db.update_deployment_checkpoint(mh_cp_id, "failed",
+                    json.dumps({"error": str(exc)}))
+                await _broadcast_deploy_line(job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health check failed for {hostname}: {exc}\n")
+                host_passed = False
+
+            if not host_passed:
+                all_passed = False
+
+        final_status = "verified" if all_passed else "verification_failed"
+        await db.update_deployment_status(deployment_id, final_status)
+
+        action = "deployment.verification.passed" if all_passed else "deployment.verification.failed"
+        await _audit("deployments", action, user=user,
+                     detail=f"id={deployment_id} hosts={len(hosts)}")
+
+        icon = "All checks passed" if all_passed else "Some checks flagged concerns"
+        await _broadcast_deploy_line(job_id,
+            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Verification complete: {icon}. "
+            f"Status set to '{final_status}'.\n")
+
+    except Exception as exc:
+        LOGGER.error("post-deployment verification failed for deployment %d: %s", deployment_id, exc)
+        await _broadcast_deploy_line(job_id,
+            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Verification error: {exc}\n")
+        await db.update_deployment_status(deployment_id, "verification_failed")
+
+
 async def _run_deployment_job(
     job_id: str, deployment_id: int, hosts: list[dict],
     commands: list[str], credentials: dict, user: str,
@@ -207,6 +339,30 @@ async def _run_deployment_job(
                 await db.create_deployment_snapshot(deployment_id, host["id"], "pre", config_text)
                 await db.update_deployment_checkpoint(cp_id, "passed",
                     json.dumps({"config_length": len(config_text)}))
+
+                # Capture metric baseline for post-deployment verification
+                try:
+                    now_iso = datetime.now(UTC).isoformat()
+                    five_min_ago = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+                    baseline_metrics: dict[str, float | None] = {}
+                    for metric_name in VERIFICATION_METRICS:
+                        samples = await db.query_metric_samples(
+                            metric_name, host_ids=[host["id"]], start=five_min_ago, end=now_iso, limit=50,
+                        )
+                        if samples:
+                            avg_val = sum(s["value"] for s in samples) / len(samples)
+                            baseline_metrics[metric_name] = round(avg_val, 2)
+                        else:
+                            baseline_metrics[metric_name] = None
+                    mb_cp_id = await db.create_deployment_checkpoint(
+                        deployment_id, phase="pre", check_name=f"metric_baseline_{hostname}",
+                        check_type="metric_baseline", host_id=host["id"],
+                    )
+                    await db.update_deployment_checkpoint(mb_cp_id, "passed", json.dumps(baseline_metrics))
+                except Exception as mb_exc:
+                    LOGGER.warning("deployment %d: metric baseline capture failed for %s: %s",
+                                   deployment_id, hostname, mb_exc)
+
                 await _broadcast_deploy_line(job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pre-check passed for {hostname} ({len(config_text)} chars captured).\n")
             except Exception as exc:
@@ -322,6 +478,12 @@ async def _run_deployment_job(
 
         await db.update_deployment_status(deployment_id, final_status)
         await _finish_deploy_job(job_id, final_status)
+
+        # Schedule post-deployment verification for successful deployments
+        if final_status == "completed" and successful_hosts:
+            asyncio.create_task(_run_post_deployment_verification(
+                job_id, deployment_id, successful_hosts, user,
+            ))
 
     except Exception as exc:
         LOGGER.error("deployment job %s failed: %s", job_id, exc)
@@ -503,6 +665,39 @@ async def get_deployment_detail(deployment_id: int):
     checkpoints = await db.get_deployment_checkpoints(deployment_id)
     snapshots = await db.get_deployment_snapshots(deployment_id)
     return {**dep, "checkpoints": checkpoints, "snapshots": snapshots}
+
+
+@router.get("/api/deployments/{deployment_id}/correlation")
+async def get_deployment_correlation(deployment_id: int):
+    """Return correlated events (drift, alerts, audit trail) around a deployment."""
+    dep = await db.get_deployment(deployment_id)
+    if not dep:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    started = dep.get("started_at") or dep.get("created_at")
+    finished = dep.get("finished_at")
+    window_start = (datetime.fromisoformat(started) - timedelta(minutes=5)).isoformat() if started else None
+    window_end = (datetime.fromisoformat(finished) + timedelta(minutes=30)).isoformat() if finished else datetime.now(UTC).isoformat()
+
+    host_ids: list[int] = []
+    try:
+        host_ids = json.loads(dep.get("host_ids") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    checkpoints = await db.get_deployment_checkpoints(deployment_id)
+    drift_events = await db.get_config_drift_events_in_range(host_ids, window_start, window_end) if host_ids and window_start else []
+    alerts = await db.get_monitoring_alerts_in_range(host_ids, window_start, window_end) if host_ids and window_start else []
+    audit_trail = await db.get_audit_events_for_deployment(deployment_id, window_start, window_end) if window_start else []
+
+    return {
+        "deployment": dep,
+        "checkpoints": checkpoints,
+        "drift_events": drift_events,
+        "alerts": alerts,
+        "audit_trail": audit_trail,
+        "time_window": {"start": window_start, "end": window_end},
+    }
 
 
 @router.post("/api/deployments/{deployment_id}/execute")
