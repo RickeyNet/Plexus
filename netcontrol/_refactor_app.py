@@ -6,7 +6,7 @@ One-shot script to refactor app.py:
 """
 import re
 
-with open("netcontrol/app.py", "r", encoding="utf-8") as f:
+with open("netcontrol/app.py", encoding="utf-8") as f:
     lines = f.readlines()
 
 content = "".join(lines)
@@ -105,7 +105,7 @@ registration_marker = """app.include_router(
 
 s6 = content.find(registration_marker)
 if s6 < 0:
-    raise ValueError(f"Could not find playbooks_router registration marker")
+    raise ValueError("Could not find playbooks_router registration marker")
 insert_pos = s6 + len(registration_marker)
 
 new_registrations = """

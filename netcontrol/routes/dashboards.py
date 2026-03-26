@@ -3,10 +3,11 @@ dashboards.py -- User-defined dashboards with configurable panels
 """
 
 import logging
+
+import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-import routes.database as db
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()

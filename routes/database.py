@@ -5009,7 +5009,7 @@ async def get_sla_summary(
         # Compute jitter per host from response_time_ms variance
         for h in hosts:
             jcursor = await db.execute(
-                f"""SELECT AVG(p.response_time_ms) AS mean_rt,
+                """SELECT AVG(p.response_time_ms) AS mean_rt,
                            AVG(p.response_time_ms * p.response_time_ms) AS mean_sq_rt
                     FROM monitoring_polls p
                     WHERE p.host_id = ? AND p.response_time_ms IS NOT NULL

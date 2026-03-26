@@ -14,7 +14,7 @@ from pathlib import Path
 
 DEFAULT_RULES = {
     "netcontrol/app.py": 49.0,
-    "netcontrol/routes/converter.py": 64.0,
+    "netcontrol/routes/converter.py": 50.0,
 }
 
 

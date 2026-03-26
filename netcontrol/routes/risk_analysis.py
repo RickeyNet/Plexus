@@ -5,17 +5,20 @@ risk_analysis.py -- Pre-change risk analysis engine and API routes.
 import asyncio
 import json
 
+import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+from routes.crypto import decrypt
 
-import routes.database as db
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import (
-    _audit, _corr_id, _get_session,
-    _capture_running_config, _compute_config_diff,
+    _audit,
+    _capture_running_config,
+    _compute_config_diff,
+    _corr_id,
+    _get_session,
 )
 from netcontrol.telemetry import configure_logging
-from routes.crypto import decrypt
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.risk_analysis")
