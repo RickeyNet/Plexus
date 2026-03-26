@@ -27,7 +27,6 @@ try:
         UdpTransportTarget,
         UsmUserData,
         get_cmd,
-        walk_cmd,
         usmAesCfb128Protocol,
         usmAesCfb192Protocol,
         usmAesCfb256Protocol,
@@ -36,6 +35,7 @@ try:
         usmHMAC384SHA512AuthProtocol,
         usmHMACMD5AuthProtocol,
         usmHMACSHAAuthProtocol,
+        walk_cmd,
     )
     PYSMNP_AVAILABLE = True
 except Exception:
@@ -375,7 +375,8 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
     All independent SNMP walks run in parallel for speed.
     """
     neighbors: list[dict] = []
-    _walk = lambda oid: _snmp_walk(ip_address, timeout_seconds, snmp_config, oid)
+    def _walk(oid):
+        return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid)
 
     # ── Phase 1: Parallel walk of ALL OID groups ──
     # ifName / ifDescr (need ifName first, ifDescr as fallback)

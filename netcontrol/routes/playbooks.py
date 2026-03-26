@@ -7,12 +7,12 @@ import os
 import re
 import sys
 
+import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-import routes.database as db
-from netcontrol.telemetry import configure_logging
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.playbooks")

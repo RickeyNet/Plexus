@@ -13,10 +13,10 @@ import ipaddress
 import json
 import os
 import secrets
-import uuid
 import socket
 import sys
 import traceback
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -36,50 +36,153 @@ import time
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
+from netcontrol.routes.admin import (
+    AdminAccessGroupCreateRequest,
+    AdminAccessGroupUpdateRequest,
+    AdminLoginRulesRequest,
+    AdminUserCreateRequest,
+    AdminUserGroupAssignmentRequest,
+    AdminUserPasswordResetRequest,
+    AdminUserUpdateRequest,
+    AuthConfigRequest,
+    RadiusConfigRequest,
+    _admin_user_payload,
+    _security_check_payload,
+    _validate_feature_keys,
+    admin_run_retention_cleanup_now,
+    init_admin,
+    router as admin_router,
+)
+from netcontrol.routes.auth import (
+    PYRAD_AVAILABLE,
+    ChangePasswordRequest,
+    LoginRequest,
+    RegisterRequest,
+    UpdateProfileRequest,
+    _ensure_radius_dictionary_file,
+    _get_user_features,
+    _radius_authenticate_sync,
+    auth_status,
+    authenticate_login_identity,
+    init_auth,
+    login,
+    register,
+    router as auth_router,
+    upsert_radius_user,
+    verify_radius_user,
+)
+from netcontrol.routes.compliance import (
+    ComplianceAssignmentCreate,
+    ComplianceAssignmentUpdate,
+    ComplianceProfileCreate,
+    ComplianceProfileUpdate,
+    ComplianceScanRequest,
+    _compliance_check_loop,
+    _evaluate_host_compliance,
+    _evaluate_rule,
+    _run_compliance_check_once,
+    admin_router as compliance_admin_router,
+    init_compliance,
+    router as compliance_router,
+)
+from netcontrol.routes.config_backups import (
+    _config_backup_loop,
+    _run_config_backups_once,
+    init_config_backups,
+    router as config_backups_router,
+)
+from netcontrol.routes.config_drift import (
+    ConfigDriftStatusUpdate,
+    _analyze_drift_for_host,
+    _capture_job_sockets,
+    _capture_jobs,
+    _config_drift_check_loop,
+    _run_config_drift_check_once,
+    init_config_drift,
+    router as config_drift_router,
+    ws_router as config_drift_ws_router,
+)
 from netcontrol.routes.converter import prune_converter_sessions, router as converter_router
-from netcontrol.routes.templates import router as templates_router
-from netcontrol.routes.credentials import router as credentials_router
-from netcontrol.routes.playbooks import router as playbooks_router
+from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate, router as credentials_router
+from netcontrol.routes.dashboards import router as dashboards_router
+from netcontrol.routes.deployments import (
+    DeploymentCreate,
+    DeploymentExecute,
+    DeploymentRollback,
+    _broadcast_deploy_line,
+    _build_revert_commands,
+    _deployment_job_sockets,
+    _deployment_jobs,
+    _finish_deploy_job,
+    _run_deployment_job,
+    _run_rollback_job,
+    init_deployments,
+    router as deployments_router,
+    ws_router as deployments_ws_router,
+)
+from netcontrol.routes.inventory import (
+    DiscoveryOnboardRequest,
+    DiscoveryScanRequest,
+    DiscoverySyncRequest,
+    GroupCreate,
+    GroupUpdate,
+    HostCreate,
+    HostUpdate,
+    _discover_hosts,
+    _discovery_sync_loop,
+    _expand_scan_targets,
+    _probe_discovery_target,
+    _run_discovery_sync_once,
+    _sync_group_hosts,
+    admin_router as inventory_admin_router,
+    router as inventory_router,
+)
 from netcontrol.routes.jobs import (
-    router as jobs_router, ws_router as jobs_ws_router, init_jobs,
     _MAX_CONCURRENT_JOBS as _jobs_MAX_CONCURRENT_JOBS,
     _job_semaphore as _jobs_job_semaphore,
     _process_job_queue,
+    init_jobs,
+    router as jobs_router,
+    ws_router as jobs_ws_router,
 )
-from netcontrol.routes.config_drift import (
-    router as config_drift_router, ws_router as config_drift_ws_router, init_config_drift,
-    _config_drift_check_loop, _run_config_drift_check_once,
-    _analyze_drift_for_host, _capture_jobs, _capture_job_sockets,
-    ConfigDriftStatusUpdate,
+from netcontrol.routes.metrics_engine import (
+    _downsampling_loop,
+    admin_router as metrics_engine_admin_router,
+    inject_auth as metrics_engine_inject_auth,
+    router as metrics_engine_router,
 )
-from netcontrol.routes.config_backups import (
-    router as config_backups_router, init_config_backups,
-    _config_backup_loop, _run_config_backups_once,
+from netcontrol.routes.monitoring import (
+    _alert_escalation_loop,
+    _check_threshold,
+    _evaluate_alerts_for_poll,
+    _metric_value_from_poll,
+    _monitoring_poll_loop,
+    _poll_host_monitoring,
+    _run_alert_escalation,
+    _run_monitoring_poll_once,
+    admin_router as monitoring_admin_router,
+    init_monitoring,
+    router as monitoring_router,
 )
 from netcontrol.routes.playbooks import (
-    _sanitize_playbook_filename, _sanitize_ansible_filename, write_playbook_file,
-    PlaybookCreate, PlaybookUpdate, sync_playbooks_from_registry,
+    PlaybookCreate,
+    PlaybookUpdate,
+    _sanitize_ansible_filename,
+    _sanitize_playbook_filename,
+    router as playbooks_router,
+    sync_playbooks_from_registry,
+    write_playbook_file,
 )
-from netcontrol.routes.templates import TemplateCreate, TemplateUpdate
-from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate
-from netcontrol.routes.auth import (
-    router as auth_router,
-    init_auth,
-    LoginRequest, RegisterRequest, ChangePasswordRequest, UpdateProfileRequest,
-    authenticate_login_identity, verify_radius_user, upsert_radius_user,
-    _get_user_features, _ensure_radius_dictionary_file, _radius_authenticate_sync,
-    PYRAD_AVAILABLE,
-    login, register, auth_status,
-)
-from netcontrol.routes.admin import (
-    router as admin_router,
-    init_admin,
-    AdminUserCreateRequest, AdminUserUpdateRequest,
-    AdminUserPasswordResetRequest, AdminUserGroupAssignmentRequest,
-    AdminAccessGroupCreateRequest, AdminAccessGroupUpdateRequest,
-    AdminLoginRulesRequest, RadiusConfigRequest, AuthConfigRequest,
-    _validate_feature_keys, _admin_user_payload, _security_check_payload,
-    admin_run_retention_cleanup_now,
+from netcontrol.routes.reporting import router as reporting_router
+from netcontrol.routes.risk_analysis import (
+    _CRITICAL_PATTERNS,
+    RiskAnalysisRequest,
+    _classify_change_areas,
+    _compute_risk_score,
+    _run_risk_analysis_for_host,
+    _simulate_config_change,
+    init_risk_analysis,
+    router as risk_analysis_router,
 )
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
@@ -91,68 +194,15 @@ from netcontrol.routes.snmp import (
     _snmp_get,
     _snmp_walk,
 )
-from netcontrol.routes.inventory import (
-    router as inventory_router,
-    admin_router as inventory_admin_router,
-    GroupCreate, GroupUpdate, HostCreate, HostUpdate,
-    DiscoveryScanRequest, DiscoverySyncRequest, DiscoveryOnboardRequest,
-    _expand_scan_targets,
-    _probe_discovery_target,
-    _discover_hosts,
-    _sync_group_hosts,
-    _run_discovery_sync_once,
-    _discovery_sync_loop,
-)
+from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
 from netcontrol.routes.topology import (
-    router as topology_router,
-    admin_router as topology_admin_router,
-    _record_topology_changes,
     _calc_interface_utilization,
+    _record_topology_changes,
     _run_topology_discovery_once,
     _topology_discovery_loop,
+    admin_router as topology_admin_router,
+    router as topology_router,
 )
-from netcontrol.routes.compliance import (
-    router as compliance_router,
-    admin_router as compliance_admin_router,
-    init_compliance,
-    ComplianceProfileCreate, ComplianceProfileUpdate,
-    ComplianceAssignmentCreate, ComplianceAssignmentUpdate,
-    ComplianceScanRequest,
-    _evaluate_rule, _evaluate_host_compliance,
-    _run_compliance_check_once, _compliance_check_loop,
-)
-from netcontrol.routes.risk_analysis import (
-    router as risk_analysis_router,
-    init_risk_analysis,
-    RiskAnalysisRequest,
-    _CRITICAL_PATTERNS, _classify_change_areas, _simulate_config_change,
-    _compute_risk_score, _run_risk_analysis_for_host,
-)
-from netcontrol.routes.deployments import (
-    router as deployments_router, ws_router as deployments_ws_router,
-    init_deployments,
-    DeploymentCreate, DeploymentExecute, DeploymentRollback,
-    _deployment_jobs, _deployment_job_sockets,
-    _broadcast_deploy_line, _finish_deploy_job,
-    _run_deployment_job, _run_rollback_job,
-    _build_revert_commands,
-)
-from netcontrol.routes.monitoring import (
-    router as monitoring_router,
-    admin_router as monitoring_admin_router,
-    init_monitoring,
-    _poll_host_monitoring, _metric_value_from_poll, _check_threshold,
-    _evaluate_alerts_for_poll, _run_alert_escalation,
-    _alert_escalation_loop, _run_monitoring_poll_once, _monitoring_poll_loop,
-)
-from netcontrol.routes.metrics_engine import (
-    router as metrics_engine_router,
-    admin_router as metrics_engine_admin_router,
-    inject_auth as metrics_engine_inject_auth,
-    _downsampling_loop,
-)
-from netcontrol.routes.dashboards import router as dashboards_router
-from netcontrol.routes.reporting import router as reporting_router
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -185,20 +235,21 @@ _MAX_CONCURRENT_JOBS = _jobs_MAX_CONCURRENT_JOBS
 _job_semaphore = _jobs_job_semaphore
 
 # Re-export route handler functions and helpers referenced by tests
-from netcontrol.routes.shared import _compute_config_diff
-from netcontrol.routes.topology import (
-    get_topology, discover_topology_for_group, get_host_topology,
-)
+import netcontrol.routes.shared as shared
+import netcontrol.routes.state as state
 from netcontrol.routes.config_drift import (
-    get_config_baseline, get_config_drift_summary, update_config_drift_event_status,
+    get_config_baseline,
+    get_config_drift_summary,
+    update_config_drift_event_status,
 )
 from netcontrol.routes.inventory import discovery_onboard
-
-
-import netcontrol.routes.state as state
+from netcontrol.routes.shared import _compute_config_diff
 from netcontrol.routes.state import _env_flag, _parse_cors_origins
-import netcontrol.routes.shared as shared
-
+from netcontrol.routes.topology import (
+    discover_topology_for_group,
+    get_host_topology,
+    get_topology,
+)
 
 # ── CSRF token helpers ───────────────────────────────────────────────────────
 

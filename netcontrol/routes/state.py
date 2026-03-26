@@ -8,7 +8,6 @@ reference ``state.CONFIG_X`` without circular-import issues.
 
 import os
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _env_flag(name: str, default: bool = False) -> bool:

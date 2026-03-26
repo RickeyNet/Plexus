@@ -9,6 +9,7 @@ import difflib
 import re
 
 import routes.database as db
+
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.shared")
