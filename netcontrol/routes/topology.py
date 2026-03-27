@@ -250,6 +250,12 @@ async def _run_topology_discovery_once() -> dict:
                 # Store interface stats
                 for stat in if_stats:
                     await db.upsert_interface_stat(**stat)
+                # Auto-apply interface-scope graph templates
+                if if_stats:
+                    try:
+                        await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
+                    except Exception:
+                        pass
                 # Record topology changes (only if there were previous links)
                 if old_link_keys:
                     await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
@@ -634,6 +640,12 @@ async def discover_topology_for_group(group_id: int):
                 # Store interface stats
                 for stat in if_stats:
                     await db.upsert_interface_stat(**stat)
+                # Auto-apply interface-scope graph templates
+                if if_stats:
+                    try:
+                        await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
+                    except Exception:
+                        pass
                 # Record topology changes (only if there were previous links)
                 if old_link_keys:
                     await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
@@ -730,6 +742,12 @@ async def discover_topology_all():
                     # Store interface stats
                     for stat in if_stats:
                         await db.upsert_interface_stat(**stat)
+                    # Auto-apply interface-scope graph templates
+                    if if_stats:
+                        try:
+                            await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
+                        except Exception:
+                            pass
                     # Record topology changes (only if there were previous links)
                     if old_link_keys:
                         await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)

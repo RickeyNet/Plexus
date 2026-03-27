@@ -30,13 +30,14 @@ const NAV_FEATURE_MAP = {
     'change-management': 'risk-analysis',
     monitoring: 'monitoring',
     reports: 'reports',
+    'graph-templates': 'graph-templates',
 };
 
 const THEME_KEY = 'plexus-theme';
 const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light', 'void', 'coral'];
 const DEFAULT_THEME = 'coral';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'configuration'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'configuration', 'graph-templates'];
 const pageCacheMeta = {};
 
 // ── Utility: debounce ──────────────────────────────────────────────────────────
@@ -93,6 +94,7 @@ const listViewState = {
     sla: { summary: null, hosts: [], query: '', tab: 'hosts' },
     deviceDetail: { hostId: null, tab: 'overview' },
     customDashboards: { items: [], currentId: null, editMode: false },
+    graphTemplates: { items: [], hostTemplates: [], graphTrees: [], query: '', tab: 'graph-templates', category: '' },
 };
 
 function normalizeTheme(theme) {
@@ -584,10 +586,13 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
         const plSeries = extractMetricSeries(plData, 'Packet Loss');
         PlexusChart.timeSeries('device-chart-pktloss', plSeries, { area: true, yAxisName: '%', yMin: 0 });
 
-        // Interface summary bar chart
+        // Interface summary bar chart + detail table
         if (ifData.status === 'fulfilled') {
             renderInterfaceSummaryChart(ifData.value);
-            renderInterfaceDetailCharts(ifData.value);
+            renderInterfaceDetailCharts(ifData.value, latestPoll);
+        } else {
+            // Even without time-series, render interface table from poll data
+            renderInterfaceDetailCharts(null, latestPoll);
         }
 
         // Alert history
@@ -648,12 +653,17 @@ function renderDeviceInfoBar(hostId, poll) {
     if (!poll) { el.innerHTML = '<span class="text-muted">No poll data available</span>'; return; }
     const uptimeStr = poll.uptime_seconds ? formatUptime(poll.uptime_seconds) : 'N/A';
     const polledAt = poll.polled_at ? new Date(poll.polled_at).toLocaleString() : 'N/A';
+    const ifTotal = (poll.if_up_count || 0) + (poll.if_down_count || 0) + (poll.if_admin_down || 0);
+    const ifSummary = ifTotal > 0
+        ? `<span class="badge badge-success">${poll.if_up_count || 0}</span>/<span class="badge badge-danger">${poll.if_down_count || 0}</span>/<span class="badge badge-secondary">${poll.if_admin_down || 0}</span>`
+        : 'N/A';
     el.innerHTML = `
         <div class="device-info-item"><span class="device-info-label">Hostname</span><span>${escapeHtml(poll.hostname || 'Unknown')}</span></div>
         <div class="device-info-item"><span class="device-info-label">IP</span><span>${escapeHtml(poll.ip_address || 'N/A')}</span></div>
         <div class="device-info-item"><span class="device-info-label">Type</span><span>${escapeHtml(poll.device_type || 'N/A')}</span></div>
         <div class="device-info-item"><span class="device-info-label">CPU</span><span>${poll.cpu_percent != null ? poll.cpu_percent.toFixed(1) + '%' : 'N/A'}</span></div>
         <div class="device-info-item"><span class="device-info-label">Memory</span><span>${poll.memory_percent != null ? poll.memory_percent.toFixed(1) + '%' : 'N/A'}</span></div>
+        <div class="device-info-item"><span class="device-info-label">Interfaces</span><span>${ifSummary}</span></div>
         <div class="device-info-item"><span class="device-info-label">Uptime</span><span>${uptimeStr}</span></div>
         <div class="device-info-item"><span class="device-info-label">Last Poll</span><span>${polledAt}</span></div>`;
 }
@@ -673,32 +683,257 @@ function renderInterfaceSummaryChart(ifData) {
     PlexusChart.bar('device-chart-if-summary', sorted.map(d => d.if_name || `idx-${d.if_index}`), sorted.map(d => Math.round((d.utilization_pct || 0) * 10) / 10), { rotateLabels: 45 });
 }
 
-function renderInterfaceDetailCharts(ifData) {
+function renderInterfaceDetailCharts(ifData, latestPoll) {
     const container = document.getElementById('device-interface-charts');
     if (!container) return;
-    const interfaces = ifData?.data || ifData?.interfaces || ifData || [];
-    if (!interfaces.length) { container.innerHTML = '<p class="text-muted">No interface data available</p>'; return; }
-    // Group by interface
-    const grouped = {};
-    interfaces.forEach(d => {
-        const key = d.if_name || `idx-${d.if_index}`;
-        if (!grouped[key]) grouped[key] = [];
-        grouped[key].push(d);
+
+    // ── Interface Status Table from latest poll ──
+    let pollInterfaces = [];
+    if (latestPoll) {
+        try {
+            const raw = typeof latestPoll.if_details === 'string'
+                ? JSON.parse(latestPoll.if_details || '[]')
+                : (latestPoll.if_details || []);
+            pollInterfaces = raw;
+        } catch { pollInterfaces = []; }
+    }
+
+    // ── Time-series data for traffic charts ──
+    const tsInterfaces = ifData?.data || ifData?.interfaces || ifData || [];
+
+    // Build a merged map: keyed by if_index, combining poll status + latest TS rates
+    const ifMap = new Map();
+    pollInterfaces.forEach(iface => {
+        const idx = String(iface.if_index);
+        ifMap.set(idx, {
+            if_index: iface.if_index,
+            name: iface.name || `ifIndex-${iface.if_index}`,
+            status: iface.status || 'unknown',
+            speed_mbps: iface.speed_mbps || 0,
+            in_octets: iface.in_octets || 0,
+            out_octets: iface.out_octets || 0,
+            in_rate_bps: null,
+            out_rate_bps: null,
+            utilization_pct: null,
+        });
     });
-    const ifNames = Object.keys(grouped).slice(0, 12);
-    container.innerHTML = ifNames.map(name => `
-        <div class="card" style="margin-bottom:1rem;">
-            <div class="card-title">${escapeHtml(name)}</div>
-            <div id="if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}" class="chart-container"></div>
-        </div>`).join('');
-    ifNames.forEach(name => {
-        const data = grouped[name].sort((a, b) => new Date(a.sampled_at) - new Date(b.sampled_at));
-        const chartId = `if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
-        PlexusChart.timeSeries(chartId, [
-            { name: 'In (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.in_rate_bps || 0 })), color: '#3b82f6' },
-            { name: 'Out (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.out_rate_bps || 0 })), color: '#f59e0b' },
-        ], { area: true, yAxisName: 'bps' });
+
+    // Overlay latest TS rate data
+    const latestByIf = {};
+    tsInterfaces.forEach(d => {
+        const idx = String(d.if_index);
+        if (!latestByIf[idx] || new Date(d.sampled_at) > new Date(latestByIf[idx].sampled_at)) {
+            latestByIf[idx] = d;
+        }
     });
+    Object.entries(latestByIf).forEach(([idx, d]) => {
+        const existing = ifMap.get(idx) || { if_index: parseInt(idx), name: d.if_name || `ifIndex-${idx}`, status: 'unknown', speed_mbps: d.if_speed_mbps || 0 };
+        existing.in_rate_bps = d.in_rate_bps;
+        existing.out_rate_bps = d.out_rate_bps;
+        existing.utilization_pct = d.utilization_pct;
+        if (d.if_name) existing.name = d.if_name;
+        ifMap.set(idx, existing);
+    });
+
+    const allIfaces = [...ifMap.values()].sort((a, b) => a.if_index - b.if_index);
+
+    if (!allIfaces.length && !tsInterfaces.length) {
+        container.innerHTML = '<p class="text-muted">No interface data available. Ensure SNMP is configured and at least one poll has completed.</p>';
+        return;
+    }
+
+    // ── Classify interfaces: Physical/Logical vs VLANs vs Loopback/Management ──
+    const isVlan = (n) => /^(Vl|Vlan|vlan|BDI|irb\.|vlan\.)\s*[\d]/i.test(n) || /vlan/i.test(n);
+    const isLoopback = (n) => /^(Lo|Loopback|lo[\d])/i.test(n);
+    const isMgmt = (n) => /^(Mgmt|Management|mgmt|ma[\d]|FastEthernet0$|GigabitEthernet0$)/i.test(n) || /^(Null|Embedded-Service|NV|Async|Voice|Cellular)/i.test(n);
+    const isPortChannel = (n) => /^(Po|Port-channel|port-channel|ae[\d]|Bundle-Ether)/i.test(n);
+    const isTunnel = (n) => /^(Tu|Tunnel|tunnel[\d])/i.test(n);
+
+    const physicals = [];
+    const vlans = [];
+    const portChannels = [];
+    const tunnels = [];
+    const other = []; // loopbacks, mgmt, virtual, etc.
+
+    allIfaces.forEach(i => {
+        const n = i.name;
+        if (isVlan(n)) vlans.push(i);
+        else if (isPortChannel(n)) portChannels.push(i);
+        else if (isTunnel(n)) tunnels.push(i);
+        else if (isLoopback(n) || isMgmt(n)) other.push(i);
+        else physicals.push(i);
+    });
+
+    // Format helpers
+    const fmtRate = (bps) => {
+        if (bps == null) return '<span class="text-muted">-</span>';
+        if (bps >= 1e9) return (bps / 1e9).toFixed(2) + ' Gbps';
+        if (bps >= 1e6) return (bps / 1e6).toFixed(2) + ' Mbps';
+        if (bps >= 1e3) return (bps / 1e3).toFixed(1) + ' Kbps';
+        return Math.round(bps) + ' bps';
+    };
+    const statusBadge = (s) => {
+        if (s === 'up') return '<span class="badge badge-success">Up</span>';
+        if (s === 'admin_down') return '<span class="badge badge-secondary">Admin Down</span>';
+        return '<span class="badge badge-danger">Down</span>';
+    };
+    const utilBar = (pct) => {
+        if (pct == null) return '<span class="text-muted">-</span>';
+        const color = pct > 80 ? 'var(--danger)' : pct > 50 ? 'var(--warning)' : 'var(--success)';
+        return `<div style="display:flex;align-items:center;gap:0.5rem;"><div style="flex:1;max-width:80px;height:6px;background:var(--border-color);border-radius:3px;overflow:hidden;"><div style="width:${Math.min(pct, 100)}%;height:100%;background:${color};border-radius:3px;"></div></div><span>${pct.toFixed(1)}%</span></div>`;
+    };
+    const fmtSpeed = (mbps) => {
+        if (!mbps) return '<span class="text-muted">-</span>';
+        return mbps >= 1000 ? (mbps / 1000) + ' Gbps' : mbps + ' Mbps';
+    };
+
+    // Count stats across all
+    const upCount = allIfaces.filter(i => i.status === 'up').length;
+    const downCount = allIfaces.filter(i => i.status === 'down').length;
+    const adminDownCount = allIfaces.filter(i => i.status === 'admin_down').length;
+
+    // ── Build a full-detail table for a set of interfaces ──
+    const buildFullTable = (ifaces) => {
+        if (!ifaces.length) return '<p class="text-muted" style="padding:0.5rem;">None</p>';
+        return `<div style="overflow-x:auto;"><table class="chart-table" style="width:100%; font-size:0.82rem;">
+            <thead><tr><th>Name</th><th>Status</th><th>Speed</th><th>In</th><th>Out</th><th>Util</th></tr></thead>
+            <tbody>${ifaces.map(i => `<tr>
+                <td><strong>${escapeHtml(i.name)}</strong></td>
+                <td>${statusBadge(i.status)}</td>
+                <td>${fmtSpeed(i.speed_mbps)}</td>
+                <td>${fmtRate(i.in_rate_bps)}</td>
+                <td>${fmtRate(i.out_rate_bps)}</td>
+                <td>${utilBar(i.utilization_pct)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`;
+    };
+
+    // ── Build a compact table for VLANs (status + name, no traffic columns) ──
+    const buildVlanTable = (ifaces) => {
+        if (!ifaces.length) return '<p class="text-muted" style="padding:0.5rem;">No VLANs detected</p>';
+        const vlanUp = ifaces.filter(i => i.status === 'up').length;
+        const vlanDown = ifaces.filter(i => i.status !== 'up').length;
+        return `<div style="margin-bottom:0.5rem; font-size:0.8rem; display:flex; gap:0.5rem;">
+                <span class="badge badge-success">${vlanUp} up</span>
+                ${vlanDown > 0 ? `<span class="badge badge-danger">${vlanDown} down</span>` : ''}
+            </div>
+            <div style="overflow-y:auto; max-height:400px;"><table class="chart-table" style="width:100%; font-size:0.82rem;">
+            <thead><tr><th>VLAN</th><th>Status</th><th>In</th><th>Out</th></tr></thead>
+            <tbody>${ifaces.map(i => `<tr>
+                <td><strong>${escapeHtml(i.name)}</strong></td>
+                <td>${statusBadge(i.status)}</td>
+                <td style="font-size:0.78rem;">${fmtRate(i.in_rate_bps)}</td>
+                <td style="font-size:0.78rem;">${fmtRate(i.out_rate_bps)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`;
+    };
+
+    // ── Build a compact table for Port-Channels / Tunnels / Other ──
+    const buildCompactTable = (ifaces) => {
+        if (!ifaces.length) return '';
+        return `<div style="overflow-x:auto;"><table class="chart-table" style="width:100%; font-size:0.82rem;">
+            <thead><tr><th>Name</th><th>Status</th><th>Speed</th><th>In</th><th>Out</th></tr></thead>
+            <tbody>${ifaces.map(i => `<tr>
+                <td><strong>${escapeHtml(i.name)}</strong></td>
+                <td>${statusBadge(i.status)}</td>
+                <td>${fmtSpeed(i.speed_mbps)}</td>
+                <td>${fmtRate(i.in_rate_bps)}</td>
+                <td>${fmtRate(i.out_rate_bps)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`;
+    };
+
+    // ── Summary bar ──
+    let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap; gap:0.5rem;">
+        <h4 style="margin:0;">${allIfaces.length} Interfaces</h4>
+        <div style="display:flex; gap:0.5rem; font-size:0.85rem; flex-wrap:wrap;">
+            <span class="badge badge-success">${upCount} Up</span>
+            ${downCount > 0 ? `<span class="badge badge-danger">${downCount} Down</span>` : ''}
+            ${adminDownCount > 0 ? `<span class="badge badge-secondary">${adminDownCount} Admin Down</span>` : ''}
+            <span style="color:var(--text-secondary);">|</span>
+            <span style="color:var(--text-secondary);">${physicals.length} Physical</span>
+            ${portChannels.length ? `<span style="color:var(--text-secondary);">${portChannels.length} Port-Channel</span>` : ''}
+            <span style="color:var(--text-secondary);">${vlans.length} VLAN</span>
+            ${tunnels.length ? `<span style="color:var(--text-secondary);">${tunnels.length} Tunnel</span>` : ''}
+            ${other.length ? `<span style="color:var(--text-secondary);">${other.length} Other</span>` : ''}
+        </div>
+    </div>`;
+
+    // ── Two-column layout: Physical interfaces (left) + VLANs (right) ──
+    html += `<div class="if-split-grid">`;
+
+    // Left column: Physical interfaces
+    html += `<div class="card"><div class="card-body" style="padding:0.75rem;">
+        <h4 style="margin:0 0 0.5rem; font-size:0.95rem;">Physical Interfaces (${physicals.length})</h4>
+        ${buildFullTable(physicals)}
+    </div></div>`;
+
+    // Right column: VLANs
+    html += `<div class="card"><div class="card-body" style="padding:0.75rem;">
+        <h4 style="margin:0 0 0.5rem; font-size:0.95rem;">VLANs (${vlans.length})</h4>
+        ${buildVlanTable(vlans)}
+    </div></div>`;
+
+    html += `</div>`; // close grid
+
+    // ── Port-Channels, Tunnels, Other in a row below ──
+    const extraSections = [];
+    if (portChannels.length) extraSections.push({ title: `Port-Channels (${portChannels.length})`, items: portChannels });
+    if (tunnels.length) extraSections.push({ title: `Tunnels (${tunnels.length})`, items: tunnels });
+    if (other.length) extraSections.push({ title: `Loopback / Management / Other (${other.length})`, items: other });
+
+    if (extraSections.length) {
+        const cols = Math.min(extraSections.length, 3);
+        html += `<div class="if-extra-grid" style="grid-template-columns:repeat(${cols}, 1fr);">`;
+        extraSections.forEach(sec => {
+            html += `<div class="card"><div class="card-body" style="padding:0.75rem;">
+                <h4 style="margin:0 0 0.5rem; font-size:0.95rem;">${escapeHtml(sec.title)}</h4>
+                ${buildCompactTable(sec.items)}
+            </div></div>`;
+        });
+        html += `</div>`;
+    }
+
+    // ── Per-interface traffic charts (from time-series data) ──
+    if (tsInterfaces.length) {
+        const grouped = {};
+        tsInterfaces.forEach(d => {
+            const key = d.if_name || `idx-${d.if_index}`;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(d);
+        });
+        // Sort by most traffic, show up to 12, skip VLANs/loopbacks (focus on physical + port-channels)
+        const ifNames = Object.keys(grouped).sort((a, b) => {
+            const aMax = Math.max(...grouped[a].map(d => (d.in_rate_bps || 0) + (d.out_rate_bps || 0)));
+            const bMax = Math.max(...grouped[b].map(d => (d.in_rate_bps || 0) + (d.out_rate_bps || 0)));
+            return bMax - aMax;
+        }).slice(0, 12);
+
+        if (ifNames.length) {
+            html += '<h4 style="margin:1.25rem 0 0.5rem;">Traffic Charts (Top 12 by Activity)</h4>';
+            html += '<div class="if-chart-grid">';
+            html += ifNames.map(name => `
+                <div class="card" style="margin-bottom:0;">
+                    <div class="card-title" style="font-size:0.85rem; padding:0.5rem 0.75rem;">${escapeHtml(name)}</div>
+                    <div id="if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}" class="chart-container" style="height:180px;"></div>
+                </div>`).join('');
+            html += '</div>';
+        }
+
+        container.innerHTML = html;
+
+        ifNames.forEach(name => {
+            const data = grouped[name].sort((a, b) => new Date(a.sampled_at) - new Date(b.sampled_at));
+            const chartId = `if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            PlexusChart.timeSeries(chartId, [
+                { name: 'In (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.in_rate_bps || 0 })), color: '#3b82f6' },
+                { name: 'Out (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.out_rate_bps || 0 })), color: '#f59e0b' },
+            ], { area: true, yAxisName: 'bps' });
+        });
+    } else {
+        html += '<p class="text-muted" style="margin-top:1rem;">Traffic charts will appear after two or more polling cycles collect rate data.</p>';
+        container.innerHTML = html;
+    }
 }
 
 function renderDeviceAlertHistory(alerts) {
@@ -1369,6 +1604,7 @@ const NAV_GROUP_CHILDREN = {
     'compliance': 'network',
     'change-management': 'network',
     'reports': 'network',
+    'graph-templates': 'network',
 };
 
 window.toggleNavGroup = function(groupName, e) {
@@ -1403,7 +1639,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports'];
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -1520,6 +1756,7 @@ const PAGE_LABELS = {
     monitoring: 'Monitoring',
     reports: 'Reports & Export',
     'device-detail': 'Device Detail',
+    'graph-templates': 'Graph Templates',
     settings: 'Admin Settings',
 };
 
@@ -1575,6 +1812,10 @@ const PAGE_HELP = {
     reports: {
         title: 'Reports, Event Log & OID Profiles',
         text: 'Generate and export availability, compliance, and utilization reports. View syslog events and SNMP traps. Manage custom OID profiles for monitoring.'
+    },
+    'graph-templates': {
+        title: 'Graph Templates & Auto-Graphing',
+        text: 'Manage reusable graph definitions that auto-apply to devices. Create host templates to map device types to graphs, and organize with graph trees for hierarchical navigation.'
     },
     settings: {
         title: 'Application Settings',
@@ -1689,6 +1930,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'device-detail':
                 await loadDeviceDetail({ preserveContent });
+                break;
+            case 'graph-templates':
+                await loadGraphTemplates({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
@@ -11850,6 +12094,504 @@ async function renderDeviceSyslogTab(hostId) {
         container.innerHTML = '<p class="text-muted">Could not load syslog events</p>';
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Graph Templates Page (Cacti-parity)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadGraphTemplates(options = {}) {
+    const state = listViewState.graphTemplates;
+    try {
+        const [gtRes, htRes, treeRes] = await Promise.all([
+            api.getGraphTemplates(),
+            api.getHostTemplates(),
+            api.getGraphTrees(),
+        ]);
+        state.items = gtRes.graph_templates || [];
+        state.hostTemplates = htRes.host_templates || [];
+        state.graphTrees = treeRes.graph_trees || [];
+        renderGraphTemplatesTab(state.tab);
+    } catch (e) {
+        console.error('Failed to load graph templates:', e);
+        showError('Failed to load graph templates: ' + e.message);
+    }
+}
+
+function renderGraphTemplatesTab(tab) {
+    const state = listViewState.graphTemplates;
+    state.tab = tab;
+    const tabSelect = document.getElementById('graph-templates-tab');
+    if (tabSelect) tabSelect.value = tab;
+    const catFilter = document.getElementById('graph-templates-category');
+
+    document.getElementById('graph-templates-list-view').style.display = tab === 'graph-templates' ? '' : 'none';
+    document.getElementById('host-templates-list-view').style.display = tab === 'host-templates' ? '' : 'none';
+    document.getElementById('graph-trees-list-view').style.display = tab === 'graph-trees' ? '' : 'none';
+    if (catFilter) catFilter.style.display = tab === 'graph-templates' ? '' : 'none';
+
+    const addBtn = document.querySelector('#page-graph-templates .page-header .btn-primary');
+    if (addBtn) {
+        if (tab === 'graph-templates') { addBtn.textContent = '+ New Template'; addBtn.onclick = showCreateGraphTemplateModal; }
+        else if (tab === 'host-templates') { addBtn.textContent = '+ New Host Template'; addBtn.onclick = showCreateHostTemplateModal; }
+        else { addBtn.textContent = '+ New Tree'; addBtn.onclick = showCreateGraphTreeModal; }
+    }
+
+    if (tab === 'graph-templates') renderGraphTemplatesList();
+    else if (tab === 'host-templates') renderHostTemplatesList();
+    else renderGraphTreesList();
+}
+window.switchGraphTemplatesTab = function(v) { renderGraphTemplatesTab(v); };
+window.filterGraphTemplatesCategory = function(v) { listViewState.graphTemplates.category = v; renderGraphTemplatesList(); };
+
+function renderGraphTemplatesList() {
+    const state = listViewState.graphTemplates;
+    const container = document.getElementById('graph-templates-list');
+    const emptyEl = document.getElementById('graph-templates-empty');
+    let items = state.items;
+
+    if (state.category) items = items.filter(t => t.category === state.category);
+    if (state.query) {
+        const q = state.query.toLowerCase();
+        items = items.filter(t => (t.name || '').toLowerCase().includes(q) || (t.category || '').toLowerCase().includes(q));
+    }
+
+    if (!items.length) {
+        container.innerHTML = '';
+        if (emptyEl) emptyEl.style.display = '';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    const scopeIcon = (scope) => scope === 'interface'
+        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"></path><path d="M4 12h16"></path></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>';
+
+    container.innerHTML = `<div class="card-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem;">
+        ${items.map(t => `
+            <div class="card" style="cursor:pointer;" onclick="showGraphTemplateDetail(${t.id})">
+                <div class="card-body">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                        <h4 style="margin:0;">${escapeHtml(t.name)}</h4>
+                        ${t.built_in ? '<span class="badge badge-info" style="font-size:0.7rem;">Built-in</span>' : ''}
+                    </div>
+                    <p class="text-muted" style="margin:0 0 0.5rem; font-size:0.85rem;">${escapeHtml(t.description || 'No description')}</p>
+                    <div style="display:flex; gap:0.75rem; font-size:0.8rem; color:var(--text-secondary);">
+                        <span>${scopeIcon(t.scope)} ${escapeHtml(t.scope)}</span>
+                        <span class="badge badge-secondary">${escapeHtml(t.category)}</span>
+                        <span>${escapeHtml(t.graph_type)}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('')}
+    </div>`;
+}
+
+function renderHostTemplatesList() {
+    const state = listViewState.graphTemplates;
+    const container = document.getElementById('host-templates-list');
+    const items = state.hostTemplates;
+
+    if (!items.length) {
+        container.innerHTML = '<p class="text-muted" style="padding:1rem;">No host templates configured.</p>';
+        return;
+    }
+
+    container.innerHTML = `<div class="card-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem;">
+        ${items.map(ht => {
+            let dtypes = [];
+            try { dtypes = JSON.parse(ht.device_types || '[]'); } catch(e) {}
+            const dtLabel = dtypes.length ? dtypes.join(', ') : 'All devices';
+            const gtCount = (ht.graph_templates || []).length;
+            return `<div class="card">
+                <div class="card-body">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                        <h4 style="margin:0;">${escapeHtml(ht.name)}</h4>
+                        <span class="badge ${ht.auto_apply ? 'badge-success' : 'badge-secondary'}">${ht.auto_apply ? 'Auto-apply' : 'Manual'}</span>
+                    </div>
+                    <p class="text-muted" style="margin:0 0 0.5rem; font-size:0.85rem;">${escapeHtml(ht.description || '')}</p>
+                    <div style="display:flex; gap:0.75rem; font-size:0.8rem; color:var(--text-secondary);">
+                        <span>Devices: ${escapeHtml(dtLabel)}</span>
+                        <span>${gtCount} graph template${gtCount !== 1 ? 's' : ''}</span>
+                    </div>
+                    ${gtCount > 0 ? `<div style="margin-top:0.5rem; font-size:0.8rem;">${ht.graph_templates.map(g => `<span class="badge badge-secondary" style="margin:0.1rem;">${escapeHtml(g.name)}</span>`).join('')}</div>` : ''}
+                </div>
+                <div class="card-actions" style="display:flex; gap:0.5rem; padding:0.5rem 1rem; border-top:1px solid var(--border-color);">
+                    <button class="btn btn-sm btn-secondary" onclick="editHostTemplate(${ht.id})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteHostTemplateConfirm(${ht.id})">Delete</button>
+                </div>
+            </div>`;
+        }).join('')}
+    </div>`;
+}
+
+function renderGraphTreesList() {
+    const state = listViewState.graphTemplates;
+    const container = document.getElementById('graph-trees-list');
+    const items = state.graphTrees;
+
+    if (!items.length) {
+        container.innerHTML = '<p class="text-muted" style="padding:1rem;">No graph trees configured. Create a tree to organize graphs hierarchically.</p>';
+        return;
+    }
+
+    container.innerHTML = `<div class="card-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem;">
+        ${items.map(tree => `
+            <div class="card" style="cursor:pointer;" onclick="showGraphTreeDetail(${tree.id})">
+                <div class="card-body">
+                    <h4 style="margin:0 0 0.5rem;">${escapeHtml(tree.name)}</h4>
+                    <p class="text-muted" style="margin:0; font-size:0.85rem;">${escapeHtml(tree.description || 'No description')}</p>
+                </div>
+                <div class="card-actions" style="display:flex; gap:0.5rem; padding:0.5rem 1rem; border-top:1px solid var(--border-color);">
+                    <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); editGraphTree(${tree.id})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteGraphTreeConfirm(${tree.id})">Delete</button>
+                </div>
+            </div>
+        `).join('')}
+    </div>`;
+}
+
+// ── Graph Template Detail Modal ──────────────────────────────────────────────
+
+window.showGraphTemplateDetail = async function(id) {
+    try {
+        const tpl = await api.getGraphTemplate(id);
+        const items = tpl.items || [];
+        const html = `
+            <div class="modal-header"><h3>${escapeHtml(tpl.name)}</h3></div>
+            <div class="modal-body">
+                <p>${escapeHtml(tpl.description || '')}</p>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem; margin-bottom:1rem; font-size:0.85rem;">
+                    <div><strong>Type:</strong> ${escapeHtml(tpl.graph_type)}</div>
+                    <div><strong>Scope:</strong> ${escapeHtml(tpl.scope)}</div>
+                    <div><strong>Category:</strong> ${escapeHtml(tpl.category)}</div>
+                    <div><strong>Y-Axis:</strong> ${escapeHtml(tpl.y_axis_label || '-')}</div>
+                    <div><strong>Stacked:</strong> ${tpl.stacked ? 'Yes' : 'No'}</div>
+                    <div><strong>Area Fill:</strong> ${tpl.area_fill ? 'Yes' : 'No'}</div>
+                    <div><strong>Grid Size:</strong> ${tpl.grid_w}×${tpl.grid_h}</div>
+                    <div><strong>Built-in:</strong> ${tpl.built_in ? 'Yes' : 'No'}</div>
+                </div>
+                <h4>Data Series (${items.length})</h4>
+                ${items.length ? `<table class="table"><thead><tr><th>Label</th><th>Metric</th><th>Type</th><th>Color</th><th>Consolidation</th></tr></thead><tbody>
+                    ${items.map(i => `<tr>
+                        <td>${escapeHtml(i.label)}</td>
+                        <td><code>${escapeHtml(i.metric_name)}</code></td>
+                        <td>${escapeHtml(i.line_type)}</td>
+                        <td><span style="display:inline-block;width:16px;height:16px;border-radius:3px;background:${escapeHtml(i.color)};vertical-align:middle;"></span> ${escapeHtml(i.color)}</td>
+                        <td>${escapeHtml(i.consolidation)}</td>
+                    </tr>`).join('')}
+                </tbody></table>` : '<p class="text-muted">No data series defined.</p>'}
+            </div>
+            <div class="modal-footer">
+                ${!tpl.built_in ? `<button class="btn btn-danger" onclick="deleteGraphTemplateConfirm(${tpl.id})">Delete</button>` : ''}
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+            </div>`;
+        showModal(html);
+    } catch (e) {
+        showError('Failed to load template: ' + e.message);
+    }
+};
+
+// ── Create Graph Template Modal ──────────────────────────────────────────────
+
+window.showCreateGraphTemplateModal = function() {
+    const html = `
+        <div class="modal-header"><h3>New Graph Template</h3></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="gt-name" placeholder="e.g. CPU Usage"></div>
+            <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="gt-desc" placeholder="Optional description"></div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+                <div class="form-group"><label class="form-label">Graph Type</label>
+                    <select class="form-select" id="gt-type"><option value="line">Line</option><option value="bar">Bar</option><option value="gauge">Gauge</option><option value="heatmap">Heatmap</option></select></div>
+                <div class="form-group"><label class="form-label">Scope</label>
+                    <select class="form-select" id="gt-scope"><option value="device">Device</option><option value="interface">Interface</option></select></div>
+                <div class="form-group"><label class="form-label">Category</label>
+                    <select class="form-select" id="gt-category"><option value="system">System</option><option value="traffic">Traffic</option><option value="availability">Availability</option><option value="custom">Custom</option></select></div>
+                <div class="form-group"><label class="form-label">Title Format</label><input class="form-input" id="gt-title-format" placeholder="$interface Traffic"></div>
+                <div class="form-group"><label class="form-label">Y-Axis Label</label><input class="form-input" id="gt-y-label" placeholder="e.g. Bits/sec"></div>
+                <div class="form-group" style="display:flex; gap:1rem; align-items:center; padding-top:1.5rem;">
+                    <label><input type="checkbox" id="gt-stacked"> Stacked</label>
+                    <label><input type="checkbox" id="gt-area" checked> Area Fill</label>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitCreateGraphTemplate()">Create</button>
+        </div>`;
+    showModal(html);
+};
+
+window.submitCreateGraphTemplate = async function() {
+    const name = document.getElementById('gt-name').value.trim();
+    if (!name) { showError('Name is required'); return; }
+    try {
+        await api.createGraphTemplate({
+            name,
+            description: document.getElementById('gt-desc').value.trim(),
+            graph_type: document.getElementById('gt-type').value,
+            scope: document.getElementById('gt-scope').value,
+            category: document.getElementById('gt-category').value,
+            title_format: document.getElementById('gt-title-format').value.trim(),
+            y_axis_label: document.getElementById('gt-y-label').value.trim(),
+            stacked: document.getElementById('gt-stacked').checked,
+            area_fill: document.getElementById('gt-area').checked,
+        });
+        closeModal();
+        showSuccess('Graph template created');
+        await loadGraphTemplates({ force: true });
+    } catch (e) {
+        showError('Failed to create template: ' + e.message);
+    }
+};
+
+window.deleteGraphTemplateConfirm = async function(id) {
+    if (!confirm('Delete this graph template? This will also remove all host graph instances using it.')) return;
+    try {
+        await api.deleteGraphTemplate(id);
+        closeModal();
+        showSuccess('Graph template deleted');
+        await loadGraphTemplates({ force: true });
+    } catch (e) {
+        showError('Failed to delete: ' + e.message);
+    }
+};
+
+// ── Host Template CRUD ──────────────────────────────────────────────────────
+
+window.showCreateHostTemplateModal = function() {
+    const html = `
+        <div class="modal-header"><h3>New Host Template</h3></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="ht-name" placeholder="e.g. Cisco IOS Switches"></div>
+            <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="ht-desc" placeholder="Optional description"></div>
+            <div class="form-group"><label class="form-label">Device Types (comma-separated, leave empty for all)</label><input class="form-input" id="ht-dtypes" placeholder="e.g. cisco_ios, cisco_nxos"></div>
+            <div class="form-group"><label><input type="checkbox" id="ht-auto" checked> Auto-apply to matching devices</label></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitCreateHostTemplate()">Create</button>
+        </div>`;
+    showModal(html);
+};
+
+window.submitCreateHostTemplate = async function() {
+    const name = document.getElementById('ht-name').value.trim();
+    if (!name) { showError('Name is required'); return; }
+    const dtypes = document.getElementById('ht-dtypes').value.trim();
+    const dtArr = dtypes ? dtypes.split(',').map(s => s.trim()).filter(Boolean) : [];
+    try {
+        await api.createHostTemplate({
+            name,
+            description: document.getElementById('ht-desc').value.trim(),
+            device_types: JSON.stringify(dtArr),
+            auto_apply: document.getElementById('ht-auto').checked,
+        });
+        closeModal();
+        showSuccess('Host template created');
+        await loadGraphTemplates({ force: true });
+    } catch (e) {
+        showError('Failed to create host template: ' + e.message);
+    }
+};
+
+window.editHostTemplate = async function(id) {
+    try {
+        const ht = await api.getHostTemplate(id);
+        let dtypes = [];
+        try { dtypes = JSON.parse(ht.device_types || '[]'); } catch(e) {}
+        const html = `
+            <div class="modal-header"><h3>Edit Host Template</h3></div>
+            <div class="modal-body">
+                <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="ht-edit-name" value="${escapeHtml(ht.name)}"></div>
+                <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="ht-edit-desc" value="${escapeHtml(ht.description || '')}"></div>
+                <div class="form-group"><label class="form-label">Device Types (comma-separated)</label><input class="form-input" id="ht-edit-dtypes" value="${escapeHtml(dtypes.join(', '))}"></div>
+                <div class="form-group"><label><input type="checkbox" id="ht-edit-auto" ${ht.auto_apply ? 'checked' : ''}> Auto-apply</label></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitEditHostTemplate(${id})">Save</button>
+            </div>`;
+        showModal(html);
+    } catch (e) {
+        showError('Failed to load host template: ' + e.message);
+    }
+};
+
+window.submitEditHostTemplate = async function(id) {
+    const dtypes = document.getElementById('ht-edit-dtypes').value.trim();
+    const dtArr = dtypes ? dtypes.split(',').map(s => s.trim()).filter(Boolean) : [];
+    try {
+        await api.updateHostTemplate(id, {
+            name: document.getElementById('ht-edit-name').value.trim(),
+            description: document.getElementById('ht-edit-desc').value.trim(),
+            device_types: JSON.stringify(dtArr),
+            auto_apply: document.getElementById('ht-edit-auto').checked,
+        });
+        closeModal();
+        showSuccess('Host template updated');
+        await loadGraphTemplates({ force: true });
+    } catch (e) {
+        showError('Failed to update: ' + e.message);
+    }
+};
+
+window.deleteHostTemplateConfirm = async function(id) {
+    if (!confirm('Delete this host template?')) return;
+    try {
+        await api.deleteHostTemplate(id);
+        showSuccess('Host template deleted');
+        await loadGraphTemplates({ force: true });
+    } catch (e) {
+        showError('Failed to delete: ' + e.message);
+    }
+};
+
+// ── Graph Tree CRUD ──────────────────────────────────────────────────────────
+
+window.showCreateGraphTreeModal = function() {
+    const html = `
+        <div class="modal-header"><h3>New Graph Tree</h3></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="tree-name" placeholder="e.g. All Devices"></div>
+            <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="tree-desc"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitCreateGraphTree()">Create</button>
+        </div>`;
+    showModal(html);
+};
+
+window.submitCreateGraphTree = async function() {
+    const name = document.getElementById('tree-name').value.trim();
+    if (!name) { showError('Name is required'); return; }
+    try {
+        await api.createGraphTree({
+            name,
+            description: document.getElementById('tree-desc').value.trim(),
+        });
+        closeModal();
+        showSuccess('Graph tree created');
+        await loadGraphTemplates({ force: true });
+    } catch (e) {
+        showError('Failed to create tree: ' + e.message);
+    }
+};
+
+window.showGraphTreeDetail = async function(id) {
+    try {
+        const tree = await api.getGraphTree(id);
+        const nodes = tree.nodes || [];
+        const html = `
+            <div class="modal-header"><h3>${escapeHtml(tree.name)}</h3></div>
+            <div class="modal-body">
+                <p>${escapeHtml(tree.description || '')}</p>
+                <h4>Nodes (${nodes.length})</h4>
+                ${nodes.length ? `<table class="table"><thead><tr><th>Title</th><th>Type</th><th>Sort</th></tr></thead><tbody>
+                    ${nodes.map(n => `<tr>
+                        <td>${escapeHtml(n.title || '-')}</td>
+                        <td><span class="badge badge-secondary">${escapeHtml(n.node_type)}</span></td>
+                        <td>${n.sort_order}</td>
+                    </tr>`).join('')}
+                </tbody></table>` : '<p class="text-muted">No nodes yet. Add nodes to organize your graph hierarchy.</p>'}
+                <button class="btn btn-sm btn-primary" onclick="showAddTreeNodeModal(${id})" style="margin-top:0.5rem;">+ Add Node</button>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+            </div>`;
+        showModal(html);
+    } catch (e) {
+        showError('Failed to load tree: ' + e.message);
+    }
+};
+
+window.showAddTreeNodeModal = function(treeId) {
+    const html = `
+        <div class="modal-header"><h3>Add Tree Node</h3></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Title</label><input class="form-input" id="tnode-title" placeholder="e.g. Core Switches"></div>
+            <div class="form-group"><label class="form-label">Type</label>
+                <select class="form-select" id="tnode-type"><option value="header">Header</option><option value="device">Device</option><option value="graph">Graph</option></select></div>
+            <div class="form-group"><label class="form-label">Sort Order</label><input class="form-input" id="tnode-sort" type="number" value="0"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitAddTreeNode(${treeId})">Add</button>
+        </div>`;
+    showModal(html);
+};
+
+window.submitAddTreeNode = async function(treeId) {
+    const title = document.getElementById('tnode-title').value.trim();
+    if (!title) { showError('Title is required'); return; }
+    try {
+        await api.createGraphTreeNode(treeId, {
+            title,
+            node_type: document.getElementById('tnode-type').value,
+            sort_order: parseInt(document.getElementById('tnode-sort').value) || 0,
+        });
+        closeModal();
+        showSuccess('Node added');
+        showGraphTreeDetail(treeId);
+    } catch (e) {
+        showError('Failed to add node: ' + e.message);
+    }
+};
+
+window.editGraphTree = async function(id) {
+    try {
+        const tree = await api.getGraphTree(id);
+        const html = `
+            <div class="modal-header"><h3>Edit Graph Tree</h3></div>
+            <div class="modal-body">
+                <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="tree-edit-name" value="${escapeHtml(tree.name)}"></div>
+                <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="tree-edit-desc" value="${escapeHtml(tree.description || '')}"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitEditGraphTree(${id})">Save</button>
+            </div>`;
+        showModal(html);
+    } catch (e) {
+        showError('Failed to load tree: ' + e.message);
+    }
+};
+
+window.submitEditGraphTree = async function(id) {
+    try {
+        await api.updateGraphTree(id, {
+            name: document.getElementById('tree-edit-name').value.trim(),
+            description: document.getElementById('tree-edit-desc').value.trim(),
+        });
+        closeModal();
+        showSuccess('Graph tree updated');
+        await loadGraphTemplates({ force: true });
+    } catch (e) {
+        showError('Failed to update: ' + e.message);
+    }
+};
+
+window.deleteGraphTreeConfirm = async function(id) {
+    if (!confirm('Delete this graph tree and all its nodes?')) return;
+    try {
+        await api.deleteGraphTree(id);
+        showSuccess('Graph tree deleted');
+        await loadGraphTemplates({ force: true });
+    } catch (e) {
+        showError('Failed to delete: ' + e.message);
+    }
+};
+
+// ── Graph Templates Search ──────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    const searchEl = document.getElementById('graph-templates-search');
+    if (searchEl) {
+        searchEl.addEventListener('input', debounce(() => {
+            listViewState.graphTemplates.query = searchEl.value;
+            renderGraphTemplatesList();
+        }, 200));
+    }
+});
 
 // ── Hash-based routing: back/forward button support ─────────────────────────
 window.addEventListener('popstate', () => {

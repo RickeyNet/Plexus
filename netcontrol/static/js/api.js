@@ -1335,3 +1335,152 @@ export function getExportUrl(type, params = {}) {
     const qs = new URLSearchParams(params).toString();
     return `/api/reports/export/${type}${qs ? '?' + qs : ''}`;
 }
+
+// ── Graph Templates (Cacti-parity) ──────────────────────────────────────────
+
+export async function getGraphTemplates(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/graph-templates${qs ? '?' + qs : ''}`);
+}
+
+export async function getGraphTemplate(id) {
+    return apiRequest(`/graph-templates/${id}`);
+}
+
+export async function createGraphTemplate(data) {
+    return apiRequest('/graph-templates', { method: 'POST', body: data });
+}
+
+export async function updateGraphTemplate(id, data) {
+    return apiRequest(`/graph-templates/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteGraphTemplate(id) {
+    return apiRequest(`/graph-templates/${id}`, { method: 'DELETE' });
+}
+
+export async function createGraphTemplateItem(templateId, data) {
+    return apiRequest(`/graph-templates/${templateId}/items`, { method: 'POST', body: data });
+}
+
+export async function updateGraphTemplateItem(templateId, itemId, data) {
+    return apiRequest(`/graph-templates/${templateId}/items/${itemId}`, { method: 'PUT', body: data });
+}
+
+export async function deleteGraphTemplateItem(templateId, itemId) {
+    return apiRequest(`/graph-templates/${templateId}/items/${itemId}`, { method: 'DELETE' });
+}
+
+// ── Host Templates ──────────────────────────────────────────────────────────
+
+export async function getHostTemplates() {
+    return apiRequest('/host-templates');
+}
+
+export async function getHostTemplate(id) {
+    return apiRequest(`/host-templates/${id}`);
+}
+
+export async function createHostTemplate(data) {
+    return apiRequest('/host-templates', { method: 'POST', body: data });
+}
+
+export async function updateHostTemplate(id, data) {
+    return apiRequest(`/host-templates/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteHostTemplate(id) {
+    return apiRequest(`/host-templates/${id}`, { method: 'DELETE' });
+}
+
+export async function linkGraphToHostTemplate(hostTemplateId, graphTemplateId) {
+    return apiRequest(`/host-templates/${hostTemplateId}/graph-templates/${graphTemplateId}`, { method: 'POST' });
+}
+
+export async function unlinkGraphFromHostTemplate(hostTemplateId, graphTemplateId) {
+    return apiRequest(`/host-templates/${hostTemplateId}/graph-templates/${graphTemplateId}`, { method: 'DELETE' });
+}
+
+// ── Host Graphs ─────────────────────────────────────────────────────────────
+
+export async function getHostGraphs(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/host-graphs${qs ? '?' + qs : ''}`);
+}
+
+export async function getHostGraph(id) {
+    return apiRequest(`/host-graphs/${id}`);
+}
+
+export async function createHostGraph(data) {
+    return apiRequest('/host-graphs', { method: 'POST', body: data });
+}
+
+export async function updateHostGraph(id, data) {
+    return apiRequest(`/host-graphs/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteHostGraph(id) {
+    return apiRequest(`/host-graphs/${id}`, { method: 'DELETE' });
+}
+
+export async function applyGraphTemplatesToHost(hostId) {
+    return apiRequest(`/hosts/${hostId}/apply-graph-templates`, { method: 'POST' });
+}
+
+// ── Graph Trees ─────────────────────────────────────────────────────────────
+
+export async function getGraphTrees() {
+    return apiRequest('/graph-trees');
+}
+
+export async function getGraphTree(id) {
+    return apiRequest(`/graph-trees/${id}`);
+}
+
+export async function createGraphTree(data) {
+    return apiRequest('/graph-trees', { method: 'POST', body: data });
+}
+
+export async function updateGraphTree(id, data) {
+    return apiRequest(`/graph-trees/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteGraphTree(id) {
+    return apiRequest(`/graph-trees/${id}`, { method: 'DELETE' });
+}
+
+export async function createGraphTreeNode(treeId, data) {
+    return apiRequest(`/graph-trees/${treeId}/nodes`, { method: 'POST', body: data });
+}
+
+export async function updateGraphTreeNode(treeId, nodeId, data) {
+    return apiRequest(`/graph-trees/${treeId}/nodes/${nodeId}`, { method: 'PUT', body: data });
+}
+
+export async function deleteGraphTreeNode(treeId, nodeId) {
+    return apiRequest(`/graph-trees/${treeId}/nodes/${nodeId}`, { method: 'DELETE' });
+}
+
+// ── Data Source Profiles ────────────────────────────────────────────────────
+
+export async function getDataSourceProfiles(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/data-source-profiles${qs ? '?' + qs : ''}`);
+}
+
+export async function getDataSourceProfile(id) {
+    return apiRequest(`/data-source-profiles/${id}`);
+}
+
+export async function createDataSourceProfile(data) {
+    return apiRequest('/data-source-profiles', { method: 'POST', body: data });
+}
+
+export async function updateDataSourceProfile(id, data) {
+    return apiRequest(`/data-source-profiles/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteDataSourceProfile(id) {
+    return apiRequest(`/data-source-profiles/${id}`, { method: 'DELETE' });
+}
