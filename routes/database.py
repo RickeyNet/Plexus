@@ -95,6 +95,14 @@ _INSERT_ID_TABLES = {
     "custom_oid_profiles",
     "report_definitions",
     "report_runs",
+    "graph_templates",
+    "graph_template_items",
+    "host_templates",
+    "host_template_graph_links",
+    "host_graphs",
+    "graph_trees",
+    "graph_tree_nodes",
+    "data_source_profiles",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -717,6 +725,128 @@ CREATE TABLE IF NOT EXISTS report_runs (
     started_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     completed_at    TEXT    DEFAULT NULL
 );
+
+-- ── Cacti-parity: Graph Templates ──────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS graph_templates (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    description     TEXT    NOT NULL DEFAULT '',
+    graph_type      TEXT    NOT NULL DEFAULT 'line',
+    category        TEXT    NOT NULL DEFAULT 'system',
+    scope           TEXT    NOT NULL DEFAULT 'device',
+    title_format    TEXT    NOT NULL DEFAULT '',
+    y_axis_label    TEXT    NOT NULL DEFAULT '',
+    y_min           REAL    DEFAULT NULL,
+    y_max           REAL    DEFAULT NULL,
+    stacked         INTEGER NOT NULL DEFAULT 0,
+    area_fill       INTEGER NOT NULL DEFAULT 1,
+    grid_w          INTEGER NOT NULL DEFAULT 6,
+    grid_h          INTEGER NOT NULL DEFAULT 4,
+    options_json    TEXT    NOT NULL DEFAULT '{}',
+    built_in        INTEGER NOT NULL DEFAULT 0,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS graph_template_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id     INTEGER NOT NULL REFERENCES graph_templates(id) ON DELETE CASCADE,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    metric_name     TEXT    NOT NULL DEFAULT '',
+    label           TEXT    NOT NULL DEFAULT '',
+    color           TEXT    NOT NULL DEFAULT '',
+    line_type       TEXT    NOT NULL DEFAULT 'area',
+    cdef_expression TEXT    NOT NULL DEFAULT '',
+    consolidation   TEXT    NOT NULL DEFAULT 'avg',
+    transform       TEXT    NOT NULL DEFAULT '',
+    legend_format   TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_gti_template ON graph_template_items(template_id);
+
+-- ── Cacti-parity: Host Templates ───────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS host_templates (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    description     TEXT    NOT NULL DEFAULT '',
+    device_types    TEXT    NOT NULL DEFAULT '[]',
+    auto_apply      INTEGER NOT NULL DEFAULT 1,
+    poll_interval   INTEGER DEFAULT NULL,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(name)
+);
+
+CREATE TABLE IF NOT EXISTS host_template_graph_links (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_template_id    INTEGER NOT NULL REFERENCES host_templates(id) ON DELETE CASCADE,
+    graph_template_id   INTEGER NOT NULL REFERENCES graph_templates(id) ON DELETE CASCADE,
+    UNIQUE(host_template_id, graph_template_id)
+);
+
+-- ── Cacti-parity: Host Graphs (instances of graph templates applied to devices)
+
+CREATE TABLE IF NOT EXISTS host_graphs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    graph_template_id INTEGER NOT NULL REFERENCES graph_templates(id) ON DELETE CASCADE,
+    title           TEXT    NOT NULL DEFAULT '',
+    instance_key    TEXT    NOT NULL DEFAULT '',
+    instance_label  TEXT    NOT NULL DEFAULT '',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    pinned          INTEGER NOT NULL DEFAULT 0,
+    options_json    TEXT    NOT NULL DEFAULT '{}',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(host_id, graph_template_id, instance_key)
+);
+CREATE INDEX IF NOT EXISTS idx_hg_host ON host_graphs(host_id);
+CREATE INDEX IF NOT EXISTS idx_hg_template ON host_graphs(graph_template_id);
+
+-- ── Cacti-parity: Graph Trees (hierarchical navigation) ────────────────────
+
+CREATE TABLE IF NOT EXISTS graph_trees (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    description     TEXT    NOT NULL DEFAULT '',
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(name)
+);
+
+CREATE TABLE IF NOT EXISTS graph_tree_nodes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    tree_id         INTEGER NOT NULL REFERENCES graph_trees(id) ON DELETE CASCADE,
+    parent_node_id  INTEGER DEFAULT NULL REFERENCES graph_tree_nodes(id) ON DELETE CASCADE,
+    node_type       TEXT    NOT NULL DEFAULT 'header',
+    title           TEXT    NOT NULL DEFAULT '',
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    host_id         INTEGER DEFAULT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    group_id        INTEGER DEFAULT NULL REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    graph_id        INTEGER DEFAULT NULL REFERENCES host_graphs(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gtn_tree ON graph_tree_nodes(tree_id);
+CREATE INDEX IF NOT EXISTS idx_gtn_parent ON graph_tree_nodes(parent_node_id);
+
+-- ── Cacti-parity: Data Source Profiles (per-device poll config) ────────────
+
+CREATE TABLE IF NOT EXISTS data_source_profiles (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    profile_name    TEXT    NOT NULL DEFAULT 'default',
+    poll_interval   INTEGER NOT NULL DEFAULT 300,
+    oids_json       TEXT    NOT NULL DEFAULT '[]',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    last_polled_at  TEXT    DEFAULT NULL,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(host_id, profile_name)
+);
+CREATE INDEX IF NOT EXISTS idx_dsp_host ON data_source_profiles(host_id);
 """
 
 
@@ -6718,5 +6848,970 @@ async def generate_interface_report_data(
                 if r.get(k) is not None:
                     r[k] = round(r[k], 2)
         return rows
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Graph Templates (Cacti-parity)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def list_graph_templates(
+    category: str | None = None, scope: str | None = None, built_in: bool | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        if scope:
+            clauses.append("scope = ?")
+            params.append(scope)
+        if built_in is not None:
+            clauses.append("built_in = ?")
+            params.append(1 if built_in else 0)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        cursor = await db.execute(
+            f"SELECT * FROM graph_templates{where} ORDER BY category, name", tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_graph_template(template_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM graph_templates WHERE id = ?", (template_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        tpl = dict(row)
+        cursor2 = await db.execute(
+            "SELECT * FROM graph_template_items WHERE template_id = ? ORDER BY sort_order",
+            (template_id,),
+        )
+        tpl["items"] = rows_to_list(await cursor2.fetchall())
+        return tpl
+    finally:
+        await db.close()
+
+
+async def create_graph_template(
+    name: str, description: str = "", graph_type: str = "line",
+    category: str = "system", scope: str = "device",
+    title_format: str = "", y_axis_label: str = "",
+    y_min: float | None = None, y_max: float | None = None,
+    stacked: bool = False, area_fill: bool = True,
+    grid_w: int = 6, grid_h: int = 4, options_json: str = "{}",
+    built_in: bool = False, created_by: str = "",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO graph_templates
+               (name, description, graph_type, category, scope, title_format,
+                y_axis_label, y_min, y_max, stacked, area_fill, grid_w, grid_h,
+                options_json, built_in, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (name, description, graph_type, category, scope, title_format,
+             y_axis_label, y_min, y_max, int(stacked), int(area_fill),
+             grid_w, grid_h, options_json, int(built_in), created_by),
+        )
+        await db.commit()
+        new_id = cursor.lastrowid
+        cursor2 = await db.execute("SELECT * FROM graph_templates WHERE id = ?", (new_id,))
+        return dict(await cursor2.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_graph_template(template_id: int, **kwargs) -> dict | None:
+    allowed = {
+        "name", "description", "graph_type", "category", "scope", "title_format",
+        "y_axis_label", "y_min", "y_max", "stacked", "area_fill", "grid_w", "grid_h",
+        "options_json",
+    }
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return await get_graph_template(template_id)
+    for bkey in ("stacked", "area_fill"):
+        if bkey in updates:
+            updates[bkey] = int(updates[bkey])
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(template_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE graph_templates SET {sets}, updated_at = datetime('now') WHERE id = ?",
+            tuple(vals),
+        )
+        await db.commit()
+        return await get_graph_template(template_id)
+    finally:
+        await db.close()
+
+
+async def delete_graph_template(template_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM graph_templates WHERE id = ?", (template_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ── Graph Template Items ───────────────────────────────────────────────────
+
+async def create_graph_template_item(
+    template_id: int, sort_order: int = 0, metric_name: str = "",
+    label: str = "", color: str = "", line_type: str = "area",
+    cdef_expression: str = "", consolidation: str = "avg",
+    transform: str = "", legend_format: str = "",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO graph_template_items
+               (template_id, sort_order, metric_name, label, color, line_type,
+                cdef_expression, consolidation, transform, legend_format)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (template_id, sort_order, metric_name, label, color, line_type,
+             cdef_expression, consolidation, transform, legend_format),
+        )
+        await db.commit()
+        new_id = cursor.lastrowid
+        cursor2 = await db.execute("SELECT * FROM graph_template_items WHERE id = ?", (new_id,))
+        return dict(await cursor2.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_graph_template_item(item_id: int, **kwargs) -> dict | None:
+    allowed = {
+        "sort_order", "metric_name", "label", "color", "line_type",
+        "cdef_expression", "consolidation", "transform", "legend_format",
+    }
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return None
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(item_id)
+    db = await get_db()
+    try:
+        await db.execute(f"UPDATE graph_template_items SET {sets} WHERE id = ?", tuple(vals))
+        await db.commit()
+        cursor = await db.execute("SELECT * FROM graph_template_items WHERE id = ?", (item_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def delete_graph_template_item(item_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM graph_template_items WHERE id = ?", (item_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Host Templates (Cacti-parity)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def list_host_templates() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM host_templates ORDER BY name")
+        templates = rows_to_list(await cursor.fetchall())
+        for tpl in templates:
+            cursor2 = await db.execute(
+                """SELECT gt.* FROM graph_templates gt
+                   JOIN host_template_graph_links htgl ON htgl.graph_template_id = gt.id
+                   WHERE htgl.host_template_id = ?
+                   ORDER BY gt.category, gt.name""",
+                (tpl["id"],),
+            )
+            tpl["graph_templates"] = rows_to_list(await cursor2.fetchall())
+        return templates
+    finally:
+        await db.close()
+
+
+async def get_host_template(template_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM host_templates WHERE id = ?", (template_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        tpl = dict(row)
+        cursor2 = await db.execute(
+            """SELECT gt.* FROM graph_templates gt
+               JOIN host_template_graph_links htgl ON htgl.graph_template_id = gt.id
+               WHERE htgl.host_template_id = ?
+               ORDER BY gt.category, gt.name""",
+            (template_id,),
+        )
+        tpl["graph_templates"] = rows_to_list(await cursor2.fetchall())
+        return tpl
+    finally:
+        await db.close()
+
+
+async def create_host_template(
+    name: str, description: str = "", device_types: str = "[]",
+    auto_apply: bool = True, poll_interval: int | None = None,
+    created_by: str = "",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO host_templates (name, description, device_types, auto_apply, poll_interval, created_by)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, description, device_types, int(auto_apply), poll_interval, created_by),
+        )
+        await db.commit()
+        new_id = cursor.lastrowid
+        cursor2 = await db.execute("SELECT * FROM host_templates WHERE id = ?", (new_id,))
+        return dict(await cursor2.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_host_template(template_id: int, **kwargs) -> dict | None:
+    allowed = {"name", "description", "device_types", "auto_apply", "poll_interval"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return await get_host_template(template_id)
+    if "auto_apply" in updates:
+        updates["auto_apply"] = int(updates["auto_apply"])
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(template_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE host_templates SET {sets}, updated_at = datetime('now') WHERE id = ?",
+            tuple(vals),
+        )
+        await db.commit()
+        return await get_host_template(template_id)
+    finally:
+        await db.close()
+
+
+async def delete_host_template(template_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM host_templates WHERE id = ?", (template_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def link_graph_template_to_host_template(
+    host_template_id: int, graph_template_id: int,
+) -> dict:
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT OR IGNORE INTO host_template_graph_links (host_template_id, graph_template_id)
+               VALUES (?, ?)""",
+            (host_template_id, graph_template_id),
+        )
+        await db.commit()
+        return {"host_template_id": host_template_id, "graph_template_id": graph_template_id}
+    finally:
+        await db.close()
+
+
+async def unlink_graph_template_from_host_template(
+    host_template_id: int, graph_template_id: int,
+) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """DELETE FROM host_template_graph_links
+               WHERE host_template_id = ? AND graph_template_id = ?""",
+            (host_template_id, graph_template_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Host Graphs (graph template instances applied to devices)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def list_host_graphs(
+    host_id: int | None = None, graph_template_id: int | None = None,
+    enabled_only: bool = False,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if host_id is not None:
+            clauses.append("hg.host_id = ?")
+            params.append(host_id)
+        if graph_template_id is not None:
+            clauses.append("hg.graph_template_id = ?")
+            params.append(graph_template_id)
+        if enabled_only:
+            clauses.append("hg.enabled = 1")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        cursor = await db.execute(
+            f"""SELECT hg.*, gt.name AS template_name, gt.graph_type, gt.category,
+                       gt.y_axis_label, gt.stacked, gt.area_fill
+                FROM host_graphs hg
+                JOIN graph_templates gt ON gt.id = hg.graph_template_id
+                {where}
+                ORDER BY hg.host_id, gt.category, gt.name, hg.instance_key""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_host_graph(host_graph_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT hg.*, gt.name AS template_name, gt.graph_type, gt.category,
+                      gt.y_axis_label, gt.stacked, gt.area_fill, gt.options_json AS template_options
+               FROM host_graphs hg
+               JOIN graph_templates gt ON gt.id = hg.graph_template_id
+               WHERE hg.id = ?""",
+            (host_graph_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        hg = dict(row)
+        cursor2 = await db.execute(
+            "SELECT * FROM graph_template_items WHERE template_id = ? ORDER BY sort_order",
+            (hg["graph_template_id"],),
+        )
+        hg["items"] = rows_to_list(await cursor2.fetchall())
+        return hg
+    finally:
+        await db.close()
+
+
+async def create_host_graph(
+    host_id: int, graph_template_id: int, title: str = "",
+    instance_key: str = "", instance_label: str = "",
+    enabled: bool = True, pinned: bool = False,
+    options_json: str = "{}",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT OR IGNORE INTO host_graphs
+               (host_id, graph_template_id, title, instance_key, instance_label, enabled, pinned, options_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (host_id, graph_template_id, title, instance_key, instance_label,
+             int(enabled), int(pinned), options_json),
+        )
+        await db.commit()
+        new_id = cursor.lastrowid
+        if new_id:
+            cursor2 = await db.execute("SELECT * FROM host_graphs WHERE id = ?", (new_id,))
+            return dict(await cursor2.fetchone())
+        # Already existed (IGNORE), fetch existing
+        cursor3 = await db.execute(
+            """SELECT * FROM host_graphs
+               WHERE host_id = ? AND graph_template_id = ? AND instance_key = ?""",
+            (host_id, graph_template_id, instance_key),
+        )
+        row = await cursor3.fetchone()
+        return dict(row) if row else {}
+    finally:
+        await db.close()
+
+
+async def update_host_graph(host_graph_id: int, **kwargs) -> dict | None:
+    allowed = {"title", "instance_label", "enabled", "pinned", "options_json"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return await get_host_graph(host_graph_id)
+    for bkey in ("enabled", "pinned"):
+        if bkey in updates:
+            updates[bkey] = int(updates[bkey])
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(host_graph_id)
+    db = await get_db()
+    try:
+        await db.execute(f"UPDATE host_graphs SET {sets} WHERE id = ?", tuple(vals))
+        await db.commit()
+        return await get_host_graph(host_graph_id)
+    finally:
+        await db.close()
+
+
+async def delete_host_graph(host_graph_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM host_graphs WHERE id = ?", (host_graph_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def apply_graph_templates_to_host(host_id: int) -> list[dict]:
+    """Auto-create host_graphs for a device based on matching host templates.
+
+    Matches the host's device_type against host_templates.device_types JSON array.
+    Creates host_graph entries for each linked graph_template (scope='device').
+    Returns list of newly created host_graph rows.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM hosts WHERE id = ?", (host_id,))
+        host = await cursor.fetchone()
+        if not host:
+            return []
+        host = dict(host)
+        device_type = (host.get("device_type") or "").strip().lower()
+
+        cursor2 = await db.execute(
+            "SELECT * FROM host_templates WHERE auto_apply = 1"
+        )
+        htemplates = rows_to_list(await cursor2.fetchall())
+
+        created: list[dict] = []
+        for ht in htemplates:
+            try:
+                dt_list = json.loads(ht.get("device_types", "[]"))
+            except (json.JSONDecodeError, TypeError):
+                dt_list = []
+            # Empty list means "match all devices"
+            if dt_list and device_type not in [d.lower() for d in dt_list]:
+                continue
+
+            cursor3 = await db.execute(
+                """SELECT gt.* FROM graph_templates gt
+                   JOIN host_template_graph_links htgl ON htgl.graph_template_id = gt.id
+                   WHERE htgl.host_template_id = ? AND gt.scope = 'device'""",
+                (ht["id"],),
+            )
+            graph_templates = rows_to_list(await cursor3.fetchall())
+            for gt in graph_templates:
+                cursor4 = await db.execute(
+                    """INSERT OR IGNORE INTO host_graphs
+                       (host_id, graph_template_id, title, instance_key, enabled)
+                       VALUES (?, ?, ?, '', 1)""",
+                    (host_id, gt["id"], gt.get("title_format") or gt["name"]),
+                )
+                await db.commit()
+                if cursor4.lastrowid:
+                    cursor5 = await db.execute(
+                        "SELECT * FROM host_graphs WHERE id = ?", (cursor4.lastrowid,)
+                    )
+                    row = await cursor5.fetchone()
+                    if row:
+                        created.append(dict(row))
+        return created
+    finally:
+        await db.close()
+
+
+async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list[dict]) -> list[dict]:
+    """Auto-create host_graphs for each interface on a device.
+
+    For graph_templates with scope='interface', creates one host_graph per interface.
+    Each interface becomes a unique instance_key (if_index) with instance_label (if_name).
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM graph_templates WHERE scope = 'interface'"
+        )
+        iface_templates = rows_to_list(await cursor.fetchall())
+        if not iface_templates:
+            return []
+
+        created: list[dict] = []
+        for iface in interfaces:
+            if_index = str(iface.get("if_index", iface.get("ifIndex", "")))
+            if_name = iface.get("if_name", iface.get("ifDescr", ""))
+            if not if_index:
+                continue
+            for gt in iface_templates:
+                title = (gt.get("title_format") or gt["name"]).replace(
+                    "$interface", if_name
+                ).replace("$ifIndex", if_index)
+                cursor2 = await db.execute(
+                    """INSERT OR IGNORE INTO host_graphs
+                       (host_id, graph_template_id, title, instance_key, instance_label, enabled)
+                       VALUES (?, ?, ?, ?, ?, 1)""",
+                    (host_id, gt["id"], title, if_index, if_name),
+                )
+                await db.commit()
+                if cursor2.lastrowid:
+                    cursor3 = await db.execute(
+                        "SELECT * FROM host_graphs WHERE id = ?", (cursor2.lastrowid,)
+                    )
+                    row = await cursor3.fetchone()
+                    if row:
+                        created.append(dict(row))
+        return created
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Graph Trees (hierarchical navigation)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def list_graph_trees() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM graph_trees ORDER BY sort_order, name")
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_graph_tree(tree_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM graph_trees WHERE id = ?", (tree_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        tree = dict(row)
+        cursor2 = await db.execute(
+            "SELECT * FROM graph_tree_nodes WHERE tree_id = ? ORDER BY sort_order",
+            (tree_id,),
+        )
+        tree["nodes"] = rows_to_list(await cursor2.fetchall())
+        return tree
+    finally:
+        await db.close()
+
+
+async def create_graph_tree(
+    name: str, description: str = "", sort_order: int = 0, created_by: str = "",
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO graph_trees (name, description, sort_order, created_by) VALUES (?, ?, ?, ?)",
+            (name, description, sort_order, created_by),
+        )
+        await db.commit()
+        new_id = cursor.lastrowid
+        cursor2 = await db.execute("SELECT * FROM graph_trees WHERE id = ?", (new_id,))
+        return dict(await cursor2.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_graph_tree(tree_id: int, **kwargs) -> dict | None:
+    allowed = {"name", "description", "sort_order"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return await get_graph_tree(tree_id)
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(tree_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE graph_trees SET {sets}, updated_at = datetime('now') WHERE id = ?",
+            tuple(vals),
+        )
+        await db.commit()
+        return await get_graph_tree(tree_id)
+    finally:
+        await db.close()
+
+
+async def delete_graph_tree(tree_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM graph_trees WHERE id = ?", (tree_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ── Graph Tree Nodes ──────────────────────────────────────────────────────
+
+async def create_graph_tree_node(
+    tree_id: int, parent_node_id: int | None = None,
+    node_type: str = "header", title: str = "",
+    sort_order: int = 0, host_id: int | None = None,
+    group_id: int | None = None, graph_id: int | None = None,
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO graph_tree_nodes
+               (tree_id, parent_node_id, node_type, title, sort_order, host_id, group_id, graph_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (tree_id, parent_node_id, node_type, title, sort_order, host_id, group_id, graph_id),
+        )
+        await db.commit()
+        new_id = cursor.lastrowid
+        cursor2 = await db.execute("SELECT * FROM graph_tree_nodes WHERE id = ?", (new_id,))
+        return dict(await cursor2.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_graph_tree_node(node_id: int, **kwargs) -> dict | None:
+    allowed = {"parent_node_id", "node_type", "title", "sort_order", "host_id", "group_id", "graph_id"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return None
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(node_id)
+    db = await get_db()
+    try:
+        await db.execute(f"UPDATE graph_tree_nodes SET {sets} WHERE id = ?", tuple(vals))
+        await db.commit()
+        cursor = await db.execute("SELECT * FROM graph_tree_nodes WHERE id = ?", (node_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def delete_graph_tree_node(node_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM graph_tree_nodes WHERE id = ?", (node_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Data Source Profiles (per-device poll configuration)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def list_data_source_profiles(host_id: int | None = None) -> list[dict]:
+    db = await get_db()
+    try:
+        if host_id is not None:
+            cursor = await db.execute(
+                "SELECT * FROM data_source_profiles WHERE host_id = ? ORDER BY profile_name",
+                (host_id,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM data_source_profiles ORDER BY host_id, profile_name"
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_data_source_profile(profile_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM data_source_profiles WHERE id = ?", (profile_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def create_data_source_profile(
+    host_id: int, profile_name: str = "default",
+    poll_interval: int = 300, oids_json: str = "[]",
+    enabled: bool = True,
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT OR IGNORE INTO data_source_profiles
+               (host_id, profile_name, poll_interval, oids_json, enabled)
+               VALUES (?, ?, ?, ?, ?)""",
+            (host_id, profile_name, poll_interval, oids_json, int(enabled)),
+        )
+        await db.commit()
+        new_id = cursor.lastrowid
+        if new_id:
+            cursor2 = await db.execute("SELECT * FROM data_source_profiles WHERE id = ?", (new_id,))
+            return dict(await cursor2.fetchone())
+        cursor3 = await db.execute(
+            "SELECT * FROM data_source_profiles WHERE host_id = ? AND profile_name = ?",
+            (host_id, profile_name),
+        )
+        return dict(await cursor3.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_data_source_profile(profile_id: int, **kwargs) -> dict | None:
+    allowed = {"profile_name", "poll_interval", "oids_json", "enabled", "last_polled_at"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return await get_data_source_profile(profile_id)
+    if "enabled" in updates:
+        updates["enabled"] = int(updates["enabled"])
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values())
+    vals.append(profile_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE data_source_profiles SET {sets}, updated_at = datetime('now') WHERE id = ?",
+            tuple(vals),
+        )
+        await db.commit()
+        return await get_data_source_profile(profile_id)
+    finally:
+        await db.close()
+
+
+async def delete_data_source_profile(profile_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM data_source_profiles WHERE id = ?", (profile_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ── Built-in Graph Template Seeding ──────────────────────────────────────────
+
+BUILT_IN_GRAPH_TEMPLATES = [
+    {
+        "name": "CPU Usage",
+        "description": "Device CPU utilization over time",
+        "graph_type": "line",
+        "category": "system",
+        "scope": "device",
+        "title_format": "CPU Usage",
+        "y_axis_label": "Percent",
+        "y_min": 0,
+        "y_max": 100,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"metric_name": "cpu_usage", "label": "CPU %", "color": "#3B82F6",
+             "line_type": "area", "consolidation": "avg", "legend_format": "Avg: {avg} Max: {max}"},
+        ],
+    },
+    {
+        "name": "Memory Usage",
+        "description": "Device memory utilization over time",
+        "graph_type": "line",
+        "category": "system",
+        "scope": "device",
+        "title_format": "Memory Usage",
+        "y_axis_label": "Percent",
+        "y_min": 0,
+        "y_max": 100,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"metric_name": "memory_usage", "label": "Memory %", "color": "#8B5CF6",
+             "line_type": "area", "consolidation": "avg", "legend_format": "Avg: {avg} Max: {max}"},
+        ],
+    },
+    {
+        "name": "Interface Traffic",
+        "description": "Per-interface inbound and outbound traffic in bits per second",
+        "graph_type": "line",
+        "category": "traffic",
+        "scope": "interface",
+        "title_format": "Traffic - $interface",
+        "y_axis_label": "Bits/sec",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"sort_order": 0, "metric_name": "if_in_octets", "label": "Inbound",
+             "color": "#10B981", "line_type": "area", "consolidation": "avg",
+             "transform": "rate,8,*", "legend_format": "In: {avg} bps (peak {max})"},
+            {"sort_order": 1, "metric_name": "if_out_octets", "label": "Outbound",
+             "color": "#F59E0B", "line_type": "area", "consolidation": "avg",
+             "transform": "rate,8,*,negate", "legend_format": "Out: {avg} bps (peak {max})"},
+        ],
+    },
+    {
+        "name": "Interface Errors & Discards",
+        "description": "Per-interface error and discard counters",
+        "graph_type": "line",
+        "category": "traffic",
+        "scope": "interface",
+        "title_format": "Errors - $interface",
+        "y_axis_label": "Errors/sec",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": True,
+        "area_fill": False,
+        "items": [
+            {"sort_order": 0, "metric_name": "if_in_errors", "label": "In Errors",
+             "color": "#EF4444", "line_type": "line", "consolidation": "avg",
+             "transform": "rate"},
+            {"sort_order": 1, "metric_name": "if_out_errors", "label": "Out Errors",
+             "color": "#F97316", "line_type": "line", "consolidation": "avg",
+             "transform": "rate"},
+            {"sort_order": 2, "metric_name": "if_in_discards", "label": "In Discards",
+             "color": "#A855F7", "line_type": "line", "consolidation": "avg",
+             "transform": "rate"},
+            {"sort_order": 3, "metric_name": "if_out_discards", "label": "Out Discards",
+             "color": "#EC4899", "line_type": "line", "consolidation": "avg",
+             "transform": "rate"},
+        ],
+    },
+    {
+        "name": "Device Uptime",
+        "description": "Device uptime in days (gauge)",
+        "graph_type": "gauge",
+        "category": "system",
+        "scope": "device",
+        "title_format": "Uptime",
+        "y_axis_label": "Days",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": False,
+        "grid_w": 3,
+        "grid_h": 3,
+        "items": [
+            {"metric_name": "uptime", "label": "Uptime", "color": "#10B981",
+             "line_type": "line", "consolidation": "last",
+             "transform": "div,8640000", "legend_format": "{last} days"},
+        ],
+    },
+    {
+        "name": "Interface Utilization",
+        "description": "Per-interface utilization percentage",
+        "graph_type": "line",
+        "category": "traffic",
+        "scope": "interface",
+        "title_format": "Utilization - $interface",
+        "y_axis_label": "Percent",
+        "y_min": 0,
+        "y_max": 100,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"sort_order": 0, "metric_name": "if_utilization_in", "label": "In Utilization",
+             "color": "#3B82F6", "line_type": "area", "consolidation": "avg",
+             "legend_format": "Avg: {avg}% Peak: {max}%"},
+            {"sort_order": 1, "metric_name": "if_utilization_out", "label": "Out Utilization",
+             "color": "#F59E0B", "line_type": "area", "consolidation": "avg",
+             "legend_format": "Avg: {avg}% Peak: {max}%"},
+        ],
+    },
+    {
+        "name": "Ping Latency",
+        "description": "ICMP round-trip latency over time",
+        "graph_type": "line",
+        "category": "availability",
+        "scope": "device",
+        "title_format": "Ping Latency",
+        "y_axis_label": "ms",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"metric_name": "ping_rtt", "label": "RTT", "color": "#06B6D4",
+             "line_type": "area", "consolidation": "avg",
+             "legend_format": "Avg: {avg}ms Max: {max}ms"},
+        ],
+    },
+]
+
+
+async def seed_built_in_graph_templates() -> int:
+    """Create built-in graph templates if they don't already exist. Returns count created."""
+    db = await get_db()
+    try:
+        created = 0
+        for tpl_def in BUILT_IN_GRAPH_TEMPLATES:
+            cursor = await db.execute(
+                "SELECT id FROM graph_templates WHERE name = ? AND built_in = 1",
+                (tpl_def["name"],),
+            )
+            if await cursor.fetchone():
+                continue
+            items = tpl_def.pop("items", [])
+            cursor2 = await db.execute(
+                """INSERT INTO graph_templates
+                   (name, description, graph_type, category, scope, title_format,
+                    y_axis_label, y_min, y_max, stacked, area_fill, grid_w, grid_h,
+                    options_json, built_in, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', 1, 'system')""",
+                (tpl_def["name"], tpl_def.get("description", ""),
+                 tpl_def.get("graph_type", "line"), tpl_def.get("category", "system"),
+                 tpl_def.get("scope", "device"), tpl_def.get("title_format", ""),
+                 tpl_def.get("y_axis_label", ""),
+                 tpl_def.get("y_min"), tpl_def.get("y_max"),
+                 int(tpl_def.get("stacked", False)), int(tpl_def.get("area_fill", True)),
+                 tpl_def.get("grid_w", 6), tpl_def.get("grid_h", 4)),
+            )
+            await db.commit()
+            tpl_id = cursor2.lastrowid
+            for idx, item in enumerate(items):
+                await db.execute(
+                    """INSERT INTO graph_template_items
+                       (template_id, sort_order, metric_name, label, color, line_type,
+                        cdef_expression, consolidation, transform, legend_format)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (tpl_id, item.get("sort_order", idx),
+                     item.get("metric_name", ""), item.get("label", ""),
+                     item.get("color", ""), item.get("line_type", "area"),
+                     item.get("cdef_expression", ""), item.get("consolidation", "avg"),
+                     item.get("transform", ""), item.get("legend_format", "")),
+                )
+            await db.commit()
+            tpl_def["items"] = items
+            created += 1
+            _LOGGER.info("Seeded built-in graph template: %s (id=%s)", tpl_def["name"], tpl_id)
+
+        # Seed a default host template that links all device-scope built-in templates
+        cursor_ht = await db.execute(
+            "SELECT id FROM host_templates WHERE name = 'Default (All Devices)'"
+        )
+        if not await cursor_ht.fetchone():
+            cursor_ht2 = await db.execute(
+                """INSERT INTO host_templates (name, description, device_types, auto_apply, created_by)
+                   VALUES ('Default (All Devices)', 'Auto-applies system graphs to all discovered devices',
+                           '[]', 1, 'system')""",
+            )
+            await db.commit()
+            ht_id = cursor_ht2.lastrowid
+            cursor_device_tpls = await db.execute(
+                "SELECT id FROM graph_templates WHERE built_in = 1 AND scope = 'device'"
+            )
+            for row in await cursor_device_tpls.fetchall():
+                await db.execute(
+                    "INSERT OR IGNORE INTO host_template_graph_links (host_template_id, graph_template_id) VALUES (?, ?)",
+                    (ht_id, row[0] if isinstance(row, tuple) else dict(row)["id"]),
+                )
+            await db.commit()
+            _LOGGER.info("Seeded default host template (id=%s)", ht_id)
+
+        return created
     finally:
         await db.close()

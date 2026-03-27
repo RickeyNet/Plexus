@@ -147,6 +147,10 @@
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                                 <span class="nav-label">Reports</span>
                             </a>
+                            <a href="#" data-page="graph-templates" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20v-6"></path></svg>
+                                <span class="nav-label">Graphs</span>
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -1406,6 +1410,48 @@
                 </div>
             </div>
 
+
+            <!-- Graph Templates Page -->
+            <div id="page-graph-templates" class="page">
+                <div class="page-header">
+                    <h2>Graph Templates</h2>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-primary" onclick="showCreateGraphTemplateModal()">+ New Template</button>
+                    </div>
+                </div>
+                <div class="page-header" style="margin-top: 0;">
+                    <input id="graph-templates-search" class="form-input list-control-search" type="search" placeholder="Search templates...">
+                    <div class="list-controls">
+                        <select id="graph-templates-tab" class="form-select list-control-select" onchange="switchGraphTemplatesTab(this.value)">
+                            <option value="graph-templates">Graph Templates</option>
+                            <option value="host-templates">Host Templates</option>
+                            <option value="graph-trees">Graph Trees</option>
+                        </select>
+                        <select id="graph-templates-category" class="form-select list-control-select" onchange="filterGraphTemplatesCategory(this.value)">
+                            <option value="">All Categories</option>
+                            <option value="system">System</option>
+                            <option value="traffic">Traffic</option>
+                            <option value="availability">Availability</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="graph-templates-list-view">
+                    <div id="graph-templates-list"></div>
+                </div>
+                <div id="host-templates-list-view" style="display:none;">
+                    <div id="host-templates-list"></div>
+                </div>
+                <div id="graph-trees-list-view" style="display:none;">
+                    <div id="graph-trees-list"></div>
+                </div>
+                <div id="graph-templates-empty" class="empty-state" style="display:none;">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20v-6"></path>
+                    </svg>
+                    <p>No graph templates yet. Built-in templates are created on first startup.</p>
+                    <button class="btn btn-primary" onclick="showCreateGraphTemplateModal()">Create Template</button>
+                </div>
+            </div>
 
             <!-- Settings Page -->
             <div id="page-settings" class="page">

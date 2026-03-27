@@ -238,6 +238,11 @@ async def _sync_group_hosts(
             await db.update_host_status(new_id, discovered["status"])
             if model or sw_version:
                 await db.update_host_device_info(new_id, model, sw_version)
+            # Auto-apply graph templates to newly discovered host
+            try:
+                await db.apply_graph_templates_to_host(new_id)
+            except Exception:
+                pass
             added += 1
             continue
 
@@ -543,6 +548,11 @@ async def list_hosts(group_id: int):
 @router.post("/api/inventory/{group_id}/hosts", status_code=201)
 async def add_host(group_id: int, body: HostCreate):
     hid = await db.add_host(group_id, body.hostname, body.ip_address, body.device_type)
+    # Auto-apply graph templates to manually added host
+    try:
+        await db.apply_graph_templates_to_host(hid)
+    except Exception:
+        pass
     return {"id": hid}
 
 

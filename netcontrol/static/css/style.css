@@ -4298,6 +4298,32 @@ code {
     }
 }
 
+/* Interface detail split layout */
+.if-split-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    align-items: start;
+}
+.if-extra-grid {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+.if-chart-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+@media (max-width: 1100px) {
+    .if-split-grid {
+        grid-template-columns: 1fr;
+    }
+    .if-chart-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 .chart-table {
     width: 100%;
     border-collapse: collapse;
