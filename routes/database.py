@@ -4475,6 +4475,23 @@ async def get_monitoring_alerts(
         await db.close()
 
 
+async def get_monitoring_alert(alert_id: int) -> dict | None:
+    """Return a single monitoring alert by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT a.*, h.hostname, h.ip_address
+               FROM monitoring_alerts a
+               LEFT JOIN hosts h ON h.id = a.host_id
+               WHERE a.id = ?""",
+            (alert_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
 async def acknowledge_monitoring_alert(
     alert_id: int, acknowledged_by: str,
 ) -> None:
@@ -5758,6 +5775,23 @@ async def get_annotations_in_range(
         results = []
         cats = categories or ["deployment", "config", "alert"]
 
+        # When host_id is provided, find deployment IDs that involve this host
+        # so we can filter deployment annotations to only relevant ones.
+        host_deployment_ids: set[int] | None = None
+        if host_id is not None and "deployment" in cats:
+            dep_cursor = await db.execute(
+                "SELECT id, host_ids FROM deployments",
+            )
+            host_deployment_ids = set()
+            for dep_row in await dep_cursor.fetchall():
+                dep = dict(dep_row)
+                try:
+                    ids = json.loads(dep.get("host_ids") or "[]")
+                    if host_id in ids:
+                        host_deployment_ids.add(dep["id"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
         # Audit events
         if any(c in cats for c in ["deployment", "config", "alert"]):
             where = ["1=1"]
@@ -5787,6 +5821,24 @@ async def get_annotations_in_range(
                 cat = "deployment" if "deploy" in (r.get("category") or "") else \
                       "config" if "config" in (r.get("category") or "") else \
                       "alert" if "alert" in (r.get("category") or "") else "other"
+
+                # Filter by host_id when provided
+                if host_id is not None:
+                    detail = r.get("detail", "")
+                    if cat == "deployment" and host_deployment_ids is not None:
+                        # Check if this event references a deployment that involves the host
+                        dep_id_match = re.search(r"id=(\d+)", detail)
+                        if dep_id_match:
+                            dep_id = int(dep_id_match.group(1))
+                            if dep_id not in host_deployment_ids:
+                                continue
+                        else:
+                            continue
+                    elif cat in ("config", "alert"):
+                        # Check if detail references this host_id
+                        if f"host_id={host_id}" not in detail and f"host={host_id}" not in detail:
+                            continue
+
                 results.append({
                     "timestamp": r.get("timestamp"),
                     "title": r.get("action", ""),
@@ -5796,6 +5848,109 @@ async def get_annotations_in_range(
                 })
 
         return results
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Correlation Queries
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def get_config_drift_events_in_range(
+    host_ids: list[int],
+    start: str,
+    end: str,
+) -> list[dict]:
+    """Return config drift events for the given hosts within a time range."""
+    if not host_ids:
+        return []
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" for _ in host_ids)
+        cursor = await db.execute(
+            f"""SELECT d.*, h.hostname, h.ip_address
+                FROM config_drift_events d
+                LEFT JOIN hosts h ON h.id = d.host_id
+                WHERE d.host_id IN ({placeholders})
+                  AND d.detected_at >= ? AND d.detected_at <= ?
+                ORDER BY d.detected_at DESC LIMIT 200""",
+            (*host_ids, start, end),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_monitoring_alerts_in_range(
+    host_ids: list[int],
+    start: str,
+    end: str,
+) -> list[dict]:
+    """Return monitoring alerts for the given hosts within a time range."""
+    if not host_ids:
+        return []
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" for _ in host_ids)
+        cursor = await db.execute(
+            f"""SELECT a.*, h.hostname, h.ip_address
+                FROM monitoring_alerts a
+                LEFT JOIN hosts h ON h.id = a.host_id
+                WHERE a.host_id IN ({placeholders})
+                  AND a.created_at >= ? AND a.created_at <= ?
+                ORDER BY a.created_at DESC LIMIT 200""",
+            (*host_ids, start, end),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_deployments_for_host_in_range(
+    host_id: int,
+    start: str,
+    end: str,
+) -> list[dict]:
+    """Return deployments that include the given host within a time range."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM deployments
+               WHERE started_at >= ? AND started_at <= ?
+               ORDER BY started_at DESC LIMIT 50""",
+            (start, end),
+        )
+        results = []
+        for row in await cursor.fetchall():
+            dep = dict(row)
+            try:
+                ids = json.loads(dep.get("host_ids") or "[]")
+                if host_id in ids:
+                    results.append(dep)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return results
+    finally:
+        await db.close()
+
+
+async def get_audit_events_for_deployment(
+    deployment_id: int,
+    start: str,
+    end: str,
+) -> list[dict]:
+    """Return audit events related to a deployment within a time range."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM audit_events
+               WHERE timestamp >= ? AND timestamp <= ?
+                 AND detail LIKE ?
+               ORDER BY timestamp DESC LIMIT 200""",
+            (start, end, f"%id={deployment_id}%"),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
 

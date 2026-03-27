@@ -32,10 +32,11 @@ const NAV_FEATURE_MAP = {
     deployments: 'deployments',
     monitoring: 'monitoring',
     sla: 'monitoring',
+    'capacity-planning': 'monitoring',
 };
 
 const THEME_KEY = 'plexus-theme';
-const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light', 'void'];
+const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light', 'void', 'coral'];
 const DEFAULT_THEME = 'forest';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
 const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'config-drift', 'config-backups'];
@@ -596,6 +597,19 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
 
         // Syslog tab
         renderDeviceSyslogTab(hostId);
+
+        // Overlay deployment/config/alert annotations on metric charts
+        try {
+            const endISO = new Date().toISOString();
+            const startISO = new Date(Date.now() - _rangeToMs(range)).toISOString();
+            const annRes = await api.getAnnotations({ hostId, start: startISO, end: endISO, categories: 'deployment,config,alert' });
+            const events = annRes?.annotations || [];
+            if (events.length) {
+                for (const chartId of ['device-chart-cpu', 'device-chart-memory', 'device-chart-response', 'device-chart-pktloss']) {
+                    PlexusChart.addAnnotations(chartId, events);
+                }
+            }
+        } catch { /* annotations are non-critical */ }
     } catch (e) {
         console.error('Device detail load error:', e);
         showError(`Failed to load device detail: ${e.message}`);
@@ -606,6 +620,12 @@ function refreshDeviceDetail() {
     loadDeviceDetail({ force: true });
 }
 window.refreshDeviceDetail = refreshDeviceDetail;
+
+function _rangeToMs(range) {
+    const units = { h: 3600000, d: 86400000 };
+    const m = /^(\d+)([hd])$/.exec(range);
+    return m ? parseInt(m[1]) * units[m[2]] : 86400000;
+}
 
 function extractMetricSeries(result, name) {
     if (result.status !== 'fulfilled') return [{ name, data: [] }];
@@ -685,13 +705,14 @@ function renderDeviceAlertHistory(alerts) {
     const sevClass = s => s === 'critical' ? 'danger' : s === 'warning' ? 'warning' : 'info';
     container.innerHTML = `
         <table class="chart-table">
-            <thead><tr><th>Time</th><th>Severity</th><th>Metric</th><th>Message</th><th>Status</th></tr></thead>
+            <thead><tr><th>Time</th><th>Severity</th><th>Metric</th><th>Message</th><th>Status</th><th></th></tr></thead>
             <tbody>${alerts.map(a => `<tr>
                 <td>${new Date(a.created_at).toLocaleString()}</td>
                 <td><span class="badge badge-${sevClass(a.severity)}">${escapeHtml(a.severity)}</span></td>
                 <td>${escapeHtml(a.metric || '')}</td>
                 <td>${escapeHtml(a.message || '')}</td>
                 <td>${a.acknowledged ? 'Ack' : 'Open'}</td>
+                <td><button class="btn btn-sm btn-secondary" onclick="showAlertCorrelation(${a.id})" title="View correlated events" style="padding:2px 6px; font-size:0.75em;">Correlate</button></td>
             </tr>`).join('')}</tbody>
         </table>`;
 }
@@ -886,6 +907,16 @@ async function renderAllDashboardPanels(panels) {
                     data: pts.map(d => ({ time: d.sampled_at || d.period_start, value: d.val_avg ?? d.value ?? 0 })),
                 }));
                 PlexusChart.timeSeries(chartId, series.length ? series : [{ name: metric, data: [] }], { area: true });
+
+                // Overlay annotations on line charts
+                try {
+                    const endISO = new Date().toISOString();
+                    const startISO = new Date(Date.now() - _rangeToMs(range)).toISOString();
+                    const hostParam = host !== '*' ? host : undefined;
+                    const annRes = await api.getAnnotations({ hostId: hostParam, start: startISO, end: endISO, categories: 'deployment,config,alert' });
+                    const events = annRes?.annotations || [];
+                    if (events.length) PlexusChart.addAnnotations(chartId, events);
+                } catch { /* annotations are non-critical */ }
             }
         } catch (e) {
             const container = document.getElementById(chartId);
@@ -1678,6 +1709,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'availability':
                 await loadAvailability({ preserveContent });
+                break;
+            case 'capacity-planning':
+                await loadCapacityPlanning();
                 break;
             case 'syslog':
                 await loadSyslog({ preserveContent });
@@ -2742,19 +2776,142 @@ async function discoverTopology() {
     btn.disabled = true;
     btn.textContent = 'Discovering...';
 
-    try {
-        let result;
-        if (groupFilter) {
-            result = await api.discoverTopologyForGroup(groupFilter);
-        } else {
-            result = await api.discoverTopologyAll();
+    // Show live progress modal
+    showModal('Neighbor Discovery', `
+        <div style="padding: 1.5rem 1rem;">
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                <div class="discovery-spinner" id="disco-spinner"></div>
+                <div>
+                    <div style="font-size: 1rem; font-weight: 600;" id="disco-title">Initializing discovery...</div>
+                    <div style="color: var(--text-muted); font-size: 0.85rem;" id="disco-subtitle">
+                        Preparing to scan hosts via SNMP
+                    </div>
+                </div>
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.35rem;">
+                    <span><span id="disco-scanned">0</span> / <span id="disco-total">?</span> hosts scanned</span>
+                    <span><span id="disco-links" style="color: var(--primary-light); font-weight: 600;">0</span> links found</span>
+                </div>
+                <div style="height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden;">
+                    <div id="disco-progress-bar" style="height: 100%; width: 0%; background: var(--primary); border-radius: 3px; transition: width 0.15s ease;"></div>
+                </div>
+            </div>
+            <div style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.5rem;">
+                Elapsed: <span id="disco-elapsed">0s</span> &middot; <span id="disco-step">Waiting for stream...</span>
+            </div>
+            <div id="disco-feed" style="max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.4rem 0.6rem; font-size: 0.8rem; font-family: monospace; background: var(--bg-secondary);"></div>
+        </div>
+    `);
+
+    // Elapsed timer
+    const startTime = Date.now();
+    const elapsedInterval = setInterval(() => {
+        const el = document.getElementById('disco-elapsed');
+        if (el) {
+            const sec = Math.floor((Date.now() - startTime) / 1000);
+            el.textContent = sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${sec % 60}s`;
         }
-        const msg = `Discovered ${result.links_discovered} links from ${result.hosts_scanned} hosts` +
-            (result.errors > 0 ? ` (${result.errors} errors)` : '');
-        showToast(msg, result.errors > 0 ? 'warning' : 'success');
+    }, 1000);
+
+    let totalLinks = 0;
+    let finalResult = null;
+
+    function appendFeed(text, color) {
+        const feedEl = document.getElementById('disco-feed');
+        if (!feedEl) return;
+        const entry = document.createElement('div');
+        entry.style.cssText = `padding: 0.15rem 0; border-bottom: 1px solid var(--border); color: ${color || 'var(--text-primary)'};`;
+        entry.textContent = text;
+        feedEl.appendChild(entry);
+        feedEl.scrollTop = feedEl.scrollHeight;
+    }
+
+    try {
+        await api.discoverTopologyStream(groupFilter || null, (event) => {
+            const titleEl = document.getElementById('disco-title');
+            const subtitleEl = document.getElementById('disco-subtitle');
+            const stepEl = document.getElementById('disco-step');
+            const scannedEl = document.getElementById('disco-scanned');
+            const totalEl = document.getElementById('disco-total');
+            const barEl = document.getElementById('disco-progress-bar');
+            const linksEl = document.getElementById('disco-links');
+
+            if (event.type === 'start') {
+                if (totalEl) totalEl.textContent = event.total_hosts;
+                if (titleEl) titleEl.textContent = `Discovering neighbors across ${event.total_groups} group(s)...`;
+                if (subtitleEl) subtitleEl.textContent = `${event.total_hosts} host(s) to scan`;
+                appendFeed(`Starting discovery: ${event.total_hosts} hosts in ${event.total_groups} group(s)`, 'var(--text-muted)');
+
+            } else if (event.type === 'group_start') {
+                if (stepEl) stepEl.textContent = `Scanning group: ${event.group}`;
+                appendFeed(`\u25B6 Group "${event.group}" \u2014 ${event.host_count} host(s)`, 'var(--primary-light)');
+
+            } else if (event.type === 'host_walked') {
+                if (scannedEl) scannedEl.textContent = event.scanned;
+                if (barEl && event.total_hosts) barEl.style.width = `${Math.round((event.scanned / event.total_hosts) * 100)}%`;
+                if (stepEl) stepEl.textContent = `Walked ${event.hostname}`;
+                totalLinks += event.neighbors;
+                if (linksEl) linksEl.textContent = totalLinks;
+
+                if (event.ok) {
+                    const color = event.neighbors > 0 ? 'var(--success-color, #22c55e)' : 'var(--text-muted)';
+                    const icon = event.neighbors > 0 ? '\u2713' : '\u2013';
+                    appendFeed(`  ${icon} ${event.hostname} (${event.ip}) \u2014 ${event.neighbors} neighbor(s)`, color);
+                } else {
+                    appendFeed(`  \u2717 ${event.hostname} (${event.ip}) \u2014 failed`, 'var(--danger-color, #ef4444)');
+                }
+
+            } else if (event.type === 'db_write_start') {
+                if (stepEl) stepEl.textContent = `Saving results for ${event.group}...`;
+                appendFeed(`  Saving topology data for "${event.group}"...`, 'var(--text-muted)');
+
+            } else if (event.type === 'group_done') {
+                appendFeed(`\u2714 Group "${event.group}" complete \u2014 ${event.links} link(s)`, 'var(--success-color, #22c55e)');
+
+            } else if (event.type === 'resolving') {
+                if (stepEl) stepEl.textContent = 'Resolving neighbor identities...';
+                appendFeed('Resolving neighbor host IDs against inventory...', 'var(--text-muted)');
+
+            } else if (event.type === 'done') {
+                finalResult = event;
+
+            } else if (event.type === 'error') {
+                appendFeed(`Error: ${event.message}`, 'var(--danger-color, #ef4444)');
+            }
+        });
+
+        clearInterval(elapsedInterval);
+
+        // Update modal to show completion
+        const spinnerEl = document.getElementById('disco-spinner');
+        const titleEl = document.getElementById('disco-title');
+        const stepEl = document.getElementById('disco-step');
+        const barEl = document.getElementById('disco-progress-bar');
+
+        if (spinnerEl) spinnerEl.style.display = 'none';
+        if (barEl) barEl.style.width = '100%';
+
+        if (finalResult) {
+            if (titleEl) titleEl.textContent = 'Discovery Complete';
+            if (stepEl) stepEl.textContent = `${finalResult.links_discovered} links from ${finalResult.hosts_scanned} hosts`;
+            appendFeed(`\u2501\u2501 Done: ${finalResult.links_discovered} links, ${finalResult.hosts_scanned} hosts scanned, ${finalResult.errors} error(s)`, 'var(--primary-light)');
+
+            const msg = `Discovered ${finalResult.links_discovered} links from ${finalResult.hosts_scanned} hosts` +
+                (finalResult.errors > 0 ? ` (${finalResult.errors} errors)` : '');
+            showToast(msg, finalResult.errors > 0 ? 'warning' : 'success');
+        } else {
+            if (titleEl) titleEl.textContent = 'Discovery Finished';
+            if (stepEl) stepEl.textContent = 'No results received';
+        }
+
         invalidatePageCache('topology');
         await loadTopology({ preserveContent: true });
     } catch (error) {
+        clearInterval(elapsedInterval);
+        const spinnerEl = document.getElementById('disco-spinner');
+        if (spinnerEl) spinnerEl.style.display = 'none';
+        appendFeed(`Error: ${error.message}`, 'var(--danger-color, #ef4444)');
         showError('Discovery failed: ' + error.message);
     } finally {
         btn.disabled = false;
@@ -3241,12 +3398,6 @@ async function loadDashboard(_options = {}) {
         animateRing('ring-playbooks', playbooks, ringMax);
         animateRing('ring-jobs', jobs, ringMax);
 
-        // Render recent jobs
-        renderRecentJobs(data.recent_jobs || []);
-
-        // Render activity timeline
-        renderActivityTimeline(data.recent_jobs || []);
-
         // Render groups overview
         renderGroupsOverview(data.groups || []);
     } catch (error) {
@@ -3282,28 +3433,6 @@ function skeletonCards(count = 3) {
     return Array.from({length: count}, () =>
         '<div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>'
     ).join('');
-}
-
-function renderRecentJobs(jobs) {
-    const container = document.getElementById('recent-jobs');
-    if (!jobs.length) {
-        container.innerHTML = emptyStateHTML('No recent jobs', 'jobs');
-        return;
-    }
-
-    container.innerHTML = jobs.map((job, i) => `
-        <div class="job-item animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
-            <div class="job-info">
-                <div class="job-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
-                <div class="job-meta">
-                    Group: ${escapeHtml(job.group_name || 'Unknown')} •
-                    ${formatDate(job.started_at)} •
-                    <span class="status-badge status-${job.status}">${job.status}</span>
-                </div>
-            </div>
-            <button class="btn btn-sm btn-secondary" onclick="viewJobOutput(${job.id})">View Output</button>
-        </div>
-    `).join('');
 }
 
 function renderGroupsOverview(groups) {
@@ -7236,35 +7365,6 @@ function animateRing(elementId, value, maxValue) {
 // Dashboard Activity Timeline
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function renderActivityTimeline(jobs) {
-    const container = document.getElementById('activity-timeline');
-    if (!container) return;
-
-    if (!jobs || !jobs.length) {
-        container.innerHTML = emptyStateHTML('No recent activity', 'jobs');
-        return;
-    }
-
-    container.innerHTML = jobs.map((job, i) => {
-        const statusClass = job.status === 'running' ? 'timeline-running'
-            : job.status === 'failed' ? 'timeline-failure'
-            : job.status === 'completed' ? 'timeline-success'
-            : '';
-        const pulseDot = job.status === 'running' ? '<span class="pulse-dot"></span>' : '';
-        return `
-            <div class="timeline-item ${statusClass} animate-in" style="animation-delay: ${i * 0.08}s">
-                <div class="timeline-title">${escapeHtml(job.playbook_name || 'Unknown')}</div>
-                <div class="timeline-meta">
-                    ${pulseDot}
-                    <span class="status-badge status-${job.status}">${job.status}</span>
-                    <span>${escapeHtml(job.group_name || '')}</span>
-                </div>
-                <div class="timeline-time">${formatDate(job.started_at)}</div>
-            </div>
-        `;
-    }).join('');
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Config Drift Detection
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -10678,6 +10778,40 @@ function showDeploymentJobStream(jobId, deploymentId, title) {
     ws.onclose = () => { if (statusEl && statusEl.textContent === 'Connected — streaming output...') statusEl.textContent = 'Disconnected'; };
 }
 
+function renderVerificationMetrics(verifyChecks) {
+    const healthChecks = verifyChecks.filter(c => c.check_type === 'metric_health');
+    if (!healthChecks.length) return '';
+    let rows = '';
+    for (const cp of healthChecks) {
+        let result;
+        try { result = JSON.parse(cp.result || '{}'); } catch { continue; }
+        const details = result.details || [];
+        for (const m of details) {
+            const preStr = m.pre != null ? m.pre.toFixed(1) : 'N/A';
+            const postStr = m.post != null ? m.post.toFixed(1) : 'N/A';
+            const deltaStr = m.delta != null ? (m.delta >= 0 ? `+${m.delta.toFixed(1)}` : m.delta.toFixed(1)) : '-';
+            const color = m.concern ? 'var(--danger)' : 'var(--success)';
+            rows += `<tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 8px;">${escapeHtml(cp.hostname || cp.ip_address || '-')}</td>
+                <td style="padding:4px 8px;">${escapeHtml(m.metric)}</td>
+                <td style="padding:4px 8px;">${preStr}</td>
+                <td style="padding:4px 8px;">${postStr}</td>
+                <td style="padding:4px 8px; color:${color}; font-weight:600;">${deltaStr}</td>
+                <td style="padding:4px 8px;">${m.concern ? '<span style="color:var(--danger);">CONCERN</span>' : '<span style="color:var(--success);">OK</span>'}</td>
+            </tr>`;
+        }
+    }
+    if (!rows) return '';
+    return `<table style="width:100%; font-size:0.85em; border-collapse:collapse; margin-top:0.5rem;">
+        <thead><tr style="text-align:left; border-bottom:1px solid var(--border);">
+            <th style="padding:4px 8px;">Host</th><th style="padding:4px 8px;">Metric</th>
+            <th style="padding:4px 8px;">Pre</th><th style="padding:4px 8px;">Post</th>
+            <th style="padding:4px 8px;">Delta</th><th style="padding:4px 8px;">Status</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`;
+}
+
 async function showDeploymentDetail(deploymentId) {
     let dep;
     try { dep = await api.getDeployment(deploymentId); } catch (e) { showError(e.message); return; }
@@ -10686,6 +10820,7 @@ async function showDeploymentDetail(deploymentId) {
         planning: 'text-muted', 'pre-check': 'warning', executing: 'warning',
         'post-check': 'warning', completed: 'success', failed: 'danger',
         'rolled-back': 'warning', 'rolling-back': 'warning',
+        verifying: 'warning', verified: 'success', 'verification_failed': 'danger',
     };
     const statusColor = statusColors[dep.status] || 'text-muted';
     const created = dep.created_at ? new Date(dep.created_at + 'Z').toLocaleString() : '-';
@@ -10699,6 +10834,7 @@ async function showDeploymentDetail(deploymentId) {
     const preChecks = checkpoints.filter(c => c.phase === 'pre');
     const postChecks = checkpoints.filter(c => c.phase === 'post');
     const rollbackChecks = checkpoints.filter(c => c.phase === 'rollback');
+    const verifyChecks = checkpoints.filter(c => c.phase === 'verify');
 
     function renderCheckpointTable(checks, label) {
         if (!checks.length) return `<div style="color:var(--text-muted); font-size:0.85em;">No ${label} checkpoints.</div>`;
@@ -10727,8 +10863,12 @@ async function showDeploymentDetail(deploymentId) {
     if (dep.status === 'planning' || dep.status === 'failed') {
         actions += `<button class="btn btn-primary" onclick="closeModal(); executeDeploymentAction(${dep.id})">Execute</button> `;
     }
-    if (dep.status === 'completed' || dep.status === 'failed') {
+    if (dep.status === 'completed' || dep.status === 'failed' || dep.status === 'verified' || dep.status === 'verification_failed') {
         actions += `<button class="btn btn-secondary" style="border:1px solid var(--warning); color:var(--warning);" onclick="closeModal(); rollbackDeploymentAction(${dep.id})">Rollback</button> `;
+    }
+    // Correlation view — available once deployment has started
+    if (dep.started_at) {
+        actions += `<button class="btn btn-secondary" onclick="closeAllModals(); showDeploymentCorrelation(${dep.id})">Correlation</button> `;
     }
 
     showModal(`Deployment #${dep.id} — ${escapeHtml(dep.name)}`, `
@@ -10764,6 +10904,11 @@ async function showDeploymentDetail(deploymentId) {
                 <h4 style="margin:0 0 0.5rem;">Rollback Checkpoints</h4>
                 ${renderCheckpointTable(rollbackChecks, 'rollback')}
             </div>` : ''}
+            ${verifyChecks.length > 0 ? `<div>
+                <h4 style="margin:0 0 0.5rem;">Verification</h4>
+                ${renderCheckpointTable(verifyChecks, 'verification')}
+                ${renderVerificationMetrics(verifyChecks)}
+            </div>` : ''}
 
             <div style="display:flex; gap:0.75rem; font-size:0.85em; color:var(--text-muted);">
                 <span>Pre-snapshots: ${preSnaps.length}</span>
@@ -10776,6 +10921,177 @@ async function showDeploymentDetail(deploymentId) {
     initCopyableBlocks();
 }
 window.showDeploymentDetail = showDeploymentDetail;
+
+async function showDeploymentCorrelation(deploymentId) {
+    let data;
+    try { data = await api.getDeploymentCorrelation(deploymentId); } catch (e) { showError(e.message); return; }
+    const dep = data.deployment || {};
+    const timeWindow = data.time_window || {};
+
+    // Build a unified timeline of events sorted chronologically
+    const events = [];
+
+    // Deployment phases from checkpoints
+    for (const cp of (data.checkpoints || [])) {
+        events.push({
+            time: cp.executed_at || cp.created_at,
+            type: 'deployment',
+            icon: cp.status === 'passed' ? '\u2713' : cp.status === 'failed' ? '\u2717' : '\u25CB',
+            title: `${cp.phase}: ${cp.check_type}`,
+            detail: `${cp.hostname || ''} — ${cp.status}`,
+            color: cp.status === 'passed' ? 'var(--success)' : cp.status === 'failed' ? 'var(--danger)' : 'var(--text-muted)',
+        });
+    }
+
+    // Drift events
+    for (const drift of (data.drift_events || [])) {
+        events.push({
+            time: drift.detected_at,
+            type: 'drift',
+            icon: '\u26A0',
+            title: 'Config Drift Detected',
+            detail: `${drift.hostname || 'Host #' + drift.host_id} — +${drift.diff_lines_added || 0}/-${drift.diff_lines_removed || 0} lines`,
+            color: 'var(--warning)',
+        });
+    }
+
+    // Alerts
+    for (const alert of (data.alerts || [])) {
+        events.push({
+            time: alert.created_at,
+            type: 'alert',
+            icon: '\u25CF',
+            title: `Alert: ${alert.metric || alert.alert_type || 'unknown'}`,
+            detail: `${alert.hostname || ''} — ${alert.message || ''}`.trim(),
+            color: alert.severity === 'critical' ? 'var(--danger)' : 'var(--warning)',
+        });
+    }
+
+    // Audit trail
+    for (const ae of (data.audit_trail || [])) {
+        events.push({
+            time: ae.timestamp,
+            type: 'audit',
+            icon: '\u25B8',
+            title: ae.action,
+            detail: ae.detail || '',
+            color: 'var(--text-muted)',
+        });
+    }
+
+    events.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+
+    const timelineHTML = events.length ? events.map(e => {
+        const ts = e.time ? new Date(e.time + (e.time.includes('Z') || e.time.includes('+') ? '' : 'Z')).toLocaleTimeString() : '';
+        return `<div style="display:flex; gap:0.75rem; padding:0.35rem 0; border-bottom:1px solid var(--border); font-size:0.85em;">
+            <span style="min-width:60px; color:var(--text-muted);">${ts}</span>
+            <span style="color:${e.color}; min-width:20px; text-align:center;">${e.icon}</span>
+            <div>
+                <div style="font-weight:600;">${escapeHtml(e.title)}</div>
+                <div style="color:var(--text-muted); font-size:0.9em;">${escapeHtml(e.detail)}</div>
+            </div>
+        </div>`;
+    }).join('') : '<div style="color:var(--text-muted); padding:1rem;">No correlated events found in the time window.</div>';
+
+    const windowStart = timeWindow.start ? new Date(timeWindow.start + 'Z').toLocaleString() : '?';
+    const windowEnd = timeWindow.end ? new Date(timeWindow.end + 'Z').toLocaleString() : '?';
+
+    showModal(`Correlation — Deployment #${dep.id}`, `
+        <div style="display:flex; flex-direction:column; gap:1rem;">
+            <div style="font-size:0.85em; color:var(--text-muted);">
+                Time window: ${windowStart} — ${windowEnd}
+                <span style="margin-left:1rem;">Events: ${events.length}</span>
+            </div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; font-size:0.8em;">
+                <span style="color:#3b82f6;">\u25CF Deployment</span>
+                <span style="color:var(--warning);">\u25CF Drift</span>
+                <span style="color:var(--danger);">\u25CF Alert</span>
+                <span style="color:var(--text-muted);">\u25CF Audit</span>
+            </div>
+            <div style="max-height:400px; overflow-y:auto; border:1px solid var(--border); border-radius:0.5rem; padding:0.5rem;">
+                ${timelineHTML}
+            </div>
+            <div id="correlation-chart" style="height:200px;"></div>
+        </div>
+    `);
+
+    // Render a mini metric chart for affected hosts during the window
+    try {
+        const hostIds = JSON.parse(dep.host_ids || '[]');
+        if (hostIds.length) {
+            const cpuData = await api.queryMetrics('cpu_percent', hostIds.join(','), '24h');
+            const series = [];
+            const byHost = {};
+            for (const d of (cpuData?.data || [])) {
+                const key = d.hostname || `host-${d.host_id}`;
+                if (!byHost[key]) byHost[key] = [];
+                byHost[key].push(d);
+            }
+            for (const [name, pts] of Object.entries(byHost)) {
+                series.push({ name, data: pts.map(d => ({ time: d.sampled_at || d.period_start, value: d.val_avg ?? d.value ?? 0 })) });
+            }
+            if (series.length) {
+                PlexusChart.timeSeries('correlation-chart', series, { area: true, yAxisName: 'CPU %', yMin: 0, yMax: 100 });
+                // Add deployment annotations
+                const depAnnotations = events
+                    .filter(e => e.type === 'deployment' || e.type === 'alert')
+                    .map(e => ({ timestamp: e.time, title: e.title, category: e.type === 'alert' ? 'alert' : 'deployment' }));
+                if (depAnnotations.length) PlexusChart.addAnnotations('correlation-chart', depAnnotations);
+            }
+        }
+    } catch { /* chart is non-critical */ }
+}
+window.showDeploymentCorrelation = showDeploymentCorrelation;
+
+async function showAlertCorrelation(alertId) {
+    let data;
+    try { data = await api.getAlertCorrelation(alertId); } catch (e) { showError(e.message); return; }
+    const alert = data.alert || {};
+
+    const deploymentRows = (data.related_deployments || []).map(dep =>
+        `<div style="display:flex; justify-content:space-between; align-items:center; padding:0.4rem 0; border-bottom:1px solid var(--border);">
+            <div>
+                <div style="font-weight:600;">${escapeHtml(dep.name || `Deployment #${dep.id}`)}</div>
+                <div style="font-size:0.85em; color:var(--text-muted);">
+                    ${dep.status} — ${dep.started_at ? new Date(dep.started_at + 'Z').toLocaleString() : ''}
+                </div>
+            </div>
+            <button class="btn btn-sm btn-secondary" onclick="closeAllModals(); showDeploymentCorrelation(${dep.id})">View Correlation</button>
+        </div>`
+    ).join('') || '<div style="color:var(--text-muted);">No related deployments found.</div>';
+
+    const driftRows = (data.related_drift_events || []).map(drift =>
+        `<div style="padding:0.4rem 0; border-bottom:1px solid var(--border);">
+            <div style="font-weight:600;">${escapeHtml(drift.hostname || `Host #${drift.host_id}`)} — Config Drift</div>
+            <div style="font-size:0.85em; color:var(--text-muted);">
+                +${drift.diff_lines_added || 0}/-${drift.diff_lines_removed || 0} lines — ${drift.detected_at ? new Date(drift.detected_at + 'Z').toLocaleString() : ''}
+            </div>
+        </div>`
+    ).join('') || '<div style="color:var(--text-muted);">No related drift events found.</div>';
+
+    showModal(`Alert Correlation — ${escapeHtml(alert.metric || alert.alert_type || 'Alert')}`, `
+        <div style="display:flex; flex-direction:column; gap:1rem;">
+            <div class="card" style="padding:1rem;">
+                <div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.9em;">
+                    <span><strong>Host:</strong> ${escapeHtml(alert.hostname || '')}</span>
+                    <span><strong>Severity:</strong> <span style="color:${alert.severity === 'critical' ? 'var(--danger)' : 'var(--warning)'};">${escapeHtml(alert.severity || 'unknown')}</span></span>
+                    <span><strong>Value:</strong> ${alert.value != null ? alert.value : '-'}</span>
+                    <span><strong>Time:</strong> ${alert.created_at ? new Date(alert.created_at + 'Z').toLocaleString() : '-'}</span>
+                </div>
+                ${alert.message ? `<div style="margin-top:0.5rem; color:var(--text-muted); font-size:0.85em;">${escapeHtml(alert.message)}</div>` : ''}
+            </div>
+            <div>
+                <h4 style="margin:0 0 0.5rem;">Possibly Related Deployments (30 min window)</h4>
+                ${deploymentRows}
+            </div>
+            <div>
+                <h4 style="margin:0 0 0.5rem;">Related Config Drift</h4>
+                ${driftRows}
+            </div>
+        </div>
+    `);
+}
+window.showAlertCorrelation = showAlertCorrelation;
 
 async function confirmDeleteDeployment(deploymentId) {
     if (!await showConfirm({ title: 'Delete Deployment', message: 'Delete this deployment and all its checkpoints/snapshots?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
@@ -10797,6 +11113,140 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 200));
     }
 });
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Capacity Planning Page
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadCapacityPlanning() {
+    const metric = document.getElementById('cap-plan-metric')?.value || 'cpu_percent';
+    const range = document.getElementById('cap-plan-range')?.value || '90d';
+    const groupFilter = document.getElementById('cap-plan-group')?.value || '';
+    const chartEl = document.getElementById('cap-plan-chart-main');
+    const thresholdEl = document.getElementById('cap-plan-thresholds');
+    const emptyEl = document.getElementById('cap-plan-empty');
+
+    // Populate group filter on first load
+    const groupSelect = document.getElementById('cap-plan-group');
+    if (groupSelect && groupSelect.options.length <= 1) {
+        try {
+            const inv = await api.getInventoryGroups(false);
+            const groups = inv?.groups || inv || [];
+            groups.forEach(g => {
+                const opt = document.createElement('option');
+                opt.value = g.id;
+                opt.textContent = g.name;
+                groupSelect.appendChild(opt);
+            });
+        } catch { /* ignore */ }
+    }
+
+    try {
+        const data = await api.getCapacityPlanning({
+            metric, range, group: groupFilter || undefined, projectionDays: 30,
+        });
+
+        if (!data.count) {
+            if (chartEl) chartEl.style.display = 'none';
+            if (thresholdEl) thresholdEl.innerHTML = '';
+            if (emptyEl) emptyEl.style.display = '';
+            return;
+        }
+        if (emptyEl) emptyEl.style.display = 'none';
+        if (chartEl) chartEl.style.display = '';
+
+        // Build chart series: historical data per host + projection
+        const byHost = {};
+        for (const d of (data.data || [])) {
+            const key = d.hostname || `host-${d.host_id}`;
+            if (!byHost[key]) byHost[key] = [];
+            byHost[key].push(d);
+        }
+
+        const series = [];
+        for (const [hostname, pts] of Object.entries(byHost)) {
+            series.push({
+                name: hostname,
+                data: pts.map(d => ({
+                    time: d.period_start,
+                    value: d.val_avg ?? d.value ?? 0,
+                })),
+            });
+        }
+
+        // Add projection lines (dashed) for each host
+        for (const hostResult of (data.per_host || [])) {
+            if (hostResult.projection && hostResult.projection.length) {
+                series.push({
+                    name: `${hostResult.hostname} (proj.)`,
+                    data: hostResult.projection.map(p => ({ time: p.date, value: p.value })),
+                    lineStyle: { type: 'dashed', width: 1.5 },
+                    itemStyle: { opacity: 0 },
+                });
+            }
+        }
+
+        const isPercent = metric.endsWith('_percent') || metric.endsWith('_pct');
+        const yOpts = isPercent ? { yAxisName: '%', yMin: 0, yMax: 100 } : { yAxisName: '' };
+        PlexusChart.timeSeries('cap-plan-chart-main', series.length ? series : [{ name: metric, data: [] }], { area: false, ...yOpts });
+
+        // Add threshold markLine
+        const threshold = data.threshold || 90;
+        if (isPercent) {
+            const chart = PlexusChart.instances.get('cap-plan-chart-main');
+            if (chart) {
+                const opt = chart.getOption();
+                if (opt.series?.length) {
+                    opt.series[0].markLine = opt.series[0].markLine || { silent: true, symbol: 'none', data: [] };
+                    opt.series[0].markLine.data.push({
+                        yAxis: threshold,
+                        label: { formatter: `Threshold ${threshold}%`, position: 'insideEndTop', fontSize: 10, color: '#ef4444' },
+                        lineStyle: { color: '#ef4444', type: 'dashed', width: 1.5 },
+                    });
+                    chart.setOption(opt);
+                }
+            }
+        }
+
+        // Render threshold ETA table
+        if (thresholdEl) {
+            const hostResults = data.per_host || [];
+            const hasETA = hostResults.some(h => h.threshold_eta);
+            if (!hostResults.length) {
+                thresholdEl.innerHTML = '<p class="text-muted">No per-host data available.</p>';
+            } else {
+                thresholdEl.innerHTML = `
+                    <table class="chart-table">
+                        <thead><tr>
+                            <th>Host</th>
+                            <th>Current (avg)</th>
+                            <th>Trend (per day)</th>
+                            <th>Threshold (${threshold}${isPercent ? '%' : ''})</th>
+                            <th>Days Until</th>
+                        </tr></thead>
+                        <tbody>${hostResults.map(h => {
+                            const current = h.threshold_eta?.current_value ?? (h.trend ? (h.trend.slope * (data.data?.length || 90) + h.trend.intercept).toFixed(1) : 'N/A');
+                            const slopeStr = h.trend ? (h.trend.slope >= 0 ? '+' : '') + h.trend.slope.toFixed(4) : 'N/A';
+                            const etaStr = h.threshold_eta ? `${h.threshold_eta.days_until}d (${h.threshold_eta.date})` : h.trend && h.trend.slope <= 0 ? 'Never (declining)' : 'N/A';
+                            const etaColor = h.threshold_eta && h.threshold_eta.days_until < 30 ? 'var(--danger)' :
+                                             h.threshold_eta && h.threshold_eta.days_until < 90 ? 'var(--warning)' : 'var(--success)';
+                            return `<tr>
+                                <td>${escapeHtml(h.hostname)}</td>
+                                <td>${typeof current === 'number' ? current.toFixed(1) : current}</td>
+                                <td>${slopeStr}</td>
+                                <td>${threshold}${isPercent ? '%' : ''}</td>
+                                <td style="color:${etaColor}; font-weight:600;">${etaStr}</td>
+                            </tr>`;
+                        }).join('')}</tbody>
+                    </table>`;
+            }
+        }
+    } catch (e) {
+        showError('Failed to load capacity planning: ' + e.message);
+    }
+}
+window.loadCapacityPlanning = loadCapacityPlanning;
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
