@@ -151,6 +151,14 @@
                                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20v-6"></path></svg>
                                 <span class="nav-label">Graphs</span>
                             </a>
+                            <a href="#" data-page="mac-tracking" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                                <span class="nav-label">MAC Tracking</span>
+                            </a>
+                            <a href="#" data-page="traffic-analysis" class="nav-link nav-child-link">
+                                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                                <span class="nav-label">Traffic Analysis</span>
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -1450,6 +1458,65 @@
                     </svg>
                     <p>No graph templates yet. Built-in templates are created on first startup.</p>
                     <button class="btn btn-primary" onclick="showCreateGraphTemplateModal()">Create Template</button>
+                </div>
+            </div>
+
+            <!-- MAC Tracking Page -->
+            <div id="page-mac-tracking" class="page">
+                <div class="page-header">
+                    <h2>MAC/ARP Tracking</h2>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-primary" onclick="triggerMacCollectionUI()">Collect Now</button>
+                    </div>
+                </div>
+                <div class="page-header" style="margin-top: 0;">
+                    <input id="mac-tracking-search" class="form-input list-control-search" type="search"
+                           placeholder="Search by MAC, IP, or port name..."
+                           onkeydown="if(event.key==='Enter') searchMacTrackingUI()">
+                    <button class="btn btn-sm" onclick="searchMacTrackingUI()">Search</button>
+                </div>
+                <div id="mac-tracking-results"></div>
+                <div id="mac-tracking-empty" class="empty-state">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
+                    <p>Search for a MAC address, IP address, or port name to see endpoint locations.</p>
+                    <p style="font-size:0.85em; opacity:0.7;">MAC/ARP tables are collected automatically during topology discovery.</p>
+                </div>
+            </div>
+
+            <!-- Traffic Analysis Page -->
+            <div id="page-traffic-analysis" class="page">
+                <div class="page-header">
+                    <h2>Traffic Analysis</h2>
+                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                        <select id="traffic-time-range" class="form-select list-control-select" onchange="loadTrafficAnalysis()">
+                            <option value="1">Last 1 Hour</option>
+                            <option value="6" selected>Last 6 Hours</option>
+                            <option value="24">Last 24 Hours</option>
+                            <option value="168">Last 7 Days</option>
+                        </select>
+                        <span id="flow-collector-status" class="badge"></span>
+                    </div>
+                </div>
+                <div id="traffic-analysis-content">
+                    <div class="chart-grid-2col" style="margin-bottom:1rem;">
+                        <div class="glass-card card"><h4 style="margin:0 0 0.5rem">Top Sources</h4><div id="traffic-top-src"></div></div>
+                        <div class="glass-card card"><h4 style="margin:0 0 0.5rem">Top Destinations</h4><div id="traffic-top-dst"></div></div>
+                    </div>
+                    <div class="chart-grid-2col" style="margin-bottom:1rem;">
+                        <div class="glass-card card"><h4 style="margin:0 0 0.5rem">Top Applications</h4><div id="traffic-top-apps"></div></div>
+                        <div class="glass-card card"><h4 style="margin:0 0 0.5rem">Top Conversations</h4><div id="traffic-top-convos"></div></div>
+                    </div>
+                    <div class="glass-card card"><h4 style="margin:0 0 0.5rem">Traffic Timeline</h4><div id="traffic-timeline-chart" style="height:250px;"></div></div>
+                </div>
+                <div id="traffic-analysis-empty" class="empty-state" style="display:none;">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <p>No flow data available. Configure devices to send NetFlow/sFlow/IPFIX to Plexus.</p>
+                    <p style="font-size:0.85em; opacity:0.7;">Collector port: UDP 2055 (NetFlow), 6343 (sFlow)</p>
                 </div>
             </div>
 

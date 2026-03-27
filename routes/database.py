@@ -103,6 +103,15 @@ _INSERT_ID_TABLES = {
     "graph_trees",
     "graph_tree_nodes",
     "data_source_profiles",
+    "snmp_data_sources",
+    "cdef_definitions",
+    "mac_address_table",
+    "arp_table",
+    "mac_tracking_history",
+    "flow_records",
+    "flow_summaries",
+    "metric_baselines",
+    "baseline_alert_rules",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -847,6 +856,163 @@ CREATE TABLE IF NOT EXISTS data_source_profiles (
     UNIQUE(host_id, profile_name)
 );
 CREATE INDEX IF NOT EXISTS idx_dsp_host ON data_source_profiles(host_id);
+
+-- ── SNMP Data Sources (auto-discovered independent data sources) ──────────
+
+CREATE TABLE IF NOT EXISTS snmp_data_sources (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    name            TEXT    NOT NULL DEFAULT '',
+    ds_type         TEXT    NOT NULL DEFAULT 'interface',
+    table_oid       TEXT    NOT NULL DEFAULT '',
+    index_oid       TEXT    NOT NULL DEFAULT '',
+    instance_key    TEXT    NOT NULL DEFAULT '',
+    instance_label  TEXT    NOT NULL DEFAULT '',
+    oids_json       TEXT    NOT NULL DEFAULT '[]',
+    poll_interval   INTEGER NOT NULL DEFAULT 300,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    last_polled_at  TEXT    DEFAULT NULL,
+    discovered_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(host_id, ds_type, instance_key)
+);
+CREATE INDEX IF NOT EXISTS idx_snmp_ds_host ON snmp_data_sources(host_id);
+CREATE INDEX IF NOT EXISTS idx_snmp_ds_type ON snmp_data_sources(host_id, ds_type);
+
+-- ── CDEF Definitions (calculated data sources) ───────────────────────────
+
+CREATE TABLE IF NOT EXISTS cdef_definitions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL UNIQUE,
+    description     TEXT    NOT NULL DEFAULT '',
+    expression      TEXT    NOT NULL DEFAULT '',
+    built_in        INTEGER NOT NULL DEFAULT 0,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── MAC/ARP Tracking ─────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS mac_address_table (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    mac_address     TEXT    NOT NULL,
+    vlan            INTEGER DEFAULT 0,
+    port_name       TEXT    NOT NULL DEFAULT '',
+    port_index      INTEGER DEFAULT 0,
+    ip_address      TEXT    DEFAULT '',
+    entry_type      TEXT    NOT NULL DEFAULT 'dynamic',
+    first_seen      TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_seen       TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(host_id, mac_address, vlan)
+);
+CREATE INDEX IF NOT EXISTS idx_mac_table_mac ON mac_address_table(mac_address);
+CREATE INDEX IF NOT EXISTS idx_mac_table_port ON mac_address_table(host_id, port_name);
+CREATE INDEX IF NOT EXISTS idx_mac_table_ip ON mac_address_table(ip_address);
+
+CREATE TABLE IF NOT EXISTS arp_table (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    ip_address      TEXT    NOT NULL,
+    mac_address     TEXT    NOT NULL,
+    interface_name  TEXT    NOT NULL DEFAULT '',
+    vrf             TEXT    NOT NULL DEFAULT '',
+    first_seen      TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_seen       TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(host_id, ip_address, vrf)
+);
+CREATE INDEX IF NOT EXISTS idx_arp_table_ip ON arp_table(ip_address);
+CREATE INDEX IF NOT EXISTS idx_arp_table_mac ON arp_table(mac_address);
+
+CREATE TABLE IF NOT EXISTS mac_tracking_history (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    mac_address     TEXT    NOT NULL,
+    ip_address      TEXT    DEFAULT '',
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    port_name       TEXT    NOT NULL DEFAULT '',
+    vlan            INTEGER DEFAULT 0,
+    seen_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mac_history_mac ON mac_tracking_history(mac_address, seen_at);
+
+-- ── NetFlow / sFlow / IPFIX ──────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS flow_records (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    exporter_ip     TEXT    NOT NULL,
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    flow_type       TEXT    NOT NULL DEFAULT 'netflow',
+    src_ip          TEXT    NOT NULL DEFAULT '',
+    dst_ip          TEXT    NOT NULL DEFAULT '',
+    src_port        INTEGER DEFAULT 0,
+    dst_port        INTEGER DEFAULT 0,
+    protocol        INTEGER DEFAULT 0,
+    bytes           INTEGER DEFAULT 0,
+    packets         INTEGER DEFAULT 0,
+    src_as          INTEGER DEFAULT 0,
+    dst_as          INTEGER DEFAULT 0,
+    input_if        INTEGER DEFAULT 0,
+    output_if       INTEGER DEFAULT 0,
+    tos             INTEGER DEFAULT 0,
+    tcp_flags       INTEGER DEFAULT 0,
+    start_time      TEXT    NOT NULL DEFAULT (datetime('now')),
+    end_time        TEXT    NOT NULL DEFAULT (datetime('now')),
+    received_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_flow_received ON flow_records(received_at);
+CREATE INDEX IF NOT EXISTS idx_flow_exporter ON flow_records(exporter_ip, received_at);
+CREATE INDEX IF NOT EXISTS idx_flow_src ON flow_records(src_ip, received_at);
+CREATE INDEX IF NOT EXISTS idx_flow_dst ON flow_records(dst_ip, received_at);
+
+CREATE TABLE IF NOT EXISTS flow_summaries (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    summary_type    TEXT    NOT NULL DEFAULT 'top_talkers',
+    time_window     TEXT    NOT NULL DEFAULT 'hourly',
+    period_start    TEXT    NOT NULL,
+    period_end      TEXT    NOT NULL,
+    data_json       TEXT    NOT NULL DEFAULT '{}',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_flow_summary_lookup ON flow_summaries(host_id, summary_type, period_start);
+
+-- ── Metric Baselines (statistical learning) ──────────────────────────────
+
+CREATE TABLE IF NOT EXISTS metric_baselines (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    metric_name     TEXT    NOT NULL,
+    labels_json     TEXT    NOT NULL DEFAULT '{}',
+    day_of_week     INTEGER NOT NULL DEFAULT -1,
+    hour_of_day     INTEGER NOT NULL DEFAULT -1,
+    baseline_avg    REAL    NOT NULL DEFAULT 0,
+    baseline_stddev REAL    NOT NULL DEFAULT 0,
+    baseline_min    REAL    NOT NULL DEFAULT 0,
+    baseline_max    REAL    NOT NULL DEFAULT 0,
+    baseline_p95    REAL    NOT NULL DEFAULT 0,
+    sample_count    INTEGER NOT NULL DEFAULT 0,
+    learning_window_days INTEGER NOT NULL DEFAULT 14,
+    last_computed   TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(host_id, metric_name, labels_json, day_of_week, hour_of_day)
+);
+CREATE INDEX IF NOT EXISTS idx_baselines_lookup ON metric_baselines(host_id, metric_name, day_of_week, hour_of_day);
+
+CREATE TABLE IF NOT EXISTS baseline_alert_rules (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT    NOT NULL DEFAULT '',
+    description         TEXT    NOT NULL DEFAULT '',
+    metric_name         TEXT    NOT NULL DEFAULT '',
+    host_id             INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    group_id            INTEGER REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    sensitivity         REAL    NOT NULL DEFAULT 2.0,
+    min_samples         INTEGER NOT NULL DEFAULT 100,
+    learning_days       INTEGER NOT NULL DEFAULT 14,
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    severity            TEXT    NOT NULL DEFAULT 'warning',
+    cooldown_minutes    INTEGER NOT NULL DEFAULT 30,
+    created_by          TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -7813,5 +7979,750 @@ async def seed_built_in_graph_templates() -> int:
             _LOGGER.info("Seeded default host template (id=%s)", ht_id)
 
         return created
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SNMP DATA SOURCES  (auto-discovered interfaces as independent data sources)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def list_snmp_data_sources(host_id: int, ds_type: str | None = None) -> list[dict]:
+    db = await get_db()
+    try:
+        if ds_type:
+            cursor = await db.execute(
+                "SELECT * FROM snmp_data_sources WHERE host_id = ? AND ds_type = ? ORDER BY instance_key",
+                (host_id, ds_type),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM snmp_data_sources WHERE host_id = ? ORDER BY ds_type, instance_key",
+                (host_id,),
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_snmp_data_source(ds_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM snmp_data_sources WHERE id = ?", (ds_id,))
+        row = await cursor.fetchone()
+        return row_to_dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def upsert_snmp_data_source(
+    host_id: int, ds_type: str, instance_key: str, **kwargs
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id FROM snmp_data_sources WHERE host_id = ? AND ds_type = ? AND instance_key = ?",
+            (host_id, ds_type, instance_key),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            eid = existing[0] if isinstance(existing, tuple) else dict(existing)["id"]
+            sets = []
+            vals = []
+            for k, v in kwargs.items():
+                if k in ("name", "table_oid", "index_oid", "instance_label",
+                         "oids_json", "poll_interval", "enabled", "last_polled_at"):
+                    sets.append(f"{k} = ?")
+                    vals.append(v)
+            if sets:
+                vals.append(eid)
+                await db.execute(
+                    f"UPDATE snmp_data_sources SET {', '.join(sets)} WHERE id = ?", vals
+                )
+                await db.commit()
+            return eid
+        else:
+            cursor2 = await db.execute(
+                """INSERT INTO snmp_data_sources
+                   (host_id, ds_type, instance_key, name, table_oid, index_oid,
+                    instance_label, oids_json, poll_interval, enabled)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (host_id, ds_type, instance_key,
+                 kwargs.get("name", ""),
+                 kwargs.get("table_oid", ""),
+                 kwargs.get("index_oid", ""),
+                 kwargs.get("instance_label", ""),
+                 kwargs.get("oids_json", "[]"),
+                 kwargs.get("poll_interval", 300),
+                 kwargs.get("enabled", 1)),
+            )
+            await db.commit()
+            return cursor2.lastrowid
+    finally:
+        await db.close()
+
+
+async def update_snmp_data_source(ds_id: int, **kwargs) -> bool:
+    db = await get_db()
+    try:
+        sets = []
+        vals = []
+        for k, v in kwargs.items():
+            if k in ("name", "poll_interval", "enabled", "oids_json", "last_polled_at"):
+                sets.append(f"{k} = ?")
+                vals.append(v)
+        if not sets:
+            return False
+        vals.append(ds_id)
+        await db.execute(
+            f"UPDATE snmp_data_sources SET {', '.join(sets)} WHERE id = ?", vals
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def delete_snmp_data_source(ds_id: int) -> bool:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM snmp_data_sources WHERE id = ?", (ds_id,))
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def delete_snmp_data_sources_for_host(host_id: int) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM snmp_data_sources WHERE host_id = ?", (host_id,)
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CDEF DEFINITIONS  (calculated data sources / expressions)
+# ═════════════════════════════════════════════════════════════════════════════
+
+BUILT_IN_CDEFS = [
+    {
+        "name": "Total Bandwidth",
+        "description": "Sum of inbound and outbound traffic (in+out)",
+        "expression": "a,b,+",
+    },
+    {
+        "name": "95th Percentile",
+        "description": "95th percentile of the data series",
+        "expression": "PERCENTILE_95",
+    },
+    {
+        "name": "Average",
+        "description": "Average of the data series",
+        "expression": "AVG",
+    },
+    {
+        "name": "Peak (Max)",
+        "description": "Maximum value of the data series",
+        "expression": "MAX",
+    },
+    {
+        "name": "Bits to Bytes",
+        "description": "Convert bits to bytes (divide by 8)",
+        "expression": "a,8,/",
+    },
+    {
+        "name": "Bytes to Bits",
+        "description": "Convert bytes to bits (multiply by 8)",
+        "expression": "a,8,*",
+    },
+    {
+        "name": "Invert (Negate)",
+        "description": "Negate the value (for outbound display below axis)",
+        "expression": "a,-1,*",
+    },
+]
+
+
+async def list_cdef_definitions() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM cdef_definitions ORDER BY built_in DESC, name")
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_cdef_definition(cdef_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM cdef_definitions WHERE id = ?", (cdef_id,))
+        row = await cursor.fetchone()
+        return row_to_dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def create_cdef_definition(name: str, expression: str, description: str = "",
+                                  built_in: int = 0, created_by: str = "") -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO cdef_definitions (name, description, expression, built_in, created_by)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, description, expression, built_in, created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def update_cdef_definition(cdef_id: int, **kwargs) -> bool:
+    db = await get_db()
+    try:
+        sets = []
+        vals = []
+        for k, v in kwargs.items():
+            if k in ("name", "description", "expression"):
+                sets.append(f"{k} = ?")
+                vals.append(v)
+        if not sets:
+            return False
+        vals.append(cdef_id)
+        await db.execute(
+            f"UPDATE cdef_definitions SET {', '.join(sets)} WHERE id = ?", vals
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def delete_cdef_definition(cdef_id: int) -> bool:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM cdef_definitions WHERE id = ?", (cdef_id,))
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def seed_built_in_cdefs() -> int:
+    db = await get_db()
+    try:
+        created = 0
+        for cdef in BUILT_IN_CDEFS:
+            cursor = await db.execute(
+                "SELECT id FROM cdef_definitions WHERE name = ? AND built_in = 1",
+                (cdef["name"],),
+            )
+            if await cursor.fetchone():
+                continue
+            await db.execute(
+                """INSERT INTO cdef_definitions (name, description, expression, built_in, created_by)
+                   VALUES (?, ?, ?, 1, 'system')""",
+                (cdef["name"], cdef.get("description", ""), cdef["expression"]),
+            )
+            await db.commit()
+            created += 1
+        return created
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MAC / ARP TRACKING  (MacTrack-style endpoint location)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def upsert_mac_entry(host_id: int, mac_address: str, vlan: int,
+                            port_name: str = "", port_index: int = 0,
+                            ip_address: str = "", entry_type: str = "dynamic") -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id FROM mac_address_table WHERE host_id = ? AND mac_address = ? AND vlan = ?",
+            (host_id, mac_address, vlan),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            eid = existing[0] if isinstance(existing, tuple) else dict(existing)["id"]
+            await db.execute(
+                """UPDATE mac_address_table
+                   SET port_name = ?, port_index = ?, ip_address = ?,
+                       entry_type = ?, last_seen = datetime('now')
+                   WHERE id = ?""",
+                (port_name, port_index, ip_address, entry_type, eid),
+            )
+            await db.commit()
+            return eid
+        else:
+            cursor2 = await db.execute(
+                """INSERT INTO mac_address_table
+                   (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type),
+            )
+            await db.commit()
+            return cursor2.lastrowid
+    finally:
+        await db.close()
+
+
+async def upsert_arp_entry(host_id: int, ip_address: str, mac_address: str,
+                            interface_name: str = "", vrf: str = "") -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id FROM arp_table WHERE host_id = ? AND ip_address = ? AND vrf = ?",
+            (host_id, ip_address, vrf),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            eid = existing[0] if isinstance(existing, tuple) else dict(existing)["id"]
+            await db.execute(
+                """UPDATE arp_table
+                   SET mac_address = ?, interface_name = ?, last_seen = datetime('now')
+                   WHERE id = ?""",
+                (mac_address, interface_name, eid),
+            )
+            await db.commit()
+            return eid
+        else:
+            cursor2 = await db.execute(
+                """INSERT INTO arp_table
+                   (host_id, ip_address, mac_address, interface_name, vrf)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (host_id, ip_address, mac_address, interface_name, vrf),
+            )
+            await db.commit()
+            return cursor2.lastrowid
+    finally:
+        await db.close()
+
+
+async def record_mac_history(mac_address: str, host_id: int, port_name: str,
+                              vlan: int = 0, ip_address: str = "") -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO mac_tracking_history
+               (mac_address, ip_address, host_id, port_name, vlan)
+               VALUES (?, ?, ?, ?, ?)""",
+            (mac_address, ip_address, host_id, port_name, vlan),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
+    """Search MAC/ARP tables by MAC address, IP address, or port name."""
+    db = await get_db()
+    try:
+        pattern = f"%{query}%"
+        cursor = await db.execute(
+            """SELECT m.*, h.hostname, h.ip_address as host_ip
+               FROM mac_address_table m
+               LEFT JOIN hosts h ON h.id = m.host_id
+               WHERE m.mac_address LIKE ? OR m.ip_address LIKE ? OR m.port_name LIKE ?
+               ORDER BY m.last_seen DESC LIMIT ?""",
+            (pattern, pattern, pattern, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_mac_history(mac_address: str, limit: int = 100) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT mh.*, h.hostname, h.ip_address as host_ip
+               FROM mac_tracking_history mh
+               LEFT JOIN hosts h ON h.id = mh.host_id
+               WHERE mh.mac_address = ?
+               ORDER BY mh.seen_at DESC LIMIT ?""",
+            (mac_address, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_mac_table_for_host(host_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM mac_address_table WHERE host_id = ? ORDER BY vlan, port_name",
+            (host_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_arp_table_for_host(host_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM arp_table WHERE host_id = ? ORDER BY ip_address",
+            (host_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_macs_on_port(host_id: int, port_name: str) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM mac_address_table WHERE host_id = ? AND port_name = ? ORDER BY mac_address",
+            (host_id, port_name),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def cleanup_stale_mac_entries(days: int = 30) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM mac_address_table WHERE last_seen < datetime('now', ? || ' days')",
+            (f"-{days}",),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FLOW RECORDS  (NetFlow / sFlow / IPFIX)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def create_flow_records_batch(rows: list[tuple]) -> int:
+    """Batch insert flow records.  Each tuple:
+    (exporter_ip, host_id, flow_type, src_ip, dst_ip, src_port, dst_port,
+     protocol, bytes, packets, src_as, dst_as, input_if, output_if,
+     tos, tcp_flags, start_time, end_time)
+    """
+    if not rows:
+        return 0
+    db = await get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO flow_records
+               (exporter_ip, host_id, flow_type, src_ip, dst_ip, src_port, dst_port,
+                protocol, bytes, packets, src_as, dst_as, input_if, output_if,
+                tos, tcp_flags, start_time, end_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        await db.commit()
+        return len(rows)
+    finally:
+        await db.close()
+
+
+async def get_flow_top_talkers(host_id: int | None = None, hours: int = 1,
+                                direction: str = "src", limit: int = 20) -> list[dict]:
+    db = await get_db()
+    try:
+        col = "src_ip" if direction == "src" else "dst_ip"
+        where = "WHERE received_at >= datetime('now', ? || ' hours')"
+        params: list = [f"-{hours}"]
+        if host_id is not None:
+            where += " AND host_id = ?"
+            params.append(host_id)
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT {col} as ip, SUM(bytes) as total_bytes, SUM(packets) as total_packets,
+                       COUNT(*) as flow_count
+               FROM flow_records {where}
+               GROUP BY {col} ORDER BY total_bytes DESC LIMIT ?""",
+            params,
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_flow_top_applications(host_id: int | None = None, hours: int = 1,
+                                     limit: int = 20) -> list[dict]:
+    db = await get_db()
+    try:
+        where = "WHERE received_at >= datetime('now', ? || ' hours')"
+        params: list = [f"-{hours}"]
+        if host_id is not None:
+            where += " AND host_id = ?"
+            params.append(host_id)
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT dst_port as port, protocol, SUM(bytes) as total_bytes,
+                       SUM(packets) as total_packets, COUNT(*) as flow_count
+               FROM flow_records {where}
+               GROUP BY dst_port, protocol ORDER BY total_bytes DESC LIMIT ?""",
+            params,
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1,
+                                      limit: int = 20) -> list[dict]:
+    db = await get_db()
+    try:
+        where = "WHERE received_at >= datetime('now', ? || ' hours')"
+        params: list = [f"-{hours}"]
+        if host_id is not None:
+            where += " AND host_id = ?"
+            params.append(host_id)
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT src_ip, dst_ip, SUM(bytes) as total_bytes,
+                       SUM(packets) as total_packets, COUNT(*) as flow_count
+               FROM flow_records {where}
+               GROUP BY src_ip, dst_ip ORDER BY total_bytes DESC LIMIT ?""",
+            params,
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_flow_timeline(host_id: int | None = None, hours: int = 6,
+                             bucket_minutes: int = 5) -> list[dict]:
+    """Aggregate flow data into time buckets."""
+    db = await get_db()
+    try:
+        where = "WHERE received_at >= datetime('now', ? || ' hours')"
+        params: list = [f"-{hours}"]
+        if host_id is not None:
+            where += " AND host_id = ?"
+            params.append(host_id)
+        cursor = await db.execute(
+            f"""SELECT
+                   strftime('%Y-%m-%dT%H:', received_at) ||
+                   printf('%02d', (CAST(strftime('%M', received_at) AS INTEGER) / {bucket_minutes}) * {bucket_minutes}) ||
+                   ':00' as bucket,
+                   SUM(bytes) as total_bytes,
+                   SUM(packets) as total_packets,
+                   COUNT(*) as flow_count
+               FROM flow_records {where}
+               GROUP BY bucket ORDER BY bucket""",
+            params,
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def create_flow_summary(host_id: int | None, summary_type: str,
+                               time_window: str, period_start: str,
+                               period_end: str, data_json: str) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO flow_summaries
+               (host_id, summary_type, time_window, period_start, period_end, data_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (host_id, summary_type, time_window, period_start, period_end, data_json),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def cleanup_old_flow_records(hours: int = 48) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM flow_records WHERE received_at < datetime('now', ? || ' hours')",
+            (f"-{hours}",),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# METRIC BASELINES  (statistical learning for baseline deviation alerting)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def upsert_metric_baseline(host_id: int, metric_name: str,
+                                   day_of_week: int, hour_of_day: int,
+                                   baseline_avg: float, baseline_stddev: float,
+                                   baseline_min: float, baseline_max: float,
+                                   baseline_p95: float, sample_count: int,
+                                   labels_json: str = "{}",
+                                   learning_window_days: int = 14) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT id FROM metric_baselines
+               WHERE host_id = ? AND metric_name = ? AND labels_json = ?
+                     AND day_of_week = ? AND hour_of_day = ?""",
+            (host_id, metric_name, labels_json, day_of_week, hour_of_day),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            eid = existing[0] if isinstance(existing, tuple) else dict(existing)["id"]
+            await db.execute(
+                """UPDATE metric_baselines
+                   SET baseline_avg = ?, baseline_stddev = ?, baseline_min = ?,
+                       baseline_max = ?, baseline_p95 = ?, sample_count = ?,
+                       learning_window_days = ?, last_computed = datetime('now')
+                   WHERE id = ?""",
+                (baseline_avg, baseline_stddev, baseline_min, baseline_max,
+                 baseline_p95, sample_count, learning_window_days, eid),
+            )
+            await db.commit()
+            return eid
+        else:
+            cursor2 = await db.execute(
+                """INSERT INTO metric_baselines
+                   (host_id, metric_name, labels_json, day_of_week, hour_of_day,
+                    baseline_avg, baseline_stddev, baseline_min, baseline_max,
+                    baseline_p95, sample_count, learning_window_days)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (host_id, metric_name, labels_json, day_of_week, hour_of_day,
+                 baseline_avg, baseline_stddev, baseline_min, baseline_max,
+                 baseline_p95, sample_count, learning_window_days),
+            )
+            await db.commit()
+            return cursor2.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_metric_baseline(host_id: int, metric_name: str,
+                                day_of_week: int, hour_of_day: int,
+                                labels_json: str = "{}") -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM metric_baselines
+               WHERE host_id = ? AND metric_name = ? AND labels_json = ?
+                     AND day_of_week = ? AND hour_of_day = ?""",
+            (host_id, metric_name, labels_json, day_of_week, hour_of_day),
+        )
+        row = await cursor.fetchone()
+        return row_to_dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def get_baselines_for_host(host_id: int, metric_name: str | None = None) -> list[dict]:
+    db = await get_db()
+    try:
+        if metric_name:
+            cursor = await db.execute(
+                "SELECT * FROM metric_baselines WHERE host_id = ? AND metric_name = ? ORDER BY day_of_week, hour_of_day",
+                (host_id, metric_name),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM metric_baselines WHERE host_id = ? ORDER BY metric_name, day_of_week, hour_of_day",
+                (host_id,),
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ── Baseline Alert Rules ──
+
+async def list_baseline_alert_rules(enabled_only: bool = False) -> list[dict]:
+    db = await get_db()
+    try:
+        q = "SELECT * FROM baseline_alert_rules"
+        if enabled_only:
+            q += " WHERE enabled = 1"
+        q += " ORDER BY name"
+        cursor = await db.execute(q)
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_baseline_alert_rule(rule_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM baseline_alert_rules WHERE id = ?", (rule_id,))
+        row = await cursor.fetchone()
+        return row_to_dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def create_baseline_alert_rule(**kwargs) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO baseline_alert_rules
+               (name, description, metric_name, host_id, group_id,
+                sensitivity, min_samples, learning_days, enabled,
+                severity, cooldown_minutes, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (kwargs.get("name", ""), kwargs.get("description", ""),
+             kwargs.get("metric_name", ""), kwargs.get("host_id"),
+             kwargs.get("group_id"), kwargs.get("sensitivity", 2.0),
+             kwargs.get("min_samples", 100), kwargs.get("learning_days", 14),
+             kwargs.get("enabled", 1), kwargs.get("severity", "warning"),
+             kwargs.get("cooldown_minutes", 30), kwargs.get("created_by", "")),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def update_baseline_alert_rule(rule_id: int, **kwargs) -> bool:
+    db = await get_db()
+    try:
+        sets = []
+        vals = []
+        allowed = ("name", "description", "metric_name", "host_id", "group_id",
+                    "sensitivity", "min_samples", "learning_days", "enabled",
+                    "severity", "cooldown_minutes")
+        for k, v in kwargs.items():
+            if k in allowed:
+                sets.append(f"{k} = ?")
+                vals.append(v)
+        if not sets:
+            return False
+        sets.append("updated_at = datetime('now')")
+        vals.append(rule_id)
+        await db.execute(
+            f"UPDATE baseline_alert_rules SET {', '.join(sets)} WHERE id = ?", vals
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def delete_baseline_alert_rule(rule_id: int) -> bool:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM baseline_alert_rules WHERE id = ?", (rule_id,))
+        await db.commit()
+        return True
     finally:
         await db.close()

@@ -256,6 +256,18 @@ async def _run_topology_discovery_once() -> dict:
                         await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
                     except Exception:
                         pass
+                # Auto-discover SNMP data sources (interfaces, storage)
+                try:
+                    from netcontrol.routes.snmp import auto_discover_data_sources
+                    await auto_discover_data_sources(host["id"], host["ip_address"], snmp_cfg)
+                except Exception:
+                    pass
+                # Collect MAC/ARP tables during topology discovery
+                try:
+                    from netcontrol.routes.mac_tracking import collect_mac_arp_tables
+                    await collect_mac_arp_tables(host["id"], host["ip_address"], snmp_cfg)
+                except Exception:
+                    pass
                 # Record topology changes (only if there were previous links)
                 if old_link_keys:
                     await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
@@ -447,6 +459,91 @@ async def get_topology(group_id: int | None = Query(default=None)):
     except Exception as exc:
         LOGGER.error("topology: failed to build graph: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/api/topology/utilization")
+async def get_topology_utilization(group_id: int | None = Query(None)):
+    """Return lightweight utilization data for all topology edges."""
+    all_host_ids = set()
+    links = await db.get_topology_links()
+    for link in links:
+        all_host_ids.add(link["source_host_id"])
+        if link.get("target_host_id"):
+            all_host_ids.add(link["target_host_id"])
+
+    if group_id is not None:
+        hosts = await db.get_hosts_for_group(group_id)
+        all_host_ids = {h["id"] for h in hosts}
+
+    all_stats = await db.get_interface_stats_by_hosts(list(all_host_ids)) if all_host_ids else []
+    util_map: dict[tuple[int, str], dict] = {}
+    for stat in all_stats:
+        util = _calc_interface_utilization(stat)
+        if util:
+            util_map[(stat["host_id"], stat["if_name"])] = util
+
+    edges = []
+    for link in links:
+        src_id = link["source_host_id"]
+        src_iface = link.get("source_interface", "")
+        util_data = util_map.get((src_id, src_iface))
+        edges.append({
+            "source_host_id": src_id,
+            "target_host_id": link.get("target_host_id"),
+            "source_interface": src_iface,
+            "utilization": util_data,
+        })
+
+    return {"edges": edges}
+
+
+@router.get("/api/topology/utilization/stream")
+async def stream_topology_utilization(
+    group_id: int | None = Query(None),
+    interval: int = Query(30, ge=5, le=300),
+):
+    """SSE endpoint that pushes utilization updates at regular intervals."""
+    async def _event_gen():
+        try:
+            while True:
+                all_host_ids = set()
+                links = await db.get_topology_links()
+                for link in links:
+                    all_host_ids.add(link["source_host_id"])
+                    if link.get("target_host_id"):
+                        all_host_ids.add(link["target_host_id"])
+
+                if group_id is not None:
+                    hosts = await db.get_hosts_for_group(group_id)
+                    all_host_ids = {h["id"] for h in hosts}
+
+                all_stats = await db.get_interface_stats_by_hosts(list(all_host_ids)) if all_host_ids else []
+                util_map: dict[tuple[int, str], dict] = {}
+                for stat in all_stats:
+                    util = _calc_interface_utilization(stat)
+                    if util:
+                        util_map[(stat["host_id"], stat["if_name"])] = util
+
+                edges = []
+                for link in links:
+                    src_id = link["source_host_id"]
+                    src_iface = link.get("source_interface", "")
+                    util_data = util_map.get((src_id, src_iface))
+                    if util_data:
+                        edges.append({
+                            "source_host_id": src_id,
+                            "target_host_id": link.get("target_host_id"),
+                            "source_interface": src_iface,
+                            "utilization": util_data,
+                        })
+
+                payload = json.dumps({"edges": edges})
+                yield f"data: {payload}\n\n"
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(_event_gen(), media_type="text/event-stream")
 
 
 @router.post("/api/topology/discover/stream")

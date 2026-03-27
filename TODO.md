@@ -132,18 +132,18 @@
 - [x] Add capacity planning trends (bandwidth, policy scale, route table growth).
 
 ### Cacti Parity (Graphing & Data Collection Engine)
-- [ ] Add graph template system (reusable chart definitions that auto-apply to devices by type/metric).
-- [ ] Add auto-graph creation on device add/discovery (auto-create graphs for all interfaces and standard metrics).
-- [ ] Add host templates mapping device types to sets of graph templates for automatic provisioning.
-- [ ] Add per-device and per-data-source configurable poll intervals (30s, 1m, 5m per OID group).
-- [ ] Add SNMP table walking with auto-discovery of interfaces as independent data sources.
-- [ ] Add calculated data sources / CDEFs (95th percentile billing, in+out totals, averages, custom expressions).
-- [ ] Add graph tree hierarchical navigation (Site → Device → Interface with user-scoped permissions).
-- [ ] Add live bandwidth utilization overlay on topology weathermap links.
-- [ ] Add graph image export (PNG/SVG direct URLs for embedding in wikis, emails, NOC screens).
-- [ ] Add MacTrack-style MAC/ARP/port tracking for endpoint location.
-- [ ] Add NetFlow/sFlow/IPFIX collection and traffic analysis.
-- [ ] Add baseline deviation alerting (statistical learning, not just static thresholds).
+- [x] Add graph template system (reusable chart definitions that auto-apply to devices by type/metric).
+- [x] Add auto-graph creation on device add/discovery (auto-create graphs for all interfaces and standard metrics).
+- [x] Add host templates mapping device types to sets of graph templates for automatic provisioning.
+- [x] Add per-device and per-data-source configurable poll intervals (30s, 1m, 5m per OID group).
+- [x] Add SNMP table walking with auto-discovery of interfaces as independent data sources.
+- [x] Add calculated data sources / CDEFs (95th percentile billing, in+out totals, averages, custom expressions).
+- [x] Add graph tree hierarchical navigation (Site → Device → Interface with user-scoped permissions).
+- [x] Add live bandwidth utilization overlay on topology weathermap links.
+- [x] Add graph image export (PNG/SVG direct URLs for embedding in wikis, emails, NOC screens).
+- [x] Add MacTrack-style MAC/ARP/port tracking for endpoint location.
+- [x] Add NetFlow/sFlow/IPFIX collection and traffic analysis.
+- [x] Add baseline deviation alerting (statistical learning, not just static thresholds).
 
 ### Later (Enterprise and Ecosystem)
 - [ ] Add firmware/OS lifecycle management with staged upgrade workflows.

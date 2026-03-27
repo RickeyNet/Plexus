@@ -1484,3 +1484,192 @@ export async function updateDataSourceProfile(id, data) {
 export async function deleteDataSourceProfile(id) {
     return apiRequest(`/data-source-profiles/${id}`, { method: 'DELETE' });
 }
+
+// ── CDEF Definitions ──────────────────────────────────────────────────────
+
+export async function getCdefs() {
+    return apiRequest('/cdefs');
+}
+
+export async function getCdef(id) {
+    return apiRequest(`/cdefs/${id}`);
+}
+
+export async function createCdef(data) {
+    return apiRequest('/cdefs', { method: 'POST', body: data });
+}
+
+export async function updateCdef(id, data) {
+    return apiRequest(`/cdefs/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteCdef(id) {
+    return apiRequest(`/cdefs/${id}`, { method: 'DELETE' });
+}
+
+export async function evaluateCdef(data) {
+    return apiRequest('/cdefs/evaluate', { method: 'POST', body: data });
+}
+
+// ── SNMP Data Sources ─────────────────────────────────────────────────────
+
+export async function getDataSources(hostId, dsType) {
+    let url = `/hosts/${hostId}/data-sources`;
+    if (dsType) url += `?ds_type=${dsType}`;
+    return apiRequest(url);
+}
+
+export async function discoverDataSources(hostId) {
+    return apiRequest(`/hosts/${hostId}/data-sources/discover`, { method: 'POST' });
+}
+
+export async function updateDataSource(dsId, data) {
+    return apiRequest(`/data-sources/${dsId}`, { method: 'PUT', body: data });
+}
+
+export async function deleteDataSource(dsId) {
+    return apiRequest(`/data-sources/${dsId}`, { method: 'DELETE' });
+}
+
+// ── MAC/ARP Tracking ──────────────────────────────────────────────────────
+
+export async function searchMacTracking(query) {
+    return apiRequest(`/mac-tracking/search?query=${encodeURIComponent(query)}`);
+}
+
+export async function getHostMacArp(hostId) {
+    return apiRequest(`/mac-tracking/host/${hostId}`);
+}
+
+export async function getMacHistory(macAddress) {
+    return apiRequest(`/mac-tracking/history/${encodeURIComponent(macAddress)}`);
+}
+
+export async function getPortMacs(hostId, portName) {
+    return apiRequest(`/mac-tracking/port/${hostId}/${encodeURIComponent(portName)}`);
+}
+
+export async function triggerMacCollection(hostId) {
+    let url = '/mac-tracking/collect';
+    if (hostId) url += `?host_id=${hostId}`;
+    return apiRequest(url, { method: 'POST' });
+}
+
+// ── NetFlow / Traffic Analysis ────────────────────────────────────────────
+
+export async function getFlowTopTalkers(opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.hostId) params.set('host_id', opts.hostId);
+    if (opts.hours) params.set('hours', opts.hours);
+    if (opts.direction) params.set('direction', opts.direction);
+    if (opts.limit) params.set('limit', opts.limit);
+    return apiRequest(`/flows/top-talkers?${params}`);
+}
+
+export async function getFlowTopApplications(opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.hostId) params.set('host_id', opts.hostId);
+    if (opts.hours) params.set('hours', opts.hours);
+    if (opts.limit) params.set('limit', opts.limit);
+    return apiRequest(`/flows/top-applications?${params}`);
+}
+
+export async function getFlowTopConversations(opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.hostId) params.set('host_id', opts.hostId);
+    if (opts.hours) params.set('hours', opts.hours);
+    if (opts.limit) params.set('limit', opts.limit);
+    return apiRequest(`/flows/top-conversations?${params}`);
+}
+
+export async function getFlowTimeline(opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.hostId) params.set('host_id', opts.hostId);
+    if (opts.hours) params.set('hours', opts.hours);
+    if (opts.bucketMinutes) params.set('bucket_minutes', opts.bucketMinutes);
+    return apiRequest(`/flows/timeline?${params}`);
+}
+
+export async function getFlowStatus() {
+    return apiRequest('/flows/status');
+}
+
+export async function startFlowCollector(port) {
+    return apiRequest(`/admin/flows/start?port=${port || 2055}`, { method: 'POST' });
+}
+
+export async function stopFlowCollector() {
+    return apiRequest('/admin/flows/stop', { method: 'POST' });
+}
+
+// ── Baseline Alerting ─────────────────────────────────────────────────────
+
+export async function getBaselineRules(enabledOnly) {
+    let url = '/baseline-rules';
+    if (enabledOnly) url += '?enabled_only=true';
+    return apiRequest(url);
+}
+
+export async function getBaselineRule(id) {
+    return apiRequest(`/baseline-rules/${id}`);
+}
+
+export async function createBaselineRule(data) {
+    return apiRequest('/baseline-rules', { method: 'POST', body: data });
+}
+
+export async function updateBaselineRule(id, data) {
+    return apiRequest(`/baseline-rules/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteBaselineRule(id) {
+    return apiRequest(`/baseline-rules/${id}`, { method: 'DELETE' });
+}
+
+export async function getBaselines(hostId, metric) {
+    let url = `/baselines?host_id=${hostId}`;
+    if (metric) url += `&metric=${encodeURIComponent(metric)}`;
+    return apiRequest(url);
+}
+
+export async function triggerBaselineCompute(hostId, metric, learningDays) {
+    return apiRequest(`/baselines/compute?host_id=${hostId}&metric=${encodeURIComponent(metric)}&learning_days=${learningDays || 14}`, { method: 'POST' });
+}
+
+export async function getBaselineChartData(hostId, metric) {
+    return apiRequest(`/baselines/${hostId}/${encodeURIComponent(metric)}/chart`);
+}
+
+// ── Graph Export ──────────────────────────────────────────────────────────
+
+export async function getGraphConfig(hostGraphId, range, theme) {
+    const params = new URLSearchParams();
+    if (range) params.set('range', range);
+    if (theme) params.set('theme', theme);
+    return apiRequest(`/graphs/${hostGraphId}/config?${params}`);
+}
+
+export function getGraphEmbedUrl(hostGraphId, opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.width) params.set('width', opts.width);
+    if (opts.height) params.set('height', opts.height);
+    if (opts.range) params.set('range', opts.range);
+    if (opts.theme) params.set('theme', opts.theme);
+    return `/api/graphs/${hostGraphId}/embed?${params}`;
+}
+
+export function getGraphSvgUrl(hostGraphId, opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.width) params.set('width', opts.width);
+    if (opts.height) params.set('height', opts.height);
+    if (opts.range) params.set('range', opts.range);
+    return `/api/graph-image/${hostGraphId}.svg?${params}`;
+}
+
+// ── Topology Utilization ──────────────────────────────────────────────────
+
+export async function getTopologyUtilization(groupId) {
+    let url = '/topology/utilization';
+    if (groupId) url += `?group_id=${groupId}`;
+    return apiRequest(url);
+}

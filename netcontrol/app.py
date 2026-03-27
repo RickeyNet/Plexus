@@ -106,6 +106,11 @@ from netcontrol.routes.converter import prune_converter_sessions, router as conv
 from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate, router as credentials_router
 from netcontrol.routes.dashboards import router as dashboards_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
+from netcontrol.routes.cdef_engine import router as cdef_router
+from netcontrol.routes.mac_tracking import router as mac_tracking_router
+from netcontrol.routes.flow_collector import router as flow_collector_router
+from netcontrol.routes.baseline_alerting import router as baseline_alerting_router
+from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.deployments import (
     DeploymentCreate,
     DeploymentExecute,
@@ -154,6 +159,7 @@ from netcontrol.routes.metrics_engine import (
 )
 from netcontrol.routes.monitoring import (
     _alert_escalation_loop,
+    _baseline_computation_loop,
     _check_threshold,
     _evaluate_alerts_for_poll,
     _metric_value_from_poll,
@@ -623,6 +629,7 @@ async def lifespan(app: FastAPI):
         from routes.seed import seed
         await seed()
     await db.seed_built_in_graph_templates()
+    await db.seed_built_in_cdefs()
     await _cleanup_expired_jobs()
     await _cleanup_expired_converter_sessions()
     await _run_discovery_sync_once()
@@ -634,6 +641,7 @@ async def lifespan(app: FastAPI):
     compliance_check_task = asyncio.create_task(_compliance_check_loop())
     monitoring_task = asyncio.create_task(_monitoring_poll_loop())
     escalation_task = asyncio.create_task(_alert_escalation_loop())
+    baseline_task = asyncio.create_task(_baseline_computation_loop())
     downsampling_task = asyncio.create_task(_downsampling_loop())
     try:
         yield
@@ -1005,6 +1013,31 @@ app.include_router(
 
 app.include_router(
     reporting_router,
+    dependencies=[Depends(require_auth)],
+)
+# CDEF Engine (calculated data sources)
+app.include_router(
+    cdef_router,
+    dependencies=[Depends(require_auth)],
+)
+# MAC/ARP Tracking
+app.include_router(
+    mac_tracking_router,
+    dependencies=[Depends(require_auth)],
+)
+# NetFlow / sFlow / IPFIX
+app.include_router(
+    flow_collector_router,
+    dependencies=[Depends(require_auth)],
+)
+# Baseline Deviation Alerting
+app.include_router(
+    baseline_alerting_router,
+    dependencies=[Depends(require_auth)],
+)
+# Graph Export (PNG/SVG/embed URLs)
+app.include_router(
+    graph_export_router,
     dependencies=[Depends(require_auth)],
 )
 
