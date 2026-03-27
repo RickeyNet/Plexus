@@ -599,6 +599,41 @@ export async function discoverTopologyAll() {
     return apiRequest('/topology/discover', { method: 'POST' });
 }
 
+export async function discoverTopologyStream(groupId, onEvent) {
+    const url = groupId
+        ? `${API_BASE}/topology/discover/${groupId}/stream`
+        : `${API_BASE}/topology/discover/stream`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
+
+    const response = await fetch(url, { method: 'POST', headers });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                try {
+                    const event = JSON.parse(line.slice(6));
+                    onEvent(event);
+                } catch { /* skip malformed */ }
+            }
+        }
+    }
+}
+
 export async function getHostTopology(hostId) {
     return apiRequest(`/topology/host/${hostId}`);
 }
@@ -935,6 +970,14 @@ export async function getDeploymentJobStatus(jobId) {
     return apiRequest(`/deployments/job/${jobId}/status`);
 }
 
+export async function getDeploymentCorrelation(deploymentId) {
+    return apiRequest(`/deployments/${deploymentId}/correlation`);
+}
+
+export async function getAlertCorrelation(alertId) {
+    return apiRequest(`/monitoring/alerts/${alertId}/correlation`);
+}
+
 // ── Real-Time Monitoring ────────────────────────────────────────────────────
 
 export async function getMonitoringSummary(groupId = null) {
@@ -1089,6 +1132,18 @@ export async function getMetricEvents(params = {}) {
     if (params.limit) qs.set('limit', params.limit);
     const q = qs.toString();
     return apiRequest(`/metrics/events${q ? '?' + q : ''}`);
+}
+
+export async function getCapacityPlanning(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.metric) qs.set('metric', params.metric);
+    if (params.host) qs.set('host', params.host);
+    if (params.range) qs.set('range', params.range);
+    if (params.group) qs.set('group', params.group);
+    if (params.projectionDays) qs.set('projection_days', params.projectionDays);
+    if (params.threshold) qs.set('threshold', params.threshold);
+    const q = qs.toString();
+    return apiRequest(`/metrics/capacity-planning${q ? '?' + q : ''}`);
 }
 
 // ── Annotations ─────────────────────────────────────────────────────────────
