@@ -36,6 +36,15 @@ except Exception:
     radius_packet = None
     PYRAD_AVAILABLE = False
 
+# ── python-ldap imports (optional) ───────────────────────────────────────────
+
+try:
+    import ldap as python_ldap
+    LDAP_AVAILABLE = True
+except Exception:
+    python_ldap = None
+    LDAP_AVAILABLE = False
+
 # ── Late-binding dependency injection ─────────────────────────────────────────
 # app.py calls init_auth() after defining require_auth to avoid circular imports.
 
@@ -143,6 +152,29 @@ async def verify_radius_user(username: str, password: str) -> tuple[bool, str]:
     return await asyncio.to_thread(_radius_authenticate_sync, username, password, radius_cfg)
 
 
+async def upsert_external_user(username: str, display_name: str = "",
+                                role: str = "user") -> dict | None:
+    """Ensure a local shadow user exists for externally-authenticated identities (RADIUS/LDAP)."""
+    user = await db.get_user_by_username(username)
+    if user:
+        return user
+
+    salt = secrets.token_hex(16)
+    random_pw = secrets.token_urlsafe(32)
+    pw_hash = _hash_password_fn(random_pw, salt)
+    try:
+        user_id = await db.create_user(
+            username,
+            pw_hash,
+            salt,
+            display_name=display_name or username,
+            role=role,
+        )
+    except ValueError:
+        return await db.get_user_by_username(username)
+    return await db.get_user_by_id(user_id)
+
+
 async def upsert_radius_user(username: str) -> dict | None:
     """Ensure a local shadow user exists for RADIUS-authenticated identities."""
     user = await db.get_user_by_username(username)
@@ -164,6 +196,194 @@ async def upsert_radius_user(username: str) -> dict | None:
         # Another request may have created it concurrently.
         return await db.get_user_by_username(username)
     return await db.get_user_by_id(user_id)
+
+
+# ── LDAP / Active Directory helpers ──────────────────────────────────────────
+
+
+def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tuple[bool, str, dict]:
+    """Perform a blocking LDAP bind authentication.
+
+    Returns (success, status, user_attrs).
+    status is one of: "accept", "reject", "error"
+    user_attrs may contain: display_name, email, groups
+    """
+    if not LDAP_AVAILABLE:
+        return False, "error", {}
+    assert python_ldap is not None
+
+    server = ldap_cfg.get("server", "").strip()
+    if not server:
+        return False, "error", {}
+
+    port = int(ldap_cfg.get("port", 389))
+    use_ssl = bool(ldap_cfg.get("use_ssl", False))
+    timeout = int(ldap_cfg.get("timeout", 10))
+    bind_dn = ldap_cfg.get("bind_dn", "").strip()
+    bind_password = ldap_cfg.get("bind_password", "")
+    base_dn = ldap_cfg.get("base_dn", "").strip()
+    user_search_filter = ldap_cfg.get("user_search_filter", "(sAMAccountName={username})").strip()
+    user_dn_template = ldap_cfg.get("user_dn_template", "").strip()
+    group_search_base = ldap_cfg.get("group_search_base", "").strip()
+    group_search_filter = ldap_cfg.get("group_search_filter", "").strip()
+
+    protocol = "ldaps" if use_ssl else "ldap"
+    uri = f"{protocol}://{server}:{port}"
+
+    try:
+        conn = python_ldap.initialize(uri)
+        conn.set_option(python_ldap.OPT_NETWORK_TIMEOUT, timeout)
+        conn.set_option(python_ldap.OPT_TIMEOUT, timeout)
+        conn.set_option(python_ldap.OPT_REFERRALS, 0)
+        conn.protocol_version = python_ldap.VERSION3
+
+        if use_ssl:
+            conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, python_ldap.OPT_X_TLS_ALLOW)
+            conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
+
+        user_dn = None
+        user_attrs: dict = {}
+
+        if user_dn_template:
+            # Direct bind: template like "CN={username},OU=Users,DC=corp,DC=local"
+            user_dn = user_dn_template.replace("{username}", username)
+        elif bind_dn and base_dn:
+            # Search bind: first bind as service account, then search for user
+            try:
+                conn.simple_bind_s(bind_dn, bind_password)
+            except python_ldap.INVALID_CREDENTIALS:
+                LOGGER.warning("ldap: service account bind failed — check bind_dn / bind_password")
+                return False, "error", {}
+
+            search_filter = user_search_filter.replace("{username}", username)
+            try:
+                result = conn.search_s(
+                    base_dn, python_ldap.SCOPE_SUBTREE, search_filter,
+                    ["dn", "displayName", "mail", "sAMAccountName", "cn", "memberOf"],
+                )
+            except python_ldap.NO_SUCH_OBJECT:
+                return False, "reject", {}
+
+            # Filter out referrals (entries with dn=None)
+            entries = [(dn, attrs) for dn, attrs in result if dn is not None]
+            if not entries:
+                return False, "reject", {}
+
+            user_dn = entries[0][0]
+            raw_attrs = entries[0][1]
+
+            # Decode LDAP byte values
+            def _first_str(attr_name):
+                vals = raw_attrs.get(attr_name, [])
+                if vals and isinstance(vals[0], bytes):
+                    return vals[0].decode("utf-8", errors="replace")
+                return str(vals[0]) if vals else ""
+
+            user_attrs["display_name"] = _first_str("displayName") or _first_str("cn") or username
+            user_attrs["email"] = _first_str("mail")
+            user_attrs["groups"] = [
+                g.decode("utf-8", errors="replace") if isinstance(g, bytes) else str(g)
+                for g in raw_attrs.get("memberOf", [])
+            ]
+
+            # Unbind the service account before re-binding as the user
+            conn.unbind_s()
+            conn = python_ldap.initialize(uri)
+            conn.set_option(python_ldap.OPT_NETWORK_TIMEOUT, timeout)
+            conn.set_option(python_ldap.OPT_TIMEOUT, timeout)
+            conn.set_option(python_ldap.OPT_REFERRALS, 0)
+            conn.protocol_version = python_ldap.VERSION3
+            if use_ssl:
+                conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, python_ldap.OPT_X_TLS_ALLOW)
+                conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
+        else:
+            # No service account and no template — try direct bind with UPN
+            user_dn = f"{username}@{base_dn}" if base_dn else username
+
+        if not user_dn:
+            return False, "error", {}
+
+        # Authenticate the user by binding with their credentials
+        try:
+            conn.simple_bind_s(user_dn, password)
+        except python_ldap.INVALID_CREDENTIALS:
+            return False, "reject", user_attrs
+
+        # If we didn't get attributes from the search, fetch them now
+        if not user_attrs.get("display_name") and base_dn:
+            try:
+                search_filter = user_search_filter.replace("{username}", username)
+                result = conn.search_s(
+                    base_dn, python_ldap.SCOPE_SUBTREE, search_filter,
+                    ["displayName", "mail", "cn", "memberOf"],
+                )
+                entries = [(dn, attrs) for dn, attrs in result if dn is not None]
+                if entries:
+                    raw_attrs = entries[0][1]
+
+                    def _first(attr):
+                        vals = raw_attrs.get(attr, [])
+                        if vals and isinstance(vals[0], bytes):
+                            return vals[0].decode("utf-8", errors="replace")
+                        return str(vals[0]) if vals else ""
+
+                    user_attrs["display_name"] = _first("displayName") or _first("cn") or username
+                    user_attrs["email"] = _first("mail")
+                    user_attrs["groups"] = [
+                        g.decode("utf-8", errors="replace") if isinstance(g, bytes) else str(g)
+                        for g in raw_attrs.get("memberOf", [])
+                    ]
+            except Exception:
+                pass
+
+        # Fetch group memberships if a group search is configured
+        if group_search_base and group_search_filter and not user_attrs.get("groups"):
+            try:
+                gfilter = group_search_filter.replace("{user_dn}", user_dn).replace("{username}", username)
+                g_result = conn.search_s(group_search_base, python_ldap.SCOPE_SUBTREE, gfilter, ["dn", "cn"])
+                user_attrs["groups"] = [
+                    dn for dn, _ in g_result if dn is not None
+                ]
+            except Exception:
+                pass
+
+        conn.unbind_s()
+        return True, "accept", user_attrs
+
+    except python_ldap.SERVER_DOWN:
+        LOGGER.warning("ldap: server %s unreachable", server)
+        return False, "error", {}
+    except python_ldap.INVALID_CREDENTIALS:
+        return False, "reject", {}
+    except Exception as exc:
+        LOGGER.warning("ldap: authentication error: %s", str(exc))
+        return False, "error", {}
+
+
+async def verify_ldap_user(username: str, password: str) -> tuple[bool, str, dict]:
+    """Returns (is_authenticated, status, user_attrs)."""
+    ldap_cfg = state.AUTH_CONFIG.get("ldap", {})
+    return await asyncio.to_thread(_ldap_authenticate_sync, username, password, ldap_cfg)
+
+
+async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
+    """Ensure a local shadow user exists for LDAP-authenticated identities.
+
+    If the user has groups that match admin_group_dn, promote to admin role.
+    """
+    ldap_cfg = state.AUTH_CONFIG.get("ldap", {})
+    admin_group_dn = ldap_cfg.get("admin_group_dn", "").strip().lower()
+    default_role = ldap_cfg.get("default_role", "user")
+
+    # Determine role from group membership
+    role = default_role
+    user_groups = [g.lower() for g in ldap_attrs.get("groups", [])]
+    if admin_group_dn and any(admin_group_dn in g for g in user_groups):
+        role = "admin"
+
+    display_name = ldap_attrs.get("display_name", "") or username
+
+    return await upsert_external_user(username, display_name=display_name, role=role)
 
 
 async def authenticate_login_identity(username: str, password: str) -> tuple[dict | None, str | None, str | None]:
@@ -206,6 +426,33 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 
         if status == "error":
             return None, None, "RADIUS authentication service unavailable"
+        return None, None, "Invalid username or password"
+
+    # LDAP / Active Directory provider
+    ldap_cfg = auth_config.get("ldap", {})
+    ldap_enabled = bool(ldap_cfg.get("enabled"))
+
+    if provider == "ldap" and ldap_enabled:
+        accepted, status, ldap_attrs = await verify_ldap_user(username, password)
+        if accepted:
+            user = await upsert_ldap_user(username, ldap_attrs)
+            if user:
+                return user, "ldap", None
+            return None, None, "LDAP login succeeded but local account provisioning failed"
+
+        if status == "reject" and not bool(ldap_cfg.get("fallback_on_reject", False)):
+            return None, None, "Invalid username or password"
+
+        if bool(ldap_cfg.get("fallback_to_local", True)):
+            local_user = await _verify_local(username, password)
+            if local_user:
+                return local_user, "local-fallback", None
+            if status == "error":
+                return None, None, "LDAP server is unavailable and local fallback credentials failed"
+            return None, None, "Invalid username or password"
+
+        if status == "error":
+            return None, None, "LDAP authentication service unavailable"
         return None, None, "Invalid username or password"
 
     # Default/local provider path.

@@ -1590,7 +1590,8 @@
                             <label class="form-label" for="auth-provider">Active Provider</label>
                             <select id="auth-provider" class="form-select">
                                 <option value="local">Local Database</option>
-                                <option value="radius">RADIUS (planned)</option>
+                                <option value="radius">RADIUS</option>
+                                <option value="ldap">LDAP / Active Directory</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -1633,6 +1634,57 @@
                                     <label class="form-label" for="radius-timeout">Timeout (sec)</label>
                                     <input type="number" id="radius-timeout" class="form-input" min="1">
                                 </div>
+                            </div>
+                        </div>
+                        <div id="ldap-config-panel" style="display: none; border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 0.5rem; padding: 0.75rem;">
+                            <div class="form-group">
+                                <label><input type="checkbox" id="ldap-enabled"> Enable LDAP / Active Directory authentication</label>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 100px 100px; gap: 0.75rem;">
+                                <div class="form-group">
+                                    <label class="form-label" for="ldap-server">LDAP Server</label>
+                                    <input type="text" id="ldap-server" class="form-input" placeholder="dc01.corp.local">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="ldap-port">Port</label>
+                                    <input type="number" id="ldap-port" class="form-input" min="1" value="389">
+                                </div>
+                                <div class="form-group" style="display:flex; align-items:end; padding-bottom:0.25rem;">
+                                    <label><input type="checkbox" id="ldap-use-ssl"> Use SSL</label>
+                                </div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                                <div class="form-group">
+                                    <label class="form-label" for="ldap-bind-dn">Service Account DN (Bind DN)</label>
+                                    <input type="text" id="ldap-bind-dn" class="form-input" placeholder="CN=svc_plexus,OU=Service Accounts,DC=corp,DC=local">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="ldap-bind-password">Service Account Password</label>
+                                    <input type="password" id="ldap-bind-password" class="form-input" placeholder="Service account password">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="ldap-base-dn">Base DN (Search Root)</label>
+                                <input type="text" id="ldap-base-dn" class="form-input" placeholder="DC=corp,DC=local">
+                                <small style="color: var(--text-muted);">The root of the LDAP tree to search for users.</small>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="ldap-user-search-filter">User Search Filter</label>
+                                <input type="text" id="ldap-user-search-filter" class="form-input" value="(sAMAccountName={username})" placeholder="(sAMAccountName={username})">
+                                <small style="color: var(--text-muted);">Use <code>{username}</code> as a placeholder. For AD: <code>(sAMAccountName={username})</code>. For OpenLDAP: <code>(uid={username})</code>.</small>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="ldap-admin-group-dn">Admin Group DN (optional)</label>
+                                <input type="text" id="ldap-admin-group-dn" class="form-input" placeholder="CN=Plexus Admins,OU=Groups,DC=corp,DC=local">
+                                <small style="color: var(--text-muted);">Users in this AD group are auto-promoted to admin role. Leave blank if all LDAP users should be regular users.</small>
+                            </div>
+                            <div class="form-group" style="display: grid; gap: 0.4rem; margin-top: 0.35rem;">
+                                <label><input type="checkbox" id="ldap-fallback-local" checked> Fallback to local auth when LDAP is unavailable</label>
+                                <label><input type="checkbox" id="ldap-fallback-reject"> Allow fallback to local auth on LDAP reject</label>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="ldap-timeout">Timeout (seconds)</label>
+                                <input type="number" id="ldap-timeout" class="form-input" min="1" value="10" style="max-width:100px;">
                             </div>
                         </div>
                         <div>

@@ -5271,6 +5271,20 @@ function bindAuthConfigForm() {
                     secret: document.getElementById('radius-secret').value,
                     timeout: Number(document.getElementById('radius-timeout').value),
                 },
+                ldap: {
+                    enabled: document.getElementById('ldap-enabled').checked,
+                    server: document.getElementById('ldap-server').value,
+                    port: Number(document.getElementById('ldap-port').value),
+                    use_ssl: document.getElementById('ldap-use-ssl').checked,
+                    bind_dn: document.getElementById('ldap-bind-dn').value,
+                    bind_password: document.getElementById('ldap-bind-password').value,
+                    base_dn: document.getElementById('ldap-base-dn').value,
+                    user_search_filter: document.getElementById('ldap-user-search-filter').value,
+                    admin_group_dn: document.getElementById('ldap-admin-group-dn').value,
+                    fallback_to_local: document.getElementById('ldap-fallback-local').checked,
+                    fallback_on_reject: document.getElementById('ldap-fallback-reject').checked,
+                    timeout: Number(document.getElementById('ldap-timeout').value),
+                },
             };
             adminState.authConfig = await api.updateAuthConfig(payload);
             renderAuthConfig();
@@ -5284,9 +5298,9 @@ function bindAuthConfigForm() {
     if (providerEl) {
         providerEl.addEventListener('change', () => {
             const radiusPanel = document.getElementById('radius-config-panel');
-            if (radiusPanel) {
-                radiusPanel.style.display = providerEl.value === 'radius' ? '' : 'none';
-            }
+            const ldapPanel = document.getElementById('ldap-config-panel');
+            if (radiusPanel) radiusPanel.style.display = providerEl.value === 'radius' ? '' : 'none';
+            if (ldapPanel) ldapPanel.style.display = providerEl.value === 'ldap' ? '' : 'none';
         });
     }
 }
@@ -5307,6 +5321,24 @@ async function renderAuthConfig() {
     if (radiusPanel) {
         radiusPanel.style.display = cfg.provider === 'radius' ? '' : 'none';
     }
+    // LDAP fields
+    const ldapPanel = document.getElementById('ldap-config-panel');
+    if (ldapPanel) {
+        ldapPanel.style.display = cfg.provider === 'ldap' ? '' : 'none';
+    }
+    const ldapEl = (id) => document.getElementById(id);
+    if (ldapEl('ldap-enabled')) ldapEl('ldap-enabled').checked = !!cfg.ldap?.enabled;
+    if (ldapEl('ldap-server')) ldapEl('ldap-server').value = cfg.ldap?.server || '';
+    if (ldapEl('ldap-port')) ldapEl('ldap-port').value = cfg.ldap?.port || 389;
+    if (ldapEl('ldap-use-ssl')) ldapEl('ldap-use-ssl').checked = !!cfg.ldap?.use_ssl;
+    if (ldapEl('ldap-bind-dn')) ldapEl('ldap-bind-dn').value = cfg.ldap?.bind_dn || '';
+    if (ldapEl('ldap-bind-password')) ldapEl('ldap-bind-password').value = cfg.ldap?.bind_password || '';
+    if (ldapEl('ldap-base-dn')) ldapEl('ldap-base-dn').value = cfg.ldap?.base_dn || '';
+    if (ldapEl('ldap-user-search-filter')) ldapEl('ldap-user-search-filter').value = cfg.ldap?.user_search_filter || '(sAMAccountName={username})';
+    if (ldapEl('ldap-admin-group-dn')) ldapEl('ldap-admin-group-dn').value = cfg.ldap?.admin_group_dn || '';
+    if (ldapEl('ldap-fallback-local')) ldapEl('ldap-fallback-local').checked = cfg.ldap?.fallback_to_local !== false;
+    if (ldapEl('ldap-fallback-reject')) ldapEl('ldap-fallback-reject').checked = !!cfg.ldap?.fallback_on_reject;
+    if (ldapEl('ldap-timeout')) ldapEl('ldap-timeout').value = cfg.ldap?.timeout || 10;
     // Populate default credential dropdown
     const credSelect = document.getElementById('default-credential-id');
     if (credSelect) {

@@ -174,6 +174,24 @@ AUTH_CONFIG_DEFAULTS = {
         "fallback_to_local": True,
         "fallback_on_reject": False,
     },
+    "ldap": {
+        "enabled": False,
+        "server": "",
+        "port": 389,
+        "use_ssl": False,
+        "bind_dn": "",
+        "bind_password": "",
+        "base_dn": "",
+        "user_search_filter": "(sAMAccountName={username})",
+        "user_dn_template": "",
+        "group_search_base": "",
+        "group_search_filter": "(&(objectClass=group)(member={user_dn}))",
+        "admin_group_dn": "",
+        "default_role": "user",
+        "timeout": 10,
+        "fallback_to_local": True,
+        "fallback_on_reject": False,
+    },
 }
 
 FEATURE_FLAGS = [
@@ -237,8 +255,9 @@ def _sanitize_login_rules(data: dict | None) -> dict:
 def _sanitize_auth_config(data: dict | None) -> dict:
     cfg = dict(AUTH_CONFIG_DEFAULTS)
     cfg["radius"] = dict(AUTH_CONFIG_DEFAULTS["radius"])
+    cfg["ldap"] = dict(AUTH_CONFIG_DEFAULTS["ldap"])
     if isinstance(data, dict):
-        if data.get("provider") in {"local", "radius"}:
+        if data.get("provider") in {"local", "radius", "ldap"}:
             cfg["provider"] = data["provider"]
         if "job_retention_days" in data:
             cfg["job_retention_days"] = int(data.get("job_retention_days", cfg["job_retention_days"]))
@@ -275,6 +294,29 @@ def _sanitize_auth_config(data: dict | None) -> dict:
     )
     cfg["radius"]["port"] = max(1, cfg["radius"]["port"])
     cfg["radius"]["timeout"] = max(1, cfg["radius"]["timeout"])
+    # LDAP config sanitization
+    ldap = data.get("ldap") if isinstance(data, dict) else None
+    if isinstance(ldap, dict):
+        cfg["ldap"].update({
+            "enabled": bool(ldap.get("enabled", cfg["ldap"]["enabled"])),
+            "server": str(ldap.get("server", cfg["ldap"]["server"])).strip(),
+            "port": int(ldap.get("port", cfg["ldap"]["port"])),
+            "use_ssl": bool(ldap.get("use_ssl", cfg["ldap"]["use_ssl"])),
+            "bind_dn": str(ldap.get("bind_dn", cfg["ldap"]["bind_dn"])).strip(),
+            "bind_password": str(ldap.get("bind_password", cfg["ldap"]["bind_password"])),
+            "base_dn": str(ldap.get("base_dn", cfg["ldap"]["base_dn"])).strip(),
+            "user_search_filter": str(ldap.get("user_search_filter", cfg["ldap"]["user_search_filter"])).strip(),
+            "user_dn_template": str(ldap.get("user_dn_template", cfg["ldap"]["user_dn_template"])).strip(),
+            "group_search_base": str(ldap.get("group_search_base", cfg["ldap"]["group_search_base"])).strip(),
+            "group_search_filter": str(ldap.get("group_search_filter", cfg["ldap"]["group_search_filter"])).strip(),
+            "admin_group_dn": str(ldap.get("admin_group_dn", cfg["ldap"]["admin_group_dn"])).strip(),
+            "default_role": str(ldap.get("default_role", cfg["ldap"]["default_role"])).strip(),
+            "timeout": int(ldap.get("timeout", cfg["ldap"]["timeout"])),
+            "fallback_to_local": bool(ldap.get("fallback_to_local", cfg["ldap"]["fallback_to_local"])),
+            "fallback_on_reject": bool(ldap.get("fallback_on_reject", cfg["ldap"]["fallback_on_reject"])),
+        })
+    cfg["ldap"]["port"] = max(1, cfg["ldap"]["port"])
+    cfg["ldap"]["timeout"] = max(1, cfg["ldap"]["timeout"])
     return cfg
 
 
