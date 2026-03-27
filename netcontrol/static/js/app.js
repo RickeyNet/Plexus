@@ -25,21 +25,18 @@ const NAV_FEATURE_MAP = {
     credentials: 'credentials',
     converter: 'converter',
     topology: 'topology',
-    'config-drift': 'config-drift',
-    'config-backups': 'config-backups',
+    configuration: 'config-drift',
     compliance: 'compliance',
-    'risk-analysis': 'risk-analysis',
-    deployments: 'deployments',
+    'change-management': 'risk-analysis',
     monitoring: 'monitoring',
-    sla: 'monitoring',
-    'capacity-planning': 'monitoring',
+    reports: 'reports',
 };
 
 const THEME_KEY = 'plexus-theme';
 const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light', 'void', 'coral'];
-const DEFAULT_THEME = 'forest';
+const DEFAULT_THEME = 'coral';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'config-drift', 'config-backups'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'configuration'];
 const pageCacheMeta = {};
 
 // ── Utility: debounce ──────────────────────────────────────────────────────────
@@ -87,9 +84,11 @@ const listViewState = {
     credentials: { items: [], query: '', sort: 'name_asc' },
     configDrift: { items: [], query: '', sort: 'detected_desc', status: 'open' },
     configBackups: { policies: [], backups: [], query: '', tab: 'policies' },
+    configuration: { tab: 'drift' },
     compliance: { profiles: [], assignments: [], results: [], statusList: [], query: '', tab: 'profiles' },
     riskAnalysis: { items: [], query: '', levelFilter: '' },
     deployments: { items: [], query: '', statusFilter: '' },
+    changeManagement: { tab: 'risk' },
     monitoring: { polls: [], alerts: [], query: '', tab: 'devices' },
     sla: { summary: null, hosts: [], query: '', tab: 'hosts' },
     deviceDetail: { hostId: null, tab: 'overview' },
@@ -162,7 +161,7 @@ function initPerformanceMode() {
 // Global Time Range Selector
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const METRIC_PAGES = ['monitoring', 'sla', 'device-detail', 'dashboard'];
+const METRIC_PAGES = ['monitoring', 'device-detail', 'dashboard'];
 
 const globalTimeRange = {
     range: '6h',
@@ -1361,16 +1360,10 @@ function applyFeatureVisibility() {
 // Map child pages to their nav-group id for auto-expand
 const NAV_GROUP_CHILDREN = {
     'topology': 'network',
-    'config-drift': 'network',
-    'config-backups': 'network',
     'monitoring': 'network',
+    'configuration': 'network',
     'compliance': 'network',
-    'risk-analysis': 'network',
-    'deployments': 'network',
-    'sla': 'network',
-    'availability': 'network',
-    'syslog': 'network',
-    'oid-profiles': 'network',
+    'change-management': 'network',
     'reports': 'network',
 };
 
@@ -1406,7 +1399,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'monitoring', 'config-drift', 'config-backups', 'settings', 'device-detail', 'compliance', 'risk-analysis', 'deployments', 'sla'];
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -1516,16 +1509,10 @@ const PAGE_LABELS = {
     credentials: 'Credentials',
     converter: 'Firewall Migration Tool',
     topology: 'Network Topology',
-    'config-drift': 'Config Drift Detection',
-    'config-backups': 'Config Backups',
+    configuration: 'Configuration',
     compliance: 'Compliance',
-    'risk-analysis': 'Risk Analysis',
-    deployments: 'Deployments',
+    'change-management': 'Change Management',
     monitoring: 'Monitoring',
-    sla: 'SLA Dashboards',
-    availability: 'Availability Tracking',
-    syslog: 'Syslog Events',
-    'oid-profiles': 'SNMP OID Profiles',
     reports: 'Reports & Export',
     'device-detail': 'Device Detail',
     settings: 'Admin Settings',
@@ -1564,33 +1551,25 @@ const PAGE_HELP = {
         title: 'Interactive Network Map',
         text: 'Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data.'
     },
-    'config-drift': {
-        title: 'Detect Config Changes',
-        text: 'Compare current device configurations against saved baselines to find unauthorized or unexpected changes. Run scans to check for drift across your network.'
-    },
-    'config-backups': {
-        title: 'Backup & Restore Configs',
-        text: 'Schedule automatic configuration backups for your devices. Browse backup history, compare versions side-by-side, and restore previous configurations.'
+    configuration: {
+        title: 'Configuration Management',
+        text: 'Manage device configurations in one place. Detect drift against baselines, schedule automatic backups, browse backup history, and restore previous configurations.'
     },
     compliance: {
         title: 'Policy Compliance Auditing',
         text: 'Define compliance rules and run audits against your devices. Check configurations against security policies, best practices, and industry standards.'
     },
-    'risk-analysis': {
-        title: 'Network Risk Assessment',
-        text: 'Evaluate network risk based on device health, compliance violations, and configuration issues. View risk scores and prioritize remediation efforts.'
-    },
-    deployments: {
-        title: 'Deploy Config Changes',
-        text: 'Plan and push configuration changes to devices with staged rollouts. Track deployment status, view diffs, and roll back if needed.'
+    'change-management': {
+        title: 'Plan, Analyze & Deploy Changes',
+        text: 'Assess risk before pushing changes, deploy with staged rollouts, and roll back if needed. The full change lifecycle in one place.'
     },
     monitoring: {
         title: 'Real-Time Device Monitoring',
-        text: 'Track CPU, memory, response time, packet loss, and interface status across your network. Click a device for detailed metrics and charts.'
+        text: 'Track CPU, memory, response time, packet loss, and interface status. Includes SLA tracking, availability history, and capacity planning trends.'
     },
-    sla: {
-        title: 'Service Level Tracking',
-        text: 'Monitor uptime, latency, jitter, and packet loss against SLA targets. Set thresholds per host or group and track compliance over time.'
+    reports: {
+        title: 'Reports, Event Log & OID Profiles',
+        text: 'Generate and export availability, compliance, and utilization reports. View syslog events and SNMP traps. Manage custom OID profiles for monitoring.'
     },
     settings: {
         title: 'Application Settings',
@@ -1686,38 +1665,19 @@ async function loadPageData(page, options = {}) {
             case 'topology':
                 await loadTopology({ preserveContent });
                 break;
-            case 'config-drift':
+            case 'configuration':
                 await loadConfigDrift({ preserveContent });
-                break;
-            case 'config-backups':
                 await loadConfigBackups({ preserveContent });
                 break;
             case 'compliance':
                 await loadCompliance({ preserveContent });
                 break;
-            case 'risk-analysis':
+            case 'change-management':
                 await loadRiskAnalysis({ preserveContent });
-                break;
-            case 'deployments':
                 await loadDeployments({ preserveContent });
                 break;
             case 'monitoring':
                 await loadMonitoring({ preserveContent });
-                break;
-            case 'sla':
-                await loadSla({ preserveContent });
-                break;
-            case 'availability':
-                await loadAvailability({ preserveContent });
-                break;
-            case 'capacity-planning':
-                await loadCapacityPlanning();
-                break;
-            case 'syslog':
-                await loadSyslog({ preserveContent });
-                break;
-            case 'oid-profiles':
-                await loadOidProfiles({ preserveContent });
                 break;
             case 'reports':
                 await loadReports({ preserveContent });
@@ -7589,7 +7549,7 @@ window.createBaseline = async function(e) {
         });
         closeAllModals();
         showSuccess('Baseline saved successfully');
-        invalidatePageCache('config-drift');
+        invalidatePageCache('configuration');
         await loadConfigDrift({ preserveContent: false });
     } catch (err) {
         showError('Failed to save baseline: ' + err.message);
@@ -7690,7 +7650,7 @@ window.captureSnapshot = async function(e) {
                     output.scrollTop = output.scrollHeight;
                     ws.close();
                     // Refresh the config drift list
-                    invalidatePageCache('config-drift');
+                    invalidatePageCache('configuration');
                     loadConfigDrift({ preserveContent: false });
                 }
             } catch (err) {
@@ -7714,7 +7674,7 @@ window.acceptDriftEvent = async function(eventId) {
     try {
         await api.updateConfigDriftEventStatus(eventId, 'accepted');
         showSuccess('Drift accepted — baseline updated to match current config');
-        invalidatePageCache('config-drift');
+        invalidatePageCache('configuration');
         await loadConfigDrift({ preserveContent: false });
     } catch (err) {
         showError('Failed to accept: ' + err.message);
@@ -7725,7 +7685,7 @@ window.resolveDriftEvent = async function(eventId) {
     try {
         await api.updateConfigDriftEventStatus(eventId, 'resolved');
         showSuccess('Drift event resolved');
-        invalidatePageCache('config-drift');
+        invalidatePageCache('configuration');
         await loadConfigDrift({ preserveContent: false });
     } catch (err) {
         showError('Failed to resolve: ' + err.message);
@@ -7787,7 +7747,7 @@ window.showRevertDriftModal = async function(eventId) {
                     done.textContent = data.status === 'completed' ? 'Revert completed.' : 'Revert failed.';
                     output.appendChild(done);
                     output.scrollTop = output.scrollHeight;
-                    invalidatePageCache('config-drift');
+                    invalidatePageCache('configuration');
                     loadConfigDrift({ preserveContent: false });
                 }
             };
@@ -7857,10 +7817,42 @@ window.viewSnapshotConfig = async function(snapshotId) {
 };
 
 window.refreshConfigDrift = async function() {
-    invalidatePageCache('config-drift');
+    invalidatePageCache('configuration');
     await loadConfigDrift({ preserveContent: false });
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Consolidated Page Tab Switching
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Configuration page tabs (Drift Events / Backup Policies / Backup History)
+window.switchConfigurationTab = function(tab) {
+    listViewState.configuration.tab = tab;
+    document.querySelectorAll('.config-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-config-tab') === tab));
+    document.querySelectorAll('.config-tab').forEach(t => t.style.display = 'none');
+    const target = document.getElementById(`config-tab-${tab}`);
+    if (target) target.style.display = '';
+};
+
+window.refreshConfiguration = async function() {
+    invalidatePageCache('configuration');
+    await loadConfigDrift({ preserveContent: false });
+    await loadConfigBackups({ preserveContent: false });
+};
+
+// Change Management page tabs (Risk Analysis / Deployments)
+window.switchChangeTab = function(tab) {
+    listViewState.changeManagement.tab = tab;
+    document.querySelectorAll('.change-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-change-tab') === tab));
+    document.querySelectorAll('.change-tab').forEach(t => t.style.display = 'none');
+    const target = document.getElementById(`change-tab-${tab}`);
+    if (target) target.style.display = '';
+};
+
+window.refreshChangeManagement = async function() {
+    await loadRiskAnalysis({ preserveContent: false });
+    await loadDeployments({ preserveContent: false });
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Keyboard Shortcuts & Command Palette
@@ -7875,12 +7867,9 @@ const COMMAND_PALETTE_PAGES = [
     { page: 'credentials', label: 'Credentials',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' },
     { page: 'converter',   label: 'Converter',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>' },
     { page: 'monitoring',   label: 'Monitoring',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
-    { page: 'config-drift', label: 'Config Drift', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>' },
-    { page: 'deployments', label: 'Deployments',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>' },
-    { page: 'sla',         label: 'SLA Dashboards', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>' },
-    { page: 'availability', label: 'Availability', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' },
-    { page: 'syslog',     label: 'Syslog',        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
-    { page: 'oid-profiles', label: 'OID Profiles', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="10" y1="4" x2="10" y2="20"/></svg>' },
+    { page: 'configuration', label: 'Configuration', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="M9 15l3 3 3-3"/></svg>' },
+    { page: 'compliance',  label: 'Compliance',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>' },
+    { page: 'change-management', label: 'Changes', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>' },
     { page: 'reports',     label: 'Reports',       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' },
     { page: 'settings',    label: 'Settings',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
 ];
@@ -9489,6 +9478,8 @@ window.switchMonitoringTab = function(tab) {
     }
     if (tab === 'rules') loadMonitoringRules();
     if (tab === 'suppressions') loadMonitoringSuppressions();
+    if (tab === 'sla') { loadSla(); loadAvailability(); }
+    if (tab === 'capacity') loadCapacityPlanning();
 };
 
 async function loadMonitoringRouteChurn() {
@@ -10227,6 +10218,7 @@ function switchSlaTab(tab) {
 
     if (tab === 'trends') loadSlaTrends();
     if (tab === 'targets') loadSlaTargets();
+    if (tab === 'availability') loadAvailability();
 }
 window.switchSlaTab = switchSlaTab;
 
@@ -11661,6 +11653,9 @@ function switchReportTab(tab) {
     if (tabEl) tabEl.style.display = '';
     const btn = document.querySelector(`.report-tab-btn[data-report-tab="${tab}"]`);
     if (btn) btn.classList.add('active');
+    // Lazy load syslog and OID profiles when their tabs are selected
+    if (tab === 'events') loadSyslog();
+    if (tab === 'oid-profiles') loadOidProfiles();
 }
 window.switchReportTab = switchReportTab;
 
