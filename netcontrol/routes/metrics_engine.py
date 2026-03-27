@@ -190,6 +190,22 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
         rows.append((host_id, if_index, if_name, speed_mbps,
                       in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct))
 
+    # Update interface_stats with current counters so the *next* poll
+    # can calculate deltas.  Without this, rates stay null because
+    # interface_stats was only written by topology discovery.
+    for iface in if_details:
+        if_index = iface.get("if_index")
+        if not if_index:
+            continue
+        await db.upsert_interface_stat(
+            host_id=host_id,
+            if_index=if_index,
+            if_name=iface.get("name", ""),
+            if_speed_mbps=iface.get("speed_mbps", 0) or 0,
+            in_octets=iface.get("in_octets", 0) or 0,
+            out_octets=iface.get("out_octets", 0) or 0,
+        )
+
     return await db.create_interface_ts_batch(rows)
 
 

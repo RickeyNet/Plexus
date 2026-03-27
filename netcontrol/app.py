@@ -105,6 +105,7 @@ from netcontrol.routes.config_drift import (
 from netcontrol.routes.converter import prune_converter_sessions, router as converter_router
 from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate, router as credentials_router
 from netcontrol.routes.dashboards import router as dashboards_router
+from netcontrol.routes.graph_templates import router as graph_templates_router
 from netcontrol.routes.deployments import (
     DeploymentCreate,
     DeploymentExecute,
@@ -621,6 +622,7 @@ async def lifespan(app: FastAPI):
     if not check:
         from routes.seed import seed
         await seed()
+    await db.seed_built_in_graph_templates()
     await _cleanup_expired_jobs()
     await _cleanup_expired_converter_sessions()
     await _run_discovery_sync_once()
@@ -993,6 +995,11 @@ app.include_router(
 # Dashboards & Annotations
 app.include_router(
     dashboards_router,
+    dependencies=[Depends(require_auth)],
+)
+# Graph Templates (Cacti-parity)
+app.include_router(
+    graph_templates_router,
     dependencies=[Depends(require_auth)],
 )
 
