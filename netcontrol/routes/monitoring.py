@@ -641,6 +641,15 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
                 LOGGER.debug("metrics: emission error for host %s: %s",
                              res["host_id"], redact_value(str(exc)))
 
+            # ── Baseline Deviation Alerting ──
+            try:
+                from netcontrol.routes.baseline_alerting import evaluate_baseline_alerts_for_poll
+                baseline_alerts = await evaluate_baseline_alerts_for_poll(res, poll_id)
+                alerts_created += baseline_alerts
+            except Exception as exc:
+                LOGGER.debug("baseline: evaluation error for host %s: %s",
+                             res["host_id"], redact_value(str(exc)))
+
             # Route churn detection
             if res["route_snapshot"]:
                 route_hash = hashlib.sha256(res["route_snapshot"].encode()).hexdigest()[:16]
@@ -696,6 +705,20 @@ async def _monitoring_poll_loop() -> None:
         except Exception as exc:
             LOGGER.warning("monitoring poll loop failure: %s", redact_value(str(exc)))
             await asyncio.sleep(state.MONITORING_DEFAULTS["interval_seconds"])
+
+
+async def _baseline_computation_loop() -> None:
+    """Background loop that recomputes metric baselines every 6 hours."""
+    while True:
+        try:
+            await asyncio.sleep(6 * 3600)  # Every 6 hours
+            from netcontrol.routes.baseline_alerting import run_baseline_computation_cycle
+            await run_baseline_computation_cycle()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.debug("baseline computation loop failure: %s", redact_value(str(exc)))
+            await asyncio.sleep(3600)
 
 
 async def _alert_escalation_loop() -> None:
