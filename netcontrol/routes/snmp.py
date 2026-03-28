@@ -7,6 +7,7 @@ and topology route modules.
 """
 
 import asyncio
+import json
 import re
 import socket
 
@@ -645,3 +646,179 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         })
 
     return neighbors, if_stats
+
+
+# ── SNMP Table Walking (auto-discovery of interfaces as data sources) ─────
+
+
+async def snmp_table_walk(ip_address: str, snmp_config: dict,
+                          table_oids: list[str], timeout_seconds: float = 5.0,
+                          max_rows: int = 1000) -> dict[str, dict[str, str]]:
+    """Walk multiple SNMP OID subtrees in parallel and correlate rows by index suffix.
+
+    Returns {table_oid: {index_suffix: value}} for each OID walked.
+    """
+    if not table_oids:
+        return {}
+
+    async def _walk_one(oid):
+        return oid, await _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows)
+
+    results_raw = await asyncio.gather(*[_walk_one(oid) for oid in table_oids],
+                                        return_exceptions=True)
+    tables: dict[str, dict[str, str]] = {}
+    for res in results_raw:
+        if isinstance(res, Exception):
+            continue
+        oid_prefix, raw_data = res
+        indexed: dict[str, str] = {}
+        for full_oid, val in raw_data.items():
+            # Extract index suffix (everything after the base OID prefix)
+            if full_oid.startswith(oid_prefix):
+                suffix = full_oid[len(oid_prefix):].lstrip(".")
+            else:
+                # Fallback: use last dotted component
+                suffix = full_oid.rsplit(".", 1)[-1] if "." in full_oid else full_oid
+            val_str = _snmp_str(val) if not isinstance(val, str) else val
+            indexed[suffix] = val_str
+        tables[oid_prefix] = indexed
+    return tables
+
+
+async def auto_discover_data_sources(host_id: int, ip_address: str,
+                                      snmp_config: dict,
+                                      timeout_seconds: float = 5.0) -> dict:
+    """Walk ifTable/ifXTable to enumerate interfaces as independent data sources.
+
+    Also discovers storage entries (hrStorageTable) if available.
+    Returns {"interfaces": count, "storage": count, "total": count}.
+    """
+    import routes.database as db
+
+    # OIDs for interface discovery
+    IF_TABLE_OIDS = [
+        "1.3.6.1.2.1.31.1.1.1.1",    # ifName
+        "1.3.6.1.2.1.2.2.1.2",        # ifDescr
+        "1.3.6.1.2.1.2.2.1.3",        # ifType
+        "1.3.6.1.2.1.2.2.1.5",        # ifSpeed (bps)
+        "1.3.6.1.2.1.31.1.1.1.15",    # ifHighSpeed (Mbps)
+        "1.3.6.1.2.1.2.2.1.7",        # ifAdminStatus
+        "1.3.6.1.2.1.2.2.1.8",        # ifOperStatus
+        "1.3.6.1.2.1.2.2.1.6",        # ifPhysAddress (MAC)
+    ]
+
+    # OIDs for storage discovery (HOST-RESOURCES-MIB)
+    STORAGE_TABLE_OIDS = [
+        "1.3.6.1.2.1.25.2.3.1.2",     # hrStorageType
+        "1.3.6.1.2.1.25.2.3.1.3",     # hrStorageDescr
+        "1.3.6.1.2.1.25.2.3.1.4",     # hrStorageAllocationUnits
+        "1.3.6.1.2.1.25.2.3.1.5",     # hrStorageSize
+        "1.3.6.1.2.1.25.2.3.1.6",     # hrStorageUsed
+    ]
+
+    counts = {"interfaces": 0, "storage": 0, "total": 0}
+
+    # Walk interface and storage tables in parallel
+    try:
+        if_tables, storage_tables = await asyncio.gather(
+            snmp_table_walk(ip_address, snmp_config, IF_TABLE_OIDS, timeout_seconds),
+            snmp_table_walk(ip_address, snmp_config, STORAGE_TABLE_OIDS, timeout_seconds),
+            return_exceptions=False,
+        )
+    except Exception as exc:
+        LOGGER.warning("data_source_discovery: SNMP table walk failed for %s: %s",
+                        ip_address, str(exc))
+        return counts
+
+    # ── Process interfaces ──
+    if_name_data = if_tables.get("1.3.6.1.2.1.31.1.1.1.1", {})
+    if_descr_data = if_tables.get("1.3.6.1.2.1.2.2.1.2", {})
+    if_type_data = if_tables.get("1.3.6.1.2.1.2.2.1.3", {})
+    if_speed_data = if_tables.get("1.3.6.1.2.1.2.2.1.5", {})
+    if_high_speed_data = if_tables.get("1.3.6.1.2.1.31.1.1.1.15", {})
+    if_admin_data = if_tables.get("1.3.6.1.2.1.2.2.1.7", {})
+    if_oper_data = if_tables.get("1.3.6.1.2.1.2.2.1.8", {})
+    if_mac_data = if_tables.get("1.3.6.1.2.1.2.2.1.6", {})
+
+    # Collect all known if_indexes
+    all_indexes = set()
+    for table in [if_name_data, if_descr_data, if_type_data]:
+        all_indexes.update(table.keys())
+
+    for idx in sorted(all_indexes, key=lambda x: int(x) if x.isdigit() else 0):
+        if_name = if_name_data.get(idx, "") or if_descr_data.get(idx, f"ifIndex-{idx}")
+        if_type = if_type_data.get(idx, "")
+        speed_raw = if_high_speed_data.get(idx, "")
+        if not speed_raw:
+            speed_bps = if_speed_data.get(idx, "0")
+            try:
+                speed_mbps = int(speed_bps) // 1_000_000
+            except (ValueError, TypeError):
+                speed_mbps = 0
+        else:
+            try:
+                speed_mbps = int(speed_raw)
+            except (ValueError, TypeError):
+                speed_mbps = 0
+
+        admin_status = if_admin_data.get(idx, "")
+        oper_status = if_oper_data.get(idx, "")
+        mac = if_mac_data.get(idx, "")
+
+        oids_info = {
+            "if_type": if_type,
+            "speed_mbps": speed_mbps,
+            "admin_status": admin_status,
+            "oper_status": oper_status,
+            "mac": mac,
+        }
+
+        try:
+            await db.upsert_snmp_data_source(
+                host_id=host_id,
+                ds_type="interface",
+                instance_key=str(idx),
+                name=if_name,
+                instance_label=if_name,
+                table_oid="1.3.6.1.2.1.2.2.1",
+                index_oid="1.3.6.1.2.1.2.2.1.1",
+                oids_json=json.dumps(oids_info),
+            )
+            counts["interfaces"] += 1
+        except Exception:
+            pass
+
+    # ── Process storage entries ──
+    storage_type_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.2", {})
+    storage_descr_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.3", {})
+    storage_alloc_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.4", {})
+    storage_size_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.5", {})
+
+    for idx in storage_descr_data:
+        descr = storage_descr_data.get(idx, "")
+        if not descr:
+            continue
+        storage_info = {
+            "storage_type": storage_type_data.get(idx, ""),
+            "alloc_units": storage_alloc_data.get(idx, ""),
+            "size": storage_size_data.get(idx, ""),
+        }
+        try:
+            await db.upsert_snmp_data_source(
+                host_id=host_id,
+                ds_type="storage",
+                instance_key=f"hr-{idx}",
+                name=descr,
+                instance_label=descr,
+                table_oid="1.3.6.1.2.1.25.2.3.1",
+                index_oid="1.3.6.1.2.1.25.2.3.1.1",
+                oids_json=json.dumps(storage_info),
+            )
+            counts["storage"] += 1
+        except Exception:
+            pass
+
+    counts["total"] = counts["interfaces"] + counts["storage"]
+    LOGGER.info("data_source_discovery: host %s (%s) — %d interfaces, %d storage entries",
+                host_id, ip_address, counts["interfaces"], counts["storage"])
+    return counts
