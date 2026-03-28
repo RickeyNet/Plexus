@@ -110,6 +110,25 @@ class RadiusConfigRequest(BaseModel):
     fallback_on_reject: bool = False
 
 
+class LdapConfigRequest(BaseModel):
+    enabled: bool = False
+    server: str = ""
+    port: int = 389
+    use_ssl: bool = False
+    bind_dn: str = ""
+    bind_password: str = ""
+    base_dn: str = ""
+    user_search_filter: str = "(sAMAccountName={username})"
+    user_dn_template: str = ""
+    group_search_base: str = ""
+    group_search_filter: str = "(&(objectClass=group)(member={user_dn}))"
+    admin_group_dn: str = ""
+    default_role: str = "user"
+    timeout: int = 10
+    fallback_to_local: bool = True
+    fallback_on_reject: bool = False
+
+
 class AuthConfigRequest(BaseModel):
     provider: str = "local"
     default_credential_id: int | None = None
@@ -117,6 +136,7 @@ class AuthConfigRequest(BaseModel):
     converter_session_retention_days: int = Field(default=30, ge=1)
     converter_backup_retention_days: int = Field(default=30, ge=1)
     radius: RadiusConfigRequest = RadiusConfigRequest()
+    ldap: LdapConfigRequest = LdapConfigRequest()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
