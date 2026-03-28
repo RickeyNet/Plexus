@@ -148,7 +148,7 @@
 ### Later (Enterprise and Ecosystem)
 - [ ] Add firmware/OS lifecycle management with staged upgrade workflows.
 - [ ] Add multi-vendor adapter framework with pluggable device drivers.
-- [ ] Add enterprise auth (OIDC/SAML), group-to-role mapping, and scoped permissions.
+- [x] Add enterprise auth (LDAP/AD with auto-provisioning, group-to-role mapping, and local fallback).
 - [ ] Add secrets vault integrations (Vault/Azure Key Vault/AWS Secrets Manager) with rotation.
 - [ ] Add multi-tenant boundaries (tenant isolation, quotas, delegated admin).
 - [ ] Add ITSM integrations (ServiceNow/Jira) for change ticket linkage.
