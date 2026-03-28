@@ -3,6 +3,11 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
+# System dependencies for python-ldap and pysnmp
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libldap2-dev libsasl2-dev libssl-dev gcc \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
