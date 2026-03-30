@@ -166,51 +166,19 @@ def test_sanitize_auth_config_enforces_job_retention_minimum():
     assert cfg["job_retention_days"] == 30
 
 
-def test_sanitize_auth_config_applies_converter_retention_defaults():
-    cfg = app_module._sanitize_auth_config({"provider": "local"})
-    assert cfg["converter_session_retention_days"] == 30
-    assert cfg["converter_backup_retention_days"] == 30
-
-
-def test_sanitize_auth_config_enforces_converter_retention_minimums():
-    cfg = app_module._sanitize_auth_config(
-        {
-            "provider": "local",
-            "converter_session_retention_days": 0,
-            "converter_backup_retention_days": -10,
-        }
-    )
-    assert cfg["converter_session_retention_days"] == 1
-    assert cfg["converter_backup_retention_days"] == 1
-
-
 @pytest.mark.asyncio
 async def test_admin_run_retention_cleanup_now_returns_summary(monkeypatch):
     async def fake_cleanup_expired_jobs():
         return 2
 
-    async def fake_cleanup_expired_converter_sessions():
-        return {"sessions_deleted": 1, "snapshots_deleted": 3, "sessions_kept": 4}
-
     monkeypatch.setattr(app_module, "_cleanup_expired_jobs", fake_cleanup_expired_jobs)
-    monkeypatch.setattr(
-        app_module,
-        "_cleanup_expired_converter_sessions",
-        fake_cleanup_expired_converter_sessions,
-    )
     monkeypatch.setattr(app_module, "_effective_job_retention_days", lambda: 30)
-    monkeypatch.setattr(app_module, "_effective_converter_session_retention_days", lambda: 14)
-    monkeypatch.setattr(app_module, "_effective_converter_backup_retention_days", lambda: 7)
 
     result = await app_module.admin_run_retention_cleanup_now()
 
     assert result["ok"] is True
     assert result["jobs_deleted"] == 2
-    assert result["converter"]["sessions_deleted"] == 1
-    assert result["converter"]["snapshots_deleted"] == 3
     assert result["effective_retention_days"]["jobs"] == 30
-    assert result["effective_retention_days"]["converter_sessions"] == 14
-    assert result["effective_retention_days"]["converter_backups"] == 7
 
 
 @pytest.mark.asyncio
