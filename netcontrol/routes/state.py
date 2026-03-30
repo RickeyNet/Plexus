@@ -159,6 +159,22 @@ DEFAULT_LOGIN_RULES = {
     "rate_limit_max": 10,
 }
 
+# Global API rate-limit defaults — applied to all authenticated API endpoints
+# beyond login.  Limits state-changing methods (POST/PUT/DELETE) more tightly
+# than read-only (GET).
+DEFAULT_API_RATE_LIMIT = {
+    "enabled": True,
+    "window": 60,               # sliding window in seconds
+    "max_read": 120,            # GET requests per window per IP
+    "max_write": 40,            # POST/PUT/DELETE requests per window per IP
+}
+API_RATE_LIMIT = {
+    "enabled": _env_flag("APP_API_RATE_LIMIT_ENABLED", DEFAULT_API_RATE_LIMIT["enabled"]),
+    "window": int(os.getenv("APP_API_RATE_LIMIT_WINDOW", str(DEFAULT_API_RATE_LIMIT["window"]))),
+    "max_read": int(os.getenv("APP_API_RATE_LIMIT_MAX_READ", str(DEFAULT_API_RATE_LIMIT["max_read"]))),
+    "max_write": int(os.getenv("APP_API_RATE_LIMIT_MAX_WRITE", str(DEFAULT_API_RATE_LIMIT["max_write"]))),
+}
+
 AUTH_CONFIG_DEFAULTS = {
     "provider": "local",
     "default_credential_id": None,
@@ -218,6 +234,10 @@ JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
 
 LOGIN_ATTEMPTS: dict = {}
 LOCKED_OUT: dict = {}
+
+# Global API rate-limit state — keyed by client IP.
+# Each value is a list of ``time.time()`` timestamps of recent requests.
+API_RATE_LIMIT_TRACKER: dict[str, list[float]] = {}
 
 LOGIN_RULES = dict(DEFAULT_LOGIN_RULES)
 AUTH_CONFIG = dict(AUTH_CONFIG_DEFAULTS)

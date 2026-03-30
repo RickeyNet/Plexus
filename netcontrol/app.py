@@ -620,6 +620,7 @@ async def lifespan(app: FastAPI):
     escalation_task = asyncio.create_task(_alert_escalation_loop())
     baseline_task = asyncio.create_task(_baseline_computation_loop())
     downsampling_task = asyncio.create_task(_downsampling_loop())
+    rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
     try:
         yield
     finally:
@@ -632,6 +633,7 @@ async def lifespan(app: FastAPI):
         monitoring_task.cancel()
         escalation_task.cancel()
         downsampling_task.cancel()
+        rate_limit_cleanup_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -668,6 +670,22 @@ async def lifespan(app: FastAPI):
             await downsampling_task
         except asyncio.CancelledError:
             pass
+        try:
+            await rate_limit_cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+
+async def _rate_limit_cleanup_loop() -> None:
+    """Periodically prune stale entries from the API rate-limit tracker."""
+    while True:
+        await asyncio.sleep(300)  # every 5 minutes
+        window = max(1, int(state.API_RATE_LIMIT.get("window", 60)))
+        now = time.time()
+        tracker = state.API_RATE_LIMIT_TRACKER
+        stale_keys = [ip for ip, ts in tracker.items() if not ts or (now - ts[-1]) > window]
+        for key in stale_keys:
+            tracker.pop(key, None)
 
 
 async def _migrate_auth_json_users():
@@ -774,6 +792,43 @@ async def csrf_protection_middleware(request: Request, call_next):
                         )
                         if not csrf_tok or not _validate_csrf_token(csrf_tok, session["user"]):
                             return _api_error_response(403, "csrf_error", "Missing or invalid CSRF token")
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def api_rate_limit_middleware(request: Request, call_next):
+    """Enforce per-IP sliding-window rate limits on API endpoints.
+
+    Read requests (GET) and write requests (POST/PUT/DELETE) have separate
+    thresholds.  Public paths (login, register, health) are exempt — the
+    login endpoint already has its own brute-force protection.
+    """
+    cfg = state.API_RATE_LIMIT
+    if (
+        cfg.get("enabled")
+        and request.url.path.startswith("/api/")
+        and request.url.path not in PUBLIC_PATHS
+    ):
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        window = max(1, int(cfg.get("window", 60)))
+        is_write = request.method in _CSRF_PROTECTED_METHODS
+        limit = int(cfg.get("max_write", 40) if is_write else cfg.get("max_read", 120))
+
+        tracker = state.API_RATE_LIMIT_TRACKER
+        timestamps = tracker.get(client_ip, [])
+        # Prune entries outside the sliding window
+        timestamps = [t for t in timestamps if now - t < window]
+        if len(timestamps) >= limit:
+            retry_after = int(window - (now - timestamps[0])) + 1
+            return _api_error_response(
+                429,
+                "rate_limit_exceeded",
+                f"Too many requests. Try again in {retry_after}s.",
+            )
+        timestamps.append(now)
+        tracker[client_ip] = timestamps
+
     return await call_next(request)
 
 

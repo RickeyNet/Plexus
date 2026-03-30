@@ -12,7 +12,7 @@
 - [x] **Docker container runs as root** — No `USER` directive in `Dockerfile`. Add a non-root user (`RUN useradd -m -u 1000 plexus` / `USER plexus`).
 - [x] **Swallowed exceptions in LDAP auth** — Bare `except Exception: pass` blocks silently discard authentication errors (`netcontrol/routes/auth.py:336-348`). Add `LOGGER.warning()` calls so failures are visible for security monitoring.
 - [x] **Permissive CORS configuration** — `allow_methods=["*"]` and `allow_headers=["*"]` with `allow_credentials=True` (`netcontrol/app.py:731-737`). Restrict to specific methods (`GET, POST, PUT, DELETE, OPTIONS`) and headers (`Content-Type, X-CSRF-Token, X-API-Token, Authorization`).
-- [ ] **No API rate limiting beyond login** — Only the login endpoint has rate limiting. All other endpoints (job launch, discovery, inventory) have no throttling, enabling resource exhaustion.
+- [x] **No API rate limiting beyond login** — Only the login endpoint has rate limiting. All other endpoints (job launch, discovery, inventory) have no throttling, enabling resource exhaustion.
 - [x] **Missing `.dockerignore`** — Docker build context includes `.venv/`, `.git/`, `*.db`, `*.key`, and other sensitive files. Create a `.dockerignore` excluding secrets, databases, caches, and dev artifacts.
 - [x] **Insecure LDAP TLS settings** — LDAP connections use `OPT_X_TLS_ALLOW` permitting invalid certificates (`netcontrol/routes/auth.py:240-242`), enabling MITM attacks. Require certificate validation for production LDAP servers.
 - [x] **Plaintext credentials in CI/CD** — Hardcoded `POSTGRES_USER: plexus` / `POSTGRES_PASSWORD: plexus` in GitHub Actions workflow (`.github/workflows/ci.yml:65-70`). Use GitHub secrets or document that these are test-only values.
@@ -33,4 +33,4 @@
 - [x] **Bare exception handlers in database layer** — Multiple `except Exception:` blocks silently swallow errors in host info updates and topology changes (`routes/database.py:6089,6228,6410,6423`). Add logging to all exception handlers.
 - [x] **HSTS disabled by default** — `APP_HSTS=false` in `.env.example` even when HTTPS is enabled. Should default to `true` when `APP_HTTPS=true`.
 - [x] **Dependabot monthly schedule** — Monthly update schedule in `.github/dependabot.yml` means security patches could be delayed up to 30 days. Change to weekly.
-- [ ] **Loose dependency version ranges** — `python-ldap>=3.4,<4`, `pysnmp>=7.1,<8`, `ansible-runner>=2.4,<3` in `requirements.txt` allow potentially breaking minor version updates. Pin to patch-level versions.
+- [x] **Loose dependency version ranges** — `python-ldap>=3.4,<4`, `pysnmp>=7.1,<8`, `ansible-runner>=2.4,<3` in `requirements.txt` allow potentially breaking minor version updates. Pin to patch-level versions.
