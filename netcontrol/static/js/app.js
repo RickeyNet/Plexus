@@ -13,7 +13,6 @@ const _hostCache = {};
 const _groupCache = {};
 let _snmpProfilesCache = [];
 let _groupSnmpAssignments = {};
-let converterSessionId = null;
 let currentFeatureAccess = [];
 
 const NAV_FEATURE_MAP = {
@@ -23,7 +22,6 @@ const NAV_FEATURE_MAP = {
     jobs: 'jobs',
     templates: 'templates',
     credentials: 'credentials',
-    converter: 'converter',
     topology: 'topology',
     configuration: 'config-drift',
     compliance: 'compliance',
@@ -36,10 +34,10 @@ const NAV_FEATURE_MAP = {
 };
 
 const THEME_KEY = 'plexus-theme';
-const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'easy', 'easy-dark', 'light', 'void', 'coral'];
-const DEFAULT_THEME = 'coral';
+const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'light', 'void', 'coral', 'sandstone', 'sandstone-dark'];
+const DEFAULT_THEME = 'sandstone-dark';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'converter', 'topology', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis'];
 const pageCacheMeta = {};
 
 // ── Utility: debounce ──────────────────────────────────────────────────────────
@@ -1643,7 +1641,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter', 'topology', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates', 'mac-tracking', 'traffic-analysis'];
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'topology', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates', 'mac-tracking', 'traffic-analysis'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -1752,7 +1750,6 @@ const PAGE_LABELS = {
     jobs: 'Job Execution',
     templates: 'Config Templates',
     credentials: 'Credentials',
-    converter: 'Firewall Migration Tool',
     topology: 'Network Topology',
     configuration: 'Configuration',
     compliance: 'Compliance',
@@ -1790,10 +1787,6 @@ const PAGE_HELP = {
     credentials: {
         title: 'Credential Management',
         text: 'Securely store SSH, SNMP, and API credentials used to connect to network devices. Assign credentials to devices in the Inventory page.'
-    },
-    converter: {
-        title: 'Firewall Rule Converter',
-        text: 'Paste a firewall configuration from one vendor and convert it to another vendor\'s format. Supports common firewall platforms.'
     },
     topology: {
         title: 'Interactive Network Map',
@@ -1911,9 +1904,6 @@ async function loadPageData(page, options = {}) {
             case 'settings':
                 await loadAdminSettings({ preserveContent });
                 break;
-            case 'converter':
-                await loadConverter({ preserveContent });
-                break;
             case 'topology':
                 await loadTopology({ preserveContent });
                 break;
@@ -1954,599 +1944,6 @@ async function loadPageData(page, options = {}) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Converter
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Firewall brand/model data
-const FIREWALL_MODELS = {
-    source: {
-        fortinet: [
-            { value: 'fortigate-60f',   label: 'FortiGate 60F' },
-            { value: 'fortigate-80f',   label: 'FortiGate 80F' },
-            { value: 'fortigate-100f',  label: 'FortiGate 100F' },
-            { value: 'fortigate-200f',  label: 'FortiGate 200F' },
-            { value: 'fortigate-300e',  label: 'FortiGate 300E' },
-            { value: 'fortigate-400e',  label: 'FortiGate 400E' },
-            { value: 'fortigate-500e',  label: 'FortiGate 500E' },
-            { value: 'fortigate-600e',  label: 'FortiGate 600E' },
-            { value: 'fortigate-1000d', label: 'FortiGate 1000D' },
-            { value: 'fortigate-2000e', label: 'FortiGate 2000E' },
-            { value: 'fortigate-3000d', label: 'FortiGate 3000D' },
-            { value: 'fortigate-3200d', label: 'FortiGate 3200D' },
-            { value: 'fortigate-3600e', label: 'FortiGate 3600E' },
-            { value: 'fortigate-3980e', label: 'FortiGate 3980E' },
-            { value: 'fortigate-6300f', label: 'FortiGate 6300F' },
-            { value: 'fortigate-6500f', label: 'FortiGate 6500F' },
-        ]
-    },
-    target: {
-        cisco: [
-            { value: 'ftd-1010', label: 'Firepower 1010' },
-            { value: 'ftd-1120', label: 'Firepower 1120' },
-            { value: 'ftd-1140', label: 'Firepower 1140' },
-            { value: 'ftd-2110', label: 'Firepower 2110' },
-            { value: 'ftd-2120', label: 'Firepower 2120' },
-            { value: 'ftd-2130', label: 'Firepower 2130' },
-            { value: 'ftd-2140', label: 'Firepower 2140' },
-            { value: 'ftd-3105', label: 'Secure Firewall 3105' },
-            { value: 'ftd-3110', label: 'Secure Firewall 3110' },
-            { value: 'ftd-3120', label: 'Secure Firewall 3120' },
-            { value: 'ftd-3130', label: 'Secure Firewall 3130' },
-            { value: 'ftd-3140', label: 'Secure Firewall 3140' },
-            { value: 'ftd-4215', label: 'Secure Firewall 4215' },
-        ]
-    }
-};
-
-window.updateSourceModels = function () {
-    const brand = document.getElementById('source-brand').value;
-    const modelSelect = document.getElementById('source-model');
-    const models = FIREWALL_MODELS.source[brand] || [];
-    modelSelect.innerHTML = '<option value="">-- Select Model --</option>' +
-        models.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
-};
-
-window.updateTargetModels = function () {
-    const brand = document.getElementById('target-brand').value;
-    const modelSelect = document.getElementById('target-model');
-    const models = FIREWALL_MODELS.target[brand] || [];
-    modelSelect.innerHTML = '<option value="">-- Select Model --</option>' +
-        models.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
-};
-
-async function loadConverter(options = {}) {
-    const { preserveContent = false } = options;
-    const convertForm   = document.getElementById('converter-form');
-    const importForm    = document.getElementById('import-form');
-    const statusDiv     = document.getElementById('converter-status');
-    const step2         = document.getElementById('converter-step2');
-    const step3         = document.getElementById('converter-step3');
-    const outputWindow  = document.getElementById('converter-output-window');
-    const summaryCards  = document.getElementById('converter-summary-cards');
-    const importOutput  = document.getElementById('import-output-window');
-    const cleanupForm   = document.getElementById('cleanup-form');
-    const cleanupOutput = document.getElementById('cleanup-output-window');
-    const recentSessions = document.getElementById('recent-sessions');
-    const configSection = document.getElementById('session-config-preview');
-    const configFileSelect = document.getElementById('session-config-file');
-    const configContent = document.getElementById('session-config-content');
-    const configMeta = document.getElementById('session-config-meta');
-    const importSelectAll = document.getElementById('import-only-select-all');
-
-    // Bail out if any required element is missing
-    if (!convertForm || !importForm || !statusDiv || !step2 || !step3 || !outputWindow || !summaryCards || !importOutput) {
-        console.error('Converter: missing DOM elements', { convertForm, importForm, statusDiv, step2, step3, outputWindow, summaryCards, importOutput });
-        return;
-    }
-
-    // Reset state only on first load/forced refresh so revisiting keeps context.
-    if (!preserveContent) {
-        const step1 = document.getElementById('converter-step1');
-        if (step1) step1.style.display = '';
-        convertForm.reset();
-        statusDiv.textContent = '';
-        step2.style.display = 'none';
-        step3.style.display = 'none';
-        importOutput.style.display = 'none';
-        converterSessionId = null;
-        updateConverterStepper(1);
-    }
-
-    function syncImportOnlySelectAll() {
-        if (!importSelectAll) return;
-        const onlyFlags = [...document.querySelectorAll('.only-flag')];
-        const checkedCount = onlyFlags.filter(cb => cb.checked).length;
-
-        importSelectAll.checked = onlyFlags.length > 0 && checkedCount === onlyFlags.length;
-        importSelectAll.indeterminate = checkedCount > 0 && checkedCount < onlyFlags.length;
-    }
-
-    if (importSelectAll) {
-        importSelectAll.onchange = () => {
-            const checkAll = importSelectAll.checked;
-            document.querySelectorAll('.only-flag').forEach((cb) => {
-                cb.checked = checkAll;
-            });
-            importSelectAll.indeterminate = false;
-        };
-    }
-
-    document.querySelectorAll('.only-flag').forEach((cb) => {
-        cb.onchange = syncImportOnlySelectAll;
-    });
-
-    syncImportOnlySelectAll();
-
-    function apiErrorMessage(data, fallback) {
-        return data?.error?.message || data?.detail || fallback;
-    }
-
-    function renderSummary(summary) {
-        const s = summary?.conversion_summary;
-        if (s) {
-            summaryCards.innerHTML = `
-                <div class="stat-card"><div class="stat-label">Address Objects</div><div class="stat-value">${s.address_objects ?? '-'}</div></div>
-                <div class="stat-card"><div class="stat-label">Address Groups</div><div class="stat-value">${s.address_groups ?? '-'}</div></div>
-                <div class="stat-card"><div class="stat-label">Service Objects</div><div class="stat-value">${s.service_objects?.total ?? '-'}</div></div>
-                <div class="stat-card"><div class="stat-label">Service Groups</div><div class="stat-value">${s.service_groups ?? '-'}</div></div>
-                <div class="stat-card"><div class="stat-label">Access Rules</div><div class="stat-value">${s.access_rules?.total ?? '-'}</div></div>
-                <div class="stat-card"><div class="stat-label">Static Routes</div><div class="stat-value">${s.static_routes?.total ?? '-'}</div></div>
-            `;
-        } else {
-            summaryCards.innerHTML = '';
-        }
-    }
-
-    async function loadSessionState(sessionId) {
-        try {
-            const resp = await fetch(`/api/converter-session-state?session_id=${encodeURIComponent(sessionId)}`);
-            const data = await resp.json();
-            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load session state'));
-
-            const modelLabel = data.target_model || 'unknown';
-            outputWindow.textContent = `[Backend confirmed target model: ${modelLabel}]\n\n` + (data.conversion_output || '(no output captured for this session)');
-            renderSummary(data.summary || {});
-            if (step2) step2.style.display = 'block';
-            return data;
-        } catch (err) {
-            outputWindow.textContent = 'Error loading conversion output: ' + err.message;
-            summaryCards.innerHTML = '';
-            return null;
-        }
-    }
-
-    // ── Step 1: Convert ──────────────────────────────────────────────────────
-    convertForm.onsubmit = async (e) => {
-        e.preventDefault();
-        step2.style.display = 'none';
-        converterSessionId = null;
-
-        const targetModel = document.getElementById('target-model').value;
-        const sourceModel = document.getElementById('source-model').value;
-
-        if (!targetModel) {
-            statusDiv.textContent = 'Error: Please select a target firewall brand and model before converting.';
-            return;
-        }
-        if (!sourceModel) {
-            statusDiv.textContent = 'Error: Please select a source firewall brand and model before converting.';
-            return;
-        }
-
-        statusDiv.textContent = `Converting for target model: ${targetModel}...`;
-
-        const formData = new FormData(convertForm);
-        // Explicitly set model values to ensure they are included regardless of FormData capture behaviour
-        formData.set('target_model', targetModel);
-        formData.set('source_model', sourceModel);
-
-        // Debug: confirm what is being sent
-        console.log('[Converter] Sending target_model:', formData.get('target_model'), '| source_model:', formData.get('source_model'));
-
-        try {
-            const convertHeaders = {};
-            const csrfTok1 = getCsrfToken();
-            if (csrfTok1) convertHeaders['X-CSRF-Token'] = csrfTok1;
-            const resp = await fetch('/api/convert-only', { method: 'POST', headers: convertHeaders, body: formData });
-            const data = await resp.json();
-            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Conversion failed'));
-
-            converterSessionId = data.session_id;
-
-            // Show raw output, prefixed with confirmed model from backend
-            outputWindow.textContent = `[Backend confirmed target model: ${data.target_model}]\n\n` + (data.conversion_output || '(no output)');
-
-            // Build summary stat cards
-            renderSummary(data.summary || {});
-
-            const step1El = document.getElementById('converter-step1');
-            if (step1El) step1El.style.display = 'none';
-            step2.style.display = 'block';
-            step3.style.display = 'none';
-            statusDiv.textContent = 'Conversion complete. Review the output, then proceed to import.';
-            updateConverterStepper(2);
-            step2.scrollIntoView({ behavior: 'smooth' });
-            await loadRecentSessions();
-        } catch (err) {
-            statusDiv.textContent = 'Error: ' + err.message;
-        }
-    };
-
-    // ── Recent sessions list ──────────────────────────────────────────────
-    async function loadRecentSessions() {
-        if (!recentSessions) return;
-        recentSessions.innerHTML = skeletonCards(2);
-        try {
-            const resp = await fetch('/api/converter-sessions');
-            const data = await resp.json();
-            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load sessions'));
-            const sessions = data.sessions || [];
-            if (!sessions.length) {
-                recentSessions.innerHTML = emptyStateHTML('No recent conversions', 'converter');
-                return;
-            }
-            recentSessions.innerHTML = sessions.map(s => {
-                const when = new Date(s.created_at * 1000).toLocaleString();
-                return `
-                    <div class="job-item">
-                        <div class="job-info">
-                            <div class="job-title">Session ${s.session_id}</div>
-                            <div class="job-meta">Model: ${s.target_model || 'unknown'} • Base: ${s.base} • ${when}</div>
-                        </div>
-                        <div style="display:flex; gap:0.5rem;">
-                            <button class="btn btn-sm" onclick="viewSessionConfig('${s.session_id}')">View</button>
-                            <button class="btn btn-sm btn-secondary" onclick="resumeImport('${s.session_id}')">Import</button>
-                            <button class="btn btn-sm" onclick="resumeCleanup('${s.session_id}')">Cleanup</button>
-                            <button class="btn btn-sm btn-danger" onclick="deleteSession('${s.session_id}')">Delete</button>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        } catch (err) {
-            recentSessions.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
-        }
-    }
-
-    window.deleteSession = async function (id) {
-        const confirmed = await showConfirm({
-            title: 'Delete Session',
-            message: `Delete session ${id}? This removes its generated files.`,
-            confirmText: 'Delete',
-            cancelText: 'Keep Session',
-            confirmClass: 'btn-danger'
-        });
-        if (!confirmed) return;
-        try {
-            const delHeaders = { 'Content-Type': 'application/json' };
-            const csrfTok2 = getCsrfToken();
-            if (csrfTok2) delHeaders['X-CSRF-Token'] = csrfTok2;
-            const resp = await fetch('/api/reset-session', {
-                method: 'POST',
-                headers: delHeaders,
-                body: JSON.stringify({ session_id: id })
-            });
-            if (!resp.ok) throw new Error('Delete failed');
-            if (converterSessionId === id) {
-                converterSessionId = null;
-                const statusDiv = document.getElementById('converter-status');
-                if (statusDiv) statusDiv.textContent = 'Active session deleted.';
-            }
-            await loadRecentSessions();
-        } catch (err) {
-            showToast('Error deleting session: ' + err.message, 'error');
-        }
-    };
-
-    function setActiveSession(id, message) {
-        converterSessionId = id;
-        if (statusDiv) statusDiv.textContent = message || `Using session ${id}.`;
-    }
-
-    window.resumeImport = function (id) {
-        const step1 = document.getElementById('converter-step1');
-        if (step1) step1.style.display = 'none';
-        setActiveSession(id, `Resumed session ${id}. Provide FTD credentials to import.`);
-        loadSessionState(id);
-        step2.style.display = 'none';
-        step3.style.display = 'block';
-        updateConverterStepper(3);
-        if (importOutput) { importOutput.textContent = ''; importOutput.style.display = 'none'; }
-        document.getElementById('converter-step3')?.scrollIntoView({ behavior: 'smooth' });
-    };
-
-    window.resumeCleanup = function (id) {
-        setActiveSession(id, `Linked session ${id} for cleanup.`);
-        // Open the cleanup section and scroll to it
-        const cleanupSection = document.getElementById('converter-cleanup-section');
-        if (cleanupSection) {
-            cleanupSection.open = true;
-            cleanupSection.scrollIntoView({ behavior: 'smooth' });
-        }
-        if (cleanupOutput) { cleanupOutput.textContent = 'Ready to clean up this session.'; cleanupOutput.style.display = 'block'; }
-    };
-
-    async function loadSessionConfigFile(sessionId, filename) {
-        if (!configContent) return;
-        if (!filename) { configContent.textContent = 'Select a file to preview.'; return; }
-        configContent.textContent = 'Loading file...';
-        try {
-            const resp = await fetch(`/api/converter-session-file?session_id=${encodeURIComponent(sessionId)}&filename=${encodeURIComponent(filename)}`);
-            const data = await resp.json();
-            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load file'));
-            const raw = data.content || '';
-            const trimmed = raw.trim();
-            if (!trimmed) {
-                configContent.textContent = '(empty file)';
-                return;
-            }
-            // Pretty-print JSON when possible; fallback to raw text on parse errors
-            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                try {
-                    const parsed = JSON.parse(trimmed);
-                    configContent.textContent = JSON.stringify(parsed, null, 2);
-                    return;
-                } catch (_) {
-                    // fall through to raw
-                }
-            }
-            configContent.textContent = raw;
-        } catch (err) {
-            configContent.textContent = 'Error: ' + err.message;
-        }
-    }
-
-    window.viewSessionConfig = async function (id) {
-        setActiveSession(id, `Viewing generated config for session ${id}.`);
-        await loadSessionState(id);
-        if (!configSection || !configContent || !configFileSelect) return;
-        configSection.style.display = 'block';
-        configContent.textContent = 'Loading files...';
-        configFileSelect.innerHTML = '';
-        if (configMeta) configMeta.textContent = '';
-        try {
-            const resp = await fetch(`/api/converter-session-files?session_id=${encodeURIComponent(id)}`);
-            const data = await resp.json();
-            if (!resp.ok) throw new Error(apiErrorMessage(data, 'Failed to load session files'));
-            const files = data.files || [];
-            if (configMeta) configMeta.textContent = `Model: ${data.target_model || 'unknown'} • Base: ${data.base || ''}`;
-            if (!files.length) {
-                configContent.textContent = 'No generated config files found for this session.';
-                return;
-            }
-            configFileSelect.innerHTML = files.map(f => {
-                const kb = Math.max(1, Math.round(f.size / 1024));
-                return `<option value="${f.name}">${f.name} (${kb} KB)</option>`;
-            }).join('');
-            configFileSelect.onchange = () => loadSessionConfigFile(id, configFileSelect.value);
-            await loadSessionConfigFile(id, files[0].name);
-            configSection.scrollIntoView({ behavior: 'smooth' });
-        } catch (err) {
-            configContent.textContent = 'Error: ' + err.message;
-        }
-    };
-
-    await loadRecentSessions();
-
-    // ── Converter job WebSocket helper ───────────────────────────────────────
-    // Opens a WebSocket to /ws/converter-jobs/{jobId}, replays history, then
-    // streams live lines.  Clears storageKey from localStorage when done.
-    function connectConverterJobWS(jobId, outputEl, storageKey, onComplete) {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/converter-jobs/${jobId}`);
-        ws.onmessage = (ev) => {
-            try {
-                const msg = JSON.parse(ev.data);
-                if (msg.type === 'line') {
-                    outputEl.textContent += msg.text;
-                    outputEl.scrollTop = outputEl.scrollHeight;
-                } else if (msg.type === 'job_complete') {
-                    if (storageKey) localStorage.removeItem(storageKey);
-                    if (onComplete) onComplete(msg.status);
-                    ws.close();
-                } else if (msg.type === 'error') {
-                    outputEl.textContent += `\n[Error] ${msg.message}\n`;
-                }
-            } catch (_) {}
-        };
-        ws.onerror = () => { outputEl.textContent += '\n[Connection error — WebSocket failed]\n'; };
-        return ws;
-    }
-
-    // ── Reconnect any active converter jobs from a previous page visit ────────
-    async function tryReconnectActiveJobs() {
-        const jobs = [
-            { key: 'plexus_converter_import_job', outputEl: importOutput, label: 'import' },
-            { key: 'plexus_converter_cleanup_job', outputEl: cleanupOutput, label: 'cleanup' },
-        ];
-        for (const { key, outputEl, label } of jobs) {
-            if (!outputEl) continue;
-            const raw = localStorage.getItem(key);
-            if (!raw) continue;
-            let saved;
-            try { saved = JSON.parse(raw); } catch (_) { localStorage.removeItem(key); continue; }
-            const { job_id, session_id } = saved;
-            try {
-                const resp = await fetch(`/api/converter-job/${encodeURIComponent(job_id)}`);
-                if (!resp.ok) { localStorage.removeItem(key); continue; }
-                const job = await resp.json();
-
-                // Restore session + step so the UI is in the right state
-                if (session_id && !converterSessionId) {
-                    converterSessionId = session_id;
-                    if (statusDiv) statusDiv.textContent = `Reconnected to active ${label} job for session ${session_id}.`;
-                    if (step3) step3.style.display = 'block';
-                    if (step2) step2.style.display = 'none';
-                    updateConverterStepper(3);
-                }
-
-                outputEl.textContent = `[Reconnected — accumulated ${label} output]\n` + (job.output || '');
-                outputEl.style.display = 'block';
-
-                if (job.status === 'running') {
-                    connectConverterJobWS(job_id, outputEl, key, (status) => {
-                        outputEl.textContent += `\n[${label} finished: ${status}]\n`;
-                    });
-                    showToast(`Reconnected to running ${label} job.`, 'info');
-                } else {
-                    localStorage.removeItem(key);
-                    outputEl.textContent += `\n[${label} finished: ${job.status}]\n`;
-                }
-            } catch (_) {
-                localStorage.removeItem(key);
-            }
-        }
-    }
-
-    // ── Step 3: Import ───────────────────────────────────────────────────────
-    importForm.onsubmit = async (e) => {
-        e.preventDefault();
-        if (!converterSessionId) { showToast('No active conversion session. Please convert first or resume one.', 'error'); return; }
-        importOutput.textContent = `Importing session ${converterSessionId} to FTD...\n`;
-        importOutput.style.display = 'block';
-        importOutput.scrollIntoView({ behavior: 'smooth' });
-
-        try {
-            const importHeaders = { 'Content-Type': 'application/json' };
-            const csrfTok3 = getCsrfToken();
-            if (csrfTok3) importHeaders['X-CSRF-Token'] = csrfTok3;
-            const resp = await fetch('/api/import-fortigate-bg', {
-                method: 'POST',
-                headers: importHeaders,
-                body: JSON.stringify({
-                    session_id: converterSessionId,
-                    ftd_host:     document.getElementById('ftd-host').value,
-                    ftd_username: document.getElementById('ftd-username').value,
-                    ftd_password: document.getElementById('ftd-password').value,
-                    deploy:       document.getElementById('ftd-deploy').checked,
-                    debug:        document.getElementById('ftd-debug').checked,
-                    only_flags:   [...document.querySelectorAll('.only-flag:checked')].map(cb => cb.value)
-                })
-            });
-
-            if (!resp.ok) {
-                const data = await resp.json().catch(() => ({}));
-                throw new Error(data.detail || `Import request failed (HTTP ${resp.status})`);
-            }
-
-            const { job_id } = await resp.json();
-            localStorage.setItem('plexus_converter_import_job', JSON.stringify({ job_id, session_id: converterSessionId }));
-            connectConverterJobWS(job_id, importOutput, 'plexus_converter_import_job', (status) => {
-                importOutput.textContent += `\n[Import finished: ${status}]\n`;
-            });
-        } catch (err) {
-            importOutput.textContent += '\nError: ' + err.message;
-        }
-    };
-
-    // ── Cleanup Utility ─────────────────────────────────────────────────────
-    if (cleanupForm) {
-        cleanupForm.onsubmit = async (e) => {
-            e.preventDefault();
-            const deleteFlags = [...document.querySelectorAll('.delete-flag:checked')].map(cb => cb.value);
-            if (deleteFlags.length === 0) {
-                showToast('Please select at least one item to delete.', 'error');
-                return;
-            }
-            if (cleanupOutput) {
-                cleanupOutput.textContent = 'Running cleanup...';
-                cleanupOutput.style.display = 'block';
-                cleanupOutput.scrollIntoView({ behavior: 'smooth' });
-            }
-            try {
-                const headers = { 'Content-Type': 'application/json' };
-                const csrfTok = getCsrfToken();
-                if (csrfTok) headers['X-CSRF-Token'] = csrfTok;
-                const resp = await fetch('/api/cleanup-ftd-bg', {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({
-                        session_id:   converterSessionId || '',
-                        ftd_host:     document.getElementById('cleanup-host').value,
-                        ftd_username: document.getElementById('cleanup-username').value,
-                        ftd_password: document.getElementById('cleanup-password').value,
-                        dry_run:      document.getElementById('cleanup-dry-run').checked,
-                        deploy:       document.getElementById('cleanup-deploy').checked,
-                        debug:        document.getElementById('cleanup-debug').checked,
-                        delete_flags: deleteFlags
-                    })
-                });
-
-                if (!resp.ok) {
-                    const data = await resp.json().catch(() => ({}));
-                    throw new Error(data.detail || `Cleanup request failed (HTTP ${resp.status})`);
-                }
-
-                const { job_id } = await resp.json();
-                localStorage.setItem('plexus_converter_cleanup_job', JSON.stringify({ job_id, session_id: converterSessionId || '' }));
-                connectConverterJobWS(job_id, cleanupOutput, 'plexus_converter_cleanup_job', (status) => {
-                    cleanupOutput.textContent += `\n[Cleanup finished: ${status}]\n`;
-                });
-            } catch (err) {
-                if (cleanupOutput) cleanupOutput.textContent = 'Error: ' + err.message;
-            }
-        };
-    }
-
-    await tryReconnectActiveJobs();
-}
-
-window.toggleDeleteAll = function (cb) {
-    const specifics = document.querySelectorAll('.delete-specific');
-    const allIfaces = document.getElementById('cleanup-delete-all-ifaces');
-    specifics.forEach(f => { f.checked = cb.checked; f.disabled = cb.checked; });
-    if (allIfaces) { allIfaces.checked = cb.checked; allIfaces.disabled = cb.checked; }
-};
-
-window.resetConverter = function () {
-    // Fire-and-forget: clean up server-side session files
-    const currentSession = converterSessionId;
-    if (currentSession) {
-        const resetHeaders = { 'Content-Type': 'application/json' };
-        const csrfTok4 = getCsrfToken();
-        if (csrfTok4) resetHeaders['X-CSRF-Token'] = csrfTok4;
-        fetch('/api/reset-session', {
-            method: 'POST',
-            headers: resetHeaders,
-            body: JSON.stringify({ session_id: currentSession })
-        }).catch(() => {});
-    }
-    converterSessionId = null;
-    localStorage.removeItem('plexus_converter_import_job');
-    localStorage.removeItem('plexus_converter_cleanup_job');
-    const f  = document.getElementById('converter-form');
-    const s  = document.getElementById('converter-status');
-    const s2 = document.getElementById('converter-step2');
-    const s3 = document.getElementById('converter-step3');
-    const io = document.getElementById('import-output-window');
-    const co = document.getElementById('cleanup-output-window');
-    const cf = document.getElementById('cleanup-form');
-    const sc = document.getElementById('session-config-preview');
-    const scf = document.getElementById('session-config-file');
-    const scc = document.getElementById('session-config-content');
-    const scm = document.getElementById('session-config-meta');
-    const s1 = document.getElementById('converter-step1');
-    if (f)  f.reset();
-    const importSelectAll = document.getElementById('import-only-select-all');
-    if (importSelectAll) importSelectAll.indeterminate = false;
-    if (s)  s.textContent = '';
-    if (s1) s1.style.display = '';
-    if (s2) s2.style.display = 'none';
-    if (s3) s3.style.display = 'none';
-    if (io) io.style.display = 'none';
-    if (co) { co.style.display = 'none'; co.textContent = ''; }
-    if (cf) cf.reset();
-    if (sc) sc.style.display = 'none';
-    if (scf) scf.innerHTML = '';
-    if (scc) scc.textContent = '';
-    if (scm) scm.textContent = '';
-    // Clear dynamic model dropdowns
-    const srcModel = document.getElementById('source-model');
-    const tgtModel = document.getElementById('target-model');
-    if (srcModel) srcModel.innerHTML = '<option value="">-- Select Model --</option>';
-    if (tgtModel) tgtModel.innerHTML = '<option value="">-- Select Model --</option>';
-    updateConverterStepper(1);
-};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Topology
@@ -2566,7 +1963,7 @@ let _topoThemeColors = null;     // cached theme-aware colors for vis-network
 function _getTopoThemeColors() {
     const style = getComputedStyle(document.documentElement);
     const theme = document.documentElement.getAttribute('data-theme') || 'forest';
-    const isDark = !['easy', 'light'].includes(theme);
+    const isDark = !['light', 'sandstone'].includes(theme);
     const v = (prop, fallback) => style.getPropertyValue(prop).trim() || fallback;
     _topoThemeColors = {
         nodeFont: v('--text', '#c8d4c8'),
@@ -7143,7 +6540,7 @@ function showApp(userData) {
         return;
     }
 
-    const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter'];
+    const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials'];
     const firstAllowed = orderedPages.find((page) => canAccessFeature(NAV_FEATURE_MAP[page])) || 'dashboard';
     // Restore page from URL hash if present, otherwise go to first allowed page
     const hashPage = getPageFromHash();
@@ -7349,7 +6746,7 @@ function showForcePasswordChange() {
             closeAllModals();
             currentUserData.must_change_password = false;
             showSuccess('Password changed successfully. Welcome!');
-            const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'converter'];
+            const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials'];
             const firstAllowed = orderedPages.find((page) => canAccessFeature(NAV_FEATURE_MAP[page])) || 'dashboard';
             navigateToPage(firstAllowed);
         } catch (error) {
@@ -7628,77 +7025,6 @@ function closeMobileSidebar() {
     if (sidebar) sidebar.classList.remove('mobile-open');
     if (backdrop) backdrop.classList.remove('visible');
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Converter Stepper
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function updateConverterStepper(activeStep) {
-    const steps = document.querySelectorAll('.stepper-step');
-    const fill1 = document.getElementById('stepper-fill-1');
-    const fill2 = document.getElementById('stepper-fill-2');
-    if (!steps.length) return;
-
-    steps.forEach((step) => {
-        const stepNum = parseInt(step.dataset.step, 10);
-        step.classList.remove('active', 'completed');
-        if (stepNum < activeStep) {
-            step.classList.add('completed');
-            // Replace number with checkmark
-            const numEl = step.querySelector('.stepper-number');
-            if (numEl) numEl.innerHTML = '&#10003;';
-        } else if (stepNum === activeStep) {
-            step.classList.add('active');
-            const numEl = step.querySelector('.stepper-number');
-            if (numEl) numEl.textContent = stepNum;
-        } else {
-            const numEl = step.querySelector('.stepper-number');
-            if (numEl) numEl.textContent = stepNum;
-        }
-    });
-
-    if (fill1) fill1.style.width = activeStep > 1 ? '100%' : '0%';
-    if (fill2) fill2.style.width = activeStep > 2 ? '100%' : '0%';
-}
-
-window.jumpToConverterStep = function (step) {
-    const step1 = document.getElementById('converter-step1');
-    const step2 = document.getElementById('converter-step2');
-    const step3 = document.getElementById('converter-step3');
-    const statusDiv = document.getElementById('converter-status');
-    const importOutput = document.getElementById('import-output-window');
-
-    if (step === 1) {
-        // Show upload form, hide review/import
-        if (step1) step1.style.display = '';
-        if (step2) step2.style.display = 'none';
-        if (step3) step3.style.display = 'none';
-        updateConverterStepper(1);
-        if (statusDiv) statusDiv.textContent = '';
-        step1?.scrollIntoView({ behavior: 'smooth' });
-    } else if (step === 2) {
-        // Show review section
-        if (step1) step1.style.display = 'none';
-        if (step2) step2.style.display = 'block';
-        if (step3) step3.style.display = 'none';
-        updateConverterStepper(2);
-        if (statusDiv) statusDiv.textContent = converterSessionId
-            ? `Reviewing session ${converterSessionId}.`
-            : 'No conversion session active — go back to Step 1 to convert, or select a recent session.';
-        step2?.scrollIntoView({ behavior: 'smooth' });
-    } else if (step === 3) {
-        // Show import section
-        if (step1) step1.style.display = 'none';
-        if (step2) step2.style.display = 'none';
-        if (step3) step3.style.display = 'block';
-        updateConverterStepper(3);
-        if (statusDiv) statusDiv.textContent = converterSessionId
-            ? `Using session ${converterSessionId}. Provide FTD credentials to import.`
-            : 'No conversion session active — go back to Step 1 to convert, or select a recent session.';
-        if (importOutput) { importOutput.textContent = ''; importOutput.style.display = 'none'; }
-        step3?.scrollIntoView({ behavior: 'smooth' });
-    }
-};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Dashboard Ring Charts
@@ -8263,7 +7589,6 @@ const COMMAND_PALETTE_PAGES = [
     { page: 'jobs',        label: 'Jobs',         icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>' },
     { page: 'templates',   label: 'Templates',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
     { page: 'credentials', label: 'Credentials',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' },
-    { page: 'converter',   label: 'Converter',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>' },
     { page: 'monitoring',   label: 'Monitoring',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
     { page: 'configuration', label: 'Configuration', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="M9 15l3 3 3-3"/></svg>' },
     { page: 'compliance',  label: 'Compliance',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>' },
@@ -8509,16 +7834,6 @@ const EMPTY_ILLUSTRATIONS = {
         <rect x="35" y="85" width="50" height="4" rx="2" opacity="0.15"/>
         <rect x="42" y="93" width="36" height="4" rx="2" opacity="0.1"/>
     </svg>`,
-    converter: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="15" y="35" width="35" height="50" rx="4" opacity="0.25"/>
-        <rect x="70" y="35" width="35" height="50" rx="4" opacity="0.25"/>
-        <polyline points="55,52 63,60 55,68" opacity="0.5"/>
-        <line x1="42" y1="60" x2="63" y2="60" opacity="0.4"/>
-        <rect x="22" y="45" width="18" height="3" rx="1.5" opacity="0.35"/>
-        <rect x="22" y="53" width="12" height="3" rx="1.5" opacity="0.25"/>
-        <rect x="77" y="45" width="18" height="3" rx="1.5" opacity="0.35"/>
-        <rect x="77" y="53" width="12" height="3" rx="1.5" opacity="0.25"/>
-    </svg>`,
 };
 
 function getEmptyIllustration(type) {
@@ -8529,7 +7844,7 @@ function emptyStateHTML(message, type, actionBtn) {
     return `<div class="empty-state">
         <div class="empty-state-illustration">${getEmptyIllustration(type)}</div>
         <div class="empty-state-title">${message}</div>
-        <div class="empty-state-text">Get started by creating your first ${type === 'converter' ? 'conversion' : type.replace(/s$/, '')}.</div>
+        <div class="empty-state-text">Get started by creating your first ${type.replace(/s$/, '')}.</div>
         ${actionBtn || ''}
     </div>`;
 }

@@ -27,7 +27,6 @@ _require_admin = None
 _hash_password_fn = None
 _get_user_features_fn = None
 _cleanup_expired_jobs_fn = None
-_cleanup_expired_converter_sessions_fn = None
 
 
 def _app_module():
@@ -45,16 +44,14 @@ def init_admin(
     hash_password_fn,
     get_user_features_fn,
     cleanup_expired_jobs_fn,
-    cleanup_expired_converter_sessions_fn,
 ):
     """Called from app.py after helpers are defined."""
     global _require_admin, _hash_password_fn, _get_user_features_fn
-    global _cleanup_expired_jobs_fn, _cleanup_expired_converter_sessions_fn
+    global _cleanup_expired_jobs_fn
     _require_admin = require_admin_fn
     _hash_password_fn = hash_password_fn
     _get_user_features_fn = get_user_features_fn
     _cleanup_expired_jobs_fn = cleanup_expired_jobs_fn
-    _cleanup_expired_converter_sessions_fn = cleanup_expired_converter_sessions_fn
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
@@ -133,8 +130,6 @@ class AuthConfigRequest(BaseModel):
     provider: str = "local"
     default_credential_id: int | None = None
     job_retention_days: int = Field(default=30, ge=30)
-    converter_session_retention_days: int = Field(default=30, ge=1)
-    converter_backup_retention_days: int = Field(default=30, ge=1)
     radius: RadiusConfigRequest = RadiusConfigRequest()
     ldap: LdapConfigRequest = LdapConfigRequest()
 
@@ -440,27 +435,20 @@ async def admin_update_auth_config(body: AuthConfigRequest):
 
 @router.post("/api/admin/retention/cleanup-now")
 async def admin_run_retention_cleanup_now():
-    """Run retention cleanup immediately for jobs and converter artifacts.
+    """Run retention cleanup immediately for jobs.
 
     Looks up cleanup functions and retention helpers through the app module
     so that tests can monkeypatch them on ``app_module``.
     """
     _app = _app_module()
     _cleanup_jobs = getattr(_app, "_cleanup_expired_jobs", _cleanup_expired_jobs_fn)
-    _cleanup_converter = getattr(_app, "_cleanup_expired_converter_sessions", _cleanup_expired_converter_sessions_fn)
     _eff_job_ret = getattr(_app, "_effective_job_retention_days", state._effective_job_retention_days)
-    _eff_conv_sess_ret = getattr(_app, "_effective_converter_session_retention_days", state._effective_converter_session_retention_days)
-    _eff_conv_bak_ret = getattr(_app, "_effective_converter_backup_retention_days", state._effective_converter_backup_retention_days)
 
     jobs_deleted = await _cleanup_jobs()
-    converter_summary = await _cleanup_converter()
     return {
         "ok": True,
         "jobs_deleted": jobs_deleted,
-        "converter": converter_summary,
         "effective_retention_days": {
             "jobs": _eff_job_ret(),
-            "converter_sessions": _eff_conv_sess_ret(),
-            "converter_backups": _eff_conv_bak_ret(),
         },
     }
