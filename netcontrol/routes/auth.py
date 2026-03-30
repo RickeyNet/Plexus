@@ -333,8 +333,8 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
                         g.decode("utf-8", errors="replace") if isinstance(g, bytes) else str(g)
                         for g in raw_attrs.get("memberOf", [])
                     ]
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("ldap: failed to retrieve user attributes for '%s': %s", username, exc)
 
         # Fetch group memberships if a group search is configured
         if group_search_base and group_search_filter and not user_attrs.get("groups"):
@@ -344,8 +344,8 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
                 user_attrs["groups"] = [
                     dn for dn, _ in g_result if dn is not None
                 ]
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("ldap: group search failed for '%s': %s", username, exc)
 
         conn.unbind_s()
         return True, "accept", user_attrs

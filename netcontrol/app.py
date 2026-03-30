@@ -264,13 +264,15 @@ CSRF_TOKEN_MAX_AGE = 86400  # 24 hours — aligned with session lifetime
 
 def _generate_csrf_token(session_user: str) -> str:
     """Create a signed, time-limited CSRF token bound to the session user."""
-    assert _csrf_serializer is not None
+    if _csrf_serializer is None:
+        raise RuntimeError("CSRF serializer not initialised — check SECRET_KEY configuration")
     return _csrf_serializer.dumps({"csrf_user": session_user})
 
 
 def _validate_csrf_token(token: str, session_user: str) -> bool:
     """Return True when the token is valid, not expired, and bound to the user."""
-    assert _csrf_serializer is not None
+    if _csrf_serializer is None:
+        raise RuntimeError("CSRF serializer not initialised — check SECRET_KEY configuration")
     try:
         data = _csrf_serializer.loads(token, max_age=CSRF_TOKEN_MAX_AGE)
         return data.get("csrf_user") == session_user
@@ -732,8 +734,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=APP_CORS_ALLOW_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-CSRF-Token", "X-API-Token", "Authorization"],
 )
 
 

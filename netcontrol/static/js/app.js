@@ -2382,14 +2382,15 @@ function showTopologyNodeDetails(node, allEdges) {
         e.from === node.id || e.to === node.id
     );
 
+    const esc = (s) => escapeHtml(String(s ?? ''));
     let html = `
         <div class="topology-detail-section">
-            <div class="topology-detail-row"><span class="topology-detail-label">IP Address</span><span>${node.ip || 'N/A'}</span></div>
-            <div class="topology-detail-row"><span class="topology-detail-label">Device Type</span><span>${node.device_type || 'unknown'}</span></div>
-            <div class="topology-detail-row"><span class="topology-detail-label">Status</span><span class="status-badge status-${node.status || 'unknown'}">${node.status || 'unknown'}</span></div>
-            ${node.group_name ? `<div class="topology-detail-row"><span class="topology-detail-label">Group</span><span>${node.group_name}</span></div>` : ''}
+            <div class="topology-detail-row"><span class="topology-detail-label">IP Address</span><span>${esc(node.ip || 'N/A')}</span></div>
+            <div class="topology-detail-row"><span class="topology-detail-label">Device Type</span><span>${esc(node.device_type || 'unknown')}</span></div>
+            <div class="topology-detail-row"><span class="topology-detail-label">Status</span><span class="status-badge status-${esc(node.status || 'unknown')}">${esc(node.status || 'unknown')}</span></div>
+            ${node.group_name ? `<div class="topology-detail-row"><span class="topology-detail-label">Group</span><span>${esc(node.group_name)}</span></div>` : ''}
             <div class="topology-detail-row"><span class="topology-detail-label">In Inventory</span><span>${node.in_inventory ? 'Yes' : 'No'}</span></div>
-            ${node.platform ? `<div class="topology-detail-row"><span class="topology-detail-label">Platform</span><span>${node.platform}</span></div>` : ''}
+            ${node.platform ? `<div class="topology-detail-row"><span class="topology-detail-label">Platform</span><span>${esc(node.platform)}</span></div>` : ''}
         </div>
     `;
 
@@ -2405,8 +2406,8 @@ function showTopologyNodeDetails(node, allEdges) {
             const util = edge.utilization;
             const utilHtml = util ? `<span style="font-size:0.7rem; padding:0.1rem 0.35rem; border-radius:0.2rem; background:${util.utilization_pct > 75 ? 'rgba(244,67,54,0.2)' : util.utilization_pct > 50 ? 'rgba(255,235,59,0.15)' : 'rgba(76,175,80,0.15)'}; color:${util.utilization_pct > 75 ? '#ef5350' : util.utilization_pct > 50 ? '#fdd835' : '#66bb6a'};">${util.utilization_pct}% (${_formatBps(util.in_bps)} in / ${_formatBps(util.out_bps)} out)</span>` : '';
             html += `<div class="topology-detail-row" style="flex-direction:column; align-items:flex-start; gap:0.15rem;">
-                <span style="font-weight:500; color:var(--text-color);">${peerLabel}</span>
-                <span style="font-size:0.75rem; color:var(--text-muted);">${edge.source_interface || ''} &harr; ${edge.target_interface || ''} &middot; ${proto}</span>
+                <span style="font-weight:500; color:var(--text-color);">${esc(peerLabel)}</span>
+                <span style="font-size:0.75rem; color:var(--text-muted);">${esc(edge.source_interface || '')} &harr; ${esc(edge.target_interface || '')} &middot; ${esc(proto)}</span>
                 ${utilHtml}
             </div>`;
         }
@@ -2414,11 +2415,17 @@ function showTopologyNodeDetails(node, allEdges) {
     }
 
     if (!node.in_inventory && node.ip) {
-        html += `<button class="btn btn-primary btn-sm" style="margin-top:1rem; width:100%;"
-                         onclick="addTopologyNodeToInventory('${node.label}', '${node.ip}')">Add to Inventory</button>`;
+        html += `<button class="btn btn-primary btn-sm topology-add-inventory-btn" style="margin-top:1rem; width:100%;"
+                         data-hostname="${esc(node.label)}" data-ip="${esc(node.ip)}">Add to Inventory</button>`;
     }
 
     content.innerHTML = html;
+    const addBtn = content.querySelector('.topology-add-inventory-btn');
+    if (addBtn) {
+        addBtn.addEventListener('click', () => {
+            addTopologyNodeToInventory(addBtn.dataset.hostname, addBtn.dataset.ip);
+        });
+    }
     panel.style.display = 'flex';
 }
 

@@ -13,6 +13,10 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+RUN useradd -m -u 1000 plexus && chown -R plexus:plexus /app
+USER plexus
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD \
