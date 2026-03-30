@@ -365,7 +365,7 @@ async def test_auth_status_includes_csrf_token_for_authenticated_session(monkeyp
         return user_row
 
     async def fake_features(user):
-        return ["dashboard", "converter"]
+        return ["dashboard", "inventory"]
 
     monkeypatch.setattr(app_module.db, "get_user_by_id", fake_get_user_by_id)
     monkeypatch.setattr(app_module, "_get_user_features", fake_features)

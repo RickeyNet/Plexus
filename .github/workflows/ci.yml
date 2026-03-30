@@ -50,7 +50,7 @@ jobs:
           path: sbom.cdx.json
 
       - name: Static security checks (bandit)
-        run: bandit -q -r netcontrol routes Firewall_converter templates -ll -ii
+        run: bandit -q -r netcontrol routes templates -ll -ii
 
       - name: Tests with coverage gate
         run: pytest --cov=netcontrol --cov=routes --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=30

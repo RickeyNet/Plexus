@@ -150,7 +150,7 @@ docker compose up --build
 Notes:
 - The Docker image runs `python templates/run.py --host 0.0.0.0 --port 8080` inside the container.
 - The built-in healthcheck pings `/api/health`; compose restarts the container if it becomes unhealthy.
-- Named volumes persist converter sessions, DB data, and generated certs across restarts.
+- Named volumes persist DB data and generated certs across restarts.
 - Compose now includes a PostgreSQL service; SQLite remains available as a backend option.
 - For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables.
 

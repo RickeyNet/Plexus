@@ -30,7 +30,6 @@ from fastapi.staticfiles import StaticFiles
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-# Register converter API
 import time
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -102,7 +101,6 @@ from netcontrol.routes.config_drift import (
     router as config_drift_router,
     ws_router as config_drift_ws_router,
 )
-from netcontrol.routes.converter import prune_converter_sessions, router as converter_router
 from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate, router as credentials_router
 from netcontrol.routes.dashboards import router as dashboards_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
@@ -461,8 +459,6 @@ DISCOVERY_MAX_CONCURRENT_PROBES = state.DISCOVERY_MAX_CONCURRENT_PROBES
 DISCOVERY_PROBE_PORTS = state.DISCOVERY_PROBE_PORTS
 JOB_RETENTION_MIN_DAYS = state.JOB_RETENTION_MIN_DAYS
 JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = state.JOB_RETENTION_CLEANUP_INTERVAL_SECONDS
-CONVERTER_SESSION_RETENTION_MIN_DAYS = state.CONVERTER_SESSION_RETENTION_MIN_DAYS
-CONVERTER_BACKUP_RETENTION_MIN_DAYS = state.CONVERTER_BACKUP_RETENTION_MIN_DAYS
 APP_HTTPS_ENABLED = state.APP_HTTPS_ENABLED
 APP_HSTS_ENABLED = state.APP_HSTS_ENABLED
 APP_HSTS_MAX_AGE = state.APP_HSTS_MAX_AGE
@@ -490,10 +486,6 @@ _sanitize_login_rules = state._sanitize_login_rules
 
 _sanitize_auth_config = state._sanitize_auth_config
 _effective_job_retention_days = state._effective_job_retention_days
-_effective_converter_session_retention_days = state._effective_converter_session_retention_days
-_effective_converter_backup_retention_days = state._effective_converter_backup_retention_days
-
-
 _sanitize_discovery_sync_config = state._sanitize_discovery_sync_config
 _sanitize_topology_discovery_config = state._sanitize_topology_discovery_config
 _sanitize_config_drift_check_config = state._sanitize_config_drift_check_config
@@ -518,42 +510,16 @@ async def _cleanup_expired_jobs() -> int:
     return deleted
 
 
-async def _cleanup_expired_converter_sessions() -> dict:
-    session_days = _effective_converter_session_retention_days()
-    backup_days = _effective_converter_backup_retention_days()
-    summary = await asyncio.to_thread(prune_converter_sessions, session_days, backup_days)
-
-    sessions_deleted = int(summary.get("sessions_deleted", 0))
-    snapshots_deleted = int(summary.get("snapshots_deleted", 0))
-    if sessions_deleted:
-        LOGGER.info(
-            "Deleted %s converter session(s) older than %s day(s)",
-            sessions_deleted,
-            session_days,
-        )
-        increment_metric("converter.retention.sessions.deleted")
-    if snapshots_deleted:
-        LOGGER.info(
-            "Deleted %s converter snapshot(s) older than %s day(s)",
-            snapshots_deleted,
-            backup_days,
-        )
-        increment_metric("converter.retention.snapshots.deleted")
-    return summary
-
-
 async def _job_retention_cleanup_loop() -> None:
     while True:
         try:
             await _cleanup_expired_jobs()
-            await _cleanup_expired_converter_sessions()
             await asyncio.sleep(JOB_RETENTION_CLEANUP_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             LOGGER.warning("Retention cleanup failed: %s", redact_value(str(exc)))
             increment_metric("jobs.retention.cleanup.failed")
-            increment_metric("converter.retention.cleanup.failed")
             await asyncio.sleep(JOB_RETENTION_CLEANUP_INTERVAL_SECONDS)
 
 
@@ -631,7 +597,6 @@ async def lifespan(app: FastAPI):
     await db.seed_built_in_graph_templates()
     await db.seed_built_in_cdefs()
     await _cleanup_expired_jobs()
-    await _cleanup_expired_converter_sessions()
     await _run_discovery_sync_once()
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
     discovery_sync_task = asyncio.create_task(_discovery_sync_loop())
@@ -741,7 +706,6 @@ init_admin(
     hash_password_fn=_hash_password,
     get_user_features_fn=_get_user_features,
     cleanup_expired_jobs_fn=_cleanup_expired_jobs,
-    cleanup_expired_converter_sessions_fn=_cleanup_expired_converter_sessions,
 )
 
 # Auth routes — no global auth dependency (login/register are public)
@@ -750,10 +714,6 @@ app.include_router(auth_router)
 app.include_router(
     admin_router,
     dependencies=[Depends(require_admin)],
-)
-app.include_router(
-    converter_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("converter"))],
 )
 app.include_router(
     templates_router,

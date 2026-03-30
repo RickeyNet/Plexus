@@ -3,9 +3,8 @@
 ## Week 1: Baseline Quality & Installability
 - [x] Dependencies: add pinned requirements (`requirements.txt`, `requirements-lock.txt`); choose pip; add `.env.example` with config keys.
 - [x] Tooling: add `ruff` (lint/format), `mypy`, and `pre-commit` hooks (ruff, mypy, trailing whitespace).
-- [x] Tests: create converter tests (happy-path conversion stub + import args) with fixtures in `tests/`.
 - [x] CI: GitHub Actions pipeline running lint + type check + tests on push/PR.
-- [x] Docs: expand README with quickstart, scope (FortiGate → FTD), and how to run dev server/CLI + Docker.
+- [x] Docs: expand README with quickstart and how to run dev server/CLI + Docker.
 
 ## Week 2: Reliability, Security, and UX
 - [x] Error handling/logging: standardize logging with redaction; normalize API/CLI error responses and exit codes.
@@ -28,9 +27,7 @@
 - [x] Add CSRF protection for cookie-authenticated API calls; keep token-auth workflows compatible.
 
 ## Week 5: Reliability and Observability
-- [x] Add scheduled disk cleanup for `netcontrol/converter_sessions` backups and stale session directories based on retention settings.
-- [x] Add import idempotency/checkpoint markers so failed staged imports can resume safely.
-- [x] Add bounded concurrency controls for convert/import jobs to avoid FTD API saturation.
+- [x] Add bounded concurrency controls for jobs.
 - [x] Replace remaining `print()` statements with structured logger events and consistent redaction.
 - [x] Add request/job correlation IDs in logs and API responses for traceability.
 - [x] Add audit events for auth changes, playbook CRUD actions, and import/deploy operations.
@@ -56,7 +53,6 @@
 - [x] Spacing & visual hierarchy: gradient text headings, better rhythm, section dividers.
 - [x] Animated login screen: particle background, card slide-in, logo pulse.
 - [x] Toast notifications: slide-in toasts replacing inline error/success banners.
-- [x] Converter stepper UI: visual progress bar for the 3-step convert/import/cleanup flow.
 - [x] Keyboard shortcuts: Ctrl+K page switcher, Esc modal close, / to focus search.
 - [x] Breadcrumb / page title bar: top bar with current page name and breadcrumb trail.
 - [x] Custom scrollbar styling: thin themed scrollbars matching color palette.
@@ -66,7 +62,6 @@
 ## UI/UX Improvement Backlog (Post-Modernization)
 - [x] Optimize Inventory load path: remove N+1 group->hosts requests by using a single inventory payload with embedded hosts.
 - [x] Add page-level data cache + stale-while-revalidate behavior so nav switches feel instant and avoid full refetch every time.
-- [x] Align converter stepper state with visible content: hide Cleanup until Step 3 and keep reset state consistent.
 - [x] Add page-level search/filter/sort controls for Inventory, Playbooks, Jobs, Templates, and Credentials.
 - [x] Reduce visual weight on Templates list (snippet/preview by default, full content on expand/edit).
 - [x] Improve Jobs scanability with sticky filters (status/date/dry-run) and denser list/table view.
@@ -155,5 +150,5 @@
 - [ ] Add outbound/inbound event integrations (Slack/Teams/PagerDuty/webhooks).
 - [ ] Add scheduled report builder (operator + executive reports in PDF/CSV/email).
 - [ ] Version and publish API contracts (OpenAPI, deprecation policy, compatibility tests).
-- [ ] Create a plugin SDK for custom converters, validators, and integrations.
+- [ ] Create a plugin SDK for custom validators and integrations.
 - [ ] Add digital twin/lab mode for safe pre-production change testing.

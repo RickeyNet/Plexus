@@ -3,7 +3,7 @@
 
 Usage:
   python tools/coverage_gate.py coverage.json
-  python tools/coverage_gate.py coverage.json netcontrol/app.py:49 netcontrol/routes/converter.py:64
+  python tools/coverage_gate.py coverage.json netcontrol/app.py:49
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from pathlib import Path
 
 DEFAULT_RULES = {
     "netcontrol/app.py": 49.0,
-    "netcontrol/routes/converter.py": 50.0,
 }
 
 

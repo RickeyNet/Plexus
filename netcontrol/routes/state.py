@@ -163,8 +163,6 @@ AUTH_CONFIG_DEFAULTS = {
     "provider": "local",
     "default_credential_id": None,
     "job_retention_days": 30,
-    "converter_session_retention_days": 30,
-    "converter_backup_retention_days": 30,
     "radius": {
         "enabled": False,
         "server": "",
@@ -201,7 +199,6 @@ FEATURE_FLAGS = [
     "jobs",
     "templates",
     "credentials",
-    "converter",
     "topology",
     "config-drift",
     "config-backups",
@@ -215,8 +212,6 @@ RADIUS_DICTIONARY_FILE = os.path.normpath(RADIUS_DICTIONARY_FILE)
 
 JOB_RETENTION_MIN_DAYS = 30
 JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
-CONVERTER_SESSION_RETENTION_MIN_DAYS = 1
-CONVERTER_BACKUP_RETENTION_MIN_DAYS = 1
 
 
 # ── Mutable config state (populated at startup, mutated by admin routes) ────
@@ -261,14 +256,6 @@ def _sanitize_auth_config(data: dict | None) -> dict:
             cfg["provider"] = data["provider"]
         if "job_retention_days" in data:
             cfg["job_retention_days"] = int(data.get("job_retention_days", cfg["job_retention_days"]))
-        if "converter_session_retention_days" in data:
-            cfg["converter_session_retention_days"] = int(
-                data.get("converter_session_retention_days", cfg["converter_session_retention_days"])
-            )
-        if "converter_backup_retention_days" in data:
-            cfg["converter_backup_retention_days"] = int(
-                data.get("converter_backup_retention_days", cfg["converter_backup_retention_days"])
-            )
         if "default_credential_id" in data:
             val = data.get("default_credential_id")
             cfg["default_credential_id"] = int(val) if val is not None else None
@@ -284,14 +271,6 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "fallback_on_reject": bool(radius.get("fallback_on_reject", cfg["radius"]["fallback_on_reject"])),
             })
     cfg["job_retention_days"] = max(JOB_RETENTION_MIN_DAYS, int(cfg.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
-    cfg["converter_session_retention_days"] = max(
-        CONVERTER_SESSION_RETENTION_MIN_DAYS,
-        int(cfg.get("converter_session_retention_days", AUTH_CONFIG_DEFAULTS["converter_session_retention_days"])),
-    )
-    cfg["converter_backup_retention_days"] = max(
-        CONVERTER_BACKUP_RETENTION_MIN_DAYS,
-        int(cfg.get("converter_backup_retention_days", AUTH_CONFIG_DEFAULTS["converter_backup_retention_days"])),
-    )
     cfg["radius"]["port"] = max(1, cfg["radius"]["port"])
     cfg["radius"]["timeout"] = max(1, cfg["radius"]["timeout"])
     # LDAP config sanitization
@@ -324,28 +303,6 @@ def _effective_job_retention_days() -> int:
     return max(JOB_RETENTION_MIN_DAYS, int(AUTH_CONFIG.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
 
 
-def _effective_converter_session_retention_days() -> int:
-    return max(
-        CONVERTER_SESSION_RETENTION_MIN_DAYS,
-        int(
-            AUTH_CONFIG.get(
-                "converter_session_retention_days",
-                AUTH_CONFIG_DEFAULTS["converter_session_retention_days"],
-            )
-        ),
-    )
-
-
-def _effective_converter_backup_retention_days() -> int:
-    return max(
-        CONVERTER_BACKUP_RETENTION_MIN_DAYS,
-        int(
-            AUTH_CONFIG.get(
-                "converter_backup_retention_days",
-                AUTH_CONFIG_DEFAULTS["converter_backup_retention_days"],
-            )
-        ),
-    )
 
 
 def _sanitize_discovery_sync_config(data: dict | None) -> dict:

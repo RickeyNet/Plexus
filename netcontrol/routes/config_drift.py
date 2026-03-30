@@ -95,7 +95,7 @@ class ConfigDriftRevertRequest(BaseModel):
 
 # ── Module-level state ────────────────────────────────────────────────────────
 
-# Config capture job state (in-memory, like converter jobs)
+# Config capture job state (in-memory)
 # capture_job_id -> {job_id, status, started_at, finished_at, output_lines}
 _capture_jobs: dict[str, dict] = {}
 _capture_job_sockets: dict[str, list] = {}

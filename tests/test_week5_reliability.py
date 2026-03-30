@@ -5,7 +5,7 @@ Covers:
   2. Correlation-ID middleware injects and returns header.
   3. Bounded-concurrency semaphore limits concurrent jobs.
   4. Import checkpoint write/read round-trip.
-  5. No stray print() in web-facing modules (app, database, converter).
+  5. No stray print() in web-facing modules (app, database).
   6. Audit events fired by auth endpoints (login, register, change-password).
 """
 
@@ -22,8 +22,6 @@ import netcontrol.app as app_module
 import pytest
 import routes.database as db_module
 from fastapi import Request
-from netcontrol.routes import converter as conv_module
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -157,13 +155,6 @@ def test_job_semaphore_exists_with_correct_limit():
     assert isinstance(sem, asyncio.Semaphore)
 
 
-def test_converter_import_semaphore_exists():
-    """converter module should have an import semaphore."""
-    assert hasattr(conv_module, "_import_semaphore")
-    sem = conv_module._import_semaphore
-    assert isinstance(sem, asyncio.Semaphore)
-
-
 def test_max_concurrent_jobs_env_default():
     """_MAX_CONCURRENT_JOBS should default to a sane positive value."""
     assert app_module._MAX_CONCURRENT_JOBS >= 1
@@ -239,7 +230,6 @@ _PRINT_PATTERN = re.compile(r"^\s*print\s*\(", re.MULTILINE)
 _WEB_MODULE_PATHS = [
     os.path.join("netcontrol", "app.py"),
     os.path.join("routes", "database.py"),
-    os.path.join("netcontrol", "routes", "converter.py"),
 ]
 
 
