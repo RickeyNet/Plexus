@@ -1964,12 +1964,13 @@ function _getTopoThemeColors() {
     const style = getComputedStyle(document.documentElement);
     const theme = document.documentElement.getAttribute('data-theme') || 'forest';
     const isDark = !['light', 'sandstone'].includes(theme);
+    const hasLightTopoNodes = ['light', 'sandstone', 'sandstone-dark'].includes(theme);
     const v = (prop, fallback) => style.getPropertyValue(prop).trim() || fallback;
     _topoThemeColors = {
-        nodeFont: v('--text', '#c8d4c8'),
-        nodeFontStroke: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.7)',
-        edgeFont: v('--text-muted', '#7a8a7a'),
-        edgeFontStroke: isDark ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.6)',
+        nodeFont: hasLightTopoNodes ? '#2a1818' : v('--text', '#c8d4c8'),
+        nodeFontStroke: hasLightTopoNodes ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
+        edgeFont: hasLightTopoNodes ? '#4a3030' : v('--text-muted', '#7a8a7a'),
+        edgeFontStroke: hasLightTopoNodes ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)',
         externalBg: isDark ? '#263238' : v('--bg-secondary', '#edf2ea'),
         externalBorder: isDark ? '#546e7a' : v('--border', '#d1d9d1'),
         externalHighlightBg: isDark ? '#37474f' : v('--card-bg-hover', '#f2f5ef'),
