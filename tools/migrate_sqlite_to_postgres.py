@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import importlib
 import os
+import re
 import sqlite3
 from collections import OrderedDict
 from collections.abc import Iterable
@@ -51,6 +52,23 @@ SEQUENCE_TABLES = [
     "audit_events",
 ]
 
+_ALLOWED_TABLES = frozenset(TABLE_ORDER) | frozenset(SEQUENCE_TABLES)
+_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _safe_table(name: str) -> str:
+    """Validate a table name against the known whitelist."""
+    if name not in _ALLOWED_TABLES:
+        raise ValueError(f"Unknown table name: {name!r}")
+    return name
+
+
+def _safe_column(name: str) -> str:
+    """Validate a column name is a safe SQL identifier."""
+    if not _IDENTIFIER_RE.match(name):
+        raise ValueError(f"Invalid column name: {name!r}")
+    return name
+
 
 def _default_sqlite_path() -> str:
     return os.getenv("APP_DB_PATH", os.path.join("routes", "netcontrol.db"))
@@ -70,11 +88,12 @@ def _order_by_clause(columns: Iterable[str]) -> str:
 
 
 def _fetch_sqlite_rows(sqlite_path: str, table: str) -> tuple[list[str], list[tuple]]:
+    _safe_table(table)
     with sqlite3.connect(sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.execute(f"SELECT * FROM {table}")
         rows = cur.fetchall()
-        cols = [d[0] for d in cur.description]
+        cols = [_safe_column(d[0]) for d in cur.description]
 
         order_by = _order_by_clause(cols)
         if order_by:
@@ -100,7 +119,7 @@ def _load_asyncpg() -> Any:
 
 
 async def _truncate_target(conn: Any) -> None:
-    tables = ", ".join(TABLE_ORDER)
+    tables = ", ".join(_safe_table(t) for t in TABLE_ORDER)
     await conn.execute(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE")
 
 
@@ -110,7 +129,8 @@ async def _insert_rows(
     columns: Iterable[str],
     rows: list[tuple],
 ) -> int:
-    cols = list(columns)
+    _safe_table(table)
+    cols = [_safe_column(c) for c in columns]
     if not rows:
         return 0
 
@@ -123,12 +143,13 @@ async def _insert_rows(
 
 async def _set_sequences(conn: Any) -> None:
     for table in SEQUENCE_TABLES:
+        safe = _safe_table(table)
         await conn.execute(
             """
             SELECT setval(
                 pg_get_serial_sequence($1, 'id'),
-                COALESCE((SELECT MAX(id) FROM ONLY """ + table + """), 0),
-                COALESCE((SELECT MAX(id) FROM ONLY """ + table + """), 0) > 0
+                COALESCE((SELECT MAX(id) FROM ONLY """ + safe + """), 0),
+                COALESCE((SELECT MAX(id) FROM ONLY """ + safe + """), 0) > 0
             )
             """,
             table,
@@ -136,6 +157,7 @@ async def _set_sequences(conn: Any) -> None:
 
 
 async def _count_postgres_rows(conn: Any, table: str) -> int:
+    _safe_table(table)
     return int(await conn.fetchval(f"SELECT COUNT(*) FROM {table}"))
 
 
@@ -144,7 +166,8 @@ async def _fetch_postgres_rows(
     table: str,
     columns: Iterable[str],
 ) -> list[tuple]:
-    cols = list(columns)
+    _safe_table(table)
+    cols = [_safe_column(c) for c in columns]
     if not cols:
         return []
 

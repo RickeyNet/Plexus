@@ -2,10 +2,14 @@
 seed.py — Populate the database with starter data for demo/development.
 
 Run once after init_db(). Idempotent — skips if data already exists.
+
+WARNING: Seed credentials are for local development only.  Never use in
+production environments.
 """
 
 import asyncio
 import os
+import secrets
 import sys
 
 # Ensure project root is on path for imports
@@ -125,13 +129,14 @@ async def seed():
         print(f"  + Template '{name}'")
 
     # ── Credentials ──────────────────────────────────────────────────────
+    seed_password = secrets.token_urlsafe(12)
     await create_credential(
         "Default SSH",
         "netadmin",
-        encrypt("cisco123"),
-        encrypt("cisco123"),
+        encrypt(seed_password),
+        encrypt(seed_password),
     )
-    print("  + Credential 'Default SSH'")
+    print(f"  + Credential 'Default SSH' (password: {seed_password})")
 
     print("[seed] Done.")
 
