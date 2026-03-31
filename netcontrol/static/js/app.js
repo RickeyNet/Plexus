@@ -2562,8 +2562,6 @@ async function discoverTopology() {
             }
         });
 
-        clearInterval(elapsedInterval);
-
         // Update modal to show completion
         const spinnerEl = document.getElementById('disco-spinner');
         const titleEl = document.getElementById('disco-title');
@@ -2589,12 +2587,12 @@ async function discoverTopology() {
         invalidatePageCache('topology');
         await loadTopology({ preserveContent: true });
     } catch (error) {
-        clearInterval(elapsedInterval);
         const spinnerEl = document.getElementById('disco-spinner');
         if (spinnerEl) spinnerEl.style.display = 'none';
         appendFeed(`Error: ${error.message}`, 'var(--danger-color, #ef4444)');
         showError('Discovery failed: ' + error.message);
     } finally {
+        clearInterval(elapsedInterval);
         btn.disabled = false;
         btn.textContent = 'Discover Neighbors';
     }
@@ -3344,7 +3342,10 @@ async function loadInventory(options = {}) {
 
 window.exportInventoryCSV = async function() {
     try {
-        const resp = await fetch('/api/inventory/export/csv', { credentials: 'same-origin' });
+        const csvHeaders = {};
+        const csrf = getCsrfToken();
+        if (csrf) csvHeaders['X-CSRF-Token'] = csrf;
+        const resp = await fetch('/api/inventory/export/csv', { credentials: 'same-origin', headers: csvHeaders });
         if (!resp.ok) {
             const err = await resp.text();
             throw new Error(err || `HTTP ${resp.status}`);
@@ -3710,8 +3711,6 @@ window.runGlobalDiscovery = async function(e) {
             }
         });
 
-        clearInterval(elapsedInterval);
-
         if (!finalResult) {
             closeAllModals();
             showError('Scan completed but no results received.');
@@ -3747,9 +3746,10 @@ window.runGlobalDiscovery = async function(e) {
             </div>
         `);
     } catch (error) {
-        clearInterval(elapsedInterval);
         closeAllModals();
         showError(`Discovery scan failed: ${error.message}`);
+    } finally {
+        clearInterval(elapsedInterval);
     }
 };
 
@@ -5576,7 +5576,6 @@ window.launchJob = async function(e) {
     }
 
     const totalTargets = hostIds.length + adHocIps.length;
-    console.log('Launching job with host IDs:', hostIds, 'ad-hoc IPs:', adHocIps);
 
     try {
         const playbookId = parseInt(formData.get('playbook_id'));
@@ -5934,9 +5933,6 @@ window.createPlaybook = async function(e) {
 window.editPlaybook = async function(playbookId) {
     try {
         const playbook = await api.getPlaybook(playbookId);
-        console.log('Loaded playbook:', playbook);
-        console.log('Content type:', typeof playbook.content);
-        console.log('Content length:', playbook.content ? playbook.content.length : 'null/undefined');
         
         let tags = playbook.tags;
         if (typeof tags === 'string') {
@@ -5952,7 +5948,6 @@ window.editPlaybook = async function(playbookId) {
         
         // Ensure content is a string
         const playbookContent = playbook.content || '';
-        console.log('Final content to set, length:', playbookContent.length);
         
         const pbType = playbook.type || 'python';
         const isAnsible = pbType === 'ansible';
@@ -6002,8 +5997,6 @@ window.editPlaybook = async function(playbookId) {
             const textarea = document.getElementById('playbook-content-textarea');
             if (textarea) {
                 textarea.value = playbookContent;
-                console.log('Successfully set textarea content, length:', playbookContent.length);
-                console.log('Textarea value length:', textarea.value.length);
             } else {
                 console.warn('Textarea not found, retrying...');
                 setTimeout(setContent, 50);
@@ -6603,7 +6596,6 @@ window.showUserMenu = async function() {
     try {
         const profile = await api.getProfile();
         currentUserData = profile;
-        console.log('showUserMenu: Fetched profile:', profile);
 
         const userMenuOverlay = document.getElementById('user-menu-overlay');
         if (!userMenuOverlay) {
@@ -6627,12 +6619,10 @@ window.showUserMenu = async function() {
         }
 
         const displayName = profile.display_name || profile.username;
-        console.log('showUserMenu: Attempting to set avatar textContent. Avatar element:', avatar); // NEW LOG
         avatar.textContent = displayName.charAt(0).toUpperCase();
         displayNameEl.textContent = displayName;
         usernameEl.textContent = `@${profile.username}`;
         roleEl.textContent = profile.role;
-        console.log('showUserMenu: Updated user menu elements.');
     } catch (e) {
         console.error('showUserMenu: Error fetching profile, falling back to cached data:', e);
     }
@@ -6645,7 +6635,6 @@ window.showUserMenu = async function() {
     }
     finalOverlay.classList.add('active');
     activateFocusTrap('user-menu-overlay');
-    console.log('showUserMenu: User menu overlay activated.');
 };
 
 window.closeUserMenu = function() {
