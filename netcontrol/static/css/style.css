@@ -422,11 +422,11 @@
 /* ─── Sandstone theme ────────────────────────────────────────────── */
 
 [data-theme="sandstone"] {
-    --primary: #8A7650;
-    --primary-dark: #74633f;
-    --primary-light: #a08c64;
+    --primary: #703B3B;
+    --primary-dark: #5c2e2e;
+    --primary-light: #8a5050;
     --secondary: #6e7560;
-    --success: #7a9a68;
+    --success: #265809;
     --warning: #c4a04e;
     --danger: #b85c4f;
     --bg: #8E977D;
@@ -434,40 +434,48 @@
     --bg-dark: #768066;
     --card-bg: #9aa389;
     --card-bg-hover: #a3ac9a;
-    --text: #1a1e14;
-    --text-light: #2e3326;
-    --text-muted: #3a4030;
+    --text: #2a1818;
+    --text-light: #703B3B;
+    --text-muted: #5c2e2e;
     --border: #768066;
     --border-light: #6e7560;
-    --primary-soft: rgba(138, 118, 80, 0.12);
-    --primary-soft-strong: rgba(138, 118, 80, 0.22);
-    --primary-glow: rgba(138, 118, 80, 0.18);
+    --primary-soft: rgba(112, 59, 59, 0.12);
+    --primary-soft-strong: rgba(112, 59, 59, 0.22);
+    --primary-glow: rgba(112, 59, 59, 0.18);
     --overlay: rgba(26, 30, 20, 0.5);
     --shadow: 0 1px 3px 0 rgba(40, 45, 30, 0.25), 0 1px 2px 0 rgba(40, 45, 30, 0.15);
     --shadow-lg: 0 10px 15px -3px rgba(40, 45, 30, 0.25), 0 4px 6px -2px rgba(40, 45, 30, 0.15);
-    --topo-accent-rgb: 138, 118, 80;
+    --topo-accent-rgb: 112, 59, 59;
 
-    --topo-cisco-bg: #a8b098;       --topo-cisco-border: #8A7650;
-    --topo-cisco-hi-bg: #9aa389;    --topo-cisco-hi-border: #6b5a3a;
-    --topo-juniper-bg: #96a88c;     --topo-juniper-border: #5a7a4a;
-    --topo-juniper-hi-bg: #8a9c80;  --topo-juniper-hi-border: #4a6838;
-    --topo-arista-bg: #b0a880;      --topo-arista-border: #a07828;
-    --topo-arista-hi-bg: #a49c74;   --topo-arista-hi-border: #886420;
-    --topo-fortinet-bg: #b09888;    --topo-fortinet-border: #a05040;
-    --topo-fortinet-hi-bg: #a48c7c; --topo-fortinet-hi-border: #884030;
-    --topo-unknown-bg: #9aa389;     --topo-unknown-border: #6e7560;
-    --topo-unknown-hi-bg: #a3ac9a;  --topo-unknown-hi-border: #5e6550;
+    --topo-cisco-bg: #f5e6d0;       --topo-cisco-border: #703B3B;
+    --topo-cisco-hi-bg: #eedcc0;    --topo-cisco-hi-border: #5c2e2e;
+    --topo-juniper-bg: #c8e0b8;     --topo-juniper-border: #2d5a1e;
+    --topo-juniper-hi-bg: #b8d4a6;  --topo-juniper-hi-border: #1e4a10;
+    --topo-arista-bg: #f0d890;      --topo-arista-border: #7a5a10;
+    --topo-arista-hi-bg: #e8cc78;   --topo-arista-hi-border: #604808;
+    --topo-fortinet-bg: #e8b0a0;    --topo-fortinet-border: #8b3020;
+    --topo-fortinet-hi-bg: #dca090; --topo-fortinet-hi-border: #702818;
+    --topo-unknown-bg: #d0d0c0;     --topo-unknown-border: #505848;
+    --topo-unknown-hi-bg: #c4c4b4;  --topo-unknown-hi-border: #404840;
 
-    --topo-edge-cdp: #8A7650;       --topo-edge-cdp-hi: #6b5a3a;
-    --topo-edge-lldp: #5a7a4a;      --topo-edge-lldp-hi: #4a6838;
-    --topo-edge-ospf: #a07828;      --topo-edge-ospf-hi: #886420;
-    --topo-edge-bgp: #8a6a9a;       --topo-edge-bgp-hi: #705580;
+    --topo-edge-cdp: #703B3B;       --topo-edge-cdp-hi: #4a2020;
+    --topo-edge-lldp: #2d5a1e;      --topo-edge-lldp-hi: #1e4a10;
+    --topo-edge-ospf: #7a5a10;      --topo-edge-ospf-hi: #604808;
+    --topo-edge-bgp: #6a3a7a;       --topo-edge-bgp-hi: #502860;
 
-    --topo-path-glow: rgba(138, 118, 80, 0.5);
+    --topo-path-glow: rgba(112, 59, 59, 0.5);
     --topo-dim-bg: rgba(142, 151, 125, 0.5);
     --topo-dim-border: rgba(118, 128, 102, 0.5);
     --topo-dim-edge: rgba(110, 117, 96, 0.3);
     --topo-dim-edge-hi: rgba(110, 117, 96, 0.4);
+}
+
+[data-theme="sandstone"] .btn-primary {
+    color: #f0eee6;
+}
+
+[data-theme="sandstone"] .btn-primary:hover {
+    color: #f0eee6;
 }
 
 [data-theme="sandstone-dark"] {
@@ -485,7 +493,7 @@
     --card-bg-hover: #768066;
     --text: #f0eee6;
     --text-light: #DBCEA5;
-    --text-muted: #2e3326;
+    --text-muted: #703B3B;
     --border: #6e7560;
     --border-light: #5e6550;
     --primary-soft: rgba(219, 206, 165, 0.12);
@@ -502,21 +510,21 @@
     --ambient-glow: rgba(219, 206, 165, 0.08);
     --topo-accent-rgb: 219, 206, 165;
 
-    --topo-cisco-bg: #6e7560;       --topo-cisco-border: #DBCEA5;
-    --topo-cisco-hi-bg: #768066;    --topo-cisco-hi-border: #ECE7D1;
-    --topo-juniper-bg: #5e7058;     --topo-juniper-border: #8aad72;
-    --topo-juniper-hi-bg: #687a62;  --topo-juniper-hi-border: #a8cc90;
-    --topo-arista-bg: #7a7050;      --topo-arista-border: #d4b060;
-    --topo-arista-hi-bg: #847a5a;   --topo-arista-hi-border: #e8cc80;
-    --topo-fortinet-bg: #7a5a5a;    --topo-fortinet-border: #cf6f5e;
-    --topo-fortinet-hi-bg: #846464; --topo-fortinet-hi-border: #e8988a;
-    --topo-unknown-bg: #6e7560;     --topo-unknown-border: #a8b098;
-    --topo-unknown-hi-bg: #768066;  --topo-unknown-hi-border: #b8c0a8;
+    --topo-cisco-bg: #f5e6d0;       --topo-cisco-border: #703B3B;
+    --topo-cisco-hi-bg: #eedcc0;    --topo-cisco-hi-border: #5c2e2e;
+    --topo-juniper-bg: #c8e0b8;     --topo-juniper-border: #2d5a1e;
+    --topo-juniper-hi-bg: #b8d4a6;  --topo-juniper-hi-border: #1e4a10;
+    --topo-arista-bg: #f0d890;      --topo-arista-border: #7a5a10;
+    --topo-arista-hi-bg: #e8cc78;   --topo-arista-hi-border: #604808;
+    --topo-fortinet-bg: #e8b0a0;    --topo-fortinet-border: #8b3020;
+    --topo-fortinet-hi-bg: #dca090; --topo-fortinet-hi-border: #702818;
+    --topo-unknown-bg: #d0d0c0;     --topo-unknown-border: #505848;
+    --topo-unknown-hi-bg: #c4c4b4;  --topo-unknown-hi-border: #404840;
 
-    --topo-edge-cdp: #DBCEA5;       --topo-edge-cdp-hi: #ECE7D1;
-    --topo-edge-lldp: #8aad72;      --topo-edge-lldp-hi: #a8cc90;
-    --topo-edge-ospf: #d4b060;      --topo-edge-ospf-hi: #e8cc80;
-    --topo-edge-bgp: #b88ec8;       --topo-edge-bgp-hi: #d0b0dc;
+    --topo-edge-cdp: #f5e6d0;       --topo-edge-cdp-hi: #eedcc0;
+    --topo-edge-lldp: #7cc860;      --topo-edge-lldp-hi: #98d880;
+    --topo-edge-ospf: #e8c050;      --topo-edge-ospf-hi: #f0d070;
+    --topo-edge-bgp: #c88ee0;       --topo-edge-bgp-hi: #d8a8f0;
 
     --topo-path-glow: rgba(219, 206, 165, 0.6);
     --topo-dim-bg: rgba(142, 151, 125, 0.4);
@@ -590,10 +598,12 @@
 }
 
 [data-theme="sandstone-dark"] .btn-primary {
+    color: #1a1e14;
     box-shadow: 0 0 12px rgba(219, 206, 165, 0.25);
 }
 
 [data-theme="sandstone-dark"] .btn-primary:hover {
+    color: #1a1e14;
     box-shadow: 0 0 20px rgba(219, 206, 165, 0.4);
 }
 
