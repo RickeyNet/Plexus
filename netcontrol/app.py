@@ -337,18 +337,28 @@ def _hash_password(password: str, salt: str = "") -> str:
 
 
 async def _ensure_default_admin():
-    """Create the default admin user in the DB if no users exist."""
+    """Create the default admin user in the DB if no users exist.
+
+    Generates a random password on first startup so hardcoded credentials
+    are never shipped.  The password is logged once at WARNING level and
+    the account is flagged ``must_change_password``.
+    """
     existing = await db.get_all_users()
     if existing:
         return
+    initial_password = secrets.token_urlsafe(16)
     salt = secrets.token_hex(16)
-    pw_hash = _hash_password("netcontrol", salt)
+    pw_hash = _hash_password(initial_password, salt)
     await db.create_user(
         "admin", pw_hash, salt,
         display_name="Administrator", role="admin",
         must_change_password=True,
     )
-    LOGGER.warning("Created default user: admin / netcontrol — CHANGE THIS PASSWORD!")
+    LOGGER.warning(
+        "Created default admin account.  Initial password: %s  — "
+        "change it immediately after first login.",
+        initial_password,
+    )
 
 
 async def verify_user(username: str, password: str) -> dict | None:

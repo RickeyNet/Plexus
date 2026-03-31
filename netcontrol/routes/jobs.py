@@ -3,6 +3,7 @@ jobs.py -- Job orchestration routes: launch, cancel, retry, priority, queue, Web
 """
 
 import asyncio
+import ipaddress
 import json
 
 import routes.database as db
@@ -52,6 +53,29 @@ _job_sockets: dict[int, list[WebSocket]] = {}
 _running_job_tasks: dict[int, asyncio.Task] = {}  # job_id -> asyncio.Task for cancellation
 
 _PRIORITY_LABELS = {0: "low", 1: "below-normal", 2: "normal", 3: "high", 4: "critical"}
+
+# Reserved IP ranges that should not be targeted by ad-hoc jobs
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),      # loopback
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("169.254.0.0/16"),    # link-local
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+    ipaddress.ip_network("0.0.0.0/8"),         # "this" network
+    ipaddress.ip_network("224.0.0.0/4"),       # multicast
+    ipaddress.ip_network("255.255.255.255/32"),  # broadcast
+]
+
+
+def _validate_ad_hoc_ip(ip_str: str) -> str:
+    """Validate that an ad-hoc IP is a valid unicast address not in reserved ranges."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        raise HTTPException(400, f"Invalid IP address: {ip_str}")
+    for net in _BLOCKED_NETWORKS:
+        if addr in net:
+            raise HTTPException(400, f"IP address {ip_str} is in a reserved range and cannot be targeted")
+    return ip_str
 
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
@@ -414,6 +438,7 @@ async def launch_job(body: JobLaunch, request: Request):
         for ip in body.ad_hoc_ips:
             ip = ip.strip()
             if ip:
+                _validate_ad_hoc_ip(ip)
                 ad_hoc_hosts.append({
                     "id": None,
                     "hostname": ip,

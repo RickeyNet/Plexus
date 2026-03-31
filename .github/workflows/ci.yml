@@ -64,6 +64,7 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
+          # CI-only ephemeral credentials — not used in any deployed environment
           POSTGRES_DB: plexus
           POSTGRES_USER: plexus
           POSTGRES_PASSWORD: plexus

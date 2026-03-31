@@ -655,6 +655,22 @@ CREATE INDEX IF NOT EXISTS idx_trap_syslog_received
 CREATE INDEX IF NOT EXISTS idx_trap_syslog_host
     ON trap_syslog_events (host_id, received_at);
 
+-- Core table indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_jobs_created_status
+    ON jobs (created_at, status);
+CREATE INDEX IF NOT EXISTS idx_hosts_group_id
+    ON hosts (group_id);
+CREATE INDEX IF NOT EXISTS idx_users_username
+    ON users (username);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created
+    ON audit_events (created_at);
+CREATE INDEX IF NOT EXISTS idx_job_events_job_id
+    ON job_events (job_id);
+CREATE INDEX IF NOT EXISTS idx_credentials_owner_id
+    ON credentials (owner_id);
+CREATE INDEX IF NOT EXISTS idx_topology_links_group
+    ON topology_links (group_id);
+
 CREATE TABLE IF NOT EXISTS dashboards (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT    NOT NULL,
@@ -6085,8 +6101,8 @@ async def get_annotations_in_range(
                     ids = json.loads(dep.get("host_ids") or "[]")
                     if host_id in ids:
                         host_deployment_ids.add(dep["id"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                except (json.JSONDecodeError, TypeError) as exc:
+                    _LOGGER.debug("skipping deployment %s: bad host_ids JSON: %s", dep.get("id"), exc)
 
         # Audit events
         if any(c in cats for c in ["deployment", "config", "alert"]):
@@ -6224,8 +6240,8 @@ async def get_deployments_for_host_in_range(
                 ids = json.loads(dep.get("host_ids") or "[]")
                 if host_id in ids:
                     results.append(dep)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as exc:
+                _LOGGER.debug("skipping deployment %s: bad host_ids JSON: %s", dep.get("id"), exc)
         return results
     finally:
         await db.close()
@@ -6406,8 +6422,8 @@ async def get_availability_summary(
                             t1 = dt.strptime(last_ts[:19], fmt)
                             t2 = dt.strptime(ts[:19], fmt)
                             down_seconds += (t2 - t1).total_seconds()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            _LOGGER.warning("uptime: failed to parse transition timestamps '%s' / '%s': %s", last_ts, ts, exc)
                     current_state = t["new_state"]
                     last_ts = ts
 
@@ -6419,8 +6435,8 @@ async def get_availability_summary(
                         t1 = dt.strptime(last_ts[:19], fmt)
                         now = dt.utcnow()
                         down_seconds += (now - t1).total_seconds()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _LOGGER.warning("uptime: failed to parse transition timestamp '%s': %s", last_ts, exc)
             elif initial_state == "down":
                 down_seconds = total_seconds
 

@@ -226,9 +226,18 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
     user_dn_template = ldap_cfg.get("user_dn_template", "").strip()
     group_search_base = ldap_cfg.get("group_search_base", "").strip()
     group_search_filter = ldap_cfg.get("group_search_filter", "").strip()
+    tls_verify = str(ldap_cfg.get("tls_verify", "demand")).lower().strip()
 
     protocol = "ldaps" if use_ssl else "ldap"
     uri = f"{protocol}://{server}:{port}"
+
+    _TLS_LEVEL_MAP = {
+        "never": python_ldap.OPT_X_TLS_NEVER,
+        "allow": python_ldap.OPT_X_TLS_ALLOW,
+        "try": python_ldap.OPT_X_TLS_TRY,
+        "demand": python_ldap.OPT_X_TLS_DEMAND,
+        "hard": python_ldap.OPT_X_TLS_HARD,
+    }
 
     try:
         conn = python_ldap.initialize(uri)
@@ -238,8 +247,11 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
         conn.protocol_version = python_ldap.VERSION3
 
         if use_ssl:
-            conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, python_ldap.OPT_X_TLS_ALLOW)
+            tls_level = _TLS_LEVEL_MAP.get(tls_verify, python_ldap.OPT_X_TLS_DEMAND)
+            conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, tls_level)
             conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
+            if tls_verify == "allow":
+                LOGGER.warning("ldap: TLS certificate verification is permissive (allow) — use 'demand' in production")
 
         user_dn = None
         user_attrs: dict = {}
@@ -601,13 +613,14 @@ async def register(body: RegisterRequest, request: Request = None):
         "feature_access": await _features_fn(user),
         "csrf_token": csrf_token,
     })
+    _https = getattr(_app, "APP_HTTPS_ENABLED", _APP_HTTPS_ENABLED)
     response.set_cookie(
         key="session",
         value=token,
         httponly=True,
         samesite="strict",
         max_age=_SESSION_MAX_AGE,
-        secure=_APP_HTTPS_ENABLED,
+        secure=_https,
     )
     return response
 
