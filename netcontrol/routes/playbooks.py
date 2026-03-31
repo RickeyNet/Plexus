@@ -144,7 +144,9 @@ async def get_playbook(playbook_id: int):
         filename = playbook["filename"]
         if not filename.endswith('.py'):
             filename += '.py'
-        file_path = os.path.join(playbooks_dir, filename)
+        file_path = os.path.normpath(os.path.join(playbooks_dir, filename))
+        if not file_path.startswith(os.path.normpath(playbooks_dir)):
+            raise HTTPException(400, "Invalid playbook filename")
         if os.path.exists(file_path):
             try:
                 with open(file_path, encoding='utf-8') as f:
