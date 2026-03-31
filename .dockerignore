@@ -1,0 +1,50 @@
+# Version control
+.git
+.gitignore
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.json
+htmlcov/
+
+# Environment and secrets
+.env
+*.key
+*.pem
+certs/
+
+# Databases
+*.db
+*.sqlite3
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# CI/CD and docs
+.github/
+*.md
+LICENSE
+
+# Dev tooling
+.pre-commit-config.yaml
+mypy.ini
+pytest.ini
+requirements-dev.txt
+check_syntax.py
+
+# OS artifacts
+Thumbs.db
+.DS_Store
+
+# Deploy scripts (not needed inside container)
+deploy/
