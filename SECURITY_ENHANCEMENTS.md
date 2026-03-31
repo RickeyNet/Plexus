@@ -17,6 +17,9 @@
 - [x] **Insecure LDAP TLS settings** — LDAP connections use `OPT_X_TLS_ALLOW` permitting invalid certificates (`netcontrol/routes/auth.py:240-242`), enabling MITM attacks. Require certificate validation for production LDAP servers.
 - [x] **Plaintext credentials in CI/CD** — Hardcoded `POSTGRES_USER: plexus` / `POSTGRES_PASSWORD: plexus` in GitHub Actions workflow (`.github/workflows/ci.yml:65-70`). Use GitHub secrets or document that these are test-only values.
 
+- [ ] **LDAP injection in authentication** — User-supplied `username` from the login form is inserted into LDAP filter expressions and DN templates via `.replace("{username}", username)` without calling `ldap.filter.escape_filter_chars()` (`netcontrol/routes/auth.py:261,270,327,354`). No input validation exists on the username field. An attacker can submit `*` to match every directory account or inject filter operators to bypass authentication. Escape all user input with `escape_filter_chars()` before LDAP interpolation.
+- [ ] **Stored XSS via SVG graph export** — The SVG export endpoint embeds the graph template `name` field directly into an SVG `<text>` element via f-string interpolation with no XML escaping (`netcontrol/routes/graph_export.py:248`). Any authenticated user can create templates with arbitrary names. The SVG is served with `image/svg+xml` content type, so browsers execute inline scripts. Escape the title with `xml.sax.saxutils.escape()` before interpolation.
+
 ## Medium
 
 - [x] **Missing database indexes** — Only 7 indexes across 30+ tables (`routes/database.py:643-656`). Add indexes on `jobs(created_at, status)`, `hosts(group_id)`, `users(username)`, `audit_events(created_at)`, and other commonly queried foreign keys.
