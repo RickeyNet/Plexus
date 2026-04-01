@@ -13036,6 +13036,42 @@ async function viewCampaign(campaignId) {
         // Connect WebSocket for live updates
         connectUpgradeWebSocket(campaignId,
             (data) => {
+                // Handle live device status updates (checkmarks)
+                if (data.type === 'device_status' && data.device_id) {
+                    const row = document.getElementById(`upgrade-dev-${data.device_id}`);
+                    if (row) {
+                        const phases = ['prestage', 'transfer', 'activate', 'verify'];
+                        const cells = row.querySelectorAll('td');
+                        // Phase columns start after Device, Model, Current, Target Image (index 4-7)
+                        phases.forEach((p, i) => {
+                            const statusKey = `${p}_status`;
+                            if (data[statusKey]) {
+                                const cell = cells[4 + i];
+                                if (cell) {
+                                    cell.innerHTML = data[statusKey] === 'completed'
+                                        ? '<span style="color:var(--success-color);">&#10003;</span>'
+                                        : data[statusKey] === 'running'
+                                        ? '<span style="color:var(--info-color);">&#9881;</span>'
+                                        : data[statusKey] === 'failed'
+                                        ? '<span style="color:var(--error-color);">&#10007;</span>'
+                                        : '<span style="opacity:0.3;">&#8226;</span>';
+                                }
+                            }
+                        });
+                        // Update error message column (last column)
+                        if (data.error_message) {
+                            const lastCell = cells[cells.length - 1];
+                            if (lastCell) {
+                                const short = data.error_message.length > 40
+                                    ? data.error_message.substring(0, 40) + '...'
+                                    : data.error_message;
+                                lastCell.innerHTML = `<span style="color:var(--error-color); font-size:0.85em;" title="${data.error_message}">${short}</span>`;
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 const output = document.getElementById('upgrade-live-output');
                 if (output) {
                     const line = document.createElement('div');
