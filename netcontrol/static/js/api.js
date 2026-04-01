@@ -1673,3 +1673,43 @@ export async function getTopologyUtilization(groupId) {
     if (groupId) url += `?group_id=${groupId}`;
     return apiRequest(url);
 }
+
+// ── Generic API helpers (use full path, bypass API_BASE prefix) ─────────
+
+async function rawApiRequest(fullPath, options = {}) {
+    const config = {
+        headers: {
+            'Content-Type': 'application/json',
+            ...options.headers,
+        },
+        ...options,
+    };
+    if (_csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes((config.method || 'GET').toUpperCase())) {
+        config.headers['X-CSRF-Token'] = _csrfToken;
+    }
+    if (config.body && typeof config.body === 'object') {
+        config.body = JSON.stringify(config.body);
+    }
+    const response = await fetch(fullPath, config);
+    const data = await response.json();
+    if (!response.ok) {
+        throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return data;
+}
+
+export async function apiGet(fullPath) {
+    return rawApiRequest(fullPath);
+}
+
+export async function apiPost(fullPath, body) {
+    return rawApiRequest(fullPath, { method: 'POST', body });
+}
+
+export async function apiPatch(fullPath, body) {
+    return rawApiRequest(fullPath, { method: 'PATCH', body });
+}
+
+export async function apiDelete(fullPath) {
+    return rawApiRequest(fullPath, { method: 'DELETE' });
+}

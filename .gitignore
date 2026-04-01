@@ -239,5 +239,8 @@ executions/
 backups/
 config_backups/
 device_configs/
+
+# Software images (IOS-XE upgrade binaries)
+software_images/
 *.cfg.backup
 *.config

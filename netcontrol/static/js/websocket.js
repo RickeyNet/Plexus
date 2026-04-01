@@ -55,3 +55,59 @@ export function disconnectJobWebSocket() {
         currentJobSocket = null;
     }
 }
+
+// ── Upgrade Campaign WebSocket ──────────────────────────────────────────────
+
+let currentUpgradeSocket = null;
+
+export function connectUpgradeWebSocket(campaignId, onMessage, onComplete, onError) {
+    if (currentUpgradeSocket) {
+        currentUpgradeSocket.close();
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/upgrades/${campaignId}`;
+
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+        console.log(`Upgrade WebSocket connected for campaign ${campaignId}`);
+    };
+
+    ws.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'campaign_complete') {
+                if (onComplete) onComplete(data);
+            } else {
+                if (onMessage) onMessage(data);
+            }
+        } catch (error) {
+            console.error('Error parsing upgrade WebSocket message:', error);
+        }
+    };
+
+    ws.onerror = (error) => {
+        console.error('Upgrade WebSocket error:', error);
+        if (onError) onError(error);
+    };
+
+    ws.onclose = (event) => {
+        console.log(`Upgrade WebSocket closed for campaign ${campaignId} (code: ${event.code})`);
+        currentUpgradeSocket = null;
+        // Only fire error for abnormal closures (not clean close or auth rejection)
+        if (event.code !== 1000 && event.code !== 1005 && event.code !== 4001) {
+            if (onError) onError(event);
+        }
+    };
+
+    currentUpgradeSocket = ws;
+    return ws;
+}
+
+export function disconnectUpgradeWebSocket() {
+    if (currentUpgradeSocket) {
+        currentUpgradeSocket.close();
+        currentUpgradeSocket = null;
+    }
+}

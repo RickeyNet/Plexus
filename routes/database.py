@@ -112,6 +112,10 @@ _INSERT_ID_TABLES = {
     "flow_summaries",
     "metric_baselines",
     "baseline_alert_rules",
+    "upgrade_images",
+    "upgrade_campaigns",
+    "upgrade_devices",
+    "upgrade_events",
 }
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -656,20 +660,20 @@ CREATE INDEX IF NOT EXISTS idx_trap_syslog_host
     ON trap_syslog_events (host_id, received_at);
 
 -- Core table indexes for common query patterns
-CREATE INDEX IF NOT EXISTS idx_jobs_created_status
-    ON jobs (created_at, status);
+CREATE INDEX IF NOT EXISTS idx_jobs_queued_status
+    ON jobs (queued_at, status);
 CREATE INDEX IF NOT EXISTS idx_hosts_group_id
     ON hosts (group_id);
 CREATE INDEX IF NOT EXISTS idx_users_username
     ON users (username);
-CREATE INDEX IF NOT EXISTS idx_audit_events_created
-    ON audit_events (created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+    ON audit_events (timestamp);
 CREATE INDEX IF NOT EXISTS idx_job_events_job_id
     ON job_events (job_id);
 CREATE INDEX IF NOT EXISTS idx_credentials_owner_id
     ON credentials (owner_id);
-CREATE INDEX IF NOT EXISTS idx_topology_links_group
-    ON topology_links (group_id);
+CREATE INDEX IF NOT EXISTS idx_topology_links_source
+    ON topology_links (source_host_id);
 
 CREATE TABLE IF NOT EXISTS dashboards (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1028,6 +1032,67 @@ CREATE TABLE IF NOT EXISTS baseline_alert_rules (
     created_by          TEXT    NOT NULL DEFAULT '',
     created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── IOS-XE Upgrade System ──────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS upgrade_images (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename        TEXT    NOT NULL UNIQUE,
+    original_name   TEXT    NOT NULL DEFAULT '',
+    file_size       INTEGER NOT NULL DEFAULT 0,
+    md5_hash        TEXT    NOT NULL DEFAULT '',
+    model_pattern   TEXT    NOT NULL DEFAULT '',
+    version         TEXT    NOT NULL DEFAULT '',
+    platform        TEXT    NOT NULL DEFAULT 'iosxe',
+    notes           TEXT    NOT NULL DEFAULT '',
+    uploaded_by     TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS upgrade_campaigns (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL,
+    description     TEXT    NOT NULL DEFAULT '',
+    status          TEXT    NOT NULL DEFAULT 'created',
+    image_map       TEXT    NOT NULL DEFAULT '{}',
+    options         TEXT    NOT NULL DEFAULT '{}',
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS upgrade_devices (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id     INTEGER NOT NULL REFERENCES upgrade_campaigns(id) ON DELETE CASCADE,
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    ip_address      TEXT    NOT NULL,
+    hostname        TEXT    NOT NULL DEFAULT '',
+    model           TEXT    NOT NULL DEFAULT '',
+    current_version TEXT    NOT NULL DEFAULT '',
+    target_image    TEXT    NOT NULL DEFAULT '',
+    phase           TEXT    NOT NULL DEFAULT 'pending',
+    phase_detail    TEXT    NOT NULL DEFAULT '',
+    health_status   TEXT    NOT NULL DEFAULT '',
+    prestage_status TEXT    NOT NULL DEFAULT 'pending',
+    transfer_status TEXT    NOT NULL DEFAULT 'pending',
+    activate_status TEXT    NOT NULL DEFAULT 'pending',
+    verify_status   TEXT    NOT NULL DEFAULT 'pending',
+    error_message   TEXT    NOT NULL DEFAULT '',
+    started_at      TEXT,
+    completed_at    TEXT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(campaign_id, ip_address)
+);
+
+CREATE TABLE IF NOT EXISTS upgrade_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id     INTEGER NOT NULL REFERENCES upgrade_campaigns(id) ON DELETE CASCADE,
+    device_id       INTEGER REFERENCES upgrade_devices(id) ON DELETE CASCADE,
+    level           TEXT    NOT NULL DEFAULT 'info',
+    message         TEXT    NOT NULL DEFAULT '',
+    host            TEXT    NOT NULL DEFAULT '',
+    timestamp       TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -8740,5 +8805,250 @@ async def delete_baseline_alert_rule(rule_id: int) -> bool:
         await db.execute("DELETE FROM baseline_alert_rules WHERE id = ?", (rule_id,))
         await db.commit()
         return True
+    finally:
+        await db.close()
+
+
+# ── IOS-XE Upgrade System ──────────────────────────────────────────────────
+
+
+async def create_upgrade_image(filename, original_name, file_size, md5_hash,
+                               model_pattern, version, platform, notes, uploaded_by):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO upgrade_images (filename, original_name, file_size, md5_hash, "
+            "model_pattern, version, platform, notes, uploaded_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (filename, original_name, file_size, md5_hash,
+             model_pattern, version, platform, notes, uploaded_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_all_upgrade_images():
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM upgrade_images ORDER BY created_at DESC")
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_upgrade_image(image_id):
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM upgrade_images WHERE id = ?", (image_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def update_upgrade_image(image_id, **kwargs):
+    db = await get_db()
+    try:
+        sets, vals = [], []
+        for k, v in kwargs.items():
+            if k in ("model_pattern", "version", "platform", "notes"):
+                sets.append(f"{k} = ?")
+                vals.append(v)
+        if not sets:
+            return False
+        vals.append(image_id)
+        await db.execute(
+            f"UPDATE upgrade_images SET {', '.join(sets)} WHERE id = ?", vals
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def delete_upgrade_image(image_id):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM upgrade_images WHERE id = ?", (image_id,))
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def create_upgrade_campaign(name, description, image_map, options, created_by):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO upgrade_campaigns (name, description, image_map, options, created_by) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, description, json.dumps(image_map), json.dumps(options), created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_all_upgrade_campaigns():
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM upgrade_campaigns ORDER BY created_at DESC")
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_upgrade_campaign(campaign_id):
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM upgrade_campaigns WHERE id = ?", (campaign_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def update_upgrade_campaign(campaign_id, **kwargs):
+    db = await get_db()
+    try:
+        sets, vals = [], []
+        for k, v in kwargs.items():
+            if k in ("name", "description", "status", "image_map", "options"):
+                if k in ("image_map", "options"):
+                    v = json.dumps(v)
+                sets.append(f"{k} = ?")
+                vals.append(v)
+        if not sets:
+            return False
+        sets.append("updated_at = datetime('now')")
+        vals.append(campaign_id)
+        await db.execute(
+            f"UPDATE upgrade_campaigns SET {', '.join(sets)} WHERE id = ?", vals
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def delete_upgrade_campaign(campaign_id):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM upgrade_campaigns WHERE id = ?", (campaign_id,))
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def delete_upgrade_devices_by_campaign(campaign_id):
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM upgrade_devices WHERE campaign_id = ? AND phase = 'pending' "
+            "AND prestage_status = 'pending' AND transfer_status = 'pending' "
+            "AND activate_status = 'pending'",
+            (campaign_id,),
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def add_upgrade_device(campaign_id, host_id, ip_address, hostname):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO upgrade_devices (campaign_id, host_id, ip_address, hostname) "
+            "VALUES (?, ?, ?, ?)",
+            (campaign_id, host_id, ip_address, hostname),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_upgrade_devices(campaign_id):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM upgrade_devices WHERE campaign_id = ? ORDER BY hostname, ip_address",
+            (campaign_id,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_upgrade_device(device_id):
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM upgrade_devices WHERE id = ?", (device_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def update_upgrade_device(device_id, **kwargs):
+    db = await get_db()
+    try:
+        allowed = {
+            "model", "current_version", "target_image", "phase", "phase_detail",
+            "health_status", "prestage_status", "transfer_status", "activate_status",
+            "verify_status", "error_message", "started_at", "completed_at",
+        }
+        sets, vals = [], []
+        for k, v in kwargs.items():
+            if k in allowed:
+                sets.append(f"{k} = ?")
+                vals.append(v)
+        if not sets:
+            return False
+        vals.append(device_id)
+        await db.execute(
+            f"UPDATE upgrade_devices SET {', '.join(sets)} WHERE id = ?", vals
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def add_upgrade_event(campaign_id, device_id, level, message, host=""):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO upgrade_events (campaign_id, device_id, level, message, host) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (campaign_id, device_id, level, message, host),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_upgrade_events(campaign_id, device_id=None, limit=500):
+    db = await get_db()
+    try:
+        if device_id:
+            cursor = await db.execute(
+                "SELECT * FROM upgrade_events WHERE campaign_id = ? AND device_id = ? "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (campaign_id, device_id, limit),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM upgrade_events WHERE campaign_id = ? "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (campaign_id, limit),
+            )
+        return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
