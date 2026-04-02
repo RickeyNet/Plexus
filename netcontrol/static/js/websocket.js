@@ -80,9 +80,14 @@ export function connectUpgradeWebSocket(campaignId, onMessage, onComplete, onErr
         try {
             const data = JSON.parse(event.data);
 
-            // Mark end of historical replay
-            if (data.type === 'replay_complete') {
+            // Handle batched historical replay (single message with all events)
+            if (data.type === 'replay_batch') {
                 lastReplayEventId = data.last_event_id || 0;
+                if (data.events && onMessage) {
+                    for (const ev of data.events) {
+                        onMessage(ev);
+                    }
+                }
                 replayDone = true;
                 return;
             }
