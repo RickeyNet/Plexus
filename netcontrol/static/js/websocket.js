@@ -69,6 +69,8 @@ export function connectUpgradeWebSocket(campaignId, onMessage, onComplete, onErr
     const wsUrl = `${protocol}//${window.location.host}/ws/upgrades/${campaignId}`;
 
     const ws = new WebSocket(wsUrl);
+    let replayDone = false;
+    let lastReplayTimestamp = '';
 
     ws.onopen = () => {
         console.log(`Upgrade WebSocket connected for campaign ${campaignId}`);
@@ -77,9 +79,21 @@ export function connectUpgradeWebSocket(campaignId, onMessage, onComplete, onErr
     ws.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
+
+            // Mark end of historical replay
+            if (data.type === 'replay_complete') {
+                lastReplayTimestamp = data.last_timestamp || '';
+                replayDone = true;
+                return;
+            }
+
             if (data.type === 'campaign_complete') {
                 if (onComplete) onComplete(data);
             } else {
+                // Skip duplicate live events that were already sent during replay
+                if (replayDone && lastReplayTimestamp && data.type === 'upgrade_event' && data.timestamp && data.timestamp <= lastReplayTimestamp) {
+                    return;
+                }
                 if (onMessage) onMessage(data);
             }
         } catch (error) {
