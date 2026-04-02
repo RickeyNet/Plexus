@@ -200,6 +200,11 @@ from netcontrol.routes.snmp import (
     _snmp_walk,
 )
 from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
+from netcontrol.routes.upgrades import (
+    init_upgrades,
+    router as upgrades_router,
+    ws_router as upgrades_ws_router,
+)
 from netcontrol.routes.topology import (
     _calc_interface_utilization,
     _record_topology_changes,
@@ -952,6 +957,7 @@ init_compliance(require_auth, require_feature, require_admin)
 init_risk_analysis(require_auth, require_feature)
 init_deployments(require_auth, require_feature)
 init_monitoring(require_auth, require_feature, require_admin)
+init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
 metrics_engine_inject_auth(require_auth, require_admin)
 
 # Jobs
@@ -1067,6 +1073,12 @@ app.include_router(
     graph_export_router,
     dependencies=[Depends(require_auth)],
 )
+# IOS-XE Upgrade Tool
+app.include_router(
+    upgrades_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("upgrades"))],
+)
+app.include_router(upgrades_ws_router)  # WebSocket — handles its own auth
 
 
 # ═════════════════════════════════════════════════════════════════════════════
