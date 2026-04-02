@@ -443,8 +443,8 @@
     --primary-soft-strong: rgb(112, 59, 59);
     --primary-glow: rgba(112, 59, 59, 0.18);
     --overlay: rgba(26, 30, 20, 0.5);
-    --shadow: 0 1px 3px 0 rgba(40, 45, 30, 0.25), 0 1px 2px 0 rgba(40, 45, 30, 0.15);
-    --shadow-lg: 0 10px 15px -3px rgba(40, 45, 30, 0.25), 0 4px 6px -2px rgba(40, 45, 30, 0.15);
+    --shadow: 0 2px 6px rgba(40, 30, 20, 0.2), 0 1px 3px rgba(40, 30, 20, 0.15);
+    --shadow-lg: 0 8px 24px rgba(40, 30, 20, 0.25), 0 4px 8px rgba(40, 30, 20, 0.18);
     --topo-accent-rgb: 112, 59, 59;
 
     --topo-cisco-bg: #f5e6d0;       --topo-cisco-border: #703B3B;
@@ -470,12 +470,109 @@
     --topo-dim-edge-hi: rgba(110, 117, 96, 0.4);
 }
 
+/* ─── Sandstone depth & immersion overrides ─── */
+
+[data-theme="sandstone"] body {
+    background:
+        radial-gradient(ellipse 80% 60% at 50% 0%, rgba(112, 59, 59, 0.08) 0%, transparent 70%),
+        var(--bg);
+}
+
+[data-theme="sandstone"] .login-screen {
+    background:
+        radial-gradient(ellipse 70% 50% at 50% 30%, rgba(112, 59, 59, 0.10) 0%, transparent 70%),
+        var(--bg);
+}
+
+[data-theme="sandstone"] .login-card {
+    border-color: var(--border);
+    box-shadow:
+        0 8px 32px rgba(40, 30, 20, 0.25),
+        0 2px 8px rgba(40, 30, 20, 0.15);
+}
+
+[data-theme="sandstone"] .sidebar {
+    background:
+        linear-gradient(180deg, rgba(112, 59, 59, 0.05) 0%, transparent 40%),
+        rgba(from var(--card-bg) r g b / 0.55);
+    backdrop-filter: blur(24px) saturate(1.4);
+    border-right-color: rgba(from var(--border) r g b / 0.6);
+    box-shadow:
+        4px 0 24px rgba(40, 30, 20, 0.2),
+        inset -1px 0 0 rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="sandstone"] .card {
+    box-shadow:
+        0 2px 8px rgba(40, 30, 20, 0.18),
+        0 1px 3px rgba(40, 30, 20, 0.12),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="sandstone"] .card:hover {
+    box-shadow:
+        0 8px 24px rgba(40, 30, 20, 0.25),
+        0 2px 8px rgba(112, 59, 59, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    background: rgba(from var(--card-bg-hover) r g b / 0.6);
+}
+
+[data-theme="sandstone"] .nav-brand-text {
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.15),
+        0 0 20px rgba(112, 59, 59, 0.2);
+}
+
+[data-theme="sandstone"] .stat-ring-fill {
+    filter: drop-shadow(0 0 4px rgba(112, 59, 59, 0.35));
+}
+
+[data-theme="sandstone"] .stat-ring-value {
+    text-shadow: 0 0 8px rgba(112, 59, 59, 0.3);
+}
+
+[data-theme="sandstone"] .stat-value {
+    text-shadow: 0 0 10px rgba(112, 59, 59, 0.25), 0 0 4px rgba(112, 59, 59, 0.15);
+}
+
+[data-theme="sandstone"] .page h2 {
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.12),
+        0 0 20px rgba(112, 59, 59, 0.08);
+}
+
+[data-theme="sandstone"] .nav-link.active {
+    box-shadow:
+        inset 3px 0 0 var(--primary-light),
+        0 0 12px rgba(112, 59, 59, 0.12);
+}
+
 [data-theme="sandstone"] .btn-primary {
     color: #f0eee6ce;
+    box-shadow:
+        0 2px 8px rgba(92, 46, 46, 0.3),
+        0 1px 2px rgba(92, 46, 46, 0.2);
 }
 
 [data-theme="sandstone"] .btn-primary:hover {
     color: #f0eee6;
+    box-shadow:
+        0 4px 16px rgba(92, 46, 46, 0.35),
+        0 2px 4px rgba(92, 46, 46, 0.25);
+}
+
+[data-theme="sandstone"] .data-table {
+    box-shadow: 0 1px 4px rgba(40, 30, 20, 0.12);
+}
+
+[data-theme="sandstone"] .badge {
+    box-shadow: 0 1px 3px rgba(40, 30, 20, 0.15);
+}
+
+[data-theme="sandstone"] .form-input,
+[data-theme="sandstone"] .form-select {
+    box-shadow: inset 0 1px 3px rgba(40, 30, 20, 0.1);
 }
 
 [data-theme="light"] {
