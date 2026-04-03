@@ -1,4 +1,4 @@
-fastapi==0.135.2
+fastapi==0.135.3
 uvicorn[standard]==0.42.0
 aiosqlite==0.22.1
 aiofiles==25.1.0
@@ -6,7 +6,7 @@ cryptography==46.0.6
 pyyaml==6.0.3
 itsdangerous==2.2.0
 python-multipart==0.0.22
-requests==2.33.0
+requests==2.33.1
 urllib3==2.6.3
 netmiko==4.6.0
 pyrad==2.5.4
