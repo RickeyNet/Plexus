@@ -12989,6 +12989,9 @@ async function viewCampaign(campaignId) {
                 <button class="btn btn-danger" onclick="executeCampaignPhase(${campaignId}, 'activate')" ${isRunning ? 'disabled' : ''}>
                     Run Activate (Reload!)
                 </button>
+                <button class="btn btn-secondary" onclick="executeCampaignPhase(${campaignId}, 'verify')" ${isRunning ? 'disabled' : ''}>
+                    Verify Upgrade
+                </button>
                 ${isRunning ? `<button class="btn btn-secondary" onclick="cancelCampaignPhase(${campaignId})">Cancel</button>` : ''}
                 <button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="editCampaign(${campaignId})" ${isRunning ? 'disabled' : ''}>Edit</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteCampaign(${campaignId})">Delete</button>
@@ -13058,14 +13061,20 @@ async function viewCampaign(campaignId) {
                                 }
                             }
                         });
-                        // Update error message column (last column)
-                        if (data.error_message) {
-                            const lastCell = cells[cells.length - 1];
-                            if (lastCell) {
+                        // Update error message / status column (last column)
+                        const lastCell = cells[cells.length - 1];
+                        if (lastCell) {
+                            if (data.error_message) {
                                 const short = data.error_message.length > 40
                                     ? data.error_message.substring(0, 40) + '...'
                                     : data.error_message;
                                 lastCell.innerHTML = `<span style="color:var(--error-color); font-size:0.85em;" title="${data.error_message}">${short}</span>`;
+                            } else if ('error_message' in data) {
+                                // Explicitly cleared — show phase instead
+                                const phase = data.verify_status === 'completed' ? 'verified'
+                                    : data.activate_status === 'completed' ? 'completed'
+                                    : '';
+                                lastCell.innerHTML = `<span style="opacity:0.5;">${phase || 'ok'}</span>`;
                             }
                         }
                     }
@@ -13107,12 +13116,14 @@ window.viewCampaign = viewCampaign;
 async function executeCampaignPhase(campaignId, phase) {
     const confirmMsg = phase === 'activate'
         ? 'This will reload switches and cause downtime. Are you sure?'
+        : phase === 'verify'
+        ? 'Connect to each switch and check the running version against the target?'
         : `Run ${phase} phase on all campaign devices?`;
 
     const confirmed = await showConfirm({
-        title: `Execute ${phase.charAt(0).toUpperCase() + phase.slice(1)}`,
+        title: phase === 'verify' ? 'Verify Upgrade' : `Execute ${phase.charAt(0).toUpperCase() + phase.slice(1)}`,
         message: confirmMsg,
-        confirmText: phase === 'activate' ? 'Activate & Reload' : `Run ${phase}`,
+        confirmText: phase === 'activate' ? 'Activate & Reload' : phase === 'verify' ? 'Verify' : `Run ${phase}`,
         confirmClass: phase === 'activate' ? 'btn-danger' : 'btn-primary',
     });
     if (!confirmed) return;

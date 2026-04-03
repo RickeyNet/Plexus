@@ -9034,7 +9034,7 @@ async def add_upgrade_event(campaign_id, device_id, level, message, host=""):
         await db.close()
 
 
-async def get_upgrade_events(campaign_id, device_id=None, limit=500):
+async def get_upgrade_events(campaign_id, device_id=None, limit=10000):
     db = await get_db()
     try:
         if device_id:
