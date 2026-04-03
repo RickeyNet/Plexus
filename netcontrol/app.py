@@ -955,7 +955,7 @@ init_config_drift(require_auth, require_feature, require_admin, verify_session_t
 init_config_backups(require_auth, require_feature, require_admin, verify_session_token, _get_user_features)
 init_compliance(require_auth, require_feature, require_admin)
 init_risk_analysis(require_auth, require_feature)
-init_deployments(require_auth, require_feature)
+init_deployments(require_auth, require_feature, verify_session_token, _get_user_features)
 init_monitoring(require_auth, require_feature, require_admin)
 init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
 metrics_engine_inject_auth(require_auth, require_admin)

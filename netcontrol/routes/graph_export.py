@@ -9,6 +9,7 @@ Provides:
 """
 
 import json
+from xml.sax.saxutils import escape as _xml_escape
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -212,7 +213,7 @@ async def get_graph_embed(
     echarts_theme = "dark" if theme == "dark" else ""
 
     html = EMBED_HTML_TEMPLATE.format(
-        title=template.get("name", "Plexus Graph"),
+        title=_xml_escape(template.get("name", "Plexus Graph")),
         bg=bg,
         width=width,
         height=height,
@@ -240,7 +241,7 @@ async def get_graph_svg_stub(
         raise HTTPException(404, "Host graph not found")
 
     template = await db.get_graph_template(host_graph["graph_template_id"])
-    title = template.get("name", "Graph") if template else "Graph"
+    title = _xml_escape(template.get("name", "Graph")) if template else "Graph"
 
     svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">

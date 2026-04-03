@@ -40,9 +40,13 @@ except Exception:
 
 try:
     import ldap as python_ldap
+    from ldap.dn import escape_dn_chars as _escape_dn_chars
+    from ldap.filter import escape_filter_chars as _escape_filter_chars
     LDAP_AVAILABLE = True
 except Exception:
     python_ldap = None
+    _escape_dn_chars = None
+    _escape_filter_chars = None
     LDAP_AVAILABLE = False
 
 # ── Late-binding dependency injection ─────────────────────────────────────────
@@ -258,7 +262,7 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
 
         if user_dn_template:
             # Direct bind: template like "CN={username},OU=Users,DC=corp,DC=local"
-            user_dn = user_dn_template.replace("{username}", username)
+            user_dn = user_dn_template.replace("{username}", _escape_dn_chars(username))
         elif bind_dn and base_dn:
             # Search bind: first bind as service account, then search for user
             try:
@@ -267,7 +271,7 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
                 LOGGER.warning("ldap: service account bind failed — check bind_dn / bind_password")
                 return False, "error", {}
 
-            search_filter = user_search_filter.replace("{username}", username)
+            search_filter = user_search_filter.replace("{username}", _escape_filter_chars(username))
             try:
                 result = conn.search_s(
                     base_dn, python_ldap.SCOPE_SUBTREE, search_filter,
@@ -324,7 +328,7 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
         # If we didn't get attributes from the search, fetch them now
         if not user_attrs.get("display_name") and base_dn:
             try:
-                search_filter = user_search_filter.replace("{username}", username)
+                search_filter = user_search_filter.replace("{username}", _escape_filter_chars(username))
                 result = conn.search_s(
                     base_dn, python_ldap.SCOPE_SUBTREE, search_filter,
                     ["displayName", "mail", "cn", "memberOf"],
@@ -351,7 +355,7 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
         # Fetch group memberships if a group search is configured
         if group_search_base and group_search_filter and not user_attrs.get("groups"):
             try:
-                gfilter = group_search_filter.replace("{user_dn}", user_dn).replace("{username}", username)
+                gfilter = group_search_filter.replace("{user_dn}", _escape_filter_chars(user_dn)).replace("{username}", _escape_filter_chars(username))
                 g_result = conn.search_s(group_search_base, python_ldap.SCOPE_SUBTREE, gfilter, ["dn", "cn"])
                 user_attrs["groups"] = [
                     dn for dn, _ in g_result if dn is not None
