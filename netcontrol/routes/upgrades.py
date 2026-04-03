@@ -578,28 +578,28 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
             await ws.close(code=4001, reason="Unauthorized")
             return
 
-    # Send full historical events
+    # Send full historical events as a single batch to avoid keepalive timeouts
     events = await db.get_upgrade_events(campaign_id, limit=10000)
-    for ev in events:
-        try:
-            await ws.send_json({
-                "type": "upgrade_event",
-                "campaign_id": campaign_id,
-                "device_id": ev.get("device_id"),
-                "level": ev["level"],
-                "message": ev["message"],
-                "host": ev.get("host", ""),
-                "timestamp": ev["timestamp"],
-                "event_id": ev["id"],
-            })
-        except Exception:
-            return
-
-    # Signal that historical replay is done — frontend uses the last
-    # event_id to deduplicate live events that were already replayed
+    last_id = events[-1]["id"] if events else 0
     try:
-        last_id = events[-1]["id"] if events else 0
-        await ws.send_json({"type": "replay_complete", "last_event_id": last_id})
+        await ws.send_json({
+            "type": "replay_batch",
+            "campaign_id": campaign_id,
+            "last_event_id": last_id,
+            "events": [
+                {
+                    "type": "upgrade_event",
+                    "campaign_id": campaign_id,
+                    "device_id": ev.get("device_id"),
+                    "level": ev["level"],
+                    "message": ev["message"],
+                    "host": ev.get("host", ""),
+                    "timestamp": ev["timestamp"],
+                    "event_id": ev["id"],
+                }
+                for ev in events
+            ],
+        })
     except Exception:
         return
 
