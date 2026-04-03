@@ -13105,6 +13105,23 @@ async function viewCampaign(campaignId) {
                     line.textContent = '[WebSocket Error] Connection lost';
                     output.appendChild(line);
                 }
+            },
+            (events) => {
+                // Batch replay — build all lines in a fragment, append once
+                const output = document.getElementById('upgrade-live-output');
+                if (!output) return;
+                const frag = document.createDocumentFragment();
+                for (const data of events) {
+                    if (data.type === 'device_status') continue;
+                    const line = document.createElement('div');
+                    line.className = `job-output-line ${data.level || 'info'}`;
+                    const ts = data.timestamp ? data.timestamp.substring(11, 19) : '';
+                    const host = data.host ? `${data.host}: ` : '';
+                    line.textContent = `[${ts}] ${host}${data.message}`;
+                    frag.appendChild(line);
+                }
+                output.appendChild(frag);
+                output.scrollTop = output.scrollHeight;
             }
         );
     } catch (err) {

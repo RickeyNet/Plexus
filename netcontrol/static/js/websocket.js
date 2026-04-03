@@ -60,7 +60,7 @@ export function disconnectJobWebSocket() {
 
 let currentUpgradeSocket = null;
 
-export function connectUpgradeWebSocket(campaignId, onMessage, onComplete, onError) {
+export function connectUpgradeWebSocket(campaignId, onMessage, onComplete, onError, onReplayBatch) {
     if (currentUpgradeSocket) {
         currentUpgradeSocket.close();
     }
@@ -83,9 +83,13 @@ export function connectUpgradeWebSocket(campaignId, onMessage, onComplete, onErr
             // Handle batched historical replay (single message with all events)
             if (data.type === 'replay_batch') {
                 lastReplayEventId = data.last_event_id || 0;
-                if (data.events && onMessage) {
-                    for (const ev of data.events) {
-                        onMessage(ev);
+                if (data.events) {
+                    if (onReplayBatch) {
+                        onReplayBatch(data.events);
+                    } else if (onMessage) {
+                        for (const ev of data.events) {
+                            onMessage(ev);
+                        }
                     }
                 }
                 replayDone = true;
