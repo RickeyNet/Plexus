@@ -116,6 +116,9 @@ def _build_echart_option(template: dict, items: list[dict],
 # Self-contained HTML embed
 # ═════════════════════════════════════════════════════════════════════════════
 
+# The chart option JSON is placed inside a <script type="application/json">
+# block so the browser never interprets it as executable code or HTML.
+# The bootstrap <script> reads it via textContent and JSON.parse.
 EMBED_HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
@@ -129,9 +132,11 @@ body {{ margin: 0; padding: 0; background: {bg}; }}
 </head>
 <body>
 <div id="chart"></div>
+<script id="chart-data" type="application/json">{option_json}</script>
 <script>
+var opt = JSON.parse(document.getElementById('chart-data').textContent);
 var chart = echarts.init(document.getElementById('chart'), '{echarts_theme}');
-chart.setOption({option_json});
+chart.setOption(opt);
 window.addEventListener('resize', function() {{ chart.resize(); }});
 </script>
 </body>
@@ -209,17 +214,19 @@ async def get_graph_embed(
         metric_data[metric_name] = data
 
     option = _build_echart_option(template, items, metric_data, range, theme)
-    bg = "#1a1a2e" if theme == "dark" else "#ffffff"
-    echarts_theme = "dark" if theme == "dark" else ""
 
-    # Escape </script> sequences in the JSON to prevent script injection (CWE-79)
-    safe_json = json.dumps(option).replace("</", "<\\/")
+    # Strict whitelist for theme — only known values are allowed (CWE-79).
+    echarts_theme_safe = "dark" if theme == "dark" else ""
+    bg_safe = "#1a1a2e" if theme == "dark" else "#ffffff"
+
+    # Escape sequences that could break out of the JSON <script> block.
+    safe_json = json.dumps(option).replace("<", "\\u003c").replace(">", "\\u003e")
     html = EMBED_HTML_TEMPLATE.format(
         title=_xml_escape(template.get("name", "Plexus Graph")),
-        bg=bg,
-        width=width,
-        height=height,
-        echarts_theme=_xml_escape(echarts_theme),
+        bg=bg_safe,
+        width=int(width),
+        height=int(height),
+        echarts_theme=echarts_theme_safe,
         option_json=safe_json,
     )
     return HTMLResponse(content=html)
