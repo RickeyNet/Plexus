@@ -2845,8 +2845,9 @@ function _onTopoSearchInput() {
             resultsEl.innerHTML = '<div class="topology-search-item" style="color:rgba(180,210,240,0.4); cursor:default;">No matches</div>';
         } else {
             resultsEl.innerHTML = matches.map(n => {
-                const label = (n.label || '').replace(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark>$1</mark>');
-                const ip = (n.ip || '').replace(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark>$1</mark>');
+                const qRe = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                const label = escapeHtml(n.label || '').replace(qRe, '<mark>$1</mark>');
+                const ip = escapeHtml(n.ip || '').replace(qRe, '<mark>$1</mark>');
                 return `<div class="topology-search-item" data-node-id="${n.id}">${label}${n.ip ? `<span class="search-ip">${ip}</span>` : ''}</div>`;
             }).join('');
         }
@@ -2991,7 +2992,7 @@ async function showTopologyChanges() {
             const color = isAdded ? successColor : dangerColor;
             const bg = color + '14';
             const ackClass = c.acknowledged ? ' style="opacity:0.5;"' : '';
-            const proto = { cdp: 'CDP', lldp: 'LLDP', ospf: 'OSPF', bgp: 'BGP' }[c.protocol] || c.protocol?.toUpperCase() || '';
+            const proto = { cdp: 'CDP', lldp: 'LLDP', ospf: 'OSPF', bgp: 'BGP' }[c.protocol] || escapeHtml(c.protocol?.toUpperCase() || '');
 
             html += `<div class="topology-change-item"${ackClass} style="background:${bg}; border-left:3px solid ${color}; padding:0.5rem 0.75rem; margin-bottom:0.4rem; border-radius:0.25rem;">
                 <div style="display:flex; justify-content:space-between; align-items:baseline;">
@@ -2999,11 +3000,11 @@ async function showTopologyChanges() {
                     <span style="font-size:0.7rem; color:var(--text-muted);">${new Date(c.detected_at + 'Z').toLocaleString()}</span>
                 </div>
                 <div style="font-size:0.82rem; margin-top:0.2rem;">
-                    <strong>${c.source_hostname || 'Host #' + c.source_host_id}</strong>
-                    ${c.source_interface ? `(${c.source_interface})` : ''}
+                    <strong>${escapeHtml(c.source_hostname || 'Host #' + c.source_host_id)}</strong>
+                    ${c.source_interface ? `(${escapeHtml(c.source_interface)})` : ''}
                     &harr;
-                    <strong>${c.target_device_name || c.target_ip || 'unknown'}</strong>
-                    ${c.target_interface ? `(${c.target_interface})` : ''}
+                    <strong>${escapeHtml(c.target_device_name || c.target_ip || 'unknown')}</strong>
+                    ${c.target_interface ? `(${escapeHtml(c.target_interface)})` : ''}
                     ${proto ? `<span style="margin-left:0.4rem; font-size:0.7rem; padding:0.1rem 0.35rem; background:rgba(255,255,255,0.07); border-radius:0.2rem;">${proto}</span>` : ''}
                 </div>
             </div>`;
@@ -3341,7 +3342,7 @@ async function loadInventory(options = {}) {
         // Load SNMP profile assignments for each group and populate selects
         await _populateSnmpProfileSelects(groups);
     } catch (error) {
-        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+        container.innerHTML = `<div class="error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -4135,7 +4136,7 @@ async function loadPlaybooks(options = {}) {
         }
         renderPlaybooksList(applyPlaybookFilters());
     } catch (error) {
-        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+        container.innerHTML = `<div class="error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -4214,7 +4215,7 @@ async function loadJobs(options = {}) {
         }
         renderJobsList(applyJobFilters());
     } catch (error) {
-        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+        container.innerHTML = `<div class="error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -4307,7 +4308,7 @@ async function loadTemplates(options = {}) {
         }
         renderTemplatesList(applyTemplateFilters());
     } catch (error) {
-        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+        container.innerHTML = `<div class="error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -4418,7 +4419,7 @@ async function loadCredentials(options = {}) {
         renderCredentialsList(applyCredentialFilters());
         initCredentialChangeTracking();
     } catch (error) {
-        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+        container.innerHTML = `<div class="error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -4755,7 +4756,7 @@ async function renderAuthConfig() {
         try {
             const creds = await api.getCredentials();
             credSelect.innerHTML = '<option value="">-- None --</option>' +
-                creds.map(c => `<option value="${c.id}">${c.name} (${c.username})</option>`).join('');
+                creds.map(c => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.username)})</option>`).join('');
             credSelect.value = cfg.default_credential_id || '';
         } catch (_) {
             credSelect.value = cfg.default_credential_id || '';
@@ -12054,22 +12055,22 @@ async function searchMacTrackingUI() {
                     </tr></thead>
                     <tbody>
                     ${results.map(r => `<tr>
-                        <td><code style="font-size:0.85em;">${r.mac_address || '-'}</code></td>
-                        <td>${r.ip_address || '-'}</td>
-                        <td>${r.hostname || 'host-' + r.host_id}</td>
-                        <td>${r.port_name || '-'}</td>
-                        <td>${r.vlan || '-'}</td>
-                        <td><span class="badge badge-sm">${r.entry_type || 'dynamic'}</span></td>
+                        <td><code style="font-size:0.85em;">${escapeHtml(r.mac_address || '-')}</code></td>
+                        <td>${escapeHtml(r.ip_address || '-')}</td>
+                        <td>${escapeHtml(r.hostname || 'host-' + r.host_id)}</td>
+                        <td>${escapeHtml(r.port_name || '-')}</td>
+                        <td>${escapeHtml(String(r.vlan || '-'))}</td>
+                        <td><span class="badge badge-sm">${escapeHtml(r.entry_type || 'dynamic')}</span></td>
                         <td style="font-size:0.85em;">${fmtTime(r.first_seen)}</td>
                         <td style="font-size:0.85em;">${fmtTime(r.last_seen)}</td>
-                        <td><button class="btn btn-sm" onclick="showMacHistory('${r.mac_address}')">History</button></td>
+                        <td><button class="btn btn-sm" onclick="showMacHistory('${escapeHtml(r.mac_address)}')">History</button></td>
                     </tr>`).join('')}
                     </tbody>
                 </table>
                 <div style="margin-top:0.5rem; font-size:0.85em; opacity:0.6;">${results.length} result(s)</div>
             </div>`;
     } catch (err) {
-        resultsEl.innerHTML = '<div class="glass-card card" style="color:var(--danger);">Search error: ' + err.message + '</div>';
+        resultsEl.innerHTML = '<div class="glass-card card" style="color:var(--danger);">Search error: ' + escapeHtml(err.message) + '</div>';
     }
 }
 
@@ -12083,16 +12084,16 @@ async function showMacHistory(macAddress) {
         const fmtTime = (t) => t ? new Date(t).toLocaleString() : '-';
         const content = `
             <div style="max-height:400px; overflow-y:auto;">
-                <h4>Movement History: <code>${macAddress}</code></h4>
+                <h4>Movement History: <code>${escapeHtml(macAddress)}</code></h4>
                 <table class="data-table" style="width:100%;">
                     <thead><tr><th>Time</th><th>Switch</th><th>Port</th><th>VLAN</th><th>IP</th></tr></thead>
                     <tbody>
                     ${history.map(h => `<tr>
                         <td style="font-size:0.85em;">${fmtTime(h.seen_at)}</td>
-                        <td>${h.hostname || 'host-' + h.host_id}</td>
-                        <td>${h.port_name || '-'}</td>
-                        <td>${h.vlan || '-'}</td>
-                        <td>${h.ip_address || '-'}</td>
+                        <td>${escapeHtml(h.hostname || 'host-' + h.host_id)}</td>
+                        <td>${escapeHtml(h.port_name || '-')}</td>
+                        <td>${escapeHtml(String(h.vlan || '-'))}</td>
+                        <td>${escapeHtml(h.ip_address || '-')}</td>
                     </tr>`).join('')}
                     </tbody>
                 </table>
@@ -12167,7 +12168,7 @@ async function loadTrafficAnalysis({ preserveContent } = {}) {
         srcEl.innerHTML = `<table class="data-table" style="width:100%; font-size:0.85em;">
             <thead><tr><th>IP</th><th>Traffic</th><th>Flows</th></tr></thead>
             <tbody>${topSrc.value.slice(0, 10).map(r => `<tr>
-                <td><code>${r.ip}</code></td><td>${fmtBytes(r.total_bytes)}</td><td>${r.flow_count}</td>
+                <td><code>${escapeHtml(r.ip)}</code></td><td>${fmtBytes(r.total_bytes)}</td><td>${r.flow_count}</td>
             </tr>`).join('')}</tbody></table>`;
     } else if (srcEl) { srcEl.innerHTML = '<div style="opacity:0.5; text-align:center; padding:1rem;">No data</div>'; }
 
@@ -12177,7 +12178,7 @@ async function loadTrafficAnalysis({ preserveContent } = {}) {
         dstEl.innerHTML = `<table class="data-table" style="width:100%; font-size:0.85em;">
             <thead><tr><th>IP</th><th>Traffic</th><th>Flows</th></tr></thead>
             <tbody>${topDst.value.slice(0, 10).map(r => `<tr>
-                <td><code>${r.ip}</code></td><td>${fmtBytes(r.total_bytes)}</td><td>${r.flow_count}</td>
+                <td><code>${escapeHtml(r.ip)}</code></td><td>${fmtBytes(r.total_bytes)}</td><td>${r.flow_count}</td>
             </tr>`).join('')}</tbody></table>`;
     } else if (dstEl) { dstEl.innerHTML = '<div style="opacity:0.5; text-align:center; padding:1rem;">No data</div>'; }
 
@@ -12187,7 +12188,7 @@ async function loadTrafficAnalysis({ preserveContent } = {}) {
         appsEl.innerHTML = `<table class="data-table" style="width:100%; font-size:0.85em;">
             <thead><tr><th>Service</th><th>Port</th><th>Proto</th><th>Traffic</th></tr></thead>
             <tbody>${topApps.value.slice(0, 10).map(r => `<tr>
-                <td>${r.service_name || '-'}</td><td>${r.port}</td><td>${r.protocol_name || r.protocol}</td><td>${fmtBytes(r.total_bytes)}</td>
+                <td>${escapeHtml(r.service_name || '-')}</td><td>${r.port}</td><td>${escapeHtml(r.protocol_name || String(r.protocol))}</td><td>${fmtBytes(r.total_bytes)}</td>
             </tr>`).join('')}</tbody></table>`;
     } else if (appsEl) { appsEl.innerHTML = '<div style="opacity:0.5; text-align:center; padding:1rem;">No data</div>'; }
 
@@ -12197,7 +12198,7 @@ async function loadTrafficAnalysis({ preserveContent } = {}) {
         convosEl.innerHTML = `<table class="data-table" style="width:100%; font-size:0.85em;">
             <thead><tr><th>Source</th><th>Destination</th><th>Traffic</th><th>Flows</th></tr></thead>
             <tbody>${topConvos.value.slice(0, 10).map(r => `<tr>
-                <td><code>${r.src_ip}</code></td><td><code>${r.dst_ip}</code></td><td>${fmtBytes(r.total_bytes)}</td><td>${r.flow_count}</td>
+                <td><code>${escapeHtml(r.src_ip)}</code></td><td><code>${escapeHtml(r.dst_ip)}</code></td><td>${fmtBytes(r.total_bytes)}</td><td>${r.flow_count}</td>
             </tr>`).join('')}</tbody></table>`;
     } else if (convosEl) { convosEl.innerHTML = '<div style="opacity:0.5; text-align:center; padding:1rem;">No data</div>'; }
 
@@ -12342,7 +12343,7 @@ async function loadUpgradeCampaigns() {
                         <p style="margin:0; opacity:0.7; font-size:0.85em;">${escapeHtml(c.description || '')}</p>
                     </div>
                     <div style="text-align:right;">
-                        <span class="badge ${statusClass}">${c.status || 'created'}</span>
+                        <span class="badge ${statusClass}">${escapeHtml(c.status || 'created')}</span>
                         <div style="font-size:0.85em; margin-top:0.25rem; opacity:0.7;">
                             ${c.devices_completed}/${c.device_count} devices &bull; ${pct}%
                         </div>
@@ -12359,7 +12360,7 @@ async function loadUpgradeCampaigns() {
             </div>`;
         }).join('');
     } catch (err) {
-        container.innerHTML = `<div class="empty-state"><p>Failed to load campaigns: ${err.message}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><p>Failed to load campaigns: ${escapeHtml(err.message)}</p></div>`;
     }
 }
 
@@ -12400,7 +12401,7 @@ async function loadUpgradeImages() {
             </tr>`).join('')}</tbody>
         </table>`;
     } catch (err) {
-        container.innerHTML = `<div class="empty-state"><p>Failed to load images: ${err.message}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><p>Failed to load images: ${escapeHtml(err.message)}</p></div>`;
     }
 }
 
@@ -12973,7 +12974,7 @@ async function viewCampaign(campaignId) {
 
         showModal(`Campaign: ${escapeHtml(campaign.name)}`, `
             <div style="margin-bottom:1rem;">
-                <span class="badge ${campaign.status?.includes('failed') ? 'badge-error' : campaign.status?.includes('running') ? 'badge-info' : campaign.status?.includes('complete') ? 'badge-success' : 'badge-secondary'}">${campaign.status || 'created'}</span>
+                <span class="badge ${campaign.status?.includes('failed') ? 'badge-error' : campaign.status?.includes('running') ? 'badge-info' : campaign.status?.includes('complete') ? 'badge-success' : 'badge-secondary'}">${escapeHtml(campaign.status || 'created')}</span>
                 <span style="opacity:0.7; margin-left:0.5rem; font-size:0.85em;">${devices.length} devices</span>
                 ${Object.entries(imageMap).map(([p, i]) => `<span class="badge badge-secondary" style="margin-left:0.25rem;">${escapeHtml(p)} &rarr; ${escapeHtml(String(i).split('/').pop() || i)}</span>`).join('')}
             </div>
@@ -13014,14 +13015,14 @@ async function viewCampaign(campaignId) {
                         ${devices.map(d => `<tr id="upgrade-dev-${d.id}" style="cursor:pointer;" onclick="viewDeviceUpgradeLog(${campaignId}, ${d.id}, '${escapeHtml(d.ip_address)}')">
                             <td>
                                 <strong>${escapeHtml(d.hostname || d.ip_address)}</strong>
-                                ${d.hostname ? `<br><span style="opacity:0.5; font-size:0.9em;">${d.ip_address}</span>` : ''}
+                                ${d.hostname ? `<br><span style="opacity:0.5; font-size:0.9em;">${escapeHtml(d.ip_address)}</span>` : ''}
                             </td>
                             <td><code>${escapeHtml(d.model || '-')}</code></td>
                             <td>${escapeHtml(d.current_version || '-')}</td>
                             <td style="font-size:0.85em;">${escapeHtml(d.target_image ? d.target_image.split('/').pop() : '-')}</td>
                             ${phaseColumns.map(p => `<td style="text-align:center;">${statusIcon(d[p + '_status'])}</td>`).join('')}
                             <td>
-                                ${d.error_message ? `<span style="color:var(--error-color); font-size:0.85em;" title="${escapeHtml(d.error_message)}">${escapeHtml(d.error_message.substring(0, 40))}${d.error_message.length > 40 ? '...' : ''}</span>` : `<span style="opacity:0.5;">${d.phase || 'pending'}</span>`}
+                                ${d.error_message ? `<span style="color:var(--error-color); font-size:0.85em;" title="${escapeHtml(d.error_message)}">${escapeHtml(d.error_message.substring(0, 40))}${d.error_message.length > 40 ? '...' : ''}</span>` : `<span style="opacity:0.5;">${escapeHtml(d.phase || 'pending')}</span>`}
                             </td>
                         </tr>`).join('')}
                     </tbody>
