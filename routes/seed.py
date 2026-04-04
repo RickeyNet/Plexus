@@ -136,7 +136,16 @@ async def seed():
         encrypt(seed_password),
         encrypt(seed_password),
     )
-    print(f"  + Credential 'Default SSH' (password: {seed_password})")
+    print(f"  + Credential 'Default SSH' (password: {'*' * len(seed_password)})")
+    # Write seed credential to a local file instead of stdout (CWE-532)
+    import pathlib
+    pw_file = pathlib.Path(__file__).resolve().parent.parent / ".seed_credential_password"
+    pw_file.write_text(seed_password)
+    try:
+        pw_file.chmod(0o600)
+    except OSError:
+        pass
+    print(f"    Seed password written to {pw_file}  — delete after use.")
 
     print("[seed] Done.")
 

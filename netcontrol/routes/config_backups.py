@@ -316,7 +316,8 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
         lines_changed = added + removed
         validated = lines_changed == 0
     except Exception as exc:
-        diff_text = f"Validation capture failed: {exc}"
+        LOGGER.warning("Validation capture failed for backup %s: %s", body.backup_id, exc)
+        diff_text = "Validation capture failed — see server logs for details."
 
     session = _get_session(request)
     await _audit(

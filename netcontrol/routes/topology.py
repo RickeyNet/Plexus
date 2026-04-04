@@ -655,7 +655,7 @@ async def discover_topology_stream():
             yield f"data: {json.dumps({'type': 'done', 'hosts_scanned': scanned, 'links_discovered': total_links, 'targets_resolved': resolved, 'errors': total_errors})}\n\n"
         except Exception as exc:
             LOGGER.error("topology: streaming discovery error: %s", exc, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': 'An internal error occurred during discovery.'})}\n\n"
 
     return StreamingResponse(_event_generator(), media_type="text/event-stream")
 
@@ -972,7 +972,7 @@ async def discover_topology_for_group_stream(group_id: int):
             yield f"data: {json.dumps({'type': 'done', 'hosts_scanned': scanned, 'links_discovered': total_links, 'targets_resolved': resolved, 'errors': errors})}\n\n"
         except Exception as exc:
             LOGGER.error("topology: streaming discovery error for group %d: %s", group_id, exc, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': 'An internal error occurred during discovery.'})}\n\n"
 
     return StreamingResponse(_event_generator(), media_type="text/event-stream")
 
@@ -990,7 +990,7 @@ async def get_host_topology(host_id: int):
         raise
     except Exception as exc:
         LOGGER.error("topology: host topology error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
 @router.get("/api/topology/changes")
@@ -1004,7 +1004,7 @@ async def get_topology_changes(unacknowledged: bool = Query(default=True),
         return {"changes": changes, "unacknowledged_count": count}
     except Exception as exc:
         LOGGER.error("topology: changes error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
 @router.post("/api/topology/changes/acknowledge")
@@ -1015,7 +1015,7 @@ async def acknowledge_topology_changes():
         return {"acknowledged": count}
     except Exception as exc:
         LOGGER.error("topology: acknowledge error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
 @router.get("/api/topology/positions")
@@ -1025,7 +1025,7 @@ async def get_topology_positions():
         return await db.get_topology_positions()
     except Exception as exc:
         LOGGER.error("topology: get positions error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
 @router.put("/api/topology/positions")
@@ -1037,7 +1037,7 @@ async def save_topology_positions(payload: dict):
         return {"saved": count}
     except Exception as exc:
         LOGGER.error("topology: save positions error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
 @router.delete("/api/topology/positions")
@@ -1048,4 +1048,4 @@ async def delete_topology_positions():
         return {"deleted": count}
     except Exception as exc:
         LOGGER.error("topology: delete positions error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="An internal error occurred.")

@@ -459,9 +459,11 @@ async def list_backups():
 @router.get("/api/upgrades/backups/{filename}")
 async def download_backup(filename: str):
     """Download a specific backup file."""
-    # Prevent path traversal
+    # Prevent path traversal (CWE-22)
     safe = os.path.basename(filename)
-    fpath = os.path.join(BACKUPS_DIR, safe)
+    fpath = os.path.realpath(os.path.join(BACKUPS_DIR, safe))
+    if not fpath.startswith(os.path.realpath(BACKUPS_DIR) + os.sep):
+        raise HTTPException(400, "Invalid filename")
 
     if not os.path.isfile(fpath):
         raise HTTPException(404, "Backup file not found")
@@ -476,7 +478,9 @@ async def delete_backup(filename: str, request: Request):
     user = session.get("user", "unknown") if session else "unknown"
 
     safe = os.path.basename(filename)
-    fpath = os.path.join(BACKUPS_DIR, safe)
+    fpath = os.path.realpath(os.path.join(BACKUPS_DIR, safe))
+    if not fpath.startswith(os.path.realpath(BACKUPS_DIR) + os.sep):
+        raise HTTPException(400, "Invalid filename")
 
     if not os.path.isfile(fpath):
         raise HTTPException(404, "Backup file not found")

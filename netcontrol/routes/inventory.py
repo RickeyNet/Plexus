@@ -694,7 +694,8 @@ async def test_group_snmp_profile(group_id: int, body: dict):
     try:
         result = await _snmp_get(target_ip, timeout, snmp_config)
     except Exception as exc:
-        return {"success": False, "target_ip": target_ip, "error": str(exc)}
+        LOGGER.warning("SNMP test failed for %s: %s", target_ip, exc)
+        return {"success": False, "target_ip": target_ip, "error": "SNMP query failed — check credentials and connectivity."}
     if result is None:
         return {"success": False, "target_ip": target_ip, "error": "SNMP query failed -- no response or bad credentials"}
     return {"success": True, "target_ip": target_ip, "result": result}

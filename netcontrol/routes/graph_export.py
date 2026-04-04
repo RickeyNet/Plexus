@@ -212,13 +212,15 @@ async def get_graph_embed(
     bg = "#1a1a2e" if theme == "dark" else "#ffffff"
     echarts_theme = "dark" if theme == "dark" else ""
 
+    # Escape </script> sequences in the JSON to prevent script injection (CWE-79)
+    safe_json = json.dumps(option).replace("</", "<\\/")
     html = EMBED_HTML_TEMPLATE.format(
         title=_xml_escape(template.get("name", "Plexus Graph")),
         bg=bg,
         width=width,
         height=height,
-        echarts_theme=echarts_theme,
-        option_json=json.dumps(option),
+        echarts_theme=_xml_escape(echarts_theme),
+        option_json=safe_json,
     )
     return HTMLResponse(content=html)
 
