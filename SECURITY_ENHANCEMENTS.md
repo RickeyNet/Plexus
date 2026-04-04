@@ -30,7 +30,7 @@
 ## Medium
 
 - [x] **Missing database indexes** — Only 7 indexes across 30+ tables (`routes/database.py:643-656`). Add indexes on `jobs(created_at, status)`, `hosts(group_id)`, `users(username)`, `audit_events(created_at)`, and other commonly queried foreign keys.
-- [ ] **No schema migration framework** — Schema changes use manual `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` at startup (`routes/database.py:1162-1179`). No version tracking, no rollback, concurrent startup race risk. Consider adopting Alembic.
+- [x] **No schema migration framework** — Schema changes use manual `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` at startup (`routes/database.py:1162-1179`). No version tracking, no rollback, concurrent startup race risk. Fixed: implemented `routes/migrations/` framework with versioned migration files, a `schema_migrations` tracking table, advisory/file locking for concurrent startup safety, and automatic bootstrapping for existing databases. All inline migrations consolidated into `0001_baseline.py`.
 - [x] **SQL injection in migration tool** — Table and column names interpolated directly into SQL via f-strings (`tools/migrate_sqlite_to_postgres.py:75-139`). Validate names against a whitelist of known tables.
 - [x] **Console logging of sensitive data** — Multiple `console.log()` calls expose host IPs, user profiles, and playbook details in browser DevTools (`netcontrol/static/js/app.js:5572,5930,5998,6599`). Remove or gate behind a debug flag.
 - [x] **Frontend memory leaks** — `setInterval` instances for elapsed time displays not always cleared on abnormal modal closure (`netcontrol/static/js/app.js:2483-2489`). Event listeners for device detail time ranges accumulate without cleanup (line 523).
