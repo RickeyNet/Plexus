@@ -48,6 +48,25 @@ BACKUPS_DIR = os.path.join(
     "backups", "upgrades",
 )
 
+# Validation patterns for values interpolated into device CLI commands
+_SAFE_IMAGE_NAME_RE = re.compile(r'^[A-Za-z0-9._\-]+$')
+_SAFE_DEST_PATH_RE = re.compile(r'^[a-z]+[0-9]*:/?$')   # flash: bootflash:/ slot0: etc.
+
+
+def _validate_cli_inputs(image_name: str, dest_path: str) -> str | None:
+    """Return an error message if image_name or dest_path contain unsafe characters.
+
+    These values are interpolated into device CLI commands (dir, verify /md5,
+    install add) so they must be restricted to safe characters to prevent
+    command injection via Netmiko.
+    """
+    if not _SAFE_IMAGE_NAME_RE.match(image_name):
+        return f"Image name contains invalid characters: {image_name!r}"
+    if not _SAFE_DEST_PATH_RE.match(dest_path):
+        return f"Destination path contains invalid characters: {dest_path!r}"
+    return None
+
+
 # ── Late-binding auth dependencies (injected by app.py) ──────────────────────
 
 _require_auth = None
@@ -161,7 +180,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 
     os.makedirs(SOFTWARE_IMAGES_DIR, exist_ok=True)
 
-    filename = file.filename or "unknown.bin"
+    filename = os.path.basename(file.filename or "unknown.bin")
     dest = os.path.join(SOFTWARE_IMAGES_DIR, filename)
 
     # Stream to disk and compute MD5
@@ -248,8 +267,11 @@ async def delete_image(image_id: int, request: Request):
     if not img:
         raise HTTPException(404, "Image not found")
 
-    # Remove file from disk
-    fpath = os.path.join(SOFTWARE_IMAGES_DIR, img["filename"])
+    # Remove file from disk (sanitize filename to prevent path traversal)
+    safe_name = os.path.basename(img["filename"])
+    fpath = os.path.realpath(os.path.join(SOFTWARE_IMAGES_DIR, safe_name))
+    if not fpath.startswith(os.path.realpath(SOFTWARE_IMAGES_DIR)):
+        raise HTTPException(400, "Invalid image filename")
     if os.path.isfile(fpath):
         os.remove(fpath)
 
@@ -922,8 +944,23 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 await _emit(campaign_id, dev_id, "error", "Cannot determine target image", host=ip)
                 return
 
-        image_path = os.path.join(SOFTWARE_IMAGES_DIR, target_image)
         image_name = os.path.basename(target_image)
+        image_path = os.path.realpath(os.path.join(SOFTWARE_IMAGES_DIR, image_name))
+        if not image_path.startswith(os.path.realpath(SOFTWARE_IMAGES_DIR)):
+            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
+                                           error_message="Invalid image path")
+            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message="Invalid image path")
+            await _emit(campaign_id, dev_id, "error", "Invalid image path — possible path traversal", host=ip)
+            return
+
+        # Validate image_name and dest_path before using in device CLI commands
+        cli_err = _validate_cli_inputs(image_name, dest_path)
+        if cli_err:
+            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
+                                           error_message=cli_err)
+            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=cli_err)
+            await _emit(campaign_id, dev_id, "error", cli_err, host=ip)
+            return
 
         if not os.path.isfile(image_path):
             await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
@@ -1107,6 +1144,15 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                 return
 
         image_name = os.path.basename(target_image)
+
+        # Validate inputs before using in device CLI commands
+        cli_err = _validate_cli_inputs(image_name, dest_path)
+        if cli_err:
+            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
+                                           error_message=cli_err)
+            await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=cli_err)
+            await _emit(campaign_id, dev_id, "error", cli_err, host=ip)
+            return
 
         # Verify image exists on flash
         exists = await asyncio.to_thread(_check_image_exists, conn, image_name, dest_path)

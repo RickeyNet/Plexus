@@ -13068,7 +13068,7 @@ async function viewCampaign(campaignId) {
                                 const short = data.error_message.length > 40
                                     ? data.error_message.substring(0, 40) + '...'
                                     : data.error_message;
-                                lastCell.innerHTML = `<span style="color:var(--error-color); font-size:0.85em;" title="${data.error_message}">${short}</span>`;
+                                lastCell.innerHTML = `<span style="color:var(--error-color); font-size:0.85em;" title="${escapeHtml(data.error_message)}">${escapeHtml(short)}</span>`;
                             } else if ('error_message' in data) {
                                 // Explicitly cleared — show phase instead
                                 const phase = data.verify_status === 'completed' ? 'verified'
