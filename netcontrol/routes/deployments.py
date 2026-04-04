@@ -37,12 +37,16 @@ VERIFICATION_DELAY_SECONDS = 60
 
 _require_auth = None
 _require_feature = None
+_verify_session_token = None
+_get_user_features = None
 
 
-def init_deployments(require_auth, require_feature):
-    global _require_auth, _require_feature
+def init_deployments(require_auth, require_feature, verify_session_token_fn=None, get_user_features_fn=None):
+    global _require_auth, _require_feature, _verify_session_token, _get_user_features
     _require_auth = require_auth
     _require_feature = require_feature
+    _verify_session_token = verify_session_token_fn
+    _get_user_features = get_user_features_fn
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -831,6 +835,22 @@ async def get_deployment_job_status(job_id: str):
 @ws_router.websocket("/ws/deployment/{job_id}")
 async def ws_deployment(websocket: WebSocket, job_id: str):
     """WebSocket for streaming deployment/rollback job output."""
+    token = websocket.cookies.get("session")
+    session = _verify_session_token(token) if token else None
+    if not session:
+        await websocket.close(code=1008)
+        return
+
+    user = await db.get_user_by_id(session["user_id"])
+    if not user:
+        await websocket.close(code=1008)
+        return
+
+    features = await _get_user_features(user)
+    if user.get("role") != "admin" and "deployments" not in features:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     if job_id not in _deployment_job_sockets:
         _deployment_job_sockets[job_id] = []

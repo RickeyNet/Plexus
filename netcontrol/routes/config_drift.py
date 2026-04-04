@@ -898,6 +898,22 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
 @ws_router.websocket("/ws/config-revert/{job_id}")
 async def ws_config_revert(websocket: WebSocket, job_id: str):
     """WebSocket for streaming revert job output."""
+    token = websocket.cookies.get("session")
+    session = _verify_session_token(token) if token else None
+    if not session:
+        await websocket.close(code=1008)
+        return
+
+    user = await db.get_user_by_id(session["user_id"])
+    if not user:
+        await websocket.close(code=1008)
+        return
+
+    features = await _get_user_features(user)
+    if user.get("role") != "admin" and "config-drift" not in features:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     job = _revert_jobs.get(job_id)
     if not job:
