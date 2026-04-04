@@ -865,7 +865,7 @@ async def monitoring_poll_now_stream(request: Request):
                 errors += 1
                 completed += 1
                 LOGGER.warning("monitoring: poll exception: %s", redact_value(str(exc)))
-                yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': '(unknown)', 'error': str(exc)})}\n\n"
+                yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': '(unknown)', 'error': 'Poll failed for host.'})}\n\n"
                 continue
 
             hostname = h.get("hostname", h.get("ip_address", "unknown"))

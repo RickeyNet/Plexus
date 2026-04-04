@@ -338,7 +338,12 @@ _csrf_serializer = URLSafeTimedSerializer(_secret_key + "-csrf")
 
 
 def _hash_password(password: str, salt: str = "") -> str:
-    return hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+    # Use PBKDF2 with 600 000 iterations (OWASP recommendation) instead of
+    # a single SHA-256 round.  Existing hashes are 64-char hex (SHA-256);
+    # new hashes are 128-char hex (PBKDF2-SHA-256, 64-byte dk).
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), f"{salt}:".encode(), 600_000, dklen=64
+    ).hex()
 
 
 async def _ensure_default_admin():
@@ -359,11 +364,30 @@ async def _ensure_default_admin():
         display_name="Administrator", role="admin",
         must_change_password=True,
     )
-    LOGGER.warning(
-        "Created default admin account.  Initial password: %s  — "
-        "change it immediately after first login.",
-        initial_password,
-    )
+    # Write the one-time password to a file readable only by the process owner
+    # instead of logging it in clear text (CWE-532).
+    pw_file = os.path.join(os.path.dirname(__file__), ".initial_admin_password")
+    try:
+        with open(pw_file, "w") as fh:
+            fh.write(initial_password)
+        os.chmod(pw_file, 0o600)
+        LOGGER.warning(
+            "Created default admin account.  Initial password written to %s  — "
+            "change it immediately after first login and delete the file.",
+            pw_file,
+        )
+    except OSError:
+        # Fallback: log a masked hint so operators know an account was created
+        LOGGER.warning(
+            "Created default admin account.  Could not write password file. "
+            "Password starts with: %s…  — change it immediately.",
+            initial_password[:4],
+        )
+
+
+def _legacy_hash(password: str, salt: str = "") -> str:
+    """Old single-round SHA-256 hash for migration compatibility."""
+    return hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
 
 
 async def verify_user(username: str, password: str) -> dict | None:
@@ -371,7 +395,14 @@ async def verify_user(username: str, password: str) -> dict | None:
     user = await db.get_user_by_username(username)
     if not user:
         return None
-    if _hash_password(password, user["salt"]) == user["password_hash"]:
+    stored = user["password_hash"]
+    # Try current PBKDF2 hash first
+    if _hash_password(password, user["salt"]) == stored:
+        return user
+    # Fall back to legacy SHA-256 hash and auto-upgrade if it matches
+    if len(stored) == 64 and _legacy_hash(password, user["salt"]) == stored:
+        new_hash = _hash_password(password, user["salt"])
+        await db.update_user_password(user["id"], new_hash, user["salt"])
         return user
     return None
 

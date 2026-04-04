@@ -9445,7 +9445,7 @@ window.showRouteSnapshotHistory = async function(hostId, hostname) {
                         <span style="margin-left:0.75rem;">Routes: <strong>${s.route_count}</strong></span>
                         <span style="margin-left:0.5rem; font-size:0.85em;">Delta: ${deltaStr}</span>
                     </div>
-                    <button class="btn btn-sm btn-secondary" onclick="showRouteSnapshotDetail('${escapeHtml(s.routes_text || '').replace(/'/g, "\\'")}', '${ts}')">View</button>
+                    <button class="btn btn-sm btn-secondary" data-routes="${btoa(encodeURIComponent(s.routes_text || ''))}" onclick="showRouteSnapshotDetail(decodeURIComponent(atob(this.dataset.routes)), '${ts}')">View</button>
                 </div>
             </div>`;
         }).join('');
@@ -12041,7 +12041,7 @@ async function searchMacTrackingUI() {
     try {
         const results = await api.searchMacTracking(query);
         if (!results || results.length === 0) {
-            resultsEl.innerHTML = '<div class="glass-card card" style="text-align:center; padding:2rem; opacity:0.7;">No results found for "' + query + '"</div>';
+            resultsEl.innerHTML = '<div class="glass-card card" style="text-align:center; padding:2rem; opacity:0.7;">No results found for "' + escapeHtml(query) + '"</div>';
             return;
         }
         const fmtTime = (t) => t ? new Date(t).toLocaleString() : '-';
