@@ -172,6 +172,10 @@ async def _emit_device_status(campaign_id: int, device_id: int, **statuses):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+# Maximum upload size: 2 GiB (IOS-XE images are typically 400-900 MB)
+_MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("PLEXUS_MAX_IMAGE_UPLOAD_MB", "2048")) * 1024 * 1024
+
+
 @router.post("/api/upgrades/images")
 async def upload_image(request: Request, file: UploadFile = File(...)):
     """Upload a software image file."""
@@ -181,19 +185,32 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     os.makedirs(SOFTWARE_IMAGES_DIR, exist_ok=True)
 
     filename = os.path.basename(file.filename or "unknown.bin")
+    # Validate filename: only allow safe characters
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,254}', filename):
+        raise HTTPException(400, "Invalid image filename — use only alphanumeric, dot, hyphen, underscore")
     dest = os.path.join(SOFTWARE_IMAGES_DIR, filename)
 
-    # Stream to disk and compute MD5
+    # Stream to disk and compute MD5, enforcing size limit
     md5 = hashlib.md5()
     size = 0
-    with open(dest, "wb") as f:
-        while True:
-            chunk = await file.read(8 * 1024 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
-            md5.update(chunk)
-            size += len(chunk)
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = await file.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > _MAX_IMAGE_UPLOAD_BYTES:
+                    raise HTTPException(
+                        413, f"Image exceeds maximum upload size of {_MAX_IMAGE_UPLOAD_BYTES // (1024*1024)} MB"
+                    )
+                f.write(chunk)
+                md5.update(chunk)
+    except HTTPException:
+        # Clean up partial file on size limit exceeded
+        if os.path.isfile(dest):
+            os.remove(dest)
+        raise
 
     md5_hash = md5.hexdigest()
 
