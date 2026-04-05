@@ -35,11 +35,146 @@ const NAV_FEATURE_MAP = {
 };
 
 const THEME_KEY = 'plexus-theme';
-const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'light', 'void', 'coral', 'sandstone'];
+const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'astral', 'light', 'void', 'coral', 'sandstone'];
 const DEFAULT_THEME = 'sandstone';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
 const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades'];
 const pageCacheMeta = {};
+
+// ── Space Depth Experience Controls ──────────────────────────────────────────
+const SPACE_INTENSITY_KEY = 'plexus_space_intensity';
+const SPACE_PARALLAX_KEY = 'plexus_space_parallax';
+const SPACE_INTENSITY_MAP = Object.freeze({ off: 0, low: 0.45, medium: 0.8, high: 1.0 });
+const DEFAULT_SPACE_INTENSITY = 'medium';
+
+const _spaceFxState = {
+    intensity: DEFAULT_SPACE_INTENSITY,
+    parallax: true,
+    baseIntensity: 1,
+    targetX: 0,
+    targetY: 0,
+    currentX: 0,
+    currentY: 0,
+    rafId: null,
+    initialized: false,
+};
+
+function normalizeSpaceIntensity(value) {
+    return Object.prototype.hasOwnProperty.call(SPACE_INTENSITY_MAP, value)
+        ? value
+        : DEFAULT_SPACE_INTENSITY;
+}
+
+function refreshSpaceBaseIntensity() {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--space-intensity-base').trim();
+    const parsed = Number.parseFloat(raw);
+    _spaceFxState.baseIntensity = Number.isFinite(parsed) ? parsed : 1;
+}
+
+function getSpaceIntensityScalar() {
+    const userScalar = SPACE_INTENSITY_MAP[normalizeSpaceIntensity(_spaceFxState.intensity)] ?? SPACE_INTENSITY_MAP[DEFAULT_SPACE_INTENSITY];
+    return userScalar * (_spaceFxState.baseIntensity || 1);
+}
+
+function _resetSpaceParallax() {
+    _spaceFxState.targetX = 0;
+    _spaceFxState.targetY = 0;
+    _spaceFxState.currentX = 0;
+    _spaceFxState.currentY = 0;
+    document.documentElement.style.setProperty('--space-parallax-x', '0px');
+    document.documentElement.style.setProperty('--space-parallax-y', '0px');
+}
+
+function updateSpaceFxForMotionPreference() {
+    const canAnimateParallax = _spaceFxState.parallax && !isReducedMotion() && getSpaceIntensityScalar() > 0;
+    document.body.classList.toggle('space-parallax-disabled', !canAnimateParallax);
+    if (!canAnimateParallax) _resetSpaceParallax();
+}
+
+function applySpaceSettings(intensity, parallaxEnabled) {
+    const normalizedIntensity = normalizeSpaceIntensity(intensity);
+    const normalizedParallax = Boolean(parallaxEnabled);
+
+    _spaceFxState.intensity = normalizedIntensity;
+    _spaceFxState.parallax = normalizedParallax;
+
+    localStorage.setItem(SPACE_INTENSITY_KEY, normalizedIntensity);
+    localStorage.setItem(SPACE_PARALLAX_KEY, normalizedParallax ? '1' : '0');
+
+    const userScalar = SPACE_INTENSITY_MAP[normalizedIntensity] ?? SPACE_INTENSITY_MAP[DEFAULT_SPACE_INTENSITY];
+    document.documentElement.style.setProperty('--space-intensity-user', String(userScalar));
+
+    const intensitySelect = document.getElementById('space-intensity-settings');
+    if (intensitySelect) intensitySelect.value = normalizedIntensity;
+
+    const parallaxToggle = document.getElementById('space-parallax-settings');
+    if (parallaxToggle) parallaxToggle.checked = normalizedParallax;
+
+    updateSpaceFxForMotionPreference();
+}
+
+function initSpaceParallax() {
+    if (_spaceFxState.initialized) return;
+    _spaceFxState.initialized = true;
+
+    const MAX_SHIFT = 18;
+
+    window.addEventListener('mousemove', (e) => {
+        if (!_spaceFxState.parallax || isReducedMotion()) return;
+        const w = window.innerWidth || 1;
+        const h = window.innerHeight || 1;
+        const nx = (e.clientX / w) * 2 - 1;
+        const ny = (e.clientY / h) * 2 - 1;
+        _spaceFxState.targetX = nx * MAX_SHIFT;
+        _spaceFxState.targetY = ny * MAX_SHIFT;
+    }, { passive: true });
+
+    window.addEventListener('mouseleave', () => {
+        _spaceFxState.targetX = 0;
+        _spaceFxState.targetY = 0;
+    });
+
+    const tick = () => {
+        const canAnimateParallax = _spaceFxState.parallax && !isReducedMotion() && getSpaceIntensityScalar() > 0;
+        if (canAnimateParallax) {
+            _spaceFxState.currentX += (_spaceFxState.targetX - _spaceFxState.currentX) * 0.07;
+            _spaceFxState.currentY += (_spaceFxState.targetY - _spaceFxState.currentY) * 0.07;
+            document.documentElement.style.setProperty('--space-parallax-x', `${_spaceFxState.currentX.toFixed(3)}px`);
+            document.documentElement.style.setProperty('--space-parallax-y', `${_spaceFxState.currentY.toFixed(3)}px`);
+        } else {
+            _resetSpaceParallax();
+        }
+        _spaceFxState.rafId = requestAnimationFrame(tick);
+    };
+
+    _spaceFxState.rafId = requestAnimationFrame(tick);
+}
+
+function initSpaceControls() {
+    refreshSpaceBaseIntensity();
+    const savedIntensity = localStorage.getItem(SPACE_INTENSITY_KEY) || DEFAULT_SPACE_INTENSITY;
+    const savedParallax = localStorage.getItem(SPACE_PARALLAX_KEY);
+    const parallaxEnabled = savedParallax === null ? true : savedParallax === '1';
+
+    applySpaceSettings(savedIntensity, parallaxEnabled);
+    initSpaceParallax();
+
+    const intensitySelect = document.getElementById('space-intensity-settings');
+    if (intensitySelect && intensitySelect.dataset.bound !== '1') {
+        intensitySelect.dataset.bound = '1';
+        intensitySelect.addEventListener('change', (e) => {
+            applySpaceSettings(e.target.value, _spaceFxState.parallax);
+        });
+    }
+
+    const parallaxToggle = document.getElementById('space-parallax-settings');
+    if (parallaxToggle && parallaxToggle.dataset.bound !== '1') {
+        parallaxToggle.dataset.bound = '1';
+        parallaxToggle.addEventListener('change', (e) => {
+            applySpaceSettings(_spaceFxState.intensity, e.target.checked);
+        });
+    }
+}
 
 // ── Utility: debounce ──────────────────────────────────────────────────────────
 function debounce(fn, delay) {
@@ -106,6 +241,8 @@ function applyTheme(theme) {
     const chosen = normalizeTheme(theme);
     document.documentElement.setAttribute('data-theme', chosen);
     localStorage.setItem(THEME_KEY, chosen);
+    refreshSpaceBaseIntensity();
+    updateSpaceFxForMotionPreference();
     ['theme-select', 'theme-select-settings'].forEach((id) => {
         const select = document.getElementById(id);
         if (select) select.value = chosen;
@@ -144,6 +281,7 @@ function applyPerformanceMode(enabled) {
         toggle.classList.toggle('active', enabled);
         toggle.title = enabled ? 'Performance Mode ON — click to disable' : 'Performance Mode — reduce animations and blur';
     }
+    updateSpaceFxForMotionPreference();
 }
 
 function togglePerformanceMode(e) {
@@ -6958,181 +7096,202 @@ window.showChangePasswordModal = function() {
 // Initialize
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function initLoginParticles() {
-    const canvas = document.getElementById('login-particles');
-    if (!canvas) return;
+function parseRgbVar(rawValue, fallback) {
+    const parsed = (rawValue || '').trim().match(/^(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})$/);
+    if (!parsed) return fallback;
+    return [
+        Math.min(255, parseInt(parsed[1], 10)),
+        Math.min(255, parseInt(parsed[2], 10)),
+        Math.min(255, parseInt(parsed[3], 10)),
+    ];
+}
+
+function initSpaceStarfield({ canvasId, hostId, baseCount = 90, linkDistance = 0, baseSpeed = 0.06 }) {
+    const canvas = document.getElementById(canvasId);
+    const host = document.getElementById(hostId);
+    if (!canvas || !host) return;
+
     const ctx = canvas.getContext('2d');
-    let animId;
-    const particles = [];
-    const PARTICLE_COUNT = 50;
+    let animId = null;
+    let slowTimer = null;
+    let running = false;
+    let stars = [];
+    let farRGB = [150, 190, 255];
+    let nearRGB = [225, 240, 255];
 
-    let cachedColor = '#7fa07f';
-    function updateColor() {
+    function updatePalette() {
         const style = getComputedStyle(document.documentElement);
-        cachedColor = style.getPropertyValue('--primary-light').trim() || '#7fa07f';
+        farRGB = parseRgbVar(style.getPropertyValue('--space-star-far-rgb'), [150, 190, 255]);
+        nearRGB = parseRgbVar(style.getPropertyValue('--space-star-near-rgb'), [225, 240, 255]);
     }
 
-    function resize() {
-        canvas.width = canvas.offsetWidth;
-        canvas.height = canvas.offsetHeight;
-        updateColor();
-    }
-    resize();
-    window.addEventListener('resize', resize);
-    
-    // Also observe theme changes if attributes change on html
-    const themeObserver = new MutationObserver(updateColor);
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-        particles.push({
-            x: Math.random() * canvas.width,
-            y: Math.random() * canvas.height,
-            r: Math.random() * 2 + 0.5,
-            dx: (Math.random() - 0.5) * 0.4,
-            dy: (Math.random() - 0.5) * 0.4,
-            opacity: Math.random() * 0.5 + 0.15,
+    function createStars() {
+        const width = canvas.width || 1;
+        const height = canvas.height || 1;
+        stars = Array.from({ length: baseCount }, (_, i) => {
+            const near = i < Math.floor(baseCount * 0.35);
+            const speed = near ? baseSpeed * (0.9 + Math.random() * 0.8) : baseSpeed * (0.2 + Math.random() * 0.35);
+            return {
+                near,
+                x: Math.random() * width,
+                y: Math.random() * height,
+                dx: (Math.random() - 0.5) * speed,
+                dy: (Math.random() - 0.5) * speed,
+                size: near ? (0.7 + Math.random() * 1.8) : (0.4 + Math.random() * 1.0),
+                alpha: near ? (0.3 + Math.random() * 0.55) : (0.15 + Math.random() * 0.35),
+                twinkle: Math.random() * Math.PI * 2,
+            };
         });
     }
 
+    function resize() {
+        canvas.width = canvas.offsetWidth || window.innerWidth;
+        canvas.height = canvas.offsetHeight || window.innerHeight;
+        updatePalette();
+        createStars();
+    }
+
+    function wrapStar(star) {
+        if (star.x < -4) star.x = canvas.width + 4;
+        else if (star.x > canvas.width + 4) star.x = -4;
+        if (star.y < -4) star.y = canvas.height + 4;
+        else if (star.y > canvas.height + 4) star.y = -4;
+    }
+
     function draw() {
+        if (!running) return;
+
+        const intensity = getSpaceIntensityScalar();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const color = cachedColor;
-        // Draw connecting lines for nearby particles
-        for (let i = 0; i < particles.length; i++) {
-            for (let j = i + 1; j < particles.length; j++) {
-                const dx = particles[i].x - particles[j].x;
-                const dy = particles[i].y - particles[j].y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < 120) {
+
+        if (intensity <= 0) {
+            if (slowTimer) clearTimeout(slowTimer);
+            slowTimer = window.setTimeout(() => {
+                animId = requestAnimationFrame(draw);
+            }, 320);
+            return;
+        }
+
+        const moving = !isReducedMotion();
+        const px = _spaceFxState.currentX;
+        const py = _spaceFxState.currentY;
+        const maxStars = Math.max(4, Math.floor(stars.length * intensity));
+
+        for (let i = 0; i < maxStars; i++) {
+            const s = stars[i];
+            s.twinkle += moving ? 0.02 : 0;
+            const twinkleAlpha = 0.75 + Math.sin(s.twinkle) * 0.25;
+            const parallaxFactor = s.near ? 0.9 : 0.35;
+            const sx = s.x + px * parallaxFactor;
+            const sy = s.y + py * parallaxFactor;
+            const rgb = s.near ? nearRGB : farRGB;
+
+            ctx.beginPath();
+            ctx.arc(sx, sy, s.size * (s.near ? 1 : 0.85), 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${Math.max(0.02, s.alpha * twinkleAlpha * intensity)})`;
+            ctx.fill();
+
+            if (moving) {
+                s.x += s.dx;
+                s.y += s.dy;
+                wrapStar(s);
+            }
+        }
+
+        if (linkDistance > 0) {
+            for (let i = 0; i < maxStars; i++) {
+                const a = stars[i];
+                if (!a.near) continue;
+                for (let j = i + 1; j < maxStars; j++) {
+                    const b = stars[j];
+                    if (!b.near) continue;
+                    const dx = a.x - b.x;
+                    const dy = a.y - b.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist > linkDistance) continue;
+                    const alpha = (1 - dist / linkDistance) * 0.08 * intensity;
+                    if (alpha <= 0.002) continue;
                     ctx.beginPath();
-                    ctx.strokeStyle = color;
-                    ctx.globalAlpha = (1 - dist / 120) * 0.12;
-                    ctx.lineWidth = 0.5;
-                    ctx.moveTo(particles[i].x, particles[i].y);
-                    ctx.lineTo(particles[j].x, particles[j].y);
+                    ctx.moveTo(a.x + px * 0.7, a.y + py * 0.7);
+                    ctx.lineTo(b.x + px * 0.7, b.y + py * 0.7);
+                    ctx.strokeStyle = `rgba(${nearRGB[0]}, ${nearRGB[1]}, ${nearRGB[2]}, ${alpha})`;
+                    ctx.lineWidth = 0.55;
                     ctx.stroke();
                 }
             }
         }
-        // Draw particles
-        for (const p of particles) {
+
+        // Rare subtle light streak for depth
+        if (!isReducedMotion() && Math.random() < 0.0035 * intensity) {
+            const streakY = Math.random() * canvas.height;
+            const streakX = Math.random() * canvas.width;
+            const len = 45 + Math.random() * 130;
+            const grad = ctx.createLinearGradient(streakX, streakY, streakX + len, streakY - len * 0.22);
+            grad.addColorStop(0, `rgba(${nearRGB[0]}, ${nearRGB[1]}, ${nearRGB[2]}, 0)`);
+            grad.addColorStop(0.45, `rgba(${nearRGB[0]}, ${nearRGB[1]}, ${nearRGB[2]}, ${0.14 * intensity})`);
+            grad.addColorStop(1, `rgba(${nearRGB[0]}, ${nearRGB[1]}, ${nearRGB[2]}, 0)`);
             ctx.beginPath();
-            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-            ctx.fillStyle = color;
-            ctx.globalAlpha = p.opacity;
-            ctx.fill();
-            p.x += p.dx;
-            p.y += p.dy;
-            if (p.x < 0 || p.x > canvas.width) p.dx *= -1;
-            if (p.y < 0 || p.y > canvas.height) p.dy *= -1;
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 1.1;
+            ctx.moveTo(streakX, streakY);
+            ctx.lineTo(streakX + len, streakY - len * 0.22);
+            ctx.stroke();
         }
-        ctx.globalAlpha = 1;
-        if (!isReducedMotion()) animId = requestAnimationFrame(draw);
+
+        if (moving) {
+            animId = requestAnimationFrame(draw);
+        } else {
+            if (slowTimer) clearTimeout(slowTimer);
+            slowTimer = window.setTimeout(() => {
+                animId = requestAnimationFrame(draw);
+            }, 220);
+        }
     }
 
-    if (!isReducedMotion()) draw();
-
-    // Stop animation once user logs in (login-screen hidden)
-    const observer = new MutationObserver(() => {
-        const screen = document.getElementById('login-screen');
-        if (screen && screen.style.display === 'none') {
-            cancelAnimationFrame(animId);
-            observer.disconnect();
+    function syncRunningState() {
+        const visible = host.style.display !== 'none';
+        if (visible && !running) {
+            running = true;
+            resize();
+            animId = requestAnimationFrame(draw);
+        } else if (!visible && running) {
+            running = false;
+            if (animId) cancelAnimationFrame(animId);
+            if (slowTimer) clearTimeout(slowTimer);
+            animId = null;
+            slowTimer = null;
         }
+    }
+
+    resize();
+    updatePalette();
+    window.addEventListener('resize', resize);
+    const themeObserver = new MutationObserver(updatePalette);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    const visibilityObserver = new MutationObserver(syncRunningState);
+    visibilityObserver.observe(host, { attributes: true, attributeFilter: ['style'] });
+    syncRunningState();
+}
+
+function initLoginParticles() {
+    initSpaceStarfield({
+        canvasId: 'login-particles',
+        hostId: 'login-screen',
+        baseCount: 135,
+        linkDistance: 125,
+        baseSpeed: 0.08,
     });
-    observer.observe(document.getElementById('login-screen'), { attributes: true, attributeFilter: ['style'] });
 }
 
 function initAppParticles() {
-    const canvas = document.getElementById('app-particles');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    let animId;
-    const particles = [];
-    const PARTICLE_COUNT = 35; // slightly fewer for the app to not clutter
-
-    let cachedColor = '#7fa07f';
-    function updateColor() {
-        const style = getComputedStyle(document.documentElement);
-        cachedColor = style.getPropertyValue('--primary-light').trim() || '#7fa07f';
-    }
-
-    function resize() {
-        canvas.width = canvas.offsetWidth;
-        canvas.height = canvas.offsetHeight;
-        updateColor();
-    }
-    resize();
-    window.addEventListener('resize', resize);
-    
-    const themeObserver = new MutationObserver(updateColor);
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-        particles.push({
-            x: Math.random() * (canvas.width || window.innerWidth),
-            y: Math.random() * (canvas.height || window.innerHeight),
-            r: Math.random() * 2 + 0.5,
-            dx: (Math.random() - 0.5) * 0.3,
-            dy: (Math.random() - 0.5) * 0.3,
-            opacity: Math.random() * 0.4 + 0.1,
-        });
-    }
-
-    let isRunning = false;
-
-    function draw() {
-        if (!isRunning) return;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const color = cachedColor;
-        
-        for (let i = 0; i < particles.length; i++) {
-            for (let j = i + 1; j < particles.length; j++) {
-                const dx = particles[i].x - particles[j].x;
-                const dy = particles[i].y - particles[j].y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < 150) {
-                    ctx.beginPath();
-                    ctx.strokeStyle = color;
-                    ctx.globalAlpha = (1 - dist / 150) * 0.08;
-                    ctx.lineWidth = 0.5;
-                    ctx.moveTo(particles[i].x, particles[i].y);
-                    ctx.lineTo(particles[j].x, particles[j].y);
-                    ctx.stroke();
-                }
-            }
-        }
-        
-        for (const p of particles) {
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-            ctx.fillStyle = color;
-            ctx.globalAlpha = p.opacity;
-            ctx.fill();
-            p.x += p.dx;
-            p.y += p.dy;
-            if (p.x < 0 || p.x > canvas.width) p.dx *= -1;
-            if (p.y < 0 || p.y > canvas.height) p.dy *= -1;
-        }
-        ctx.globalAlpha = 1;
-        if (!isReducedMotion()) animId = requestAnimationFrame(draw);
-    }
-
-    // Only run when app is visible
-    const observer = new MutationObserver(() => {
-        const screen = document.getElementById('app-container');
-        const isVisible = screen && screen.style.display !== 'none';
-        if (isVisible && !isRunning) {
-            isRunning = true;
-            resize(); // Ensure canvas has dimensions once shown
-            if (!isReducedMotion()) draw();
-        } else if (!isVisible && isRunning) {
-            isRunning = false;
-            cancelAnimationFrame(animId);
-        }
+    initSpaceStarfield({
+        canvasId: 'app-particles',
+        hostId: 'app-container',
+        baseCount: 95,
+        linkDistance: 0,
+        baseSpeed: 0.055,
     });
-    observer.observe(document.getElementById('app-container'), { attributes: true, attributeFilter: ['style'] });
 }
 
 function initSidebar() {
@@ -13361,6 +13520,7 @@ window.viewDeviceUpgradeLog = viewDeviceUpgradeLog;
 document.addEventListener('DOMContentLoaded', async () => {
     initThemeControls();
     initPerformanceMode();
+    initSpaceControls();
     initSidebar();
     initTimeRangeBar();
     initLoginParticles();
