@@ -4404,6 +4404,13 @@ window.copyTemplateContent = copyTemplateContent;
 
 async function loadCredentials(options = {}) {
     const { preserveContent = false } = options;
+
+    // Load the active tab
+    if (_credentialCurrentTab === 'secrets') {
+        await loadSecretVariables();
+        return;
+    }
+
     const container = document.getElementById('credentials-list');
     if (!preserveContent) {
         container.innerHTML = skeletonCards(3);
@@ -4513,6 +4520,151 @@ window.saveCredentialInline = async function(credentialId) {
         saveBtn.textContent = 'Save';
     }
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Secret Variables (encrypted template variables)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _credentialCurrentTab = 'credentials';
+
+function switchCredentialTab(tab) {
+    _credentialCurrentTab = tab;
+    document.querySelectorAll('.cred-tab-btn').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-cred-tab') === tab);
+    });
+    document.getElementById('cred-tab-credentials').style.display = tab === 'credentials' ? '' : 'none';
+    document.getElementById('cred-tab-secrets').style.display = tab === 'secrets' ? '' : 'none';
+    if (tab === 'secrets') loadSecretVariables();
+}
+window.switchCredentialTab = switchCredentialTab;
+
+async function loadSecretVariables() {
+    const container = document.getElementById('secret-variables-list');
+    if (!container) return;
+    try {
+        const vars = await api.getSecretVariables();
+        if (!vars.length) {
+            container.innerHTML = `<div class="empty-state">
+                <p>No secret variables yet</p>
+                <p style="opacity:0.7; font-size:0.85em;">Use <code>{{secret.NAME}}</code> in config templates to reference encrypted values.</p>
+                <button class="btn btn-primary" onclick="showCreateSecretVarModal()">Create First Secret</button>
+            </div>`;
+            return;
+        }
+        container.innerHTML = vars.map((v, i) => `
+            <div class="card animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s; margin-bottom:0.75rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <div style="font-weight:600;"><code>{{secret.${escapeHtml(v.name)}}}</code></div>
+                        <div style="font-size:0.85em; opacity:0.7; margin-top:0.15rem;">${escapeHtml(v.description || '')}</div>
+                        <div style="font-size:0.8em; opacity:0.5; margin-top:0.15rem;">Created by ${escapeHtml(v.created_by || 'system')} &bull; ${v.created_at?.replace('T', ' ').substring(0, 16) || ''}</div>
+                    </div>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-sm btn-secondary" onclick="showEditSecretVarModal(${v.id}, '${escapeHtml(v.name)}', '${escapeHtml(v.description || '')}')">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteSecretVar(${v.id}, '${escapeHtml(v.name)}')">Delete</button>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    } catch (err) {
+        container.innerHTML = `<div class="error">Error: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function showCreateSecretVarModal() {
+    showModal('Create Secret Variable', `
+        <form id="create-secret-var-form">
+            <div class="form-group">
+                <label class="form-label">Name</label>
+                <input type="text" class="form-input" id="secret-var-name" required
+                       pattern="[A-Za-z_][A-Za-z0-9_-]*" maxlength="64"
+                       placeholder="e.g. snmp_community_ro">
+                <div style="font-size:0.8em; opacity:0.5; margin-top:0.25rem;">Letters, numbers, underscore, hyphen. Referenced as <code>{{secret.name}}</code></div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Value</label>
+                <input type="password" class="form-input" id="secret-var-value" required
+                       placeholder="Secret value (encrypted at rest)">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description (optional)</label>
+                <input type="text" class="form-input" id="secret-var-description"
+                       placeholder="What this secret is used for">
+            </div>
+            <button type="submit" class="btn btn-primary" style="width:100%;">Create Secret</button>
+        </form>
+    `);
+    document.getElementById('create-secret-var-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('secret-var-name').value.trim();
+        const value = document.getElementById('secret-var-value').value;
+        const description = document.getElementById('secret-var-description').value.trim();
+        try {
+            await api.createSecretVariable(name, value, description);
+            closeModal();
+            showSuccess(`Secret variable '${name}' created`);
+            loadSecretVariables();
+        } catch (err) {
+            showError(err.message);
+        }
+    });
+}
+window.showCreateSecretVarModal = showCreateSecretVarModal;
+
+function showEditSecretVarModal(varId, name, description) {
+    showModal(`Edit Secret: ${escapeHtml(name)}`, `
+        <form id="edit-secret-var-form">
+            <div class="form-group">
+                <label class="form-label">Name</label>
+                <input type="text" class="form-input" value="${escapeHtml(name)}" disabled>
+            </div>
+            <div class="form-group">
+                <label class="form-label">New Value (leave blank to keep current)</label>
+                <input type="password" class="form-input" id="edit-secret-var-value"
+                       placeholder="New secret value">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <input type="text" class="form-input" id="edit-secret-var-description"
+                       value="${escapeHtml(description)}">
+            </div>
+            <button type="submit" class="btn btn-primary" style="width:100%;">Update Secret</button>
+        </form>
+    `);
+    document.getElementById('edit-secret-var-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const value = document.getElementById('edit-secret-var-value').value;
+        const desc = document.getElementById('edit-secret-var-description').value.trim();
+        const data = {};
+        if (value) data.value = value;
+        data.description = desc;
+        try {
+            await api.updateSecretVariable(varId, data);
+            closeModal();
+            showSuccess(`Secret variable '${name}' updated`);
+            loadSecretVariables();
+        } catch (err) {
+            showError(err.message);
+        }
+    });
+}
+window.showEditSecretVarModal = showEditSecretVarModal;
+
+async function deleteSecretVar(varId, name) {
+    const confirmed = await showConfirm(
+        `Delete secret variable '${escapeHtml(name)}'?`,
+        'Any templates referencing {{secret.' + escapeHtml(name) + '}} will fail at execution time.'
+    );
+    if (!confirmed) return;
+    try {
+        await api.deleteSecretVariable(varId);
+        showSuccess(`Secret variable '${name}' deleted`);
+        loadSecretVariables();
+    } catch (err) {
+        showError(err.message);
+    }
+}
+window.deleteSecretVar = deleteSecretVar;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Admin Settings

@@ -102,6 +102,7 @@ from netcontrol.routes.config_drift import (
     ws_router as config_drift_ws_router,
 )
 from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate, router as credentials_router
+from netcontrol.routes.secret_variables import init_secret_variables, router as secret_variables_router
 from netcontrol.routes.dashboards import router as dashboards_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
 from netcontrol.routes.cdef_engine import router as cdef_router
@@ -411,7 +412,7 @@ def verify_session_token(token: str) -> dict | None:
 # Initialize shared module with session verifier
 shared.init_shared(verify_session_token)
 
-PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/api/health", "/favicon.ico", "/docs", "/openapi.json", "/redoc"}
+PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/api/health", "/favicon.ico"}
 
 # Paths that remain accessible even when must_change_password is true
 PASSWORD_CHANGE_ALLOWED_PATHS = {
@@ -740,7 +741,16 @@ async def _migrate_auth_json_users():
         LOGGER.error("migration: auth.json migration error: %s", e)
 
 
-app = FastAPI(title="Plexus API", version=APP_VERSION, lifespan=lifespan)
+# Disable OpenAPI docs in production unless explicitly enabled
+_enable_docs = _env_flag("APP_ENABLE_DOCS", False)
+app = FastAPI(
+    title="Plexus API",
+    version=APP_VERSION,
+    lifespan=lifespan,
+    docs_url="/docs" if _enable_docs else None,
+    redoc_url="/redoc" if _enable_docs else None,
+    openapi_url="/openapi.json" if _enable_docs else None,
+)
 
 # Initialize late-binding dependencies for extracted route modules
 init_auth(
@@ -774,6 +784,14 @@ app.include_router(
 app.include_router(
     credentials_router,
     dependencies=[Depends(require_auth), Depends(require_feature("credentials"))],
+)
+# Secret Variables — encrypted key-value store for template substitution
+# List/names endpoints need auth only (template editor autocomplete);
+# create/update/delete enforce admin inside the route handlers.
+init_secret_variables(require_auth, require_admin)
+app.include_router(
+    secret_variables_router,
+    dependencies=[Depends(require_auth)],
 )
 app.include_router(
     playbooks_router,
@@ -892,13 +910,38 @@ async def metrics_and_logging_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
-    """Add transport-oriented headers.
+    """Add security headers to every response.
 
-    HSTS is enabled only when APP_HSTS/APP_HTTPS is enabled.
+    - HSTS when APP_HSTS/APP_HTTPS is enabled
+    - X-Content-Type-Options to prevent MIME sniffing
+    - X-Frame-Options to prevent clickjacking
+    - Referrer-Policy to limit referrer leakage
+    - Content-Security-Policy to mitigate XSS
+    - Permissions-Policy to disable unused browser features
     """
     response = await call_next(request)
     if APP_HSTS_ENABLED:
         response.headers["Strict-Transport-Security"] = f"max-age={max(0, APP_HSTS_MAX_AGE)}; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # CSP: restrict resource origins while allowing the SPA to function.
+    # 'unsafe-inline' is needed for both styles (dynamic style= attrs) and
+    # scripts (onclick= attrs in index.html).  Migrating onclick handlers to
+    # addEventListener would allow dropping 'unsafe-inline' from script-src.
+    # The CDN entry is for graph export embed pages (ECharts).
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self'; "
+        "connect-src 'self' ws: wss:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
     return response
 
 

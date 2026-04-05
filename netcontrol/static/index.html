@@ -420,20 +420,41 @@
             <div id="page-credentials" class="page">
                 <div class="page-header">
                     <h2>Credentials</h2>
-                    <button class="btn btn-primary" onclick="showCreateCredentialModal()">+ New Credential</button>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-primary" onclick="showCreateCredentialModal()">+ New Credential</button>
+                        <button class="btn btn-secondary" onclick="showCreateSecretVarModal()">+ New Secret Variable</button>
+                    </div>
                 </div>
-                <div class="list-controls">
-                    <input id="credentials-search" class="form-input list-control-search" type="search" placeholder="Search credential name or username">
-                    <select id="credentials-sort" class="form-select list-control-select">
-                        <option value="name_asc">Name: A-Z</option>
-                        <option value="name_desc">Name: Z-A</option>
-                        <option value="created_desc">Created: Newest</option>
-                        <option value="created_asc">Created: Oldest</option>
-                    </select>
+                <!-- Tab Controls -->
+                <div class="list-controls" style="margin-bottom:0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                    <button class="btn btn-sm btn-secondary cred-tab-btn active" data-cred-tab="credentials" onclick="switchCredentialTab('credentials')">Device Credentials</button>
+                    <button class="btn btn-sm btn-secondary cred-tab-btn" data-cred-tab="secrets" onclick="switchCredentialTab('secrets')">Secret Variables</button>
                 </div>
-                <div id="credentials-list" class="credentials-list">
-                    <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
-                    <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
+                <!-- Device Credentials Tab -->
+                <div id="cred-tab-credentials" class="cred-tab">
+                    <div class="list-controls">
+                        <input id="credentials-search" class="form-input list-control-search" type="search" placeholder="Search credential name or username">
+                        <select id="credentials-sort" class="form-select list-control-select">
+                            <option value="name_asc">Name: A-Z</option>
+                            <option value="name_desc">Name: Z-A</option>
+                            <option value="created_desc">Created: Newest</option>
+                            <option value="created_asc">Created: Oldest</option>
+                        </select>
+                    </div>
+                    <div id="credentials-list" class="credentials-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
+                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
+                    </div>
+                </div>
+                <!-- Secret Variables Tab -->
+                <div id="cred-tab-secrets" class="cred-tab" style="display:none;">
+                    <div style="padding:0.5rem 0 1rem; opacity:0.7; font-size:0.9em;">
+                        Encrypted secrets for use in config templates via <code>{{secret.NAME}}</code> syntax.
+                        Values are encrypted at rest and only decrypted at job execution time.
+                    </div>
+                    <div id="secret-variables-list">
+                        <div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>
+                    </div>
                 </div>
             </div>
 

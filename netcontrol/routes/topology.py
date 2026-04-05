@@ -458,7 +458,7 @@ async def get_topology(group_id: int | None = Query(default=None)):
         }
     except Exception as exc:
         LOGGER.error("topology: failed to build graph: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Failed to build topology graph")
 
 
 @router.get("/api/topology/utilization")
@@ -767,7 +767,7 @@ async def discover_topology_for_group(group_id: int):
         raise
     except Exception as exc:
         LOGGER.error("topology: discovery error for group %d: %s", group_id, exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="An internal error occurred during topology discovery.")
 
 
 @router.post("/api/topology/discover")
@@ -864,7 +864,7 @@ async def discover_topology_all():
         }
     except Exception as exc:
         LOGGER.error("topology: full discovery error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="An internal error occurred during topology discovery.")
 
 
 @router.post("/api/topology/discover/{group_id}/stream")

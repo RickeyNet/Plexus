@@ -208,6 +208,16 @@ CREATE TABLE IF NOT EXISTS credentials (
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS secret_variables (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    enc_value   TEXT    NOT NULL,
+    description TEXT    DEFAULT '',
+    created_by  TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     playbook_id     INTEGER NOT NULL REFERENCES playbooks(id),
@@ -674,6 +684,8 @@ CREATE INDEX IF NOT EXISTS idx_credentials_owner_id
     ON credentials (owner_id);
 CREATE INDEX IF NOT EXISTS idx_topology_links_source
     ON topology_links (source_host_id);
+CREATE INDEX IF NOT EXISTS idx_secret_variables_name
+    ON secret_variables (name);
 
 CREATE TABLE IF NOT EXISTS dashboards (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2036,6 +2048,107 @@ async def delete_template(template_id: int):
         await db.commit()
     finally:
         await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Secret Variables (encrypted key-value store for template substitution)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def get_all_secret_variables() -> list[dict]:
+    """Return all secret variables (without decrypted values)."""
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            "SELECT id, name, description, created_by, created_at, updated_at FROM secret_variables ORDER BY name"
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await conn.close()
+
+
+async def get_secret_variable(var_id: int) -> dict | None:
+    """Return a single secret variable metadata (no decrypted value)."""
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            "SELECT id, name, description, created_by, created_at, updated_at FROM secret_variables WHERE id = ?",
+            (var_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await conn.close()
+
+
+async def get_secret_variable_by_name(name: str) -> dict | None:
+    """Return a secret variable including its encrypted value, looked up by name."""
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            "SELECT id, name, enc_value, description, created_by FROM secret_variables WHERE name = ?",
+            (name,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await conn.close()
+
+
+async def create_secret_variable(
+    name: str, enc_value: str, description: str = "", created_by: str = ""
+) -> int:
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            "INSERT INTO secret_variables (name, enc_value, description, created_by) VALUES (?,?,?,?)",
+            (name, enc_value, description, created_by),
+        )
+        await conn.commit()
+        return cursor.lastrowid
+    finally:
+        await conn.close()
+
+
+async def update_secret_variable(
+    var_id: int,
+    *,
+    enc_value: str | None = None,
+    description: str | None = None,
+) -> bool:
+    updates = []
+    args = []
+    if enc_value is not None:
+        updates.append("enc_value = ?")
+        args.append(enc_value)
+    if description is not None:
+        updates.append("description = ?")
+        args.append(description)
+    if not updates:
+        return True
+    if DB_ENGINE == "postgres":
+        updates.append("updated_at = NOW()::text")
+    else:
+        updates.append("updated_at = datetime('now')")
+    args.append(var_id)
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            f"UPDATE secret_variables SET {', '.join(updates)} WHERE id = ?",
+            tuple(args),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        await conn.close()
+
+
+async def delete_secret_variable(var_id: int) -> bool:
+    conn = await get_db()
+    try:
+        cursor = await conn.execute("DELETE FROM secret_variables WHERE id = ?", (var_id,))
+        await conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        await conn.close()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

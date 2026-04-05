@@ -11,6 +11,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel, ConfigDict
 from routes.crypto import decrypt
 from routes.runner import LogEvent, execute_playbook, get_playbook_class
+from routes.secret_resolver import (
+    SecretResolutionError,
+    build_redaction_set,
+    extract_secret_names,
+    has_secret_references,
+    redact_secrets_in_text,
+    redact_values,
+    resolve_secrets,
+)
 
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
@@ -193,6 +202,22 @@ async def _process_job_queue_inner():
                 if line.strip() and not line.strip().startswith("#")
             ]
 
+    # Resolve {{secret.NAME}} placeholders in template commands
+    _secret_redact_values: set[str] = set()
+    if template_commands and has_secret_references("\n".join(template_commands)):
+        try:
+            _secret_redact_values = await build_redaction_set(template_commands)
+            template_commands = await resolve_secrets(template_commands)
+            await db.add_job_event(job_id, "info", "Secret variables resolved successfully")
+        except SecretResolutionError as exc:
+            await db.finish_job(job_id, status="failed")
+            await db.add_job_event(
+                job_id, "error",
+                f"Template references undefined secret variable(s): {', '.join(exc.missing)}. "
+                "Create them in Credentials → Secret Variables before running this job.",
+            )
+            return
+
     # Resolve dry_run: the DB stores 1/0; treat NULL or missing as dry-run (safe default)
     raw_dry_run = next_job.get("dry_run")
     dry_run = raw_dry_run != 0  # Only False when explicitly stored as 0
@@ -229,7 +254,7 @@ async def _process_job_queue_inner():
             await db.add_job_event(job_id, "error", f"No runner for '{playbook['filename']}'")
             return
         await db.start_job(job_id)
-        task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run))
+        task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run, _secret_redact_values))
     _running_job_tasks[job_id] = task
 
     def _on_done(t):
@@ -304,13 +329,24 @@ async def _run_job(
     credentials: dict,
     template_commands: list[str],
     dry_run: bool,
+    secret_redact_values: set[str] | None = None,
 ):
     """Background task: execute playbook, store events, broadcast via WebSocket."""
     hosts_ok = 0
     hosts_failed = 0
+    _redact = secret_redact_values or set()
 
     async def on_event(event: LogEvent):
         nonlocal hosts_ok, hosts_failed
+
+        # Scrub any secret values from the log message before persisting
+        if _redact:
+            event = LogEvent(
+                level=event.level,
+                message=redact_values(event.message, _redact),
+                host=event.host,
+                timestamp=event.timestamp,
+            )
 
         # Persist event
         await db.add_job_event(job_id, event.level, event.message, event.host)
@@ -477,6 +513,19 @@ async def launch_job(body: JobLaunch, request: Request):
                 line.rstrip() for line in tpl["content"].splitlines()
                 if line.strip() and not line.strip().startswith("#")
             ]
+
+    # Validate that all {{secret.NAME}} references can be resolved
+    if template_commands and has_secret_references("\n".join(template_commands)):
+        try:
+            # Dry-resolve (redacted) to verify all secrets exist without
+            # decrypting yet — actual decryption happens at execution time.
+            await resolve_secrets(template_commands, redact=True)
+        except SecretResolutionError as exc:
+            raise HTTPException(
+                400,
+                f"Template references undefined secret variable(s): {', '.join(exc.missing)}. "
+                "Create them in Credentials \u2192 Secret Variables before launching.",
+            )
 
     # Validate the playbook can be executed
     pb_type = playbook.get("type", "python")

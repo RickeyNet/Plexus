@@ -46,3 +46,28 @@
 - [x] **HSTS disabled by default** — `APP_HSTS=false` in `.env.example` even when HTTPS is enabled. Should default to `true` when `APP_HTTPS=true`.
 - [x] **Dependabot monthly schedule** — Monthly update schedule in `.github/dependabot.yml` means security patches could be delayed up to 30 days. Change to weekly.
 - [x] **Loose dependency version ranges** — `python-ldap>=3.4,<4`, `pysnmp>=7.1,<8`, `ansible-runner>=2.4,<3` in `requirements.txt` allow potentially breaking minor version updates. Pin to patch-level versions.
+
+## Post-audit hardening (security review pass 2)
+
+- [x] **Missing security headers** — Only HSTS was set. Added `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, and `Content-Security-Policy` (script-src 'self' + CDN, no unsafe-inline for scripts, frame-ancestors 'none').
+- [x] **OpenAPI docs exposed unauthenticated** — `/docs`, `/redoc`, `/openapi.json` were in PUBLIC_PATHS, leaking the full API schema. Removed from public paths; docs endpoints now disabled by default (`APP_ENABLE_DOCS=true` to re-enable).
+- [x] **Encryption key file hardening** — `routes/crypto.py` had no key validation, no atomic write, no permission warning, and decrypt errors leaked `InvalidToken` tracebacks. Rewrote: validates key length/encoding on load, warns on loose file permissions, uses atomic write (tmp+rename) for key creation, catches `InvalidToken` with a safe error message, handles empty strings gracefully.
+- [x] **No upload size limit** — Image upload (`/api/upgrades/images`) had no size cap, enabling disk exhaustion. Added streaming size check with 2 GiB default limit (`PLEXUS_MAX_IMAGE_UPLOAD_MB` env var), plus filename character validation.
+- [x] **Remaining `str(exc)` in topology HTTP responses** — Three endpoints in `topology.py` still leaked exception details: build-graph, group-discovery, and full-discovery. Replaced with generic messages.
+- [x] **Authorization matrix documented** — Created `AUTHORIZATION_MATRIX.md` mapping every endpoint to its auth/feature/admin requirement.
+
+### Verified secure (no action needed)
+
+- **Fernet encryption** — Uses AES-128-CBC + HMAC-SHA256 (encrypt-then-MAC) with random IV per message. No IV reuse, no ECB.
+- **Session tokens** — `itsdangerous.URLSafeTimedSerializer` uses HMAC-SHA1 with `hmac.compare_digest()` internally (timing-safe). 24h expiry enforced.
+- **API token comparison** — Uses `secrets.compare_digest()` (constant-time).
+- **CSRF protection** — Signed, time-limited, user-bound tokens on all state-changing cookie-auth requests.
+- **Password hashing** — PBKDF2-SHA256 with 600k iterations and random salt.
+- **SQL queries** — All use parameterized `?` placeholders (verified across database.py).
+- **Playbook execution** — Python playbooks require server-side registered classes (cannot inject arbitrary code via API). Ansible playbooks run user YAML by design (documented risk for admin-only users).
+
+### Remaining risks (accepted or deferred)
+
+- **SSRF via SNMP/Netmiko** — Authenticated users can target arbitrary IPs for discovery/jobs/upgrades. Ad-hoc IPs are validated against reserved ranges, but inventory hosts are not restricted. Mitigation: feature-gated access, audit logging. Full fix would require an IP allowlist.
+- **Ansible playbook RCE** — Admin users can execute arbitrary Ansible YAML. This is by design but should be restricted to admin role only (currently gated by `jobs` feature which non-admins may have).
+- **Dependency CVEs** — `pip-audit` and `bandit` are in CI (`requirements-dev.txt`). Consider adding `safety` or Snyk for broader CVE coverage. Run `pip-audit` locally before releases.
