@@ -10,6 +10,12 @@
 <body>
     <!-- Login Screen -->
     <div id="login-screen" class="login-screen">
+        <div class="space-depth space-depth-login" aria-hidden="true">
+            <div class="space-nebula nebula-a"></div>
+            <div class="space-nebula nebula-b"></div>
+            <div class="space-nebula nebula-c"></div>
+            <div class="space-vignette"></div>
+        </div>
         <canvas id="login-particles" class="login-particles"></canvas>
         <div class="login-card">
             <div class="login-orb" aria-hidden="true"></div>
@@ -63,6 +69,12 @@
     <div class="app-container" id="app-container" style="display: none;">
         <!-- Animated background -->
         <div class="animated-bg">
+            <div class="space-depth space-depth-app" aria-hidden="true">
+                <div class="space-nebula nebula-a"></div>
+                <div class="space-nebula nebula-b"></div>
+                <div class="space-nebula nebula-c"></div>
+                <div class="space-vignette"></div>
+            </div>
             <div class="gradient-orb orb-1"></div>
             <div class="gradient-orb orb-2"></div>
             <div class="gradient-orb orb-3"></div>
@@ -1383,12 +1395,27 @@
                             <option value="forest">Forest</option>
                             <option value="dark">Dark Blue</option>
                             <option value="dark-modern">Dark Modern</option>
-
+                            <option value="astral">Astral</option>
                             <option value="light">Light</option>
                             <option value="void">Void</option>
                             <option value="coral">Coral</option>
                             <option value="sandstone">Sandstone</option>
                         </select>
+                    </div>
+                    <div style="max-width: 320px; margin-top: 1rem;">
+                        <label class="form-label" for="space-intensity-settings">Space Depth Intensity</label>
+                        <select id="space-intensity-settings" class="theme-select" aria-label="Select space depth intensity">
+                            <option value="off">Off</option>
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+                    <div style="margin-top: 0.75rem; max-width: 320px;">
+                        <label style="display:flex; align-items:center; gap:0.5rem; color:var(--text);">
+                            <input type="checkbox" id="space-parallax-settings" checked>
+                            Enable background parallax motion
+                        </label>
                     </div>
                 </div>
                 <div class="section">
