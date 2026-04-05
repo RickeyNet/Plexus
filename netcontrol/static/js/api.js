@@ -397,6 +397,35 @@ export async function deleteCredential(credentialId) {
     });
 }
 
+// Secret Variables
+export async function getSecretVariables() {
+    return apiRequest('/secret-variables');
+}
+
+export async function getSecretVariableNames() {
+    return apiRequest('/secret-variables/names');
+}
+
+export async function createSecretVariable(name, value, description = '') {
+    return apiRequest('/secret-variables', {
+        method: 'POST',
+        body: { name, value, description },
+    });
+}
+
+export async function updateSecretVariable(varId, data) {
+    return apiRequest(`/secret-variables/${varId}`, {
+        method: 'PUT',
+        body: data,
+    });
+}
+
+export async function deleteSecretVariable(varId) {
+    return apiRequest(`/secret-variables/${varId}`, {
+        method: 'DELETE',
+    });
+}
+
 // Admin Settings
 export async function getAdminCapabilities() {
     return apiRequest('/admin/capabilities');
