@@ -144,7 +144,18 @@ async def _probe_discovery_target(
         lower_banner = banner_sample.lower()
         if "cisco" in lower_banner:
             inferred_vendor = "cisco"
-            inferred_device_type = "cisco_ios"
+            # Distinguish IOS-XE from classic IOS — Catalyst 9xxx, 3850,
+            # 3650, ISR 1000/4000, ASR 1000, etc. all run IOS-XE.
+            # SSH banners rarely include OS detail, so also match on
+            # sysDescr variants: "IOS XE", "IOS-XE", "(CAT9K_IOSXE)".
+            if "ios-xe" in lower_banner or "iosxe" in lower_banner or "ios xe" in lower_banner:
+                inferred_device_type = "cisco_xe"
+            elif "nx-os" in lower_banner or "nxos" in lower_banner:
+                inferred_device_type = "cisco_nxos"
+            elif "ios-xr" in lower_banner or "iosxr" in lower_banner or "ios xr" in lower_banner:
+                inferred_device_type = "cisco_xr"
+            else:
+                inferred_device_type = "cisco_ios"
         elif "juniper" in lower_banner or "junos" in lower_banner:
             inferred_vendor = "juniper"
             inferred_device_type = "juniper_junos"
@@ -155,7 +166,11 @@ async def _probe_discovery_target(
             inferred_vendor = "fortinet"
             inferred_device_type = "fortinet"
 
-        if "ios" in lower_banner:
+        if "ios-xe" in lower_banner or "iosxe" in lower_banner or "ios xe" in lower_banner:
+            inferred_os = "ios-xe"
+        elif "ios-xr" in lower_banner or "iosxr" in lower_banner or "ios xr" in lower_banner:
+            inferred_os = "ios-xr"
+        elif "ios" in lower_banner:
             inferred_os = "ios"
         elif "nx-os" in lower_banner or "nxos" in lower_banner:
             inferred_os = "nx-os"

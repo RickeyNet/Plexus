@@ -71,7 +71,17 @@ def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
 
     if "cisco" in lowered:
         vendor = "cisco"
-        detected_type = "cisco_ios"
+        # Distinguish IOS-XE from classic IOS — Catalyst 9xxx, 3850,
+        # 3650, ISR 1000/4000, ASR 1000, etc. all run IOS-XE.
+        # sysDescr variants: "Cisco IOS XE Software", "IOS-XE", "(CAT9K_IOSXE)", etc.
+        if "ios-xe" in lowered or "iosxe" in lowered or "ios xe" in lowered:
+            detected_type = "cisco_xe"
+        elif "nx-os" in lowered or "nxos" in lowered:
+            detected_type = "cisco_nxos"
+        elif "ios-xr" in lowered or "iosxr" in lowered or "ios xr" in lowered:
+            detected_type = "cisco_xr"
+        else:
+            detected_type = "cisco_ios"
     elif "juniper" in lowered or "junos" in lowered:
         vendor = "juniper"
         detected_type = "juniper_junos"
@@ -82,7 +92,11 @@ def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
         vendor = "fortinet"
         detected_type = "fortinet"
 
-    if "ios" in lowered:
+    if "ios-xe" in lowered or "iosxe" in lowered or "ios xe" in lowered:
+        os_name = "ios-xe"
+    elif "ios-xr" in lowered or "iosxr" in lowered or "ios xr" in lowered:
+        os_name = "ios-xr"
+    elif "ios" in lowered:
         os_name = "ios"
     elif "nx-os" in lowered or "nxos" in lowered:
         os_name = "nx-os"
@@ -186,8 +200,14 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
             "aes192": usmAesCfb192Protocol,
             "aes256": usmAesCfb256Protocol,
         }
-        auth_proto = auth_map.get(str(v3.get("auth_protocol", "sha")).lower(), usmHMACSHAAuthProtocol)
-        priv_proto = priv_map.get(str(v3.get("priv_protocol", "aes128")).lower(), usmAesCfb128Protocol)
+        auth_proto_key = str(v3.get("auth_protocol", "sha")).lower()
+        priv_proto_key = str(v3.get("priv_protocol", "aes128")).lower()
+        auth_proto = auth_map.get(auth_proto_key, usmHMACSHAAuthProtocol)
+        priv_proto = priv_map.get(priv_proto_key, usmAesCfb128Protocol)
+        LOGGER.info(
+            "SNMPv3 GET %s: user=%r auth=%s priv=%s (has_priv_key=%s)",
+            ip_address, username, auth_proto_key, priv_proto_key, bool(priv_password),
+        )
         if priv_password:
             auth_data = UsmUserData(
                 username,
@@ -202,6 +222,12 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
                 authKey=auth_password,
                 authProtocol=auth_proto,
             )
+        # SNMPv3 engine discovery consumes retry rounds: the first
+        # exchange learns the remote engineID (usmStats.4 report),
+        # and only the subsequent retry carries the real authenticated
+        # request.  With retries=0 the authenticated GET never fires.
+        # Guarantee at least 2 retries so the handshake can complete.
+        retries = max(retries, 2)
     else:
         community = str(cfg.get("community", "public")).strip()
         if not community:
@@ -219,10 +245,42 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),
     )
     engine.close_dispatcher()
-    if error_indication:
-        raise RuntimeError(str(error_indication))
-    if error_status:
-        raise RuntimeError(f"SNMP error: {error_status.prettyPrint()}")
+
+    # If SNMPv3 fails, fall back to v2c using the community string if available.
+    # This handles cases where v3 users are invalidated (e.g. after a firmware
+    # upgrade that changes the SNMP engine ID) but v2c still works.
+    if (error_indication or error_status) and version == "3":
+        v3_err = str(error_indication or error_status.prettyPrint())
+        community = str(cfg.get("community", "")).strip()
+        if community:
+            LOGGER.warning(
+                "SNMPv3 failed for %s (%s), falling back to v2c",
+                ip_address, v3_err,
+            )
+            v2_auth = CommunityData(community, mpModel=1)
+            engine2 = SnmpEngine()
+            transport2 = await UdpTransportTarget.create(
+                (ip_address, port), timeout=timeout, retries=retries,
+            )
+            error_indication, error_status, _error_index, var_binds = await get_cmd(
+                engine2, v2_auth, transport2, ContextData(),
+                ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),
+                ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),
+            )
+            engine2.close_dispatcher()
+            if not error_indication and not error_status:
+                version = "2c-fallback"
+            else:
+                # Both v3 and v2c failed — report the original v3 error.
+                raise RuntimeError(
+                    f"SNMPv3 failed for {ip_address}: {v3_err}"
+                )
+        else:
+            raise RuntimeError(f"SNMPv3 failed for {ip_address}: {v3_err}")
+    elif error_indication:
+        raise RuntimeError(f"SNMP v{version} error for {ip_address}: {error_indication}")
+    elif error_status:
+        raise RuntimeError(f"SNMP v{version} error for {ip_address}: {error_status.prettyPrint()}")
 
     values = {str(name): str(value) for name, value in var_binds}
     sys_descr = values.get("1.3.6.1.2.1.1.1.0", "")
@@ -257,7 +315,8 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
 async def _probe_discovery_target_snmp(ip_address: str, timeout_seconds: float, snmp_config: dict) -> dict | None:
     try:
         return await _snmp_get(ip_address, timeout_seconds, snmp_config)
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("SNMP probe failed for %s: %s", ip_address, exc)
         return None
 
 
@@ -298,6 +357,8 @@ def _build_snmp_auth(snmp_config: dict):
                                     authProtocol=auth_proto, privProtocol=priv_proto)
         else:
             auth_data = UsmUserData(username, authKey=auth_password, authProtocol=auth_proto)
+        # SNMPv3 engine discovery needs extra retries (see _snmp_get).
+        retries = max(retries, 2)
     else:
         community = str(cfg.get("community", "public")).strip()
         if not community:
