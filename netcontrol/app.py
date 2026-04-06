@@ -347,40 +347,165 @@ def _hash_password(password: str, salt: str = "") -> str:
     ).hex()
 
 
-async def _ensure_default_admin():
-    """Create the default admin user in the DB if no users exist.
+def _bootstrap_admin_username() -> str:
+    raw = os.getenv("PLEXUS_INITIAL_ADMIN_USERNAME", "admin").strip()
+    if not raw:
+        return "admin"
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    cleaned = "".join(ch for ch in raw if ch in allowed).strip("._-")
+    return cleaned or "admin"
 
-    Reads ``PLEXUS_INITIAL_ADMIN_PASSWORD`` from the environment if set,
-    otherwise generates a random password.  The credentials are printed to
-    stderr (never to log files or disk) and the account is flagged
-    ``must_change_password``.
-    """
-    existing = await db.get_all_users()
-    if existing:
-        return
-    # Accept an explicit password from the environment, or generate one and
-    # print it to stderr exactly once.  Never write it to a file or log.
-    initial_password = os.environ.pop("PLEXUS_INITIAL_ADMIN_PASSWORD", "") or secrets.token_urlsafe(16)
-    salt = secrets.token_hex(16)
-    pw_hash = _hash_password(initial_password, salt)
-    await db.create_user(
-        "admin", pw_hash, salt,
-        display_name="Administrator", role="admin",
-        must_change_password=True,
+
+def _emit_bootstrap_admin_credentials(
+    username: str,
+    password: str,
+    action: str,
+    must_change_password: bool,
+) -> None:
+    """Print one-time bootstrap credentials to stderr only."""
+    guidance = (
+        "Change it immediately after first login."
+        if must_change_password
+        else "Development bootstrap password is active."
     )
-    # Emit to stderr via raw fd write so the credential is visible on first
-    # boot but never passes through Python's logging or print machinery
-    # (which static analysers flag as CWE-532).
     _msg = (
-        f"\n*** Created default admin account. ***\n"
-        f"    Username: admin\n"
-        f"    Password: {initial_password}\n"
-        f"    Change it immediately after first login.\n\n"
+        f"\n*** {action} ***\n"
+        f"    Username: {username}\n"
+        f"    Password: {password}\n"
+        f"    {guidance}\n\n"
     )
     os.write(2, _msg.encode())  # fd 2 = stderr
+
+
+def _is_dev_bootstrap_mode() -> bool:
+    env = os.getenv("APP_ENV", "").strip().lower()
+    if env in {"dev", "development", "local", "test"}:
+        return True
+    return _env_flag("PLEXUS_DEV_BOOTSTRAP", False)
+
+
+async def _ensure_default_admin():
+    """Ensure at least one local admin account exists.
+
+    First-boot behavior:
+      - If no admin user exists, create/promote one and print credentials.
+      - ``PLEXUS_INITIAL_ADMIN_PASSWORD`` may provide the initial password.
+      - Dev mode defaults to ``netcontrol`` (or ``PLEXUS_DEFAULT_ADMIN_PASSWORD``).
+      - Non-dev mode defaults to a random password.
+
+    Recovery behavior:
+      - If ``PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true`` is set, reset the
+        configured bootstrap admin account password on startup.
+    """
+    users = await db.get_all_users()
+    has_admin = any((u.get("role") or "").lower() == "admin" for u in users)
+
+    bootstrap_username = _bootstrap_admin_username()
+    configured_password = os.environ.pop("PLEXUS_INITIAL_ADMIN_PASSWORD", "").strip()
+    default_bootstrap_password = os.getenv("PLEXUS_DEFAULT_ADMIN_PASSWORD", "netcontrol").strip() or "netcontrol"
+    force_reset = _env_flag("PLEXUS_FORCE_ADMIN_PASSWORD_RESET", False)
+    dev_bootstrap = _is_dev_bootstrap_mode()
+
+    if has_admin and not force_reset:
+        return
+
+    if configured_password:
+        password = configured_password
+        must_change_password = True
+    elif dev_bootstrap:
+        password = default_bootstrap_password
+        must_change_password = False
+    else:
+        password = secrets.token_urlsafe(16)
+        must_change_password = True
+
+    salt = secrets.token_hex(16)
+    pw_hash = _hash_password(password, salt)
+
+    if has_admin and force_reset:
+        target = await db.get_user_by_username(bootstrap_username)
+        if not target:
+            target = await db.get_user_by_username("admin")
+        if not target:
+            fallback_admin = next((u for u in users if (u.get("role") or "").lower() == "admin"), None)
+            target = await db.get_user_by_id(int(fallback_admin["id"])) if fallback_admin else None
+        if not target:
+            return
+
+        await db.update_user_admin(int(target["id"]), role="admin")
+        await db.update_user_password(
+            int(target["id"]),
+            pw_hash,
+            salt,
+            must_change_password=must_change_password,
+        )
+        _emit_bootstrap_admin_credentials(
+            target["username"],
+            password,
+            "Reset admin bootstrap password",
+            must_change_password,
+        )
+        LOGGER.warning(
+            "Reset bootstrap admin password via PLEXUS_FORCE_ADMIN_PASSWORD_RESET. "
+            "Credentials were printed to stderr.",
+        )
+        return
+
+    existing_user = await db.get_user_by_username(bootstrap_username)
+    if existing_user:
+        await db.update_user_admin(int(existing_user["id"]), role="admin")
+        await db.update_user_password(
+            int(existing_user["id"]),
+            pw_hash,
+            salt,
+            must_change_password=must_change_password,
+        )
+        _emit_bootstrap_admin_credentials(
+            existing_user["username"],
+            password,
+            "Promoted existing user to default admin",
+            must_change_password,
+        )
+        LOGGER.warning(
+            "Promoted existing user '%s' to admin and reset password (must_change_password=%s). "
+            "Credentials were printed to stderr.",
+            existing_user["username"],
+            must_change_password,
+        )
+        return
+
+    username = bootstrap_username
+    try:
+        await db.create_user(
+            username,
+            pw_hash,
+            salt,
+            display_name="Administrator",
+            role="admin",
+            must_change_password=must_change_password,
+        )
+    except ValueError:
+        username = f"admin-{secrets.token_hex(2)}"
+        await db.create_user(
+            username,
+            pw_hash,
+            salt,
+            display_name="Administrator",
+            role="admin",
+            must_change_password=must_change_password,
+        )
+
+    _emit_bootstrap_admin_credentials(
+        username,
+        password,
+        "Created default admin account",
+        must_change_password,
+    )
     LOGGER.warning(
-        "Created default admin account (must_change_password=True). "
+        "Created default admin account '%s' (must_change_password=%s). "
         "Credentials were printed to stderr.",
+        username,
+        must_change_password,
     )
 
 
