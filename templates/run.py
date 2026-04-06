@@ -127,6 +127,12 @@ if os.name == "nt":
     socket.socket.shutdown = ignore_connection_reset_error(original_shutdown)
 
 if __name__ == "__main__":
+    # Local launcher defaults to dev bootstrap mode unless explicitly overridden.
+    # This keeps first-login credentials deterministic in local development.
+    os.environ.setdefault("APP_ENV", "dev")
+    os.environ.setdefault("PLEXUS_DEV_BOOTSTRAP", "true")
+    os.environ.setdefault("PLEXUS_BREAKGLASS_LOCAL_ADMIN", "true")
+
     parser = argparse.ArgumentParser(description="Plexus Automation Hub")
     parser.add_argument("--version", action="version", version=f"Plexus {APP_VERSION}")
     parser.add_argument("--host", default=os.getenv("APP_HOST"), help="Bind address (default: 127.0.0.1)")
