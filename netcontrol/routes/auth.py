@@ -402,6 +402,67 @@ async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
     return await upsert_external_user(username, display_name=display_name, role=role)
 
 
+def _dev_bootstrap_enabled() -> bool:
+    env = os.getenv("APP_ENV", "").strip().lower()
+    if env in {"dev", "development", "local", "test"}:
+        return True
+    return _env_flag("PLEXUS_DEV_BOOTSTRAP", False)
+
+
+def _dev_bootstrap_username() -> str:
+    raw = os.getenv("PLEXUS_INITIAL_ADMIN_USERNAME", "admin").strip()
+    if not raw:
+        return "admin"
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    cleaned = "".join(ch for ch in raw if ch in allowed).strip("._-")
+    return cleaned or "admin"
+
+
+def _dev_bootstrap_password() -> str:
+    return os.getenv("PLEXUS_DEFAULT_ADMIN_PASSWORD", "netcontrol").strip() or "netcontrol"
+
+
+async def _authenticate_dev_bootstrap(username: str, password: str) -> dict | None:
+    """Dev-only deterministic local admin login.
+
+    If APP_ENV indicates development (or PLEXUS_DEV_BOOTSTRAP=true), allow
+    login with bootstrap credentials and ensure the corresponding local admin
+    account exists with must_change_password=False.
+    """
+    if not _dev_bootstrap_enabled():
+        return None
+
+    expected_username = _dev_bootstrap_username()
+    expected_password = _dev_bootstrap_password()
+    if username != expected_username or password != expected_password:
+        return None
+
+    if _hash_password_fn is None:
+        return None
+
+    user = await db.get_user_by_username(expected_username)
+    salt = secrets.token_hex(16)
+    pw_hash = _hash_password_fn(expected_password, salt)
+
+    if user:
+        await db.update_user_admin(int(user["id"]), role="admin")
+        await db.update_user_password(int(user["id"]), pw_hash, salt, must_change_password=False)
+    else:
+        try:
+            await db.create_user(
+                expected_username,
+                pw_hash,
+                salt,
+                display_name="Administrator",
+                role="admin",
+                must_change_password=False,
+            )
+        except ValueError:
+            pass
+
+    return await db.get_user_by_username(expected_username)
+
+
 async def authenticate_login_identity(username: str, password: str) -> tuple[dict | None, str | None, str | None]:
     """Authenticate using configured provider with defined fallback behavior.
 
@@ -420,6 +481,20 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
     _verify_radius = getattr(_app, "verify_radius_user", verify_radius_user)
     _upsert_radius = getattr(_app, "upsert_radius_user", upsert_radius_user)
     _verify_local = getattr(_app, "verify_user", _verify_user_fn)
+
+    # Dev bootstrap shortcut: deterministic local admin credentials.
+    dev_bootstrap_user = await _authenticate_dev_bootstrap(username, password)
+    if dev_bootstrap_user:
+        return dev_bootstrap_user, "local-dev-bootstrap", None
+
+    # Break-glass: always allow local admin credentials when enabled, even if
+    # the primary auth provider is LDAP/RADIUS and local fallback is disabled.
+    # This prevents lockout after external auth misconfiguration.
+    allow_breakglass = _env_flag("PLEXUS_BREAKGLASS_LOCAL_ADMIN", True)
+    if allow_breakglass:
+        local_admin = await _verify_local(username, password)
+        if local_admin and (local_admin.get("role") or "").lower() == "admin":
+            return local_admin, "local-admin-breakglass", None
 
     if provider == "radius" and radius_enabled:
         accepted, status = await _verify_radius(username, password)

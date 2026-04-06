@@ -1326,12 +1326,17 @@ async def create_user(username: str, password_hash: str, salt: str,
         await db.close()
 
 
-async def update_user_password(user_id: int, password_hash: str, salt: str):
+async def update_user_password(
+    user_id: int,
+    password_hash: str,
+    salt: str,
+    must_change_password: bool = False,
+):
     db = await get_db()
     try:
         await db.execute(
-            "UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0 WHERE id = ?",
-            (password_hash, salt, user_id),
+            "UPDATE users SET password_hash = ?, salt = ?, must_change_password = ? WHERE id = ?",
+            (password_hash, salt, int(bool(must_change_password)), user_id),
         )
         await db.commit()
     finally:
