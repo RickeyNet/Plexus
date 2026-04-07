@@ -5373,7 +5373,9 @@ function closeAllModals() {
 }
 
 // Expose to window for inline onclick handlers
+const closeModal = closeAllModals;
 window.closeAllModals = closeAllModals;
+window.closeModal = closeModal;
 
 // ── Copyable Code Block Utilities ────────────────────────────────────────────
 const COPY_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
@@ -8501,14 +8503,21 @@ async function confirmDeleteBackup(id) {
 }
 window.confirmDeleteBackup = confirmDeleteBackup;
 
-// Search handler for config backups
+// Search handler for configuration page (drift, backup policies, backup history)
 document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('backup-search');
+    const searchInput = document.getElementById('configuration-search');
     if (searchInput) {
         searchInput.addEventListener('input', debounce(() => {
-            listViewState.configBackups.query = searchInput.value;
-            renderBackupPolicies(listViewState.configBackups.policies);
-            renderBackupHistory(listViewState.configBackups.backups);
+            const q = searchInput.value;
+            const tab = listViewState.configuration.tab;
+            if (tab === 'drift') {
+                listViewState.configDrift.query = q;
+                renderDriftEventsList(applyDriftFilters());
+            } else {
+                listViewState.configBackups.query = q;
+                renderBackupPolicies(listViewState.configBackups.policies);
+                renderBackupHistory(listViewState.configBackups.backups);
+            }
         }, 200));
     }
 });
@@ -12573,15 +12582,15 @@ async function loadUpgradeBackups() {
         container.innerHTML = `<table class="data-table" style="width:100%;">
             <thead><tr>
                 <th style="text-align:left;">Filename</th>
-                <th style="text-align:right;">Size</th>
+                <th style="text-align:left;">Size</th>
                 <th style="text-align:left;">Date</th>
-                <th style="text-align:right;">Actions</th>
+                <th style="text-align:left;">Actions</th>
             </tr></thead>
             <tbody>${backups.map(b => `<tr>
                 <td style="text-align:left;"><code>${escapeHtml(b.filename)}</code></td>
-                <td style="text-align:right; padding-right:1.5rem;">${(b.size / 1024).toFixed(1)} KB</td>
+                <td style="text-align:left;">${(b.size / 1024).toFixed(1)} KB</td>
                 <td style="text-align:left; white-space:nowrap;">${b.modified?.replace('T', ' ').substring(0, 19) || ''}</td>
-                <td style="text-align:right; white-space:nowrap;">
+                <td style="text-align:left; white-space:nowrap;">
                     <button class="btn btn-sm btn-secondary" onclick="downloadUpgradeBackup('${escapeHtml(b.filename)}')">Download</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteUpgradeBackup('${escapeHtml(b.filename)}')">Delete</button>
                 </td>
@@ -12693,19 +12702,19 @@ async function loadUpgradeImages() {
                 <th style="text-align:left;">Filename</th>
                 <th style="text-align:left;">Version</th>
                 <th style="text-align:left;">Model Pattern</th>
-                <th style="text-align:right;">Size</th>
+                <th style="text-align:left;">Size</th>
                 <th style="text-align:left;">MD5</th>
                 <th style="text-align:left;">Uploaded</th>
-                <th style="text-align:right;">Actions</th>
+                <th style="text-align:left;">Actions</th>
             </tr></thead>
             <tbody>${images.map(img => `<tr>
                 <td style="text-align:left;"><code>${escapeHtml(img.filename)}</code></td>
                 <td style="text-align:left;">${escapeHtml(img.version || '-')}</td>
                 <td style="text-align:left;"><code>${escapeHtml(img.model_pattern || '-')}</code></td>
-                <td style="text-align:right; padding-right:1.5rem;">${(img.file_size / 1024 / 1024).toFixed(1)} MB</td>
+                <td style="text-align:left;">${(img.file_size / 1024 / 1024).toFixed(1)} MB</td>
                 <td style="text-align:left;" title="${escapeHtml(img.md5_hash || '')}"><code>${escapeHtml(img.md5_hash || '')}</code></td>
                 <td style="text-align:left; white-space:nowrap;">${img.created_at?.replace('T', ' ').substring(0, 16) || ''}</td>
-                <td style="text-align:right; white-space:nowrap;">
+                <td style="text-align:left; white-space:nowrap;">
                     <button class="btn btn-sm btn-secondary" onclick="editUpgradeImage(${img.id})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteUpgradeImage(${img.id}, '${escapeHtml(img.filename)}')">Delete</button>
                 </td>

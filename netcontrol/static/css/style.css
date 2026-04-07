@@ -1892,6 +1892,39 @@ body {
     line-height: 1.4;
 }
 
+/* Page tab buttons */
+.config-tab-btn,
+.change-tab-btn,
+.cred-tab-btn,
+.mon-tab-btn,
+.sla-tab-btn,
+.avail-tab-btn,
+.report-tab-btn,
+.dev-tab-btn,
+.upgrade-tab-btn {
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    transition: all 0.2s ease;
+}
+
+.config-tab-btn.active,
+.change-tab-btn.active,
+.cred-tab-btn.active,
+.mon-tab-btn.active,
+.sla-tab-btn.active,
+.avail-tab-btn.active,
+.report-tab-btn.active,
+.dev-tab-btn.active,
+.upgrade-tab-btn.active {
+    background: linear-gradient(135deg, var(--primary-light), var(--primary), var(--primary-dark));
+    color: var(--bg-dark);
+    font-weight: 600;
+    border-color: transparent;
+    box-shadow: 0 2px 8px var(--primary-glow);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════════
    Forms
    ═══════════════════════════════════════════════════════════════════════════════ */
