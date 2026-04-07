@@ -2465,6 +2465,12 @@ input[type="number"].form-input {
     padding-bottom: 0.3rem;
     border-bottom: 1px solid var(--border);
     margin-bottom: 0.15rem;
+    text-align: left;
+}
+
+.host-columns-header > span,
+.host-columns-row > span {
+    text-align: left;
 }
 
 .host-item {
@@ -2500,10 +2506,11 @@ input[type="number"].form-input {
     padding: 0.05rem 0.4rem;
     border-radius: 0.2rem;
     border: 1px solid var(--border);
-    text-align: center;
+    text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    width: fit-content;
 }
 
 .host-col-model,
@@ -3227,6 +3234,12 @@ code {
     flex-shrink: 0;
 }
 
+#breadcrumb-trail {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .breadcrumb-home {
     color: var(--text-muted);
     text-decoration: none;
@@ -3248,6 +3261,17 @@ code {
 .breadcrumb-current {
     color: var(--text);
     font-weight: 600;
+}
+
+.breadcrumb-link {
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: color 0.2s;
+    cursor: pointer;
+}
+
+.breadcrumb-link:hover {
+    color: var(--primary-light);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════

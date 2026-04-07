@@ -2,7 +2,7 @@
 secret_variables.py — CRUD routes for encrypted secret variables.
 
 Secret variables are referenced in config templates via {{secret.NAME}}
-and resolved at job execution time.  Values are Fernet-encrypted at rest.
+and resolved at job execution time.  Values are AES-256-GCM encrypted at rest.
 Only admins can create/update/delete secret variables.
 """
 

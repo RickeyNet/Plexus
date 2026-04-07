@@ -241,8 +241,9 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         auth_data,
         transport,
         ContextData(),
-        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),
-        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),
+        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
+        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
+        ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1 (chassis)
     )
     engine.close_dispatcher()
 
@@ -264,8 +265,9 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
             )
             error_indication, error_status, _error_index, var_binds = await get_cmd(
                 engine2, v2_auth, transport2, ContextData(),
-                ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),
-                ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),
+                ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
+                ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
+                ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1
             )
             engine2.close_dispatcher()
             if not error_indication and not error_status:
@@ -285,6 +287,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     values = {str(name): str(value) for name, value in var_binds}
     sys_descr = values.get("1.3.6.1.2.1.1.1.0", "")
     sys_name = values.get("1.3.6.1.2.1.1.5.0", "")
+    ent_model = values.get("1.3.6.1.2.1.47.1.1.1.1.13.1", "")
 
     # pysnmp returns special objects (NoSuchInstance, NoSuchObject, endOfMibView)
     # that str() converts to long descriptive strings — treat those as empty.
@@ -292,8 +295,14 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         sys_name = ""
     if sys_descr and any(m in sys_descr.lower() for m in _SNMP_BAD_MARKERS):
         sys_descr = ""
+    if ent_model and any(m in ent_model.lower() for m in _SNMP_BAD_MARKERS):
+        ent_model = ""
     vendor, detected_type, os_name = _infer_vendor_os_from_text(sys_descr)
     hw_model, sw_version = _parse_model_and_version(sys_descr)
+    # Prefer entPhysicalModelName (actual hardware PID like C9300-48T) over
+    # the software image name parsed from sysDescr (like CAT9K_LITE_IOSXE).
+    if ent_model.strip():
+        hw_model = ent_model.strip()
     return {
         "hostname": sys_name or f"snmp-{ip_address.replace('.', '-')}",
         "ip_address": ip_address,
