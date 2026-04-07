@@ -1085,6 +1085,25 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
             except Exception:
                 pass
 
+            # Pre-stage: unpack and add image so activate only needs activate+commit
+            full_path = f"{dest_path}{image_name}"
+            install_add_cmd = f"install add file {full_path}"
+            await _emit(campaign_id, dev_id, "info", f"Pre-staging image: {install_add_cmd}", host=ip)
+            await _emit(campaign_id, dev_id, "info", "This may take several minutes...", host=ip)
+            try:
+                install_output = await asyncio.to_thread(
+                    conn.send_command, install_add_cmd, read_timeout=900,
+                )
+                await _emit(campaign_id, dev_id, "success", "Image pre-staged successfully", host=ip)
+                if install_output:
+                    await _emit(campaign_id, dev_id, "info", install_output[-500:], host=ip)
+            except Exception as e:
+                await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
+                                               error_message=f"install add failed: {e}")
+                await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=f"install add failed: {e}")
+                await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {e}", host=ip)
+                return
+
             await db.update_upgrade_device(dev_id, transfer_status="completed", phase="transfer_done")
             await _emit_device_status(campaign_id, dev_id, transfer_status="completed")
             await _emit(campaign_id, dev_id, "success", "Transfer phase complete", host=ip)
@@ -1117,6 +1136,28 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                             await asyncio.to_thread(verify_conn.send_command, "write memory", read_timeout=60)
                         except Exception:
                             pass
+                        # Pre-stage: unpack and add image so activate only needs activate+commit
+                        full_path = f"{dest_path}{image_name}"
+                        install_add_cmd = f"install add file {full_path}"
+                        await _emit(campaign_id, dev_id, "info", f"Pre-staging image: {install_add_cmd}", host=ip)
+                        await _emit(campaign_id, dev_id, "info", "This may take several minutes...", host=ip)
+                        try:
+                            install_output = await asyncio.to_thread(
+                                verify_conn.send_command, install_add_cmd, read_timeout=900,
+                            )
+                            await _emit(campaign_id, dev_id, "success", "Image pre-staged successfully", host=ip)
+                            if install_output:
+                                await _emit(campaign_id, dev_id, "info", install_output[-500:], host=ip)
+                        except Exception as e:
+                            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
+                                                           error_message=f"install add failed: {e}")
+                            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=f"install add failed: {e}")
+                            await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {e}", host=ip)
+                            try:
+                                await asyncio.to_thread(verify_conn.disconnect)
+                            except Exception:
+                                pass
+                            return
                         await db.update_upgrade_device(dev_id, transfer_status="completed", phase="transfer_done")
                         await _emit_device_status(campaign_id, dev_id, transfer_status="completed")
                         await _emit(campaign_id, dev_id, "success", "Transfer phase complete", host=ip)
@@ -1154,7 +1195,7 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
 
 
 async def _device_activate(campaign_id, dev, credentials, image_map, options):
-    """Activate: install add file flash:<image> activate commit, wait for reboot, verify."""
+    """Activate: install activate commit (image already pre-staged during transfer), wait for reboot, verify."""
     ip = dev["ip_address"]
     dev_id = dev["id"]
     dest_path = options.get("dest_path", "flash:")
@@ -1239,34 +1280,20 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
         await _emit(campaign_id, dev_id, "info", f"Image verified on flash: {dest_path}{image_name}", host=ip)
 
-        # Run install add file flash:<image> activate commit
-        full_path = f"{dest_path}{image_name}"
-        command = f"install add file {full_path} activate commit"
+        # Image already pre-staged during transfer (install add), just activate
+        command = "install activate prompt-level none"
         await _emit(campaign_id, dev_id, "cmd", f"Executing: {command}", host=ip)
         await _emit(campaign_id, dev_id, "info", "This will trigger a reload (5-15 minutes)...", host=ip)
 
         try:
-            output = await asyncio.to_thread(
-                conn.send_command, command,
-                expect_string=r"proceed\s*\?\s*\[y\/n\]|y\/n|\[yes\/no\]",
-                read_timeout=900,
+            await asyncio.to_thread(
+                conn.send_command, command, read_timeout=120,
             )
-
-            await _emit(campaign_id, dev_id, "info", "Install initiated, confirming reload...", host=ip)
-
-            # Confirm reload
-            try:
-                await asyncio.to_thread(
-                    conn.send_command, "y", expect_string=r".", read_timeout=30,
-                )
-            except Exception:
-                pass  # Expected — switch is rebooting
-
-            await _emit(campaign_id, dev_id, "success", "Reload confirmed - switch is rebooting", host=ip)
-
         except Exception as e:
-            # Could mean switch already started reloading
-            await _emit(campaign_id, dev_id, "warn", f"Connection lost during install (may be normal): {e}", host=ip)
+            # Expected — switch reboots and drops the SSH session
+            await _emit(campaign_id, dev_id, "info", f"Connection closed (expected during reload): {e}", host=ip)
+
+        await _emit(campaign_id, dev_id, "success", "Activate sent - switch is rebooting", host=ip)
 
         # Wait for switch to come back
         if options.get("verify_upgrade", True):
@@ -1298,6 +1325,19 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                     if running_version and expected_version in running_version:
                         await _emit(campaign_id, dev_id, "success",
                                     f"Version verified: {running_version} (expected {expected_version})", host=ip)
+
+                        # Commit the install to make the new version permanent
+                        await _emit(campaign_id, dev_id, "info", "Running install commit to lock in new version...", host=ip)
+                        try:
+                            commit_output = await asyncio.to_thread(
+                                new_conn.send_command, "install commit", read_timeout=300,
+                            )
+                            await _emit(campaign_id, dev_id, "success", "Install committed — new version is permanent", host=ip)
+                            if commit_output:
+                                await _emit(campaign_id, dev_id, "info", commit_output[-500:], host=ip)
+                        except Exception as e:
+                            await _emit(campaign_id, dev_id, "warn", f"install commit failed: {e} — switch may rollback on next reload!", host=ip)
+
                         await db.update_upgrade_device(dev_id, verify_status="completed",
                                                        current_version=running_version)
                         await _emit_device_status(campaign_id, dev_id, verify_status="completed")

@@ -407,6 +407,13 @@ async def _ensure_default_admin():
     dev_bootstrap = _is_dev_bootstrap_mode()
 
     if has_admin and not force_reset:
+        if dev_bootstrap:
+            conn = await db.get_db()
+            try:
+                await conn.execute("UPDATE users SET must_change_password = 0 WHERE must_change_password = 1")
+                await conn.commit()
+            finally:
+                await conn.close()
         return
 
     if configured_password:
