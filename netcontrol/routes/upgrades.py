@@ -966,6 +966,33 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 return
 
         image_name = os.path.basename(target_image)
+
+        # Check if device is already running the target version — skip transfer
+        expected_version = _extract_version(image_name)
+        if expected_version:
+            det_model, running_version = await _detect_model(conn, ip)
+            if det_model:
+                await db.update_upgrade_device(dev_id, model=det_model, current_version=running_version or "")
+            if running_version and expected_version in running_version:
+                await _emit(campaign_id, dev_id, "success",
+                            f"Already running target version {running_version} — skipping transfer", host=ip)
+                await db.update_upgrade_device(dev_id,
+                                               prestage_status="completed",
+                                               transfer_status="completed",
+                                               activate_status="completed",
+                                               verify_status="completed",
+                                               phase="verified",
+                                               current_version=running_version,
+                                               error_message="",
+                                               completed_at=datetime.now(UTC).isoformat())
+                await _emit_device_status(campaign_id, dev_id,
+                                          prestage_status="completed",
+                                          transfer_status="completed",
+                                          activate_status="completed",
+                                          verify_status="completed",
+                                          error_message="")
+                return
+
         image_path = os.path.realpath(os.path.join(SOFTWARE_IMAGES_DIR, image_name))
         if not image_path.startswith(os.path.realpath(SOFTWARE_IMAGES_DIR)):
             await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
@@ -1166,6 +1193,32 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
         image_name = os.path.basename(target_image)
 
+        # Check if device is already running the target version — skip activate
+        expected_version = _extract_version(image_name)
+        if expected_version:
+            det_model, running_version = await _detect_model(conn, ip)
+            if det_model:
+                await db.update_upgrade_device(dev_id, model=det_model, current_version=running_version or "")
+            if running_version and expected_version in running_version:
+                await _emit(campaign_id, dev_id, "success",
+                            f"Already running target version {running_version} — skipping activate", host=ip)
+                await db.update_upgrade_device(dev_id,
+                                               prestage_status="completed",
+                                               transfer_status="completed",
+                                               activate_status="completed",
+                                               verify_status="completed",
+                                               phase="verified",
+                                               current_version=running_version,
+                                               error_message="",
+                                               completed_at=datetime.now(UTC).isoformat())
+                await _emit_device_status(campaign_id, dev_id,
+                                          prestage_status="completed",
+                                          transfer_status="completed",
+                                          activate_status="completed",
+                                          verify_status="completed",
+                                          error_message="")
+                return
+
         # Validate inputs before using in device CLI commands
         cli_err = _validate_cli_inputs(image_name, dest_path)
         if cli_err:
@@ -1350,11 +1403,20 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
 
         # Compare versions
         if expected_version in running_version:
+            # Device is fully upgraded — mark all steps completed
             await db.update_upgrade_device(dev_id, verify_status="completed", phase="verified",
+                                           prestage_status="completed",
+                                           transfer_status="completed",
+                                           activate_status="completed",
                                            current_version=running_version,
                                            error_message="",
                                            completed_at=datetime.now(UTC).isoformat())
-            await _emit_device_status(campaign_id, dev_id, verify_status="completed", error_message="")
+            await _emit_device_status(campaign_id, dev_id,
+                                      prestage_status="completed",
+                                      transfer_status="completed",
+                                      activate_status="completed",
+                                      verify_status="completed",
+                                      error_message="")
             await _emit(campaign_id, dev_id, "success",
                         f"Upgrade verified — running {running_version} (matches {expected_version})", host=ip)
         else:
