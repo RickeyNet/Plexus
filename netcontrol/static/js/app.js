@@ -7133,11 +7133,16 @@ function showForcePasswordChange() {
     document.getElementById('force-password-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const formData = new FormData(e.target);
+        const currentPass = formData.get('current_password');
         const newPass = formData.get('new_password');
         const confirmPass = formData.get('confirm_password');
 
         if (newPass !== confirmPass) {
             showError('New passwords do not match');
+            return;
+        }
+        if (newPass === currentPass) {
+            showError('New password must be different from your current password');
             return;
         }
 
@@ -7184,11 +7189,16 @@ window.showChangePasswordModal = function() {
     document.getElementById('change-password-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const formData = new FormData(e.target);
+        const currentPass = formData.get('current_password');
         const newPass = formData.get('new_password');
         const confirmPass = formData.get('confirm_password');
 
         if (newPass !== confirmPass) {
             showError('New passwords do not match');
+            return;
+        }
+        if (newPass === currentPass) {
+            showError('New password must be different from your current password');
             return;
         }
 
