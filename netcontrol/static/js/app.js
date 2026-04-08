@@ -9156,17 +9156,32 @@ async function confirmDeleteComplianceAssignment(assignmentId) {
 window.confirmDeleteComplianceAssignment = confirmDeleteComplianceAssignment;
 
 async function showComplianceFindings(resultId) {
-    let result;
-    try { result = await api.getComplianceScanResult(resultId); } catch (e) { showError(e.message); return; }
+    let result, creds = [];
+    try {
+        [result, creds] = await Promise.all([
+            api.getComplianceScanResult(resultId),
+            api.getCredentials().catch(() => []),
+        ]);
+    } catch (e) { showError(e.message); return; }
     let findings = [];
     try { findings = JSON.parse(result.findings || '[]'); } catch (e) { /* ignore */ }
+
+    const hasFailedWithFix = findings.some(f => !f.passed && f.remediation && f.remediation.length > 0);
+    const credOptions = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+
     const rows = findings.map(f => {
         const color = f.passed ? 'success' : 'danger';
+        const hasFix = !f.passed && f.remediation && f.remediation.length > 0;
+        const fixBtn = hasFix
+            ? `<button class="btn btn-sm btn-primary" onclick="remediateComplianceRule(${resultId}, '${escapeHtml(f.name).replace(/'/g, "\\'")}')">Fix</button>
+               <button class="btn btn-sm btn-secondary" style="margin-left:0.25rem;" onclick="previewComplianceRemediation('${escapeHtml(f.name).replace(/'/g, "\\'")}', ${JSON.stringify(JSON.stringify(f.remediation))})">Preview</button>`
+            : (!f.passed ? '<span style="font-size:0.8em; color:var(--text-muted);">Manual fix required</span>' : '');
         return `<tr>
             <td style="color:var(--${color})">${f.passed ? 'PASS' : 'FAIL'}</td>
             <td>${escapeHtml(f.name || '-')}</td>
             <td><code>${escapeHtml(f.type || '-')}</code></td>
             <td style="font-size:0.85em">${escapeHtml(f.detail || '-')}</td>
+            <td style="white-space:nowrap;">${fixBtn}</td>
         </tr>`;
     }).join('');
     showModal(`Compliance Findings — ${escapeHtml(result.hostname || '?')}`, `
@@ -9175,6 +9190,16 @@ async function showComplianceFindings(resultId) {
             <strong>Status:</strong> ${escapeHtml(result.status)} ·
             <strong>Score:</strong> ${result.passed_rules}/${result.total_rules} passed
         </div>
+        ${hasFailedWithFix ? `
+        <div style="margin-bottom:1rem; display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+            <label style="font-weight:600; font-size:0.9em;">Credential for remediation:</label>
+            <select id="remediation-cred-select" class="form-select" style="max-width:300px;">
+                <option value="">Select credential...</option>
+                ${credOptions}
+            </select>
+            <button class="btn btn-sm btn-primary" onclick="remediateAllFailedRules(${resultId})">Fix All</button>
+        </div>
+        ` : ''}
         <div style="overflow-x:auto;">
             <table style="width:100%; border-collapse:collapse; font-size:0.9em;">
                 <thead><tr style="border-bottom:1px solid var(--border-color);">
@@ -9182,6 +9207,7 @@ async function showComplianceFindings(resultId) {
                     <th style="text-align:left; padding:0.5rem;">Rule</th>
                     <th style="text-align:left; padding:0.5rem;">Type</th>
                     <th style="text-align:left; padding:0.5rem;">Detail</th>
+                    <th style="text-align:left; padding:0.5rem;">Action</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
             </table>
@@ -9189,6 +9215,113 @@ async function showComplianceFindings(resultId) {
     `);
 }
 window.showComplianceFindings = showComplianceFindings;
+
+function previewComplianceRemediation(ruleName, commandsJson) {
+    let commands = [];
+    try { commands = JSON.parse(commandsJson); } catch (e) { /* ignore */ }
+    showModal(`Remediation Preview — ${escapeHtml(ruleName)}`, `
+        <p style="margin-bottom:0.75rem;">The following commands will be pushed in config mode:</p>
+        <pre style="background:var(--bg-secondary); padding:1rem; border-radius:0.5rem; overflow-x:auto; font-size:0.9em;">${commands.map(c => escapeHtml(c)).join('\n')}</pre>
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+        </div>
+    `);
+}
+window.previewComplianceRemediation = previewComplianceRemediation;
+
+async function remediateComplianceRule(resultId, ruleName) {
+    const credSelect = document.getElementById('remediation-cred-select');
+    const credId = credSelect ? parseInt(credSelect.value) : NaN;
+    if (!credId || isNaN(credId)) {
+        showError('Select a credential before applying a fix.');
+        return;
+    }
+    if (!await showConfirm({
+        title: 'Apply Remediation',
+        message: `Push fix commands to the device for rule "${ruleName}"?\n\nThis will modify the running config and save it.`,
+        confirmText: 'Apply Fix',
+        confirmClass: 'btn-primary'
+    })) return;
+
+    try {
+        const res = await api.remediateComplianceFinding({
+            result_id: resultId,
+            rule_name: ruleName,
+            credential_id: credId,
+            dry_run: false,
+        });
+        if (res.rule_now_passes) {
+            showSuccess(`${res.rule} — FIXED. New score: ${res.rescan_passed}/${res.rescan_total}`);
+        } else {
+            showError(`Remediation applied but rule still failing. Review device output. New score: ${res.rescan_passed}/${res.rescan_total}`);
+        }
+        // Re-open findings modal with the new scan result
+        closeAllModals();
+        await showComplianceFindings(res.rescan_id);
+        loadCompliance();
+    } catch (e) {
+        showError(`Remediation failed: ${e.message}`);
+    }
+}
+window.remediateComplianceRule = remediateComplianceRule;
+
+async function remediateAllFailedRules(resultId) {
+    const credSelect = document.getElementById('remediation-cred-select');
+    const credId = credSelect ? parseInt(credSelect.value) : NaN;
+    if (!credId || isNaN(credId)) {
+        showError('Select a credential before applying fixes.');
+        return;
+    }
+
+    let result;
+    try { result = await api.getComplianceScanResult(resultId); } catch (e) { showError(e.message); return; }
+    let findings = [];
+    try { findings = JSON.parse(result.findings || '[]'); } catch (e) { /* ignore */ }
+    const fixable = findings.filter(f => !f.passed && f.remediation && f.remediation.length > 0);
+
+    if (fixable.length === 0) {
+        showError('No auto-fixable rules found.');
+        return;
+    }
+
+    if (!await showConfirm({
+        title: 'Fix All Failed Rules',
+        message: `Apply remediation for ${fixable.length} failed rule(s) on ${escapeHtml(result.hostname || '?')}?\n\nThis will push config changes and save.`,
+        confirmText: `Fix ${fixable.length} Rule(s)`,
+        confirmClass: 'btn-primary'
+    })) return;
+
+    let lastRescanId = resultId;
+    let fixed = 0;
+    let failed = 0;
+
+    for (const f of fixable) {
+        try {
+            const res = await api.remediateComplianceFinding({
+                result_id: lastRescanId,
+                rule_name: f.name,
+                credential_id: credId,
+                dry_run: false,
+            });
+            lastRescanId = res.rescan_id;
+            if (res.rule_now_passes) fixed++;
+            else failed++;
+        } catch (e) {
+            failed++;
+        }
+    }
+
+    if (failed === 0) {
+        showSuccess(`All ${fixed} rule(s) remediated successfully.`);
+    } else {
+        showError(`${fixed} rule(s) fixed, ${failed} still failing — review manually.`);
+    }
+
+    closeAllModals();
+    await showComplianceFindings(lastRescanId);
+    loadCompliance();
+}
+window.remediateAllFailedRules = remediateAllFailedRules;
 
 // Search handler for compliance
 document.addEventListener('DOMContentLoaded', () => {

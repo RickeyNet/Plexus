@@ -935,6 +935,10 @@ export async function runComplianceScan(data) {
     return apiRequest('/compliance/scan', { method: 'POST', body: data });
 }
 
+export async function remediateComplianceFinding(data) {
+    return apiRequest('/compliance/remediate', { method: 'POST', body: data });
+}
+
 // ── Risk Analysis ────────────────────────────────────────────────────────────
 
 export async function runRiskAnalysis(data) {
