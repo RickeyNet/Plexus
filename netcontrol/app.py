@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 # Ensure project root is on path for imports
@@ -629,6 +629,7 @@ JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = state.JOB_RETENTION_CLEANUP_INTERVAL_SE
 APP_HTTPS_ENABLED = state.APP_HTTPS_ENABLED
 APP_HSTS_ENABLED = state.APP_HSTS_ENABLED
 APP_HSTS_MAX_AGE = state.APP_HSTS_MAX_AGE
+APP_HTTPS_REDIRECT = state.APP_HTTPS_REDIRECT
 APP_CORS_ALLOW_ORIGINS = state.APP_CORS_ALLOW_ORIGINS
 SNMP_DISCOVERY_DEFAULTS = state.SNMP_DISCOVERY_DEFAULTS
 SNMP_DISCOVERY_PROFILE_DEFAULTS = state.SNMP_DISCOVERY_PROFILE_DEFAULTS
@@ -1077,6 +1078,38 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
+# ── HTTPS redirect middleware ─────────────────────────────────────────────────
+# Registered after security_headers so Starlette runs it *first* (LIFO order).
+# Redirects plaintext HTTP to HTTPS when APP_HTTPS_REDIRECT is enabled.
+# Skips the health endpoint so load-balancer probes still work over HTTP.
+
+_HTTPS_REDIRECT_EXEMPT = {"/api/health"}
+
+
+@app.middleware("http")
+async def https_redirect_middleware(request: Request, call_next):
+    if not APP_HTTPS_REDIRECT:
+        return await call_next(request)
+
+    # Allow health checks through without redirect
+    if request.url.path in _HTTPS_REDIRECT_EXEMPT:
+        return await call_next(request)
+
+    # Detect scheme: trust X-Forwarded-Proto from reverse proxy, fall back to
+    # the actual request scheme (covers direct TLS termination by uvicorn).
+    scheme = (
+        request.headers.get("x-forwarded-proto", request.url.scheme)
+        .strip()
+        .lower()
+    )
+
+    if scheme != "https":
+        target = request.url.replace(scheme="https")
+        return RedirectResponse(str(target), status_code=301)
+
+    return await call_next(request)
+
+
 def _api_error_response(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -1290,7 +1323,6 @@ async def serve_frontend():
     if os.path.isfile(INDEX_FILE):
         return FileResponse(INDEX_FILE)
     # If no frontend, redirect to API docs
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/docs")
 
 @app.get("/favicon.ico")

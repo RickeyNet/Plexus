@@ -30,6 +30,10 @@ def _parse_cors_origins() -> list[str]:
 APP_HTTPS_ENABLED = _env_flag("APP_HTTPS", False)
 APP_HSTS_ENABLED = _env_flag("APP_HSTS", APP_HTTPS_ENABLED)
 APP_HSTS_MAX_AGE = int(os.getenv("APP_HSTS_MAX_AGE", "31536000"))
+# When true, the app-level middleware redirects plaintext HTTP requests to HTTPS.
+# Detects scheme via X-Forwarded-Proto (reverse proxy) or request.url.scheme (direct TLS).
+# Defaults to APP_HTTPS so production deployments get redirect automatically.
+APP_HTTPS_REDIRECT = _env_flag("APP_HTTPS_REDIRECT", APP_HTTPS_ENABLED)
 APP_CORS_ALLOW_ORIGINS = _parse_cors_origins()
 
 DISCOVERY_DEFAULT_TIMEOUT_SECONDS = float(os.getenv("APP_DISCOVERY_TIMEOUT_SECONDS", "0.35"))

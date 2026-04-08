@@ -178,6 +178,7 @@ def _security_check_payload() -> dict:
     _https = getattr(_app, "APP_HTTPS_ENABLED", APP_HTTPS_ENABLED)
     _hsts = getattr(_app, "APP_HSTS_ENABLED", APP_HSTS_ENABLED)
     _hsts_age = getattr(_app, "APP_HSTS_MAX_AGE", APP_HSTS_MAX_AGE)
+    _https_redirect = getattr(_app, "APP_HTTPS_REDIRECT", getattr(state, "APP_HTTPS_REDIRECT", False))
     _cors = getattr(_app, "APP_CORS_ALLOW_ORIGINS", APP_CORS_ALLOW_ORIGINS)
     _api_token = getattr(_app, "APP_API_TOKEN", APP_API_TOKEN)
 
@@ -187,6 +188,8 @@ def _security_check_payload() -> dict:
         warnings.append("APP_HTTPS is false: browser traffic may be sent over HTTP if your proxy does not enforce HTTPS.")
     if not _hsts:
         warnings.append("APP_HSTS is false: browsers are not instructed to enforce HTTPS for future requests.")
+    if not _https_redirect:
+        warnings.append("APP_HTTPS_REDIRECT is false: plaintext HTTP requests are not redirected to HTTPS at the app level.")
     if not api_token_required:
         warnings.append("APP_REQUIRE_API_TOKEN is false: non-session API calls are not forced to present an API token.")
     if not _api_token:
@@ -196,6 +199,7 @@ def _security_check_payload() -> dict:
         "ok": True,
         "transport": {
             "https_enabled": _https,
+            "https_redirect": _https_redirect,
             "hsts_enabled": _hsts,
             "hsts_max_age": max(0, _hsts_age),
         },
