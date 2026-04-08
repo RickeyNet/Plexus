@@ -35,7 +35,7 @@ const NAV_FEATURE_MAP = {
 };
 
 const THEME_KEY = 'plexus-theme';
-const VALID_THEMES = ['forest', 'dark', 'dark-modern', 'astral', 'light', 'void', 'coral', 'sandstone'];
+const VALID_THEMES = ['forest', 'dark-modern', 'astral', 'light', 'void', 'coral', 'sandstone'];
 const DEFAULT_THEME = 'sandstone';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
 const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades'];
