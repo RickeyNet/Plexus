@@ -155,6 +155,41 @@ def _parse_model_and_version(sys_descr: str) -> tuple[str, str]:
     return model, version
 
 
+# ── Secret resolution helper ─────────────────────────────────────────────────
+
+
+async def _resolve_snmp_secrets(snmp_config: dict) -> dict:
+    """Resolve {{secret.NAME}} placeholders in v3 auth/priv passwords.
+
+    Returns a shallow copy of *snmp_config* with passwords replaced by
+    their decrypted values.  If there are no secret references the
+    original dict is returned unchanged (fast path).
+    """
+    v3 = snmp_config.get("v3")
+    if not isinstance(v3, dict):
+        return snmp_config
+    auth_pw = str(v3.get("auth_password", ""))
+    priv_pw = str(v3.get("priv_password", ""))
+    try:
+        from routes.secret_resolver import has_secret_references, resolve_secrets
+        if not (has_secret_references(auth_pw) or has_secret_references(priv_pw)):
+            return snmp_config
+        resolved = await resolve_secrets([auth_pw, priv_pw])
+        cfg = dict(snmp_config)
+        cfg["v3"] = dict(v3)
+        cfg["v3"]["auth_password"] = resolved[0].strip()
+        cfg["v3"]["priv_password"] = resolved[1].strip()
+        LOGGER.debug(
+            "SNMPv3 secret resolution: auth_key_len=%d priv_key_len=%d",
+            len(cfg["v3"]["auth_password"]),
+            len(cfg["v3"]["priv_password"]),
+        )
+        return cfg
+    except Exception as exc:
+        LOGGER.error("SNMPv3 secret resolution FAILED — using raw value as password: %s", exc)
+        return snmp_config
+
+
 # ── SNMP Get ─────────────────────────────────────────────────────────────────
 
 
@@ -174,7 +209,8 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     if not snmp_config.get("enabled", False):
         return None
 
-    cfg = snmp_config
+    # Resolve {{secret.NAME}} references in v3 passwords
+    cfg = await _resolve_snmp_secrets(snmp_config)
     version = str(cfg.get("version", "2c"))
     port = int(cfg.get("port", 161))
     retries = int(cfg.get("retries", 0))
@@ -204,9 +240,10 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         priv_proto_key = str(v3.get("priv_protocol", "aes128")).lower()
         auth_proto = auth_map.get(auth_proto_key, usmHMACSHAAuthProtocol)
         priv_proto = priv_map.get(priv_proto_key, usmAesCfb128Protocol)
-        LOGGER.info(
-            "SNMPv3 GET %s: user=%r auth=%s priv=%s (has_priv_key=%s)",
-            ip_address, username, auth_proto_key, priv_proto_key, bool(priv_password),
+        LOGGER.debug(
+            "SNMPv3 GET %s: user=%r auth=%s priv=%s auth_key_len=%d priv_key_len=%d",
+            ip_address, username, auth_proto_key, priv_proto_key,
+            len(auth_password), len(priv_password),
         )
         if priv_password:
             auth_data = UsmUserData(
@@ -248,8 +285,6 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     engine.close_dispatcher()
 
     # If SNMPv3 fails, fall back to v2c using the community string if available.
-    # This handles cases where v3 users are invalidated (e.g. after a firmware
-    # upgrade that changes the SNMP engine ID) but v2c still works.
     if (error_indication or error_status) and version == "3":
         v3_err = str(error_indication or error_status.prettyPrint())
         community = str(cfg.get("community", "")).strip()
@@ -273,7 +308,6 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
             if not error_indication and not error_status:
                 version = "2c-fallback"
             else:
-                # Both v3 and v2c failed — report the original v3 error.
                 raise RuntimeError(
                     f"SNMPv3 failed for {ip_address}: {v3_err}"
                 )
@@ -380,6 +414,8 @@ def _build_snmp_auth(snmp_config: dict):
 async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
                      base_oid: str, max_rows: int = 500) -> dict[str, str]:
     """Walk an SNMP OID subtree and return {oid: value} dict."""
+    # Resolve {{secret.NAME}} references in v3 passwords before building auth
+    snmp_config = await _resolve_snmp_secrets(snmp_config)
     auth_tuple = _build_snmp_auth(snmp_config)
     if auth_tuple is None:
         return {}

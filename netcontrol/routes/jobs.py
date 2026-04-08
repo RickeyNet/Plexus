@@ -25,6 +25,11 @@ import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 
+# Grace period (seconds) after a live job before re-probing SNMP on affected
+# hosts.  Some devices briefly restart their SNMP agent when config changes
+# are written, so polling too early would produce transient failures.
+_POST_JOB_REPROBE_DELAY = 15
+
 try:
     from routes.ansible_runner_backend import execute_ansible_playbook
     ANSIBLE_RUNNER_AVAILABLE = True
@@ -102,6 +107,57 @@ class JobLaunch(BaseModel):
 
     # Forbid unknown fields for strict payload validation.
     model_config = ConfigDict(extra="forbid")
+
+
+# ── Post-job SNMP re-probe ──────────────────────────────────────────────────
+
+
+async def _reprobe_hosts_after_job(hosts: list[dict], credentials: dict, dry_run: bool):
+    """After a live job, wait briefly then re-probe affected hosts via SNMP.
+
+    Devices may briefly restart their SNMP agent when configuration is
+    written (e.g. adding snmp-server host lines), which can cause the
+    next scheduled discovery or monitoring poll to see the device as
+    unreachable.  A short grace period followed by a targeted re-probe
+    refreshes the SNMP engine-ID cache and keeps inventory in sync.
+    """
+    if dry_run:
+        return
+    # Only re-probe inventory hosts (skip ad-hoc IPs with id=None)
+    real_hosts = [h for h in hosts if h.get("id") is not None and h.get("group_id") is not None]
+    if not real_hosts:
+        return
+
+    await asyncio.sleep(_POST_JOB_REPROBE_DELAY)
+
+    try:
+        from netcontrol.routes.snmp import _probe_discovery_target_snmp
+        from netcontrol.routes.inventory import _sync_group_hosts
+
+        # Group hosts by their inventory group for efficient sync
+        groups: dict[int, list[dict]] = {}
+        for h in real_hosts:
+            gid = h["group_id"]
+            groups.setdefault(gid, []).append(h)
+
+        for group_id, group_hosts in groups.items():
+            snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+            if not snmp_cfg.get("enabled"):
+                continue
+            discovered = []
+            for h in group_hosts:
+                ip = h.get("ip_address")
+                if not ip:
+                    continue
+                result = await _probe_discovery_target_snmp(ip, 5.0, snmp_cfg)
+                if result is not None:
+                    discovered.append(result)
+            if discovered:
+                await _sync_group_hosts(group_id, discovered, remove_absent=False)
+                LOGGER.info("post-job reprobe: group %s — %d/%d hosts re-synced via SNMP",
+                            group_id, len(discovered), len(group_hosts))
+    except Exception as exc:
+        LOGGER.warning("post-job SNMP reprobe failed: %s", exc)
 
 
 # ── Background job processor ─────────────────────────────────────────────────
@@ -289,6 +345,7 @@ async def _run_ansible_job(
         for ws in dead:
             sockets.remove(ws)
 
+    job_succeeded = False
     try:
         result = await execute_ansible_playbook(
             playbook_content=playbook_content,
@@ -305,6 +362,7 @@ async def _run_ansible_job(
             hosts_failed=result.hosts_failed,
             hosts_skipped=result.hosts_skipped,
         )
+        job_succeeded = result.status == "success"
     except asyncio.CancelledError:
         await db.add_job_event(job_id, "warning", "Job cancelled by user")
         await db.cancel_job(job_id, "system")
@@ -320,6 +378,10 @@ async def _run_ansible_job(
             await ws.send_json(done_msg)
         except Exception:
             pass
+
+    # Re-probe affected hosts via SNMP after a successful live job.
+    if job_succeeded:
+        asyncio.ensure_future(_reprobe_hosts_after_job(hosts, credentials, dry_run))
 
 
 async def _run_job(
@@ -368,6 +430,7 @@ async def _run_job(
         for ws in dead:
             sockets.remove(ws)
 
+    job_succeeded = False
     try:
         result = await execute_playbook(
             pb_class, hosts, credentials, template_commands, dry_run, on_event
@@ -379,6 +442,7 @@ async def _run_job(
             hosts_failed=hosts_failed,
             hosts_skipped=result.hosts_skipped,
         )
+        job_succeeded = result.status == "success"
     except asyncio.CancelledError:
         await db.add_job_event(job_id, "warning", "Job cancelled by user")
         await db.cancel_job(job_id, "system")
@@ -394,6 +458,11 @@ async def _run_job(
             await ws.send_json(done_msg)
         except Exception:
             pass
+
+    # Re-probe affected hosts via SNMP after a successful live job so that
+    # any transient SNMP agent restart doesn't leave inventory stale.
+    if job_succeeded:
+        asyncio.ensure_future(_reprobe_hosts_after_job(hosts, credentials, dry_run))
 
 
 # ── Job REST routes ──────────────────────────────────────────────────────────

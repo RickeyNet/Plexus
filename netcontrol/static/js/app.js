@@ -4192,7 +4192,7 @@ function _snmpProfileFormHtml(cfg = {}) {
         <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
             <div>
                 <label class="form-label">Auth Password</label>
-                <input type="password" class="form-input" name="v3_auth_password" value="${escapeHtml(v3.auth_password || '')}">
+                <input type="${(v3.auth_password || '').includes('{{secret.') ? 'text' : 'password'}" class="form-input" name="v3_auth_password" value="${escapeHtml(v3.auth_password || '')}" placeholder="password or {{secret.NAME}}">
             </div>
             <div>
                 <label class="form-label">Privacy Protocol</label>
@@ -4206,7 +4206,10 @@ function _snmpProfileFormHtml(cfg = {}) {
         </div>
         <div class="form-group">
             <label class="form-label">Privacy Password</label>
-            <input type="password" class="form-input" name="v3_priv_password" value="${escapeHtml(v3.priv_password || '')}">
+            <input type="${(v3.priv_password || '').includes('{{secret.') ? 'text' : 'password'}" class="form-input" name="v3_priv_password" value="${escapeHtml(v3.priv_password || '')}" placeholder="password or {{secret.NAME}}">
+        </div>
+        <div class="card-description" style="font-size:0.8rem; opacity:0.7; margin-top:-0.5rem;">
+            Passwords support <code>{{secret.NAME}}</code> references from Credentials &rarr; Secret Variables.
         </div>
     `;
 }
@@ -7553,6 +7556,63 @@ function applyDriftFilters() {
     return filtered;
 }
 
+let _driftViewMode = 'grouped'; // 'grouped' or 'flat'
+
+function _normalizeDiffForGrouping(diffText) {
+    if (!diffText) return '';
+    // Strip header lines (--- a/... +++ b/...) and hunk positions (@@ ... @@) that contain host-specific paths
+    // Keep only the actual change lines and context for grouping
+    return diffText.split('\n').filter(line =>
+        !line.startsWith('---') && !line.startsWith('+++') && !line.startsWith('@@')
+    ).join('\n').trim();
+}
+
+function _groupDriftEvents(events) {
+    const groups = new Map();
+    for (const ev of events) {
+        const key = _normalizeDiffForGrouping(ev.diff_text || '');
+        if (!groups.has(key)) {
+            groups.set(key, { diff_text: ev.diff_text, diff_lines_added: ev.diff_lines_added, diff_lines_removed: ev.diff_lines_removed, events: [], representative_id: ev.id });
+        }
+        groups.get(key).events.push(ev);
+    }
+    return [...groups.values()].sort((a, b) => b.events.length - a.events.length);
+}
+
+function _renderDriftCard(ev, i) {
+    const statusColor = ev.status === 'open' ? 'var(--danger, #ef5350)' :
+        ev.status === 'accepted' ? 'var(--warning, #ffa726)' : 'var(--success, #66bb6a)';
+    const detected = ev.detected_at ? new Date(ev.detected_at + 'Z').toLocaleString() : '';
+    return `<div class="card drift-event-card animate-in" style="animation-delay:${Math.min(i * 0.04, 0.3)}s">
+        <div class="drift-event-header">
+            <div>
+                <div class="card-title">${escapeHtml(ev.hostname || '')} <span style="color:var(--text-muted);font-weight:400;font-size:0.85rem">${escapeHtml(ev.ip_address || '')}</span></div>
+                <div class="drift-event-meta">
+                    <span>${escapeHtml(ev.device_type || '')}</span>
+                    <span style="opacity:0.4">|</span>
+                    <span>${detected}</span>
+                </div>
+            </div>
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+                <div class="drift-diff-stats">
+                    <span class="drift-diff-added">+${ev.diff_lines_added || 0}</span>
+                    <span class="drift-diff-removed">-${ev.diff_lines_removed || 0}</span>
+                </div>
+                <button class="btn btn-sm" style="background:${statusColor};color:#fff;padding:0.15rem 0.5rem;border-radius:0.25rem;font-size:0.7rem;font-weight:600;text-transform:uppercase;cursor:pointer;border:none;" onclick="showDriftDiffModal(${ev.id})">${escapeHtml(ev.status)}</button>
+            </div>
+        </div>
+        <div style="margin-top:0.75rem;display:flex;gap:0.35rem;flex-wrap:wrap">
+            <button class="btn btn-sm btn-secondary" onclick="showDriftDiffModal(${ev.id})">View Diff</button>
+            <button class="btn btn-sm btn-secondary" onclick="showHostDriftHistory(${ev.host_id})">History</button>
+            ${ev.status === 'open' ? `
+                <button class="btn btn-sm btn-primary" onclick="acceptDriftEvent(${ev.id})">Accept</button>
+                <button class="btn btn-sm btn-danger" onclick="showRevertDriftModal(${ev.id})">Revert</button>
+                <button class="btn btn-sm btn-secondary" onclick="resolveDriftEvent(${ev.id})">Resolve</button>
+            ` : ''}
+        </div>
+    </div>`;
+}
+
 function renderDriftEventsList(events) {
     const container = document.getElementById('drift-events-list');
     if (!container) return;
@@ -7560,39 +7620,99 @@ function renderDriftEventsList(events) {
         container.innerHTML = '<div class="card" style="text-align:center;color:var(--text-muted);padding:2rem;">No matching drift events.</div>';
         return;
     }
-    container.innerHTML = events.map((ev, i) => {
-        const statusColor = ev.status === 'open' ? 'var(--danger, #ef5350)' :
-            ev.status === 'accepted' ? 'var(--warning, #ffa726)' : 'var(--success, #66bb6a)';
-        const detected = ev.detected_at ? new Date(ev.detected_at + 'Z').toLocaleString() : '';
-        return `<div class="card drift-event-card animate-in" style="animation-delay:${Math.min(i * 0.04, 0.3)}s">
-            <div class="drift-event-header">
-                <div>
-                    <div class="card-title">${escapeHtml(ev.hostname || '')} <span style="color:var(--text-muted);font-weight:400;font-size:0.85rem">${escapeHtml(ev.ip_address || '')}</span></div>
-                    <div class="drift-event-meta">
-                        <span>${escapeHtml(ev.device_type || '')}</span>
-                        <span style="opacity:0.4">|</span>
-                        <span>${detected}</span>
-                    </div>
-                </div>
-                <div style="display:flex;gap:0.5rem;align-items:center;">
-                    <div class="drift-diff-stats">
-                        <span class="drift-diff-added">+${ev.diff_lines_added || 0}</span>
-                        <span class="drift-diff-removed">-${ev.diff_lines_removed || 0}</span>
-                    </div>
-                    <button class="btn btn-sm" style="background:${statusColor};color:#fff;padding:0.15rem 0.5rem;border-radius:0.25rem;font-size:0.7rem;font-weight:600;text-transform:uppercase;cursor:pointer;border:none;" onclick="showDriftDiffModal(${ev.id})">${escapeHtml(ev.status)}</button>
-                </div>
-            </div>
-            <div style="margin-top:0.75rem;display:flex;gap:0.35rem;flex-wrap:wrap">
-                <button class="btn btn-sm btn-secondary" onclick="showDriftDiffModal(${ev.id})">View Diff</button>
-                <button class="btn btn-sm btn-secondary" onclick="showHostDriftHistory(${ev.host_id})">History</button>
-                ${ev.status === 'open' ? `
-                    <button class="btn btn-sm btn-primary" onclick="acceptDriftEvent(${ev.id})">Accept</button>
-                    <button class="btn btn-sm btn-danger" onclick="showRevertDriftModal(${ev.id})">Revert</button>
-                    <button class="btn btn-sm btn-secondary" onclick="resolveDriftEvent(${ev.id})">Resolve</button>
-                ` : ''}
-            </div>
+
+    const openIds = events.filter(e => e.status === 'open').map(e => e.id);
+    const openCount = openIds.length;
+    const groups = _groupDriftEvents(events);
+    const hasGroupableEvents = groups.some(g => g.events.length > 1);
+
+    // Toolbar: bulk actions + view toggle
+    let toolbar = '<div style="margin-bottom:0.75rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;justify-content:space-between">';
+    toolbar += '<div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">';
+    if (openCount > 1) {
+        toolbar += `<button class="btn btn-sm btn-primary" onclick="bulkAcceptDriftEvents([${openIds.join(',')}])">Accept All Open (${openCount})</button>`;
+        toolbar += `<button class="btn btn-sm btn-secondary" onclick="bulkResolveDriftEvents([${openIds.join(',')}])">Resolve All Open (${openCount})</button>`;
+    }
+    toolbar += '</div>';
+    if (hasGroupableEvents) {
+        const groupedActive = _driftViewMode === 'grouped' ? 'btn-primary' : 'btn-secondary';
+        const flatActive = _driftViewMode === 'flat' ? 'btn-primary' : 'btn-secondary';
+        toolbar += `<div style="display:flex;gap:0.25rem;align-items:center;">
+            <button class="btn btn-sm ${groupedActive}" onclick="setDriftViewMode('grouped')" title="Group similar changes">Grouped</button>
+            <button class="btn btn-sm ${flatActive}" onclick="setDriftViewMode('flat')" title="Show individual events">Flat</button>
         </div>`;
-    }).join('');
+    }
+    toolbar += '</div>';
+
+    if (_driftViewMode === 'grouped' && hasGroupableEvents) {
+        // Grouped view
+        container.innerHTML = toolbar + groups.map((group, gi) => {
+            const evs = group.events;
+            const openInGroup = evs.filter(e => e.status === 'open').map(e => e.id);
+            const hasDiff = group.diff_text != null && group.diff_text !== '';
+            const diffHtml = hasDiff ? _renderUnifiedDiff(group.diff_text) : '';
+            const hostList = evs.map(e =>
+                `<span style="display:inline-flex;align-items:center;gap:0.25rem;background:var(--bg-secondary);padding:0.15rem 0.5rem;border-radius:0.25rem;font-size:0.85rem;">
+                    ${escapeHtml(e.hostname || '')}
+                    <span style="color:var(--text-muted);font-size:0.8em">${escapeHtml(e.ip_address || '')}</span>
+                    <span style="color:${e.status === 'open' ? 'var(--danger)' : e.status === 'accepted' ? 'var(--warning)' : 'var(--success)'};font-size:0.7em;font-weight:600;text-transform:uppercase;">${escapeHtml(e.status)}</span>
+                </span>`
+            ).join(' ');
+
+            return `<div class="card animate-in" style="animation-delay:${Math.min(gi * 0.06, 0.3)}s">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.5rem;">
+                    <div>
+                        <div class="card-title" style="font-size:1rem;">${evs.length} device${evs.length > 1 ? 's' : ''} with identical changes</div>
+                        <div class="drift-diff-stats" style="margin-top:0.25rem;">
+                            <span class="drift-diff-added">+${group.diff_lines_added || 0}</span>
+                            <span class="drift-diff-removed">-${group.diff_lines_removed || 0}</span>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
+                        ${openInGroup.length > 0 ? `
+                            <button class="btn btn-sm btn-primary" onclick="bulkAcceptDriftEvents([${openInGroup.join(',')}])">Accept Group (${openInGroup.length})</button>
+                            <button class="btn btn-sm btn-secondary" onclick="bulkResolveDriftEvents([${openInGroup.join(',')}])">Resolve Group</button>
+                        ` : ''}
+                    </div>
+                </div>
+                <div style="margin:0.75rem 0;display:flex;flex-wrap:wrap;gap:0.35rem;">${hostList}</div>
+                <details class="drift-group-diff" data-representative-id="${group.representative_id}" style="margin-top:0.5rem;">
+                    <summary style="cursor:pointer;color:var(--primary);font-size:0.9rem;font-weight:500;user-select:none;">View Diff</summary>
+                    <pre class="drift-diff-block" ${hasDiff ? 'data-loaded="1"' : ''} style="margin-top:0.5rem;max-height:400px;overflow:auto;padding:0.75rem;background:var(--bg-primary);border:1px solid var(--border);border-radius:0.375rem;font-size:0.8rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;">${hasDiff ? diffHtml : '<span style="color:var(--text-muted)">Loading...</span>'}</pre>
+                </details>
+                <details style="margin-top:0.35rem;">
+                    <summary style="cursor:pointer;color:var(--text-muted);font-size:0.85rem;user-select:none;">Show individual devices (${evs.length})</summary>
+                    <div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.35rem;">
+                        ${evs.map((ev, i) => _renderDriftCard(ev, i)).join('')}
+                    </div>
+                </details>
+            </div>`;
+        }).join('');
+        // Lazy-load diffs on expand for groups where diff_text was not in the list response
+        container.querySelectorAll('details.drift-group-diff').forEach(det => {
+            det.addEventListener('toggle', async function handler() {
+                if (!det.open) return;
+                const pre = det.querySelector('pre');
+                if (pre.dataset.loaded) return;
+                const repId = det.dataset.representativeId;
+                if (!repId) return;
+                try {
+                    const ev = await api.getConfigDriftEvent(parseInt(repId));
+                    if (ev && ev.diff_text) {
+                        pre.innerHTML = _renderUnifiedDiff(ev.diff_text);
+                    } else {
+                        pre.innerHTML = '<span style="color:var(--text-muted)">No differences recorded.</span>';
+                    }
+                } catch (err) {
+                    pre.innerHTML = `<span style="color:var(--danger)">Failed to load diff: ${escapeHtml(err.message)}</span>`;
+                }
+                pre.dataset.loaded = '1';
+            });
+        });
+    } else {
+        // Flat view (original)
+        container.innerHTML = toolbar + events.map((ev, i) => _renderDriftCard(ev, i)).join('');
+    }
 }
 
 window.showDriftDiffModal = async function(eventId) {
@@ -7847,6 +7967,37 @@ window.resolveDriftEvent = async function(eventId) {
         await loadConfigDrift({ preserveContent: false });
     } catch (err) {
         showError('Failed to resolve: ' + err.message);
+    }
+};
+
+window.setDriftViewMode = function(mode) {
+    _driftViewMode = mode;
+    renderDriftEventsList(applyDriftFilters());
+};
+
+window.bulkAcceptDriftEvents = async function(eventIds) {
+    try {
+        const result = await api.bulkAcceptDriftEvents(eventIds);
+        showSuccess(`${result.accepted} drift event(s) accepted — baselines updated`);
+        invalidatePageCache('configuration');
+        await loadConfigDrift({ preserveContent: false });
+    } catch (err) {
+        showError('Bulk accept failed: ' + err.message);
+    }
+};
+
+window.bulkResolveDriftEvents = async function(eventIds) {
+    try {
+        let resolved = 0;
+        for (const id of eventIds) {
+            await api.updateConfigDriftEventStatus(id, 'resolved');
+            resolved++;
+        }
+        showSuccess(`${resolved} drift event(s) resolved`);
+        invalidatePageCache('configuration');
+        await loadConfigDrift({ preserveContent: false });
+    } catch (err) {
+        showError('Bulk resolve failed: ' + err.message);
     }
 };
 

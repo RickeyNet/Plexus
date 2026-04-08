@@ -544,7 +544,7 @@
 /* Sandstone: use desert painting as background, hide orbs/stars */
 [data-theme="sandstone"] .animated-bg {
     background:
-        linear-gradient(rgba(194, 178, 148, 0.55), rgba(194, 178, 148, 0.55)),
+        linear-gradient(rgba(194, 178, 148, 0.72), rgba(194, 178, 148, 0.72)),
         url('../img/sandstone-bg.webp') center/cover no-repeat fixed;
 }
 

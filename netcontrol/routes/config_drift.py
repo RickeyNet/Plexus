@@ -88,6 +88,10 @@ class ConfigDriftCheckRequest(BaseModel):
     credential_id: int
 
 
+class ConfigDriftBulkAcceptRequest(BaseModel):
+    event_ids: list[int]
+
+
 class ConfigDriftRevertRequest(BaseModel):
     event_id: int
     credential_id: int
@@ -809,6 +813,41 @@ async def list_config_drift_events(
 ):
     """List drift events with optional filters."""
     return await db.get_config_drift_events(status=status, host_id=host_id, limit=limit)
+
+
+@router.post("/api/config-drift/events/bulk-accept")
+async def bulk_accept_drift_events(body: ConfigDriftBulkAcceptRequest, request: Request):
+    """Accept multiple drift events at once, updating baselines for each."""
+    if not body.event_ids:
+        raise HTTPException(status_code=400, detail="event_ids required")
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    accepted = 0
+    for event_id in body.event_ids:
+        event = await db.get_config_drift_event(event_id)
+        if not event or event.get("status") != "open":
+            continue
+        await db.update_config_drift_event_status(event_id, "accepted", resolved_by=user)
+        if event.get("snapshot_id"):
+            snapshot = await db.get_config_snapshot(event["snapshot_id"])
+            if snapshot and snapshot.get("config_text"):
+                host = await db.get_host(event["host_id"])
+                hostname = host["hostname"] if host else f"host-{event['host_id']}"
+                await db.create_config_baseline(
+                    host_id=event["host_id"],
+                    name=f"{hostname} baseline",
+                    config_text=snapshot["config_text"],
+                    source="accepted-drift",
+                    created_by=user,
+                )
+        accepted += 1
+    await _audit(
+        "config-drift", "drift.bulk_accepted",
+        user=user,
+        detail=f"count={accepted} ids={body.event_ids[:20]}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "accepted": accepted}
 
 
 @router.get("/api/config-drift/events/{event_id}")

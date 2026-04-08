@@ -3208,7 +3208,7 @@ async def get_config_drift_events(
         params.append(limit)
         cursor = await db.execute(
             f"""SELECT e.id, e.host_id, e.snapshot_id, e.baseline_id,
-                       e.status, e.diff_lines_added, e.diff_lines_removed,
+                       e.status, e.diff_text, e.diff_lines_added, e.diff_lines_removed,
                        e.detected_at, e.resolved_at, e.resolved_by,
                        h.hostname, h.ip_address, h.device_type
                 FROM config_drift_events e

@@ -267,14 +267,26 @@ async def _sync_group_hosts(
         is_fallback_name = new_hostname.startswith("snmp-") or new_hostname.startswith("host-")
         effective_hostname = existing.get("hostname") if is_fallback_name else new_hostname
 
+        # Don't downgrade device_type from a specific type (e.g. "cisco_xe")
+        # to "unknown" when SNMP is temporarily unreachable and the SSH
+        # fallback can't determine the platform precisely.
+        new_device_type = discovered["device_type"]
+        existing_device_type = existing.get("device_type", "unknown")
+        if new_device_type == "unknown" and existing_device_type != "unknown":
+            new_device_type = existing_device_type
+
         if (
             existing.get("hostname") != effective_hostname
-            or existing.get("device_type") != discovered["device_type"]
+            or existing.get("device_type") != new_device_type
         ):
-            await db.update_host(existing["id"], effective_hostname, discovered["ip_address"], discovered["device_type"])
+            await db.update_host(existing["id"], effective_hostname, discovered["ip_address"], new_device_type)
             updated += 1
+        # Don't blank out model/version with empty values — only update
+        # when discovery actually returned data (e.g. via SNMP sysDescr).
         if model or sw_version:
-            await db.update_host_device_info(existing["id"], model, sw_version)
+            effective_model = model or existing.get("model", "")
+            effective_sw = sw_version or existing.get("software_version", "")
+            await db.update_host_device_info(existing["id"], effective_model, effective_sw)
         await db.update_host_status(existing["id"], discovered["status"])
 
     if remove_absent:
@@ -413,12 +425,27 @@ async def admin_list_snmp_profiles():
     return list(state.SNMP_PROFILES.values())
 
 
+async def _validate_snmp_profile_secrets(profile: dict):
+    """Check that any {{secret.NAME}} references in v3 passwords exist."""
+    from routes.secret_resolver import has_secret_references, extract_secret_names
+    v3 = profile.get("v3", {})
+    for field_name in ("auth_password", "priv_password"):
+        value = v3.get(field_name, "")
+        if has_secret_references(value):
+            names = extract_secret_names([value])
+            for name in names:
+                row = await db.get_secret_variable_by_name(name)
+                if row is None:
+                    raise HTTPException(400, f"Secret variable '{name}' not found. Create it in Credentials \u2192 Secret Variables first.")
+
+
 @admin_router.post("/api/admin/snmp-profiles")
 async def admin_create_snmp_profile(body: dict):
     profile_id = str(uuid.uuid4())
     profile = state._sanitize_snmp_profile(profile_id, body)
     if not profile["name"]:
         raise HTTPException(400, "Profile name is required")
+    await _validate_snmp_profile_secrets(profile)
     state.SNMP_PROFILES[profile_id] = profile
     await db.set_auth_setting("snmp_profiles", state.SNMP_PROFILES)
     return profile
@@ -431,6 +458,7 @@ async def admin_update_snmp_profile(profile_id: str, body: dict):
     profile = state._sanitize_snmp_profile(profile_id, body)
     if not profile["name"]:
         raise HTTPException(400, "Profile name is required")
+    await _validate_snmp_profile_secrets(profile)
     state.SNMP_PROFILES[profile_id] = profile
     await db.set_auth_setting("snmp_profiles", state.SNMP_PROFILES)
     return profile
