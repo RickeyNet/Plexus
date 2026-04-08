@@ -45,14 +45,16 @@ ws_router = APIRouter()  # WebSocket routes — registered without HTTP auth dep
 
 _require_auth = None
 _require_feature = None
+_require_admin = None
 _verify_session_token = None
 _get_user_features = None
 
 
-def init_jobs(require_auth_fn, require_feature_fn, verify_session_token_fn, get_user_features_fn):
-    global _require_auth, _require_feature, _verify_session_token, _get_user_features
+def init_jobs(require_auth_fn, require_feature_fn, verify_session_token_fn, get_user_features_fn, require_admin_fn=None):
+    global _require_auth, _require_feature, _require_admin, _verify_session_token, _get_user_features
     _require_auth = require_auth_fn
     _require_feature = require_feature_fn
+    _require_admin = require_admin_fn
     _verify_session_token = verify_session_token_fn
     _get_user_features = get_user_features_fn
 
@@ -517,6 +519,10 @@ async def launch_job(body: JobLaunch, request: Request):
     playbook = await db.get_playbook(body.playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
+
+    # Ansible playbooks can execute arbitrary code — restrict to admin only
+    if playbook.get("type") == "ansible" and _require_admin:
+        await _require_admin(request)
 
     # Get hosts - from selected host_ids, ad-hoc IPs, or inventory_group_id
     hosts = []

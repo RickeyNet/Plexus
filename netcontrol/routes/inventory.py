@@ -32,6 +32,29 @@ LOGGER = configure_logging("plexus.inventory")
 router = APIRouter()
 admin_router = APIRouter()
 
+# Reserved IP ranges that should not be added to inventory (mirrors jobs.py)
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),        # loopback
+    ipaddress.ip_network("::1/128"),             # IPv6 loopback
+    ipaddress.ip_network("169.254.0.0/16"),      # link-local
+    ipaddress.ip_network("fe80::/10"),           # IPv6 link-local
+    ipaddress.ip_network("0.0.0.0/8"),           # "this" network
+    ipaddress.ip_network("224.0.0.0/4"),         # multicast
+    ipaddress.ip_network("255.255.255.255/32"),  # broadcast
+]
+
+
+def _validate_host_ip(ip_str: str) -> str:
+    """Validate that a host IP is a valid unicast address not in reserved ranges."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        raise HTTPException(400, f"Invalid IP address: {ip_str}")
+    for net in _BLOCKED_NETWORKS:
+        if addr in net:
+            raise HTTPException(400, f"IP address {ip_str} is in a reserved range and cannot be added to inventory")
+    return ip_str
+
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
 
@@ -249,6 +272,7 @@ async def _sync_group_hosts(
         model = discovered.get("model", "")
         sw_version = discovered.get("software_version", "")
         if existing is None:
+            _validate_host_ip(discovered["ip_address"])
             new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
             await db.update_host_status(new_id, discovered["status"])
             if model or sw_version:
@@ -590,6 +614,7 @@ async def list_hosts(group_id: int):
 
 @router.post("/api/inventory/{group_id}/hosts", status_code=201)
 async def add_host(group_id: int, body: HostCreate):
+    _validate_host_ip(body.ip_address)
     hid = await db.add_host(group_id, body.hostname, body.ip_address, body.device_type)
     # Auto-apply graph templates to manually added host
     try:
@@ -601,6 +626,8 @@ async def add_host(group_id: int, body: HostCreate):
 
 @router.put("/api/hosts/{host_id}")
 async def update_host(host_id: int, body: HostUpdate):
+    if body.ip_address:
+        _validate_host_ip(body.ip_address)
     await db.update_host(host_id, body.hostname, body.ip_address, body.device_type)
     return {"ok": True}
 

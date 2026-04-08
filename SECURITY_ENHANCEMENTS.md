@@ -64,10 +64,10 @@
 - [x] **CSRF protection** — Signed, time-limited, user-bound tokens on all state-changing cookie-auth requests.
 - [x] **Password hashing** — PBKDF2-SHA256 with 600k iterations and random salt.
 - [x] **SQL queries** — All *values* use parameterized `?` placeholders. Column/table names in dynamic `UPDATE SET` clauses are hardcoded Python strings (not user-controlled). Verified across `database.py`.
-- [ ] **Playbook execution** — Python playbooks require server-side registered classes (cannot inject arbitrary code via API). Ansible playbooks run user YAML by design — currently gated by `jobs` feature which non-admins may have; should be restricted to admin role only.
+- [x] **Playbook execution** — Python playbooks require server-side registered classes (cannot inject arbitrary code via API). Ansible playbook execution restricted to admin role only (`jobs.py:launch_job` calls `require_admin` for ansible type).
 
 ### Remaining risks (accepted or deferred)
 
-- [ ] **SSRF via SNMP/Netmiko** — Authenticated users can target arbitrary IPs for discovery/jobs/upgrades. Ad-hoc IPs are validated against reserved ranges, but inventory hosts are not restricted. Mitigation: feature-gated access, audit logging. Full fix would require an IP allowlist.
-- [ ] **Ansible playbook RCE** — Admin users can execute arbitrary Ansible YAML. This is by design but should be restricted to admin role only (currently gated by `jobs` feature which non-admins may have).
-- [ ] **Dependency CVEs** — `pip-audit` and `bandit` are in CI (`requirements-dev.txt`). Consider adding `safety` or Snyk for broader CVE coverage. Run `pip-audit` locally before releases.
+- [x] **SSRF via SNMP/Netmiko** — Authenticated users can target arbitrary IPs for discovery/jobs/upgrades. Ad-hoc IPs validated against reserved ranges. Inventory hosts now also validated against reserved ranges on add/update/discovery (`inventory.py:_validate_host_ip`). Full IP allowlist remains deferred.
+- [x] **Ansible playbook RCE** — Admin users can execute arbitrary Ansible YAML. This is by design and now enforced: `launch_job` requires admin role for ansible-type playbooks.
+- [x] **Dependency CVEs** — `pip-audit`, `bandit`, and `safety` all run in CI (`requirements-dev.txt`). Three complementary vulnerability databases now covered. Run `pip-audit` and `safety scan` locally before releases.
