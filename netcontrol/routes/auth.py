@@ -747,6 +747,8 @@ async def change_password(body: ChangePasswordRequest, request: Request):
     user = await _verify_user_fn(session["user"], body.current_password)
     if not user:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if body.new_password == body.current_password:
+        raise HTTPException(status_code=400, detail="New password must be different from your current password")
     salt = secrets.token_hex(16)
     pw_hash = _hash_password_fn(body.new_password, salt)
     await db.update_user_password(user["id"], pw_hash, salt)

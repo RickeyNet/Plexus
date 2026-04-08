@@ -58,16 +58,16 @@
 
 ### Verified secure (no action needed)
 
-- **Fernet encryption** — Uses AES-128-CBC + HMAC-SHA256 (encrypt-then-MAC) with random IV per message. No IV reuse, no ECB.
-- **Session tokens** — `itsdangerous.URLSafeTimedSerializer` uses HMAC-SHA1 with `hmac.compare_digest()` internally (timing-safe). 24h expiry enforced.
-- **API token comparison** — Uses `secrets.compare_digest()` (constant-time).
-- **CSRF protection** — Signed, time-limited, user-bound tokens on all state-changing cookie-auth requests.
-- **Password hashing** — PBKDF2-SHA256 with 600k iterations and random salt.
-- **SQL queries** — All use parameterized `?` placeholders (verified across database.py).
-- **Playbook execution** — Python playbooks require server-side registered classes (cannot inject arbitrary code via API). Ansible playbooks run user YAML by design (documented risk for admin-only users).
+- [x] **Encryption** — AES-256-GCM (`AESGCM`) with random 96-bit nonce per message (`routes/crypto.py:118-131`). Legacy Fernet-encrypted values (AES-128-CBC + HMAC-SHA256) are transparently decrypted on read for backward compatibility.
+- [x] **Session tokens** — `itsdangerous.URLSafeTimedSerializer` uses HMAC-SHA1 with `hmac.compare_digest()` internally (timing-safe). 24h expiry enforced.
+- [x] **API token comparison** — Uses `secrets.compare_digest()` (constant-time).
+- [x] **CSRF protection** — Signed, time-limited, user-bound tokens on all state-changing cookie-auth requests.
+- [x] **Password hashing** — PBKDF2-SHA256 with 600k iterations and random salt.
+- [x] **SQL queries** — All *values* use parameterized `?` placeholders. Column/table names in dynamic `UPDATE SET` clauses are hardcoded Python strings (not user-controlled). Verified across `database.py`.
+- [ ] **Playbook execution** — Python playbooks require server-side registered classes (cannot inject arbitrary code via API). Ansible playbooks run user YAML by design — currently gated by `jobs` feature which non-admins may have; should be restricted to admin role only.
 
 ### Remaining risks (accepted or deferred)
 
-- **SSRF via SNMP/Netmiko** — Authenticated users can target arbitrary IPs for discovery/jobs/upgrades. Ad-hoc IPs are validated against reserved ranges, but inventory hosts are not restricted. Mitigation: feature-gated access, audit logging. Full fix would require an IP allowlist.
-- **Ansible playbook RCE** — Admin users can execute arbitrary Ansible YAML. This is by design but should be restricted to admin role only (currently gated by `jobs` feature which non-admins may have).
-- **Dependency CVEs** — `pip-audit` and `bandit` are in CI (`requirements-dev.txt`). Consider adding `safety` or Snyk for broader CVE coverage. Run `pip-audit` locally before releases.
+- [ ] **SSRF via SNMP/Netmiko** — Authenticated users can target arbitrary IPs for discovery/jobs/upgrades. Ad-hoc IPs are validated against reserved ranges, but inventory hosts are not restricted. Mitigation: feature-gated access, audit logging. Full fix would require an IP allowlist.
+- [ ] **Ansible playbook RCE** — Admin users can execute arbitrary Ansible YAML. This is by design but should be restricted to admin role only (currently gated by `jobs` feature which non-admins may have).
+- [ ] **Dependency CVEs** — `pip-audit` and `bandit` are in CI (`requirements-dev.txt`). Consider adding `safety` or Snyk for broader CVE coverage. Run `pip-audit` locally before releases.
