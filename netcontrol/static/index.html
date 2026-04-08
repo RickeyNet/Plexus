@@ -196,9 +196,7 @@
             <!-- Breadcrumb / Page Title Bar -->
             <div class="breadcrumb-bar" id="breadcrumb-bar">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                <a class="breadcrumb-home" onclick="navigateToPage('dashboard')">Home</a>
-                <span class="breadcrumb-sep">/</span>
-                <a class="breadcrumb-current" id="breadcrumb-current" onclick="breadcrumbCurrentClick()" style="cursor:pointer;">Dashboard</a>
+                <span id="breadcrumb-trail"></span>
             </div>
 
             <!-- Global Time Range Selector -->
@@ -1565,6 +1563,51 @@
                         </div>
                         <div>
                             <button type="submit" class="btn btn-primary">Save Auth Configuration</button>
+                        </div>
+                    </form>
+                </div>
+                <div class="section">
+                    <h3>Monitoring</h3>
+                    <p style="color: var(--text-muted); margin-bottom: 0.75rem; font-size: 0.85rem;">
+                        Periodically poll devices via SNMP/SSH to collect CPU, memory, response time, packet loss, and interface metrics.
+                    </p>
+                    <form id="admin-monitoring-form" style="display: grid; grid-template-columns: auto 1fr; gap: 0.75rem 1rem; max-width: 520px; align-items: center;">
+                        <label class="form-label" style="margin:0;">Enabled</label>
+                        <label><input type="checkbox" id="mon-enabled"> Enable monitoring polling</label>
+
+                        <label class="form-label" for="mon-interval" style="margin:0;">Poll Interval (seconds)</label>
+                        <input type="number" id="mon-interval" class="form-input" min="60" max="86400" step="60" value="300">
+
+                        <label class="form-label" for="mon-retention" style="margin:0;">Retention (days)</label>
+                        <input type="number" id="mon-retention" class="form-input" min="1" max="365" value="30">
+
+                        <label class="form-label" for="mon-cpu-threshold" style="margin:0;">CPU Threshold (%)</label>
+                        <input type="number" id="mon-cpu-threshold" class="form-input" min="1" max="100" value="90">
+
+                        <label class="form-label" for="mon-mem-threshold" style="margin:0;">Memory Threshold (%)</label>
+                        <input type="number" id="mon-mem-threshold" class="form-input" min="1" max="100" value="90">
+
+                        <label class="form-label" style="margin:0;">Collection</label>
+                        <div style="display: grid; gap: 0.4rem;">
+                            <label><input type="checkbox" id="mon-collect-routes" checked> Collect routes</label>
+                            <label><input type="checkbox" id="mon-collect-vpn" checked> Collect VPN tunnels</label>
+                        </div>
+
+                        <label class="form-label" style="margin:0;">Escalation</label>
+                        <label><input type="checkbox" id="mon-escalation-enabled" checked> Enable alert escalation</label>
+
+                        <label class="form-label" for="mon-escalation-after" style="margin:0;">Escalate After (minutes)</label>
+                        <input type="number" id="mon-escalation-after" class="form-input" min="1" max="1440" value="30">
+
+                        <label class="form-label" for="mon-escalation-check" style="margin:0;">Escalation Check Interval (s)</label>
+                        <input type="number" id="mon-escalation-check" class="form-input" min="10" max="3600" value="60">
+
+                        <label class="form-label" for="mon-cooldown" style="margin:0;">Alert Cooldown (minutes)</label>
+                        <input type="number" id="mon-cooldown" class="form-input" min="1" max="1440" value="15">
+
+                        <div style="grid-column: 1 / -1; display:flex; gap:0.5rem;">
+                            <button type="submit" class="btn btn-primary">Save</button>
+                            <button type="button" class="btn btn-secondary" id="mon-poll-now-btn" onclick="runMonitoringPollNow()">Poll Now</button>
                         </div>
                     </form>
                 </div>
