@@ -1901,6 +1901,22 @@ const PAGE_LABELS = {
     'mac-tracking': 'MAC/ARP Tracking',
     'traffic-analysis': 'Traffic Analysis',
     settings: 'Admin Settings',
+    upgrades: 'Upgrades',
+};
+
+// Parent page for breadcrumb trail. Pages not listed here are top-level (parent = dashboard).
+const PAGE_PARENTS = {
+    'device-detail': 'monitoring',
+    topology: 'dashboard',
+    monitoring: 'dashboard',
+    configuration: 'dashboard',
+    compliance: 'dashboard',
+    'change-management': 'dashboard',
+    reports: 'dashboard',
+    'graph-templates': 'dashboard',
+    'mac-tracking': 'dashboard',
+    'traffic-analysis': 'dashboard',
+    upgrades: 'dashboard',
 };
 
 const PAGE_HELP = {
@@ -2006,14 +2022,39 @@ function renderPageHelp(page) {
 }
 
 function updateBreadcrumb(page) {
-    const el = document.getElementById('breadcrumb-current');
-    if (el) el.textContent = PAGE_LABELS[page] || page;
-}
+    const trail = document.getElementById('breadcrumb-trail');
+    if (!trail) return;
 
-function breadcrumbCurrentClick() {
-    navigateToPage(currentPage || 'dashboard');
+    // Build the chain from current page up to dashboard
+    const chain = [];
+    let p = page;
+    while (p && p !== 'dashboard') {
+        chain.unshift(p);
+        p = PAGE_PARENTS[p] || null;
+    }
+
+    // Always start with Home → Dashboard
+    let html = '<a class="breadcrumb-home" onclick="navigateToPage(\'dashboard\')">Home</a>';
+
+    if (chain.length === 0) {
+        // We're on the dashboard itself
+        html += '<span class="breadcrumb-sep">/</span>';
+        html += '<span class="breadcrumb-current">Dashboard</span>';
+    } else {
+        // Render intermediate pages as clickable links, last one as current
+        for (let i = 0; i < chain.length; i++) {
+            html += '<span class="breadcrumb-sep">/</span>';
+            const label = PAGE_LABELS[chain[i]] || chain[i];
+            if (i < chain.length - 1) {
+                html += `<a class="breadcrumb-link" onclick="navigateToPage('${chain[i]}')">${label}</a>`;
+            } else {
+                html += `<span class="breadcrumb-current">${label}</span>`;
+            }
+        }
+    }
+
+    trail.innerHTML = html;
 }
-window.breadcrumbCurrentClick = breadcrumbCurrentClick;
 
 async function loadPageData(page, options = {}) {
     const { force = false } = options;
@@ -5085,9 +5126,11 @@ async function loadAdminSettings(_options = {}) {
         bindLoginRulesForm();
         bindAuthConfigForm();
         bindTopologyDiscoveryForm();
+        bindMonitoringForm();
         renderLoginRules();
         renderAuthConfig();
         loadTopologyDiscoveryConfig();
+        loadMonitoringConfig();
         initThemeControls();
     } catch (error) {
         const usersContainer = document.getElementById('admin-users-list');
@@ -5140,6 +5183,71 @@ async function runTopologyDiscoveryNow() {
 }
 
 window.runTopologyDiscoveryNow = runTopologyDiscoveryNow;
+
+// ── Monitoring Config ──
+
+async function loadMonitoringConfig() {
+    try {
+        const cfg = await api.getMonitoringConfig();
+        document.getElementById('mon-enabled').checked = !!cfg.enabled;
+        document.getElementById('mon-interval').value = cfg.interval_seconds || 300;
+        document.getElementById('mon-retention').value = cfg.retention_days || 30;
+        document.getElementById('mon-cpu-threshold').value = cfg.cpu_threshold || 90;
+        document.getElementById('mon-mem-threshold').value = cfg.memory_threshold || 90;
+        document.getElementById('mon-collect-routes').checked = cfg.collect_routes !== false;
+        document.getElementById('mon-collect-vpn').checked = cfg.collect_vpn !== false;
+        document.getElementById('mon-escalation-enabled').checked = cfg.escalation_enabled !== false;
+        document.getElementById('mon-escalation-after').value = cfg.escalation_after_minutes || 30;
+        document.getElementById('mon-escalation-check').value = cfg.escalation_check_interval || 60;
+        document.getElementById('mon-cooldown').value = cfg.default_cooldown_minutes || 15;
+    } catch { /* not admin or feature unavailable */ }
+}
+
+function bindMonitoringForm() {
+    const form = document.getElementById('admin-monitoring-form');
+    if (!form || form._bound) return;
+    form._bound = true;
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+            const payload = {
+                enabled: document.getElementById('mon-enabled').checked,
+                interval_seconds: parseInt(document.getElementById('mon-interval').value) || 300,
+                retention_days: parseInt(document.getElementById('mon-retention').value) || 30,
+                cpu_threshold: parseInt(document.getElementById('mon-cpu-threshold').value) || 90,
+                memory_threshold: parseInt(document.getElementById('mon-mem-threshold').value) || 90,
+                collect_routes: document.getElementById('mon-collect-routes').checked,
+                collect_vpn: document.getElementById('mon-collect-vpn').checked,
+                escalation_enabled: document.getElementById('mon-escalation-enabled').checked,
+                escalation_after_minutes: parseInt(document.getElementById('mon-escalation-after').value) || 30,
+                escalation_check_interval: parseInt(document.getElementById('mon-escalation-check').value) || 60,
+                default_cooldown_minutes: parseInt(document.getElementById('mon-cooldown').value) || 15,
+            };
+            await api.updateMonitoringConfig(payload);
+            showToast('Monitoring configuration saved', 'success');
+        } catch (err) {
+            showError('Failed to save monitoring config: ' + err.message);
+        }
+    });
+}
+
+async function runMonitoringPollNow() {
+    try {
+        const btn = document.getElementById('mon-poll-now-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Polling...'; }
+        showToast('Running monitoring poll...', 'info');
+        const resp = await api.runMonitoringPollNow();
+        showToast(`Monitoring poll complete: ${resp.hosts_polled || 0} hosts, ${resp.alerts_created || 0} alerts, ${resp.errors || 0} errors`,
+            (resp.errors > 0) ? 'warning' : 'success');
+    } catch (err) {
+        showError('Monitoring poll failed: ' + err.message);
+    } finally {
+        const btn = document.getElementById('mon-poll-now-btn');
+        if (btn) { btn.disabled = false; btn.textContent = 'Poll Now'; }
+    }
+}
+
+window.runMonitoringPollNow = runMonitoringPollNow;
 
 window.showCreateAdminUserModal = function() {
     showModal('Create User Account', `
