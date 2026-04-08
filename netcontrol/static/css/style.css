@@ -166,53 +166,6 @@
     --topo-dim-edge-hi: rgba(50, 80, 50, 0.3);
 }
 
-[data-theme="dark"] {
-    --primary: #5fa8f0;
-    --primary-dark: #2f74c0;
-    --primary-light: #8ec5ff;
-    --secondary: #9aa4b5;
-    --success: #6ccf9d;
-    --warning: #f0b76a;
-    --danger: #ff6b6b;
-    --bg: #0b1021;
-    --bg-secondary: #11182b;
-    --bg-dark: #070b14;
-    --card-bg: #151e2f;
-    --card-bg-hover: #1b2740;
-    --text: #dbe4ff;
-    --text-light: #b8ccff;
-    --text-muted: #8fa0c2;
-    --border: #22304a;
-    --border-light: #2e4261;
-    --primary-soft: rgba(95, 168, 240, 0.15);
-    --primary-soft-strong: rgba(95, 168, 240, 0.25);
-    --primary-glow: rgba(95, 168, 240, 0.2);
-    --overlay: rgba(7, 12, 24, 0.8);
-    --topo-accent-rgb: 95, 168, 240;
-
-    --topo-cisco-bg: #0d3560;       --topo-cisco-border: #5fa8f0;
-    --topo-cisco-hi-bg: #154580;    --topo-cisco-hi-border: #8ec5ff;
-    --topo-juniper-bg: #0d4020;     --topo-juniper-border: #6ccf9d;
-    --topo-juniper-hi-bg: #1a5030;  --topo-juniper-hi-border: #a5e6c0;
-    --topo-arista-bg: #5a3200;      --topo-arista-border: #f0b76a;
-    --topo-arista-hi-bg: #6b4000;   --topo-arista-hi-border: #f8d4a0;
-    --topo-fortinet-bg: #5a1520;    --topo-fortinet-border: #ff6b6b;
-    --topo-fortinet-hi-bg: #6b2030; --topo-fortinet-hi-border: #ff9a9a;
-    --topo-unknown-bg: #151e2f;     --topo-unknown-border: #5a7a9a;
-    --topo-unknown-hi-bg: #1b2740;  --topo-unknown-hi-border: #8aaac5;
-
-    --topo-edge-cdp: #5fa8f0;       --topo-edge-cdp-hi: #8ec5ff;
-    --topo-edge-lldp: #6ccf9d;      --topo-edge-lldp-hi: #a5e6c0;
-    --topo-edge-ospf: #f0b76a;      --topo-edge-ospf-hi: #f8d4a0;
-    --topo-edge-bgp: #c48ef0;       --topo-edge-bgp-hi: #dab8f8;
-
-    --topo-path-glow: rgba(95, 168, 240, 0.6);
-    --topo-dim-bg: rgba(11, 16, 33, 0.4);
-    --topo-dim-border: rgba(22, 30, 50, 0.4);
-    --topo-dim-edge: rgba(50, 60, 90, 0.2);
-    --topo-dim-edge-hi: rgba(50, 60, 90, 0.3);
-}
-
 [data-theme="dark-modern"] {
     --primary: #4ea1ff;
     --primary-dark: #2d7dd2;
@@ -305,6 +258,24 @@
     --topo-dim-border: rgba(24, 38, 65, 0.42);
     --topo-dim-edge: rgba(65, 90, 130, 0.22);
     --topo-dim-edge-hi: rgba(75, 105, 145, 0.34);
+}
+
+/* Astral: use space-scene image instead of floating orbs */
+[data-theme="astral"] .animated-bg {
+    background: url('../img/space-scene.avif') center/cover no-repeat fixed;
+}
+
+[data-theme="astral"] .app-container {
+    background: url('../img/space-scene.avif') center/cover no-repeat fixed;
+}
+
+[data-theme="astral"] .gradient-orb {
+    display: none;
+}
+
+[data-theme="astral"] .login-screen::before,
+[data-theme="astral"] .login-screen::after {
+    display: none;
 }
 
 [data-theme="astral"] .nav-brand-text {
@@ -741,15 +712,6 @@
     --space-nebula-c: rgba(70, 120, 190, 0.10);
     --space-star-far-rgb: 125, 175, 145;
     --space-star-near-rgb: 215, 240, 225;
-}
-
-[data-theme="dark"] {
-    --space-bg-1: #040914;
-    --space-bg-2: #0b1428;
-    --space-bg-3: #141335;
-    --space-nebula-a: rgba(88, 142, 240, 0.20);
-    --space-nebula-b: rgba(125, 104, 240, 0.14);
-    --space-nebula-c: rgba(62, 205, 250, 0.12);
 }
 
 [data-theme="dark-modern"] {
