@@ -1142,7 +1142,7 @@ async def dashboard():
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Initialize late-binding dependencies for modules that need them
-init_jobs(require_auth, require_feature, verify_session_token, _get_user_features)
+init_jobs(require_auth, require_feature, verify_session_token, _get_user_features, require_admin_fn=require_admin)
 init_config_drift(require_auth, require_feature, require_admin, verify_session_token, _get_user_features)
 init_config_backups(require_auth, require_feature, require_admin, verify_session_token, _get_user_features)
 init_compliance(require_auth, require_feature, require_admin)
