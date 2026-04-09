@@ -803,6 +803,13 @@ export async function fullDriftCheck(hostId, credentialId) {
     });
 }
 
+export async function bulkAcceptDriftEvents(eventIds) {
+    return apiRequest('/config-drift/events/bulk-accept', {
+        method: 'POST',
+        body: { event_ids: eventIds },
+    });
+}
+
 export async function deleteConfigSnapshot(snapshotId) {
     return apiRequest(`/config-drift/snapshots/${snapshotId}`, { method: 'DELETE' });
 }

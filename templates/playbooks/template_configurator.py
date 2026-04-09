@@ -143,6 +143,18 @@ class TemplateConfigurator(BasePlaybook):
             prompt = conn.find_prompt().replace("#", "").replace(">", "").strip()
             yield self.log_success(f"Connected to {prompt} ({ip})", host=hostname)
 
+            # If the template contains snmp-server commands, pin the SNMP
+            # engine ID first.  Cisco IOS regenerates the engine ID when
+            # certain snmp-server lines are added, which invalidates all
+            # SNMPv3 localized keys and breaks monitoring.
+            has_snmp_cmds = any(
+                cmd.strip().lower().startswith("snmp-server")
+                for cmd in template_commands
+            )
+            if has_snmp_cmds and not dry_run:
+                async for ev in self._pin_snmp_engine_id(conn, hostname):
+                    yield ev
+
             if dry_run:
                 yield self.log_info("[DRY-RUN] Would apply the following commands:", host=hostname)
                 for cmd in template_commands:
@@ -169,6 +181,46 @@ class TemplateConfigurator(BasePlaybook):
             )
         finally:
             conn.disconnect()
+
+    # ── SNMP engine ID preservation ─────────────────────────────────────
+
+    async def _pin_snmp_engine_id(self, conn, hostname: str) -> AsyncGenerator[LogEvent, None]:
+        """Read the current SNMP engine ID and pin it with an explicit config.
+
+        Cisco IOS regenerates the engine ID when certain snmp-server
+        commands are added/removed.  This invalidates all SNMPv3 user
+        keys (they are localized to the engine ID).  By setting
+        ``snmp-server engineID local <id>`` before applying SNMP
+        changes, the engine ID is pinned and keys remain valid.
+        """
+        import re
+
+        try:
+            output = await asyncio.to_thread(
+                conn.send_command, "show snmp engineID"
+            )
+            # Typical output: "Local SNMP engineID: 80000009030050568D9CDFC0"
+            match = re.search(r"[Ll]ocal\s+.*[Ee]ngine\s*ID[:\s]+([0-9A-Fa-f]+)", output)
+            if not match:
+                yield self.log_info(
+                    "Could not detect SNMP engine ID — skipping pin.",
+                    host=hostname,
+                )
+                return
+            engine_id = match.group(1).strip()
+            yield self.log_info(
+                f"Pinning SNMP engine ID ({engine_id}) to prevent SNMPv3 key invalidation.",
+                host=hostname,
+            )
+            await asyncio.to_thread(
+                conn.send_config_set,
+                [f"snmp-server engineID local {engine_id}"],
+            )
+        except Exception as exc:
+            yield self.log_warn(
+                f"Could not pin SNMP engine ID: {exc}",
+                host=hostname,
+            )
 
     # ── Simulation mode for dev/testing ───────────────────────────────────
 
