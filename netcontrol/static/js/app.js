@@ -8968,7 +8968,7 @@ function switchComplianceTab(tab) {
     tabs.forEach(t => {
         const btn = document.getElementById(`compliance-tab-${t}`);
         const list = document.getElementById(`compliance-${t}-list`);
-        if (btn) btn.className = t === tab ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-secondary';
+        if (btn) btn.className = t === tab ? 'btn btn-sm btn-secondary compliance-tab-btn active' : 'btn btn-sm btn-secondary compliance-tab-btn';
         if (list) list.style.display = t === tab ? '' : 'none';
     });
 }
@@ -8976,6 +8976,19 @@ window.switchComplianceTab = switchComplianceTab;
 
 function refreshCompliance() { loadCompliance(); }
 window.refreshCompliance = refreshCompliance;
+
+async function loadBuiltinProfiles() {
+    try {
+        const res = await api.loadBuiltinComplianceProfiles();
+        if (res.loaded > 0) {
+            showSuccess(`Loaded ${res.loaded} built-in profile(s).${res.skipped > 0 ? ` ${res.skipped} already existed.` : ''}`);
+        } else {
+            showSuccess(`All ${res.total_available} built-in profiles already loaded.`);
+        }
+        loadCompliance();
+    } catch (e) { showError(e.message); }
+}
+window.loadBuiltinProfiles = loadBuiltinProfiles;
 
 async function showCreateComplianceProfileModal() {
     showModal('Create Compliance Profile', `

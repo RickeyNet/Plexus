@@ -685,6 +685,42 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
     }
 
 
+# ── Load Built-in Compliance Profiles ────────────────────────────────────────
+
+
+@router.post("/api/compliance/profiles/load-builtin")
+async def load_builtin_compliance_profiles(request: Request):
+    """Load all built-in compliance profiles, skipping any that already exist by name."""
+    from routes.builtin_compliance_profiles import BUILTIN_PROFILES
+
+    session = _get_session(request)
+    loaded = 0
+    skipped = 0
+    existing = await db.get_compliance_profiles()
+    existing_names = {p["name"] for p in existing}
+
+    for name, description, severity, rules in BUILTIN_PROFILES:
+        if name in existing_names:
+            skipped += 1
+            continue
+        await db.create_compliance_profile(
+            name=name,
+            description=description,
+            rules=json.dumps(rules),
+            severity=severity,
+            created_by=session["user"] if session else "system",
+        )
+        loaded += 1
+
+    await _audit(
+        "compliance", "profiles.builtin_loaded",
+        user=session["user"] if session else "",
+        detail=f"loaded={loaded} skipped={skipped} total_available={len(BUILTIN_PROFILES)}",
+        correlation_id=_corr_id(request),
+    )
+    return {"loaded": loaded, "skipped": skipped, "total_available": len(BUILTIN_PROFILES)}
+
+
 # ── Admin Compliance Schedule ────────────────────────────────────────────────
 
 
