@@ -260,15 +260,17 @@
     --topo-dim-edge-hi: rgba(75, 105, 145, 0.34);
 }
 
-/* Astral: use space-scene image instead of floating orbs */
+/* Astral: use space-scene image instead of floating orbs.
+   Image lives on .animated-bg (already position:fixed) — avoids
+   background-attachment:fixed which kills GPU compositing on scroll. */
 [data-theme="astral"] .animated-bg {
     background:
         linear-gradient(rgba(4, 7, 16, 0.55), rgba(4, 7, 16, 0.55)),
-        url('../img/space-scene.avif') center/cover no-repeat fixed;
+        url('../img/space-scene.avif') center/cover no-repeat;
 }
 
 [data-theme="astral"] .app-container {
-    background: url('../img/space-scene.avif') center/cover no-repeat fixed;
+    background: transparent;
 }
 
 [data-theme="astral"] .gradient-orb {
@@ -276,9 +278,7 @@
 }
 
 [data-theme="astral"] .login-screen {
-    background:
-        linear-gradient(rgba(4, 7, 16, 0.55), rgba(4, 7, 16, 0.55)),
-        url('../img/space-scene.avif') center/cover no-repeat fixed;
+    background: transparent;
 }
 
 [data-theme="astral"] .login-screen::before,
@@ -299,8 +299,7 @@
 [data-theme="astral"] .nav-brand-text {
     text-shadow:
         0 1px 0 rgba(0, 0, 0, 0.7),
-        0 0 18px rgba(98, 199, 255, 0.35),
-        0 0 34px rgba(186, 145, 255, 0.16);
+        0 0 18px rgba(98, 199, 255, 0.35);
 }
 
 [data-theme="astral"] .stat-ring-fill {
@@ -310,8 +309,7 @@
 [data-theme="astral"] .page h2 {
     text-shadow:
         0 1px 0 rgba(0, 0, 0, 0.65),
-        0 0 24px rgba(98, 199, 255, 0.16),
-        0 0 42px rgba(186, 145, 255, 0.12);
+        0 0 24px rgba(98, 199, 255, 0.16);
 }
 
 [data-theme="void"] {
@@ -541,11 +539,13 @@
 
 /* ─── Sandstone depth & immersion overrides ─── */
 
-/* Sandstone: use desert painting as background, hide orbs/stars */
+/* Sandstone: use desert painting as background, hide orbs/stars.
+   Image lives on .animated-bg (already position:fixed) — avoids
+   background-attachment:fixed which kills GPU compositing on scroll. */
 [data-theme="sandstone"] .animated-bg {
     background:
         linear-gradient(rgba(194, 178, 148, 0.72), rgba(194, 178, 148, 0.72)),
-        url('../img/sandstone-bg.webp') center/cover no-repeat fixed;
+        url('../img/sandstone-bg.webp') center/cover no-repeat;
 }
 
 [data-theme="sandstone"] .gradient-orb {
@@ -568,7 +568,7 @@
 }
 
 [data-theme="sandstone"] .app-container {
-    background: url('../img/sandstone-bg.webp') center/cover no-repeat fixed;
+    background: transparent;
 }
 
 [data-theme="sandstone"] body {
@@ -578,7 +578,7 @@
 }
 
 [data-theme="sandstone"] .login-screen {
-    background: url('../img/sandstone-bg.webp') center/cover no-repeat fixed;
+    background: transparent;
 }
 
 [data-theme="sandstone"] .login-card {
@@ -591,8 +591,8 @@
 [data-theme="sandstone"] .sidebar {
     background:
         linear-gradient(180deg, rgba(112, 59, 59, 0.05) 0%, transparent 40%),
-        rgba(from var(--card-bg) r g b / 0.55);
-    backdrop-filter: blur(24px) saturate(1.4);
+        rgba(from var(--card-bg) r g b / 0.65);
+    backdrop-filter: blur(12px);
     border-right-color: rgba(from var(--border) r g b / 0.6);
     box-shadow:
         4px 0 24px rgba(40, 30, 20, 0.2),
@@ -610,7 +610,6 @@
 [data-theme="sandstone"] .card:hover {
     box-shadow:
         0 8px 24px rgba(40, 30, 20, 0.25),
-        0 2px 8px rgba(112, 59, 59, 0.1),
         inset 0 1px 0 rgba(255, 255, 255, 0.1);
     background: rgba(from var(--card-bg-hover) r g b / 0.6);
 }
@@ -630,7 +629,7 @@
 }
 
 [data-theme="sandstone"] .stat-value {
-    text-shadow: 0 0 10px rgba(112, 59, 59, 0.25), 0 0 4px rgba(112, 59, 59, 0.15);
+    text-shadow: 0 0 8px rgba(112, 59, 59, 0.3);
 }
 
 [data-theme="sandstone"] .page h2 {
@@ -1266,7 +1265,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s;
+    transition: background 0.2s, color 0.2s;
     flex-shrink: 0;
 }
 
@@ -1300,7 +1299,7 @@ body {
     font-size: 0.875rem;
     padding: 0.6rem 0.75rem;
     border-radius: 0.5rem;
-    transition: all 0.2s ease;
+    transition: color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
     white-space: nowrap;
     position: relative;
     letter-spacing: 0.02em;
@@ -1412,7 +1411,7 @@ body {
     font-size: 0.875rem;
     padding: 0.6rem 0.75rem;
     border-radius: 0.5rem;
-    transition: all 0.2s ease;
+    transition: color 0.2s ease, background 0.2s ease;
     white-space: nowrap;
 }
 
@@ -1507,7 +1506,7 @@ body {
     font-size: 0.875rem;
     line-height: 1.5;
     color: var(--text-light, #b0b0b0);
-    transition: all 0.25s ease;
+    transition: background 0.25s ease, border-color 0.25s ease;
 }
 
 .page-help-content {
@@ -1636,9 +1635,9 @@ body {
 }
 
 .stat-card {
-    background: rgba(from var(--card-bg) r g b / 0.45);
-    backdrop-filter: blur(16px) saturate(1.2);
-    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    background: rgba(from var(--card-bg) r g b / 0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     padding: 1.5rem;
     border-radius: 0.75rem;
     box-shadow:
@@ -1651,9 +1650,8 @@ body {
 
 .stat-card:hover {
     box-shadow:
-        0 8px 24px rgba(0, 0, 0, 0.25),
-        0 0 12px var(--primary-glow),
-        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        0 8px 24px rgba(0, 0, 0, 0.2),
+        0 0 10px var(--primary-glow);
 }
 
 .stat-label {
@@ -1688,9 +1686,9 @@ body {
 }
 
 .card {
-    background: rgba(from var(--card-bg) r g b / 0.45);
-    backdrop-filter: blur(16px) saturate(1.2);
-    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    background: rgba(from var(--card-bg) r g b / 0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     border: 1px solid rgba(from var(--border) r g b / 0.5);
     border-top: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 0.75rem;
@@ -1704,9 +1702,8 @@ body {
 
 .card:hover {
     box-shadow:
-        0 12px 32px rgba(0, 0, 0, 0.25),
-        0 0 16px var(--primary-glow),
-        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        0 8px 24px rgba(0, 0, 0, 0.2),
+        0 0 12px var(--primary-glow);
     background: rgba(from var(--card-bg-hover) r g b / 0.55);
     border-color: rgba(from var(--border-light) r g b / 0.6);
 }
@@ -1798,10 +1795,8 @@ body {
     border-radius: 0.375rem;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease, color 0.2s ease;
     font-size: 0.875rem;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
 }
 
 .btn:hover {
@@ -1817,7 +1812,7 @@ body {
     box-shadow:
         0 2px 8px rgba(0, 0, 0, 0.2),
         inset 0 1px 0 rgba(255, 255, 255, 0.15);
-    transition: all 0.25s ease;
+    transition: box-shadow 0.25s ease, transform 0.25s ease, color 0.25s ease;
     position: relative;
     overflow: hidden;
 }
@@ -1834,7 +1829,6 @@ body {
 .btn-primary:hover {
     box-shadow:
         0 4px 16px var(--primary-glow),
-        0 0 24px var(--primary-glow),
         inset 0 1px 0 rgba(255, 255, 255, 0.15);
     transform: translateY(-1px);
     color: var(--bg-dark);
@@ -1866,9 +1860,7 @@ body {
 .btn-danger:hover {
     background: rgba(from var(--danger) r g b / 0.3);
     border-color: rgba(from var(--danger) r g b / 0.6);
-    box-shadow:
-        0 4px 12px rgba(0, 0, 0, 0.15),
-        0 0 16px rgba(from var(--danger) r g b / 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     transform: translateY(-1px);
     color: var(--text);
 }
@@ -1924,7 +1916,7 @@ body {
     font-size: 0.85rem;
     font-weight: 500;
     letter-spacing: 0.02em;
-    transition: all 0.2s ease;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
     white-space: nowrap;
 }
 
@@ -2178,7 +2170,7 @@ input[type="number"].form-input {
     align-items: center;
     justify-content: center;
     border-radius: 0.25rem;
-    transition: all 0.2s;
+    transition: background 0.2s, color 0.2s;
 }
 
 .modal-close:hover {
@@ -2636,7 +2628,7 @@ input[type="number"].form-input {
     font-family: inherit;
     background: transparent;
     color: var(--text);
-    transition: all 0.2s;
+    transition: background 0.2s, border-color 0.2s;
 }
 
 .credential-input:hover {
@@ -3760,7 +3752,7 @@ code {
     padding: 0.25rem 0.5rem;
     border-radius: 6px;
     line-height: 1;
-    transition: all 0.2s;
+    transition: background 0.2s, color 0.2s;
 }
 .topology-details-header .btn-icon:hover {
     background: rgba(var(--topo-accent-rgb), 0.1);
@@ -4375,7 +4367,7 @@ code {
     color: var(--text-muted);
     font-size: 0.8rem;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
     font-family: inherit;
 }
 

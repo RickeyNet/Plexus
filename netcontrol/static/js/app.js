@@ -127,12 +127,16 @@ function initSpaceParallax() {
         const ny = (e.clientY / h) * 2 - 1;
         _spaceFxState.targetX = nx * MAX_SHIFT;
         _spaceFxState.targetY = ny * MAX_SHIFT;
+        ensureParallaxRunning();
     }, { passive: true });
 
     window.addEventListener('mouseleave', () => {
         _spaceFxState.targetX = 0;
         _spaceFxState.targetY = 0;
+        ensureParallaxRunning();
     });
+
+    const SETTLE_THRESHOLD = 0.05;
 
     const tick = () => {
         const canAnimateParallax = _spaceFxState.parallax && !isReducedMotion() && getSpaceIntensityScalar() > 0;
@@ -141,11 +145,30 @@ function initSpaceParallax() {
             _spaceFxState.currentY += (_spaceFxState.targetY - _spaceFxState.currentY) * 0.07;
             document.documentElement.style.setProperty('--space-parallax-x', `${_spaceFxState.currentX.toFixed(3)}px`);
             document.documentElement.style.setProperty('--space-parallax-y', `${_spaceFxState.currentY.toFixed(3)}px`);
+
+            // Stop looping once values have settled to save CPU
+            const dx = Math.abs(_spaceFxState.targetX - _spaceFxState.currentX);
+            const dy = Math.abs(_spaceFxState.targetY - _spaceFxState.currentY);
+            if (dx < SETTLE_THRESHOLD && dy < SETTLE_THRESHOLD) {
+                _spaceFxState.currentX = _spaceFxState.targetX;
+                _spaceFxState.currentY = _spaceFxState.targetY;
+                _spaceFxState.rafId = null;
+                return;
+            }
         } else {
             _resetSpaceParallax();
+            _spaceFxState.rafId = null;
+            return;
         }
         _spaceFxState.rafId = requestAnimationFrame(tick);
     };
+
+    // Helper to kick the loop if it's not already running
+    function ensureParallaxRunning() {
+        if (!_spaceFxState.rafId) {
+            _spaceFxState.rafId = requestAnimationFrame(tick);
+        }
+    }
 
     _spaceFxState.rafId = requestAnimationFrame(tick);
 }
@@ -7372,7 +7395,8 @@ function initSpaceStarfield({ canvasId, hostId, baseCount = 90, linkDistance = 0
     }
 
     function syncRunningState() {
-        const visible = host.style.display !== 'none';
+        // Use getComputedStyle to catch CSS-driven display:none (not just inline style)
+        const visible = getComputedStyle(host).display !== 'none';
         if (visible && !running) {
             running = true;
             resize();
@@ -7389,7 +7413,10 @@ function initSpaceStarfield({ canvasId, hostId, baseCount = 90, linkDistance = 0
     resize();
     updatePalette();
     window.addEventListener('resize', resize);
-    const themeObserver = new MutationObserver(updatePalette);
+    const themeObserver = new MutationObserver(() => {
+        updatePalette();
+        syncRunningState(); // Re-check visibility — theme CSS may show/hide the host
+    });
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
     const visibilityObserver = new MutationObserver(syncRunningState);
@@ -8338,17 +8365,29 @@ function initKeyboardShortcuts() {
 
 function initCardTilt() {
     const MAX_TILT = 6; // degrees
+    let tiltRafPending = false;
+
     document.addEventListener('mousemove', (e) => {
+        if (tiltRafPending) return; // throttle to one update per frame
         if (!e.target || !e.target.closest) return;
         const card = e.target.closest('.card, .stat-card');
         if (!card || isReducedMotion()) return;
-        const rect = card.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / rect.width;
-        const y = (e.clientY - rect.top) / rect.height;
-        const rotateY = (x - 0.5) * MAX_TILT * 2;
-        const rotateX = (0.5 - y) * MAX_TILT * 2;
-        card.style.transform = `perspective(800px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-3px)`;
-    });
+
+        tiltRafPending = true;
+        const clientX = e.clientX;
+        const clientY = e.clientY;
+
+        requestAnimationFrame(() => {
+            tiltRafPending = false;
+            const rect = card.getBoundingClientRect();
+            const x = (clientX - rect.left) / rect.width;
+            const y = (clientY - rect.top) / rect.height;
+            const rotateY = (x - 0.5) * MAX_TILT * 2;
+            const rotateX = (0.5 - y) * MAX_TILT * 2;
+            card.style.transform = `perspective(800px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-3px)`;
+        });
+    }, { passive: true });
+
     document.addEventListener('mouseleave', (e) => {
         if (!e.target || !e.target.closest) return;
         const card = e.target.closest('.card, .stat-card');
@@ -9097,15 +9136,33 @@ window.submitEditComplianceProfile = submitEditComplianceProfile;
 let _assignComplianceProfileId = null;
 async function showAssignComplianceProfileModal(profileId) {
     _assignComplianceProfileId = profileId;
-    let groups = [], creds = [];
+    let groups = [], creds = [], existingAssignments = [];
     try {
-        [groups, creds] = await Promise.all([api.getInventoryGroups(), api.getCredentials()]);
+        [groups, creds, existingAssignments] = await Promise.all([
+            api.getInventoryGroups(),
+            api.getCredentials(),
+            api.getComplianceAssignments(profileId),
+        ]);
     } catch (e) { /* ignore */ }
-    const groupOpts = (groups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const assignedGroupIds = new Set((existingAssignments || []).map(a => a.group_id));
+    const groupCheckboxes = (groups || []).map(g => {
+        const already = assignedGroupIds.has(g.id);
+        return `<label style="display:flex; align-items:center; gap:0.5rem; padding:0.35rem 0; cursor:pointer;">
+            <input type="checkbox" class="ca-group-cb" value="${g.id}" ${already ? 'disabled' : ''} />
+            <span>${escapeHtml(g.name)}</span>
+            ${already ? '<span style="font-size:0.8em; color:var(--text-muted);">(already assigned)</span>' : ''}
+        </label>`;
+    }).join('');
     const credOpts = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
-    showModal('Assign Profile to Group', `
-        <label class="form-label">Inventory Group</label>
-        <select id="ca-group" class="form-select">${groupOpts}</select>
+    showModal('Assign Profile to Groups', `
+        <label class="form-label">Inventory Groups</label>
+        <div style="display:flex; gap:0.5rem; margin-bottom:0.5rem;">
+            <button class="btn btn-sm btn-secondary" onclick="document.querySelectorAll('.ca-group-cb:not(:disabled)').forEach(cb => cb.checked = true)">Select All</button>
+            <button class="btn btn-sm btn-secondary" onclick="document.querySelectorAll('.ca-group-cb:not(:disabled)').forEach(cb => cb.checked = false)">Deselect All</button>
+        </div>
+        <div style="max-height:200px; overflow-y:auto; border:1px solid var(--border-color); border-radius:0.5rem; padding:0.5rem 0.75rem;">
+            ${groupCheckboxes || '<span style="color:var(--text-muted)">No inventory groups found</span>'}
+        </div>
         <label class="form-label" style="margin-top:0.75rem;">Credential</label>
         <select id="ca-cred" class="form-select">${credOpts}</select>
         <label class="form-label" style="margin-top:0.75rem;">Scan Interval (hours)</label>
@@ -9121,21 +9178,33 @@ window.showAssignComplianceProfileModal = showAssignComplianceProfileModal;
 async function submitAssignComplianceProfile() {
     const profileId = _assignComplianceProfileId;
     if (!profileId) return;
-    const groupId = parseInt(document.getElementById('ca-group')?.value);
+    const selectedGroups = [...document.querySelectorAll('.ca-group-cb:checked:not(:disabled)')].map(cb => parseInt(cb.value));
     const credId = parseInt(document.getElementById('ca-cred')?.value);
     const hours = parseInt(document.getElementById('ca-interval')?.value) || 24;
-    if (!groupId || !credId) { showError('Group and credential are required'); return; }
-    try {
-        await api.createComplianceAssignment({
-            profile_id: profileId,
-            group_id: groupId,
-            credential_id: credId,
-            interval_seconds: hours * 3600,
-        });
-        closeAllModals();
-        showSuccess('Profile assigned to group');
-        loadCompliance();
-    } catch (e) { showError(e.message); }
+    if (selectedGroups.length === 0) { showError('Select at least one group'); return; }
+    if (!credId) { showError('Credential is required'); return; }
+    let success = 0;
+    let failed = 0;
+    for (const groupId of selectedGroups) {
+        try {
+            await api.createComplianceAssignment({
+                profile_id: profileId,
+                group_id: groupId,
+                credential_id: credId,
+                interval_seconds: hours * 3600,
+            });
+            success++;
+        } catch (e) {
+            failed++;
+        }
+    }
+    closeAllModals();
+    if (failed === 0) {
+        showSuccess(`Profile assigned to ${success} group(s).`);
+    } else {
+        showError(`Assigned to ${success} group(s), ${failed} failed.`);
+    }
+    loadCompliance();
 }
 window.submitAssignComplianceProfile = submitAssignComplianceProfile;
 
