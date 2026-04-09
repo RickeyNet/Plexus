@@ -7624,7 +7624,6 @@ function renderDriftEventsList(events) {
     const openIds = events.filter(e => e.status === 'open').map(e => e.id);
     const openCount = openIds.length;
     const groups = _groupDriftEvents(events);
-    const hasGroupableEvents = groups.some(g => g.events.length > 1);
 
     // Toolbar: bulk actions + view toggle
     let toolbar = '<div style="margin-bottom:0.75rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;justify-content:space-between">';
@@ -7634,17 +7633,15 @@ function renderDriftEventsList(events) {
         toolbar += `<button class="btn btn-sm btn-secondary" onclick="bulkResolveDriftEvents([${openIds.join(',')}])">Resolve All Open (${openCount})</button>`;
     }
     toolbar += '</div>';
-    if (hasGroupableEvents) {
-        const groupedActive = _driftViewMode === 'grouped' ? 'btn-primary' : 'btn-secondary';
-        const flatActive = _driftViewMode === 'flat' ? 'btn-primary' : 'btn-secondary';
-        toolbar += `<div style="display:flex;gap:0.25rem;align-items:center;">
-            <button class="btn btn-sm ${groupedActive}" onclick="setDriftViewMode('grouped')" title="Group similar changes">Grouped</button>
-            <button class="btn btn-sm ${flatActive}" onclick="setDriftViewMode('flat')" title="Show individual events">Flat</button>
-        </div>`;
-    }
+    const groupedActive = _driftViewMode === 'grouped' ? 'btn-primary' : 'btn-secondary';
+    const flatActive = _driftViewMode === 'flat' ? 'btn-primary' : 'btn-secondary';
+    toolbar += `<div style="display:flex;gap:0.25rem;align-items:center;">
+        <button class="btn btn-sm ${groupedActive}" onclick="setDriftViewMode('grouped')" title="Group similar changes">Grouped</button>
+        <button class="btn btn-sm ${flatActive}" onclick="setDriftViewMode('flat')" title="Show individual events">Flat</button>
+    </div>`;
     toolbar += '</div>';
 
-    if (_driftViewMode === 'grouped' && hasGroupableEvents) {
+    if (_driftViewMode === 'grouped') {
         // Grouped view
         container.innerHTML = toolbar + groups.map((group, gi) => {
             const evs = group.events;
@@ -7658,34 +7655,41 @@ function renderDriftEventsList(events) {
                     <span style="color:${e.status === 'open' ? 'var(--danger)' : e.status === 'accepted' ? 'var(--warning)' : 'var(--success)'};font-size:0.7em;font-weight:600;text-transform:uppercase;">${escapeHtml(e.status)}</span>
                 </span>`
             ).join(' ');
+            const groupTitle = evs.length > 1
+                ? `${evs.length} devices with identical changes`
+                : `${escapeHtml(evs[0].hostname || '')} <span style="color:var(--text-muted);font-weight:400;font-size:0.85rem">${escapeHtml(evs[0].ip_address || '')}</span>`;
 
             return `<div class="card animate-in" style="animation-delay:${Math.min(gi * 0.06, 0.3)}s">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.5rem;">
                     <div>
-                        <div class="card-title" style="font-size:1rem;">${evs.length} device${evs.length > 1 ? 's' : ''} with identical changes</div>
+                        <div class="card-title" style="font-size:1rem;">${groupTitle}</div>
                         <div class="drift-diff-stats" style="margin-top:0.25rem;">
                             <span class="drift-diff-added">+${group.diff_lines_added || 0}</span>
                             <span class="drift-diff-removed">-${group.diff_lines_removed || 0}</span>
                         </div>
                     </div>
                     <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
-                        ${openInGroup.length > 0 ? `
+                        ${openInGroup.length > 1 ? `
                             <button class="btn btn-sm btn-primary" onclick="bulkAcceptDriftEvents([${openInGroup.join(',')}])">Accept Group (${openInGroup.length})</button>
                             <button class="btn btn-sm btn-secondary" onclick="bulkResolveDriftEvents([${openInGroup.join(',')}])">Resolve Group</button>
                         ` : ''}
+                        ${openInGroup.length === 1 ? `
+                            <button class="btn btn-sm btn-primary" onclick="acceptDriftEvent(${openInGroup[0]})">Accept</button>
+                            <button class="btn btn-sm btn-secondary" onclick="resolveDriftEvent(${openInGroup[0]})">Resolve</button>
+                        ` : ''}
                     </div>
                 </div>
-                <div style="margin:0.75rem 0;display:flex;flex-wrap:wrap;gap:0.35rem;">${hostList}</div>
+                ${evs.length > 1 ? `<div style="margin:0.75rem 0;display:flex;flex-wrap:wrap;gap:0.35rem;">${hostList}</div>` : ''}
                 <details class="drift-group-diff" data-representative-id="${group.representative_id}" style="margin-top:0.5rem;">
                     <summary style="cursor:pointer;color:var(--primary);font-size:0.9rem;font-weight:500;user-select:none;">View Diff</summary>
                     <pre class="drift-diff-block" ${hasDiff ? 'data-loaded="1"' : ''} style="margin-top:0.5rem;max-height:400px;overflow:auto;padding:0.75rem;background:var(--bg-primary);border:1px solid var(--border);border-radius:0.375rem;font-size:0.8rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;">${hasDiff ? diffHtml : '<span style="color:var(--text-muted)">Loading...</span>'}</pre>
                 </details>
-                <details style="margin-top:0.35rem;">
+                ${evs.length > 1 ? `<details style="margin-top:0.35rem;">
                     <summary style="cursor:pointer;color:var(--text-muted);font-size:0.85rem;user-select:none;">Show individual devices (${evs.length})</summary>
                     <div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.35rem;">
                         ${evs.map((ev, i) => _renderDriftCard(ev, i)).join('')}
                     </div>
-                </details>
+                </details>` : ''}
             </div>`;
         }).join('');
         // Lazy-load diffs on expand for groups where diff_text was not in the list response
