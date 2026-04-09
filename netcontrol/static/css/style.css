@@ -262,7 +262,9 @@
 
 /* Astral: use space-scene image instead of floating orbs */
 [data-theme="astral"] .animated-bg {
-    background: url('../img/space-scene.avif') center/cover no-repeat fixed;
+    background:
+        linear-gradient(rgba(4, 7, 16, 0.55), rgba(4, 7, 16, 0.55)),
+        url('../img/space-scene.avif') center/cover no-repeat fixed;
 }
 
 [data-theme="astral"] .app-container {
@@ -273,8 +275,24 @@
     display: none;
 }
 
+[data-theme="astral"] .login-screen {
+    background:
+        linear-gradient(rgba(4, 7, 16, 0.55), rgba(4, 7, 16, 0.55)),
+        url('../img/space-scene.avif') center/cover no-repeat fixed;
+}
+
 [data-theme="astral"] .login-screen::before,
 [data-theme="astral"] .login-screen::after {
+    display: none;
+}
+
+[data-theme="astral"] .space-nebula,
+[data-theme="astral"] .space-vignette {
+    display: none;
+}
+
+[data-theme="astral"] .login-particles,
+[data-theme="astral"] .app-particles {
     display: none;
 }
 
@@ -523,6 +541,36 @@
 
 /* ─── Sandstone depth & immersion overrides ─── */
 
+/* Sandstone: use desert painting as background, hide orbs/stars */
+[data-theme="sandstone"] .animated-bg {
+    background:
+        linear-gradient(rgba(194, 178, 148, 0.55), rgba(194, 178, 148, 0.55)),
+        url('../img/sandstone-bg.webp') center/cover no-repeat fixed;
+}
+
+[data-theme="sandstone"] .gradient-orb {
+    display: none;
+}
+
+[data-theme="sandstone"] .login-particles,
+[data-theme="sandstone"] .app-particles {
+    display: none;
+}
+
+[data-theme="sandstone"] .login-screen::before,
+[data-theme="sandstone"] .login-screen::after {
+    display: none;
+}
+
+[data-theme="sandstone"] .space-nebula,
+[data-theme="sandstone"] .space-vignette {
+    display: none;
+}
+
+[data-theme="sandstone"] .app-container {
+    background: url('../img/sandstone-bg.webp') center/cover no-repeat fixed;
+}
+
 [data-theme="sandstone"] body {
     background:
         radial-gradient(ellipse 80% 60% at 50% 0%, rgba(112, 59, 59, 0.08) 0%, transparent 70%),
@@ -530,9 +578,7 @@
 }
 
 [data-theme="sandstone"] .login-screen {
-    background:
-        radial-gradient(ellipse 70% 50% at 50% 30%, rgba(112, 59, 59, 0.10) 0%, transparent 70%),
-        var(--bg);
+    background: url('../img/sandstone-bg.webp') center/cover no-repeat fixed;
 }
 
 [data-theme="sandstone"] .login-card {
