@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
-from netcontrol.routes.shared import _audit, _capture_running_config, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _capture_running_config, _corr_id, _get_session, _push_config_to_device
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
@@ -75,6 +75,13 @@ class ComplianceScanRequest(BaseModel):
     credential_id: int
 
 
+class ComplianceRemediateRequest(BaseModel):
+    result_id: int
+    rule_name: str
+    credential_id: int
+    dry_run: bool = True
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -91,7 +98,9 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
     rule_type = rule.get("type", "must_contain")
     pattern = rule.get("pattern", "")
     name = rule.get("name", pattern[:60])
-    result = {"name": name, "type": rule_type, "pattern": pattern, "passed": False, "detail": ""}
+    remediation = rule.get("remediation")  # list of IOS commands or None
+    result = {"name": name, "type": rule_type, "pattern": pattern, "passed": False, "detail": "",
+              "remediation": remediation}
 
     if not pattern:
         result["passed"] = True
@@ -525,6 +534,155 @@ async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
         correlation_id=_corr_id(request),
     )
     return {"id": result_id, **result}
+
+
+# ── Compliance Remediation ─────────────────────────────────────────────────
+
+
+@router.post("/api/compliance/remediate")
+async def remediate_compliance_finding(body: ComplianceRemediateRequest, request: Request):
+    """Push remediation config for a specific failed compliance rule.
+
+    Looks up the scan result, finds the matching failed rule and its
+    remediation commands, then SSHes into the device and applies them.
+    Supports dry-run mode to preview commands before pushing.
+    After a live push, automatically re-scans the host against the same
+    profile and returns updated results.
+    """
+    # Load scan result
+    scan_result = await db.get_compliance_scan_result(body.result_id)
+    if not scan_result:
+        raise HTTPException(404, "Scan result not found")
+
+    # Find the host
+    host = await db.get_host(scan_result["host_id"])
+    if not host:
+        raise HTTPException(404, "Host not found")
+
+    # Find the profile and its rules
+    profile = await db.get_compliance_profile(scan_result["profile_id"])
+    if not profile:
+        raise HTTPException(404, "Compliance profile not found")
+
+    rules_json = profile.get("rules") or "[]"
+    if isinstance(rules_json, str):
+        try:
+            rules = json.loads(rules_json)
+        except json.JSONDecodeError:
+            rules = []
+    else:
+        rules = rules_json
+
+    # Find the specific rule by name
+    target_rule = None
+    for rule in rules:
+        if rule.get("name") == body.rule_name:
+            target_rule = rule
+            break
+
+    if not target_rule:
+        raise HTTPException(404, f"Rule '{body.rule_name}' not found in profile")
+
+    remediation_cmds = target_rule.get("remediation")
+    if not remediation_cmds:
+        raise HTTPException(400, f"Rule '{body.rule_name}' has no remediation commands defined — this issue requires manual intervention")
+
+    # Verify the rule actually failed in this scan
+    findings = []
+    try:
+        findings = json.loads(scan_result.get("findings", "[]"))
+    except json.JSONDecodeError:
+        pass
+
+    rule_finding = None
+    for f in findings:
+        if f.get("name") == body.rule_name:
+            rule_finding = f
+            break
+
+    if rule_finding and rule_finding.get("passed"):
+        raise HTTPException(400, f"Rule '{body.rule_name}' already passes — no remediation needed")
+
+    # Load credential
+    cred = await db.get_credential_raw(body.credential_id)
+    if not cred:
+        raise HTTPException(404, "Credential not found")
+
+    session = _get_session(request)
+
+    if body.dry_run:
+        # Dry-run: just return what would be pushed
+        await _audit(
+            "compliance", "remediate.dryrun",
+            user=session["user"] if session else "",
+            detail=f"host_id={host['id']} rule={body.rule_name} commands={len(remediation_cmds)}",
+            correlation_id=_corr_id(request),
+        )
+        return {
+            "dry_run": True,
+            "host": host["hostname"],
+            "ip_address": host["ip_address"],
+            "rule": body.rule_name,
+            "commands": remediation_cmds,
+            "message": f"Would push {len(remediation_cmds)} command(s) to {host['hostname']}",
+        }
+
+    # Live push
+    try:
+        output = await _push_config_to_device(host, cred, remediation_cmds)
+    except Exception as exc:
+        await _audit(
+            "compliance", "remediate.failed",
+            user=session["user"] if session else "",
+            detail=f"host_id={host['id']} rule={body.rule_name} error={str(exc)[:200]}",
+            correlation_id=_corr_id(request),
+        )
+        raise HTTPException(500, f"Remediation failed: {exc}")
+
+    await _audit(
+        "compliance", "remediate.applied",
+        user=session["user"] if session else "",
+        detail=f"host_id={host['id']} rule={body.rule_name} commands={len(remediation_cmds)}",
+        correlation_id=_corr_id(request),
+    )
+
+    # Re-scan the host to check if the fix worked
+    rescan = await _evaluate_host_compliance(host, profile, cred)
+    rescan_id = await db.create_compliance_scan_result(
+        assignment_id=None,
+        profile_id=scan_result["profile_id"],
+        host_id=host["id"],
+        **rescan,
+    )
+
+    # Find the specific rule in the new findings
+    new_findings = []
+    try:
+        new_findings = json.loads(rescan.get("findings", "[]"))
+    except json.JSONDecodeError:
+        pass
+    rule_now_passes = False
+    for f in new_findings:
+        if f.get("name") == body.rule_name and f.get("passed"):
+            rule_now_passes = True
+            break
+
+    return {
+        "dry_run": False,
+        "host": host["hostname"],
+        "ip_address": host["ip_address"],
+        "rule": body.rule_name,
+        "commands": remediation_cmds,
+        "output": output,
+        "rule_now_passes": rule_now_passes,
+        "rescan_id": rescan_id,
+        "rescan_status": rescan["status"],
+        "rescan_passed": rescan["passed_rules"],
+        "rescan_total": rescan["total_rules"],
+        "message": f"Remediation applied to {host['hostname']}. "
+                   f"{'Rule now PASSES.' if rule_now_passes else 'Rule still failing — review output.'} "
+                   f"New score: {rescan['passed_rules']}/{rescan['total_rules']}",
+    }
 
 
 # ── Admin Compliance Schedule ────────────────────────────────────────────────
