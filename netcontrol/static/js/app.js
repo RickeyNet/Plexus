@@ -5,6 +5,7 @@
 import * as api from './api.js';
 import { getCsrfToken, setCsrfToken } from './api.js';
 import { connectJobWebSocket, disconnectJobWebSocket, connectUpgradeWebSocket, disconnectUpgradeWebSocket } from './websocket.js';
+import { ensurePageDOM, ensureModalDOM, templateOidProfileModal, templateSlaHostDetailModal, templateSlaTargetModal } from './page-templates.js';
 
 // Global state
 let currentPage = 'dashboard';
@@ -173,7 +174,7 @@ function initSpaceParallax() {
     _spaceFxState.rafId = requestAnimationFrame(tick);
 }
 
-function initSpaceControls() {
+export function initSpaceControls() {
     refreshSpaceBaseIntensity();
     const savedIntensity = localStorage.getItem(SPACE_INTENSITY_KEY) || DEFAULT_SPACE_INTENSITY;
     const savedParallax = localStorage.getItem(SPACE_PARALLAX_KEY);
@@ -1889,6 +1890,11 @@ export function navigateToPage(page, { updateHash = true } = {}) {
         if (_deviceDetailTimeListener) { offTimeRangeChange(_deviceDetailTimeListener); _deviceDetailTimeListener = null; }
     }
 
+    // Ensure lazy DOM is populated for target page
+    ensurePageDOM(page);
+    // Bind list controls for newly-created DOM elements (idempotent)
+    initListPageControls();
+
     // Show target page
     const targetPage = document.getElementById(`page-${page}`);
     if (targetPage) {
@@ -3587,6 +3593,64 @@ function initListPageControls() {
         listViewState.configDrift.sort = e.target.value;
         renderDriftEventsList(applyDriftFilters());
     });
+
+    // Configuration page unified search (drift + backup tabs)
+    bindListControl('configuration-search', debounce((e) => {
+        const q = e.target.value;
+        const tab = listViewState.configuration.tab;
+        if (tab === 'drift') {
+            listViewState.configDrift.query = q;
+            renderDriftEventsList(applyDriftFilters());
+        } else {
+            listViewState.configBackups.query = q;
+            renderBackupPolicies(listViewState.configBackups.policies);
+            renderBackupHistory(listViewState.configBackups.backups);
+        }
+    }, 200));
+
+    // Compliance search
+    bindListControl('compliance-search', debounce((e) => {
+        listViewState.compliance.query = e.target.value;
+        renderComplianceProfiles(listViewState.compliance.profiles);
+        renderComplianceAssignments(listViewState.compliance.assignments);
+        renderComplianceResults(listViewState.compliance.results);
+        renderComplianceStatus(listViewState.compliance.statusList);
+    }, 200));
+
+    // Risk analysis search
+    bindListControl('risk-search', debounce((e) => {
+        listViewState.riskAnalysis.query = e.target.value;
+        renderRiskAnalyses(listViewState.riskAnalysis.items);
+    }, 200));
+
+    // Monitoring search
+    bindListControl('monitoring-search', debounce((e) => {
+        listViewState.monitoring.query = e.target.value;
+        const tab = listViewState.monitoring.tab;
+        if (tab === 'devices') renderMonitoringDevices(listViewState.monitoring.polls);
+        else if (tab === 'alerts') renderMonitoringAlerts(listViewState.monitoring.alerts);
+    }, 200));
+
+    // SLA search
+    bindListControl('sla-search', debounce((e) => {
+        listViewState.sla.query = e.target.value;
+        const summary = listViewState.sla.summary;
+        if (summary && summary.hosts) {
+            renderSlaHosts(summary.hosts, listViewState.sla.targets || []);
+        }
+    }, 200));
+
+    // Deployments search
+    bindListControl('deploy-search', debounce((e) => {
+        listViewState.deployments.query = e.target.value;
+        renderDeployments(listViewState.deployments.items);
+    }, 200));
+
+    // Graph templates search
+    bindListControl('graph-templates-search', debounce((e) => {
+        listViewState.graphTemplates.query = e.target.value;
+        renderGraphTemplatesList();
+    }, 200));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -8888,24 +8952,7 @@ async function confirmDeleteBackup(id) {
 }
 window.confirmDeleteBackup = confirmDeleteBackup;
 
-// Search handler for configuration page (drift, backup policies, backup history)
-document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('configuration-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', debounce(() => {
-            const q = searchInput.value;
-            const tab = listViewState.configuration.tab;
-            if (tab === 'drift') {
-                listViewState.configDrift.query = q;
-                renderDriftEventsList(applyDriftFilters());
-            } else {
-                listViewState.configBackups.query = q;
-                renderBackupPolicies(listViewState.configBackups.policies);
-                renderBackupHistory(listViewState.configBackups.backups);
-            }
-        }, 200));
-    }
-});
+// Configuration search handler moved to initListPageControls() for lazy DOM compatibility
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -9478,19 +9525,7 @@ async function remediateAllFailedRules(resultId) {
 }
 window.remediateAllFailedRules = remediateAllFailedRules;
 
-// Search handler for compliance
-document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('compliance-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', debounce(() => {
-            listViewState.compliance.query = searchInput.value;
-            renderComplianceProfiles(listViewState.compliance.profiles);
-            renderComplianceAssignments(listViewState.compliance.assignments);
-            renderComplianceResults(listViewState.compliance.results);
-            renderComplianceStatus(listViewState.compliance.statusList);
-        }, 200));
-    }
-});
+// Compliance search handler moved to initListPageControls() for lazy DOM compatibility
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -9855,16 +9890,7 @@ async function confirmDeleteRiskAnalysis(analysisId) {
 }
 window.confirmDeleteRiskAnalysis = confirmDeleteRiskAnalysis;
 
-// Search handler for risk analysis
-document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('risk-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', debounce(() => {
-            listViewState.riskAnalysis.query = searchInput.value;
-            renderRiskAnalyses(listViewState.riskAnalysis.items);
-        }, 200));
-    }
-});
+// Risk analysis search handler moved to initListPageControls() for lazy DOM compatibility
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -10647,18 +10673,7 @@ window.deleteSuppressionConfirmed = async function(supId) {
     }
 };
 
-// Wire up monitoring search
-document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('monitoring-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', debounce(() => {
-            listViewState.monitoring.query = searchInput.value;
-            const tab = listViewState.monitoring.tab;
-            if (tab === 'devices') renderMonitoringDevices(listViewState.monitoring.polls);
-            else if (tab === 'alerts') renderMonitoringAlerts(listViewState.monitoring.alerts);
-        }, 200));
-    }
-});
+// Monitoring search handler moved to initListPageControls() for lazy DOM compatibility
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -10978,6 +10993,7 @@ function renderSlaChart(daily, field, label, color, minY, maxY) {
 // ── SLA Host Detail Modal ────────────────────────────────────────────────────
 
 async function showSlaHostDetail(hostId) {
+    ensureModalDOM('sla-host-detail-modal', templateSlaHostDetailModal);
     const modal = document.getElementById('sla-host-detail-modal');
     const body = document.getElementById('sla-host-detail-body');
     const title = document.getElementById('sla-host-detail-title');
@@ -11072,6 +11088,7 @@ function renderSlaTargets(targets) {
 }
 
 async function showCreateSlaTargetModal(editTarget = null) {
+    ensureModalDOM('sla-target-modal', templateSlaTargetModal);
     const modal = document.getElementById('sla-target-modal');
     const titleEl = document.getElementById('sla-target-modal-title');
     if (!modal) return;
@@ -11182,19 +11199,7 @@ async function deleteSlaTarget(id) {
 }
 window.deleteSlaTarget = deleteSlaTarget;
 
-// Wire up SLA search
-document.addEventListener('DOMContentLoaded', () => {
-    const slaSearch = document.getElementById('sla-search');
-    if (slaSearch) {
-        slaSearch.addEventListener('input', debounce(() => {
-            listViewState.sla.query = slaSearch.value;
-            const summary = listViewState.sla.summary;
-            if (summary && summary.hosts) {
-                renderSlaHosts(summary.hosts, listViewState.sla.targets || []);
-            }
-        }, 200));
-    }
-});
+// SLA search handler moved to initListPageControls() for lazy DOM compatibility
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -11743,16 +11748,7 @@ async function confirmDeleteDeployment(deploymentId) {
 }
 window.confirmDeleteDeployment = confirmDeleteDeployment;
 
-// Search handler for deployments
-document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('deploy-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', debounce(() => {
-            listViewState.deployments.query = searchInput.value;
-            renderDeployments(listViewState.deployments.items);
-        }, 200));
-    }
-});
+// Deployments search handler moved to initListPageControls() for lazy DOM compatibility
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -12174,6 +12170,7 @@ async function loadOidProfiles(options = {}) {
 window.loadOidProfiles = loadOidProfiles;
 
 function showCreateOidProfile() {
+    ensureModalDOM('oid-profile-modal', templateOidProfileModal);
     document.getElementById('oid-profile-edit-id').value = '';
     document.getElementById('oid-profile-modal-title').textContent = 'New OID Profile';
     document.getElementById('oid-profile-name').value = '';
@@ -12186,6 +12183,7 @@ function showCreateOidProfile() {
 window.showCreateOidProfile = showCreateOidProfile;
 
 async function editOidProfile(profileId) {
+    ensureModalDOM('oid-profile-modal', templateOidProfileModal);
     try {
         const profile = await api.getOidProfile(profileId);
         document.getElementById('oid-profile-edit-id').value = profile.id;
@@ -12880,16 +12878,7 @@ window.deleteGraphTreeConfirm = async function(id) {
     }
 };
 
-// ── Graph Templates Search ──────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-    const searchEl = document.getElementById('graph-templates-search');
-    if (searchEl) {
-        searchEl.addEventListener('input', debounce(() => {
-            listViewState.graphTemplates.query = searchEl.value;
-            renderGraphTemplatesList();
-        }, 200));
-    }
-});
+// Graph templates search handler moved to initListPageControls() for lazy DOM compatibility
 
 // ── Hash-based routing: back/forward button support ─────────────────────────
 window.addEventListener('popstate', () => {
@@ -14096,7 +14085,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initLoginParticles();
     initAppParticles();
     initLoginForm();
-    initListPageControls();
+    // initListPageControls is now called in navigateToPage() after ensurePageDOM()
     initKeyboardShortcuts();
     initCopyableBlocks();
     // Card tilt disabled — it interfered with clicking on inventory items
