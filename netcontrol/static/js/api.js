@@ -15,6 +15,66 @@ export function getCsrfToken() {
     return _csrfToken;
 }
 
+// ── Stale-While-Revalidate Cache ─────────────────────────────────────────────
+const _cache = new Map();          // key → { data, time }
+const _inflight = new Map();       // key → Promise (dedup concurrent requests)
+const DEFAULT_TTL_MS = 30_000;     // 30 seconds fresh window
+
+/**
+ * Cached GET wrapper. Returns fresh data immediately if within TTL.
+ * If stale, returns cached data instantly and revalidates in background.
+ * Deduplicates concurrent identical requests.
+ * @param {string} key    - cache key (usually the endpoint + params)
+ * @param {Function} fetchFn - async function that returns fresh data
+ * @param {number} ttlMs  - how long the entry is considered fresh
+ */
+async function cachedGet(key, fetchFn, ttlMs = DEFAULT_TTL_MS) {
+    const entry = _cache.get(key);
+    const now = Date.now();
+
+    if (entry && (now - entry.time < ttlMs)) {
+        // Fresh cache hit — return immediately
+        return entry.data;
+    }
+
+    if (entry) {
+        // Stale — return cached data, revalidate in background
+        _revalidate(key, fetchFn);
+        return entry.data;
+    }
+
+    // No cache — must wait for fetch (but dedup concurrent calls)
+    return _revalidate(key, fetchFn);
+}
+
+async function _revalidate(key, fetchFn) {
+    // Dedup: if already in-flight for this key, return the same promise
+    if (_inflight.has(key)) return _inflight.get(key);
+    const promise = fetchFn().then(data => {
+        _cache.set(key, { data, time: Date.now() });
+        _inflight.delete(key);
+        return data;
+    }).catch(err => {
+        _inflight.delete(key);
+        throw err;
+    });
+    _inflight.set(key, promise);
+    return promise;
+}
+
+/**
+ * Invalidate cache entries whose key starts with a given prefix.
+ * Call after mutations (POST/PUT/DELETE) to bust related caches.
+ */
+export function invalidateApiCache(...prefixes) {
+    if (!prefixes.length) { _cache.clear(); return; }
+    for (const key of _cache.keys()) {
+        if (prefixes.some(p => key.startsWith(p))) {
+            _cache.delete(key);
+        }
+    }
+}
+
 async function apiRequest(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
     const config = {
@@ -34,12 +94,21 @@ async function apiRequest(endpoint, options = {}) {
         config.body = JSON.stringify(config.body);
     }
 
+    const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes((config.method || 'GET').toUpperCase());
+
     try {
         const response = await fetch(url, config);
         const data = await response.json();
 
         if (!response.ok) {
             throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        // Auto-invalidate cache for the resource prefix after successful mutations
+        if (isMutation) {
+            // e.g. /api/inventory/5/hosts → invalidate keys starting with /inventory
+            const prefix = endpoint.split('/').slice(0, 2).join('/');
+            invalidateApiCache(prefix);
         }
 
         return data;
@@ -92,16 +161,17 @@ export async function changePassword(currentPassword, newPassword) {
 
 // Dashboard
 export async function getDashboard() {
-    return apiRequest('/dashboard');
+    return cachedGet('/dashboard', () => apiRequest('/dashboard'));
 }
 
 // Inventory
 export async function getInventoryGroups(includeHosts = false) {
-    return apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory');
+    const key = includeHosts ? '/inventory?include_hosts=true' : '/inventory';
+    return cachedGet(key, () => apiRequest(key));
 }
 
 export async function getGroup(groupId) {
-    return apiRequest(`/inventory/${groupId}`);
+    return cachedGet(`/inventory/${groupId}`, () => apiRequest(`/inventory/${groupId}`));
 }
 
 export async function createGroup(name, description = '') {
@@ -242,7 +312,7 @@ export async function onboardDiscoveredHosts(groupId, discoveredHosts) {
 
 // Playbooks
 export async function getPlaybooks() {
-    return apiRequest('/playbooks');
+    return cachedGet('/playbooks', () => apiRequest('/playbooks'));
 }
 
 export async function getPlaybook(playbookId) {
@@ -271,7 +341,7 @@ export async function deletePlaybook(playbookId) {
 
 // Jobs
 export async function getJobs(limit = 50) {
-    return apiRequest(`/jobs?limit=${limit}`);
+    return cachedGet(`/jobs?limit=${limit}`, () => apiRequest(`/jobs?limit=${limit}`), 10_000);
 }
 
 export async function getJob(jobId) {
@@ -320,7 +390,7 @@ export async function getJobEvents(jobId) {
 }
 
 export async function getJobQueue() {
-    return apiRequest('/jobs/queue');
+    return cachedGet('/jobs/queue', () => apiRequest('/jobs/queue'), 10_000);
 }
 
 export async function cancelJob(jobId) {
@@ -341,7 +411,7 @@ export async function updateJobPriority(jobId, priority) {
 
 // Templates
 export async function getTemplates() {
-    return apiRequest('/templates');
+    return cachedGet('/templates', () => apiRequest('/templates'));
 }
 
 export async function getTemplate(templateId) {
@@ -370,7 +440,7 @@ export async function deleteTemplate(templateId) {
 
 // Credentials
 export async function getCredentials() {
-    return apiRequest('/credentials');
+    return cachedGet('/credentials', () => apiRequest('/credentials'));
 }
 
 export async function getCredential(credentialId) {
@@ -621,7 +691,7 @@ export async function runTopologyDiscoveryNow() {
 
 export async function getTopology(groupId = null) {
     const params = groupId ? `?group_id=${groupId}` : '';
-    return apiRequest(`/topology${params}`);
+    return cachedGet(`/topology${params}`, () => apiRequest(`/topology${params}`));
 }
 
 export async function discoverTopologyForGroup(groupId) {
@@ -701,7 +771,7 @@ export async function deleteTopologyPositions() {
 // ── Config Drift ────────────────────────────────────────────────────────────
 
 export async function getConfigDriftSummary() {
-    return apiRequest('/config-drift/summary');
+    return cachedGet('/config-drift/summary', () => apiRequest('/config-drift/summary'));
 }
 
 export async function getConfigDriftEvents(status = null, hostId = null, limit = 100) {
@@ -859,13 +929,13 @@ export async function restoreConfigBackup(data) {
 }
 
 export async function getConfigBackupSummary() {
-    return apiRequest('/config-backups/summary');
+    return cachedGet('/config-backups/summary', () => apiRequest('/config-backups/summary'));
 }
 
 // ── Compliance Profiles & Scans ──────────────────────────────────────────────
 
 export async function getComplianceProfiles() {
-    return apiRequest('/compliance/profiles');
+    return cachedGet('/compliance/profiles', () => apiRequest('/compliance/profiles'));
 }
 
 export async function createComplianceProfile(data) {
@@ -928,7 +998,7 @@ export async function getComplianceHostStatus(profileId = null) {
 }
 
 export async function getComplianceSummary() {
-    return apiRequest('/compliance/summary');
+    return cachedGet('/compliance/summary', () => apiRequest('/compliance/summary'));
 }
 
 export async function runComplianceScan(data) {
@@ -964,7 +1034,7 @@ export async function getRiskAnalyses(params = {}) {
 }
 
 export async function getRiskAnalysisSummary() {
-    return apiRequest('/risk-analysis/summary');
+    return cachedGet('/risk-analysis/summary', () => apiRequest('/risk-analysis/summary'));
 }
 
 export async function getRiskAnalysis(id) {
@@ -995,7 +1065,7 @@ export async function getDeployments(params = {}) {
 }
 
 export async function getDeploymentSummary() {
-    return apiRequest('/deployments/summary');
+    return cachedGet('/deployments/summary', () => apiRequest('/deployments/summary'));
 }
 
 export async function getDeployment(id) {
@@ -1032,14 +1102,16 @@ export async function getMonitoringSummary(groupId = null) {
     const params = new URLSearchParams();
     if (groupId) params.set('group_id', groupId);
     const qs = params.toString();
-    return apiRequest(`/monitoring/summary${qs ? '?' + qs : ''}`);
+    const key = `/monitoring/summary${qs ? '?' + qs : ''}`;
+    return cachedGet(key, () => apiRequest(key), 15_000);
 }
 
 export async function getMonitoringPolls(groupId = null, limit = 200) {
     const params = new URLSearchParams();
     if (groupId) params.set('group_id', groupId);
     if (limit) params.set('limit', limit);
-    return apiRequest(`/monitoring/polls?${params}`);
+    const key = `/monitoring/polls?${params}`;
+    return cachedGet(key, () => apiRequest(key), 15_000);
 }
 
 export async function getMonitoringPollHistory(hostId, limit = 100) {
@@ -1242,7 +1314,7 @@ export async function getAnnotations(params = {}) {
 // ── Custom Dashboards ───────────────────────────────────────────────────────
 
 export async function getCustomDashboards() {
-    return apiRequest('/dashboards');
+    return cachedGet('/dashboards', () => apiRequest('/dashboards'));
 }
 
 export async function getCustomDashboard(id) {

@@ -50,6 +50,9 @@
     box-sizing: border-box;
 }
 
+/* ── Utility classes ── */
+.hidden { display: none !important; }
+
 :root {
     /* Default Forest theme (matches original palette) */
     --primary: #6b8e6b;
