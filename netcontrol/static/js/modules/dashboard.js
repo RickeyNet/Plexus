@@ -192,8 +192,7 @@ window.openDashboard = openDashboard;
 function backToDashboardsList() {
     listViewState.customDashboards.currentId = null;
     listViewState.customDashboards.editMode = false;
-    if (_dashboardTimeListener) { offTimeRangeChange(_dashboardTimeListener); _dashboardTimeListener = null; }
-    PlexusChart.destroyAll();
+    destroyDashboard();
     loadCustomDashboards({});
 }
 window.backToDashboardsList = backToDashboardsList;
@@ -206,8 +205,8 @@ async function viewDashboard(id) {
 
         document.getElementById('dashboard-viewer-title').textContent = dashboard.name || 'Dashboard';
 
-        // Register time-range listener
-        if (_dashboardTimeListener) offTimeRangeChange(_dashboardTimeListener);
+        // Register time-range listener — remove old one first to avoid stale closure
+        if (_dashboardTimeListener) { offTimeRangeChange(_dashboardTimeListener); _dashboardTimeListener = null; }
         _dashboardTimeListener = () => renderAllDashboardPanels(panels);
         onTimeRangeChange(_dashboardTimeListener);
 
@@ -813,6 +812,9 @@ function destroyDashboard() {
         _dashboardTimeListener = null;
     }
     PlexusChart.destroyAll();
+    listViewState.customDashboards.items = [];
+    listViewState.customDashboards.currentId = null;
+    listViewState.customDashboards.editMode = false;
 }
 
 

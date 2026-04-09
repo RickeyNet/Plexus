@@ -117,6 +117,7 @@ function _utilShadow(pct) {
 }
 
 let _utilEventSource = null;
+let _utilReconnectTimer = null;
 
 function toggleUtilizationOverlay() {
     _topoUtilOverlay = !_topoUtilOverlay;
@@ -191,13 +192,15 @@ function _startUtilizationStream() {
             // Reconnect on error after a delay
             _stopUtilizationStream();
             if (_topoUtilOverlay) {
-                setTimeout(() => { if (_topoUtilOverlay) _startUtilizationStream(); }, 10000);
+                _utilReconnectTimer = setTimeout(() => { if (_topoUtilOverlay) _startUtilizationStream(); }, 10000);
             }
         };
     } catch (e) { /* SSE not supported or error */ }
 }
 
 function _stopUtilizationStream() {
+    clearTimeout(_utilReconnectTimer);
+    _utilReconnectTimer = null;
     if (_utilEventSource) {
         _utilEventSource.close();
         _utilEventSource = null;
@@ -206,6 +209,8 @@ function _stopUtilizationStream() {
 
 async function loadTopology(options = {}) {
     const { preserveContent = false } = options;
+    // Attach listeners now that lazy DOM elements exist
+    _initTopoListeners();
     const container = document.querySelector('.topology-container');
     const legend = document.getElementById('topology-legend');
     const emptyEl = document.getElementById('topology-empty');
@@ -652,6 +657,7 @@ async function discoverTopology() {
         invalidatePageCache('topology');
         await loadTopology({ preserveContent: true });
     } catch (error) {
+        if (error.name === 'AbortError') return; // navigated away — silently cancel
         const spinnerEl = document.getElementById('disco-spinner');
         if (spinnerEl) spinnerEl.style.display = 'none';
         appendFeed(`Error: ${error.message}`, 'var(--danger-color, #ef4444)');
@@ -936,8 +942,11 @@ function _focusTopologyNode(nodeId) {
     if (node) showTopologyNodeDetails(node, _topologyData.edges);
 }
 
-document.getElementById('topology-search')?.addEventListener('input', _onTopoSearchInput);
-document.getElementById('topology-search')?.addEventListener('keydown', (e) => {
+// ── Listener management (attached after lazy DOM is ready) ──
+
+let _topoListenersBound = false;
+
+function _onTopoSearchKeydown(e) {
     const resultsEl = document.getElementById('topology-search-results');
     const items = resultsEl?.querySelectorAll('.topology-search-item[data-node-id]') || [];
     if (!items.length) return;
@@ -966,15 +975,45 @@ document.getElementById('topology-search')?.addEventListener('keydown', (e) => {
     } else if (e.key === 'Escape') {
         resultsEl.style.display = 'none';
     }
-});
-document.getElementById('topology-search-results')?.addEventListener('click', _onTopoSearchResultClick);
-// Close search results when clicking elsewhere
-document.addEventListener('click', (e) => {
+}
+
+function _onTopoDocClick(e) {
     if (!e.target.closest('.topology-search-wrap')) {
         const el = document.getElementById('topology-search-results');
         if (el) el.style.display = 'none';
     }
-});
+}
+
+function _onTopoGroupFilterChange() {
+    invalidatePageCache('topology');
+    loadTopology({ preserveContent: false });
+}
+
+function _onTopoLayoutChange() {
+    if (_topologyData) renderTopologyGraph(_topologyData);
+}
+
+function _initTopoListeners() {
+    if (_topoListenersBound) return;
+    _topoListenersBound = true;
+    document.getElementById('topology-search')?.addEventListener('input', _onTopoSearchInput);
+    document.getElementById('topology-search')?.addEventListener('keydown', _onTopoSearchKeydown);
+    document.getElementById('topology-search-results')?.addEventListener('click', _onTopoSearchResultClick);
+    document.addEventListener('click', _onTopoDocClick);
+    document.getElementById('topology-group-filter')?.addEventListener('change', _onTopoGroupFilterChange);
+    document.getElementById('topology-layout')?.addEventListener('change', _onTopoLayoutChange);
+}
+
+function _removeTopoDocListeners() {
+    if (!_topoListenersBound) return;
+    _topoListenersBound = false;
+    document.getElementById('topology-search')?.removeEventListener('input', _onTopoSearchInput);
+    document.getElementById('topology-search')?.removeEventListener('keydown', _onTopoSearchKeydown);
+    document.getElementById('topology-search-results')?.removeEventListener('click', _onTopoSearchResultClick);
+    document.removeEventListener('click', _onTopoDocClick);
+    document.getElementById('topology-group-filter')?.removeEventListener('change', _onTopoGroupFilterChange);
+    document.getElementById('topology-layout')?.removeEventListener('change', _onTopoLayoutChange);
+}
 
 // ── Export ──
 
@@ -1088,16 +1127,6 @@ async function acknowledgeTopologyChanges() {
     }
 }
 
-// Event listeners for topology controls
-document.getElementById('topology-group-filter')?.addEventListener('change', () => {
-    invalidatePageCache('topology');
-    loadTopology({ preserveContent: false });
-});
-document.getElementById('topology-layout')?.addEventListener('change', () => {
-    // Layout change requires a rebuild (hierarchical vs physics are fundamentally different)
-    if (_topologyData) renderTopologyGraph(_topologyData);
-});
-
 // Expose topology functions for HTML onclick handlers
 window.discoverTopology = discoverTopology;
 window.refreshTopology = refreshTopology;
@@ -1117,6 +1146,16 @@ window.resetTopologyPositions = resetTopologyPositions;
 
 export function destroyTopology() {
     _stopUtilizationStream();
+    clearTimeout(_savePositionTimer);
+    _savePositionTimer = null;
+    clearTimeout(_topoSearchDebounce);
+    _topoSearchDebounce = null;
+    _topoUtilOverlay = false;
+    _topoPathMode = false;
+    _topoPathSource = null;
+    _topoOriginalColors = null;
+    _topoThemeColors = null;
+    _topoSavedPositions = {};
     if (_topologyNetwork) {
         _topologyNetwork.destroy();
     }
@@ -1124,6 +1163,8 @@ export function destroyTopology() {
     _topologyData = null;
     _topoNodesDS = null;
     _topoEdgesDS = null;
+    // Remove document-level listener
+    _removeTopoDocListeners();
 }
 
 // ── Exports ──

@@ -879,7 +879,7 @@ body {
 .space-nebula {
     position: absolute;
     border-radius: 9999px;
-    filter: blur(60px);
+    filter: blur(24px);
     opacity: calc(var(--space-intensity) * 0.85);
     will-change: transform;
 }
@@ -889,7 +889,7 @@ body {
     height: min(56vw, 760px);
     left: -16%;
     top: -24%;
-    background: radial-gradient(circle, var(--space-nebula-a) 0%, transparent 70%);
+    background: radial-gradient(circle, var(--space-nebula-a) 0%, transparent 60%);
     transform: translate3d(calc(var(--space-parallax-x) * -0.45), calc(var(--space-parallax-y) * -0.45), 0);
     animation: nebula-drift-a 28s ease-in-out infinite alternate;
 }
@@ -899,7 +899,7 @@ body {
     height: min(50vw, 700px);
     right: -18%;
     bottom: -28%;
-    background: radial-gradient(circle, var(--space-nebula-b) 0%, transparent 72%);
+    background: radial-gradient(circle, var(--space-nebula-b) 0%, transparent 62%);
     transform: translate3d(calc(var(--space-parallax-x) * 0.4), calc(var(--space-parallax-y) * 0.4), 0);
     animation: nebula-drift-b 34s ease-in-out infinite alternate;
 }
@@ -909,7 +909,7 @@ body {
     height: min(44vw, 620px);
     left: 36%;
     top: 24%;
-    background: radial-gradient(circle, var(--space-nebula-c) 0%, transparent 75%);
+    background: radial-gradient(circle, var(--space-nebula-c) 0%, transparent 65%);
     transform: translate3d(calc(var(--space-parallax-x) * 0.55), calc(var(--space-parallax-y) * -0.35), 0);
     animation: nebula-drift-c 24s ease-in-out infinite alternate;
 }
@@ -1199,6 +1199,8 @@ body {
     z-index: 100;
     transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
                 min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: width, min-width;
+    contain: layout style;
     overflow: hidden;
 }
 

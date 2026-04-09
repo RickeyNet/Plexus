@@ -166,12 +166,21 @@ function initSpaceParallax() {
 
     // Helper to kick the loop if it's not already running
     function ensureParallaxRunning() {
-        if (!_spaceFxState.rafId) {
+        if (!_spaceFxState.rafId && !document.hidden) {
             _spaceFxState.rafId = requestAnimationFrame(tick);
         }
     }
 
-    _spaceFxState.rafId = requestAnimationFrame(tick);
+    // Pause the RAF loop when the tab is hidden to save CPU
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            if (_spaceFxState.rafId) {
+                cancelAnimationFrame(_spaceFxState.rafId);
+                _spaceFxState.rafId = null;
+            }
+        }
+        // When visible again, the next mousemove will restart the loop via ensureParallaxRunning
+    });
 }
 
 export function initSpaceControls() {
@@ -271,17 +280,19 @@ function applyTheme(theme) {
         const select = document.getElementById(id);
         if (select) select.value = chosen;
     });
-    // Refresh ECharts theme colors
-    PlexusChart.rethemeAll();
-    // Refresh topology vis-network colors for the new theme (lazy — only if module already loaded)
-    if (_moduleCache['topology']) {
-        const topo = _moduleCache['topology'];
-        if (topo._topologyNetwork && topo._topologyData && topo._topoNodesDS && topo._topoEdgesDS) {
-            topo._getTopoThemeColors();
-            topo._topoNodesDS.update(topo._topologyData.nodes.map(n => topo._buildVisNode(n, topo._topoSavedPositions)));
-            topo._topoEdgesDS.update(topo._topologyData.edges.map(e => topo._buildVisEdge(e)));
+    // Defer chart/topology retheme to next frame so CSS theme applies first
+    requestAnimationFrame(() => {
+        PlexusChart.rethemeAll();
+        // Refresh topology vis-network colors for the new theme (lazy — only if module already loaded)
+        if (_moduleCache['topology']) {
+            const topo = _moduleCache['topology'];
+            if (topo._topologyNetwork && topo._topologyData && topo._topoNodesDS && topo._topoEdgesDS) {
+                topo._getTopoThemeColors();
+                topo._topoNodesDS.update(topo._topologyData.nodes.map(n => topo._buildVisNode(n, topo._topoSavedPositions)));
+                topo._topoEdgesDS.update(topo._topologyData.edges.map(e => topo._buildVisEdge(e)));
+            }
         }
-    }
+    });
 }
 
 export function initThemeControls() {
@@ -736,21 +747,18 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
         const title = document.getElementById('device-detail-title');
         if (title) title.textContent = latestPoll?.hostname || `Device #${hostId}`;
 
-        // CPU chart
+        // Batch all metric chart creation into a single animation frame
+        // to avoid layout thrashing (each PlexusChart.timeSeries reads element dimensions)
         const cpuSeries = extractMetricSeries(cpuData, 'CPU %');
-        PlexusChart.timeSeries('device-chart-cpu', cpuSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
-
-        // Memory chart
         const memSeries = extractMetricSeries(memData, 'Memory %');
-        PlexusChart.timeSeries('device-chart-memory', memSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
-
-        // Response time chart
         const rtSeries = extractMetricSeries(rtData, 'Response Time');
-        PlexusChart.timeSeries('device-chart-response', rtSeries, { area: true, yAxisName: 'ms' });
-
-        // Packet loss chart
         const plSeries = extractMetricSeries(plData, 'Packet Loss');
-        PlexusChart.timeSeries('device-chart-pktloss', plSeries, { area: true, yAxisName: '%', yMin: 0 });
+        requestAnimationFrame(() => {
+            PlexusChart.timeSeries('device-chart-cpu', cpuSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
+            PlexusChart.timeSeries('device-chart-memory', memSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
+            PlexusChart.timeSeries('device-chart-response', rtSeries, { area: true, yAxisName: 'ms' });
+            PlexusChart.timeSeries('device-chart-pktloss', plSeries, { area: true, yAxisName: '%', yMin: 0 });
+        });
 
         // Interface summary bar chart + detail table
         if (ifData.status === 'fulfilled') {
@@ -1088,6 +1096,9 @@ function renderInterfaceDetailCharts(ifData, latestPoll) {
 
         container.innerHTML = html;
 
+        // Defer chart creation to next frame — let the browser complete layout
+        // from the innerHTML assignment before ECharts queries element dimensions
+        requestAnimationFrame(() => {
         ifNames.forEach(name => {
             const data = grouped[name].sort((a, b) => new Date(a.sampled_at) - new Date(b.sampled_at));
             const chartId = `if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
@@ -1096,6 +1107,7 @@ function renderInterfaceDetailCharts(ifData, latestPoll) {
                 { name: 'Out (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.out_rate_bps || 0 })), color: '#f59e0b' },
             ], { area: true, yAxisName: 'bps' });
         });
+        }); // end requestAnimationFrame
     } else {
         html += '<p class="text-muted" style="margin-top:1rem;">Traffic charts will appear after two or more polling cycles collect rate data.</p>';
         container.innerHTML = html;
@@ -1863,6 +1875,9 @@ export function navigateToPage(page, { updateHash = true } = {}) {
     // Destroy all ECharts instances when leaving a page
     PlexusChart.destroyAll();
 
+    // Abort any in-flight API requests from the page being left
+    api.abortPendingRequests();
+
     // Call the current page module's destroy() to clean up event listeners, timers, etc.
     _destroyCurrentPage(currentPage);
 
@@ -2223,6 +2238,7 @@ async function loadPageData(page, options = {}) {
         }
         markPageCacheFresh(page);
     } catch (error) {
+        if (error.name === 'AbortError') return; // navigated away — silently cancel
         console.error(`Error loading ${page}:`, error);
         showError(`Failed to load ${page}: ${error.message}`);
     }
@@ -2871,6 +2887,7 @@ async function discoverTopology() {
         invalidatePageCache('topology');
         await loadTopology({ preserveContent: true });
     } catch (error) {
+        if (error.name === 'AbortError') return; // navigated away — silently cancel
         const spinnerEl = document.getElementById('disco-spinner');
         if (spinnerEl) spinnerEl.style.display = 'none';
         appendFeed(`Error: ${error.message}`, 'var(--danger-color, #ef4444)');
@@ -3660,6 +3677,7 @@ function initListPageControls() {
 async function loadInventory(options = {}) {
     const { preserveContent = false } = options;
     const container = document.getElementById('inventory-groups');
+    _lastInventoryFingerprint = null;
     if (!preserveContent) {
         container.innerHTML = skeletonCards(4);
     }
@@ -3708,12 +3726,22 @@ window.exportInventoryCSV = async function() {
     }
 }
 
+let _lastInventoryFingerprint = null;
 function renderInventoryGroups(groups) {
     const container = document.getElementById('inventory-groups');
     const query = (listViewState.inventory.query || '').trim().toLowerCase();
     const hostMatchesQuery = (host) => query && (
         textMatch(host.hostname, query) || textMatch(host.ip_address, query) || textMatch(host.device_type, query)
     );
+
+    // Skip render if data hasn't changed (prevents DOM thrash on redundant search/sort)
+    const fingerprint = JSON.stringify(groups.map(g => g.id)) + '|' + query + '|' + (listViewState.inventory.sort || '');
+    if (fingerprint === _lastInventoryFingerprint) return;
+    _lastInventoryFingerprint = fingerprint;
+
+    // Preserve scroll position across re-renders
+    const scrollTop = container.scrollTop;
+
     container.innerHTML = groups.map((group, i) => {
         const hosts = group.hosts || [];
         // When searching, sort matching hosts to the top
@@ -3784,6 +3812,9 @@ function renderInventoryGroups(groups) {
             </div>
         </div>`;
     }).join('');
+
+    // Restore scroll position after DOM rebuild
+    container.scrollTop = scrollTop;
 
     groups.forEach(group => {
         _groupCache[group.id] = {
@@ -4089,6 +4120,7 @@ window.runGlobalDiscovery = async function(e) {
             </div>
         `);
     } catch (error) {
+        if (error.name === 'AbortError') return; // navigated away — silently cancel
         closeAllModals();
         showError(`Discovery scan failed: ${error.message}`);
     } finally {
@@ -10210,6 +10242,7 @@ window.runMonitoringPollNow = async function() {
             }
         });
     } catch (e) {
+        if (e.name === 'AbortError') return; // navigated away — silently cancel
         showError(e.message);
         if (progressTitle) progressTitle.textContent = 'Poll failed';
         if (progressBar) progressBar.style.background = 'var(--danger)';
@@ -10754,7 +10787,7 @@ function renderSlaSummary(s) {
     if (mttdEl) mttdEl.textContent = s.mttd_minutes != null ? formatMinutes(s.mttd_minutes) : '-';
 }
 
-function formatMinutes(m) {
+export function formatMinutes(m) {
     if (m == null) return '-';
     if (m < 1) return '<1m';
     if (m < 60) return Math.round(m) + 'm';
@@ -10763,7 +10796,7 @@ function formatMinutes(m) {
     return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
 }
 
-function getHostSlaCompliance(host, targets) {
+export function getHostSlaCompliance(host, targets) {
     // Find applicable targets for this host
     const applicable = targets.filter(t =>
         t.enabled && (
@@ -11998,7 +12031,7 @@ async function loadAvailability(options = {}) {
 }
 window.loadAvailability = loadAvailability;
 
-function formatDuration(seconds) {
+export function formatDuration(seconds) {
     if (seconds == null) return '-';
     if (seconds < 60) return `${Math.round(seconds)}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;

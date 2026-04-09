@@ -1821,6 +1821,15 @@ window.retryJobFromList = async function(jobId) {
 function destroyJobs() {
     disconnectJobWebSocket();
     _currentViewJobId = null;
+    _credentialCurrentTab = 'credentials';
+    listViewState.jobs.items = [];
+    listViewState.jobs.query = '';
+    listViewState.playbooks.items = [];
+    listViewState.playbooks.query = '';
+    listViewState.templates.items = [];
+    listViewState.templates.query = '';
+    listViewState.credentials.items = [];
+    listViewState.credentials.query = '';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

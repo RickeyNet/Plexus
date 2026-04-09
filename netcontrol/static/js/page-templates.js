@@ -1060,9 +1060,9 @@ function templateUpgrades() {
     </div>
     <!-- Campaign subtabs -->
     <div class="tab-controls" id="upgrades-tabs">
-        <button class="btn btn-sm btn-secondary upgrade-tab-btn active" data-tab="campaigns" onclick="switchUpgradeTab('campaigns')">Campaigns</button>
-        <button class="btn btn-sm btn-secondary upgrade-tab-btn" data-tab="images" onclick="switchUpgradeTab('images')">Image Library</button>
-        <button class="btn btn-sm btn-secondary upgrade-tab-btn" data-tab="backups" onclick="switchUpgradeTab('backups')">Config Backups</button>
+        <button class="btn btn-sm btn-secondary upgrade-tab-btn active" data-upgrade-tab="campaigns" onclick="switchUpgradeTab('campaigns')">Campaigns</button>
+        <button class="btn btn-sm btn-secondary upgrade-tab-btn" data-upgrade-tab="images" onclick="switchUpgradeTab('images')">Image Library</button>
+        <button class="btn btn-sm btn-secondary upgrade-tab-btn" data-upgrade-tab="backups" onclick="switchUpgradeTab('backups')">Config Backups</button>
     </div>
     <!-- Campaigns List -->
     <div id="upgrade-tab-campaigns" class="tab-pane">

@@ -8,7 +8,8 @@ import {
     PlexusChart, listViewState, emptyStateHTML, formatDate,
     closeAllModals, invalidatePageCache, navigateToDeviceDetail, debounce,
     getTimeRangeParams, onTimeRangeChange, offTimeRangeChange, copyableCodeBlock,
-    initCopyableBlocks, showFormModal, skeletonCards
+    initCopyableBlocks, showFormModal, skeletonCards,
+    formatMinutes, getHostSlaCompliance, formatUptime
 } from '../app.js';
 import { ensureModalDOM, templateSlaHostDetailModal, templateSlaTargetModal } from '../page-templates.js';
 
@@ -121,16 +122,6 @@ function renderMonitoringDevices(polls) {
             <div style="margin-top:0.4rem; font-size:0.8em; color:var(--text-muted);">Last poll: ${polled}</div>
         </div>`;
     }).join('');
-}
-
-function formatUptime(seconds) {
-    if (seconds == null) return 'N/A';
-    const d = Math.floor(seconds / 86400);
-    const h = Math.floor((seconds % 86400) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
 }
 
 function renderMonitoringAlerts(alerts) {
@@ -331,6 +322,7 @@ window.runMonitoringPollNow = async function() {
             }
         });
     } catch (e) {
+        if (e.name === 'AbortError') return; // navigated away — silently cancel
         showError(e.message);
         if (progressTitle) progressTitle.textContent = 'Poll failed';
         if (progressBar) progressBar.style.background = 'var(--danger)';
@@ -886,48 +878,6 @@ function renderSlaSummary(s) {
     if (mttdEl) mttdEl.textContent = s.mttd_minutes != null ? formatMinutes(s.mttd_minutes) : '-';
 }
 
-function formatMinutes(m) {
-    if (m == null) return '-';
-    if (m < 1) return '<1m';
-    if (m < 60) return Math.round(m) + 'm';
-    const h = Math.floor(m / 60);
-    const rem = Math.round(m % 60);
-    return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
-}
-
-function getHostSlaCompliance(host, targets) {
-    // Find applicable targets for this host
-    const applicable = targets.filter(t =>
-        t.enabled && (
-            (!t.host_id && !t.group_id) ||
-            (t.host_id && t.host_id === host.host_id) ||
-            (t.group_id && t.group_id === host.group_id)
-        )
-    );
-    if (!applicable.length) return { status: 'none', worst: null };
-
-    let worst = 'met';
-    for (const t of applicable) {
-        let actual = null;
-        if (t.metric === 'uptime') actual = host.uptime_pct;
-        else if (t.metric === 'latency') actual = host.avg_latency_ms;
-        else if (t.metric === 'jitter') actual = host.jitter_ms;
-        else if (t.metric === 'packet_loss') actual = host.avg_packet_loss_pct;
-        if (actual == null) continue;
-
-        // For uptime: higher is better; for latency/jitter/packet_loss: lower is better
-        const higherIsBetter = t.metric === 'uptime';
-        if (higherIsBetter) {
-            if (actual < t.target_value) worst = 'breach';
-            else if (actual < t.warning_value && worst !== 'breach') worst = 'warn';
-        } else {
-            if (actual > t.target_value) worst = 'breach';
-            else if (actual > t.warning_value && worst !== 'breach') worst = 'warn';
-        }
-    }
-    return { status: worst };
-}
-
 function renderSlaHosts(hosts, targets) {
     const container = document.getElementById('sla-hosts-list');
     if (!container) return;
@@ -1353,5 +1303,10 @@ document.addEventListener('DOMContentLoaded', () => {
 export { loadMonitoring, loadSla };
 
 export function destroyMonitoring() {
-    // Cleanup: remove any time range listeners if needed in the future
+    listViewState.monitoring.polls = [];
+    listViewState.monitoring.alerts = [];
+    listViewState.monitoring.query = '';
+    listViewState.sla.summary = null;
+    listViewState.sla.hosts = [];
+    listViewState.sla.query = '';
 }
