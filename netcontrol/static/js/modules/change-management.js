@@ -965,6 +965,20 @@ document.addEventListener('DOMContentLoaded', () => {
 // Exports
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Change Management page tabs (Risk Analysis / Deployments)
+window.switchChangeTab = function(tab) {
+    listViewState.changeManagement.tab = tab;
+    document.querySelectorAll('.change-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-change-tab') === tab));
+    document.querySelectorAll('.change-tab').forEach(t => t.style.display = 'none');
+    const target = document.getElementById(`change-tab-${tab}`);
+    if (target) target.style.display = '';
+};
+
+window.refreshChangeManagement = async function() {
+    await loadRiskAnalysis({ preserveContent: false });
+    await loadDeployments({ preserveContent: false });
+};
+
 export { loadRiskAnalysis, loadDeployments };
 
 export function destroyChangeManagement() {

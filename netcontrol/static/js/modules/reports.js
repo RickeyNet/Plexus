@@ -11,6 +11,7 @@ import {
     getTimeRangeParams, copyableCodeBlock, initCopyableBlocks, debounce,
     formatDuration
 } from '../app.js';
+import { ensureModalDOM, templateOidProfileModal } from '../page-templates.js';
 
 const closeModal = closeAllModals;
 
@@ -1007,6 +1008,155 @@ function destroyReports() {
 }
 
 // =============================================================================
+// Custom OID Profiles
+// =============================================================================
+
+async function loadOidProfiles(options = {}) {
+    const { preserveContent = false } = options;
+    const container = document.getElementById('oid-profiles-list');
+    if (!preserveContent && container) container.innerHTML = skeletonCards(2);
+    try {
+        const vendor = document.getElementById('oid-vendor-filter')?.value || '';
+        const result = await api.getOidProfiles(vendor || null);
+        const profiles = result?.profiles || result || [];
+
+        // Populate vendor filter
+        const vendorSelect = document.getElementById('oid-vendor-filter');
+        if (vendorSelect && vendorSelect.options.length <= 1) {
+            const vendors = [...new Set(profiles.map(p => p.vendor).filter(Boolean))];
+            vendors.forEach(v => {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = v;
+                vendorSelect.appendChild(opt);
+            });
+        }
+
+        if (container) {
+            if (!profiles.length) {
+                container.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">No custom OID profiles. Click "+ New Profile" to create one.</p></div>';
+            } else {
+                container.innerHTML = profiles.map(p => {
+                    let oidCount = 0;
+                    try { oidCount = JSON.parse(p.oids_json || '[]').length; } catch (_) {}
+                    return `<div class="card" style="padding:1rem; margin-bottom:0.75rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <strong>${escapeHtml(p.name)}</strong>
+                                ${p.vendor ? `<span class="badge badge-info" style="margin-left:0.5rem;">${escapeHtml(p.vendor)}</span>` : ''}
+                                ${p.device_type ? `<span class="text-muted" style="margin-left:0.5rem;">${escapeHtml(p.device_type)}</span>` : ''}
+                                ${p.is_default ? '<span class="badge badge-success" style="margin-left:0.5rem;">Default</span>' : ''}
+                            </div>
+                            <div style="display:flex; gap:0.5rem;">
+                                <button class="btn btn-sm btn-secondary" onclick="editOidProfile(${p.id})">Edit</button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteOidProfile(${p.id})">Delete</button>
+                            </div>
+                        </div>
+                        <div class="text-muted" style="font-size:0.85em; margin-top:0.25rem;">
+                            ${escapeHtml(p.description || '')} &middot; ${oidCount} OID mapping${oidCount !== 1 ? 's' : ''}
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+        }
+
+        // Built-in vendor defaults (informational)
+        const defaultsEl = document.getElementById('vendor-oid-defaults-list');
+        if (defaultsEl) {
+            defaultsEl.innerHTML = `<div class="card" style="padding:1rem;">
+                <p class="text-muted" style="margin-bottom:0.75rem;">These OIDs are polled automatically based on device type detection.</p>
+                <table class="chart-table">
+                    <thead><tr><th>Vendor</th><th>Metric</th><th>OID</th></tr></thead>
+                    <tbody>
+                        <tr><td>Cisco IOS</td><td>CPU 5min</td><td>1.3.6.1.4.1.9.9.109.1.1.1.1.8</td></tr>
+                        <tr><td>Cisco IOS</td><td>Memory Used</td><td>1.3.6.1.4.1.9.9.48.1.1.1.5</td></tr>
+                        <tr><td>Juniper</td><td>CPU</td><td>1.3.6.1.4.1.2636.3.1.13.1.8</td></tr>
+                        <tr><td>Juniper</td><td>Memory</td><td>1.3.6.1.4.1.2636.3.1.13.1.11</td></tr>
+                        <tr><td>Arista</td><td>CPU</td><td>1.3.6.1.2.1.25.3.3.1.2</td></tr>
+                        <tr><td>Generic</td><td>sysUpTime</td><td>1.3.6.1.2.1.1.3.0</td></tr>
+                        <tr><td>Generic</td><td>ifHCInOctets</td><td>1.3.6.1.2.1.31.1.1.1.6</td></tr>
+                        <tr><td>Generic</td><td>ifHCOutOctets</td><td>1.3.6.1.2.1.31.1.1.1.10</td></tr>
+                    </tbody>
+                </table>
+            </div>`;
+        }
+    } catch (error) {
+        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading OID profiles: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadOidProfiles = loadOidProfiles;
+
+function showCreateOidProfile() {
+    ensureModalDOM('oid-profile-modal', templateOidProfileModal);
+    document.getElementById('oid-profile-edit-id').value = '';
+    document.getElementById('oid-profile-modal-title').textContent = 'New OID Profile';
+    document.getElementById('oid-profile-name').value = '';
+    document.getElementById('oid-profile-vendor').value = '';
+    document.getElementById('oid-profile-device-type').value = '';
+    document.getElementById('oid-profile-description').value = '';
+    document.getElementById('oid-profile-oids').value = '[\n  {"oid": "", "metric_name": "", "label": "", "type": "gauge"}\n]';
+    document.getElementById('oid-profile-modal').style.display = '';
+}
+window.showCreateOidProfile = showCreateOidProfile;
+
+async function editOidProfile(profileId) {
+    ensureModalDOM('oid-profile-modal', templateOidProfileModal);
+    try {
+        const profile = await api.getOidProfile(profileId);
+        document.getElementById('oid-profile-edit-id').value = profile.id;
+        document.getElementById('oid-profile-modal-title').textContent = 'Edit OID Profile';
+        document.getElementById('oid-profile-name').value = profile.name || '';
+        document.getElementById('oid-profile-vendor').value = profile.vendor || '';
+        document.getElementById('oid-profile-device-type').value = profile.device_type || '';
+        document.getElementById('oid-profile-description').value = profile.description || '';
+        document.getElementById('oid-profile-oids').value = profile.oids_json || '[]';
+        document.getElementById('oid-profile-modal').style.display = '';
+    } catch (e) { showError(e.message); }
+}
+window.editOidProfile = editOidProfile;
+
+async function saveOidProfile() {
+    const editId = document.getElementById('oid-profile-edit-id').value;
+    const data = {
+        name: document.getElementById('oid-profile-name').value.trim(),
+        vendor: document.getElementById('oid-profile-vendor').value.trim(),
+        device_type: document.getElementById('oid-profile-device-type').value.trim(),
+        description: document.getElementById('oid-profile-description').value.trim(),
+        oids_json: document.getElementById('oid-profile-oids').value.trim(),
+    };
+    if (!data.name) { showError('Profile name is required'); return; }
+    // Validate JSON
+    try { JSON.parse(data.oids_json); } catch (_) { showError('Invalid OID JSON'); return; }
+    try {
+        if (editId) {
+            await api.updateOidProfile(editId, data);
+            showSuccess('OID profile updated');
+        } else {
+            await api.createOidProfile(data);
+            showSuccess('OID profile created');
+        }
+        closeOidProfileModal();
+        loadOidProfiles();
+    } catch (e) { showError(e.message); }
+}
+window.saveOidProfile = saveOidProfile;
+
+function closeOidProfileModal() {
+    document.getElementById('oid-profile-modal').style.display = 'none';
+}
+window.closeOidProfileModal = closeOidProfileModal;
+
+async function deleteOidProfile(profileId) {
+    if (!await showConfirm({ title: 'Delete OID Profile', message: 'Delete this OID profile?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
+    try {
+        await api.deleteOidProfile(profileId);
+        showSuccess('OID profile deleted');
+        loadOidProfiles();
+    } catch (e) { showError(e.message); }
+}
+window.deleteOidProfile = deleteOidProfile;
+
+// =============================================================================
 // Exports
 // =============================================================================
 
@@ -1024,4 +1174,5 @@ export {
     updateReportParams,
     generateAndShowReport,
     formatDuration,
+    loadOidProfiles,
 };

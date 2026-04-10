@@ -5,7 +5,7 @@
 import * as api from './api.js';
 import { getCsrfToken, setCsrfToken } from './api.js';
 import { connectJobWebSocket, disconnectJobWebSocket, connectUpgradeWebSocket, disconnectUpgradeWebSocket } from './websocket.js';
-import { ensurePageDOM, ensureModalDOM, templateOidProfileModal, templateSlaHostDetailModal, templateSlaTargetModal } from './page-templates.js';
+import { ensurePageDOM, ensureModalDOM } from './page-templates.js';
 
 // Global state
 let currentPage = 'dashboard';
@@ -2330,21 +2330,6 @@ function closeMobileSidebar() {
     if (backdrop) backdrop.classList.remove('visible');
 }
 
-// Change Management page tabs (Risk Analysis / Deployments)
-window.switchChangeTab = function(tab) {
-    listViewState.changeManagement.tab = tab;
-    document.querySelectorAll('.change-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-change-tab') === tab));
-    document.querySelectorAll('.change-tab').forEach(t => t.style.display = 'none');
-    const target = document.getElementById(`change-tab-${tab}`);
-    if (target) target.style.display = '';
-};
-
-window.refreshChangeManagement = async function() {
-    const mod = await _loadModule('change-management');
-    await mod.loadRiskAnalysis({ preserveContent: false });
-    await mod.loadDeployments({ preserveContent: false });
-};
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Keyboard Shortcuts & Command Palette
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2510,79 +2495,8 @@ function initKeyboardShortcuts() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Empty State SVG Illustrations
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const EMPTY_ILLUSTRATIONS = {
-    inventory: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="20" y="30" width="80" height="60" rx="6" opacity="0.3"/>
-        <rect x="30" y="42" width="25" height="4" rx="2" opacity="0.5"/>
-        <rect x="30" y="52" width="40" height="4" rx="2" opacity="0.4"/>
-        <rect x="30" y="62" width="20" height="4" rx="2" opacity="0.3"/>
-        <line x1="75" y1="45" x2="85" y2="45" opacity="0.4"/>
-        <line x1="75" y1="55" x2="85" y2="55" opacity="0.3"/>
-        <circle cx="80" cy="75" r="12" opacity="0.2" fill="currentColor"/>
-        <line x1="75" y1="75" x2="85" y2="75" opacity="0.6"/>
-        <line x1="80" y1="70" x2="80" y2="80" opacity="0.6"/>
-    </svg>`,
-    playbooks: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M35 25h50a5 5 0 015 5v60a5 5 0 01-5 5H35a5 5 0 01-5-5V30a5 5 0 015-5z" opacity="0.3"/>
-        <path d="M30 30h5v60h-5" opacity="0.2" fill="currentColor"/>
-        <rect x="42" y="40" width="35" height="3" rx="1.5" opacity="0.5"/>
-        <rect x="42" y="50" width="25" height="3" rx="1.5" opacity="0.4"/>
-        <rect x="42" y="60" width="30" height="3" rx="1.5" opacity="0.3"/>
-        <rect x="42" y="70" width="20" height="3" rx="1.5" opacity="0.25"/>
-        <circle cx="80" cy="80" r="12" opacity="0.2" fill="currentColor"/>
-        <line x1="75" y1="80" x2="85" y2="80" opacity="0.6"/>
-        <line x1="80" y1="75" x2="80" y2="85" opacity="0.6"/>
-    </svg>`,
-    jobs: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="60,20 95,40 95,80 60,100 25,80 25,40" opacity="0.2"/>
-        <polygon points="60,20 95,40 60,60 25,40" opacity="0.15" fill="currentColor"/>
-        <line x1="60" y1="60" x2="60" y2="100" opacity="0.3"/>
-        <line x1="25" y1="40" x2="60" y2="60" opacity="0.3"/>
-        <line x1="95" y1="40" x2="60" y2="60" opacity="0.3"/>
-        <circle cx="60" cy="58" r="10" opacity="0.3"/>
-        <polyline points="55,58 59,62 66,54" opacity="0.5"/>
-    </svg>`,
-    templates: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="25" y="25" width="70" height="70" rx="6" opacity="0.2"/>
-        <line x1="25" y1="45" x2="95" y2="45" opacity="0.2"/>
-        <line x1="55" y1="45" x2="55" y2="95" opacity="0.2"/>
-        <rect x="30" y="30" width="20" height="4" rx="2" opacity="0.4"/>
-        <rect x="35" y="55" width="12" height="8" rx="2" opacity="0.15" fill="currentColor"/>
-        <rect x="65" y="55" width="20" height="8" rx="2" opacity="0.15" fill="currentColor"/>
-        <rect x="35" y="72" width="12" height="8" rx="2" opacity="0.1" fill="currentColor"/>
-        <rect x="65" y="72" width="20" height="8" rx="2" opacity="0.1" fill="currentColor"/>
-    </svg>`,
-    credentials: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="25" y="45" width="70" height="40" rx="6" opacity="0.3"/>
-        <path d="M60 45V35a12 12 0 0124 0v10" opacity="0.3"/>
-        <circle cx="60" cy="62" r="5" opacity="0.4"/>
-        <line x1="60" y1="67" x2="60" y2="75" opacity="0.4"/>
-    </svg>`,
-    default: `<svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="60" cy="50" r="25" opacity="0.2"/>
-        <line x1="60" y1="40" x2="60" y2="55" opacity="0.4"/>
-        <circle cx="60" cy="62" r="2" opacity="0.4" fill="currentColor"/>
-        <rect x="35" y="85" width="50" height="4" rx="2" opacity="0.15"/>
-        <rect x="42" y="93" width="36" height="4" rx="2" opacity="0.1"/>
-    </svg>`,
-};
-
-function getEmptyIllustration(type) {
-    return EMPTY_ILLUSTRATIONS[type] || EMPTY_ILLUSTRATIONS.default;
-}
-
-export function emptyStateHTML(message, type, actionBtn) {
-    return `<div class="empty-state">
-        <div class="empty-state-illustration">${getEmptyIllustration(type)}</div>
-        <div class="empty-state-title">${message}</div>
-        <div class="empty-state-text">Get started by creating your first ${type.replace(/s$/, '')}.</div>
-        ${actionBtn || ''}
-    </div>`;
-}
+// Re-export emptyStateHTML from page-templates (moved there with SVG illustrations)
+export { emptyStateHTML } from './page-templates.js';
 
 // Preserved utility functions imported by modules
 export function formatUptime(seconds) {
@@ -2643,6 +2557,15 @@ export function rangeToMs(range) {
     return m ? parseInt(m[1]) * units[m[2]] : 86400000;
 }
 
+export function formatInterval(seconds) {
+    if (seconds == null) return '-';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) { const m = Math.floor(seconds / 60); return m === 1 ? '1 minute' : `${m} minutes`; }
+    if (seconds < 86400) { const h = Math.floor(seconds / 3600); return h === 1 ? '1 hour' : `${h} hours`; }
+    const d = Math.floor(seconds / 86400);
+    return d === 1 ? '1 day' : `${d} days`;
+}
+
 export function formatDuration(seconds) {
     if (seconds == null) return '-';
     if (seconds < 60) return `${Math.round(seconds)}s`;
@@ -2655,155 +2578,6 @@ export function formatDuration(seconds) {
     return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Custom OID Profiles Page
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function loadOidProfiles(options = {}) {
-    const { preserveContent = false } = options;
-    const container = document.getElementById('oid-profiles-list');
-    if (!preserveContent && container) container.innerHTML = skeletonCards(2);
-    try {
-        const vendor = document.getElementById('oid-vendor-filter')?.value || '';
-        const result = await api.getOidProfiles(vendor || null);
-        const profiles = result?.profiles || result || [];
-
-        // Populate vendor filter
-        const vendorSelect = document.getElementById('oid-vendor-filter');
-        if (vendorSelect && vendorSelect.options.length <= 1) {
-            const vendors = [...new Set(profiles.map(p => p.vendor).filter(Boolean))];
-            vendors.forEach(v => {
-                const opt = document.createElement('option');
-                opt.value = v;
-                opt.textContent = v;
-                vendorSelect.appendChild(opt);
-            });
-        }
-
-        if (container) {
-            if (!profiles.length) {
-                container.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">No custom OID profiles. Click "+ New Profile" to create one.</p></div>';
-            } else {
-                container.innerHTML = profiles.map(p => {
-                    let oidCount = 0;
-                    try { oidCount = JSON.parse(p.oids_json || '[]').length; } catch (_) {}
-                    return `<div class="card" style="padding:1rem; margin-bottom:0.75rem;">
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <div>
-                                <strong>${escapeHtml(p.name)}</strong>
-                                ${p.vendor ? `<span class="badge badge-info" style="margin-left:0.5rem;">${escapeHtml(p.vendor)}</span>` : ''}
-                                ${p.device_type ? `<span class="text-muted" style="margin-left:0.5rem;">${escapeHtml(p.device_type)}</span>` : ''}
-                                ${p.is_default ? '<span class="badge badge-success" style="margin-left:0.5rem;">Default</span>' : ''}
-                            </div>
-                            <div style="display:flex; gap:0.5rem;">
-                                <button class="btn btn-sm btn-secondary" onclick="editOidProfile(${p.id})">Edit</button>
-                                <button class="btn btn-sm btn-danger" onclick="deleteOidProfile(${p.id})">Delete</button>
-                            </div>
-                        </div>
-                        <div class="text-muted" style="font-size:0.85em; margin-top:0.25rem;">
-                            ${escapeHtml(p.description || '')} &middot; ${oidCount} OID mapping${oidCount !== 1 ? 's' : ''}
-                        </div>
-                    </div>`;
-                }).join('');
-            }
-        }
-
-        // Built-in vendor defaults (informational)
-        const defaultsEl = document.getElementById('vendor-oid-defaults-list');
-        if (defaultsEl) {
-            defaultsEl.innerHTML = `<div class="card" style="padding:1rem;">
-                <p class="text-muted" style="margin-bottom:0.75rem;">These OIDs are polled automatically based on device type detection.</p>
-                <table class="chart-table">
-                    <thead><tr><th>Vendor</th><th>Metric</th><th>OID</th></tr></thead>
-                    <tbody>
-                        <tr><td>Cisco IOS</td><td>CPU 5min</td><td>1.3.6.1.4.1.9.9.109.1.1.1.1.8</td></tr>
-                        <tr><td>Cisco IOS</td><td>Memory Used</td><td>1.3.6.1.4.1.9.9.48.1.1.1.5</td></tr>
-                        <tr><td>Juniper</td><td>CPU</td><td>1.3.6.1.4.1.2636.3.1.13.1.8</td></tr>
-                        <tr><td>Juniper</td><td>Memory</td><td>1.3.6.1.4.1.2636.3.1.13.1.11</td></tr>
-                        <tr><td>Arista</td><td>CPU</td><td>1.3.6.1.2.1.25.3.3.1.2</td></tr>
-                        <tr><td>Generic</td><td>sysUpTime</td><td>1.3.6.1.2.1.1.3.0</td></tr>
-                        <tr><td>Generic</td><td>ifHCInOctets</td><td>1.3.6.1.2.1.31.1.1.1.6</td></tr>
-                        <tr><td>Generic</td><td>ifHCOutOctets</td><td>1.3.6.1.2.1.31.1.1.1.10</td></tr>
-                    </tbody>
-                </table>
-            </div>`;
-        }
-    } catch (error) {
-        if (container) container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading OID profiles: ${escapeHtml(error.message)}</div>`;
-    }
-}
-window.loadOidProfiles = loadOidProfiles;
-
-function showCreateOidProfile() {
-    ensureModalDOM('oid-profile-modal', templateOidProfileModal);
-    document.getElementById('oid-profile-edit-id').value = '';
-    document.getElementById('oid-profile-modal-title').textContent = 'New OID Profile';
-    document.getElementById('oid-profile-name').value = '';
-    document.getElementById('oid-profile-vendor').value = '';
-    document.getElementById('oid-profile-device-type').value = '';
-    document.getElementById('oid-profile-description').value = '';
-    document.getElementById('oid-profile-oids').value = '[\n  {"oid": "", "metric_name": "", "label": "", "type": "gauge"}\n]';
-    document.getElementById('oid-profile-modal').style.display = '';
-}
-window.showCreateOidProfile = showCreateOidProfile;
-
-async function editOidProfile(profileId) {
-    ensureModalDOM('oid-profile-modal', templateOidProfileModal);
-    try {
-        const profile = await api.getOidProfile(profileId);
-        document.getElementById('oid-profile-edit-id').value = profile.id;
-        document.getElementById('oid-profile-modal-title').textContent = 'Edit OID Profile';
-        document.getElementById('oid-profile-name').value = profile.name || '';
-        document.getElementById('oid-profile-vendor').value = profile.vendor || '';
-        document.getElementById('oid-profile-device-type').value = profile.device_type || '';
-        document.getElementById('oid-profile-description').value = profile.description || '';
-        document.getElementById('oid-profile-oids').value = profile.oids_json || '[]';
-        document.getElementById('oid-profile-modal').style.display = '';
-    } catch (e) { showError(e.message); }
-}
-window.editOidProfile = editOidProfile;
-
-async function saveOidProfile() {
-    const editId = document.getElementById('oid-profile-edit-id').value;
-    const data = {
-        name: document.getElementById('oid-profile-name').value.trim(),
-        vendor: document.getElementById('oid-profile-vendor').value.trim(),
-        device_type: document.getElementById('oid-profile-device-type').value.trim(),
-        description: document.getElementById('oid-profile-description').value.trim(),
-        oids_json: document.getElementById('oid-profile-oids').value.trim(),
-    };
-    if (!data.name) { showError('Profile name is required'); return; }
-    // Validate JSON
-    try { JSON.parse(data.oids_json); } catch (_) { showError('Invalid OID JSON'); return; }
-    try {
-        if (editId) {
-            await api.updateOidProfile(editId, data);
-            showSuccess('OID profile updated');
-        } else {
-            await api.createOidProfile(data);
-            showSuccess('OID profile created');
-        }
-        closeOidProfileModal();
-        loadOidProfiles();
-    } catch (e) { showError(e.message); }
-}
-window.saveOidProfile = saveOidProfile;
-
-function closeOidProfileModal() {
-    document.getElementById('oid-profile-modal').style.display = 'none';
-}
-window.closeOidProfileModal = closeOidProfileModal;
-
-async function deleteOidProfile(profileId) {
-    if (!await showConfirm({ title: 'Delete OID Profile', message: 'Delete this OID profile?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
-    try {
-        await api.deleteOidProfile(profileId);
-        showSuccess('OID profile deleted');
-        loadOidProfiles();
-    } catch (e) { showError(e.message); }
-}
-window.deleteOidProfile = deleteOidProfile;
 
 // ── Hash-based routing: back/forward button support ─────────────────────────
 window.addEventListener('popstate', () => {
