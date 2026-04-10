@@ -12,6 +12,23 @@ import {
 
 const closeModal = closeAllModals;
 
+let _activeWebSockets = [];
+
+function _trackWs(ws) {
+    _activeWebSockets.push(ws);
+    ws.addEventListener('close', () => {
+        _activeWebSockets = _activeWebSockets.filter(w => w !== ws);
+    });
+    return ws;
+}
+
+function _closeAllWs() {
+    for (const ws of _activeWebSockets) {
+        try { ws.close(); } catch (e) { /* ignore */ }
+    }
+    _activeWebSockets = [];
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Risk Analysis
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -584,7 +601,7 @@ function showDeploymentJobStream(jobId, deploymentId, title) {
     const statusEl = document.getElementById('deploy-job-status');
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${location.host}/ws/deployment/${jobId}`);
+    const ws = _trackWs(new WebSocket(`${protocol}//${location.host}/ws/deployment/${jobId}`));
 
     ws.onopen = () => { if (statusEl) statusEl.textContent = 'Connected — streaming output...'; };
     ws.onmessage = (event) => {
@@ -951,5 +968,9 @@ document.addEventListener('DOMContentLoaded', () => {
 export { loadRiskAnalysis, loadDeployments };
 
 export function destroyChangeManagement() {
-    // Cleanup: cancel any pending operations if needed in the future
+    _closeAllWs();
+    listViewState.riskAnalysis.items = [];
+    listViewState.riskAnalysis.query = '';
+    listViewState.deployments.items = [];
+    listViewState.deployments.query = '';
 }

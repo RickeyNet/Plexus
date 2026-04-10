@@ -75,6 +75,28 @@ export function invalidateApiCache(...prefixes) {
     }
 }
 
+// ── AbortController for page-navigation cancellation ────────────────────────
+let _pageController = new AbortController();
+const _getInflight = new Map(); // endpoint → Promise (dedup concurrent identical GETs)
+
+/**
+ * Abort all in-flight API requests (call on page navigation).
+ * A new controller is created automatically for the next page's requests.
+ */
+export function abortPendingRequests() {
+    _pageController.abort();
+    _pageController = new AbortController();
+    _getInflight.clear();
+}
+
+/**
+ * Get the current page-level AbortSignal.
+ * Stream functions or long-running callers can use this directly.
+ */
+export function getPageSignal() {
+    return _pageController.signal;
+}
+
 async function apiRequest(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
     const config = {
@@ -94,8 +116,29 @@ async function apiRequest(endpoint, options = {}) {
         config.body = JSON.stringify(config.body);
     }
 
+    // Wire up abort signal: caller-provided signal takes priority, else use page-level
+    if (!config.signal) {
+        config.signal = _pageController.signal;
+    }
+
     const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes((config.method || 'GET').toUpperCase());
 
+    // Dedup concurrent identical GET requests — return the same in-flight promise
+    if (!isMutation && _getInflight.has(endpoint)) {
+        return _getInflight.get(endpoint);
+    }
+
+    const promise = _doApiRequest(url, config, endpoint, isMutation);
+
+    if (!isMutation) {
+        _getInflight.set(endpoint, promise);
+        promise.finally(() => _getInflight.delete(endpoint));
+    }
+
+    return promise;
+}
+
+async function _doApiRequest(url, config, endpoint, isMutation) {
     try {
         const response = await fetch(url, config);
         const data = await response.json();
@@ -113,6 +156,7 @@ async function apiRequest(endpoint, options = {}) {
 
         return data;
     } catch (error) {
+        if (error.name === 'AbortError') throw error; // don't log aborts
         console.error('API request failed:', error);
         throw error;
     }
@@ -246,10 +290,12 @@ export async function scanInventoryGroupStream(groupId, cidrs, options = {}, onE
     const url = `${API_BASE}/inventory/${groupId}/discovery/scan/stream`;
     const headers = { 'Content-Type': 'application/json' };
     if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
+    const signal = options.signal || _pageController.signal;
 
     const response = await fetch(url, {
         method: 'POST',
         headers,
+        signal,
         body: JSON.stringify({
             cidrs,
             timeout_seconds: options.timeoutSeconds,
@@ -269,20 +315,24 @@ export async function scanInventoryGroupStream(groupId, cidrs, options = {}, onE
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                try {
-                    const event = JSON.parse(line.slice(6));
-                    onEvent(event);
-                } catch { /* skip malformed */ }
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const event = JSON.parse(line.slice(6));
+                        onEvent(event);
+                    } catch (e) { console.warn('Stream JSON parse error:', e.message, line); }
+                }
             }
         }
+    } finally {
+        reader.releaseLock();
     }
 }
 
@@ -702,14 +752,15 @@ export async function discoverTopologyAll() {
     return apiRequest('/topology/discover', { method: 'POST' });
 }
 
-export async function discoverTopologyStream(groupId, onEvent) {
+export async function discoverTopologyStream(groupId, onEvent, options = {}) {
     const url = groupId
         ? `${API_BASE}/topology/discover/${groupId}/stream`
         : `${API_BASE}/topology/discover/stream`;
     const headers = { 'Content-Type': 'application/json' };
     if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
+    const signal = options.signal || _pageController.signal;
 
-    const response = await fetch(url, { method: 'POST', headers });
+    const response = await fetch(url, { method: 'POST', headers, signal });
 
     if (!response.ok) {
         const err = await response.json().catch(() => ({}));
@@ -720,20 +771,24 @@ export async function discoverTopologyStream(groupId, onEvent) {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                try {
-                    const event = JSON.parse(line.slice(6));
-                    onEvent(event);
-                } catch { /* skip malformed */ }
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const event = JSON.parse(line.slice(6));
+                        onEvent(event);
+                    } catch (e) { console.warn('Stream JSON parse error:', e.message, line); }
+                }
             }
         }
+    } finally {
+        reader.releaseLock();
     }
 }
 
@@ -1140,12 +1195,13 @@ export async function runMonitoringPollNow() {
     return apiRequest('/monitoring/poll-now', { method: 'POST' });
 }
 
-export async function runMonitoringPollStream(onEvent) {
+export async function runMonitoringPollStream(onEvent, options = {}) {
     const url = `${API_BASE}/monitoring/poll-now/stream`;
     const headers = { 'Content-Type': 'application/json' };
     if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
+    const signal = options.signal || _pageController.signal;
 
-    const response = await fetch(url, { method: 'POST', headers });
+    const response = await fetch(url, { method: 'POST', headers, signal });
 
     if (!response.ok) {
         const err = await response.json().catch(() => ({}));
@@ -1156,20 +1212,24 @@ export async function runMonitoringPollStream(onEvent) {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                try {
-                    const event = JSON.parse(line.slice(6));
-                    onEvent(event);
-                } catch { /* skip malformed */ }
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const event = JSON.parse(line.slice(6));
+                        onEvent(event);
+                    } catch (e) { console.warn('Stream JSON parse error:', e.message, line); }
+                }
             }
         }
+    } finally {
+        reader.releaseLock();
     }
 }
 

@@ -46,12 +46,20 @@ function applyInventoryFilters() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Module-level resource tracking
+// ═══════════════════════════════════════════════════════════════════════════════
+let _scanElapsedInterval = null;
+let _lastInventoryFingerprint = null;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Inventory
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function loadInventory(options = {}) {
     const { preserveContent = false } = options;
     const container = document.getElementById('inventory-groups');
+    // Invalidate fingerprint so fresh data always re-renders
+    _lastInventoryFingerprint = null;
     if (!preserveContent) {
         container.innerHTML = skeletonCards(4);
     }
@@ -107,6 +115,15 @@ function renderInventoryGroups(groups) {
     const hostMatchesQuery = (host) => query && (
         textMatch(host.hostname, query) || textMatch(host.ip_address, query) || textMatch(host.device_type, query)
     );
+
+    // Skip render if data hasn't changed (prevents DOM thrash on redundant search/sort)
+    const fingerprint = JSON.stringify(groups.map(g => g.id)) + '|' + query + '|' + (listViewState.inventory.sort || '');
+    if (fingerprint === _lastInventoryFingerprint) return;
+    _lastInventoryFingerprint = fingerprint;
+
+    // Preserve scroll position across re-renders
+    const scrollTop = container.scrollTop;
+
     container.innerHTML = groups.map((group, i) => {
         const hosts = group.hosts || [];
         // When searching, sort matching hosts to the top
@@ -177,6 +194,9 @@ function renderInventoryGroups(groups) {
             </div>
         </div>`;
     }).join('');
+
+    // Restore scroll position after DOM rebuild
+    container.scrollTop = scrollTop;
 
     groups.forEach(group => {
         _groupCache[group.id] = {
@@ -402,9 +422,10 @@ window.runGlobalDiscovery = async function(e) {
         </div>
     `);
 
-    // Elapsed timer
+    // Elapsed timer (tracked at module level for cleanup on page leave)
+    clearInterval(_scanElapsedInterval);
     const scanStart = Date.now();
-    const elapsedInterval = setInterval(() => {
+    _scanElapsedInterval = setInterval(() => {
         const el = document.getElementById('scan-elapsed');
         if (el) {
             const sec = Math.floor((Date.now() - scanStart) / 1000);
@@ -483,10 +504,12 @@ window.runGlobalDiscovery = async function(e) {
             </div>
         `);
     } catch (error) {
+        if (error.name === 'AbortError') return; // navigated away — silently cancel
         closeAllModals();
         showError(`Discovery scan failed: ${error.message}`);
     } finally {
-        clearInterval(elapsedInterval);
+        clearInterval(_scanElapsedInterval);
+        _scanElapsedInterval = null;
     }
 };
 
@@ -855,9 +878,9 @@ window.deleteSnmpProfile = async function(profileId) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function destroyInventory() {
-    // Cleanup hook for when the user navigates away from inventory.
-    // Currently minimal — expand as needed (e.g. cancel pending requests,
-    // remove event listeners, clear intervals).
+    clearInterval(_scanElapsedInterval);
+    _scanElapsedInterval = null;
+    _lastInventoryFingerprint = null;
 }
 
 export { loadInventory, destroyInventory, applyInventoryFilters, renderInventoryGroups };

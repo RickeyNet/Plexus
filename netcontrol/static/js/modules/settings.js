@@ -22,6 +22,13 @@ const adminState = {
     authConfig: null,
 };
 
+// Named handler references for proper cleanup
+let _loginRulesHandler = null;
+let _authConfigHandler = null;
+let _authProviderHandler = null;
+let _topoDiscoveryHandler = null;
+let _monitoringHandler = null;
+
 function getGroupNameMap() {
     const map = {};
     (adminState.groups || []).forEach((g) => {
@@ -125,9 +132,10 @@ function renderAdminGroups() {
 
 function bindLoginRulesForm() {
     const form = document.getElementById('admin-login-rules-form');
-    if (!form || form.dataset.bound === '1') return;
-    form.dataset.bound = '1';
-    form.addEventListener('submit', async (e) => {
+    if (!form) return;
+    // Remove previous handler before attaching to prevent stacking
+    if (_loginRulesHandler) form.removeEventListener('submit', _loginRulesHandler);
+    _loginRulesHandler = async (e) => {
         e.preventDefault();
         try {
             const payload = {
@@ -141,7 +149,8 @@ function bindLoginRulesForm() {
         } catch (error) {
             showError(`Failed to save login rules: ${error.message}`);
         }
-    });
+    };
+    form.addEventListener('submit', _loginRulesHandler);
 }
 
 function renderLoginRules() {
@@ -154,9 +163,10 @@ function renderLoginRules() {
 
 function bindAuthConfigForm() {
     const form = document.getElementById('admin-auth-config-form');
-    if (!form || form.dataset.bound === '1') return;
-    form.dataset.bound = '1';
-    form.addEventListener('submit', async (e) => {
+    if (!form) return;
+    // Remove previous handlers before attaching to prevent stacking
+    if (_authConfigHandler) form.removeEventListener('submit', _authConfigHandler);
+    _authConfigHandler = async (e) => {
         e.preventDefault();
         try {
             const retentionDays = Number(document.getElementById('job-retention-days').value);
@@ -199,16 +209,19 @@ function bindAuthConfigForm() {
         } catch (error) {
             showError(`Failed to save authentication settings: ${error.message}`);
         }
-    });
+    };
+    form.addEventListener('submit', _authConfigHandler);
 
     const providerEl = document.getElementById('auth-provider');
     if (providerEl) {
-        providerEl.addEventListener('change', () => {
+        if (_authProviderHandler) providerEl.removeEventListener('change', _authProviderHandler);
+        _authProviderHandler = () => {
             const radiusPanel = document.getElementById('radius-config-panel');
             const ldapPanel = document.getElementById('ldap-config-panel');
             if (radiusPanel) radiusPanel.style.display = providerEl.value === 'radius' ? '' : 'none';
             if (ldapPanel) ldapPanel.style.display = providerEl.value === 'ldap' ? '' : 'none';
-        });
+        };
+        providerEl.addEventListener('change', _authProviderHandler);
     }
 }
 
@@ -318,9 +331,9 @@ async function loadTopologyDiscoveryConfig() {
 
 function bindTopologyDiscoveryForm() {
     const form = document.getElementById('admin-topology-discovery-form');
-    if (!form || form._bound) return;
-    form._bound = true;
-    form.addEventListener('submit', async (e) => {
+    if (!form) return;
+    if (_topoDiscoveryHandler) form.removeEventListener('submit', _topoDiscoveryHandler);
+    _topoDiscoveryHandler = async (e) => {
         e.preventDefault();
         try {
             const payload = {
@@ -332,7 +345,8 @@ function bindTopologyDiscoveryForm() {
         } catch (err) {
             showError('Failed to save: ' + err.message);
         }
-    });
+    };
+    form.addEventListener('submit', _topoDiscoveryHandler);
 }
 
 async function runTopologyDiscoveryNow() {
@@ -371,9 +385,9 @@ async function loadMonitoringConfig() {
 
 function bindMonitoringForm() {
     const form = document.getElementById('admin-monitoring-form');
-    if (!form || form._bound) return;
-    form._bound = true;
-    form.addEventListener('submit', async (e) => {
+    if (!form) return;
+    if (_monitoringHandler) form.removeEventListener('submit', _monitoringHandler);
+    _monitoringHandler = async (e) => {
         e.preventDefault();
         try {
             const payload = {
@@ -394,7 +408,8 @@ function bindMonitoringForm() {
         } catch (err) {
             showError('Failed to save monitoring config: ' + err.message);
         }
-    });
+    };
+    form.addEventListener('submit', _monitoringHandler);
 }
 
 async function runMonitoringPollNow() {
@@ -623,15 +638,33 @@ window.deleteAccessGroupAdmin = async function(groupId) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function destroySettings() {
-    // Reset bound-form flags so forms re-bind on next load
-    const loginForm = document.getElementById('admin-login-rules-form');
-    if (loginForm) delete loginForm.dataset.bound;
-    const authForm = document.getElementById('admin-auth-config-form');
-    if (authForm) delete authForm.dataset.bound;
-    const topoForm = document.getElementById('admin-topology-discovery-form');
-    if (topoForm) delete topoForm._bound;
-    const monForm = document.getElementById('admin-monitoring-form');
-    if (monForm) delete monForm._bound;
+    // Remove all named form handlers to prevent stacking on re-entry
+    if (_loginRulesHandler) {
+        document.getElementById('admin-login-rules-form')?.removeEventListener('submit', _loginRulesHandler);
+        _loginRulesHandler = null;
+    }
+    if (_authConfigHandler) {
+        document.getElementById('admin-auth-config-form')?.removeEventListener('submit', _authConfigHandler);
+        _authConfigHandler = null;
+    }
+    if (_authProviderHandler) {
+        document.getElementById('auth-provider')?.removeEventListener('change', _authProviderHandler);
+        _authProviderHandler = null;
+    }
+    if (_topoDiscoveryHandler) {
+        document.getElementById('admin-topology-discovery-form')?.removeEventListener('submit', _topoDiscoveryHandler);
+        _topoDiscoveryHandler = null;
+    }
+    if (_monitoringHandler) {
+        document.getElementById('admin-monitoring-form')?.removeEventListener('submit', _monitoringHandler);
+        _monitoringHandler = null;
+    }
+    // Clear cached admin data to free memory
+    adminState.capabilities = null;
+    adminState.users = [];
+    adminState.groups = [];
+    adminState.loginRules = null;
+    adminState.authConfig = null;
 }
 
 export { loadAdminSettings, destroySettings };

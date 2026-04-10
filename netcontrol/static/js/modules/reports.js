@@ -8,7 +8,8 @@ import {
     listViewState, escapeHtml, showError, showSuccess, showToast,
     showModal, closeAllModals, showConfirm, formatDate, formatRelativeTime,
     skeletonCards, emptyStateHTML, navigateToPage, PlexusChart,
-    getTimeRangeParams, copyableCodeBlock, initCopyableBlocks, debounce
+    getTimeRangeParams, copyableCodeBlock, initCopyableBlocks, debounce,
+    formatDuration
 } from '../app.js';
 
 const closeModal = closeAllModals;
@@ -259,18 +260,6 @@ async function loadAvailability(options = {}) {
     }
 }
 window.loadAvailability = loadAvailability;
-
-function formatDuration(seconds) {
-    if (seconds == null) return '-';
-    if (seconds < 60) return `${Math.round(seconds)}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (h < 24) return m > 0 ? `${h}h ${m}m` : `${h}h`;
-    const d = Math.floor(h / 24);
-    const rh = h % 24;
-    return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
-}
 
 function switchAvailTab(tab) {
     document.querySelectorAll('.avail-tab').forEach(t => t.style.display = 'none');
@@ -1010,10 +999,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // =============================================================================
 
 function destroyReports() {
-    // Cleanup any active chart instances on report pages
-    if (PlexusChart.instances) {
-        PlexusChart.instances.delete('cap-plan-chart-main');
-    }
+    PlexusChart.destroyAll();
+    listViewState.graphTemplates.items = [];
+    listViewState.graphTemplates.hostTemplates = [];
+    listViewState.graphTemplates.graphTrees = [];
+    listViewState.graphTemplates.query = '';
 }
 
 // =============================================================================
