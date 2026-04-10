@@ -30,7 +30,7 @@
                     <label class="form-label">Password</label>
                     <input type="password" class="form-input" id="login-password" required autocomplete="current-password">
                 </div>
-                <div id="login-error" class="login-error" style="display: none;"></div>
+                <div id="login-error" class="login-error hidden"></div>
                 <button type="submit" class="btn btn-primary login-btn">Sign In</button>
             </form>
             <div style="margin-top: 1rem; text-align: center;">
@@ -39,7 +39,7 @@
             </div>
 
             <!-- Register form (hidden by default) -->
-            <form id="register-form" style="display: none;">
+            <form id="register-form" class="hidden">
                 <div class="form-group">
                     <label class="form-label">Username</label>
                     <input type="text" class="form-input" id="register-username" required autocomplete="username" minlength="3">
@@ -56,17 +56,17 @@
                     <label class="form-label">Confirm Password</label>
                     <input type="password" class="form-input" id="register-confirm" required autocomplete="new-password" minlength="6">
                 </div>
-                <div id="register-error" class="login-error" style="display: none;"></div>
+                <div id="register-error" class="login-error hidden"></div>
                 <button type="submit" class="btn btn-primary login-btn">Create Account</button>
             </form>
-            <div id="register-back" style="margin-top: 1rem; text-align: center; display: none;">
+            <div id="register-back" class="hidden" style="margin-top: 1rem; text-align: center;">
                 <span style="color: var(--text-muted);">Already have an account?</span>
                 <a href="#" onclick="showLoginForm()" style="color: var(--primary-light); margin-left: 0.25rem;">Sign In</a>
             </div>
         </div>
     </div>
 
-    <div class="app-container" id="app-container" style="display: none;">
+    <div class="app-container hidden" id="app-container">
         <!-- Animated background -->
         <div class="animated-bg">
             <div class="space-depth space-depth-app" aria-hidden="true">
