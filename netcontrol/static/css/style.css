@@ -122,52 +122,7 @@
     --space-parallax-y: 0px;
 }
 
-[data-theme="forest"] {
-    --primary: #6b8e6b;
-    --primary-dark: #5a7a5a;
-    --primary-light: #7fa07f;
-    --secondary: #6b7280;
-    --success: #6b8e6b;
-    --warning: #d4a574;
-    --danger: #cf5e5e;
-    --bg: #0f1410;
-    --bg-secondary: #141914;
-    --bg-dark: #0a0f0a;
-    --card-bg: #1a221a;
-    --card-bg-hover: #1f281f;
-    --text: #c8d4c8;
-    --text-light: #9fb09f;
-    --text-muted: #7a8a7a;
-    --border: #2a332a;
-    --border-light: #354035;
-    --primary-soft: rgba(107, 142, 107, 0.15);
-    --primary-soft-strong: rgba(107, 142, 107, 0.25);
-    --primary-glow: rgba(107, 142, 107, 0.2);
-    --overlay: rgba(5, 20, 5, 0.85);
-    --topo-accent-rgb: 107, 142, 107;
-
-    --topo-cisco-bg: #0d3d1a;       --topo-cisco-border: #5a9a5a;
-    --topo-cisco-hi-bg: #184d28;    --topo-cisco-hi-border: #8ec48e;
-    --topo-juniper-bg: #1b4020;     --topo-juniper-border: #66bb6a;
-    --topo-juniper-hi-bg: #2a5030;  --topo-juniper-hi-border: #a5d6a7;
-    --topo-arista-bg: #5a3800;      --topo-arista-border: #d4a574;
-    --topo-arista-hi-bg: #6b4400;   --topo-arista-hi-border: #e8c49a;
-    --topo-fortinet-bg: #5a1a1a;    --topo-fortinet-border: #cf5e5e;
-    --topo-fortinet-hi-bg: #6b2828; --topo-fortinet-hi-border: #e89a9a;
-    --topo-unknown-bg: #1a2a1a;     --topo-unknown-border: #5a7a5a;
-    --topo-unknown-hi-bg: #253525;  --topo-unknown-hi-border: #8eaa8e;
-
-    --topo-edge-cdp: #7fc47f;       --topo-edge-cdp-hi: #a5d6a5;
-    --topo-edge-lldp: #6bb86b;      --topo-edge-lldp-hi: #98d898;
-    --topo-edge-ospf: #d4a574;      --topo-edge-ospf-hi: #e8c49a;
-    --topo-edge-bgp: #b48ec4;       --topo-edge-bgp-hi: #d0b8dc;
-
-    --topo-path-glow: rgba(107, 142, 107, 0.6);
-    --topo-dim-bg: rgba(15, 25, 15, 0.4);
-    --topo-dim-border: rgba(30, 50, 30, 0.4);
-    --topo-dim-edge: rgba(50, 80, 50, 0.2);
-    --topo-dim-edge-hi: rgba(50, 80, 50, 0.3);
-}
+/* [data-theme="forest"] intentionally omitted — :root already defaults to forest palette */
 
 [data-theme="dark-modern"] {
     --primary: #4ea1ff;
@@ -424,8 +379,6 @@
     --primary-soft-strong: rgba(240, 138, 101, 0.25);
     --primary-glow: rgba(240, 138, 101, 0.25);
     --overlay: rgba(5, 15, 20, 0.85);
-    --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.5), 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
     --topo-accent-rgb: 240, 138, 101;
 
     --topo-cisco-bg: #0e2a30;       --topo-cisco-border: #5abaa0;

@@ -19,6 +19,7 @@ export function getCsrfToken() {
 const _cache = new Map();          // key → { data, time }
 const _inflight = new Map();       // key → Promise (dedup concurrent requests)
 const DEFAULT_TTL_MS = 30_000;     // 30 seconds fresh window
+const MAX_CACHE_ENTRIES = 200;     // evict oldest entries when cache exceeds this
 
 /**
  * Cached GET wrapper. Returns fresh data immediately if within TTL.
@@ -52,6 +53,11 @@ async function _revalidate(key, fetchFn) {
     if (_inflight.has(key)) return _inflight.get(key);
     const promise = fetchFn().then(data => {
         _cache.set(key, { data, time: Date.now() });
+        // Evict oldest entries if cache exceeds size limit
+        if (_cache.size > MAX_CACHE_ENTRIES) {
+            const it = _cache.keys();
+            while (_cache.size > MAX_CACHE_ENTRIES) _cache.delete(it.next().value);
+        }
         _inflight.delete(key);
         return data;
     }).catch(err => {
@@ -97,6 +103,42 @@ export function getPageSignal() {
     return _pageController.signal;
 }
 
+/**
+ * Shared SSE stream helper. Issues a fetch, then reads the response body as
+ * newline-delimited SSE events ("data: {...}\n") and calls onEvent for each.
+ */
+async function _streamSSE(url, fetchOptions, onEvent) {
+    const response = await fetch(url, fetchOptions);
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const event = JSON.parse(line.slice(6));
+                        onEvent(event);
+                    } catch (e) { console.warn('Stream JSON parse error:', e.message, line); }
+                }
+            }
+        }
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+const _MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 async function apiRequest(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
     const config = {
@@ -107,8 +149,11 @@ async function apiRequest(endpoint, options = {}) {
         ...options,
     };
 
+    const method = (config.method || 'GET').toUpperCase();
+    const isMutation = _MUTATION_METHODS.has(method);
+
     // Attach CSRF token for state-changing requests
-    if (_csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes((config.method || 'GET').toUpperCase())) {
+    if (_csrfToken && isMutation) {
         config.headers['X-CSRF-Token'] = _csrfToken;
     }
 
@@ -120,8 +165,6 @@ async function apiRequest(endpoint, options = {}) {
     if (!config.signal) {
         config.signal = _pageController.signal;
     }
-
-    const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes((config.method || 'GET').toUpperCase());
 
     // Dedup concurrent identical GET requests — return the same in-flight promise
     if (!isMutation && _getInflight.has(endpoint)) {
@@ -290,12 +333,10 @@ export async function scanInventoryGroupStream(groupId, cidrs, options = {}, onE
     const url = `${API_BASE}/inventory/${groupId}/discovery/scan/stream`;
     const headers = { 'Content-Type': 'application/json' };
     if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
-    const signal = options.signal || _pageController.signal;
-
-    const response = await fetch(url, {
+    return _streamSSE(url, {
         method: 'POST',
         headers,
-        signal,
+        signal: options.signal || _pageController.signal,
         body: JSON.stringify({
             cidrs,
             timeout_seconds: options.timeoutSeconds,
@@ -304,36 +345,7 @@ export async function scanInventoryGroupStream(groupId, cidrs, options = {}, onE
             hostname_prefix: options.hostnamePrefix,
             use_snmp: options.useSnmp !== false,
         }),
-    });
-
-    if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const event = JSON.parse(line.slice(6));
-                        onEvent(event);
-                    } catch (e) { console.warn('Stream JSON parse error:', e.message, line); }
-                }
-            }
-        }
-    } finally {
-        reader.releaseLock();
-    }
+    }, onEvent);
 }
 
 export async function syncInventoryGroup(groupId, cidrs, options = {}) {
@@ -758,38 +770,11 @@ export async function discoverTopologyStream(groupId, onEvent, options = {}) {
         : `${API_BASE}/topology/discover/stream`;
     const headers = { 'Content-Type': 'application/json' };
     if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
-    const signal = options.signal || _pageController.signal;
-
-    const response = await fetch(url, { method: 'POST', headers, signal });
-
-    if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const event = JSON.parse(line.slice(6));
-                        onEvent(event);
-                    } catch (e) { console.warn('Stream JSON parse error:', e.message, line); }
-                }
-            }
-        }
-    } finally {
-        reader.releaseLock();
-    }
+    return _streamSSE(url, {
+        method: 'POST',
+        headers,
+        signal: options.signal || _pageController.signal,
+    }, onEvent);
 }
 
 export async function getHostTopology(hostId) {
@@ -1199,38 +1184,11 @@ export async function runMonitoringPollStream(onEvent, options = {}) {
     const url = `${API_BASE}/monitoring/poll-now/stream`;
     const headers = { 'Content-Type': 'application/json' };
     if (_csrfToken) headers['X-CSRF-Token'] = _csrfToken;
-    const signal = options.signal || _pageController.signal;
-
-    const response = await fetch(url, { method: 'POST', headers, signal });
-
-    if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const event = JSON.parse(line.slice(6));
-                        onEvent(event);
-                    } catch (e) { console.warn('Stream JSON parse error:', e.message, line); }
-                }
-            }
-        }
-    } finally {
-        reader.releaseLock();
-    }
+    return _streamSSE(url, {
+        method: 'POST',
+        headers,
+        signal: options.signal || _pageController.signal,
+    }, onEvent);
 }
 
 export async function getMonitoringConfig() {
@@ -1860,18 +1818,28 @@ async function rawApiRequest(fullPath, options = {}) {
         },
         ...options,
     };
-    if (_csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes((config.method || 'GET').toUpperCase())) {
+    if (_csrfToken && _MUTATION_METHODS.has((config.method || 'GET').toUpperCase())) {
         config.headers['X-CSRF-Token'] = _csrfToken;
     }
     if (config.body && typeof config.body === 'object') {
         config.body = JSON.stringify(config.body);
     }
-    const response = await fetch(fullPath, config);
-    const data = await response.json();
-    if (!response.ok) {
-        throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+    // Wire up abort signal so page navigation cancels these requests too
+    if (!config.signal) {
+        config.signal = _pageController.signal;
     }
-    return data;
+    try {
+        const response = await fetch(fullPath, config);
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+        }
+        return data;
+    } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        console.error('API request failed:', error);
+        throw error;
+    }
 }
 
 export async function apiGet(fullPath) {
