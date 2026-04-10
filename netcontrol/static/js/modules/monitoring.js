@@ -10,6 +10,7 @@ import {
     getTimeRangeParams, onTimeRangeChange, offTimeRangeChange, copyableCodeBlock,
     initCopyableBlocks, showFormModal, skeletonCards
 } from '../app.js';
+import { ensureModalDOM, templateSlaHostDetailModal, templateSlaTargetModal } from '../page-templates.js';
 
 const closeModal = closeAllModals;
 
@@ -1124,6 +1125,7 @@ function renderSlaChart(daily, field, label, color, minY, maxY) {
 // -- SLA Host Detail Modal ----------------------------------------------------
 
 async function showSlaHostDetail(hostId) {
+    ensureModalDOM('sla-host-detail-modal', templateSlaHostDetailModal);
     const modal = document.getElementById('sla-host-detail-modal');
     const body = document.getElementById('sla-host-detail-body');
     const title = document.getElementById('sla-host-detail-title');
@@ -1218,6 +1220,7 @@ function renderSlaTargets(targets) {
 }
 
 async function showCreateSlaTargetModal(editTarget = null) {
+    ensureModalDOM('sla-target-modal', templateSlaTargetModal);
     const modal = document.getElementById('sla-target-modal');
     const titleEl = document.getElementById('sla-target-modal-title');
     if (!modal) return;
