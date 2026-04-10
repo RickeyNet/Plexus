@@ -1895,9 +1895,18 @@ body {
 }
 
 .btn-sm {
-    padding: 0.15rem 0.5rem;
-    font-size: 0.7rem;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.78rem;
     line-height: 1.4;
+}
+
+/* Tab row layout — single horizontal row with uniform spacing */
+.tab-controls {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: nowrap;
+    align-items: center;
+    margin-bottom: 1rem;
 }
 
 /* Page tab buttons */
@@ -1909,12 +1918,14 @@ body {
 .avail-tab-btn,
 .report-tab-btn,
 .dev-tab-btn,
-.upgrade-tab-btn {
+.upgrade-tab-btn,
+.compliance-tab-btn {
     padding: 0.4rem 1rem;
     font-size: 0.85rem;
     font-weight: 500;
     letter-spacing: 0.02em;
     transition: all 0.2s ease;
+    white-space: nowrap;
 }
 
 .config-tab-btn.active,
@@ -1925,7 +1936,8 @@ body {
 .avail-tab-btn.active,
 .report-tab-btn.active,
 .dev-tab-btn.active,
-.upgrade-tab-btn.active {
+.upgrade-tab-btn.active,
+.compliance-tab-btn.active {
     background: linear-gradient(135deg, var(--primary-light), var(--primary), var(--primary-dark));
     color: var(--bg-dark);
     font-weight: 600;
