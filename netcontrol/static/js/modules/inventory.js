@@ -8,25 +8,9 @@ import {
     listViewState, escapeHtml, showError, showSuccess, showToast,
     showModal, closeAllModals, showConfirm, formatDate, navigateToPage,
     skeletonCards, emptyStateHTML, debounce,
-    _groupCache, _hostCache, _snmpProfilesCache, _groupSnmpAssignments
+    _groupCache, _hostCache, _snmpProfilesCache, _groupSnmpAssignments,
+    textMatch, byNameAsc, byNameDesc
 } from '../app.js';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Helpers
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function textMatch(value, query) {
-    if (!query) return true;
-    return String(value || '').toLowerCase().includes(query);
-}
-
-function byNameAsc(a, b) {
-    return String(a.name || '').localeCompare(String(b.name || ''));
-}
-
-function byNameDesc(a, b) {
-    return String(b.name || '').localeCompare(String(a.name || ''));
-}
 
 function applyInventoryFilters() {
     const state = listViewState.inventory;
@@ -870,6 +854,285 @@ window.deleteSnmpProfile = async function(profileId) {
         showSnmpProfilesModal();
     } catch (error) {
         showError(`Failed to delete SNMP profile: ${error.message}`);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CRUD Forms — Inventory Groups & Hosts
+// ═══════════════════════════════════════════════════════════════════════════════
+
+window.showCreateGroupModal = function() {
+    showModal('Create Inventory Group', `
+        <form onsubmit="createGroup(event)">
+            <div class="form-group">
+                <label class="form-label">Group Name</label>
+                <input type="text" class="form-input" name="name" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea class="form-textarea" name="description"></textarea>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    `);
+};
+
+window.createGroup = async function(e) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    try {
+        await api.createGroup(formData.get('name'), formData.get('description'));
+        closeAllModals();
+        await loadInventory();
+        showSuccess('Group created successfully');
+    } catch (error) {
+        showError(`Failed to create group: ${error.message}`);
+    }
+};
+
+window.showEditGroupModal = function(groupId) {
+    const group = _groupCache[groupId];
+    if (!group) {
+        showError('Group data not found');
+        return;
+    }
+
+    showModal('Edit Inventory Group', `
+        <form onsubmit="updateGroup(event, ${groupId})">
+            <div class="form-group">
+                <label class="form-label">Group Name</label>
+                <input type="text" class="form-input" name="name" value="${escapeHtml(group.name)}" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea class="form-textarea" name="description">${escapeHtml(group.description || '')}</textarea>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    `);
+};
+
+window.updateGroup = async function(e, groupId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    try {
+        await api.updateGroup(groupId, formData.get('name'), formData.get('description'));
+        closeAllModals();
+        await loadInventory();
+        showSuccess('Group updated successfully');
+    } catch (error) {
+        showError(`Failed to update group: ${error.message}`);
+    }
+};
+
+// Add Host Modal
+window.showAddHostModal = function(groupId) {
+    showModal('Add Host', `
+        <form onsubmit="addHost(event, ${groupId})">
+            <div class="form-group">
+                <label class="form-label">Hostname</label>
+                <input type="text" class="form-input" name="hostname" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">IP Address</label>
+                <input type="text" class="form-input" name="ip_address" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Device Type</label>
+                <select class="form-select" name="device_type">
+                    <option value="cisco_ios">Cisco IOS</option>
+                    <option value="cisco_nxos">Cisco NX-OS</option>
+                    <option value="cisco_asa">Cisco ASA</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Host</button>
+            </div>
+        </form>
+    `);
+};
+
+// Edit Host Modal
+window.showEditHostModal = function(hostId) {
+    const host = _hostCache[hostId];
+    if (!host) {
+        showError('Host data not found');
+        return;
+    }
+    const hostname = host.hostname;
+    const ipAddress = host.ip_address;
+    const deviceType = host.device_type || 'cisco_ios';
+    const groupId = host.groupId;
+
+    const form = document.createElement('form');
+    form.innerHTML = `
+        <div class="form-group">
+            <label class="form-label">Hostname</label>
+            <input type="text" class="form-input" name="hostname" required>
+        </div>
+        <div class="form-group">
+            <label class="form-label">IP Address</label>
+            <input type="text" class="form-input" name="ip_address" required>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Device Type</label>
+            <select class="form-select" name="device_type">
+                <option value="cisco_ios">Cisco IOS</option>
+                <option value="cisco_nxos">Cisco NX-OS</option>
+                <option value="cisco_asa">Cisco ASA</option>
+            </select>
+        </div>
+        <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+            <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    `;
+
+    form.querySelector('[name="hostname"]').value = hostname;
+    form.querySelector('[name="ip_address"]').value = ipAddress;
+    form.querySelector('[name="device_type"]').value = deviceType;
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(form);
+        try {
+            await api.updateHost(hostId, formData.get('hostname'), formData.get('ip_address'), formData.get('device_type'));
+            closeAllModals();
+            await loadInventory();
+            showSuccess('Host updated successfully');
+        } catch (error) {
+            showError(`Failed to update host: ${error.message}`);
+        }
+    });
+
+    document.getElementById('modal-title').textContent = 'Edit Host';
+    const modalBody = document.getElementById('modal-body');
+    modalBody.innerHTML = '';
+    modalBody.appendChild(form);
+    document.getElementById('modal-overlay').classList.add('active');
+};
+
+window.addHost = async function(e, groupId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    try {
+        await api.addHost(groupId, formData.get('hostname'), formData.get('ip_address'), formData.get('device_type'));
+        closeAllModals();
+        await loadInventory();
+        showSuccess('Host added successfully');
+    } catch (error) {
+        showError(`Failed to add host: ${error.message}`);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CRUD Forms — Delete & Bulk Operations (Inventory)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+window.deleteGroup = async function(groupId) {
+    if (!await showConfirm('Delete Group', 'This will remove the group and all its hosts. This action cannot be undone.')) return;
+    try {
+        await api.deleteGroup(groupId);
+        await loadInventory();
+        showSuccess('Group deleted successfully');
+    } catch (error) {
+        showError(`Failed to delete group: ${error.message}`);
+    }
+};
+
+window.deleteHost = async function(groupId, hostId) {
+    if (!await showConfirm('Delete Host', 'This will permanently remove this host from the inventory.')) return;
+    try {
+        await api.deleteHost(groupId, hostId);
+        await loadInventory();
+        showSuccess('Host deleted successfully');
+    } catch (error) {
+        showError(`Failed to delete host: ${error.message}`);
+    }
+};
+
+function getSelectedHostIds(groupId) {
+    return Array.from(document.querySelectorAll(`.host-select[data-group-id="${groupId}"]:checked`))
+        .map(cb => Number(cb.dataset.hostId));
+}
+
+window.onHostSelectChange = function(groupId) {
+    const selected = getSelectedHostIds(groupId);
+    const bar = document.getElementById(`bulk-actions-${groupId}`);
+    if (bar) bar.style.display = selected.length ? 'flex' : 'none';
+    const selectAll = document.querySelector(`[data-select-all="${groupId}"]`);
+    if (selectAll) {
+        const total = document.querySelectorAll(`.host-select[data-group-id="${groupId}"]`).length;
+        selectAll.checked = selected.length === total && total > 0;
+        selectAll.indeterminate = selected.length > 0 && selected.length < total;
+    }
+};
+
+window.toggleSelectAllHosts = function(groupId, checked) {
+    document.querySelectorAll(`.host-select[data-group-id="${groupId}"]`)
+        .forEach(cb => { cb.checked = checked; });
+    onHostSelectChange(groupId);
+};
+
+window.bulkDeleteHosts = async function(groupId) {
+    const hostIds = getSelectedHostIds(groupId);
+    if (!hostIds.length) return;
+    if (!await showConfirm('Delete Hosts', `This will permanently remove ${hostIds.length} host(s) from the inventory.`)) return;
+    try {
+        await api.bulkDeleteHosts(hostIds);
+        await loadInventory();
+        showSuccess(`${hostIds.length} host(s) deleted.`);
+    } catch (error) {
+        showError(`Failed to delete hosts: ${error.message}`);
+    }
+};
+
+window.bulkMoveHosts = function(groupId) {
+    const hostIds = getSelectedHostIds(groupId);
+    if (!hostIds.length) return;
+    const groups = (listViewState.inventory.items || []).filter(g => g.id !== groupId);
+    if (!groups.length) {
+        showError('No other groups available to move hosts to.');
+        return;
+    }
+    showModal(`Move ${hostIds.length} Host(s)`, `
+        <form onsubmit="executeBulkMove(event, ${groupId})">
+            <div class="form-group">
+                <label class="form-label">Destination Group</label>
+                <select class="form-select" name="target_group_id" required>
+                    <option value="">-- Select group --</option>
+                    ${groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('')}
+                </select>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Move</button>
+            </div>
+        </form>
+    `);
+};
+
+window.executeBulkMove = async function(e, sourceGroupId) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const targetGroupId = Number(formData.get('target_group_id'));
+    if (!targetGroupId) return;
+    const hostIds = getSelectedHostIds(sourceGroupId);
+    if (!hostIds.length) return;
+    try {
+        await api.moveHosts(hostIds, targetGroupId);
+        closeAllModals();
+        await loadInventory();
+        showSuccess(`${hostIds.length} host(s) moved.`);
+    } catch (error) {
+        showError(`Failed to move hosts: ${error.message}`);
     }
 };
 

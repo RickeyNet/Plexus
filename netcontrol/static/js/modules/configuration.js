@@ -1063,4 +1063,4 @@ function destroyConfiguration() {
     listViewState.configBackups.query = '';
 }
 
-export { loadConfigDrift, loadConfigBackups, destroyConfiguration };
+export { loadConfigDrift, loadConfigBackups, destroyConfiguration, applyDriftFilters };

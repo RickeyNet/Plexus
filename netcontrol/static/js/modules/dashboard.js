@@ -8,8 +8,13 @@ import {
     formatDate, showModal, closeAllModals, showConfirm, showFormModal,
     PlexusChart, getTimeRangeParams, onTimeRangeChange, offTimeRangeChange,
     emptyStateHTML, debounce, skeletonCards, initCopyableBlocks,
-    activateFocusTrap, deactivateFocusTrap, closeModal, invalidatePageCache
+    activateFocusTrap, deactivateFocusTrap, closeModal, invalidatePageCache,
+    rangeToMs,
+    textMatch, byNameAsc, byNameDesc
 } from '../app.js';
+import { applyInventoryFilters } from './inventory.js';
+import { applyPlaybookFilters, applyJobFilters, applyTemplateFilters, applyCredentialFilters } from './jobs.js';
+import { applyDriftFilters } from './configuration.js';
 
 
 // =============================================================================
@@ -288,7 +293,7 @@ async function renderAllDashboardPanels(panels) {
                 // Overlay annotations on line charts
                 try {
                     const endISO = new Date().toISOString();
-                    const startISO = new Date(Date.now() - _rangeToMs(range)).toISOString();
+                    const startISO = new Date(Date.now() - rangeToMs(range)).toISOString();
                     const hostParam = host !== '*' ? host : undefined;
                     const annRes = await api.getAnnotations({ hostId: hostParam, start: startISO, end: endISO, categories: 'deployment,config,alert' });
                     const events = annRes?.annotations || [];
@@ -310,12 +315,6 @@ function groupByHost(items) {
         map[key].push(d);
     });
     return map;
-}
-
-function _rangeToMs(range) {
-    const units = { h: 3600000, d: 86400000 };
-    const m = /^(\d+)([hd])$/.exec(range);
-    return m ? parseInt(m[1]) * units[m[2]] : 86400000;
 }
 
 function renderHeatmapPanel(chartId, items) {
@@ -599,130 +598,8 @@ window.confirmDeleteDashboardById = confirmDeleteDashboardById;
 
 
 // =============================================================================
-// Filter / Sort Helpers & List Page Controls
+// List Page Controls
 // =============================================================================
-
-function textMatch(value, query) {
-    if (!query) return true;
-    return String(value || '').toLowerCase().includes(query);
-}
-
-function byNameAsc(a, b) {
-    return String(a.name || '').localeCompare(String(b.name || ''));
-}
-
-function byNameDesc(a, b) {
-    return String(b.name || '').localeCompare(String(a.name || ''));
-}
-
-function applyInventoryFilters() {
-    const state = listViewState.inventory;
-    const query = state.query.trim().toLowerCase();
-    const filtered = state.items.filter((group) => {
-        if (!query) return true;
-        if (textMatch(group.name, query) || textMatch(group.description, query)) return true;
-        return (group.hosts || []).some((host) =>
-            textMatch(host.hostname, query) || textMatch(host.ip_address, query) || textMatch(host.device_type, query)
-        );
-    });
-    if (state.sort === 'hosts_desc') filtered.sort((a, b) => (b.host_count || (b.hosts || []).length || 0) - (a.host_count || (a.hosts || []).length || 0));
-    else if (state.sort === 'hosts_asc') filtered.sort((a, b) => (a.host_count || (a.hosts || []).length || 0) - (b.host_count || (b.hosts || []).length || 0));
-    else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
-    else filtered.sort(byNameAsc);
-    return filtered;
-}
-
-function applyPlaybookFilters() {
-    const state = listViewState.playbooks;
-    const query = state.query.trim().toLowerCase();
-    const filtered = state.items.filter((pb) => {
-        const tags = Array.isArray(pb.tags) ? pb.tags.join(' ') : (typeof pb.tags === 'string' ? pb.tags : '');
-        return !query || textMatch(pb.name, query) || textMatch(pb.description, query) || textMatch(pb.filename, query) || textMatch(tags, query);
-    });
-    if (state.sort === 'updated_desc') filtered.sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
-    else if (state.sort === 'updated_asc') filtered.sort((a, b) => String(a.updated_at || a.created_at || '').localeCompare(String(b.updated_at || b.created_at || '')));
-    else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
-    else filtered.sort(byNameAsc);
-    return filtered;
-}
-
-function applyJobFilters() {
-    const state = listViewState.jobs;
-    const query = state.query.trim().toLowerCase();
-    const now = new Date();
-    const filtered = state.items.filter((job) => {
-        const matchesText = !query || textMatch(job.playbook_name, query) || textMatch(job.group_name, query) || textMatch(job.status, query);
-        const matchesStatus = state.status === 'all' || String(job.status || '').toLowerCase() === state.status;
-        const isDry = Boolean(job.dry_run);
-        const matchesDryRun = state.dryRun === 'all' || (state.dryRun === 'yes' && isDry) || (state.dryRun === 'no' && !isDry);
-        let matchesDate = true;
-        const jobDateStr = job.started_at || job.queued_at;
-        if (state.dateRange !== 'all' && jobDateStr) {
-            const jobDate = new Date(jobDateStr);
-            const diffMs = now - jobDate;
-            const diffDays = diffMs / (1000 * 60 * 60 * 24);
-            if (state.dateRange === 'today') matchesDate = diffDays < 1;
-            else if (state.dateRange === '7d') matchesDate = diffDays <= 7;
-            else if (state.dateRange === '30d') matchesDate = diffDays <= 30;
-        }
-        return matchesText && matchesStatus && matchesDryRun && matchesDate;
-    });
-    const sortKey = (j) => j.started_at || j.queued_at || '';
-    if (state.sort === 'started_asc') filtered.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
-    else filtered.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
-    return filtered;
-}
-
-function applyTemplateFilters() {
-    const state = listViewState.templates;
-    const query = state.query.trim().toLowerCase();
-    const filtered = state.items.filter((tpl) =>
-        !query || textMatch(tpl.name, query) || textMatch(tpl.description, query) || textMatch(tpl.content, query)
-    );
-    if (state.sort === 'updated_desc') filtered.sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
-    else if (state.sort === 'updated_asc') filtered.sort((a, b) => String(a.updated_at || a.created_at || '').localeCompare(String(b.updated_at || b.created_at || '')));
-    else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
-    else filtered.sort(byNameAsc);
-    return filtered;
-}
-
-function applyCredentialFilters() {
-    const state = listViewState.credentials;
-    const query = state.query.trim().toLowerCase();
-    const filtered = state.items.filter((cred) =>
-        !query || textMatch(cred.name, query) || textMatch(cred.username, query)
-    );
-    if (state.sort === 'created_desc') filtered.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-    else if (state.sort === 'created_asc') filtered.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
-    else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
-    else filtered.sort(byNameAsc);
-    return filtered;
-}
-
-function applyDriftFilters() {
-    const state = listViewState.configDrift;
-    const query = (state.query || '').trim().toLowerCase();
-    let filtered = state.items.filter(item => {
-        const matchText = !query ||
-            textMatch(item.hostname, query) ||
-            textMatch(item.ip_address, query) ||
-            textMatch(item.device_type, query);
-        const matchStatus = !state.status || state.status === 'all' ||
-            String(item.status || '').toLowerCase() === state.status;
-        return matchText && matchStatus;
-    });
-    switch (state.sort) {
-        case 'detected_asc':
-            filtered.sort((a, b) => String(a.detected_at || '').localeCompare(String(b.detected_at || '')));
-            break;
-        case 'host_asc':
-            filtered.sort((a, b) => String(a.hostname || '').localeCompare(String(b.hostname || '')));
-            break;
-        default: // detected_desc
-            filtered.sort((a, b) => String(b.detected_at || '').localeCompare(String(a.detected_at || '')));
-    }
-    return filtered;
-}
 
 function bindListControl(id, handler) {
     const el = document.getElementById(id);
@@ -827,16 +704,6 @@ export {
     loadCustomDashboards,
     destroyDashboard,
     initListPageControls,
-    applyInventoryFilters,
-    applyPlaybookFilters,
-    applyJobFilters,
-    applyTemplateFilters,
-    applyCredentialFilters,
-    applyDriftFilters,
-    textMatch,
-    byNameAsc,
-    byNameDesc,
-    skeletonCards,
     animateCounter,
     animateRing,
 };
