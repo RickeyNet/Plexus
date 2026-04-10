@@ -134,7 +134,7 @@ function initSpaceParallax() {
         _spaceFxState.targetX = 0;
         _spaceFxState.targetY = 0;
         ensureParallaxRunning();
-    });
+    }, { passive: true });
 
     const SETTLE_THRESHOLD = 0.05;
 
@@ -8392,7 +8392,7 @@ function initCardTilt() {
         if (!e.target || !e.target.closest) return;
         const card = e.target.closest('.card, .stat-card');
         if (card) card.style.transform = '';
-    }, true);
+    }, { capture: true, passive: true });
     document.addEventListener('mouseout', (e) => {
         if (!e.target || !e.target.closest) return;
         const card = e.target.closest('.card, .stat-card');
@@ -8400,7 +8400,7 @@ function initCardTilt() {
         if (!card.contains(e.relatedTarget)) {
             card.style.transform = '';
         }
-    });
+    }, { passive: true });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -10578,12 +10578,12 @@ window.deleteSuppressionConfirmed = async function(supId) {
 document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('monitoring-search');
     if (searchInput) {
-        searchInput.addEventListener('input', () => {
+        searchInput.addEventListener('input', debounce(() => {
             listViewState.monitoring.query = searchInput.value;
             const tab = listViewState.monitoring.tab;
             if (tab === 'devices') renderMonitoringDevices(listViewState.monitoring.polls);
             else if (tab === 'alerts') renderMonitoringAlerts(listViewState.monitoring.alerts);
-        });
+        }, 200));
     }
 });
 
@@ -11113,13 +11113,13 @@ window.deleteSlaTarget = deleteSlaTarget;
 document.addEventListener('DOMContentLoaded', () => {
     const slaSearch = document.getElementById('sla-search');
     if (slaSearch) {
-        slaSearch.addEventListener('input', () => {
+        slaSearch.addEventListener('input', debounce(() => {
             listViewState.sla.query = slaSearch.value;
             const summary = listViewState.sla.summary;
             if (summary && summary.hosts) {
                 renderSlaHosts(summary.hosts, listViewState.sla.targets || []);
             }
-        });
+        }, 200));
     }
 });
 
