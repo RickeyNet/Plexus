@@ -7,7 +7,7 @@ import {
     escapeHtml, showError, showSuccess, showToast, formatDate,
     showModal, closeAllModals, showConfirm,
     emptyStateHTML, currentUserData, invalidatePageCache,
-    initThemeControls
+    initThemeControls, initSpaceControls
 } from '../app.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -297,6 +297,7 @@ async function loadAdminSettings(_options = {}) {
         loadTopologyDiscoveryConfig();
         loadMonitoringConfig();
         initThemeControls();
+        initSpaceControls();
     } catch (error) {
         const usersContainer = document.getElementById('admin-users-list');
         if (usersContainer) {
