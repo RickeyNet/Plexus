@@ -17,6 +17,23 @@ import {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 let _driftEventsCache = {};
+let _activeWebSockets = [];
+
+function _trackWs(ws) {
+    _activeWebSockets.push(ws);
+    const orig = ws.onclose;
+    ws.addEventListener('close', () => {
+        _activeWebSockets = _activeWebSockets.filter(w => w !== ws);
+    });
+    return ws;
+}
+
+function _closeAllWs() {
+    for (const ws of _activeWebSockets) {
+        try { ws.close(); } catch (e) { /* ignore */ }
+    }
+    _activeWebSockets = [];
+}
 
 async function loadConfigDrift(options = {}) {
     const { preserveContent = false } = options;
@@ -435,7 +452,7 @@ window.captureSnapshot = async function(e) {
         activateFocusTrap('job-output-modal');
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/config-capture/${jobId}`);
+        const ws = _trackWs(new WebSocket(`${protocol}//${window.location.host}/ws/config-capture/${jobId}`));
 
         ws.onmessage = (ev) => {
             try {
@@ -568,7 +585,7 @@ window.showRevertDriftModal = async function(eventId) {
             modal.classList.add('active');
             activateFocusTrap('job-output-modal');
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const ws = new WebSocket(`${protocol}//${window.location.host}/ws/config-revert/${jobId}`);
+            const ws = _trackWs(new WebSocket(`${protocol}//${window.location.host}/ws/config-revert/${jobId}`));
             ws.onmessage = (ev) => {
                 const data = JSON.parse(ev.data);
                 if (data.type === 'line') {
@@ -1034,8 +1051,16 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function destroyConfiguration() {
+    _closeAllWs();
     _driftEventsCache = {};
     _runningBackupPolicies.clear();
+    _driftViewMode = 'grouped';
+    _backupCurrentTab = 'policies';
+    listViewState.configDrift.items = [];
+    listViewState.configDrift.query = '';
+    listViewState.configBackups.policies = [];
+    listViewState.configBackups.backups = [];
+    listViewState.configBackups.query = '';
 }
 
 export { loadConfigDrift, loadConfigBackups, destroyConfiguration };

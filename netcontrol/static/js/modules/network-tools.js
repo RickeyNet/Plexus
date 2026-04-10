@@ -211,7 +211,7 @@ async function loadTrafficAnalysis({ preserveContent } = {}) {
 // =============================================================================
 
 function destroyNetworkTools() {
-    // Minimal teardown — clear any DOM references or intervals if needed
+    PlexusChart.destroyAll();
 }
 
 // =============================================================================

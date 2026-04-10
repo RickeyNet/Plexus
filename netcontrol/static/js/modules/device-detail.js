@@ -35,10 +35,11 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
     const hostId = listViewState.deviceDetail.hostId;
     if (!hostId) { navigateToPage('monitoring'); return; }
 
-    // Register time-range listener
-    if (_deviceDetailTimeListener) offTimeRangeChange(_deviceDetailTimeListener);
-    _deviceDetailTimeListener = () => loadDeviceDetail({ force: true });
-    onTimeRangeChange(_deviceDetailTimeListener);
+    // Register time-range listener once (not on every load/reload)
+    if (!_deviceDetailTimeListener) {
+        _deviceDetailTimeListener = () => loadDeviceDetail({ force: true });
+        onTimeRangeChange(_deviceDetailTimeListener);
+    }
 
     const trp = getTimeRangeParams();
     const range = trp.range === 'custom' ? '24h' : trp.range;
@@ -63,21 +64,18 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
         const title = document.getElementById('device-detail-title');
         if (title) title.textContent = latestPoll?.hostname || `Device #${hostId}`;
 
-        // CPU chart
+        // Batch all metric chart creation into a single animation frame
+        // to avoid layout thrashing (each PlexusChart.timeSeries reads element dimensions)
         const cpuSeries = extractMetricSeries(cpuData, 'CPU %');
-        PlexusChart.timeSeries('device-chart-cpu', cpuSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
-
-        // Memory chart
         const memSeries = extractMetricSeries(memData, 'Memory %');
-        PlexusChart.timeSeries('device-chart-memory', memSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
-
-        // Response time chart
         const rtSeries = extractMetricSeries(rtData, 'Response Time');
-        PlexusChart.timeSeries('device-chart-response', rtSeries, { area: true, yAxisName: 'ms' });
-
-        // Packet loss chart
         const plSeries = extractMetricSeries(plData, 'Packet Loss');
-        PlexusChart.timeSeries('device-chart-pktloss', plSeries, { area: true, yAxisName: '%', yMin: 0 });
+        requestAnimationFrame(() => {
+            PlexusChart.timeSeries('device-chart-cpu', cpuSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
+            PlexusChart.timeSeries('device-chart-memory', memSeries, { area: true, yAxisName: '%', yMin: 0, yMax: 100 });
+            PlexusChart.timeSeries('device-chart-response', rtSeries, { area: true, yAxisName: 'ms' });
+            PlexusChart.timeSeries('device-chart-pktloss', plSeries, { area: true, yAxisName: '%', yMin: 0 });
+        });
 
         // Interface summary bar chart + detail table
         if (ifData.status === 'fulfilled') {
@@ -415,13 +413,17 @@ function renderInterfaceDetailCharts(ifData, latestPoll) {
 
         container.innerHTML = html;
 
-        ifNames.forEach(name => {
-            const data = grouped[name].sort((a, b) => new Date(a.sampled_at) - new Date(b.sampled_at));
-            const chartId = `if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
-            PlexusChart.timeSeries(chartId, [
-                { name: 'In (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.in_rate_bps || 0 })), color: '#3b82f6' },
-                { name: 'Out (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.out_rate_bps || 0 })), color: '#f59e0b' },
-            ], { area: true, yAxisName: 'bps' });
+        // Defer chart creation to next frame — let the browser complete layout
+        // from the innerHTML assignment before ECharts queries element dimensions
+        requestAnimationFrame(() => {
+            ifNames.forEach(name => {
+                const data = grouped[name].sort((a, b) => new Date(a.sampled_at) - new Date(b.sampled_at));
+                const chartId = `if-chart-${name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+                PlexusChart.timeSeries(chartId, [
+                    { name: 'In (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.in_rate_bps || 0 })), color: '#3b82f6' },
+                    { name: 'Out (bps)', data: data.map(d => ({ time: d.sampled_at, value: d.out_rate_bps || 0 })), color: '#f59e0b' },
+                ], { area: true, yAxisName: 'bps' });
+            });
         });
     } else {
         html += '<p class="text-muted" style="margin-top:1rem;">Traffic charts will appear after two or more polling cycles collect rate data.</p>';
@@ -506,6 +508,8 @@ function destroyDeviceDetail() {
         _deviceDetailTimeListener = null;
     }
     PlexusChart.destroyAll();
+    listViewState.deviceDetail.hostId = null;
+    listViewState.deviceDetail.tab = 'overview';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -37,6 +37,18 @@ export async function loadCompliance(options = {}) {
         renderComplianceAssignments(assignments || []);
         renderComplianceResults(results || []);
         renderComplianceStatus(statusList || []);
+        // Bind search handler once per DOM lifetime
+        const searchInput = document.getElementById('compliance-search');
+        if (searchInput && searchInput.dataset.bound !== '1') {
+            searchInput.dataset.bound = '1';
+            searchInput.addEventListener('input', debounce(() => {
+                listViewState.compliance.query = searchInput.value;
+                renderComplianceProfiles(listViewState.compliance.profiles);
+                renderComplianceAssignments(listViewState.compliance.assignments);
+                renderComplianceResults(listViewState.compliance.results);
+                renderComplianceStatus(listViewState.compliance.statusList);
+            }, 200));
+        }
     } catch (error) {
         if (profilesContainer) profilesContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error loading compliance data: ${escapeHtml(error.message)}</div>`;
     }
@@ -580,18 +592,13 @@ async function remediateAllFailedRules(resultId) {
 }
 window.remediateAllFailedRules = remediateAllFailedRules;
 
-// Search handler for compliance
-document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('compliance-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', debounce(() => {
-            listViewState.compliance.query = searchInput.value;
-            renderComplianceProfiles(listViewState.compliance.profiles);
-            renderComplianceAssignments(listViewState.compliance.assignments);
-            renderComplianceResults(listViewState.compliance.results);
-            renderComplianceStatus(listViewState.compliance.statusList);
-        }, 200));
-    }
-});
-
-export function destroyCompliance() { }
+export function destroyCompliance() {
+    _complianceCurrentTab = 'profiles';
+    _editComplianceProfileId = null;
+    _assignComplianceProfileId = null;
+    listViewState.compliance.profiles = [];
+    listViewState.compliance.assignments = [];
+    listViewState.compliance.results = [];
+    listViewState.compliance.statusList = [];
+    listViewState.compliance.query = '';
+}

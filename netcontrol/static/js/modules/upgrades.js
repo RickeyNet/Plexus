@@ -23,7 +23,7 @@ let _upgradeCurrentTab = 'campaigns';
 function switchUpgradeTab(tab) {
     _upgradeCurrentTab = tab;
     document.querySelectorAll('.upgrade-tab-btn').forEach(b => {
-        b.classList.toggle('active', b.getAttribute('data-tab') === tab);
+        b.classList.toggle('active', b.getAttribute('data-upgrade-tab') === tab);
     });
     document.getElementById('upgrade-tab-campaigns').style.display = tab === 'campaigns' ? '' : 'none';
     document.getElementById('upgrade-tab-images').style.display = tab === 'images' ? '' : 'none';
@@ -1037,4 +1037,5 @@ window.viewDeviceUpgradeLog = viewDeviceUpgradeLog;
 
 export function destroyUpgrades() {
     disconnectUpgradeWebSocket();
+    _upgradeCurrentTab = 'campaigns';
 }
