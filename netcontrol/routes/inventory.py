@@ -136,6 +136,7 @@ async def _probe_discovery_target(
     detected_protocol = ""
     banner_sample = ""
     for port in state.DISCOVERY_PROBE_PORTS:
+        writer = None
         try:
             reader, writer = await asyncio.wait_for(asyncio.open_connection(ip_address, port), timeout=timeout_seconds)
             if port == 22:
@@ -144,14 +145,18 @@ async def _probe_discovery_target(
                     banner_sample = banner.decode("utf-8", errors="ignore").strip()
                 except Exception:
                     banner_sample = ""
-            writer.close()
-            await writer.wait_closed()
-            _ = reader
             detected_port = port
             detected_protocol = "ssh" if port == 22 else "https"
             break
         except Exception:
             continue
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
     if not detected_port:
         return None
 

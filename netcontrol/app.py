@@ -521,7 +521,8 @@ async def verify_user(username: str, password: str) -> dict | None:
     user = await db.get_user_by_username(username)
     if not user:
         return None
-    if _hash_password(password, user["salt"]) == user["password_hash"]:
+    computed = _hash_password(password, user["salt"])
+    if secrets.compare_digest(computed, user["password_hash"]):
         return user
     return None
 

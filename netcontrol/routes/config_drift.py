@@ -107,6 +107,9 @@ _capture_job_sockets: dict[str, list] = {}
 _revert_jobs: dict[str, dict] = {}
 _revert_job_sockets: dict[str, list] = {}
 
+_capture_sockets_lock = asyncio.Lock()
+_revert_sockets_lock = asyncio.Lock()
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -115,18 +118,21 @@ async def _broadcast_capture_line(job_id: str, text: str) -> None:
     job = _capture_jobs.get(job_id)
     if job:
         job["output_lines"].append(text)
-    sockets = _capture_job_sockets.get(job_id, [])
+    async with _capture_sockets_lock:
+        sockets = list(_capture_job_sockets.get(job_id, []))
     dead = []
     for ws in sockets:
         try:
             await ws.send_json({"type": "line", "text": text})
         except Exception:
             dead.append(ws)
-    for ws in dead:
-        try:
-            sockets.remove(ws)
-        except ValueError:
-            pass
+    if dead:
+        async with _capture_sockets_lock:
+            for ws in dead:
+                try:
+                    _capture_job_sockets[job_id].remove(ws)
+                except (ValueError, KeyError):
+                    pass
 
 
 async def _finish_capture_job(job_id: str, status: str) -> None:
@@ -136,12 +142,15 @@ async def _finish_capture_job(job_id: str, status: str) -> None:
         job["status"] = status
         job["finished_at"] = datetime.now(UTC).isoformat()
     done_msg = {"type": "job_complete", "job_id": job_id, "status": status}
-    sockets = _capture_job_sockets.pop(job_id, [])
+    async with _capture_sockets_lock:
+        sockets = _capture_job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
             await ws.send_json(done_msg)
         except Exception:
             pass
+    # Schedule cleanup of in-memory job state after 5 minutes
+    asyncio.get_event_loop().call_later(300, lambda: _capture_jobs.pop(job_id, None))
 
 
 async def _run_config_capture_job(
@@ -263,20 +272,34 @@ async def _analyze_drift_for_host(host_id: int) -> dict:
 
 async def _broadcast_revert_line(job_id: str, line: str):
     _revert_jobs[job_id]["output"] += line
-    for ws in list(_revert_job_sockets.get(job_id, [])):
+    async with _revert_sockets_lock:
+        sockets = list(_revert_job_sockets.get(job_id, []))
+    dead = []
+    for ws in sockets:
         try:
             await ws.send_json({"type": "line", "data": line})
         except Exception:
-            _revert_job_sockets[job_id].remove(ws)
+            dead.append(ws)
+    if dead:
+        async with _revert_sockets_lock:
+            for ws in dead:
+                try:
+                    _revert_job_sockets[job_id].remove(ws)
+                except (ValueError, KeyError):
+                    pass
 
 
 async def _finish_revert_job(job_id: str, status: str = "completed"):
     _revert_jobs[job_id]["status"] = status
-    for ws in list(_revert_job_sockets.get(job_id, [])):
+    async with _revert_sockets_lock:
+        sockets = _revert_job_sockets.pop(job_id, [])
+    for ws in sockets:
         try:
             await ws.send_json({"type": "job_complete", "status": status})
         except Exception:
             pass
+    # Schedule cleanup of in-memory job state after 5 minutes
+    asyncio.get_event_loop().call_later(300, lambda: _revert_jobs.pop(job_id, None))
 
 
 def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]:
@@ -781,16 +804,18 @@ async def websocket_config_capture(websocket: WebSocket, job_id: str):
         return
 
     # Subscribe to live events
-    if job_id not in _capture_job_sockets:
-        _capture_job_sockets[job_id] = []
-    _capture_job_sockets[job_id].append(websocket)
+    async with _capture_sockets_lock:
+        if job_id not in _capture_job_sockets:
+            _capture_job_sockets[job_id] = []
+        _capture_job_sockets[job_id].append(websocket)
 
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        if job_id in _capture_job_sockets and websocket in _capture_job_sockets[job_id]:
-            _capture_job_sockets[job_id].remove(websocket)
+        async with _capture_sockets_lock:
+            if job_id in _capture_job_sockets and websocket in _capture_job_sockets[job_id]:
+                _capture_job_sockets[job_id].remove(websocket)
 
 
 @router.delete("/api/config-drift/snapshots/{snapshot_id}")
@@ -970,15 +995,17 @@ async def ws_config_revert(websocket: WebSocket, job_id: str):
         await websocket.close()
         return
 
-    _revert_job_sockets.setdefault(job_id, []).append(websocket)
+    async with _revert_sockets_lock:
+        _revert_job_sockets.setdefault(job_id, []).append(websocket)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
-        if websocket in _revert_job_sockets.get(job_id, []):
-            _revert_job_sockets[job_id].remove(websocket)
+        async with _revert_sockets_lock:
+            if websocket in _revert_job_sockets.get(job_id, []):
+                _revert_job_sockets[job_id].remove(websocket)
 
 
 # ── Routes: Analysis ─────────────────────────────────────────────────────────

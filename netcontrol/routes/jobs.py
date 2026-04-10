@@ -66,6 +66,7 @@ _job_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_JOBS)
 
 # Active WebSocket connections keyed by job_id
 _job_sockets: dict[int, list[WebSocket]] = {}
+_job_sockets_lock = asyncio.Lock()
 _running_job_tasks: dict[int, asyncio.Task] = {}  # job_id -> asyncio.Task for cancellation
 
 _PRIORITY_LABELS = {0: "low", 1: "below-normal", 2: "normal", 3: "high", 4: "critical"}
@@ -337,15 +338,21 @@ async def _run_ansible_job(
 
     async def on_event(event: LogEvent):
         await db.add_job_event(job_id, event.level, event.message, event.host)
-        sockets = _job_sockets.get(job_id, [])
+        async with _job_sockets_lock:
+            sockets = list(_job_sockets.get(job_id, []))
         dead = []
         for ws in sockets:
             try:
                 await ws.send_json(event.to_dict())
             except Exception:
                 dead.append(ws)
-        for ws in dead:
-            sockets.remove(ws)
+        if dead:
+            async with _job_sockets_lock:
+                for ws in dead:
+                    try:
+                        _job_sockets[job_id].remove(ws)
+                    except (ValueError, KeyError):
+                        pass
 
     job_succeeded = False
     try:
@@ -374,7 +381,8 @@ async def _run_ansible_job(
 
     # Notify WebSocket clients that job is done
     done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
-    sockets = _job_sockets.pop(job_id, [])
+    async with _job_sockets_lock:
+        sockets = _job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
             await ws.send_json(done_msg)
@@ -422,15 +430,21 @@ async def _run_job(
             hosts_failed += 1
 
         # Broadcast to WebSocket subscribers
-        sockets = _job_sockets.get(job_id, [])
+        async with _job_sockets_lock:
+            sockets = list(_job_sockets.get(job_id, []))
         dead = []
         for ws in sockets:
             try:
                 await ws.send_json(event.to_dict())
             except Exception:
                 dead.append(ws)
-        for ws in dead:
-            sockets.remove(ws)
+        if dead:
+            async with _job_sockets_lock:
+                for ws in dead:
+                    try:
+                        _job_sockets[job_id].remove(ws)
+                    except (ValueError, KeyError):
+                        pass
 
     job_succeeded = False
     try:
@@ -454,7 +468,8 @@ async def _run_job(
 
     # Notify WebSocket clients that job is done
     done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
-    sockets = _job_sockets.pop(job_id, [])
+    async with _job_sockets_lock:
+        sockets = _job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
             await ws.send_json(done_msg)
@@ -839,14 +854,16 @@ async def websocket_job(websocket: WebSocket, job_id: int):
         return
 
     # Subscribe to live events
-    if job_id not in _job_sockets:
-        _job_sockets[job_id] = []
-    _job_sockets[job_id].append(websocket)
+    async with _job_sockets_lock:
+        if job_id not in _job_sockets:
+            _job_sockets[job_id] = []
+        _job_sockets[job_id].append(websocket)
 
     try:
         # Keep connection alive until client disconnects
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        if job_id in _job_sockets and websocket in _job_sockets[job_id]:
-            _job_sockets[job_id].remove(websocket)
+        async with _job_sockets_lock:
+            if job_id in _job_sockets and websocket in _job_sockets[job_id]:
+                _job_sockets[job_id].remove(websocket)
