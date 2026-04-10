@@ -436,7 +436,7 @@
                     </div>
                 </div>
                 <!-- Tab Controls -->
-                <div class="list-controls" style="margin-bottom:0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                <div class="tab-controls">
                     <button class="btn btn-sm btn-secondary cred-tab-btn active" data-cred-tab="credentials" onclick="switchCredentialTab('credentials')">Device Credentials</button>
                     <button class="btn btn-sm btn-secondary cred-tab-btn" data-cred-tab="secrets" onclick="switchCredentialTab('secrets')">Secret Variables</button>
                 </div>
@@ -566,7 +566,7 @@
                     <div class="stat-card"><div class="stat-ring-value" id="backup-stat-backups">-</div><div class="stat-label">Total Backups</div></div>
                 </div>
                 <!-- Tab Controls -->
-                <div class="list-controls" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                <div class="tab-controls">
                     <button class="btn btn-sm btn-secondary config-tab-btn active" data-config-tab="drift" onclick="switchConfigurationTab('drift')">Drift Events</button>
                     <button class="btn btn-sm btn-secondary config-tab-btn" data-config-tab="policies" onclick="switchConfigurationTab('policies')">Backup Policies</button>
                     <button class="btn btn-sm btn-secondary config-tab-btn" data-config-tab="history" onclick="switchConfigurationTab('history')">Backup History</button>
@@ -620,6 +620,7 @@
                     <h2>Compliance</h2>
                     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
                         <button class="btn btn-primary" onclick="showCreateComplianceProfileModal()">+ New Profile</button>
+                        <button class="btn btn-secondary" onclick="loadBuiltinProfiles()">Load Built-in Profiles</button>
                         <button class="btn btn-secondary" onclick="refreshCompliance()">Refresh</button>
                     </div>
                 </div>
@@ -632,11 +633,11 @@
                     <div class="stat-card"><div class="stat-ring-value" id="compliance-stat-last">-</div><div class="stat-label">Last Scan</div></div>
                 </div>
                 <!-- Tab Toggle -->
-                <div class="list-controls" style="margin-bottom:1rem;">
-                    <button class="btn btn-sm btn-primary" id="compliance-tab-profiles" onclick="switchComplianceTab('profiles')">Profiles</button>
-                    <button class="btn btn-sm btn-secondary" id="compliance-tab-assignments" onclick="switchComplianceTab('assignments')">Assignments</button>
-                    <button class="btn btn-sm btn-secondary" id="compliance-tab-results" onclick="switchComplianceTab('results')">Scan Results</button>
-                    <button class="btn btn-sm btn-secondary" id="compliance-tab-status" onclick="switchComplianceTab('status')">Host Status</button>
+                <div class="tab-controls">
+                    <button class="btn btn-sm btn-secondary compliance-tab-btn active" id="compliance-tab-profiles" onclick="switchComplianceTab('profiles')">Profiles</button>
+                    <button class="btn btn-sm btn-secondary compliance-tab-btn" id="compliance-tab-assignments" onclick="switchComplianceTab('assignments')">Assignments</button>
+                    <button class="btn btn-sm btn-secondary compliance-tab-btn" id="compliance-tab-results" onclick="switchComplianceTab('results')">Scan Results</button>
+                    <button class="btn btn-sm btn-secondary compliance-tab-btn" id="compliance-tab-status" onclick="switchComplianceTab('status')">Host Status</button>
                     <input id="compliance-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto;">
                 </div>
                 <!-- Profiles List -->
@@ -677,7 +678,7 @@
                     <div class="stat-card"><div class="stat-ring-value" id="deploy-stat-failed">-</div><div class="stat-label">Failed</div></div>
                 </div>
                 <!-- Tab Controls -->
-                <div class="list-controls" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                <div class="tab-controls">
                     <button class="btn btn-sm btn-secondary change-tab-btn active" data-change-tab="risk" onclick="switchChangeTab('risk')">Risk Analysis</button>
                     <button class="btn btn-sm btn-secondary change-tab-btn" data-change-tab="deployments" onclick="switchChangeTab('deployments')">Deployments</button>
                     <input id="change-mgmt-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto; max-width:220px;">
@@ -759,7 +760,7 @@
                     <div class="stat-card"><div class="stat-ring-value" id="mon-stat-alerts">-</div><div class="stat-label">Open Alerts</div></div>
                 </div>
                 <!-- Tab Controls -->
-                <div class="list-controls" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                <div class="tab-controls">
                     <button class="btn btn-sm btn-secondary mon-tab-btn active" data-mon-tab="devices" onclick="switchMonitoringTab('devices')">Devices</button>
                     <button class="btn btn-sm btn-secondary mon-tab-btn" data-mon-tab="alerts" onclick="switchMonitoringTab('alerts')">Alerts</button>
                     <button class="btn btn-sm btn-secondary mon-tab-btn" data-mon-tab="routes" onclick="switchMonitoringTab('routes')">Route Churn</button>
@@ -892,7 +893,7 @@
                         </div>
                     </div>
                     <!-- SLA Sub-tabs -->
-                    <div class="list-controls" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                    <div class="tab-controls">
                         <button class="btn btn-sm btn-secondary sla-tab-btn active" data-sla-tab="hosts" onclick="switchSlaTab('hosts')">Host SLAs</button>
                         <button class="btn btn-sm btn-secondary sla-tab-btn" data-sla-tab="trends" onclick="switchSlaTab('trends')">Trends</button>
                         <button class="btn btn-sm btn-secondary sla-tab-btn" data-sla-tab="incidents" onclick="switchSlaTab('incidents')">Incidents</button>
@@ -932,7 +933,7 @@
                     <!-- Availability Tab (consolidated from Availability page) -->
                     <div id="sla-tab-availability" class="sla-tab" style="display:none;">
                         <div class="drift-summary-grid" id="availability-summary-cards"></div>
-                        <div class="list-controls" style="margin-bottom:1rem;">
+                        <div class="tab-controls">
                             <button class="btn btn-sm btn-secondary avail-tab-btn active" data-avail-tab="hosts" onclick="switchAvailTab('hosts')">Host Availability</button>
                             <button class="btn btn-sm btn-secondary avail-tab-btn" data-avail-tab="outages" onclick="switchAvailTab('outages')">Outage History</button>
                             <button class="btn btn-sm btn-secondary avail-tab-btn" data-avail-tab="transitions" onclick="switchAvailTab('transitions')">State Transitions</button>
@@ -1105,7 +1106,7 @@
                         <button class="btn btn-primary" onclick="showGenerateReport()">Generate Report</button>
                     </div>
                 </div>
-                <div class="list-controls" style="margin-bottom:1rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                <div class="tab-controls">
                     <button class="btn btn-sm btn-secondary report-tab-btn active" data-report-tab="generate" onclick="switchReportTab('generate')">Generate</button>
                     <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="history" onclick="switchReportTab('history')">Report History</button>
                     <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="export" onclick="switchReportTab('export')">Quick Export</button>
@@ -1199,7 +1200,7 @@
                     </div>
                 </div>
                 <div id="device-detail-info" class="device-info-bar"></div>
-                <div class="list-controls" style="margin-bottom:1rem;">
+                <div class="tab-controls">
                     <button class="btn btn-sm btn-secondary dev-tab-btn active" data-dev-tab="overview" onclick="switchDeviceTab('overview')">Overview</button>
                     <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="interfaces" onclick="switchDeviceTab('interfaces')">Interfaces</button>
                     <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="alerts" onclick="switchDeviceTab('alerts')">Alert History</button>
@@ -1344,7 +1345,7 @@
                 </div>
 
                 <!-- Campaign subtabs -->
-                <div style="display:flex; gap:0.5rem; margin-bottom:1rem;" id="upgrades-tabs">
+                <div class="tab-controls" id="upgrades-tabs">
                     <button class="btn btn-sm btn-secondary upgrade-tab-btn active" data-tab="campaigns" onclick="switchUpgradeTab('campaigns')">Campaigns</button>
                     <button class="btn btn-sm btn-secondary upgrade-tab-btn" data-tab="images" onclick="switchUpgradeTab('images')">Image Library</button>
                     <button class="btn btn-sm btn-secondary upgrade-tab-btn" data-tab="backups" onclick="switchUpgradeTab('backups')">Config Backups</button>
