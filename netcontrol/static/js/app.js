@@ -9,10 +9,10 @@ import { connectJobWebSocket, disconnectJobWebSocket, connectUpgradeWebSocket, d
 // Global state
 let currentPage = 'dashboard';
 let dashboardData = null;
-const _hostCache = {};
-const _groupCache = {};
-let _snmpProfilesCache = [];
-let _groupSnmpAssignments = {};
+export const _hostCache = {};
+export const _groupCache = {};
+export let _snmpProfilesCache = [];
+export let _groupSnmpAssignments = {};
 let currentFeatureAccess = [];
 
 const NAV_FEATURE_MAP = {
@@ -200,7 +200,7 @@ function initSpaceControls() {
 }
 
 // ── Utility: debounce ──────────────────────────────────────────────────────────
-function debounce(fn, delay) {
+export function debounce(fn, delay) {
     let timer;
     return function (...args) {
         clearTimeout(timer);
@@ -211,7 +211,7 @@ function debounce(fn, delay) {
 // ── Utility: batched streaming renderer ───────────────────────────────────────
 // Buffers decoded chunks and flushes to the DOM once per animation frame,
 // preventing a layout reflow on every streamed byte.
-function createStreamHandler(el) {
+export function createStreamHandler(el) {
     const decoder = new TextDecoder();
     let pending = '';
     let rafId = null;
@@ -236,7 +236,7 @@ function createStreamHandler(el) {
         },
     };
 }
-const listViewState = {
+export const listViewState = {
     inventory: { items: [], query: '', sort: 'name_asc' },
     playbooks: { items: [], query: '', sort: 'name_asc' },
     jobs: { items: [], query: '', sort: 'started_desc', status: 'all', dryRun: 'all', dateRange: 'all' },
@@ -272,15 +272,18 @@ function applyTheme(theme) {
     });
     // Refresh ECharts theme colors
     PlexusChart.rethemeAll();
-    // Refresh topology vis-network colors for the new theme
-    if (_topologyNetwork && _topologyData && _topoNodesDS && _topoEdgesDS) {
-        _getTopoThemeColors();
-        _topoNodesDS.update(_topologyData.nodes.map(n => _buildVisNode(n, _topoSavedPositions)));
-        _topoEdgesDS.update(_topologyData.edges.map(e => _buildVisEdge(e)));
+    // Refresh topology vis-network colors for the new theme (lazy — only if module already loaded)
+    if (_moduleCache['topology']) {
+        const topo = _moduleCache['topology'];
+        if (topo._topologyNetwork && topo._topologyData && topo._topoNodesDS && topo._topoEdgesDS) {
+            topo._getTopoThemeColors();
+            topo._topoNodesDS.update(topo._topologyData.nodes.map(n => topo._buildVisNode(n, topo._topoSavedPositions)));
+            topo._topoEdgesDS.update(topo._topologyData.edges.map(e => topo._buildVisEdge(e)));
+        }
     }
 }
 
-function initThemeControls() {
+export function initThemeControls() {
     const savedTheme = localStorage.getItem(THEME_KEY) || DEFAULT_THEME;
     applyTheme(savedTheme);
 
@@ -350,15 +353,15 @@ function setGlobalTimeRange(range, customStart = null, customEnd = null) {
     });
 }
 
-function onTimeRangeChange(callback) {
+export function onTimeRangeChange(callback) {
     globalTimeRange.listeners.push(callback);
 }
 
-function offTimeRangeChange(callback) {
+export function offTimeRangeChange(callback) {
     globalTimeRange.listeners = globalTimeRange.listeners.filter(cb => cb !== callback);
 }
 
-function getTimeRangeParams() {
+export function getTimeRangeParams() {
     if (globalTimeRange.range === 'custom' && globalTimeRange.customStart && globalTimeRange.customEnd) {
         return { range: 'custom', start: globalTimeRange.customStart, end: globalTimeRange.customEnd };
     }
@@ -405,7 +408,7 @@ window.refreshCurrentMetricView = refreshCurrentMetricView;
 // PlexusChart — ECharts Abstraction Layer
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PlexusChart = {
+export const PlexusChart = {
     instances: new Map(),
     options: new Map(),
 
@@ -684,7 +687,7 @@ const PlexusChart = {
 
 let _deviceDetailTimeListener = null;
 
-function navigateToDeviceDetail(hostId) {
+export function navigateToDeviceDetail(hostId) {
     listViewState.deviceDetail.hostId = hostId;
     listViewState.deviceDetail.tab = 'overview';
     navigateToPage('device-detail');
@@ -1615,7 +1618,7 @@ async function confirmDeleteDashboardById(id) {
 window.confirmDeleteDashboardById = confirmDeleteDashboardById;
 
 // Helper: generic form modal using the main modal overlay
-function showFormModal(title, bodyHtml, onSubmit) {
+export function showFormModal(title, bodyHtml, onSubmit) {
     const overlay = document.getElementById('modal-overlay');
     const titleEl = document.getElementById('modal-title');
     const body = document.getElementById('modal-body');
@@ -1686,7 +1689,7 @@ function trapFocus(container) {
     return handler;
 }
 
-function activateFocusTrap(overlayId) {
+export function activateFocusTrap(overlayId) {
     _previouslyFocusedElement = document.activeElement;
     const overlay = document.getElementById(overlayId);
     if (!overlay) return;
@@ -1701,7 +1704,7 @@ function activateFocusTrap(overlayId) {
     });
 }
 
-function deactivateFocusTrap(overlayId) {
+export function deactivateFocusTrap(overlayId) {
     const idx = _focusTrapStack.findIndex(t => t.overlayId === overlayId);
     if (idx === -1) return;
     const entry = _focusTrapStack.splice(idx, 1)[0];
@@ -1721,7 +1724,7 @@ function isPageCacheFresh(page) {
     return Boolean(ts && (Date.now() - ts) < PAGE_CACHE_TTL_MS);
 }
 
-function invalidatePageCache(...pages) {
+export function invalidatePageCache(...pages) {
     pages.forEach((page) => {
         delete pageCacheMeta[page];
     });
@@ -1819,7 +1822,7 @@ function getPageFromHash() {
     return VALID_PAGES.includes(hash) ? hash : null;
 }
 
-function navigateToPage(page, { updateHash = true } = {}) {
+export function navigateToPage(page, { updateHash = true } = {}) {
     if (page === 'settings' && currentUserData?.role !== 'admin') {
         showError('Admin access required for Settings');
         return;
@@ -1858,6 +1861,9 @@ function navigateToPage(page, { updateHash = true } = {}) {
 
     // Destroy all ECharts instances when leaving a page
     PlexusChart.destroyAll();
+
+    // Call the current page module's destroy() to clean up event listeners, timers, etc.
+    _destroyCurrentPage(currentPage);
 
     // Force fresh reload when re-navigating to the same page (e.g. clicking nav or breadcrumb)
     if (page === currentPage) {
@@ -2079,6 +2085,69 @@ function updateBreadcrumb(page) {
     trail.innerHTML = html;
 }
 
+// ── Module cache for lazy-loaded page modules ──
+const _moduleCache = {};
+
+// Destroy map: page name → destroy function name in the module
+const _destroyMap = {
+    'dashboard': 'destroyDashboard',
+    'inventory': 'destroyInventory',
+    'playbooks': 'destroyJobs',
+    'jobs': 'destroyJobs',
+    'templates': 'destroyJobs',
+    'credentials': 'destroyJobs',
+    'settings': 'destroySettings',
+    'topology': 'destroyTopology',
+    'configuration': 'destroyConfiguration',
+    'compliance': 'destroyCompliance',
+    'change-management': 'destroyChangeManagement',
+    'monitoring': 'destroyMonitoring',
+    'reports': 'destroyReports',
+    'device-detail': 'destroyDeviceDetail',
+    'graph-templates': 'destroyReports',
+    'mac-tracking': 'destroyNetworkTools',
+    'traffic-analysis': 'destroyNetworkTools',
+    'upgrades': 'destroyUpgrades',
+};
+
+function _destroyCurrentPage(page) {
+    const mod = _moduleCache[page];
+    if (!mod) return;
+    const fnName = _destroyMap[page];
+    if (fnName && typeof mod[fnName] === 'function') {
+        try { mod[fnName](); } catch (e) { console.warn(`Destroy error for ${page}:`, e); }
+    }
+}
+
+async function _loadModule(page) {
+    if (_moduleCache[page]) return _moduleCache[page];
+    const moduleMap = {
+        'dashboard':        () => import('./modules/dashboard.js'),
+        'inventory':        () => import('./modules/inventory.js'),
+        'playbooks':        () => import('./modules/jobs.js'),
+        'jobs':             () => import('./modules/jobs.js'),
+        'templates':        () => import('./modules/jobs.js'),
+        'credentials':      () => import('./modules/jobs.js'),
+        'settings':         () => import('./modules/settings.js'),
+        'topology':         () => import('./modules/topology.js'),
+        'configuration':    () => import('./modules/configuration.js'),
+        'compliance':       () => import('./modules/compliance.js'),
+        'change-management': () => import('./modules/change-management.js'),
+        'monitoring':       () => import('./modules/monitoring.js'),
+        'reports':          () => import('./modules/reports.js'),
+        'device-detail':    () => import('./modules/device-detail.js'),
+        'graph-templates':  () => import('./modules/reports.js'),
+        'mac-tracking':     () => import('./modules/network-tools.js'),
+        'traffic-analysis': () => import('./modules/network-tools.js'),
+        'upgrades':         () => import('./modules/upgrades.js'),
+    };
+    const loader = moduleMap[page];
+    if (!loader) return null;
+    const mod = await loader();
+    _moduleCache[page] = mod;
+    return mod;
+}
+
 async function loadPageData(page, options = {}) {
     const { force = false } = options;
     if (!force && isPageCacheFresh(page)) {
@@ -2086,62 +2155,64 @@ async function loadPageData(page, options = {}) {
     }
     const preserveContent = !force && Boolean(pageCacheMeta[page]);
     try {
+        const mod = await _loadModule(page);
+        if (!mod) return;
         switch (page) {
             case 'dashboard':
-                await loadDashboard({ preserveContent });
+                await mod.loadDashboard({ preserveContent });
                 break;
             case 'inventory':
-                await loadInventory({ preserveContent });
+                await mod.loadInventory({ preserveContent });
                 break;
             case 'playbooks':
-                await loadPlaybooks({ preserveContent });
+                await mod.loadPlaybooks({ preserveContent });
                 break;
             case 'jobs':
-                await loadJobs({ preserveContent });
+                await mod.loadJobs({ preserveContent });
                 break;
             case 'templates':
-                await loadTemplates({ preserveContent });
+                await mod.loadTemplates({ preserveContent });
                 break;
             case 'credentials':
-                await loadCredentials({ preserveContent });
+                await mod.loadCredentials({ preserveContent });
                 break;
             case 'settings':
-                await loadAdminSettings({ preserveContent });
+                await mod.loadAdminSettings({ preserveContent });
                 break;
             case 'topology':
-                await loadTopology({ preserveContent });
+                await mod.loadTopology({ preserveContent });
                 break;
             case 'configuration':
-                await loadConfigDrift({ preserveContent });
-                await loadConfigBackups({ preserveContent });
+                await mod.loadConfigDrift({ preserveContent });
+                await mod.loadConfigBackups({ preserveContent });
                 break;
             case 'compliance':
-                await loadCompliance({ preserveContent });
+                await mod.loadCompliance({ preserveContent });
                 break;
             case 'change-management':
-                await loadRiskAnalysis({ preserveContent });
-                await loadDeployments({ preserveContent });
+                await mod.loadRiskAnalysis({ preserveContent });
+                await mod.loadDeployments({ preserveContent });
                 break;
             case 'monitoring':
-                await loadMonitoring({ preserveContent });
+                await mod.loadMonitoring({ preserveContent });
                 break;
             case 'reports':
-                await loadReports({ preserveContent });
+                await mod.loadReports({ preserveContent });
                 break;
             case 'device-detail':
-                await loadDeviceDetail({ preserveContent });
+                await mod.loadDeviceDetail({ preserveContent });
                 break;
             case 'graph-templates':
-                await loadGraphTemplates({ preserveContent });
+                await mod.loadGraphTemplates({ preserveContent });
                 break;
             case 'mac-tracking':
-                await loadMacTrackingPage({ preserveContent });
+                await mod.loadMacTrackingPage({ preserveContent });
                 break;
             case 'traffic-analysis':
-                await loadTrafficAnalysis({ preserveContent });
+                await mod.loadTrafficAnalysis({ preserveContent });
                 break;
             case 'upgrades':
-                await loadUpgradesPage({ preserveContent });
+                await mod.loadUpgradesPage({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
@@ -3295,7 +3366,7 @@ async function loadDashboard(_options = {}) {
     await loadCustomDashboards(_options);
 }
 
-function isReducedMotion() {
+export function isReducedMotion() {
     return document.body.classList.contains('reduced-motion');
 }
 
@@ -3316,7 +3387,7 @@ function animateCounter(elementId, target) {
     requestAnimationFrame(step);
 }
 
-function skeletonCards(count = 3) {
+export function skeletonCards(count = 3) {
     return Array.from({length: count}, () =>
         '<div class="skeleton skeleton-card" style="margin-bottom: 0.75rem;"></div>'
     ).join('');
@@ -3344,7 +3415,7 @@ window.goToInventory = function() {
     navigateToPage('inventory');
 };
 
-function textMatch(value, query) {
+export function textMatch(value, query) {
     if (!query) return true;
     return String(value || '').toLowerCase().includes(query);
 }
@@ -5482,7 +5553,7 @@ window.deleteAccessGroupAdmin = async function(groupId) {
 // Modals
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function showModal(title, content, options = {}) {
+export function showModal(title, content, options = {}) {
     const modal = document.querySelector('#modal-overlay .modal');
     if (modal) {
         const isCodeEditorModal = /playbook|template/i.test(title);
@@ -5495,7 +5566,7 @@ function showModal(title, content, options = {}) {
     activateFocusTrap('modal-overlay');
 }
 
-function closeAllModals() {
+export function closeAllModals() {
     const modal = document.querySelector('#modal-overlay .modal');
     if (modal) {
         modal.classList.remove('modal-large');
@@ -5507,12 +5578,12 @@ function closeAllModals() {
 }
 
 // Expose to window for inline onclick handlers
-const closeModal = closeAllModals;
+export const closeModal = closeAllModals;
 window.closeAllModals = closeAllModals;
 window.closeModal = closeModal;
 
 // ── Copyable Code Block Utilities ────────────────────────────────────────────
-const COPY_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+export const COPY_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
 let _copyableId = 0;
 
 /**
@@ -5520,7 +5591,7 @@ let _copyableId = 0;
  * @param {string} text - Raw text (will be escaped)
  * @param {object} [options] - { style, label }
  */
-function copyableCodeBlock(text, options = {}) {
+export function copyableCodeBlock(text, options = {}) {
     const id = 'copyable-' + (++_copyableId);
     const style = options.style || 'max-height:400px; overflow:auto; font-size:0.8em; white-space:pre-wrap;';
     const label = options.label || '';
@@ -5540,7 +5611,7 @@ function copyableCodeBlock(text, options = {}) {
  * @param {string} rawText - Plain text to copy to clipboard
  * @param {object} [options] - { style, className }
  */
-function copyableHtmlBlock(innerHtml, rawText, options = {}) {
+export function copyableHtmlBlock(innerHtml, rawText, options = {}) {
     const id = 'copyable-' + (++_copyableId);
     const className = options.className || '';
     return `<div class="copyable-block" data-copyable-id="${id}">
@@ -5556,7 +5627,7 @@ function copyableHtmlBlock(innerHtml, rawText, options = {}) {
  * Wire up all copyable blocks in the DOM (copy buttons + Ctrl+A scoping).
  * Safe to call multiple times — skips already-bound elements.
  */
-function initCopyableBlocks() {
+export function initCopyableBlocks() {
     document.querySelectorAll('.copyable-copy-btn:not([data-copy-bound])').forEach(btn => {
         btn.setAttribute('data-copy-bound', '1');
         btn.addEventListener('click', () => {
@@ -5596,7 +5667,7 @@ function initCopyableBlocks() {
 }
 
 // Themed confirmation dialog using the app modal styling (also accepts legacy signature showConfirm(title, message))
-function showConfirm(optionsOrTitle = {}) {
+export function showConfirm(optionsOrTitle = {}) {
     const defaults = {
         title: 'Confirm',
         message: 'Are you sure?',
@@ -6819,25 +6890,25 @@ window.retryJobFromList = async function(jobId) {
 // Utilities
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function escapeHtml(text) {
+export function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
-function formatDate(dateString) {
+export function formatDate(dateString) {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
     return date.toLocaleString();
 }
 
-function formatTime(dateString) {
+export function formatTime(dateString) {
     if (!dateString) return '';
     const date = new Date(dateString);
     return date.toLocaleTimeString();
 }
 
-function formatRelativeTime(date) {
+export function formatRelativeTime(date) {
     const now = new Date();
     const diffMs = now - date;
     const diffSec = Math.floor(diffMs / 1000);
@@ -6862,7 +6933,7 @@ function getToastContainer() {
     return container;
 }
 
-function showToast(message, type = 'info', duration = 4000) {
+export function showToast(message, type = 'info', duration = 4000) {
     const container = getToastContainer();
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
@@ -6899,7 +6970,7 @@ function dismissToast(toast) {
     setTimeout(() => toast.remove(), 500);
 }
 
-function showError(message, container = null) {
+export function showError(message, container = null) {
     if (container) {
         const errorDiv = document.createElement('div');
         errorDiv.className = 'error';
@@ -6910,7 +6981,7 @@ function showError(message, container = null) {
     }
 }
 
-function showSuccess(message) {
+export function showSuccess(message) {
     showToast(message, 'success', 3000);
 }
 
@@ -6919,12 +6990,12 @@ function showSuccess(message) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 let currentUser = null;
-let currentUserData = null; // {username, user_id, display_name, role}
+export let currentUserData = null; // {username, user_id, display_name, role}
 
 function showLoginScreen() {
-    document.getElementById('login-screen').style.display = 'flex';
-    document.getElementById('app-container').style.display = 'none';
-    document.getElementById('login-error').style.display = 'none';
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('app-container').classList.add('hidden');
+    document.getElementById('login-error').classList.add('hidden');
     document.getElementById('login-username').value = '';
     document.getElementById('login-password').value = '';
     showLoginForm();
@@ -6932,23 +7003,23 @@ function showLoginScreen() {
 }
 
 window.showRegisterScreen = function() {
-    document.getElementById('login-form').style.display = 'none';
-    document.getElementById('register-form').style.display = 'block';
-    document.getElementById('register-back').style.display = 'block';
+    document.getElementById('login-form').classList.add('hidden');
+    document.getElementById('register-form').classList.remove('hidden');
+    document.getElementById('register-back').classList.remove('hidden');
     // Hide "Don't have an account?" link
-    document.getElementById('login-form').nextElementSibling.style.display = 'none';
-    document.getElementById('register-error').style.display = 'none';
+    document.getElementById('login-form').nextElementSibling.classList.add('hidden');
+    document.getElementById('register-error').classList.add('hidden');
     document.getElementById('register-username').focus();
 };
 
 window.showLoginForm = function() {
-    document.getElementById('login-form').style.display = 'block';
-    document.getElementById('register-form').style.display = 'none';
-    document.getElementById('register-back').style.display = 'none';
+    document.getElementById('login-form').classList.remove('hidden');
+    document.getElementById('register-form').classList.add('hidden');
+    document.getElementById('register-back').classList.add('hidden');
     // Show "Don't have an account?" link
     const registerLink = document.getElementById('login-form').nextElementSibling;
-    if (registerLink) registerLink.style.display = 'block';
-    document.getElementById('login-error').style.display = 'none';
+    if (registerLink) registerLink.classList.remove('hidden');
+    document.getElementById('login-error').classList.add('hidden');
 };
 
 function showApp(userData) {
@@ -6960,8 +7031,8 @@ function showApp(userData) {
     currentUserData = userData;
     currentUser = userData.username;
     currentFeatureAccess = Array.isArray(userData.feature_access) ? userData.feature_access : [];
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app-container').style.display = 'flex';
+    document.getElementById('login-screen').classList.add('hidden');
+    document.getElementById('app-container').classList.remove('hidden');
     const navUserLabel = document.querySelector('#nav-user .nav-user-label');
     if (navUserLabel) navUserLabel.textContent = userData.display_name || userData.username;
     initNavigation();
@@ -6987,14 +7058,14 @@ function initLoginForm() {
         const username = document.getElementById('login-username').value;
         const password = document.getElementById('login-password').value;
         const errorEl = document.getElementById('login-error');
-        errorEl.style.display = 'none';
+        errorEl.classList.add('hidden');
 
         try {
             const result = await api.login(username, password);
             showApp(result);
         } catch (error) {
             errorEl.textContent = error.message || 'Invalid username or password';
-            errorEl.style.display = 'block';
+            errorEl.classList.remove('hidden');
         }
     });
 
@@ -7005,11 +7076,11 @@ function initLoginForm() {
         const password = document.getElementById('register-password').value;
         const confirm = document.getElementById('register-confirm').value;
         const errorEl = document.getElementById('register-error');
-        errorEl.style.display = 'none';
+        errorEl.classList.add('hidden');
 
         if (password !== confirm) {
             errorEl.textContent = 'Passwords do not match';
-            errorEl.style.display = 'block';
+            errorEl.classList.remove('hidden');
             return;
         }
 
@@ -7018,7 +7089,7 @@ function initLoginForm() {
             showApp(result);
         } catch (error) {
             errorEl.textContent = error.message || 'Registration failed';
-            errorEl.style.display = 'block';
+            errorEl.classList.remove('hidden');
         }
     });
 }
@@ -8176,8 +8247,9 @@ window.switchConfigurationTab = function(tab) {
 
 window.refreshConfiguration = async function() {
     invalidatePageCache('configuration');
-    await loadConfigDrift({ preserveContent: false });
-    await loadConfigBackups({ preserveContent: false });
+    const mod = await _loadModule('configuration');
+    await mod.loadConfigDrift({ preserveContent: false });
+    await mod.loadConfigBackups({ preserveContent: false });
 };
 
 // Change Management page tabs (Risk Analysis / Deployments)
@@ -8190,8 +8262,9 @@ window.switchChangeTab = function(tab) {
 };
 
 window.refreshChangeManagement = async function() {
-    await loadRiskAnalysis({ preserveContent: false });
-    await loadDeployments({ preserveContent: false });
+    const mod = await _loadModule('change-management');
+    await mod.loadRiskAnalysis({ preserveContent: false });
+    await mod.loadDeployments({ preserveContent: false });
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -8285,7 +8358,7 @@ function initKeyboardShortcuts() {
                 closeCommandPalette();
             } else {
                 // Only open when logged in
-                if (document.getElementById('app-container')?.style.display !== 'none') {
+                if (!document.getElementById('app-container')?.classList.contains('hidden')) {
                     openCommandPalette();
                 }
             }
@@ -8303,8 +8376,8 @@ function initKeyboardShortcuts() {
             if (currentUserData?.must_change_password) return;
             const modalClosers = {
                 'modal-overlay': closeAllModals,
-                'job-output-modal': closeJobOutputModal,
-                'user-menu-overlay': closeUserMenu,
+                'job-output-modal': () => window.closeJobOutputModal?.(),
+                'user-menu-overlay': () => window.closeUserMenu?.(),
                 'confirm-overlay': closeAllModals,
             };
             for (const [id, closeFn] of Object.entries(modalClosers)) {
@@ -8322,7 +8395,7 @@ function initKeyboardShortcuts() {
             const tag = document.activeElement?.tagName.toLowerCase();
             if (tag !== 'input' && tag !== 'textarea' && tag !== 'select' && !document.activeElement?.isContentEditable) {
                 e.preventDefault();
-                if (document.getElementById('app-container')?.style.display !== 'none') {
+                if (!document.getElementById('app-container')?.classList.contains('hidden')) {
                     openCommandPalette();
                 }
             }
@@ -8468,7 +8541,7 @@ function getEmptyIllustration(type) {
     return EMPTY_ILLUSTRATIONS[type] || EMPTY_ILLUSTRATIONS.default;
 }
 
-function emptyStateHTML(message, type, actionBtn) {
+export function emptyStateHTML(message, type, actionBtn) {
     return `<div class="empty-state">
         <div class="empty-state-illustration">${getEmptyIllustration(type)}</div>
         <div class="empty-state-title">${message}</div>
@@ -8581,7 +8654,7 @@ function renderBackupHistory(backups) {
     }).join('');
 }
 
-function formatInterval(seconds) {
+export function formatInterval(seconds) {
     if (seconds >= 86400) return `${Math.round(seconds / 86400)}d`;
     if (seconds >= 3600) return `${Math.round(seconds / 3600)}h`;
     return `${Math.round(seconds / 60)}m`;
@@ -9903,7 +9976,7 @@ function renderMonitoringDevices(polls) {
     }).join('');
 }
 
-function formatUptime(seconds) {
+export function formatUptime(seconds) {
     if (seconds == null) return 'N/A';
     const d = Math.floor(seconds / 86400);
     const h = Math.floor((seconds % 86400) / 3600);
@@ -12821,7 +12894,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── Hash-based routing: back/forward button support ─────────────────────────
 window.addEventListener('popstate', () => {
     const page = getPageFromHash();
-    if (page && page !== currentPage && document.getElementById('app-container')?.style.display !== 'none') {
+    if (page && page !== currentPage && !document.getElementById('app-container')?.classList.contains('hidden')) {
         navigateToPage(page, { updateHash: false });
     }
 });
@@ -14027,18 +14100,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     initKeyboardShortcuts();
     initCopyableBlocks();
     // Card tilt disabled — it interfered with clicking on inventory items
-    // Register global functions for new pages
-    window.searchMacTrackingUI = searchMacTrackingUI;
-    window.triggerMacCollectionUI = triggerMacCollectionUI;
-    window.showMacHistory = showMacHistory;
-    window.loadTrafficAnalysis = loadTrafficAnalysis;
-    window.loadUpgradesPage = loadUpgradesPage;
 
-    // Upgrade campaign search handler
-    const upgradeSearchEl = document.getElementById('upgrade-campaign-search');
-    if (upgradeSearchEl) {
-        upgradeSearchEl.addEventListener('input', debounce(() => loadUpgradeCampaigns(), 300));
-    }
+    // Window globals for lazily-loaded module functions are registered inside
+    // each module file when it's first imported. No need to register them here.
 
     try {
         const status = await api.getAuthStatus();
