@@ -35,11 +35,12 @@ const _templates = {
  */
 export function ensurePageDOM(page) {
     const container = document.getElementById(`page-${page}`);
-    if (!container || container.dataset.initialized) return;
+    if (!container || container.dataset.initialized) return false;
     const templateFn = _templates[page];
-    if (!templateFn) return;
+    if (!templateFn) return false;
     container.innerHTML = templateFn();
     container.dataset.initialized = 'true';
+    return true;
 }
 
 /**

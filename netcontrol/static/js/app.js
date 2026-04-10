@@ -1845,41 +1845,36 @@ export function navigateToPage(page, { updateHash = true } = {}) {
         return;
     }
 
-    // Update active nav link (only page-navigation links, not utility toggles)
-    document.querySelectorAll('.nav-link[data-page]').forEach(link => {
-        link.classList.remove('active');
-        if (link.getAttribute('data-page') === page) {
-            link.classList.add('active');
-        }
-    });
+    // Update active nav link — targeted swap instead of iterating all links
+    const prevNavLink = document.querySelector('.nav-link.active[data-page]');
+    if (prevNavLink) prevNavLink.classList.remove('active');
+    const nextNavLink = document.querySelector(`.nav-link[data-page="${page}"]`);
+    if (nextNavLink) nextNavLink.classList.add('active');
 
     // Auto-expand parent nav group and update group active styling
     expandNavGroupForPage(page);
     updateNavGroupActiveState();
 
     // Close any open modals before switching pages
-    // Dismiss overlay-based modals (controlled via .active class)
-    document.querySelectorAll('.modal-overlay.active').forEach(m => {
-        m.classList.remove('active');
-    });
-    // Hide standalone modals (controlled via inline display, e.g. SLA detail)
-    document.querySelectorAll('.modal[id][style*="display"]').forEach(m => {
-        if (!m.closest('.modal-overlay')) m.style.display = 'none';
-    });
+    // Fast path: dismiss the shared modal overlay (most common case)
+    const overlay = document.getElementById('modal-overlay');
+    if (overlay) overlay.classList.remove('active');
+    // Catch any additional overlay-based modals (rare — ensureModalDOM creates extras)
+    document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
 
-    // Hide all pages
-    document.querySelectorAll('.page').forEach(p => {
-        p.classList.remove('active');
-    });
-
-    // Destroy all ECharts instances when leaving a page
-    PlexusChart.destroyAll();
+    // Hide current page (targeted instead of sweeping all .page elements)
+    const currentPageEl = document.getElementById(`page-${currentPage}`);
+    if (currentPageEl) currentPageEl.classList.remove('active');
 
     // Abort any in-flight API requests from the page being left
     api.abortPendingRequests();
 
     // Call the current page module's destroy() to clean up event listeners, timers, etc.
     _destroyCurrentPage(currentPage);
+
+    // Defer chart destruction so it doesn't block the page transition paint.
+    // Charts are recreated asynchronously by loadPageData, so this is safe.
+    requestAnimationFrame(() => PlexusChart.destroyAll());
 
     // Force fresh reload when re-navigating to the same page (e.g. clicking nav or breadcrumb)
     if (page === currentPage) {
@@ -1905,10 +1900,10 @@ export function navigateToPage(page, { updateHash = true } = {}) {
         if (_deviceDetailTimeListener) { offTimeRangeChange(_deviceDetailTimeListener); _deviceDetailTimeListener = null; }
     }
 
-    // Ensure lazy DOM is populated for target page
-    ensurePageDOM(page);
-    // Bind list controls for newly-created DOM elements (idempotent)
-    initListPageControls();
+    // Ensure lazy DOM is populated for target page; bind controls only when new DOM is created
+    if (ensurePageDOM(page)) {
+        initListPageControls();
+    }
 
     // Show target page
     const targetPage = document.getElementById(`page-${page}`);
@@ -2028,37 +2023,52 @@ const PAGE_HELP = {
     },
 };
 
+// Cache help-dismissed state in memory — only read localStorage once
+let _helpDismissedCache = null;
+function _getHelpDismissed() {
+    if (!_helpDismissedCache) {
+        _helpDismissedCache = JSON.parse(localStorage.getItem('plexus_help_dismissed') || '{}');
+    }
+    return _helpDismissedCache;
+}
+
 function renderPageHelp(page) {
     const help = PAGE_HELP[page];
     if (!help) return;
     const pageEl = document.getElementById(`page-${page}`);
     if (!pageEl) return;
 
-    // Remove any existing help banner on this page
+    // Reuse existing banner if already created for this page
     const existing = pageEl.querySelector('.page-help');
-    if (existing) existing.remove();
+    if (existing) return;
 
-    // Check if user dismissed this page's help
-    const dismissed = JSON.parse(localStorage.getItem('plexus_help_dismissed') || '{}');
+    const dismissed = _getHelpDismissed();
     const isHidden = !!dismissed[page];
 
     const banner = document.createElement('div');
     banner.className = 'page-help' + (isHidden ? ' page-help-collapsed' : '');
-    banner.innerHTML = `<div class="page-help-content"><svg class="page-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg><div><strong>${escapeHtml(help.title)}</strong><span class="page-help-text"> &mdash; ${escapeHtml(help.text)}</span></div></div><button class="page-help-toggle" title="${isHidden ? 'Show help' : 'Hide help'}">${isHidden ? '?' : '&times;'}</button>`;
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'page-help-toggle';
+    toggleBtn.title = isHidden ? 'Show help' : 'Hide help';
+    toggleBtn.innerHTML = isHidden ? '?' : '&times;';
 
-    banner.querySelector('.page-help-toggle').addEventListener('click', () => {
-        const d = JSON.parse(localStorage.getItem('plexus_help_dismissed') || '{}');
+    banner.innerHTML = `<div class="page-help-content"><svg class="page-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg><div><strong>${escapeHtml(help.title)}</strong><span class="page-help-text"> &mdash; ${escapeHtml(help.text)}</span></div></div>`;
+    banner.appendChild(toggleBtn);
+
+    toggleBtn.addEventListener('click', () => {
+        const d = _getHelpDismissed();
         if (banner.classList.contains('page-help-collapsed')) {
             delete d[page];
             banner.classList.remove('page-help-collapsed');
-            banner.querySelector('.page-help-toggle').innerHTML = '&times;';
-            banner.querySelector('.page-help-toggle').title = 'Hide help';
+            toggleBtn.innerHTML = '&times;';
+            toggleBtn.title = 'Hide help';
         } else {
             d[page] = true;
             banner.classList.add('page-help-collapsed');
-            banner.querySelector('.page-help-toggle').innerHTML = '?';
-            banner.querySelector('.page-help-toggle').title = 'Show help';
+            toggleBtn.innerHTML = '?';
+            toggleBtn.title = 'Show help';
         }
+        _helpDismissedCache = d;
         localStorage.setItem('plexus_help_dismissed', JSON.stringify(d));
     });
 
@@ -2071,7 +2081,12 @@ function renderPageHelp(page) {
     }
 }
 
+let _lastBreadcrumbPage = null;
 function updateBreadcrumb(page) {
+    // Skip DOM write if breadcrumb is already showing this page
+    if (page === _lastBreadcrumbPage) return;
+    _lastBreadcrumbPage = page;
+
     const trail = document.getElementById('breadcrumb-trail');
     if (!trail) return;
 
@@ -6986,10 +7001,11 @@ window.retryJobFromList = async function(jobId) {
 // Utilities
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const _escapeMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const _escapeRe = /[&<>"']/g;
 export function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    if (text == null) return '';
+    return String(text).replace(_escapeRe, ch => _escapeMap[ch]);
 }
 
 export function formatDate(dateString) {
@@ -7620,8 +7636,10 @@ function initSidebar() {
         sidebar.classList.add('collapsed');
     }
     toggle.addEventListener('click', () => {
+        sidebar.style.willChange = 'width, min-width';
         sidebar.classList.toggle('collapsed');
         localStorage.setItem(COLLAPSED_KEY, sidebar.classList.contains('collapsed') ? '1' : '0');
+        sidebar.addEventListener('transitionend', () => { sidebar.style.willChange = ''; }, { once: true });
     });
 
     // Mobile hamburger + backdrop
