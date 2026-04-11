@@ -6,7 +6,7 @@ import * as api from '../api.js';
 import {
     listViewState, escapeHtml, showError, navigateToPage,
     PlexusChart, getTimeRangeParams, onTimeRangeChange, offTimeRangeChange,
-    formatUptime, showToast
+    formatUptime, showToast, rangeToMs
 } from '../app.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -100,7 +100,7 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
         // Overlay deployment/config/alert annotations on metric charts
         try {
             const endISO = new Date().toISOString();
-            const startISO = new Date(Date.now() - _rangeToMs(range)).toISOString();
+            const startISO = new Date(Date.now() - rangeToMs(range)).toISOString();
             const annRes = await api.getAnnotations({ hostId, start: startISO, end: endISO, categories: 'deployment,config,alert' });
             const events = annRes?.annotations || [];
             if (events.length) {
@@ -119,12 +119,6 @@ function refreshDeviceDetail() {
     loadDeviceDetail({ force: true });
 }
 window.refreshDeviceDetail = refreshDeviceDetail;
-
-function _rangeToMs(range) {
-    const units = { h: 3600000, d: 86400000 };
-    const m = /^(\d+)([hd])$/.exec(range);
-    return m ? parseInt(m[1]) * units[m[2]] : 86400000;
-}
 
 function extractMetricSeries(result, name) {
     if (result.status !== 'fulfilled') return [{ name, data: [] }];
