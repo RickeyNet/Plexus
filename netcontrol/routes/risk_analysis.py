@@ -435,7 +435,8 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
 
     for r in host_results:
         if isinstance(r, Exception):
-            results.append({"status": "error", "error": str(r), "risk_level": "unknown", "risk_score": 0.0})
+            LOGGER.warning("risk-analysis: host analysis failed: %s", r)
+            results.append({"status": "error", "error": "Analysis failed for host", "risk_level": "unknown", "risk_score": 0.0})
         else:
             results.append(r)
             if r.get("risk_score", 0) > max_risk_score:

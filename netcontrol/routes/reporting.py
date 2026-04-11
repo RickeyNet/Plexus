@@ -61,7 +61,7 @@ async def delete_report(report_id: int):
 @router.get("/api/reports/runs")
 async def list_report_runs(
     report_id: int | None = Query(default=None),
-    limit: int = Query(default=50),
+    limit: int = Query(default=50, ge=1, le=1000),
 ):
     return {"runs": await db.get_report_runs(report_id, limit)}
 
@@ -103,8 +103,9 @@ async def generate_report(body: dict, request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        await db.complete_report_run(run["id"], json.dumps({"error": str(exc)}), 0, "error")
-        raise HTTPException(status_code=500, detail=str(exc))
+        LOGGER.error("Report generation failed (type=%s): %s", report_type, exc)
+        await db.complete_report_run(run["id"], json.dumps({"error": "generation_failed"}), 0, "error")
+        raise HTTPException(status_code=500, detail="Report generation failed — see server logs")
 
 
 # ── CSV Export ───────────────────────────────────────────────────────────────

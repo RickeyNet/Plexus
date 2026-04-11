@@ -758,13 +758,29 @@ async def _require_auth_dep(request: Request):
     return await _require_auth(request)
 
 
+# Per-user rate limiter for change-password (keyed on user_id)
+_PASSWORD_CHANGE_ATTEMPTS: dict[int, list[float]] = {}
+_PASSWORD_CHANGE_MAX = 5       # max attempts per window
+_PASSWORD_CHANGE_WINDOW = 300  # 5-minute window
+
+
 @router.post("/api/auth/change-password", dependencies=[Depends(_require_auth_dep)])
 async def change_password(body: ChangePasswordRequest, request: Request):
     session = _get_session(request)
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Rate-limit password verification attempts per user
+    uid = session["user_id"]
+    now = time.time()
+    attempts = [t for t in _PASSWORD_CHANGE_ATTEMPTS.get(uid, []) if now - t < _PASSWORD_CHANGE_WINDOW]
+    if len(attempts) >= _PASSWORD_CHANGE_MAX:
+        raise HTTPException(status_code=429, detail="Too many password change attempts. Try again later.")
+
     user = await _verify_user_fn(session["user"], body.current_password)
     if not user:
+        attempts.append(now)
+        _PASSWORD_CHANGE_ATTEMPTS[uid] = attempts
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     if body.new_password == body.current_password:
         raise HTTPException(status_code=400, detail="New password must be different from your current password")

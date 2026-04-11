@@ -259,8 +259,8 @@ async def admin_create_user(body: AdminUserCreateRequest, request: Request):
     username = body.username.strip()
     if len(username) < 3:
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
-    if len(body.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     role = body.role if body.role in {"admin", "user"} else "user"
 
     salt = secrets.token_hex(16)
@@ -313,8 +313,8 @@ async def admin_reset_user_password(user_id: int, body: AdminUserPasswordResetRe
     target = await db.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    if len(body.new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     salt = secrets.token_hex(16)
     pw_hash = _hash_password_fn(body.new_password, salt)
