@@ -451,7 +451,7 @@ async def delete_campaign(campaign_id: int, request: Request):
 
 
 @router.get("/api/upgrades/campaigns/{campaign_id}/events")
-async def get_campaign_events(campaign_id: int, device_id: int = None, limit: int = 10000):
+async def get_campaign_events(campaign_id: int, device_id: int = None, limit: int = Query(default=10000, ge=1, le=10000)):
     return await db.get_upgrade_events(campaign_id, device_id=device_id, limit=limit)
 
 
@@ -618,15 +618,15 @@ async def cancel_campaign(campaign_id: int, request: Request):
 @ws_router.websocket("/ws/upgrades/{campaign_id}")
 async def upgrade_websocket(ws: WebSocket, campaign_id: int):
     """Stream upgrade events to the browser in real-time."""
-    await ws.accept()
-
-    # Verify auth via query param or cookie
+    # Verify auth before accepting the connection
     if _verify_session_token:
         token = ws.cookies.get("session") or ws.query_params.get("token", "")
         session = _verify_session_token(token) if token else None
         if not session:
             await ws.close(code=4001, reason="Unauthorized")
             return
+
+    await ws.accept()
 
     # Send full historical events as a single batch to avoid keepalive timeouts
     events = await db.get_upgrade_events(campaign_id, limit=10000)
@@ -661,7 +661,14 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
 
     try:
         while True:
-            await ws.receive_text()  # Keep alive
+            try:
+                await asyncio.wait_for(ws.receive_text(), timeout=120)
+            except asyncio.TimeoutError:
+                # Send ping to detect dead connections
+                try:
+                    await ws.send_json({"type": "ping"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
         pass
     finally:
