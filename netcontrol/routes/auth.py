@@ -394,7 +394,7 @@ async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
     # Determine role from group membership
     role = default_role
     user_groups = [g.lower() for g in ldap_attrs.get("groups", [])]
-    if admin_group_dn and any(admin_group_dn in g for g in user_groups):
+    if admin_group_dn and any(g == admin_group_dn for g in user_groups):
         role = "admin"
 
     display_name = ldap_attrs.get("display_name", "") or username
@@ -403,10 +403,14 @@ async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
 
 
 def _dev_bootstrap_enabled() -> bool:
-    env = os.getenv("APP_ENV", "").strip().lower()
-    if env in {"dev", "development", "local", "test"}:
+    # Require explicit opt-in via env var; "test" alone is not sufficient
+    # to avoid accidental bootstrap with real data.
+    if _env_flag("PLEXUS_DEV_BOOTSTRAP", False):
         return True
-    return _env_flag("PLEXUS_DEV_BOOTSTRAP", False)
+    env = os.getenv("APP_ENV", "").strip().lower()
+    if env in {"dev", "development", "local"}:
+        return True
+    return False
 
 
 def _dev_bootstrap_username() -> str:
@@ -593,6 +597,8 @@ class UpdateProfileRequest(BaseModel):
 
 router = APIRouter()
 
+_login_lock = asyncio.Lock()
+
 
 @router.post("/api/auth/login")
 async def login(body: LoginRequest, request: Request):
@@ -608,33 +614,39 @@ async def login(body: LoginRequest, request: Request):
     LOCKED_OUT = getattr(_app, "LOCKED_OUT", state.LOCKED_OUT)
     LOGIN_RULES = state.LOGIN_RULES
 
-    # Account lockout check
-    if ip in LOCKED_OUT:
-        if now < LOCKED_OUT[ip]:
-            raise HTTPException(status_code=429, detail=f"Account locked. Try again in {int((LOCKED_OUT[ip]-now)//60)+1} min.")
-        else:
-            del LOCKED_OUT[ip]
-            LOGIN_ATTEMPTS.pop(ip, None)
+    # Acquire lock for rate-limit check (prevent concurrent bypass)
+    async with _login_lock:
+        # Account lockout check
+        if ip in LOCKED_OUT:
+            if now < LOCKED_OUT[ip]:
+                raise HTTPException(status_code=429, detail=f"Account locked. Try again in {int((LOCKED_OUT[ip]-now)//60)+1} min.")
+            else:
+                del LOCKED_OUT[ip]
+                LOGIN_ATTEMPTS.pop(ip, None)
 
-    # Rate limiting
-    attempts = LOGIN_ATTEMPTS.get(ip, [])
-    # Remove old attempts
-    attempts = [t for t in attempts if now - t < LOGIN_RULES["rate_limit_window"]]
-    if len(attempts) >= LOGIN_RULES["rate_limit_max"]:
-        raise HTTPException(status_code=429, detail="Too many login attempts. Please wait a minute.")
+        # Rate limiting
+        attempts = LOGIN_ATTEMPTS.get(ip, [])
+        # Remove old attempts
+        attempts = [t for t in attempts if now - t < LOGIN_RULES["rate_limit_window"]]
+        if len(attempts) >= LOGIN_RULES["rate_limit_max"]:
+            raise HTTPException(status_code=429, detail="Too many login attempts. Please wait a minute.")
 
+    # Auth identity check runs outside lock (may be slow: LDAP/RADIUS)
     user, auth_source, auth_error = await _auth_identity(body.username, body.password)
-    if not user:
-        attempts.append(now)
-        LOGIN_ATTEMPTS[ip] = attempts
-        await _audit_fn("auth", "login.failure", user=body.username, detail=auth_error or "bad credentials", correlation_id=_corr_id(request))
-        # Lockout if too many failed attempts
-        if len(attempts) >= LOGIN_RULES["max_attempts"]:
-            LOCKED_OUT[ip] = now + LOGIN_RULES["lockout_time"]
-            raise HTTPException(status_code=429, detail="Account locked due to too many failed attempts. Try again later.")
-        raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
-    # On success, reset attempts
-    LOGIN_ATTEMPTS.pop(ip, None)
+
+    # Re-acquire lock for result tracking
+    async with _login_lock:
+        if not user:
+            attempts.append(now)
+            LOGIN_ATTEMPTS[ip] = attempts
+            await _audit_fn("auth", "login.failure", user=body.username, detail=auth_error or "bad credentials", correlation_id=_corr_id(request))
+            # Lockout if too many failed attempts
+            if len(attempts) >= LOGIN_RULES["max_attempts"]:
+                LOCKED_OUT[ip] = now + LOGIN_RULES["lockout_time"]
+                raise HTTPException(status_code=429, detail="Account locked due to too many failed attempts. Try again later.")
+            raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
+        # On success, reset attempts
+        LOGIN_ATTEMPTS.pop(ip, None)
     await _audit_fn("auth", "login.success", user=body.username, detail=f"source={auth_source}", correlation_id=_corr_id(request))
     token = _create_session_token_fn(body.username, user["id"])
     csrf_token = _generate_csrf_token(body.username)

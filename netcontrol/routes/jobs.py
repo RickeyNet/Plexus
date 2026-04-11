@@ -68,6 +68,7 @@ _job_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_JOBS)
 _job_sockets: dict[int, list[WebSocket]] = {}
 _job_sockets_lock = asyncio.Lock()
 _running_job_tasks: dict[int, asyncio.Task] = {}  # job_id -> asyncio.Task for cancellation
+_running_tasks_lock = asyncio.Lock()
 
 _PRIORITY_LABELS = {0: "low", 1: "below-normal", 2: "normal", 3: "high", 4: "critical"}
 
@@ -314,12 +315,15 @@ async def _process_job_queue_inner():
             return
         await db.start_job(job_id)
         task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run, _secret_redact_values))
-    _running_job_tasks[job_id] = task
+    async with _running_tasks_lock:
+        _running_job_tasks[job_id] = task
 
     def _on_done(t):
-        _running_job_tasks.pop(job_id, None)
-        # After a job finishes, try to dequeue the next one
-        asyncio.ensure_future(_process_job_queue())
+        async def _cleanup():
+            async with _running_tasks_lock:
+                _running_job_tasks.pop(job_id, None)
+            await _process_job_queue()
+        asyncio.ensure_future(_cleanup())
 
     task.add_done_callback(_on_done)
 
@@ -666,7 +670,8 @@ async def cancel_job_endpoint(job_id: int, request: Request):
     user = session["user"] if session else ""
 
     # Cancel running asyncio task if applicable
-    task = _running_job_tasks.pop(job_id, None)
+    async with _running_tasks_lock:
+        task = _running_job_tasks.pop(job_id, None)
     if task and not task.done():
         task.cancel()
 
@@ -676,7 +681,8 @@ async def cancel_job_endpoint(job_id: int, request: Request):
 
     # Notify WebSocket clients
     done_msg = {"type": "job_complete", "job_id": job_id, "status": "cancelled"}
-    sockets = _job_sockets.pop(job_id, [])
+    async with _job_sockets_lock:
+        sockets = _job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
             await ws.send_json(done_msg)

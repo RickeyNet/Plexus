@@ -1128,6 +1128,26 @@ CREATE TABLE IF NOT EXISTS upgrade_events (
     host            TEXT    NOT NULL DEFAULT '',
     timestamp       TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ── Missing FK indexes for join performance ──────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_compliance_assign_profile
+    ON compliance_profile_assignments (profile_id);
+CREATE INDEX IF NOT EXISTS idx_compliance_assign_group
+    ON compliance_profile_assignments (group_id);
+CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_rule
+    ON monitoring_alerts (rule_id);
+CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_poll
+    ON monitoring_alerts (poll_id);
+CREATE INDEX IF NOT EXISTS idx_deployment_checks_deploy
+    ON deployment_checkpoints (deployment_id);
+CREATE INDEX IF NOT EXISTS idx_user_group_member_user
+    ON user_group_memberships (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_group_member_group
+    ON user_group_memberships (group_id);
+CREATE INDEX IF NOT EXISTS idx_topology_links_target
+    ON topology_links (target_host_id);
+CREATE INDEX IF NOT EXISTS idx_access_group_features_group
+    ON access_group_features (group_id);
 """
 
 
@@ -1341,6 +1361,7 @@ async def create_user(username: str, password_hash: str, salt: str,
         await db.commit()
         return cursor.lastrowid
     except Exception as e:
+        await db.rollback()
         if _is_unique_violation(e):
             raise ValueError(f"Username '{username}' already exists.")
         raise
@@ -1395,6 +1416,7 @@ async def update_user_admin(user_id: int, username: str = None, display_name: st
         await db.execute(sql, params)
         await db.commit()
     except Exception as e:
+        await db.rollback()
         if _is_unique_violation(e):
             raise ValueError("Username already exists")
         raise
@@ -1419,6 +1441,9 @@ async def delete_user(user_id: int):
         await db.execute("DELETE FROM credentials WHERE owner_id = ?", (user_id,))
         await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
         await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 
@@ -1447,6 +1472,7 @@ async def set_user_groups(user_id: int, group_ids: list[int]):
             )
         await db.commit()
     except Exception as e:
+        await db.rollback()
         if _is_foreign_key_violation(e):
             raise ValueError("One or more selected groups do not exist")
         raise
@@ -1521,6 +1547,7 @@ async def create_access_group(name: str, description: str, feature_keys: list[st
         await db.commit()
         return int(group_id)
     except Exception as e:
+        await db.rollback()
         if _is_unique_violation(e):
             raise ValueError("Access group name already exists")
         raise
@@ -1543,6 +1570,7 @@ async def update_access_group(group_id: int, name: str, description: str, featur
             )
         await db.commit()
     except Exception as e:
+        await db.rollback()
         if _is_unique_violation(e):
             raise ValueError("Access group name already exists")
         raise
@@ -1729,6 +1757,9 @@ async def delete_group(group_id: int):
         await db.execute("DELETE FROM jobs WHERE inventory_group_id = ?", (group_id,))
         await db.execute("DELETE FROM inventory_groups WHERE id = ?", (group_id,))
         await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 
@@ -1942,6 +1973,7 @@ async def create_playbook(name: str, filename: str, description: str = "",
         await db.commit()
         return cursor.lastrowid
     except Exception as e:
+        await db.rollback()
         # If it's a unique constraint error, re-raise it
         if _is_unique_violation(e):
             raise
@@ -1999,13 +2031,12 @@ async def update_playbook(playbook_id: int, name: str = None, filename: str = No
         
         if updates:
             updates.append("updated_at = NOW()::text" if DB_ENGINE == "postgres" else "updated_at = datetime('now')")
-
-            params.append(playbook_id)
-            await db.execute(
-                f"UPDATE playbooks SET {', '.join(updates)} WHERE id = ?",
-                params
-            )
+            sql, sql_params = _safe_dynamic_update("playbooks", updates, params, "id = ?", playbook_id)
+            await db.execute(sql, sql_params)
             await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 
@@ -2271,14 +2302,14 @@ async def update_credential(
         args.append(enc_secret)
     if not updates:
         return
-    args.append(cred_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE credentials SET {', '.join(updates)} WHERE id = ?",
-            tuple(args),
-        )
+        sql, sql_params = _safe_dynamic_update("credentials", updates, args, "id = ?", cred_id)
+        await db.execute(sql, sql_params)
         await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 
@@ -4251,6 +4282,9 @@ async def update_deployment_status(
                 (deployment_id,),
             )
         await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 
@@ -5978,13 +6012,12 @@ async def delete_dashboard_panel(panel_id: int) -> bool:
         cursor = await db.execute("SELECT dashboard_id FROM dashboard_panels WHERE id = ?", (panel_id,))
         row = await cursor.fetchone()
         cursor2 = await db.execute("DELETE FROM dashboard_panels WHERE id = ?", (panel_id,))
-        await db.commit()
         if row:
             await db.execute(
                 "UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?",
                 (dict(row)["dashboard_id"],),
             )
-            await db.commit()
+        await db.commit()
         return cursor2.rowcount > 0
     finally:
         await db.close()
@@ -7933,44 +7966,47 @@ async def get_snmp_data_source(ds_id: int) -> dict | None:
 async def upsert_snmp_data_source(
     host_id: int, ds_type: str, instance_key: str, **kwargs
 ) -> int:
+    """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE (SQLite 3.24+)."""
+    allowed = {"name", "table_oid", "index_oid", "instance_label",
+               "oids_json", "poll_interval", "enabled", "last_polled_at"}
+    name = kwargs.get("name", "")
+    table_oid = kwargs.get("table_oid", "")
+    index_oid = kwargs.get("index_oid", "")
+    instance_label = kwargs.get("instance_label", "")
+    oids_json = kwargs.get("oids_json", "[]")
+    poll_interval = kwargs.get("poll_interval", 300)
+    enabled = kwargs.get("enabled", 1)
+    # Build SET clause for ON CONFLICT from provided kwargs
+    update_sets = []
+    for k in kwargs:
+        if k in allowed:
+            update_sets.append(f"{k} = excluded.{k}")
+    if not update_sets:
+        # Nothing to update on conflict — no-op SET
+        update_sets = ["name = excluded.name"]
     db = await get_db()
     try:
+        await db.execute(
+            f"""INSERT INTO snmp_data_sources
+                (host_id, ds_type, instance_key, name, table_oid, index_oid,
+                 instance_label, oids_json, poll_interval, enabled)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(host_id, ds_type, instance_key) DO UPDATE SET
+                {', '.join(update_sets)}""",
+            (host_id, ds_type, instance_key, name, table_oid, index_oid,
+             instance_label, oids_json, poll_interval, enabled),
+        )
+        await db.commit()
+        # Fetch the row id (works for both insert and update)
         cursor = await db.execute(
             "SELECT id FROM snmp_data_sources WHERE host_id = ? AND ds_type = ? AND instance_key = ?",
             (host_id, ds_type, instance_key),
         )
-        existing = await cursor.fetchone()
-        if existing:
-            eid = existing[0] if isinstance(existing, tuple) else dict(existing)["id"]
-            sets = []
-            vals = []
-            for k, v in kwargs.items():
-                if k in ("name", "table_oid", "index_oid", "instance_label",
-                         "oids_json", "poll_interval", "enabled", "last_polled_at"):
-                    sets.append(f"{k} = ?")
-                    vals.append(v)
-            if sets:
-                sql, sql_params = _safe_dynamic_update("snmp_data_sources", sets, vals, "id = ?", eid)
-                await db.execute(sql, sql_params)
-                await db.commit()
-            return eid
-        else:
-            cursor2 = await db.execute(
-                """INSERT INTO snmp_data_sources
-                   (host_id, ds_type, instance_key, name, table_oid, index_oid,
-                    instance_label, oids_json, poll_interval, enabled)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (host_id, ds_type, instance_key,
-                 kwargs.get("name", ""),
-                 kwargs.get("table_oid", ""),
-                 kwargs.get("index_oid", ""),
-                 kwargs.get("instance_label", ""),
-                 kwargs.get("oids_json", "[]"),
-                 kwargs.get("poll_interval", 300),
-                 kwargs.get("enabled", 1)),
-            )
-            await db.commit()
-            return cursor2.lastrowid
+        row = await cursor.fetchone()
+        return row[0] if isinstance(row, tuple) else dict(row)["id"]
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 
@@ -8153,65 +8189,60 @@ async def seed_built_in_cdefs() -> int:
 async def upsert_mac_entry(host_id: int, mac_address: str, vlan: int,
                             port_name: str = "", port_index: int = 0,
                             ip_address: str = "", entry_type: str = "dynamic") -> int:
+    """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE."""
     db = await get_db()
     try:
+        await db.execute(
+            """INSERT INTO mac_address_table
+               (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(host_id, mac_address, vlan) DO UPDATE SET
+                port_name = excluded.port_name,
+                port_index = excluded.port_index,
+                ip_address = excluded.ip_address,
+                entry_type = excluded.entry_type,
+                last_seen = datetime('now')""",
+            (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type),
+        )
+        await db.commit()
         cursor = await db.execute(
             "SELECT id FROM mac_address_table WHERE host_id = ? AND mac_address = ? AND vlan = ?",
             (host_id, mac_address, vlan),
         )
-        existing = await cursor.fetchone()
-        if existing:
-            eid = existing[0] if isinstance(existing, tuple) else dict(existing)["id"]
-            await db.execute(
-                """UPDATE mac_address_table
-                   SET port_name = ?, port_index = ?, ip_address = ?,
-                       entry_type = ?, last_seen = datetime('now')
-                   WHERE id = ?""",
-                (port_name, port_index, ip_address, entry_type, eid),
-            )
-            await db.commit()
-            return eid
-        else:
-            cursor2 = await db.execute(
-                """INSERT INTO mac_address_table
-                   (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type),
-            )
-            await db.commit()
-            return cursor2.lastrowid
+        row = await cursor.fetchone()
+        return row[0] if isinstance(row, tuple) else dict(row)["id"]
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 
 
 async def upsert_arp_entry(host_id: int, ip_address: str, mac_address: str,
                             interface_name: str = "", vrf: str = "") -> int:
+    """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE."""
     db = await get_db()
     try:
+        await db.execute(
+            """INSERT INTO arp_table
+               (host_id, ip_address, mac_address, interface_name, vrf)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(host_id, ip_address, vrf) DO UPDATE SET
+                mac_address = excluded.mac_address,
+                interface_name = excluded.interface_name,
+                last_seen = datetime('now')""",
+            (host_id, ip_address, mac_address, interface_name, vrf),
+        )
+        await db.commit()
         cursor = await db.execute(
             "SELECT id FROM arp_table WHERE host_id = ? AND ip_address = ? AND vrf = ?",
             (host_id, ip_address, vrf),
         )
-        existing = await cursor.fetchone()
-        if existing:
-            eid = existing[0] if isinstance(existing, tuple) else dict(existing)["id"]
-            await db.execute(
-                """UPDATE arp_table
-                   SET mac_address = ?, interface_name = ?, last_seen = datetime('now')
-                   WHERE id = ?""",
-                (mac_address, interface_name, eid),
-            )
-            await db.commit()
-            return eid
-        else:
-            cursor2 = await db.execute(
-                """INSERT INTO arp_table
-                   (host_id, ip_address, mac_address, interface_name, vrf)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (host_id, ip_address, mac_address, interface_name, vrf),
-            )
-            await db.commit()
-            return cursor2.lastrowid
+        row = await cursor.fetchone()
+        return row[0] if isinstance(row, tuple) else dict(row)["id"]
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 
@@ -8414,10 +8445,12 @@ async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1,
 async def get_flow_timeline(host_id: int | None = None, hours: int = 6,
                              bucket_minutes: int = 5) -> list[dict]:
     """Aggregate flow data into time buckets."""
+    # Validate bucket_minutes to prevent SQL injection via f-string
+    bucket_minutes = max(1, min(int(bucket_minutes), 60))
     db = await get_db()
     try:
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
-        params: list = [f"-{hours}"]
+        params: list = [f"-{max(1, int(hours))}"]
         if host_id is not None:
             where += " AND host_id = ?"
             params.append(host_id)
@@ -8480,41 +8513,41 @@ async def upsert_metric_baseline(host_id: int, metric_name: str,
                                    baseline_p95: float, sample_count: int,
                                    labels_json: str = "{}",
                                    learning_window_days: int = 14) -> int:
+    """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE (SQLite 3.24+)."""
     db = await get_db()
     try:
+        await db.execute(
+            """INSERT INTO metric_baselines
+               (host_id, metric_name, labels_json, day_of_week, hour_of_day,
+                baseline_avg, baseline_stddev, baseline_min, baseline_max,
+                baseline_p95, sample_count, learning_window_days)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(host_id, metric_name, labels_json, day_of_week, hour_of_day) DO UPDATE SET
+                baseline_avg = excluded.baseline_avg,
+                baseline_stddev = excluded.baseline_stddev,
+                baseline_min = excluded.baseline_min,
+                baseline_max = excluded.baseline_max,
+                baseline_p95 = excluded.baseline_p95,
+                sample_count = excluded.sample_count,
+                learning_window_days = excluded.learning_window_days,
+                last_computed = datetime('now')""",
+            (host_id, metric_name, labels_json, day_of_week, hour_of_day,
+             baseline_avg, baseline_stddev, baseline_min, baseline_max,
+             baseline_p95, sample_count, learning_window_days),
+        )
+        await db.commit()
+        # Retrieve the row id
         cursor = await db.execute(
             """SELECT id FROM metric_baselines
                WHERE host_id = ? AND metric_name = ? AND labels_json = ?
                      AND day_of_week = ? AND hour_of_day = ?""",
             (host_id, metric_name, labels_json, day_of_week, hour_of_day),
         )
-        existing = await cursor.fetchone()
-        if existing:
-            eid = existing[0] if isinstance(existing, tuple) else dict(existing)["id"]
-            await db.execute(
-                """UPDATE metric_baselines
-                   SET baseline_avg = ?, baseline_stddev = ?, baseline_min = ?,
-                       baseline_max = ?, baseline_p95 = ?, sample_count = ?,
-                       learning_window_days = ?, last_computed = datetime('now')
-                   WHERE id = ?""",
-                (baseline_avg, baseline_stddev, baseline_min, baseline_max,
-                 baseline_p95, sample_count, learning_window_days, eid),
-            )
-            await db.commit()
-            return eid
-        else:
-            cursor2 = await db.execute(
-                """INSERT INTO metric_baselines
-                   (host_id, metric_name, labels_json, day_of_week, hour_of_day,
-                    baseline_avg, baseline_stddev, baseline_min, baseline_max,
-                    baseline_p95, sample_count, learning_window_days)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (host_id, metric_name, labels_json, day_of_week, hour_of_day,
-                 baseline_avg, baseline_stddev, baseline_min, baseline_max,
-                 baseline_p95, sample_count, learning_window_days),
-            )
-            await db.commit()
-            return cursor2.lastrowid
+        row = await cursor.fetchone()
+        return row[0] if isinstance(row, tuple) else dict(row)["id"]
+    except Exception:
+        await db.rollback()
+        raise
     finally:
         await db.close()
 

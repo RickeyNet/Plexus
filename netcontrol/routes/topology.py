@@ -995,7 +995,7 @@ async def get_host_topology(host_id: int):
 
 @router.get("/api/topology/changes")
 async def get_topology_changes(unacknowledged: bool = Query(default=True),
-                               limit: int = Query(default=100)):
+                               limit: int = Query(default=100, ge=1, le=10000)):
     """Return recent topology changes (added/removed links)."""
     try:
         changes = await db.get_topology_changes(

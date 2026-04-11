@@ -107,6 +107,9 @@ _capture_job_sockets: dict[str, list] = {}
 _revert_jobs: dict[str, dict] = {}
 _revert_job_sockets: dict[str, list] = {}
 
+_capture_jobs_lock = asyncio.Lock()
+_revert_jobs_lock = asyncio.Lock()
+
 _capture_sockets_lock = asyncio.Lock()
 _revert_sockets_lock = asyncio.Lock()
 
@@ -150,7 +153,11 @@ async def _finish_capture_job(job_id: str, status: str) -> None:
         except Exception:
             pass
     # Schedule cleanup of in-memory job state after 5 minutes
-    asyncio.get_event_loop().call_later(300, lambda: _capture_jobs.pop(job_id, None))
+    async def _deferred_capture_cleanup() -> None:
+        await asyncio.sleep(300)
+        async with _capture_jobs_lock:
+            _capture_jobs.pop(job_id, None)
+    asyncio.ensure_future(_deferred_capture_cleanup())
 
 
 async def _run_config_capture_job(
@@ -299,7 +306,11 @@ async def _finish_revert_job(job_id: str, status: str = "completed"):
         except Exception:
             pass
     # Schedule cleanup of in-memory job state after 5 minutes
-    asyncio.get_event_loop().call_later(300, lambda: _revert_jobs.pop(job_id, None))
+    async def _deferred_revert_cleanup() -> None:
+        await asyncio.sleep(300)
+        async with _revert_jobs_lock:
+            _revert_jobs.pop(job_id, None)
+    asyncio.ensure_future(_deferred_revert_cleanup())
 
 
 def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]:
@@ -606,7 +617,7 @@ async def delete_config_baseline_endpoint(baseline_id: int, request: Request):
 # ── Routes: Snapshots ────────────────────────────────────────────────────────
 
 @router.get("/api/config-drift/snapshots")
-async def list_config_snapshots(host_id: int = Query(), limit: int = Query(default=50)):
+async def list_config_snapshots(host_id: int = Query(), limit: int = Query(default=50, ge=1, le=10000)):
     """List config snapshots for a host."""
     return await db.get_config_snapshots_for_host(host_id, limit=limit)
 
@@ -825,6 +836,11 @@ async def delete_config_snapshot_endpoint(snapshot_id: int, request: Request):
     if not existing:
         raise HTTPException(status_code=404, detail="Snapshot not found")
     await db.delete_config_snapshot(snapshot_id)
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    await _audit("config_drift", "snapshot.deleted", user=user,
+                 detail=f"snapshot_id={snapshot_id} host_id={existing.get('host_id', '')}",
+                 correlation_id=_corr_id(request))
     return {"ok": True}
 
 
@@ -834,7 +850,7 @@ async def delete_config_snapshot_endpoint(snapshot_id: int, request: Request):
 async def list_config_drift_events(
     status: str | None = Query(default=None),
     host_id: int | None = Query(default=None),
-    limit: int = Query(default=100),
+    limit: int = Query(default=100, ge=1, le=10000),
 ):
     """List drift events with optional filters."""
     return await db.get_config_drift_events(status=status, host_id=host_id, limit=limit)

@@ -324,12 +324,19 @@ def _load_or_create_secret_key() -> str:
         with open(SECRET_KEY_FILE) as f:
             return f.read().strip()
     key = secrets.token_hex(32)
-    with open(SECRET_KEY_FILE, "w") as f:
-        f.write(key)
     try:
-        os.chmod(SECRET_KEY_FILE, 0o600)
+        # Create file with restrictive permissions atomically (no race window)
+        fd = os.open(SECRET_KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key)
     except OSError:
-        pass
+        # Fallback for Windows (O_EXCL mode bits may not apply)
+        with open(SECRET_KEY_FILE, "w") as f:
+            f.write(key)
+        try:
+            os.chmod(SECRET_KEY_FILE, 0o600)
+        except OSError:
+            pass
     return key
 
 
@@ -767,6 +774,7 @@ async def lifespan(app: FastAPI):
     await db.seed_built_in_cdefs()
     await _cleanup_expired_jobs()
     await _run_discovery_sync_once()
+    state.API_RATE_LIMIT_LOCK = asyncio.Lock()
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
     discovery_sync_task = asyncio.create_task(_discovery_sync_loop())
     topology_discovery_task = asyncio.create_task(_topology_discovery_loop())
@@ -789,6 +797,7 @@ async def lifespan(app: FastAPI):
         compliance_check_task.cancel()
         monitoring_task.cancel()
         escalation_task.cancel()
+        baseline_task.cancel()
         downsampling_task.cancel()
         rate_limit_cleanup_task.cancel()
         try:
@@ -824,6 +833,10 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         try:
+            await baseline_task
+        except asyncio.CancelledError:
+            pass
+        try:
             await downsampling_task
         except asyncio.CancelledError:
             pass
@@ -839,10 +852,13 @@ async def _rate_limit_cleanup_loop() -> None:
         await asyncio.sleep(300)  # every 5 minutes
         window = max(1, int(state.API_RATE_LIMIT.get("window", 60)))
         now = time.time()
-        tracker = state.API_RATE_LIMIT_TRACKER
-        stale_keys = [ip for ip, ts in tracker.items() if not ts or (now - ts[-1]) > window]
-        for key in stale_keys:
-            tracker.pop(key, None)
+        lock = state.API_RATE_LIMIT_LOCK
+        if lock:
+            async with lock:
+                tracker = state.API_RATE_LIMIT_TRACKER
+                stale_keys = [ip for ip, ts in tracker.items() if not ts or (now - ts[-1]) > window]
+                for key in stale_keys:
+                    tracker.pop(key, None)
 
 
 async def _migrate_auth_json_users():
@@ -966,6 +982,8 @@ async def csrf_protection_middleware(request: Request, call_next):
                         )
                         if not csrf_tok or not _validate_csrf_token(csrf_tok, session["user"]):
                             return _api_error_response(403, "csrf_error", "Missing or invalid CSRF token")
+                # No session cookie + no API token on a mutating /api/ request:
+                # let require_auth reject it (don't silently skip CSRF)
     return await call_next(request)
 
 
@@ -989,19 +1007,22 @@ async def api_rate_limit_middleware(request: Request, call_next):
         is_write = request.method in _CSRF_PROTECTED_METHODS
         limit = int(cfg.get("max_write", 40) if is_write else cfg.get("max_read", 120))
 
-        tracker = state.API_RATE_LIMIT_TRACKER
-        timestamps = tracker.get(client_ip, [])
-        # Prune entries outside the sliding window
-        timestamps = [t for t in timestamps if now - t < window]
-        if len(timestamps) >= limit:
-            retry_after = int(window - (now - timestamps[0])) + 1
-            return _api_error_response(
-                429,
-                "rate_limit_exceeded",
-                f"Too many requests. Try again in {retry_after}s.",
-            )
-        timestamps.append(now)
-        tracker[client_ip] = timestamps
+        lock = state.API_RATE_LIMIT_LOCK
+        if lock:
+            async with lock:
+                tracker = state.API_RATE_LIMIT_TRACKER
+                timestamps = tracker.get(client_ip, [])
+                # Prune entries outside the sliding window
+                timestamps = [t for t in timestamps if now - t < window]
+                if len(timestamps) >= limit:
+                    retry_after = int(window - (now - timestamps[0])) + 1
+                    return _api_error_response(
+                        429,
+                        "rate_limit_exceeded",
+                        f"Too many requests. Try again in {retry_after}s.",
+                    )
+                timestamps.append(now)
+                tracker[client_ip] = timestamps
 
     return await call_next(request)
 

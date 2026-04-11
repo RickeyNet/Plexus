@@ -15,6 +15,7 @@ the upgrade without a migration step.
 """
 
 import base64
+import binascii
 import logging
 import os
 import stat
@@ -110,7 +111,7 @@ _key_raw = base64.urlsafe_b64decode(_key_b64)
 _legacy_fernet = None
 try:
     _legacy_fernet = Fernet(_key_b64)
-except (ValueError, Exception):
+except (ValueError, TypeError, binascii.Error):
     pass
 
 # For AES-256-GCM: if this is a legacy Fernet key (32 bytes = 16 sign + 16 enc),
