@@ -673,8 +673,8 @@ async def register(body: RegisterRequest, request: Request = None):
         raise HTTPException(status_code=400, detail="Username already taken")
     if len(body.username) < 3:
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
-    if len(body.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     salt = secrets.token_hex(16)
     pw_hash = _hash_password_fn(body.password, salt)
     display = body.display_name or body.username.title()
@@ -749,6 +749,8 @@ async def change_password(body: ChangePasswordRequest, request: Request):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     if body.new_password == body.current_password:
         raise HTTPException(status_code=400, detail="New password must be different from your current password")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     salt = secrets.token_hex(16)
     pw_hash = _hash_password_fn(body.new_password, salt)
     await db.update_user_password(user["id"], pw_hash, salt)

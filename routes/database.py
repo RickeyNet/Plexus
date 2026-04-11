@@ -118,6 +118,28 @@ _INSERT_ID_TABLES = {
     "upgrade_events",
 }
 
+# ── SQL safety helpers ────────────────────────────────────────────────────────
+
+# Only allow simple column identifiers in dynamic SQL (letters, digits, underscore).
+_SAFE_COLUMN_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _safe_dynamic_update(table: str, field_exprs: list[str], values: list, where_clause: str, where_val) -> tuple[str, tuple]:
+    """Build a parameterized UPDATE statement from validated field expressions.
+
+    Each field_expr must be of the form 'column_name = ?' and column_name
+    must match a safe identifier pattern.  Raises ValueError if any field
+    name contains suspicious characters (defence against SQL injection if
+    a future caller passes user-controlled field names).
+    """
+    for expr in field_exprs:
+        col = expr.split('=', 1)[0].strip()
+        if not _SAFE_COLUMN_RE.match(col):
+            raise ValueError(f"Unsafe column name in dynamic UPDATE: {col!r}")
+    all_values = list(values) + [where_val]
+    return f"UPDATE {table} SET {', '.join(field_exprs)} WHERE {where_clause}", tuple(all_values)
+
+
 # ── Schema ───────────────────────────────────────────────────────────────────
 
 SCHEMA = """
@@ -1369,8 +1391,8 @@ async def update_user_admin(user_id: int, username: str = None, display_name: st
             values.append(role)
         if not fields:
             return
-        values.append(user_id)
-        await db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(values))
+        sql, params = _safe_dynamic_update("users", fields, values, "id = ?", user_id)
+        await db.execute(sql, params)
         await db.commit()
     except Exception as e:
         if _is_unique_violation(e):
@@ -3387,13 +3409,10 @@ async def update_config_backup_policy(policy_id: int, **kwargs) -> None:
         else:
             sets.append(f"{k} = ?")
             params.append(v)
-    params.append(policy_id)
+    sql, sql_params = _safe_dynamic_update("config_backup_policies", sets, params, "id = ?", policy_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE config_backup_policies SET {', '.join(sets)} WHERE id = ?",
-            tuple(params),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
     finally:
         await db.close()
@@ -3646,13 +3665,10 @@ async def update_compliance_profile(profile_id: int, **kwargs) -> None:
         sets.append(f"{k} = ?")
         params.append(v)
     sets.append("updated_at = datetime('now')")
-    params.append(profile_id)
+    sql, sql_params = _safe_dynamic_update("compliance_profiles", sets, params, "id = ?", profile_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE compliance_profiles SET {', '.join(sets)} WHERE id = ?",
-            tuple(params),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
     finally:
         await db.close()
@@ -3750,13 +3766,10 @@ async def update_compliance_assignment(assignment_id: int, **kwargs) -> None:
     for k, v in updates.items():
         sets.append(f"{k} = ?")
         params.append(v)
-    params.append(assignment_id)
+    sql, sql_params = _safe_dynamic_update("compliance_profile_assignments", sets, params, "id = ?", assignment_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE compliance_profile_assignments SET {', '.join(sets)} WHERE id = ?",
-            tuple(params),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
     finally:
         await db.close()
@@ -5153,13 +5166,11 @@ async def update_sla_target(target_id: int, **kwargs) -> None:
     if not fields:
         return
     fields["updated_at"] = datetime.now(UTC).isoformat()
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    sets = [f"{k} = ?" for k in fields]
+    sql, sql_params = _safe_dynamic_update("sla_targets", sets, list(fields.values()), "id = ?", target_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE sla_targets SET {set_clause} WHERE id = ?",
-            (*fields.values(), target_id),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
     finally:
         await db.close()
@@ -5926,8 +5937,7 @@ async def create_dashboard_panel(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (dashboard_id, title, chart_type, metric_query_json, grid_x, grid_y, grid_w, grid_h, options_json),
         )
-        await db.commit()
-        # Update dashboard timestamp
+        # Update dashboard timestamp in same transaction
         await db.execute("UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?", (dashboard_id,))
         await db.commit()
         new_id = cursor.lastrowid
@@ -5942,22 +5952,20 @@ async def update_dashboard_panel(panel_id: int, **kwargs) -> dict | None:
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
         return None
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values())
-    vals.append(panel_id)
+    set_exprs = [f"{k} = ?" for k in updates]
+    sql, sql_params = _safe_dynamic_update("dashboard_panels", set_exprs, list(updates.values()), "id = ?", panel_id)
     db = await get_db()
     try:
-        await db.execute(f"UPDATE dashboard_panels SET {sets} WHERE id = ?", tuple(vals))
-        await db.commit()
+        await db.execute(sql, sql_params)
         cursor = await db.execute("SELECT * FROM dashboard_panels WHERE id = ?", (panel_id,))
         row = await cursor.fetchone()
         if row:
-            # Update parent dashboard timestamp
+            # Update parent dashboard timestamp in same transaction
             await db.execute(
                 "UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?",
                 (dict(row)["dashboard_id"],),
             )
-            await db.commit()
+        await db.commit()
         return dict(row) if row else None
     finally:
         await db.close()
@@ -6664,11 +6672,8 @@ async def update_custom_oid_profile(profile_id: int, **kwargs) -> dict | None:
         if not fields:
             return existing
         fields.append("updated_at = datetime('now')")
-        params.append(profile_id)
-        await db.execute(
-            f"UPDATE custom_oid_profiles SET {', '.join(fields)} WHERE id = ?",
-            tuple(params),
-        )
+        sql, sql_params = _safe_dynamic_update("custom_oid_profiles", fields, params, "id = ?", profile_id)
+        await db.execute(sql, sql_params)
         await db.commit()
         return await get_custom_oid_profile(profile_id)
     finally:
@@ -7030,15 +7035,12 @@ async def update_graph_template(template_id: int, **kwargs) -> dict | None:
     for bkey in ("stacked", "area_fill"):
         if bkey in updates:
             updates[bkey] = int(updates[bkey])
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values())
-    vals.append(template_id)
+    set_exprs = [f"{k} = ?" for k in updates]
+    set_exprs.append("updated_at = datetime('now')")
+    sql, sql_params = _safe_dynamic_update("graph_templates", set_exprs, list(updates.values()), "id = ?", template_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE graph_templates SET {sets}, updated_at = datetime('now') WHERE id = ?",
-            tuple(vals),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
         return await get_graph_template(template_id)
     finally:
@@ -7089,12 +7091,11 @@ async def update_graph_template_item(item_id: int, **kwargs) -> dict | None:
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
         return None
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values())
-    vals.append(item_id)
+    set_exprs = [f"{k} = ?" for k in updates]
+    sql, sql_params = _safe_dynamic_update("graph_template_items", set_exprs, list(updates.values()), "id = ?", item_id)
     db = await get_db()
     try:
-        await db.execute(f"UPDATE graph_template_items SET {sets} WHERE id = ?", tuple(vals))
+        await db.execute(sql, sql_params)
         await db.commit()
         cursor = await db.execute("SELECT * FROM graph_template_items WHERE id = ?", (item_id,))
         row = await cursor.fetchone()
@@ -7184,15 +7185,12 @@ async def update_host_template(template_id: int, **kwargs) -> dict | None:
         return await get_host_template(template_id)
     if "auto_apply" in updates:
         updates["auto_apply"] = int(updates["auto_apply"])
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values())
-    vals.append(template_id)
+    set_exprs = [f"{k} = ?" for k in updates]
+    set_exprs.append("updated_at = datetime('now')")
+    sql, sql_params = _safe_dynamic_update("host_templates", set_exprs, list(updates.values()), "id = ?", template_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE host_templates SET {sets}, updated_at = datetime('now') WHERE id = ?",
-            tuple(vals),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
         return await get_host_template(template_id)
     finally:
@@ -7341,12 +7339,11 @@ async def update_host_graph(host_graph_id: int, **kwargs) -> dict | None:
     for bkey in ("enabled", "pinned"):
         if bkey in updates:
             updates[bkey] = int(updates[bkey])
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values())
-    vals.append(host_graph_id)
+    set_exprs = [f"{k} = ?" for k in updates]
+    sql, sql_params = _safe_dynamic_update("host_graphs", set_exprs, list(updates.values()), "id = ?", host_graph_id)
     db = await get_db()
     try:
-        await db.execute(f"UPDATE host_graphs SET {sets} WHERE id = ?", tuple(vals))
+        await db.execute(sql, sql_params)
         await db.commit()
         return await get_host_graph(host_graph_id)
     finally:
@@ -7518,15 +7515,12 @@ async def update_graph_tree(tree_id: int, **kwargs) -> dict | None:
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
         return await get_graph_tree(tree_id)
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values())
-    vals.append(tree_id)
+    set_exprs = [f"{k} = ?" for k in updates]
+    set_exprs.append("updated_at = datetime('now')")
+    sql, sql_params = _safe_dynamic_update("graph_trees", set_exprs, list(updates.values()), "id = ?", tree_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE graph_trees SET {sets}, updated_at = datetime('now') WHERE id = ?",
-            tuple(vals),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
         return await get_graph_tree(tree_id)
     finally:
@@ -7572,12 +7566,11 @@ async def update_graph_tree_node(node_id: int, **kwargs) -> dict | None:
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return None
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values())
-    vals.append(node_id)
+    set_exprs = [f"{k} = ?" for k in updates]
+    sql, sql_params = _safe_dynamic_update("graph_tree_nodes", set_exprs, list(updates.values()), "id = ?", node_id)
     db = await get_db()
     try:
-        await db.execute(f"UPDATE graph_tree_nodes SET {sets} WHERE id = ?", tuple(vals))
+        await db.execute(sql, sql_params)
         await db.commit()
         cursor = await db.execute("SELECT * FROM graph_tree_nodes WHERE id = ?", (node_id,))
         row = await cursor.fetchone()
@@ -7661,15 +7654,12 @@ async def update_data_source_profile(profile_id: int, **kwargs) -> dict | None:
         return await get_data_source_profile(profile_id)
     if "enabled" in updates:
         updates["enabled"] = int(updates["enabled"])
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values())
-    vals.append(profile_id)
+    set_exprs = [f"{k} = ?" for k in updates]
+    set_exprs.append("updated_at = datetime('now')")
+    sql, sql_params = _safe_dynamic_update("data_source_profiles", set_exprs, list(updates.values()), "id = ?", profile_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE data_source_profiles SET {sets}, updated_at = datetime('now') WHERE id = ?",
-            tuple(vals),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
         return await get_data_source_profile(profile_id)
     finally:
@@ -7960,10 +7950,8 @@ async def upsert_snmp_data_source(
                     sets.append(f"{k} = ?")
                     vals.append(v)
             if sets:
-                vals.append(eid)
-                await db.execute(
-                    f"UPDATE snmp_data_sources SET {', '.join(sets)} WHERE id = ?", vals
-                )
+                sql, sql_params = _safe_dynamic_update("snmp_data_sources", sets, vals, "id = ?", eid)
+                await db.execute(sql, sql_params)
                 await db.commit()
             return eid
         else:
@@ -7998,10 +7986,8 @@ async def update_snmp_data_source(ds_id: int, **kwargs) -> bool:
                 vals.append(v)
         if not sets:
             return False
-        vals.append(ds_id)
-        await db.execute(
-            f"UPDATE snmp_data_sources SET {', '.join(sets)} WHERE id = ?", vals
-        )
+        sql, sql_params = _safe_dynamic_update("snmp_data_sources", sets, vals, "id = ?", ds_id)
+        await db.execute(sql, sql_params)
         await db.commit()
         return True
     finally:
@@ -8118,10 +8104,8 @@ async def update_cdef_definition(cdef_id: int, **kwargs) -> bool:
                 vals.append(v)
         if not sets:
             return False
-        vals.append(cdef_id)
-        await db.execute(
-            f"UPDATE cdef_definitions SET {', '.join(sets)} WHERE id = ?", vals
-        )
+        sql, sql_params = _safe_dynamic_update("cdef_definitions", sets, vals, "id = ?", cdef_id)
+        await db.execute(sql, sql_params)
         await db.commit()
         return True
     finally:
@@ -8632,10 +8616,8 @@ async def update_baseline_alert_rule(rule_id: int, **kwargs) -> bool:
         if not sets:
             return False
         sets.append("updated_at = datetime('now')")
-        vals.append(rule_id)
-        await db.execute(
-            f"UPDATE baseline_alert_rules SET {', '.join(sets)} WHERE id = ?", vals
-        )
+        sql, sql_params = _safe_dynamic_update("baseline_alert_rules", sets, vals, "id = ?", rule_id)
+        await db.execute(sql, sql_params)
         await db.commit()
         return True
     finally:
@@ -8701,10 +8683,8 @@ async def update_upgrade_image(image_id, **kwargs):
                 vals.append(v)
         if not sets:
             return False
-        vals.append(image_id)
-        await db.execute(
-            f"UPDATE upgrade_images SET {', '.join(sets)} WHERE id = ?", vals
-        )
+        sql, sql_params = _safe_dynamic_update("upgrade_images", sets, vals, "id = ?", image_id)
+        await db.execute(sql, sql_params)
         await db.commit()
         return True
     finally:
@@ -8767,10 +8747,8 @@ async def update_upgrade_campaign(campaign_id, **kwargs):
         if not sets:
             return False
         sets.append("updated_at = datetime('now')")
-        vals.append(campaign_id)
-        await db.execute(
-            f"UPDATE upgrade_campaigns SET {', '.join(sets)} WHERE id = ?", vals
-        )
+        sql, sql_params = _safe_dynamic_update("upgrade_campaigns", sets, vals, "id = ?", campaign_id)
+        await db.execute(sql, sql_params)
         await db.commit()
         return True
     finally:
@@ -8853,10 +8831,8 @@ async def update_upgrade_device(device_id, **kwargs):
                 vals.append(v)
         if not sets:
             return False
-        vals.append(device_id)
-        await db.execute(
-            f"UPDATE upgrade_devices SET {', '.join(sets)} WHERE id = ?", vals
-        )
+        sql, sql_params = _safe_dynamic_update("upgrade_devices", sets, vals, "id = ?", device_id)
+        await db.execute(sql, sql_params)
         await db.commit()
         return True
     finally:
