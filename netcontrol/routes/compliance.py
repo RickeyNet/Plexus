@@ -143,7 +143,7 @@ async def _evaluate_host_compliance(host: dict, profile: dict, credentials: dict
             "total_rules": 0,
             "passed_rules": 0,
             "failed_rules": 0,
-            "findings": json.dumps([{"name": "config_capture", "passed": False, "detail": str(exc)}]),
+            "findings": json.dumps([{"name": "config_capture", "passed": False, "detail": str(exc)[:500]}]),
             "config_snippet": "",
         }
 
@@ -637,7 +637,9 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
             detail=f"host_id={host['id']} rule={body.rule_name} error={str(exc)[:200]}",
             correlation_id=_corr_id(request),
         )
-        raise HTTPException(500, f"Remediation failed: {exc}")
+        LOGGER.error("Remediation failed for host %s rule %s: %s",
+                     host["ip_address"], body.rule_name, exc)
+        raise HTTPException(500, "Remediation failed — see server logs for details")
 
     await _audit(
         "compliance", "remediate.applied",

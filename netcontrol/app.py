@@ -386,7 +386,10 @@ def _emit_bootstrap_admin_credentials(
 
 def _is_dev_bootstrap_mode() -> bool:
     env = os.getenv("APP_ENV", "").strip().lower()
-    if env in {"dev", "development", "local", "test"}:
+    # "test" intentionally excluded — avoid deterministic admin password
+    # in CI/test environments unless explicitly opted in via
+    # PLEXUS_DEV_BOOTSTRAP=1.
+    if env in {"dev", "development", "local"}:
         return True
     return _env_flag("PLEXUS_DEV_BOOTSTRAP", False)
 

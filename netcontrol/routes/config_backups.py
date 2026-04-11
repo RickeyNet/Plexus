@@ -301,7 +301,9 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     try:
         await asyncio.to_thread(_push_config)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Config push failed: {exc}")
+        LOGGER.error("Config restore push failed for host %s backup %s: %s",
+                     host["ip_address"], body.backup_id, exc)
+        raise HTTPException(status_code=502, detail="Config push failed — see server logs for details")
 
     # Re-capture and validate
     validated = False
