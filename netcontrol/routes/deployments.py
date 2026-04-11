@@ -79,6 +79,7 @@ class DeploymentRollback(BaseModel):
 
 _deployment_jobs: dict[str, dict] = {}
 _deployment_job_sockets: dict[str, list] = {}
+_deployment_sockets_lock = asyncio.Lock()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -175,20 +176,34 @@ def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]
 
 async def _broadcast_deploy_line(job_id: str, line: str):
     _deployment_jobs[job_id]["output"] += line
-    for ws in list(_deployment_job_sockets.get(job_id, [])):
+    async with _deployment_sockets_lock:
+        sockets = list(_deployment_job_sockets.get(job_id, []))
+    dead = []
+    for ws in sockets:
         try:
             await ws.send_json({"type": "line", "data": line})
         except Exception:
-            _deployment_job_sockets[job_id].remove(ws)
+            dead.append(ws)
+    if dead:
+        async with _deployment_sockets_lock:
+            for ws in dead:
+                try:
+                    _deployment_job_sockets[job_id].remove(ws)
+                except (ValueError, KeyError):
+                    pass
 
 
 async def _finish_deploy_job(job_id: str, status: str = "completed"):
     _deployment_jobs[job_id]["status"] = status
-    for ws in list(_deployment_job_sockets.get(job_id, [])):
+    async with _deployment_sockets_lock:
+        sockets = list(_deployment_job_sockets.pop(job_id, []))
+    for ws in sockets:
         try:
             await ws.send_json({"type": "job_complete", "status": status})
         except Exception:
             pass
+    # Schedule cleanup of in-memory job state after 5 minutes
+    asyncio.get_event_loop().call_later(300, lambda: _deployment_jobs.pop(job_id, None))
 
 
 async def _run_post_deployment_verification(
@@ -852,9 +867,10 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
         return
 
     await websocket.accept()
-    if job_id not in _deployment_job_sockets:
-        _deployment_job_sockets[job_id] = []
-    _deployment_job_sockets[job_id].append(websocket)
+    async with _deployment_sockets_lock:
+        if job_id not in _deployment_job_sockets:
+            _deployment_job_sockets[job_id] = []
+        _deployment_job_sockets[job_id].append(websocket)
 
     # Send any existing output
     job = _deployment_jobs.get(job_id, {})
@@ -875,8 +891,9 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
     except WebSocketDisconnect:
         pass
     finally:
-        if job_id in _deployment_job_sockets:
-            try:
-                _deployment_job_sockets[job_id].remove(websocket)
-            except ValueError:
-                pass
+        async with _deployment_sockets_lock:
+            if job_id in _deployment_job_sockets:
+                try:
+                    _deployment_job_sockets[job_id].remove(websocket)
+                except ValueError:
+                    pass

@@ -272,17 +272,19 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         auth_data = CommunityData(community, mpModel=1)
 
     engine = SnmpEngine()
-    transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
-    error_indication, error_status, _error_index, var_binds = await get_cmd(
-        engine,
-        auth_data,
-        transport,
-        ContextData(),
-        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
-        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
-        ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1 (chassis)
-    )
-    engine.close_dispatcher()
+    try:
+        transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
+        error_indication, error_status, _error_index, var_binds = await get_cmd(
+            engine,
+            auth_data,
+            transport,
+            ContextData(),
+            ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
+            ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
+            ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1 (chassis)
+        )
+    finally:
+        engine.close_dispatcher()
 
     # If SNMPv3 fails, fall back to v2c using the community string if available.
     if (error_indication or error_status) and version == "3":
@@ -295,22 +297,24 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
             )
             v2_auth = CommunityData(community, mpModel=1)
             engine2 = SnmpEngine()
-            transport2 = await UdpTransportTarget.create(
-                (ip_address, port), timeout=timeout, retries=retries,
-            )
-            error_indication, error_status, _error_index, var_binds = await get_cmd(
-                engine2, v2_auth, transport2, ContextData(),
-                ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
-                ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
-                ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1
-            )
-            engine2.close_dispatcher()
-            if not error_indication and not error_status:
-                version = "2c-fallback"
-            else:
-                raise RuntimeError(
-                    f"SNMPv3 failed for {ip_address}: {v3_err}"
+            try:
+                transport2 = await UdpTransportTarget.create(
+                    (ip_address, port), timeout=timeout, retries=retries,
                 )
+                error_indication, error_status, _error_index, var_binds = await get_cmd(
+                    engine2, v2_auth, transport2, ContextData(),
+                    ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
+                    ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
+                    ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1
+                )
+                if not error_indication and not error_status:
+                    version = "2c-fallback"
+                else:
+                    raise RuntimeError(
+                        f"SNMPv3 failed for {ip_address}: {v3_err}"
+                    )
+            finally:
+                engine2.close_dispatcher()
         else:
             raise RuntimeError(f"SNMPv3 failed for {ip_address}: {v3_err}")
     elif error_indication:

@@ -121,6 +121,7 @@ class CampaignPhaseRequest(BaseModel):
 # ── Module-level state ───────────────────────────────────────────────────────
 
 _campaign_sockets: dict[int, list[WebSocket]] = {}
+_campaign_sockets_lock = asyncio.Lock()
 _running_campaigns: dict[int, asyncio.Task] = {}
 
 
@@ -129,15 +130,21 @@ _running_campaigns: dict[int, asyncio.Task] = {}
 
 async def _broadcast_upgrade_event(campaign_id: int, event: dict):
     """Send event to all connected WebSocket clients for a campaign."""
-    sockets = _campaign_sockets.get(campaign_id, [])
+    async with _campaign_sockets_lock:
+        sockets = list(_campaign_sockets.get(campaign_id, []))
     dead = []
     for ws in sockets:
         try:
             await ws.send_json(event)
         except Exception:
             dead.append(ws)
-    for ws in dead:
-        sockets.remove(ws)
+    if dead:
+        async with _campaign_sockets_lock:
+            for ws in dead:
+                try:
+                    _campaign_sockets[campaign_id].remove(ws)
+                except (ValueError, KeyError):
+                    pass
 
 
 async def _emit(campaign_id: int, device_id: int | None, level: str, message: str, host: str = ""):
@@ -647,9 +654,10 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
         return
 
     # Subscribe to live events
-    if campaign_id not in _campaign_sockets:
-        _campaign_sockets[campaign_id] = []
-    _campaign_sockets[campaign_id].append(ws)
+    async with _campaign_sockets_lock:
+        if campaign_id not in _campaign_sockets:
+            _campaign_sockets[campaign_id] = []
+        _campaign_sockets[campaign_id].append(ws)
 
     try:
         while True:
@@ -657,9 +665,10 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
     except WebSocketDisconnect:
         pass
     finally:
-        sockets = _campaign_sockets.get(campaign_id, [])
-        if ws in sockets:
-            sockets.remove(ws)
+        async with _campaign_sockets_lock:
+            sockets = _campaign_sockets.get(campaign_id, [])
+            if ws in sockets:
+                sockets.remove(ws)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
