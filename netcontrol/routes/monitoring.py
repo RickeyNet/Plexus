@@ -760,7 +760,7 @@ async def monitoring_alerts(
     host_id: int | None = Query(default=None),
     acknowledged: bool | None = Query(default=None),
     severity: str | None = Query(default=None),
-    limit: int = Query(default=200),
+    limit: int = Query(default=200, ge=1, le=10000),
 ):
     return await db.get_monitoring_alerts(host_id, acknowledged, severity, limit)
 
@@ -799,7 +799,7 @@ async def get_alert_correlation(alert_id: int):
 
 
 @router.get("/api/monitoring/routes/{host_id}")
-async def monitoring_route_snapshots(host_id: int, limit: int = Query(default=50)):
+async def monitoring_route_snapshots(host_id: int, limit: int = Query(default=50, ge=1, le=10000)):
     return await db.get_route_snapshots(host_id, limit)
 
 
@@ -1145,13 +1145,13 @@ async def bulk_acknowledge_alerts_endpoint(body: dict, request: Request):
 @router.get("/api/sla/summary")
 async def sla_summary(
     group_id: int | None = Query(default=None),
-    days: int = Query(default=30),
+    days: int = Query(default=30, ge=1, le=365),
 ):
     return await db.get_sla_summary(group_id, days)
 
 
 @router.get("/api/sla/host/{host_id}")
-async def sla_host_detail(host_id: int, days: int = Query(default=30)):
+async def sla_host_detail(host_id: int, days: int = Query(default=30, ge=1, le=365)):
     return await db.get_sla_host_detail(host_id, days)
 
 
@@ -1231,7 +1231,7 @@ async def availability_transitions_api(
     entity_type: str | None = Query(default=None),
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
-    limit: int = Query(default=500),
+    limit: int = Query(default=500, ge=1, le=10000),
 ):
     return {
         "transitions": await db.get_availability_transitions(
@@ -1245,8 +1245,8 @@ async def availability_transitions_api(
 async def availability_outages_api(
     host_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
-    days: int = Query(default=30),
-    limit: int = Query(default=200),
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=200, ge=1, le=10000),
 ):
     return {
         "outages": await db.get_outage_history(
@@ -1261,7 +1261,7 @@ async def availability_outages_api(
 @router.get("/api/interfaces/{host_id}/summary")
 async def interface_utilization_summary_api(
     host_id: int,
-    days: int = Query(default=1),
+    days: int = Query(default=1, ge=1, le=365),
 ):
     return {
         "host_id": host_id,
@@ -1275,6 +1275,6 @@ async def port_detail_api(
     if_index: int,
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
-    limit: int = Query(default=5000),
+    limit: int = Query(default=5000, ge=1, le=50000),
 ):
     return await db.get_port_detail_ts(host_id, if_index, start, end, limit)

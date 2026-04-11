@@ -4946,22 +4946,16 @@ async def update_alert_rule(rule_id: int, **kwargs) -> None:
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
-    updates["updated_at"] = "datetime('now')"
-    set_parts = []
+    sets = []
     params: list = []
     for k, v in updates.items():
-        if v == "datetime('now')":
-            set_parts.append(f"{k} = datetime('now')")
-        else:
-            set_parts.append(f"{k} = ?")
-            params.append(v)
-    params.append(rule_id)
+        sets.append(f"{k} = ?")
+        params.append(v)
+    sets.append("updated_at = datetime('now')")
+    sql, sql_params = _safe_dynamic_update("alert_rules", sets, params, "id = ?", rule_id)
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE alert_rules SET {', '.join(set_parts)} WHERE id = ?",
-            tuple(params),
-        )
+        await db.execute(sql, sql_params)
         await db.commit()
     finally:
         await db.close()

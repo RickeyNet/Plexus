@@ -712,9 +712,9 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
                 await db.update_upgrade_device(dev["id"], **{
                     f"{phase}_status": "failed",
                     "phase": "failed",
-                    "error_message": str(e),
+                    "error_message": str(e)[:1000],
                 })
-                await _emit(campaign_id, dev["id"], "error", f"Unhandled error: {e}", host=dev["ip_address"])
+                await _emit(campaign_id, dev["id"], "error", f"Unhandled error: {str(e)[:500]}", host=dev["ip_address"])
 
     tasks = [asyncio.create_task(_process_device(d)) for d in devices]
 
