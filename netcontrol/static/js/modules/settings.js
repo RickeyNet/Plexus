@@ -435,8 +435,8 @@ window.showCreateAdminUserModal = function() {
         <form id="admin-create-user-form">
             <div class="form-group"><label class="form-label">Username</label><input class="form-input" name="username" required minlength="3"></div>
             <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" name="display_name"></div>
-            <div class="form-group"><label class="form-label">Password</label><input type="password" class="form-input" name="password" required minlength="6"></div>
-            <div class="form-group"><label class="form-label">Confirm Password</label><input type="password" class="form-input" name="confirm_password" required minlength="6"></div>
+            <div class="form-group"><label class="form-label">Password</label><input type="password" class="form-input" name="password" required minlength="8"></div>
+            <div class="form-group"><label class="form-label">Confirm Password</label><input type="password" class="form-input" name="confirm_password" required minlength="8"></div>
             <div class="form-group"><label><input type="checkbox" id="admin-create-user-show-password"> Show passwords</label></div>
             <div class="form-group"><label class="form-label">Role</label><select class="form-select" name="role"><option value="user">User</option><option value="admin">Admin</option></select></div>
             <div class="form-group"><label class="form-label">Access Groups</label><div style="display:grid; gap:0.35rem; max-height:160px; overflow:auto; border:1px solid var(--border); border-radius:0.375rem; padding:0.6rem;">${renderGroupCheckboxes([]) || '<span class="card-description">Create access groups first.</span>'}</div></div>
@@ -530,7 +530,7 @@ window.showResetAdminUserPasswordModal = function(userId) {
     showModal('Reset User Password', `
         <form id="admin-reset-user-password-form">
             <p class="card-description" style="margin-bottom:0.75rem;">Set a new login password for @${escapeHtml(user.username)}.</p>
-            <div class="form-group"><label class="form-label">New Password</label><input type="password" class="form-input" name="new_password" required minlength="6"></div>
+            <div class="form-group"><label class="form-label">New Password</label><input type="password" class="form-input" name="new_password" required minlength="8"></div>
             <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;"><button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button><button class="btn btn-primary" type="submit">Reset Password</button></div>
         </form>
     `);

@@ -1955,11 +1955,11 @@ function showForcePasswordChange() {
             </div>
             <div class="form-group">
                 <label class="form-label">New Password</label>
-                <input type="password" class="form-input" name="new_password" required minlength="6">
+                <input type="password" class="form-input" name="new_password" required minlength="8">
             </div>
             <div class="form-group">
                 <label class="form-label">Confirm New Password</label>
-                <input type="password" class="form-input" name="confirm_password" required minlength="6">
+                <input type="password" class="form-input" name="confirm_password" required minlength="8">
             </div>
             <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                 <button type="submit" class="btn btn-primary">Change Password</button>
@@ -2016,11 +2016,11 @@ window.showChangePasswordModal = function() {
             </div>
             <div class="form-group">
                 <label class="form-label">New Password</label>
-                <input type="password" class="form-input" name="new_password" required minlength="6">
+                <input type="password" class="form-input" name="new_password" required minlength="8">
             </div>
             <div class="form-group">
                 <label class="form-label">Confirm New Password</label>
-                <input type="password" class="form-input" name="confirm_password" required minlength="6">
+                <input type="password" class="form-input" name="confirm_password" required minlength="8">
             </div>
             <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                 <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
