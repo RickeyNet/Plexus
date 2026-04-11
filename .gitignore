@@ -144,6 +144,9 @@ dmypy.json
 # IDE / Editors
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Claude Code
+.claude/
+
 # VSCode / Cursor
 .vscode/
 .cursor/
@@ -209,6 +212,9 @@ $RECYCLE.BIN/
 logs/
 *.log
 *.log.*
+
+# Temp helper scripts
+_*.py
 
 # Backup files
 *.bak

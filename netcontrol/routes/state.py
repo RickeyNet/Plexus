@@ -6,6 +6,7 @@ here so that every module can ``import netcontrol.routes.state as state`` and
 reference ``state.CONFIG_X`` without circular-import issues.
 """
 
+import asyncio
 import os
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -242,6 +243,7 @@ LOCKED_OUT: dict = {}
 # Global API rate-limit state — keyed by client IP.
 # Each value is a list of ``time.time()`` timestamps of recent requests.
 API_RATE_LIMIT_TRACKER: dict[str, list[float]] = {}
+API_RATE_LIMIT_LOCK: asyncio.Lock | None = None  # initialised at startup
 
 LOGIN_RULES = dict(DEFAULT_LOGIN_RULES)
 AUTH_CONFIG = dict(AUTH_CONFIG_DEFAULTS)

@@ -80,6 +80,7 @@ class DeploymentRollback(BaseModel):
 _deployment_jobs: dict[str, dict] = {}
 _deployment_job_sockets: dict[str, list] = {}
 _deployment_sockets_lock = asyncio.Lock()
+_deployment_jobs_lock = asyncio.Lock()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -203,7 +204,11 @@ async def _finish_deploy_job(job_id: str, status: str = "completed"):
         except Exception:
             pass
     # Schedule cleanup of in-memory job state after 5 minutes
-    asyncio.get_event_loop().call_later(300, lambda: _deployment_jobs.pop(job_id, None))
+    async def _deferred_cleanup():
+        await asyncio.sleep(300)
+        async with _deployment_jobs_lock:
+            _deployment_jobs.pop(job_id, None)
+    asyncio.ensure_future(_deferred_cleanup())
 
 
 async def _run_post_deployment_verification(

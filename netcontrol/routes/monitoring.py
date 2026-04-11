@@ -746,12 +746,12 @@ async def monitoring_summary(group_id: int | None = Query(default=None)):
 
 
 @router.get("/api/monitoring/polls")
-async def monitoring_polls(group_id: int | None = Query(default=None), limit: int = Query(default=200)):
+async def monitoring_polls(group_id: int | None = Query(default=None), limit: int = Query(default=200, ge=1, le=10000)):
     return await db.get_latest_monitoring_polls(group_id, limit)
 
 
 @router.get("/api/monitoring/polls/{host_id}/history")
-async def monitoring_poll_history(host_id: int, limit: int = Query(default=100)):
+async def monitoring_poll_history(host_id: int, limit: int = Query(default=100, ge=1, le=10000)):
     return await db.get_monitoring_poll_history(host_id, limit)
 
 
@@ -1020,16 +1020,23 @@ async def list_alert_rules():
 async def create_alert_rule_endpoint(body: dict, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
+    try:
+        value = float(body.get("value", 0))
+        consecutive = int(body.get("consecutive", 1))
+        cooldown_minutes = int(body.get("cooldown_minutes", 15))
+        escalate_after_minutes = int(body.get("escalate_after_minutes", 0))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Numeric fields must be valid numbers")
     rule_id = await db.create_alert_rule(
         name=body.get("name", ""),
         metric=body.get("metric", ""),
         rule_type=body.get("rule_type", "threshold"),
         operator=body.get("operator", ">="),
-        value=float(body.get("value", 0)),
+        value=value,
         severity=body.get("severity", "warning"),
-        consecutive=int(body.get("consecutive", 1)),
-        cooldown_minutes=int(body.get("cooldown_minutes", 15)),
-        escalate_after_minutes=int(body.get("escalate_after_minutes", 0)),
+        consecutive=consecutive,
+        cooldown_minutes=cooldown_minutes,
+        escalate_after_minutes=escalate_after_minutes,
         escalate_to=body.get("escalate_to", "critical"),
         host_id=body.get("host_id"),
         group_id=body.get("group_id"),
@@ -1162,11 +1169,16 @@ async def sla_target_create(body: dict, request: Request):
     user = session["user"] if session else ""
     if not body.get("name") or not body.get("metric"):
         raise HTTPException(status_code=400, detail="name and metric required")
+    try:
+        target_value = float(body.get("target_value", 99.9))
+        warning_value = float(body.get("warning_value", 99.0))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="target_value and warning_value must be valid numbers")
     target_id = await db.create_sla_target(
         name=body["name"],
         metric=body["metric"],
-        target_value=float(body.get("target_value", 99.9)),
-        warning_value=float(body.get("warning_value", 99.0)),
+        target_value=target_value,
+        warning_value=warning_value,
         host_id=body.get("host_id"),
         group_id=body.get("group_id"),
         created_by=user,
