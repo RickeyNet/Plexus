@@ -197,15 +197,15 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     """Returns device info dict on success, None on no response, raises on auth/config errors."""
     if not PYSMNP_AVAILABLE:
         raise RuntimeError("pysnmp library is not available")
-    assert (
-        CommunityData is not None and ContextData is not None and ObjectIdentity is not None
-        and ObjectType is not None and SnmpEngine is not None and UdpTransportTarget is not None
-        and UsmUserData is not None and get_cmd is not None
-        and usmAesCfb128Protocol is not None and usmAesCfb192Protocol is not None
-        and usmAesCfb256Protocol is not None and usmDESPrivProtocol is not None
-        and usmHMACMD5AuthProtocol is not None and usmHMACSHAAuthProtocol is not None
-        and usmHMAC192SHA256AuthProtocol is not None and usmHMAC384SHA512AuthProtocol is not None
-    )
+    _required_imports = [
+        CommunityData, ContextData, ObjectIdentity, ObjectType,
+        SnmpEngine, UdpTransportTarget, UsmUserData, get_cmd,
+        usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol,
+        usmDESPrivProtocol, usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol,
+        usmHMAC192SHA256AuthProtocol, usmHMAC384SHA512AuthProtocol,
+    ]
+    if any(obj is None for obj in _required_imports):
+        raise RuntimeError("pysnmp imported but one or more required symbols are None")
     if not snmp_config.get("enabled", False):
         return None
 

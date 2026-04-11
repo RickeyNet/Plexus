@@ -1587,9 +1587,23 @@ async def delete_access_group(group_id: int):
         await db.close()
 
 
-async def get_user_effective_features(user_id: int) -> list[str]:
+async def get_user_effective_features(user_id: int) -> list[str] | None:
+    """Return the set of feature keys the user has via group memberships.
+
+    Returns ``None`` if the user has **no** group memberships at all (so the
+    caller can distinguish "unassigned" from "assigned but zero features").
+    """
     db = await get_db()
     try:
+        # First check whether the user has any group membership rows
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM user_group_memberships WHERE user_id = ?",
+            (user_id,),
+        )
+        count = (await cursor.fetchone())[0]
+        if count == 0:
+            return None  # No memberships — caller decides default
+
         cursor = await db.execute(
             """
             SELECT DISTINCT f.feature_key

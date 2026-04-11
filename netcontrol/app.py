@@ -729,6 +729,8 @@ async def _load_persisted_security_settings():
 def require_feature(feature_key: str):
     async def _dependency(request: Request):
         session = await require_auth(request)
+        # API tokens (APP_API_TOKEN env var) are server-level secrets with
+        # full admin access by design — they bypass per-user feature checks.
         if session and session.get("auth_mode") == "token":
             return session
         user = await db.get_user_by_id(session["user_id"])
@@ -741,7 +743,11 @@ def require_feature(feature_key: str):
     return _dependency
 
 async def require_admin(request: Request):
-    """Dependency that checks for admin access. Returns session dict."""
+    """Dependency that checks for admin access. Returns session dict.
+
+    API tokens (APP_API_TOKEN) are server-level secrets equivalent to admin;
+    they bypass the per-user role check intentionally.
+    """
     session = await require_auth(request)
     if session and session.get("auth_mode") == "token":
         return session

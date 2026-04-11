@@ -135,8 +135,9 @@ async def _broadcast_upgrade_event(campaign_id: int, event: dict):
     dead = []
     for ws in sockets:
         try:
-            await ws.send_json(event)
+            await asyncio.wait_for(ws.send_json(event), timeout=5)
         except Exception:
+            LOGGER.debug("upgrade broadcast: dropping dead WS for campaign %s", campaign_id)
             dead.append(ws)
     if dead:
         async with _campaign_sockets_lock:

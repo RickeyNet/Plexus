@@ -347,7 +347,7 @@ async def _run_ansible_job(
         dead = []
         for ws in sockets:
             try:
-                await ws.send_json(event.to_dict())
+                await asyncio.wait_for(ws.send_json(event.to_dict()), timeout=5)
             except Exception:
                 dead.append(ws)
         if dead:
@@ -389,9 +389,9 @@ async def _run_ansible_job(
         sockets = _job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
-            await ws.send_json(done_msg)
+            await asyncio.wait_for(ws.send_json(done_msg), timeout=5)
         except Exception:
-            pass
+            LOGGER.debug("job broadcast: dropping dead WS for job %s", job_id)
 
     # Re-probe affected hosts via SNMP after a successful live job.
     if job_succeeded:
@@ -439,7 +439,7 @@ async def _run_job(
         dead = []
         for ws in sockets:
             try:
-                await ws.send_json(event.to_dict())
+                await asyncio.wait_for(ws.send_json(event.to_dict()), timeout=5)
             except Exception:
                 dead.append(ws)
         if dead:
@@ -866,10 +866,18 @@ async def websocket_job(websocket: WebSocket, job_id: int):
         _job_sockets[job_id].append(websocket)
 
     try:
-        # Keep connection alive until client disconnects
+        # Keep connection alive until client disconnects (120s idle timeout)
         while True:
-            await websocket.receive_text()
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=120)
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
+        pass
+    finally:
         async with _job_sockets_lock:
             if job_id in _job_sockets and websocket in _job_sockets[job_id]:
                 _job_sockets[job_id].remove(websocket)
