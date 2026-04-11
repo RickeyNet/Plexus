@@ -116,18 +116,26 @@ _revert_sockets_lock = asyncio.Lock()
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+_MAX_OUTPUT_LINES = 10_000
+_MAX_OUTPUT_SIZE = 10 * 1024 * 1024  # 10 MB cap on revert output string
+
+
 async def _broadcast_capture_line(job_id: str, text: str) -> None:
     """Send a text line to all WebSocket subscribers of a capture job."""
     job = _capture_jobs.get(job_id)
     if job:
-        job["output_lines"].append(text)
+        if len(job["output_lines"]) < _MAX_OUTPUT_LINES:
+            job["output_lines"].append(text)
+        elif len(job["output_lines"]) == _MAX_OUTPUT_LINES:
+            job["output_lines"].append("[output truncated at 10k lines]\n")
     async with _capture_sockets_lock:
         sockets = list(_capture_job_sockets.get(job_id, []))
     dead = []
     for ws in sockets:
         try:
-            await ws.send_json({"type": "line", "text": text})
+            await asyncio.wait_for(ws.send_json({"type": "line", "text": text}), timeout=5)
         except Exception:
+            LOGGER.debug("capture broadcast: dropping dead WS for job %s", job_id)
             dead.append(ws)
     if dead:
         async with _capture_sockets_lock:
@@ -149,9 +157,9 @@ async def _finish_capture_job(job_id: str, status: str) -> None:
         sockets = _capture_job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
-            await ws.send_json(done_msg)
+            await asyncio.wait_for(ws.send_json(done_msg), timeout=5)
         except Exception:
-            pass
+            LOGGER.debug("capture finish: dropping dead WS for job %s", job_id)
     # Schedule cleanup of in-memory job state after 5 minutes
     async def _deferred_capture_cleanup() -> None:
         await asyncio.sleep(300)
@@ -278,14 +286,19 @@ async def _analyze_drift_for_host(host_id: int) -> dict:
 
 
 async def _broadcast_revert_line(job_id: str, line: str):
-    _revert_jobs[job_id]["output"] += line
+    job = _revert_jobs[job_id]
+    if len(job["output"]) < _MAX_OUTPUT_SIZE:
+        job["output"] += line
+    elif not job["output"].endswith("[output truncated]\n"):
+        job["output"] += "[output truncated]\n"
     async with _revert_sockets_lock:
         sockets = list(_revert_job_sockets.get(job_id, []))
     dead = []
     for ws in sockets:
         try:
-            await ws.send_json({"type": "line", "data": line})
+            await asyncio.wait_for(ws.send_json({"type": "line", "data": line}), timeout=5)
         except Exception:
+            LOGGER.debug("revert broadcast: dropping dead WS for job %s", job_id)
             dead.append(ws)
     if dead:
         async with _revert_sockets_lock:
@@ -302,9 +315,9 @@ async def _finish_revert_job(job_id: str, status: str = "completed"):
         sockets = _revert_job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
-            await ws.send_json({"type": "job_complete", "status": status})
+            await asyncio.wait_for(ws.send_json({"type": "job_complete", "status": status}), timeout=5)
         except Exception:
-            pass
+            LOGGER.debug("revert finish: dropping dead WS for job %s", job_id)
     # Schedule cleanup of in-memory job state after 5 minutes
     async def _deferred_revert_cleanup() -> None:
         await asyncio.sleep(300)
@@ -822,8 +835,16 @@ async def websocket_config_capture(websocket: WebSocket, job_id: str):
 
     try:
         while True:
-            await websocket.receive_text()
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=120)
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
+        pass
+    finally:
         async with _capture_sockets_lock:
             if job_id in _capture_job_sockets and websocket in _capture_job_sockets[job_id]:
                 _capture_job_sockets[job_id].remove(websocket)
@@ -1015,7 +1036,13 @@ async def ws_config_revert(websocket: WebSocket, job_id: str):
         _revert_job_sockets.setdefault(job_id, []).append(websocket)
     try:
         while True:
-            await websocket.receive_text()
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=120)
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
         pass
     finally:

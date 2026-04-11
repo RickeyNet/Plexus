@@ -245,7 +245,7 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
                     await db.create_config_backup(
                         policy_id=policy_id, host_id=host["id"],
                         config_text="", capture_method="manual",
-                        status="error", error_message=str(exc),
+                        status="error", error_message=str(exc)[:1000],
                     )
                     errs += 1
 
@@ -413,7 +413,7 @@ async def _run_config_backups_once() -> dict:
                         await db.create_config_backup(
                             policy_id=pol_id, host_id=host["id"],
                             config_text="", capture_method="scheduled",
-                            status="error", error_message=str(exc),
+                            status="error", error_message=str(exc)[:1000],
                         )
                         return False
 
