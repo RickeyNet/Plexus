@@ -150,6 +150,10 @@ def _calc_interface_utilization(stat: dict) -> dict | None:
         if speed_bps <= 0:
             return None
 
+        # Guard against NULL previous counters (first poll has no baseline)
+        if stat.get("prev_in_octets") is None or stat.get("prev_out_octets") is None:
+            return None
+
         in_delta = stat["in_octets"] - stat["prev_in_octets"]
         out_delta = stat["out_octets"] - stat["prev_out_octets"]
         # Handle 32/64-bit counter wraps

@@ -568,9 +568,10 @@ async def _get_user_features(user: dict) -> list[str]:
     if user.get("role") == "admin":
         return list(FEATURE_FLAGS)
     effective = await db.get_user_effective_features(int(user["id"]))
-    if not effective:
-        # Backward-compatible default: users without assigned groups keep access.
-        return list(FEATURE_FLAGS)
+    if effective is None:
+        # No group_memberships rows at all — legacy/unassigned user.
+        # Default to empty (least-privilege).  Admins should assign groups.
+        return []
     return [f for f in FEATURE_FLAGS if f in set(effective)]
 
 
@@ -637,6 +638,10 @@ async def login(body: LoginRequest, request: Request):
     # Re-acquire lock for result tracking
     async with _login_lock:
         if not user:
+            # Re-fetch the canonical list (may have been mutated by a
+            # concurrent request while we were outside the lock).
+            attempts = LOGIN_ATTEMPTS.get(ip, [])
+            attempts = [t for t in attempts if now - t < LOGIN_RULES["rate_limit_window"]]
             attempts.append(now)
             LOGIN_ATTEMPTS[ip] = attempts
             await _audit_fn("auth", "login.failure", user=body.username, detail=auth_error or "bad credentials", correlation_id=_corr_id(request))
@@ -647,14 +652,16 @@ async def login(body: LoginRequest, request: Request):
             raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
         # On success, reset attempts
         LOGIN_ATTEMPTS.pop(ip, None)
-    await _audit_fn("auth", "login.success", user=body.username, detail=f"source={auth_source}", correlation_id=_corr_id(request))
-    token = _create_session_token_fn(body.username, user["id"])
-    csrf_token = _generate_csrf_token(body.username)
+    # Use the canonical username from the DB (may differ in case from input)
+    canonical_user = user["username"]
+    await _audit_fn("auth", "login.success", user=canonical_user, detail=f"source={auth_source}", correlation_id=_corr_id(request))
+    token = _create_session_token_fn(canonical_user, user["id"])
+    csrf_token = _generate_csrf_token(canonical_user)
     response = JSONResponse({
         "ok": True,
-        "username": body.username,
+        "username": canonical_user,
         "user_id": user["id"],
-        "display_name": user["display_name"] or body.username,
+        "display_name": user["display_name"] or canonical_user,
         "role": user["role"],
         "auth_source": auth_source,
         "feature_access": await _features_fn(user),

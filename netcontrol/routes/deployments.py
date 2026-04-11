@@ -175,15 +175,23 @@ def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]
     return commands
 
 
+_MAX_OUTPUT_SIZE = 10 * 1024 * 1024  # 10 MB cap on in-memory output
+
+
 async def _broadcast_deploy_line(job_id: str, line: str):
-    _deployment_jobs[job_id]["output"] += line
+    job = _deployment_jobs[job_id]
+    if len(job["output"]) < _MAX_OUTPUT_SIZE:
+        job["output"] += line
+    elif not job["output"].endswith("[output truncated]\n"):
+        job["output"] += "[output truncated]\n"
     async with _deployment_sockets_lock:
         sockets = list(_deployment_job_sockets.get(job_id, []))
     dead = []
     for ws in sockets:
         try:
-            await ws.send_json({"type": "line", "data": line})
+            await asyncio.wait_for(ws.send_json({"type": "line", "data": line}), timeout=5)
         except Exception:
+            LOGGER.debug("deploy broadcast: dropping dead WS for job %s", job_id)
             dead.append(ws)
     if dead:
         async with _deployment_sockets_lock:
@@ -200,9 +208,9 @@ async def _finish_deploy_job(job_id: str, status: str = "completed"):
         sockets = list(_deployment_job_sockets.pop(job_id, []))
     for ws in sockets:
         try:
-            await ws.send_json({"type": "job_complete", "status": status})
+            await asyncio.wait_for(ws.send_json({"type": "job_complete", "status": status}), timeout=5)
         except Exception:
-            pass
+            LOGGER.debug("deploy finish: dropping dead WS for job %s", job_id)
     # Schedule cleanup of in-memory job state after 5 minutes
     async def _deferred_cleanup():
         await asyncio.sleep(300)
@@ -892,7 +900,13 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
 
     try:
         while True:
-            await websocket.receive_text()
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=120)
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
         pass
     finally:

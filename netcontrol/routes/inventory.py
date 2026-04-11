@@ -108,6 +108,12 @@ def _expand_scan_targets(cidrs: list[str], max_hosts: int) -> list[str]:
     seen: set[str] = set()
     for cidr in cidrs:
         network = ipaddress.ip_network(cidr, strict=False)
+        # Reject absurdly large subnets early to avoid CPU spin
+        if network.num_addresses > max(max_hosts * 10, 65536):
+            raise ValueError(
+                f"CIDR {cidr} contains {network.num_addresses:,} addresses — "
+                f"maximum allowed is {max(max_hosts * 10, 65536):,}"
+            )
         for host in network.hosts():
             ip_str = str(host)
             if ip_str in seen:
@@ -678,7 +684,10 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest):
     group = await db.get_group(group_id)
     if not group:
         raise HTTPException(404, "Group not found")
-    scanned_count, discovered = await _discover_hosts(body, group_id=group_id)
+    try:
+        scanned_count, discovered = await _discover_hosts(body, group_id=group_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return {
         "group_id": group_id,
         "scanned_hosts": scanned_count,
@@ -694,7 +703,10 @@ async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest):
     if not group:
         raise HTTPException(404, "Group not found")
 
-    targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+    try:
+        targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     total = len(targets)
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)

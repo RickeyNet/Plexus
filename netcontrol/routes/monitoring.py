@@ -281,7 +281,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 # VPN health
                 if state.MONITORING_CONFIG.get("collect_vpn", True):
                     dtype = host.get("device_type", "cisco_ios")
-                    if "asa" in dtype:
+                    if dtype.startswith("cisco_asa") or dtype == "asa":
                         outputs["vpn"] = net_connect.send_command("show vpn-sessiondb summary")
                     else:
                         outputs["vpn"] = net_connect.send_command("show crypto isakmp sa")
