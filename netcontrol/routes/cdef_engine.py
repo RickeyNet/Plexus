@@ -259,7 +259,9 @@ async def evaluate_cdef(body: CdefEvaluateRequest):
         result = evaluate_cdef_expression(body.expression, body.data)
         return {"expression": body.expression, "result": result}
     except Exception as exc:
-        raise HTTPException(400, f"Expression evaluation error: {str(exc)}")
+        # Truncate to prevent leaking internal state on unexpected errors
+        err_msg = str(exc)[:200]
+        raise HTTPException(400, f"Expression evaluation error: {err_msg}")
 
 
 # ── Data Source Endpoints (SNMP auto-discovered) ──────────────────────────
