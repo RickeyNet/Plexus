@@ -1197,9 +1197,8 @@ body {
     border-right: 1px solid rgba(from var(--border) r g b / 0.5);
     box-shadow: 4px 0 16px rgba(0, 0, 0, 0.15);
     z-index: 100;
-    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-                min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    will-change: width, min-width;
+    transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                min-width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     contain: layout style;
     overflow: hidden;
 }
@@ -1318,13 +1317,11 @@ body {
 .sidebar .nav-link.active {
     color: var(--primary-light);
     background: var(--primary-soft);
-    box-shadow:
-        inset 3px 0 0 var(--primary-light),
-        0 0 12px var(--primary-glow);
+    box-shadow: inset 3px 0 0 var(--primary-light);
 }
 
 .sidebar .nav-link.active .nav-icon {
-    filter: drop-shadow(0 0 4px var(--primary-glow));
+    color: var(--primary-light);
 }
 
 .nav-icon {
@@ -1481,12 +1478,12 @@ body {
 
 .page.active {
     display: block;
-    animation: page-fade-in 0.3s ease-out;
+    animation: page-fade-in 0.12s ease-out;
 }
 
 @keyframes page-fade-in {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; }
+    to   { opacity: 1; }
 }
 
 .page-header {
