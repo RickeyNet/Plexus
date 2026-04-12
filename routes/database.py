@@ -2952,22 +2952,30 @@ async def get_topology_positions() -> dict:
 
 
 async def save_topology_positions(positions: dict) -> int:
-    """Upsert node positions. positions = {node_id: {x, y}}."""
+    """Upsert node positions. positions = {node_id: {x, y} | null}.
+    A null value deletes that node's saved position (unpin)."""
     if not positions:
         return 0
     db = await get_db()
     try:
         count = 0
         for node_id, pos in positions.items():
-            await db.execute(
-                """INSERT INTO topology_node_positions (node_id, x, y, updated_at)
-                   VALUES (?, ?, ?, datetime('now'))
-                   ON CONFLICT(node_id) DO UPDATE SET
-                       x = excluded.x,
-                       y = excluded.y,
-                       updated_at = datetime('now')""",
-                (str(node_id), pos["x"], pos["y"]),
-            )
+            if pos is None:
+                # Delete this node's position (unpin)
+                await db.execute(
+                    "DELETE FROM topology_node_positions WHERE node_id = ?",
+                    (str(node_id),),
+                )
+            else:
+                await db.execute(
+                    """INSERT INTO topology_node_positions (node_id, x, y, updated_at)
+                       VALUES (?, ?, ?, datetime('now'))
+                       ON CONFLICT(node_id) DO UPDATE SET
+                           x = excluded.x,
+                           y = excluded.y,
+                           updated_at = datetime('now')""",
+                    (str(node_id), pos["x"], pos["y"]),
+                )
             count += 1
         await db.commit()
         return count
