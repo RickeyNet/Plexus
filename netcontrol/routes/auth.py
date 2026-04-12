@@ -121,15 +121,18 @@ ATTRIBUTE\tNAS-Identifier\t32\tstring
 def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) -> tuple[bool, str]:
     """Perform a blocking RADIUS PAP authentication request."""
     if not PYRAD_AVAILABLE:
+        LOGGER.warning("radius: pyrad library is not installed — cannot authenticate")
         return False, "error"
     assert RadiusClient is not None and RadiusDictionary is not None and radius_packet is not None
-    if not radius_cfg.get("server") or not radius_cfg.get("secret"):
+    server = radius_cfg.get("server", "")
+    if not server or not radius_cfg.get("secret"):
+        LOGGER.warning("radius: server or shared secret not configured")
         return False, "error"
 
     dictionary_path = _ensure_radius_dictionary_file()
     try:
         client = RadiusClient(
-            server=radius_cfg["server"],
+            server=server,
             secret=radius_cfg["secret"].encode("utf-8"),
             dict=RadiusDictionary(dictionary_path),
             authport=int(radius_cfg.get("port", 1812)),
@@ -140,13 +143,18 @@ def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) ->
         req["NAS-Identifier"] = "plexus"
         reply = client.SendPacket(req)
         if reply.code == radius_packet.AccessAccept:
+            LOGGER.info("radius: user '%s' accepted by %s", username, server)
             return True, "accept"
         if reply.code == radius_packet.AccessReject:
+            LOGGER.info("radius: user '%s' rejected by %s", username, server)
             return False, "reject"
+        LOGGER.warning("radius: unexpected reply code %s from %s for user '%s'", reply.code, server, username)
         return False, "reject"
-    except (TimeoutError, OSError):
+    except (TimeoutError, OSError) as exc:
+        LOGGER.warning("radius: server %s unreachable for user '%s': %s", server, username, exc)
         return False, "error"
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("radius: authentication error for user '%s': %s", username, exc)
         return False, "error"
 
 
@@ -181,25 +189,7 @@ async def upsert_external_user(username: str, display_name: str = "",
 
 async def upsert_radius_user(username: str) -> dict | None:
     """Ensure a local shadow user exists for RADIUS-authenticated identities."""
-    user = await db.get_user_by_username(username)
-    if user:
-        return user
-
-    salt = secrets.token_hex(16)
-    random_pw = secrets.token_urlsafe(32)
-    pw_hash = _hash_password_fn(random_pw, salt)
-    try:
-        user_id = await db.create_user(
-            username,
-            pw_hash,
-            salt,
-            display_name=username,
-            role="user",
-        )
-    except ValueError:
-        # Another request may have created it concurrently.
-        return await db.get_user_by_username(username)
-    return await db.get_user_by_id(user_id)
+    return await upsert_external_user(username)
 
 
 # ── LDAP / Active Directory helpers ──────────────────────────────────────────
