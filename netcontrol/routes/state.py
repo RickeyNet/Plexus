@@ -297,8 +297,8 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "fallback_on_reject": bool(radius.get("fallback_on_reject", cfg["radius"]["fallback_on_reject"])),
             })
     cfg["job_retention_days"] = max(JOB_RETENTION_MIN_DAYS, int(cfg.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
-    cfg["radius"]["port"] = max(1, cfg["radius"]["port"])
-    cfg["radius"]["timeout"] = max(1, cfg["radius"]["timeout"])
+    cfg["radius"]["port"] = max(1, min(65535, cfg["radius"]["port"]))
+    cfg["radius"]["timeout"] = max(1, min(30, cfg["radius"]["timeout"]))
     # LDAP config sanitization
     ldap = data.get("ldap") if isinstance(data, dict) else None
     if isinstance(ldap, dict):
