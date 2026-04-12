@@ -185,11 +185,15 @@ async def _evaluate_host_compliance(host: dict, profile: dict, credentials: dict
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
-async def _run_compliance_check_once() -> dict:
-    """Run compliance scans for all due assignments."""
+async def _run_compliance_check_once(*, force: bool = False) -> dict:
+    """Run compliance scans for all due assignments.
+
+    Args:
+        force: If True, bypass the 'enabled' check (used for manual admin triggers).
+    """
     import asyncio
 
-    if not state.COMPLIANCE_CHECK_CONFIG.get("enabled"):
+    if not force and not state.COMPLIANCE_CHECK_CONFIG.get("enabled"):
         return {"enabled": False, "assignments_run": 0, "hosts_scanned": 0, "violations": 0, "errors": 0}
 
     due_assignments = await db.get_compliance_assignments_due()
@@ -506,6 +510,78 @@ async def get_compliance_summary():
 # ── On-demand Compliance Scan ────────────────────────────────────────────────
 
 
+@router.post("/api/compliance/assignments/{assignment_id}/scan-now")
+async def scan_assignment_now(assignment_id: int, request: Request):
+    """Run an on-demand compliance scan for all hosts in a specific assignment."""
+    import asyncio
+
+    assignment = await db.get_compliance_assignment(assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    profile = await db.get_compliance_profile(assignment["profile_id"])
+    if not profile:
+        raise HTTPException(status_code=404, detail="Compliance profile not found")
+
+    cred = await db.get_credential_raw(assignment["credential_id"])
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    hosts = await db.get_hosts_for_group(assignment["group_id"])
+    if not hosts:
+        raise HTTPException(status_code=400, detail="No hosts in the assigned group")
+
+    sem = asyncio.Semaphore(4)
+    hosts_scanned = 0
+    violations = 0
+    errors = 0
+
+    async def _scan_host(h):
+        async with sem:
+            try:
+                result = await _evaluate_host_compliance(h, profile, cred)
+                await db.create_compliance_scan_result(
+                    assignment_id=assignment_id,
+                    profile_id=assignment["profile_id"],
+                    host_id=h["id"],
+                    **result,
+                )
+                return result["status"]
+            except Exception as exc:
+                LOGGER.warning("compliance: scan-now failed host_id=%s: %s", h["id"], exc)
+                return "error"
+
+    tasks = [_scan_host(h) for h in hosts]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for r in results:
+        if isinstance(r, str):
+            hosts_scanned += 1
+            if r == "non-compliant":
+                violations += 1
+            elif r == "error":
+                errors += 1
+        else:
+            errors += 1
+
+    await db.update_compliance_assignment_last_scan(assignment_id)
+
+    session = _get_session(request)
+    await _audit(
+        "compliance", "assignment.scan_now",
+        user=session["user"] if session else "",
+        detail=f"assignment_id={assignment_id} hosts_scanned={hosts_scanned} violations={violations} errors={errors}",
+        correlation_id=_corr_id(request),
+    )
+    return {
+        "ok": True,
+        "assignment_id": assignment_id,
+        "hosts_scanned": hosts_scanned,
+        "violations": violations,
+        "errors": errors,
+    }
+
+
 @router.post("/api/compliance/scan")
 async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
     """Run an on-demand compliance scan for a single host against a profile."""
@@ -747,7 +823,7 @@ async def admin_update_compliance_config(body: dict, request: Request):
 
 @admin_router.post("/api/admin/compliance/run-now")
 async def admin_run_compliance_check_now(request: Request):
-    result = await _run_compliance_check_once()
+    result = await _run_compliance_check_once(force=True)
     session = _get_session(request)
     await _audit(
         "compliance", "check.manual",
