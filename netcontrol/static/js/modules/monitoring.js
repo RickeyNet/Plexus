@@ -1297,6 +1297,255 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 // =============================================================================
+// Availability Tracking
+// =============================================================================
+
+async function loadAvailability() {
+    const summaryContainer = document.getElementById('availability-summary-cards');
+    const hostsContainer = document.getElementById('availability-hosts-list');
+    const outagesContainer = document.getElementById('availability-outages-list');
+    const transitionsContainer = document.getElementById('availability-transitions-list');
+
+    const groupId = document.getElementById('availability-group-filter')?.value || null;
+    const days = parseInt(document.getElementById('availability-period')?.value || '7', 10);
+
+    // Populate group filter on first load
+    const groupFilter = document.getElementById('availability-group-filter');
+    if (groupFilter && groupFilter.options.length <= 1) {
+        try {
+            const groups = await api.getInventoryGroups();
+            (groups || []).forEach(g => {
+                const opt = document.createElement('option');
+                opt.value = g.id;
+                opt.textContent = g.name;
+                groupFilter.appendChild(opt);
+            });
+        } catch { /* ignore */ }
+    }
+
+    try {
+        const [summary, outages, transitions] = await Promise.all([
+            api.getAvailabilitySummary(groupId, days),
+            api.getAvailabilityOutages({ groupId, days, limit: 200 }),
+            api.getAvailabilityTransitions({ limit: 500 }),
+        ]);
+
+        // Summary cards
+        if (summaryContainer) {
+            const s = summary || {};
+            summaryContainer.innerHTML = `
+                <div class="stat-card"><div class="stat-ring-value">${s.total_hosts ?? '-'}</div><div class="stat-label">Hosts Tracked</div></div>
+                <div class="stat-card"><div class="stat-ring-value" style="color:var(--success);">${s.hosts_up ?? '-'}</div><div class="stat-label">Currently Up</div></div>
+                <div class="stat-card"><div class="stat-ring-value" style="color:var(--danger);">${s.hosts_down ?? '-'}</div><div class="stat-label">Currently Down</div></div>
+                <div class="stat-card"><div class="stat-ring-value">${s.avg_uptime_pct != null ? s.avg_uptime_pct.toFixed(2) + '%' : '-'}</div><div class="stat-label">Avg Uptime</div></div>
+                <div class="stat-card"><div class="stat-ring-value">${s.total_outages ?? '-'}</div><div class="stat-label">Outages (${days}d)</div></div>
+            `;
+        }
+
+        // Host availability list
+        if (hostsContainer) {
+            const hosts = summary?.hosts || [];
+            if (!hosts.length) {
+                hostsContainer.innerHTML = emptyStateHTML('No availability data', 'monitoring', 'Run monitoring polls to begin tracking availability.');
+            } else {
+                hostsContainer.innerHTML = hosts.map(h => {
+                    const uptimeColor = (h.uptime_pct ?? 100) >= 99.9 ? 'success' : (h.uptime_pct ?? 100) >= 99 ? 'warning' : 'danger';
+                    const state = h.current_state || 'unknown';
+                    const stateColor = state === 'up' ? 'success' : state === 'down' ? 'danger' : 'text-muted';
+                    return `<div class="card" style="margin-bottom:0.5rem; padding:0.75rem 1rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <span style="width:8px; height:8px; border-radius:50%; background:var(--${stateColor}); display:inline-block;"></span>
+                                <strong style="margin-left:0.4rem;">${escapeHtml(h.hostname || 'Unknown')}</strong>
+                                <span style="color:var(--text-muted); font-size:0.85em; margin-left:0.4rem;">${escapeHtml(h.ip_address || '')}</span>
+                            </div>
+                            <span style="color:var(--${uptimeColor}); font-weight:600;">${h.uptime_pct != null ? h.uptime_pct.toFixed(2) + '%' : '-'}</span>
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+        }
+
+        // Outages list
+        const outageList = outages?.outages || [];
+        if (outagesContainer) {
+            if (!outageList.length) {
+                outagesContainer.innerHTML = `<div class="card" style="padding:1rem; color:var(--text-muted);">No outages recorded in the last ${days} days.</div>`;
+            } else {
+                outagesContainer.innerHTML = outageList.map(o => {
+                    const start = o.started_at ? new Date(o.started_at + 'Z').toLocaleString() : '-';
+                    const end = o.ended_at ? new Date(o.ended_at + 'Z').toLocaleString() : '<span style="color:var(--danger);">Ongoing</span>';
+                    const dur = o.duration_seconds ? formatUptime(o.duration_seconds) : '-';
+                    return `<div class="card" style="margin-bottom:0.5rem; padding:0.75rem 1rem; border-left:3px solid var(--danger);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <strong>${escapeHtml(o.hostname || 'Unknown')}</strong>
+                                <span style="color:var(--text-muted); font-size:0.85em; margin-left:0.4rem;">${escapeHtml(o.entity_type || 'host')}${o.entity_id ? ' ' + escapeHtml(o.entity_id) : ''}</span>
+                            </div>
+                            <span style="font-size:0.85em; color:var(--text-muted);">Duration: <strong>${dur}</strong></span>
+                        </div>
+                        <div style="margin-top:0.3rem; font-size:0.85em; color:var(--text-muted);">${start} — ${end}</div>
+                    </div>`;
+                }).join('');
+            }
+        }
+
+        // State transitions
+        const transList = transitions?.transitions || [];
+        if (transitionsContainer) {
+            if (!transList.length) {
+                transitionsContainer.innerHTML = `<div class="card" style="padding:1rem; color:var(--text-muted);">No state transitions recorded.</div>`;
+            } else {
+                transitionsContainer.innerHTML = `<div style="max-height:400px; overflow:auto;">
+                    <table style="width:100%; font-size:0.85em; border-collapse:collapse;">
+                        <tr style="border-bottom:2px solid var(--border-color);">
+                            <th style="text-align:left; padding:4px 8px;">Time</th>
+                            <th style="text-align:left; padding:4px 8px;">Host</th>
+                            <th style="text-align:left; padding:4px 8px;">Entity</th>
+                            <th style="text-align:center; padding:4px 8px;">From</th>
+                            <th style="text-align:center; padding:4px 8px;">To</th>
+                        </tr>
+                        ${transList.slice(0, 200).map(t => {
+                            const ts = t.changed_at ? new Date(t.changed_at + 'Z').toLocaleString() : '-';
+                            const toColor = t.new_state === 'up' ? 'success' : t.new_state === 'down' ? 'danger' : 'text-muted';
+                            const fromColor = t.old_state === 'up' ? 'success' : t.old_state === 'down' ? 'danger' : 'text-muted';
+                            return `<tr style="border-bottom:1px solid var(--border-color);">
+                                <td style="padding:4px 8px;">${ts}</td>
+                                <td style="padding:4px 8px;">${escapeHtml(t.hostname || '')}</td>
+                                <td style="padding:4px 8px;">${escapeHtml(t.entity_type || 'host')}${t.entity_id ? ' ' + escapeHtml(t.entity_id) : ''}</td>
+                                <td style="padding:4px 8px; text-align:center; color:var(--${fromColor});">${escapeHtml(t.old_state || '?')}</td>
+                                <td style="padding:4px 8px; text-align:center; color:var(--${toColor});">${escapeHtml(t.new_state || '?')}</td>
+                            </tr>`;
+                        }).join('')}
+                    </table>
+                </div>`;
+            }
+        }
+    } catch (error) {
+        if (hostsContainer) hostsContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadAvailability = loadAvailability;
+
+window.switchAvailTab = function(tab) {
+    document.querySelectorAll('.avail-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-avail-tab') === tab));
+    document.querySelectorAll('.avail-tab').forEach(t => t.style.display = 'none');
+    const target = document.getElementById(`avail-tab-${tab}`);
+    if (target) target.style.display = '';
+};
+
+// =============================================================================
+// Capacity Planning
+// =============================================================================
+
+async function loadCapacityPlanning() {
+    const chartContainer = document.getElementById('cap-plan-chart-main');
+    const thresholdsContainer = document.getElementById('cap-plan-thresholds');
+    const emptyEl = document.getElementById('cap-plan-empty');
+
+    const metric = document.getElementById('cap-plan-metric')?.value || 'cpu_percent';
+    const range = document.getElementById('cap-plan-range')?.value || '90d';
+    const groupId = document.getElementById('cap-plan-group')?.value || null;
+
+    // Populate group filter on first load
+    const groupFilter = document.getElementById('cap-plan-group');
+    if (groupFilter && groupFilter.options.length <= 1) {
+        try {
+            const groups = await api.getInventoryGroups();
+            (groups || []).forEach(g => {
+                const opt = document.createElement('option');
+                opt.value = g.id;
+                opt.textContent = g.name;
+                groupFilter.appendChild(opt);
+            });
+        } catch { /* ignore */ }
+    }
+
+    if (chartContainer) chartContainer.innerHTML = '<div class="skeleton skeleton-card" style="height:300px;"></div>';
+    if (thresholdsContainer) thresholdsContainer.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    try {
+        const data = await api.getCapacityPlanning({
+            metric,
+            range,
+            group: groupId,
+            projectionDays: 90,
+            threshold: 80,
+        });
+
+        if (!data || !data.data_points || !data.data_points.length) {
+            if (chartContainer) chartContainer.innerHTML = '';
+            if (emptyEl) emptyEl.style.display = '';
+            return;
+        }
+
+        // Render trend chart using PlexusChart
+        const points = data.data_points || [];
+        const projection = data.projection || [];
+
+        if (chartContainer) {
+            chartContainer.innerHTML = '';
+            const metricLabels = {
+                cpu_percent: 'CPU %', memory_percent: 'Memory %',
+                route_count: 'Route Count', if_up_count: 'Interfaces Up',
+                vpn_tunnels_up: 'VPN Tunnels Up',
+            };
+            const label = metricLabels[metric] || metric;
+
+            // Combine actual + projected data
+            const allLabels = points.map(p => p.timestamp || p.day || '').concat(
+                projection.map(p => p.timestamp || p.day || '')
+            );
+            const actualValues = points.map(p => p.value);
+            const projectedValues = new Array(points.length).fill(null).concat(
+                projection.map(p => p.value)
+            );
+
+            const chart = new PlexusChart(chartContainer, {
+                type: 'line',
+                labels: allLabels,
+                datasets: [
+                    { label: `${label} (Actual)`, data: actualValues, color: 'var(--primary)' },
+                    { label: `${label} (Projected)`, data: projectedValues, color: 'var(--warning)', dashed: true },
+                ],
+                options: { height: 320 },
+            });
+            chart.render();
+        }
+
+        // Threshold estimates
+        if (thresholdsContainer && data.threshold_estimates) {
+            const estimates = data.threshold_estimates;
+            const rows = Object.entries(estimates).map(([thresh, info]) => {
+                const daysUntil = info.days_until != null ? `${info.days_until} days` : 'N/A';
+                const date = info.estimated_date || 'N/A';
+                const color = (info.days_until != null && info.days_until <= 30) ? 'danger' :
+                              (info.days_until != null && info.days_until <= 90) ? 'warning' : 'success';
+                return `<tr style="border-bottom:1px solid var(--border-color);">
+                    <td style="padding:6px 12px;">${thresh}%</td>
+                    <td style="padding:6px 12px; color:var(--${color}); font-weight:600;">${daysUntil}</td>
+                    <td style="padding:6px 12px;">${date}</td>
+                </tr>`;
+            }).join('');
+            thresholdsContainer.innerHTML = `
+                <table style="width:100%; font-size:0.9em; border-collapse:collapse;">
+                    <tr style="border-bottom:2px solid var(--border-color);">
+                        <th style="text-align:left; padding:6px 12px;">Threshold</th>
+                        <th style="text-align:left; padding:6px 12px;">Days Until</th>
+                        <th style="text-align:left; padding:6px 12px;">Est. Date</th>
+                    </tr>
+                    ${rows}
+                </table>`;
+        }
+    } catch (error) {
+        if (chartContainer) chartContainer.innerHTML = `<div style="color:var(--danger)">Error: ${escapeHtml(error.message)}</div>`;
+    }
+}
+window.loadCapacityPlanning = loadCapacityPlanning;
+
+
+// =============================================================================
 // Exports
 // =============================================================================
 
