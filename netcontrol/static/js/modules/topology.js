@@ -265,7 +265,7 @@ function _buildVisNode(n, savedPos) {
     const node = {
         id: n.id,
         label: n.label,
-        title: `${n.label}\n${n.ip || ''}\nType: ${n.device_type}${n.group_name ? '\nGroup: ' + n.group_name : ''}${n.in_inventory ? '' : '\n(External)'}`,
+        title: `${n.label}\n${n.ip || ''}\nType: ${n.device_type}${n.group_name ? '\nGroup: ' + n.group_name : ''}${n.in_inventory ? '' : '\n(External)'}\nDrag to move · Right-click to unpin`,
         shape: _topoNodeShape(n.device_type),
         color: colors,
         size: n.in_inventory ? 25 : 18,
@@ -283,6 +283,10 @@ function _buildVisNode(n, savedPos) {
         node.y = savedPos[key].y;
         node.fixed = { x: true, y: true };
         node.physics = false;
+    } else if (n._circularX != null) {
+        // Circular layout: set initial positions but leave draggable
+        node.x = n._circularX;
+        node.y = n._circularY;
     }
     return node;
 }
@@ -327,11 +331,36 @@ function renderTopologyGraph(data) {
 
     // Decide physics: if ALL nodes have saved positions, disable physics entirely
     const allPinned = data.nodes.length > 0 && data.nodes.every(n => _topoSavedPositions[String(n.id)]);
+    const isHierarchical = layoutMode.startsWith('hierarchical-');
+    const isCircular = layoutMode === 'circular';
     const usePhysics = layoutMode === 'physics' && !allPinned;
+
+    // For circular layout, pre-compute positions in a circle
+    if (isCircular) {
+        const nodeCount = data.nodes.length;
+        const radius = Math.max(200, nodeCount * 35);
+        data.nodes.forEach((n, i) => {
+            // Only assign circular positions if no saved position exists
+            if (!_topoSavedPositions[String(n.id)]) {
+                const angle = (2 * Math.PI * i) / nodeCount - Math.PI / 2;
+                n._circularX = Math.round(radius * Math.cos(angle));
+                n._circularY = Math.round(radius * Math.sin(angle));
+            }
+        });
+    }
+
+    // Build layout config
+    let layoutConfig = {};
+    if (isHierarchical) {
+        const direction = layoutMode.split('-')[1]; // UD, DU, LR, RL
+        layoutConfig = {
+            hierarchical: { direction, sortMethod: 'hubsize', nodeSpacing: 180, levelSeparation: 140 },
+        };
+    }
 
     const graphOptions = {
         physics: {
-            enabled: usePhysics,
+            enabled: isCircular ? false : usePhysics,
             barnesHut: {
                 gravitationalConstant: -4000,
                 centralGravity: 0.25,
@@ -349,9 +378,7 @@ function renderTopologyGraph(data) {
             keyboard: { enabled: true },
             zoomSpeed: 0.6,
         },
-        layout: layoutMode === 'hierarchical'
-            ? { hierarchical: { direction: 'UD', sortMethod: 'hubsize', nodeSpacing: 180, levelSeparation: 140 } }
-            : {},
+        layout: layoutConfig,
         edges: {
             smooth: { type: 'continuous', roundness: 0.4 },
         },
@@ -393,12 +420,54 @@ function renderTopologyGraph(data) {
         _saveNodePositions(updates);
     });
 
-    // Fit after stabilization (only if physics ran)
-    if (usePhysics) {
+    // Right-click on a node: unpin it (release back to physics)
+    _topologyNetwork.on('oncontext', (params) => {
+        params.event.preventDefault();
+        if (!params.nodes || params.nodes.length === 0) return;
+        const nid = params.nodes[0];
+        const key = String(nid);
+        if (_topoSavedPositions[key]) {
+            delete _topoSavedPositions[key];
+            _topoNodesDS.update({ id: nid, fixed: false, physics: true });
+            // Delete just this node's position from server
+            api.saveTopologyPositions({ [key]: null }).catch(() => {});
+            showToast('Node unpinned', 'info');
+        }
+    });
+
+    // Cursor: grab when hovering a node, grabbing while dragging
+    _topologyNetwork.on('hoverNode', () => { container.style.cursor = 'grab'; });
+    _topologyNetwork.on('blurNode', () => { container.style.cursor = 'default'; });
+    _topologyNetwork.on('dragStart', (params) => {
+        if (params.nodes.length) container.style.cursor = 'grabbing';
+    });
+    _topologyNetwork.on('dragEnd', () => { container.style.cursor = 'default'; });
+
+    // For hierarchical layouts: once layout computes, capture positions
+    // then switch to free mode so nodes can be dragged in any direction
+    if (isHierarchical) {
+        _topologyNetwork.once('stabilizationIterationsDone', () => {
+            const computedPos = _topologyNetwork.getPositions();
+            // Apply computed positions to nodes that don't have saved positions
+            const nodeUpdates = [];
+            for (const [nid, pos] of Object.entries(computedPos)) {
+                if (!_topoSavedPositions[String(nid)]) {
+                    nodeUpdates.push({ id: /^\d+$/.test(nid) ? Number(nid) : nid, x: pos.x, y: pos.y });
+                }
+            }
+            if (nodeUpdates.length) _topoNodesDS.update(nodeUpdates);
+            // Switch off hierarchical layout to allow free dragging
+            _topologyNetwork.setOptions({
+                layout: { hierarchical: { enabled: false } },
+                physics: { enabled: false },
+            });
+            _topologyNetwork.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+        });
+    } else if (usePhysics) {
         _topologyNetwork.once('stabilizationIterationsDone', () => {
             _topologyNetwork.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
         });
-    } else if (allPinned) {
+    } else if (allPinned || isCircular) {
         // All nodes positioned — just fit to view
         setTimeout(() => _topologyNetwork.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } }), 50);
     }
@@ -1015,6 +1084,56 @@ function _removeTopoDocListeners() {
     document.getElementById('topology-layout')?.removeEventListener('change', _onTopoLayoutChange);
 }
 
+// ── Layout Settings ──
+
+function toggleTopologySettings() {
+    const pop = document.getElementById('topology-settings-popover');
+    if (!pop) return;
+    pop.style.display = pop.style.display === 'none' ? 'block' : 'none';
+}
+
+function onTopologySettingChange() {
+    const spacingEl = document.getElementById('topo-setting-spacing');
+    const repulsionEl = document.getElementById('topo-setting-repulsion');
+    const edgeLenEl = document.getElementById('topo-setting-edgelen');
+    if (!spacingEl || !repulsionEl || !edgeLenEl) return;
+
+    const spacing = parseInt(spacingEl.value, 10);
+    const repulsion = parseInt(repulsionEl.value, 10);
+    const edgeLen = parseInt(edgeLenEl.value, 10);
+
+    // Update displayed values
+    document.getElementById('topo-setting-spacing-val').textContent = spacing;
+    document.getElementById('topo-setting-repulsion-val').textContent = repulsion;
+    document.getElementById('topo-setting-edgelen-val').textContent = edgeLen;
+
+    if (!_topologyNetwork) return;
+
+    const layoutMode = document.getElementById('topology-layout').value;
+    if (layoutMode.startsWith('hierarchical-')) {
+        _topologyNetwork.setOptions({
+            layout: {
+                hierarchical: {
+                    nodeSpacing: spacing,
+                    levelSeparation: Math.round(edgeLen * 0.78),
+                },
+            },
+        });
+    } else if (layoutMode === 'physics') {
+        _topologyNetwork.setOptions({
+            physics: {
+                enabled: true,
+                barnesHut: {
+                    gravitationalConstant: -repulsion,
+                    springLength: edgeLen,
+                    avoidOverlap: 0.3,
+                },
+            },
+        });
+        _topologyNetwork.stabilize(200);
+    }
+}
+
 // ── Export ──
 
 function exportTopologyPNG() {
@@ -1022,9 +1141,36 @@ function exportTopologyPNG() {
     const canvas = document.getElementById('topology-canvas')?.querySelector('canvas');
     if (!canvas) { showToast('Canvas not found', 'warning'); return; }
     try {
+        const headerHeight = 48;
+        const out = document.createElement('canvas');
+        out.width = canvas.width;
+        out.height = canvas.height + headerHeight;
+        const ctx = out.getContext('2d');
+
+        // White background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, out.width, out.height);
+
+        // Title bar
+        const groupFilter = document.getElementById('topology-group-filter');
+        const groupName = groupFilter?.selectedOptions?.[0]?.textContent || 'All Groups';
+        const dateStr = new Date().toLocaleDateString();
+        ctx.fillStyle = '#f5f5f5';
+        ctx.fillRect(0, 0, out.width, headerHeight);
+        ctx.fillStyle = '#333';
+        ctx.font = 'bold 16px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Network Topology — ${groupName}`, out.width / 2, 22);
+        ctx.font = '11px Inter, sans-serif';
+        ctx.fillStyle = '#888';
+        ctx.fillText(dateStr, out.width / 2, 38);
+
+        // Draw the topology canvas below the header
+        ctx.drawImage(canvas, 0, headerHeight);
+
         const link = document.createElement('a');
         link.download = `topology-${new Date().toISOString().slice(0, 10)}.png`;
-        link.href = canvas.toDataURL('image/png');
+        link.href = out.toDataURL('image/png');
         link.click();
         showToast('PNG exported', 'success');
     } catch (err) {
@@ -1045,6 +1191,102 @@ function exportTopologyJSON() {
     } catch (err) {
         showError('Failed to export JSON: ' + err.message);
     }
+}
+
+function printTopology() {
+    if (!_topologyNetwork) { showToast('No topology to print', 'warning'); return; }
+    window.print();
+}
+
+// ── SVG Export ──
+
+function exportTopologySVG() {
+    if (!_topologyNetwork || !_topologyData) { showToast('No topology to export', 'warning'); return; }
+    try {
+        const positions = _topologyNetwork.getPositions();
+        const nodeMap = {};
+        (_topologyData.nodes || []).forEach(n => { nodeMap[n.id] = n; });
+
+        // Calculate bounds
+        const posArray = Object.values(positions);
+        if (posArray.length === 0) { showToast('No nodes to export', 'warning'); return; }
+        const margin = 80;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        posArray.forEach(p => {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        });
+        const width = maxX - minX + margin * 2;
+        const height = maxY - minY + margin * 2;
+        const ox = -minX + margin;
+        const oy = -minY + margin;
+
+        const tc = _topoThemeColors || _getTopoThemeColors();
+        let edgeSvg = '';
+        let nodeSvg = '';
+
+        // Draw edges
+        (_topologyData.edges || []).forEach(e => {
+            const fromPos = positions[e.from];
+            const toPos = positions[e.to];
+            if (!fromPos || !toPos) return;
+            const proto = (e.protocol || 'cdp').toLowerCase();
+            const color = tc.edgeColors?.[proto] || '#888';
+            const dash = proto === 'lldp' ? ' stroke-dasharray="8 5"' : proto === 'ospf' ? ' stroke-dasharray="12 4 4 4"' : proto === 'bgp' ? ' stroke-dasharray="4 4"' : '';
+            edgeSvg += `<line x1="${fromPos.x + ox}" y1="${fromPos.y + oy}" x2="${toPos.x + ox}" y2="${toPos.y + oy}" stroke="${color}" stroke-width="2"${dash} opacity="0.7"/>`;
+            if (e.label) {
+                const mx = (fromPos.x + toPos.x) / 2 + ox;
+                const my = (fromPos.y + toPos.y) / 2 + oy;
+                edgeSvg += `<text x="${mx}" y="${my - 4}" text-anchor="middle" font-size="8" fill="#999" font-family="Inter, sans-serif">${_svgEscape(e.label)}</text>`;
+            }
+        });
+
+        // Draw nodes
+        Object.entries(positions).forEach(([id, pos]) => {
+            const n = nodeMap[id] || nodeMap[Number(id)];
+            if (!n) return;
+            const cx = pos.x + ox;
+            const cy = pos.y + oy;
+            const r = n.in_inventory ? 20 : 14;
+            const fill = n.in_inventory ? (tc.vendorColors?.unknown || '#607D8B') : 'none';
+            const stroke = n.in_inventory ? '#fff' : '#999';
+            const dashAttr = n.in_inventory ? '' : ' stroke-dasharray="5 5"';
+            nodeSvg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2"${dashAttr}/>`;
+            nodeSvg += `<text x="${cx}" y="${cy + r + 14}" text-anchor="middle" font-size="11" fill="#ddd" font-family="Inter, sans-serif">${_svgEscape(n.label)}</text>`;
+        });
+
+        // Title
+        const groupFilter = document.getElementById('topology-group-filter');
+        const groupName = groupFilter?.selectedOptions?.[0]?.textContent || 'All Groups';
+        const dateStr = new Date().toLocaleDateString();
+        const titleSvg = `<text x="${width / 2}" y="24" text-anchor="middle" font-size="16" font-weight="bold" fill="#ccc" font-family="Inter, sans-serif">Network Topology — ${_svgEscape(groupName)} — ${dateStr}</text>`;
+
+        const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height + 40}" viewBox="0 0 ${width} ${height + 40}">
+<rect width="100%" height="100%" fill="#1a1a2e"/>
+<g transform="translate(0,40)">
+${titleSvg}
+${edgeSvg}
+${nodeSvg}
+</g>
+</svg>`;
+
+        const blob = new Blob([svg], { type: 'image/svg+xml' });
+        const link = document.createElement('a');
+        link.download = `topology-${new Date().toISOString().slice(0, 10)}.svg`;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+        URL.revokeObjectURL(link.href);
+        showToast('SVG exported', 'success');
+    } catch (err) {
+        showError('Failed to export SVG: ' + err.message);
+    }
+}
+
+function _svgEscape(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ── Topology Change Detection UI ─────────────────────────────────────────────
@@ -1137,10 +1379,14 @@ window.togglePathMode = togglePathMode;
 window.clearPathMode = clearPathMode;
 window.exportTopologyPNG = exportTopologyPNG;
 window.exportTopologyJSON = exportTopologyJSON;
+window.exportTopologySVG = exportTopologySVG;
 window.toggleUtilizationOverlay = toggleUtilizationOverlay;
 window.showTopologyChanges = showTopologyChanges;
 window.acknowledgeTopologyChanges = acknowledgeTopologyChanges;
 window.resetTopologyPositions = resetTopologyPositions;
+window.toggleTopologySettings = toggleTopologySettings;
+window.onTopologySettingChange = onTopologySettingChange;
+window.printTopology = printTopology;
 
 // ── Cleanup ──
 

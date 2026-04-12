@@ -3940,6 +3940,43 @@ code {
     margin-right: 0.25rem;
 }
 
+/* Layout settings popover */
+.topology-settings-popover {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    z-index: 200;
+    min-width: 240px;
+    padding: 0.75rem 1rem;
+    background: var(--card-bg);
+    border: 1px solid rgba(var(--topo-accent-rgb), 0.25);
+    border-radius: 8px;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.topology-settings-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+.topology-settings-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text);
+    margin-bottom: 0.2rem;
+    margin-top: 0.5rem;
+}
+.topology-settings-slider {
+    width: 100%;
+    accent-color: var(--primary-light);
+    height: 4px;
+    cursor: pointer;
+}
+
 /* Override vis-network tooltip styling */
 .vis-tooltip {
     background: var(--card-bg) !important;
@@ -3965,6 +4002,72 @@ code {
     }
     .topology-details {
         width: 100%;
+    }
+}
+
+/* ── Topology Print Stylesheet ──────────────────────────────────────────── */
+
+@media print {
+    /* Hide all UI chrome */
+    .sidebar, .page-header, .topology-legend,
+    .topology-details, .topology-path-bar,
+    #topology-empty, .topology-settings-popover,
+    .toast-container, .modal-overlay, header, nav, footer {
+        display: none !important;
+    }
+
+    body, html {
+        background: #fff !important;
+        color: #000 !important;
+        margin: 0; padding: 0;
+    }
+
+    .main-content, .page-content, #page-topology {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 100% !important;
+    }
+
+    .topology-container {
+        height: auto !important;
+        display: block !important;
+    }
+
+    .topology-canvas {
+        width: 100% !important;
+        height: 100vh !important;
+        border: none !important;
+        background: #fff !important;
+        box-shadow: none !important;
+    }
+
+    /* Remove decorative overlays from canvas */
+    .topology-canvas::before,
+    .topology-canvas::after {
+        display: none !important;
+    }
+
+    /* Print title block — injected via JS before print */
+    .topology-print-header {
+        display: block !important;
+        text-align: center;
+        font-family: 'Inter', sans-serif;
+        padding: 1rem 0;
+    }
+    .topology-print-header h1 {
+        font-size: 18pt;
+        margin: 0;
+        color: #000;
+    }
+    .topology-print-header p {
+        font-size: 10pt;
+        color: #666;
+        margin: 0.25rem 0 0;
+    }
+
+    @page {
+        size: landscape;
+        margin: 0.5in;
     }
 }
 

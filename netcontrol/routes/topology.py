@@ -408,8 +408,11 @@ async def get_topology(group_id: int | None = Query(default=None)):
             if tgt_host_id and tgt_host_id in nodes_by_id:
                 tgt_id = tgt_host_id
             else:
-                # External neighbor -- use string ID
-                ext_key = f"ext_{tgt_name}" if tgt_name else f"ext_{tgt_ip}"
+                # External neighbor -- normalize to prevent duplicate nodes
+                # from minor SNMP string variations (case, domain suffix, whitespace)
+                norm_name = tgt_name.strip().lower().split(".")[0] if tgt_name else ""
+                norm_ip = tgt_ip.strip() if tgt_ip else ""
+                ext_key = f"ext_{norm_name}" if norm_name else f"ext_{norm_ip}"
                 tgt_id = ext_key
                 if ext_key not in nodes_by_id:
                     nodes_by_id[ext_key] = {
