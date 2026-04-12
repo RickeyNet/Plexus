@@ -1049,6 +1049,10 @@ export async function remediateComplianceFinding(data) {
     return apiRequest('/compliance/remediate', { method: 'POST', body: data });
 }
 
+export async function scanComplianceAssignmentNow(assignmentId) {
+    return apiRequest(`/compliance/assignments/${assignmentId}/scan-now`, { method: 'POST' });
+}
+
 export async function loadBuiltinComplianceProfiles() {
     return apiRequest('/compliance/profiles/load-builtin', { method: 'POST' });
 }
