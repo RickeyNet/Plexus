@@ -118,6 +118,7 @@ function renderComplianceAssignments(assignments) {
                     <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted)">→ ${escapeHtml(a.group_name || '?')} (${a.host_count || 0} hosts)</span>
                 </div>
                 <div style="display:flex; gap:0.4rem;">
+                    <button class="btn btn-sm btn-primary" onclick="scanAssignmentNow(${a.id})" title="Scan all hosts in this assignment now">Scan Now</button>
                     <button class="btn btn-sm btn-secondary" onclick="toggleComplianceAssignment(${a.id}, ${a.enabled ? 'false' : 'true'})">${a.enabled ? 'Disable' : 'Enable'}</button>
                     <button class="btn btn-sm" style="color:var(--danger)" onclick="confirmDeleteComplianceAssignment(${a.id})">Delete</button>
                 </div>
@@ -202,6 +203,123 @@ window.switchComplianceTab = switchComplianceTab;
 
 function refreshCompliance() { loadCompliance(); }
 window.refreshCompliance = refreshCompliance;
+
+// ── On-demand Scan Modal ────────────────────────────────────────────────────
+
+async function showRunComplianceScanModal() {
+    let groups = [], profiles = [], creds = [];
+    try {
+        [groups, profiles, creds] = await Promise.all([
+            api.getInventoryGroups(true),
+            api.getComplianceProfiles(),
+            api.getCredentials(),
+        ]);
+    } catch (e) { showError(e.message); return; }
+
+    if (!profiles || profiles.length === 0) {
+        showError('No compliance profiles exist. Create or load built-in profiles first.');
+        return;
+    }
+
+    // Flatten all hosts from all groups
+    const allHosts = (groups || []).flatMap(g =>
+        (g.hosts || []).map(h => ({ ...h, group_name: g.name }))
+    ).sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
+
+    const hostOpts = allHosts.map(h =>
+        `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)}) — ${escapeHtml(h.group_name)}</option>`
+    ).join('');
+    const profileOpts = (profiles || []).map(p =>
+        `<option value="${p.id}">${escapeHtml(p.name)}</option>`
+    ).join('');
+    const credOpts = (creds || []).map(c =>
+        `<option value="${c.id}">${escapeHtml(c.name)}</option>`
+    ).join('');
+
+    showModal('Run Compliance Scan', `
+        <label class="form-label">Host</label>
+        <select id="scan-host-select" class="form-select">
+            <option value="">Select a host...</option>
+            ${hostOpts}
+        </select>
+        <label class="form-label" style="margin-top:0.75rem;">Compliance Profile</label>
+        <select id="scan-profile-select" class="form-select">
+            ${profileOpts}
+        </select>
+        <label class="form-label" style="margin-top:0.75rem;">Credential</label>
+        <select id="scan-cred-select" class="form-select">
+            <option value="">Select a credential...</option>
+            ${credOpts}
+        </select>
+        <div style="margin-top:1rem; text-align:right;">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitRunComplianceScan()">Run Scan</button>
+        </div>
+    `);
+}
+window.showRunComplianceScanModal = showRunComplianceScanModal;
+
+async function submitRunComplianceScan() {
+    const hostId = parseInt(document.getElementById('scan-host-select')?.value);
+    const profileId = parseInt(document.getElementById('scan-profile-select')?.value);
+    const credId = parseInt(document.getElementById('scan-cred-select')?.value);
+    if (!hostId || isNaN(hostId)) { showError('Select a host'); return; }
+    if (!profileId || isNaN(profileId)) { showError('Select a compliance profile'); return; }
+    if (!credId || isNaN(credId)) { showError('Select a credential'); return; }
+
+    // Disable button while scanning
+    const submitBtn = document.querySelector('#modal-body .btn-primary');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Scanning...'; }
+
+    try {
+        const res = await api.runComplianceScan({
+            host_id: hostId,
+            profile_id: profileId,
+            credential_id: credId,
+        });
+        closeAllModals();
+        if (res.status === 'compliant') {
+            showSuccess(`Scan complete — Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`);
+        } else if (res.status === 'error') {
+            showError('Scan completed with errors — check findings for details');
+        } else {
+            showError(`Scan complete — ${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`);
+        }
+        // Show findings if there were failures
+        if (res.failed_rules > 0 && res.id) {
+            await showComplianceFindings(res.id);
+        }
+        loadCompliance();
+    } catch (e) {
+        showError(`Scan failed: ${e.message}`);
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Run Scan'; }
+    }
+}
+window.submitRunComplianceScan = submitRunComplianceScan;
+
+async function scanAssignmentNow(assignmentId) {
+    if (!await showConfirm({
+        title: 'Run Assignment Scan Now',
+        message: 'Scan all hosts in this assignment immediately? This may take a moment.',
+        confirmText: 'Scan Now',
+        confirmClass: 'btn-primary'
+    })) return;
+
+    try {
+        const res = await api.scanComplianceAssignmentNow(assignmentId);
+        if (res.violations > 0) {
+            showError(`Scan complete: ${res.hosts_scanned} hosts scanned, ${res.violations} non-compliant, ${res.errors} errors`);
+        } else if (res.errors > 0) {
+            showError(`Scan complete: ${res.hosts_scanned} hosts scanned, ${res.errors} error(s)`);
+        } else {
+            showSuccess(`Scan complete: ${res.hosts_scanned} hosts scanned — all compliant!`);
+        }
+        loadCompliance();
+    } catch (e) {
+        showError(`Assignment scan failed: ${e.message}`);
+    }
+}
+window.scanAssignmentNow = scanAssignmentNow;
 
 async function loadBuiltinProfiles() {
     try {
