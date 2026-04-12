@@ -1027,11 +1027,21 @@ async def create_alert_rule_endpoint(body: dict, request: Request):
         escalate_after_minutes = int(body.get("escalate_after_minutes", 0))
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Numeric fields must be valid numbers")
+    name = (body.get("name") or "").strip()
+    metric = (body.get("metric") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Rule name is required")
+    if not metric:
+        raise HTTPException(status_code=400, detail="Metric is required")
+    allowed_operators = {">", ">=", "<", "<=", "==", "!="}
+    operator = body.get("operator", ">=")
+    if operator not in allowed_operators:
+        raise HTTPException(status_code=400, detail=f"Operator must be one of {allowed_operators}")
     rule_id = await db.create_alert_rule(
-        name=body.get("name", ""),
-        metric=body.get("metric", ""),
+        name=name,
+        metric=metric,
         rule_type=body.get("rule_type", "threshold"),
-        operator=body.get("operator", ">="),
+        operator=operator,
         value=value,
         severity=body.get("severity", "warning"),
         consecutive=consecutive,
@@ -1130,6 +1140,8 @@ async def bulk_acknowledge_alerts_endpoint(body: dict, request: Request):
     alert_ids = body.get("alert_ids", [])
     if not alert_ids:
         raise HTTPException(status_code=400, detail="alert_ids required")
+    if not isinstance(alert_ids, list) or len(alert_ids) > 1000:
+        raise HTTPException(status_code=400, detail="alert_ids must be a list of at most 1000 IDs")
     session = _get_session(request)
     user = session["user"] if session else ""
     count = await db.bulk_acknowledge_alerts(alert_ids, user)
