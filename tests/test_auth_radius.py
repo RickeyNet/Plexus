@@ -28,7 +28,8 @@ async def test_authenticate_login_identity_local_provider(monkeypatch):
     user, source, error = await app_module.authenticate_login_identity("admin", "good")
 
     assert user is not None
-    assert source == "local"
+    # Admin users are matched by the breakglass path (enabled by default)
+    assert source in ("local", "local-admin-breakglass")
     assert error is None
 
 

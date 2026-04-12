@@ -235,7 +235,7 @@ def _admin_dep():
 async def admin_capabilities():
     return {
         "feature_flags": FEATURE_FLAGS,
-        "auth_providers": ["local", "radius"],
+        "auth_providers": ["local", "radius", "ldap"],
     }
 
 
@@ -425,16 +425,36 @@ async def admin_update_login_rules(body: AdminLoginRulesRequest):
     return state.LOGIN_RULES
 
 
+_SECRET_MASK = "••••••••"
+
+
+def _redact_auth_config(cfg: dict) -> dict:
+    """Return a copy of auth config with secrets masked for API responses."""
+    import copy
+    redacted = copy.deepcopy(cfg)
+    if redacted.get("radius", {}).get("secret"):
+        redacted["radius"]["secret"] = _SECRET_MASK
+    if redacted.get("ldap", {}).get("bind_password"):
+        redacted["ldap"]["bind_password"] = _SECRET_MASK
+    return redacted
+
+
 @router.get("/api/admin/auth-config")
 async def admin_get_auth_config():
-    return state.AUTH_CONFIG
+    return _redact_auth_config(state.AUTH_CONFIG)
 
 
 @router.put("/api/admin/auth-config")
 async def admin_update_auth_config(body: AuthConfigRequest):
-    state.AUTH_CONFIG = state._sanitize_auth_config(body.dict())
+    data = body.dict()
+    # Preserve existing secrets when client sends back the redaction mask
+    if data.get("radius", {}).get("secret") == _SECRET_MASK:
+        data["radius"]["secret"] = state.AUTH_CONFIG.get("radius", {}).get("secret", "")
+    if data.get("ldap", {}).get("bind_password") == _SECRET_MASK:
+        data["ldap"]["bind_password"] = state.AUTH_CONFIG.get("ldap", {}).get("bind_password", "")
+    state.AUTH_CONFIG = state._sanitize_auth_config(data)
     await db.set_auth_setting("auth_config", state.AUTH_CONFIG)
-    return state.AUTH_CONFIG
+    return _redact_auth_config(state.AUTH_CONFIG)
 
 
 @router.post("/api/admin/retention/cleanup-now")
