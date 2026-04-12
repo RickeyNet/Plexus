@@ -117,7 +117,10 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
         result["detail"] = "Pattern absent (good)" if not found else f"Prohibited pattern found: {pattern}"
     elif rule_type == "regex_match":
         try:
-            match = _re.search(pattern, config_text, _re.MULTILINE | _re.IGNORECASE)
+            compiled = _re.compile(pattern, _re.MULTILINE | _re.IGNORECASE)
+            # Guard against catastrophic backtracking: limit search to first 500KB
+            search_text = config_text[:512_000]
+            match = compiled.search(search_text)
             result["passed"] = match is not None
             result["detail"] = "Regex matched" if match else f"Regex not matched: {pattern}"
         except _re.error as e:
@@ -130,13 +133,32 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
     return result
 
 
+# Maximum seconds to wait for a config capture before giving up.
+_SCAN_TIMEOUT_SECONDS = 120
+
+
 async def _evaluate_host_compliance(host: dict, profile: dict, credentials: dict) -> dict:
     """Evaluate a host against a compliance profile's rules.
 
     Returns {status, total_rules, passed_rules, failed_rules, findings, config_snippet}.
     """
+    import asyncio as _aio
+
     try:
-        config_text = await _capture_running_config(host, credentials)
+        config_text = await _aio.wait_for(
+            _capture_running_config(host, credentials),
+            timeout=_SCAN_TIMEOUT_SECONDS,
+        )
+    except _aio.TimeoutError:
+        return {
+            "status": "error",
+            "total_rules": 0,
+            "passed_rules": 0,
+            "failed_rules": 0,
+            "findings": json.dumps([{"name": "config_capture", "passed": False,
+                                      "detail": f"Timed out after {_SCAN_TIMEOUT_SECONDS}s connecting to {host.get('ip_address', '?')}"}]),
+            "config_snippet": "",
+        }
     except Exception as exc:
         return {
             "status": "error",
@@ -393,6 +415,10 @@ async def create_compliance_assignment(body: ComplianceAssignmentCreate, request
     cred = await db.get_credential_raw(body.credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    # Prevent duplicate (profile_id, group_id) — DB has UNIQUE constraint but give a clean error
+    existing = await db.get_compliance_assignments(profile_id=body.profile_id, group_id=body.group_id)
+    if existing:
+        raise HTTPException(status_code=409, detail="This profile is already assigned to that group")
     interval = max(state.COMPLIANCE_ASSIGNMENT_MIN_INTERVAL, min(state.COMPLIANCE_ASSIGNMENT_MAX_INTERVAL, body.interval_seconds))
     session = _get_session(request)
     assignment_id = await db.create_compliance_assignment(
@@ -460,7 +486,7 @@ async def list_compliance_scan_results(
     profile_id: int | None = Query(default=None),
     assignment_id: int | None = Query(default=None),
     status: str | None = Query(default=None),
-    limit: int = Query(default=200, le=1000),
+    limit: int = Query(default=200, ge=1, le=1000),
 ):
     return await db.get_compliance_scan_results(
         host_id=host_id, profile_id=profile_id,
@@ -703,9 +729,23 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
             "message": f"Would push {len(remediation_cmds)} command(s) to {host['hostname']}",
         }
 
-    # Live push
+    # Live push (with timeout to prevent indefinite hangs)
+    import asyncio as _aio
     try:
-        output = await _push_config_to_device(host, cred, remediation_cmds)
+        output = await _aio.wait_for(
+            _push_config_to_device(host, cred, remediation_cmds),
+            timeout=_SCAN_TIMEOUT_SECONDS,
+        )
+    except _aio.TimeoutError as exc:
+        await _audit(
+            "compliance", "remediate.failed",
+            user=session["user"] if session else "",
+            detail=f"host_id={host['id']} rule={body.rule_name} error=timeout after {_SCAN_TIMEOUT_SECONDS}s",
+            correlation_id=_corr_id(request),
+        )
+        LOGGER.error("Remediation timed out for host %s rule %s",
+                     host["ip_address"], body.rule_name)
+        raise HTTPException(500, f"Remediation timed out after {_SCAN_TIMEOUT_SECONDS}s — the device may not have responded")
     except Exception as exc:
         await _audit(
             "compliance", "remediate.failed",

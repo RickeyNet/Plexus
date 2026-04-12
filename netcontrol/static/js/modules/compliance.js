@@ -20,6 +20,11 @@ export async function loadCompliance(options = {}) {
     const { preserveContent = false } = options;
     const profilesContainer = document.getElementById('compliance-profiles-list');
     if (!preserveContent && profilesContainer) profilesContainer.innerHTML = skeletonCards(2);
+    // Restore tab from previous state
+    const savedTab = listViewState.compliance.tab;
+    if (savedTab && savedTab !== _complianceCurrentTab) {
+        switchComplianceTab(savedTab);
+    }
     try {
         const [summary, profiles, assignments, results, statusList] = await Promise.all([
             api.getComplianceSummary(),
@@ -554,7 +559,8 @@ async function showComplianceFindings(resultId) {
     try { findings = JSON.parse(result.findings || '[]'); } catch (e) { /* ignore */ }
 
     const hasFailedWithFix = findings.some(f => !f.passed && f.remediation && f.remediation.length > 0);
-    const credOptions = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    // Pre-select first credential for convenience
+    const credOptions = (creds || []).map((c, i) => `<option value="${c.id}" ${i === 0 ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
 
     const rows = findings.map(f => {
         const color = f.passed ? 'success' : 'danger';
