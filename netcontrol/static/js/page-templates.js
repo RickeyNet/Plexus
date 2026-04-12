@@ -317,7 +317,11 @@ function templateTopology() {
             </select>
             <select id="topology-layout" class="form-select" style="min-width:140px;">
                 <option value="physics">Force-Directed</option>
-                <option value="hierarchical">Hierarchical</option>
+                <option value="hierarchical-UD">Hierarchical &darr;</option>
+                <option value="hierarchical-DU">Hierarchical &uarr;</option>
+                <option value="hierarchical-LR">Hierarchical &rarr;</option>
+                <option value="hierarchical-RL">Hierarchical &larr;</option>
+                <option value="circular">Circular</option>
             </select>
             <button class="btn btn-secondary" id="topology-discover-btn" onclick="discoverTopology()">Discover Neighbors</button>
             <button class="btn btn-secondary" onclick="refreshTopology()">Refresh</button>
@@ -328,9 +332,23 @@ function templateTopology() {
                 Changes <span id="topology-change-badge" class="topology-change-badge" style="display:none">0</span>
             </button>
             <button class="btn btn-secondary" id="topology-reset-pos-btn" onclick="resetTopologyPositions()" title="Reset all saved node positions">Reset Layout</button>
+            <div class="topology-settings-wrap" style="position:relative;">
+                <button class="btn btn-secondary" id="topology-settings-btn" onclick="toggleTopologySettings()" title="Layout settings">&#9881;</button>
+                <div id="topology-settings-popover" class="topology-settings-popover" style="display:none">
+                    <div class="topology-settings-title">Layout Settings</div>
+                    <label class="topology-settings-label">Node Spacing <span id="topo-setting-spacing-val">180</span></label>
+                    <input type="range" id="topo-setting-spacing" class="topology-settings-slider" min="80" max="400" value="180" step="10" oninput="onTopologySettingChange()">
+                    <label class="topology-settings-label">Repulsion <span id="topo-setting-repulsion-val">4000</span></label>
+                    <input type="range" id="topo-setting-repulsion" class="topology-settings-slider" min="1000" max="12000" value="4000" step="500" oninput="onTopologySettingChange()">
+                    <label class="topology-settings-label">Edge Length <span id="topo-setting-edgelen-val">180</span></label>
+                    <input type="range" id="topo-setting-edgelen" class="topology-settings-slider" min="60" max="400" value="180" step="10" oninput="onTopologySettingChange()">
+                </div>
+            </div>
             <div class="topology-export-group">
                 <button class="btn btn-secondary" onclick="exportTopologyPNG()" title="Export as PNG image">PNG</button>
+                <button class="btn btn-secondary" onclick="exportTopologySVG()" title="Export as SVG vector">SVG</button>
                 <button class="btn btn-secondary" onclick="exportTopologyJSON()" title="Export as JSON data">JSON</button>
+                <button class="btn btn-secondary" onclick="printTopology()" title="Print topology map">Print</button>
             </div>
         </div>
     </div>
@@ -450,7 +468,8 @@ function templateCompliance() {
     <div class="page-header">
         <h2>Compliance</h2>
         <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-            <button class="btn btn-primary" onclick="showCreateComplianceProfileModal()">+ New Profile</button>
+            <button class="btn btn-primary" onclick="showRunComplianceScanModal()">Run Scan</button>
+            <button class="btn btn-secondary" onclick="showCreateComplianceProfileModal()">+ New Profile</button>
             <button class="btn btn-secondary" onclick="loadBuiltinProfiles()">Load Built-in Profiles</button>
             <button class="btn btn-secondary" onclick="refreshCompliance()">Refresh</button>
         </div>
