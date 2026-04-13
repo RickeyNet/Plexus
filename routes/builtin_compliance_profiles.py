@@ -149,7 +149,7 @@ BUILTIN_PROFILES = [
              "remediation": ["aaa authorization exec default local"]},
             {"name": "AAA accounting commands", "type": "regex_match", "pattern": r"aaa accounting commands\s+",
              "remediation": ["aaa accounting commands 15 default start-stop group tacacs+"]},
-            {"name": "TACACS or RADIUS server configured", "type": "regex_match", "pattern": r"(tacacs|radius)\s+server\s+\S+",
+            {"name": "TACACS or RADIUS server configured", "type": "regex_match", "pattern": r"(tacacs\s+server\s+\S+|tacacs-server\s+host\s+\S+|radius\s+server\s+\S+|radius-server\s+host\s+\S+)",
              "remediation": None},
             {"name": "Local fallback user exists", "type": "regex_match", "pattern": r"username\s+\S+\s+privilege\s+15\s+secret",
              "remediation": None},

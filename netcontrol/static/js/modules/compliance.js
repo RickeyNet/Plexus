@@ -16,6 +16,9 @@ import {
 
 let _complianceCurrentTab = 'profiles';
 
+// Temporary store for remediation commands, keyed by index — avoids quoting issues in onclick attrs
+let _findingsRemediationMap = {};
+
 export async function loadCompliance(options = {}) {
     const { preserveContent = false } = options;
     const profilesContainer = document.getElementById('compliance-profiles-list');
@@ -211,6 +214,9 @@ window.refreshCompliance = refreshCompliance;
 
 // ── On-demand Scan Modal ────────────────────────────────────────────────────
 
+// Cached data for the scan modal, populated once per open
+let _scanModalData = { groups: [], allHosts: [] };
+
 async function showRunComplianceScanModal() {
     let groups = [], profiles = [], creds = [];
     try {
@@ -226,28 +232,47 @@ async function showRunComplianceScanModal() {
         return;
     }
 
-    // Flatten all hosts from all groups
     const allHosts = (groups || []).flatMap(g =>
         (g.hosts || []).map(h => ({ ...h, group_name: g.name }))
     ).sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
+    _scanModalData = { groups, allHosts };
 
-    const hostOpts = allHosts.map(h =>
-        `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)}) — ${escapeHtml(h.group_name)}</option>`
-    ).join('');
     const profileOpts = (profiles || []).map(p =>
         `<option value="${p.id}">${escapeHtml(p.name)}</option>`
     ).join('');
     const credOpts = (creds || []).map(c =>
         `<option value="${c.id}">${escapeHtml(c.name)}</option>`
     ).join('');
+    const groupOpts = (groups || []).map(g =>
+        `<option value="${g.id}">${escapeHtml(g.name)} (${(g.hosts || []).length} hosts)</option>`
+    ).join('');
+    const hostOpts = allHosts.map(h =>
+        `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)}) — ${escapeHtml(h.group_name)}</option>`
+    ).join('');
 
     showModal('Run Compliance Scan', `
-        <label class="form-label">Host</label>
-        <select id="scan-host-select" class="form-select">
-            <option value="">Select a host...</option>
-            ${hostOpts}
-        </select>
-        <label class="form-label" style="margin-top:0.75rem;">Compliance Profile</label>
+        <div style="margin-bottom:1rem;">
+            <label class="form-label">Scope</label>
+            <div style="display:flex; gap:0.5rem;">
+                <button class="btn btn-sm btn-primary" id="scan-scope-all" onclick="setScanScope('all')">All Hosts</button>
+                <button class="btn btn-sm btn-secondary" id="scan-scope-group" onclick="setScanScope('group')">By Group</button>
+                <button class="btn btn-sm btn-secondary" id="scan-scope-single" onclick="setScanScope('single')">Single Host</button>
+            </div>
+        </div>
+        <div id="scan-scope-group-row" style="display:none; margin-bottom:0.75rem;">
+            <label class="form-label">Group</label>
+            <select id="scan-group-select" class="form-select" onchange="setScanScope('group')">
+                ${groupOpts}
+            </select>
+        </div>
+        <div id="scan-scope-host-row" style="display:none; margin-bottom:0.75rem;">
+            <label class="form-label">Host</label>
+            <select id="scan-host-select" class="form-select">
+                <option value="">Select a host...</option>
+                ${hostOpts}
+            </select>
+        </div>
+        <label class="form-label">Compliance Profile</label>
         <select id="scan-profile-select" class="form-select">
             ${profileOpts}
         </select>
@@ -256,49 +281,110 @@ async function showRunComplianceScanModal() {
             <option value="">Select a credential...</option>
             ${credOpts}
         </select>
+        <div id="scan-scope-hint" style="margin-top:0.75rem; font-size:0.85em; color:var(--text-muted);">
+            Scans all ${allHosts.length} host(s) in the inventory.
+        </div>
         <div style="margin-top:1rem; text-align:right;">
             <button class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
-            <button class="btn btn-primary" onclick="submitRunComplianceScan()">Run Scan</button>
+            <button class="btn btn-primary" id="scan-submit-btn" onclick="submitRunComplianceScan()">Scan All Hosts</button>
         </div>
     `);
 }
 window.showRunComplianceScanModal = showRunComplianceScanModal;
 
+function setScanScope(scope) {
+    document.getElementById('scan-scope-all')?.classList.toggle('btn-primary', scope === 'all');
+    document.getElementById('scan-scope-all')?.classList.toggle('btn-secondary', scope !== 'all');
+    document.getElementById('scan-scope-group')?.classList.toggle('btn-primary', scope === 'group');
+    document.getElementById('scan-scope-group')?.classList.toggle('btn-secondary', scope !== 'group');
+    document.getElementById('scan-scope-single')?.classList.toggle('btn-primary', scope === 'single');
+    document.getElementById('scan-scope-single')?.classList.toggle('btn-secondary', scope !== 'single');
+
+    document.getElementById('scan-scope-group-row').style.display = scope === 'group' ? '' : 'none';
+    document.getElementById('scan-scope-host-row').style.display = scope === 'single' ? '' : 'none';
+
+    const hint = document.getElementById('scan-scope-hint');
+    const submitBtn = document.getElementById('scan-submit-btn');
+    const { groups, allHosts } = _scanModalData;
+
+    if (scope === 'all') {
+        hint.textContent = `Scans all ${allHosts.length} host(s) in the inventory.`;
+        submitBtn.textContent = 'Scan All Hosts';
+    } else if (scope === 'group') {
+        const groupId = parseInt(document.getElementById('scan-group-select')?.value);
+        const g = (groups || []).find(g => g.id === groupId);
+        const count = (g?.hosts || []).length;
+        hint.textContent = `Scans all ${count} host(s) in the selected group.`;
+        submitBtn.textContent = 'Scan Group';
+    } else {
+        hint.textContent = '';
+        submitBtn.textContent = 'Run Scan';
+    }
+
+    document.getElementById('scan-submit-btn').dataset.scope = scope;
+}
+window.setScanScope = setScanScope;
+
 async function submitRunComplianceScan() {
-    const hostId = parseInt(document.getElementById('scan-host-select')?.value);
+    const submitBtn = document.getElementById('scan-submit-btn');
+    const scope = submitBtn?.dataset.scope || 'all';
     const profileId = parseInt(document.getElementById('scan-profile-select')?.value);
     const credId = parseInt(document.getElementById('scan-cred-select')?.value);
-    if (!hostId || isNaN(hostId)) { showError('Select a host'); return; }
     if (!profileId || isNaN(profileId)) { showError('Select a compliance profile'); return; }
     if (!credId || isNaN(credId)) { showError('Select a credential'); return; }
 
-    // Disable button while scanning
-    const submitBtn = document.querySelector('#modal-body .btn-primary');
-    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Scanning...'; }
+    if (scope === 'single') {
+        const hostId = parseInt(document.getElementById('scan-host-select')?.value);
+        if (!hostId || isNaN(hostId)) { showError('Select a host'); return; }
 
-    try {
-        const res = await api.runComplianceScan({
-            host_id: hostId,
-            profile_id: profileId,
-            credential_id: credId,
-        });
-        closeAllModals();
-        if (res.status === 'compliant') {
-            showSuccess(`Scan complete — Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`);
-        } else if (res.status === 'error') {
-            showError('Scan completed with errors — check findings for details');
-        } else {
-            showError(`Scan complete — ${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`);
+        if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Scanning...'; }
+        try {
+            const res = await api.runComplianceScan({ host_id: hostId, profile_id: profileId, credential_id: credId });
+            closeAllModals();
+            if (res.status === 'compliant') {
+                showSuccess(`Scan complete — Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`);
+            } else if (res.status === 'error') {
+                showError('Scan completed with errors — check findings for details');
+            } else {
+                showError(`Scan complete — ${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`);
+            }
+            if (res.failed_rules > 0 && res.id) await showComplianceFindings(res.id);
+        } catch (e) {
+            showError(`Scan failed: ${e.message}`);
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Run Scan'; }
+            return;
         }
-        // Show findings if there were failures
-        if (res.failed_rules > 0 && res.id) {
-            await showComplianceFindings(res.id);
+    } else {
+        let hostIds = [];
+        if (scope === 'group') {
+            const groupId = parseInt(document.getElementById('scan-group-select')?.value);
+            if (!groupId || isNaN(groupId)) { showError('Select a group'); return; }
+            const g = (_scanModalData.groups || []).find(g => g.id === groupId);
+            hostIds = (g?.hosts || []).map(h => h.id);
+            if (!hostIds.length) { showError('No hosts in the selected group'); return; }
         }
-        loadCompliance();
-    } catch (e) {
-        showError(`Scan failed: ${e.message}`);
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Run Scan'; }
+        // hostIds empty = all hosts (backend handles it)
+
+        const label = submitBtn?.textContent || 'Scanning...';
+        if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Scanning...'; }
+        try {
+            const res = await api.runComplianceScanBulk({ profile_id: profileId, credential_id: credId, host_ids: hostIds });
+            closeAllModals();
+            if (res.violations > 0) {
+                showError(`Scan complete: ${res.hosts_scanned} host(s) scanned, ${res.violations} non-compliant, ${res.errors} error(s)`);
+            } else if (res.errors > 0) {
+                showError(`Scan complete: ${res.hosts_scanned} host(s) scanned, ${res.errors} error(s)`);
+            } else {
+                showSuccess(`Scan complete: ${res.hosts_scanned} host(s) scanned — all compliant!`);
+            }
+        } catch (e) {
+            showError(`Scan failed: ${e.message}`);
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = label; }
+            return;
+        }
     }
+
+    loadCompliance();
 }
 window.submitRunComplianceScan = submitRunComplianceScan;
 
@@ -562,12 +648,15 @@ async function showComplianceFindings(resultId) {
     // Pre-select first credential for convenience
     const credOptions = (creds || []).map((c, i) => `<option value="${c.id}" ${i === 0 ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
 
-    const rows = findings.map(f => {
+    _findingsRemediationMap = {};
+    const rows = findings.map((f, idx) => {
         const color = f.passed ? 'success' : 'danger';
         const hasFix = !f.passed && f.remediation && f.remediation.length > 0;
+        if (hasFix) _findingsRemediationMap[idx] = f.remediation;
+        const escapedName = escapeHtml(f.name).replace(/'/g, "\\'");
         const fixBtn = hasFix
-            ? `<button class="btn btn-sm btn-primary" onclick="remediateComplianceRule(${resultId}, '${escapeHtml(f.name).replace(/'/g, "\\'")}')">Fix</button>
-               <button class="btn btn-sm btn-secondary" style="margin-left:0.25rem;" onclick="previewComplianceRemediation('${escapeHtml(f.name).replace(/'/g, "\\'")}', ${JSON.stringify(JSON.stringify(f.remediation))})">Preview</button>`
+            ? `<button class="btn btn-sm btn-primary" onclick="remediateComplianceRule(${resultId}, '${escapedName}')">Fix</button>
+               <button class="btn btn-sm btn-secondary" style="margin-left:0.25rem;" onclick="previewComplianceRemediation('${escapedName}', ${idx})">Preview</button>`
             : (!f.passed ? '<span style="font-size:0.8em; color:var(--text-muted);">Manual fix required</span>' : '');
         return `<tr>
             <td style="color:var(--${color})">${f.passed ? 'PASS' : 'FAIL'}</td>
@@ -609,9 +698,8 @@ async function showComplianceFindings(resultId) {
 }
 window.showComplianceFindings = showComplianceFindings;
 
-function previewComplianceRemediation(ruleName, commandsJson) {
-    let commands = [];
-    try { commands = JSON.parse(commandsJson); } catch (e) { /* ignore */ }
+function previewComplianceRemediation(ruleName, idx) {
+    const commands = _findingsRemediationMap[idx] || [];
     showModal(`Remediation Preview — ${escapeHtml(ruleName)}`, `
         <p style="margin-bottom:0.75rem;">The following commands will be pushed in config mode:</p>
         <pre style="background:var(--bg-secondary); padding:1rem; border-radius:0.5rem; overflow-x:auto; font-size:0.9em;">${commands.map(c => escapeHtml(c)).join('\n')}</pre>

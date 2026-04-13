@@ -75,6 +75,12 @@ class ComplianceScanRequest(BaseModel):
     credential_id: int
 
 
+class ComplianceBulkScanRequest(BaseModel):
+    profile_id: int
+    credential_id: int
+    host_ids: list[int] = []   # empty = scan all hosts
+
+
 class ComplianceRemediateRequest(BaseModel):
     result_id: int
     rule_name: str
@@ -638,6 +644,92 @@ async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
     return {"id": result_id, **result}
 
 
+# ── Bulk / All-Hosts Scan ─────────────────────────────────────────────────
+
+
+@router.post("/api/compliance/scan-bulk")
+async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Request):
+    """Run an on-demand compliance scan against multiple (or all) hosts.
+
+    If host_ids is empty, every host in the inventory is scanned.
+    Returns aggregate stats plus a per-host result list.
+    """
+    import asyncio
+
+    profile = await db.get_compliance_profile(body.profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Compliance profile not found")
+    cred = await db.get_credential_raw(body.credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    if body.host_ids:
+        hosts = await db.get_hosts_by_ids(body.host_ids)
+    else:
+        hosts = await db.get_all_hosts()
+
+    if not hosts:
+        raise HTTPException(status_code=400, detail="No hosts found to scan")
+
+    sem = asyncio.Semaphore(4)
+    host_results = []
+
+    async def _scan_host(h):
+        async with sem:
+            try:
+                result = await _evaluate_host_compliance(h, profile, cred)
+                result_id = await db.create_compliance_scan_result(
+                    assignment_id=None,
+                    profile_id=body.profile_id,
+                    host_id=h["id"],
+                    **result,
+                )
+                return {
+                    "host_id": h["id"],
+                    "hostname": h["hostname"],
+                    "status": result["status"],
+                    "passed_rules": result["passed_rules"],
+                    "failed_rules": result["failed_rules"],
+                    "total_rules": result["total_rules"],
+                    "result_id": result_id,
+                }
+            except Exception as exc:
+                LOGGER.warning("compliance: bulk scan failed host_id=%s: %s", h["id"], exc)
+                return {
+                    "host_id": h["id"],
+                    "hostname": h.get("hostname", "?"),
+                    "status": "error",
+                    "passed_rules": 0,
+                    "failed_rules": 0,
+                    "total_rules": 0,
+                    "result_id": None,
+                }
+
+    host_results = await asyncio.gather(*[_scan_host(h) for h in hosts])
+
+    hosts_scanned = len(host_results)
+    violations = sum(1 for r in host_results if r["status"] == "non-compliant")
+    errors = sum(1 for r in host_results if r["status"] == "error")
+
+    session = _get_session(request)
+    await _audit(
+        "compliance", "scan.bulk",
+        user=session["user"] if session else "",
+        detail=(
+            f"profile_id={body.profile_id} hosts_scanned={hosts_scanned} "
+            f"violations={violations} errors={errors} "
+            f"scope={'selected' if body.host_ids else 'all'}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {
+        "hosts_scanned": hosts_scanned,
+        "violations": violations,
+        "errors": errors,
+        "results": list(host_results),
+    }
+
+
 # ── Compliance Remediation ─────────────────────────────────────────────────
 
 
@@ -808,35 +900,42 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
 
 @router.post("/api/compliance/profiles/load-builtin")
 async def load_builtin_compliance_profiles(request: Request):
-    """Load all built-in compliance profiles, skipping any that already exist by name."""
+    """Load all built-in compliance profiles, creating new ones and updating existing ones."""
     from routes.builtin_compliance_profiles import BUILTIN_PROFILES
 
     session = _get_session(request)
     loaded = 0
-    skipped = 0
+    updated = 0
     existing = await db.get_compliance_profiles()
-    existing_names = {p["name"] for p in existing}
+    existing_by_name = {p["name"]: p for p in existing}
 
     for name, description, severity, rules in BUILTIN_PROFILES:
-        if name in existing_names:
-            skipped += 1
-            continue
-        await db.create_compliance_profile(
-            name=name,
-            description=description,
-            rules=json.dumps(rules),
-            severity=severity,
-            created_by=session["user"] if session else "system",
-        )
-        loaded += 1
+        rules_json = json.dumps(rules)
+        if name in existing_by_name:
+            await db.update_compliance_profile(
+                existing_by_name[name]["id"],
+                description=description,
+                rules=rules_json,
+                severity=severity,
+            )
+            updated += 1
+        else:
+            await db.create_compliance_profile(
+                name=name,
+                description=description,
+                rules=rules_json,
+                severity=severity,
+                created_by=session["user"] if session else "system",
+            )
+            loaded += 1
 
     await _audit(
         "compliance", "profiles.builtin_loaded",
         user=session["user"] if session else "",
-        detail=f"loaded={loaded} skipped={skipped} total_available={len(BUILTIN_PROFILES)}",
+        detail=f"loaded={loaded} updated={updated} total_available={len(BUILTIN_PROFILES)}",
         correlation_id=_corr_id(request),
     )
-    return {"loaded": loaded, "skipped": skipped, "total_available": len(BUILTIN_PROFILES)}
+    return {"loaded": loaded, "updated": updated, "total_available": len(BUILTIN_PROFILES)}
 
 
 # ── Admin Compliance Schedule ────────────────────────────────────────────────

@@ -1045,6 +1045,10 @@ export async function runComplianceScan(data) {
     return apiRequest('/compliance/scan', { method: 'POST', body: data });
 }
 
+export async function runComplianceScanBulk(data) {
+    return apiRequest('/compliance/scan-bulk', { method: 'POST', body: data });
+}
+
 export async function remediateComplianceFinding(data) {
     return apiRequest('/compliance/remediate', { method: 'POST', body: data });
 }

@@ -1819,6 +1819,18 @@ async def get_hosts_by_ids(host_ids: list[int]) -> list[dict]:
         await db.close()
 
 
+async def get_all_hosts() -> list[dict]:
+    """Get every host across all groups, ordered by hostname."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM hosts ORDER BY hostname, ip_address"
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def find_host_by_ip(ip_address: str) -> dict | None:
     db = await get_db()
     try:
