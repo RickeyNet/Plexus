@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY . .
 
+RUN mkdir -p /app/state
 RUN useradd -m -u 1000 plexus && chown -R plexus:plexus /app
 USER plexus
 

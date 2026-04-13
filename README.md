@@ -117,12 +117,12 @@ This avoids installing Python/deps locally.
 1) Copy `.env.example` to `.env` and update values.
 2) Build and start:
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 3) Access at `http://localhost:8080` (mapped from the container).
 4) Stop/remove containers:
 ```bash
-docker-compose down
+docker compose down
 ```
 
 PostgreSQL mode (recommended for VM/production reliability):
@@ -150,8 +150,9 @@ docker compose up --build
 Notes:
 - The Docker image runs `python templates/run.py --host 0.0.0.0 --port 8080` inside the container.
 - The built-in healthcheck pings `/api/health`; compose restarts the container if it becomes unhealthy.
-- Named volumes persist DB data and generated certs across restarts.
+- Named volumes persist runtime state at `/app/state` (SQLite DB + key files) and certs at `/app/certs` across restarts.
 - Compose now includes a PostgreSQL service; SQLite remains available as a backend option.
+- Docker runtime base image is currently `python:3.12-slim`.
 - For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables.
 
 ## Database Backends
@@ -169,6 +170,7 @@ Environment variables:
 
 - `APP_DB_ENGINE=sqlite|postgres`
 - `APP_DATABASE_URL=postgresql://<user>:<pass>@postgres:5432/<db>` (required when engine is `postgres`)
+- `APP_DB_PATH` (SQLite file path; compose pins this to `/app/state/netcontrol.db`)
 
 SQLite to PostgreSQL migration utility:
 
