@@ -401,7 +401,7 @@ async function showCreateCampaignModal() {
                             </label>
                             <div style="margin-left:1.5rem;">
                                 ${groupHosts.map(h => `<label style="display:flex; align-items:center; gap:0.5rem; font-size:0.9em;">
-                                    <input type="checkbox" class="campaign-host-cb" data-host-id="${h.id}" data-group-id="${g.id}" value="${h.id}">
+                                    <input type="checkbox" class="campaign-host-cb" data-host-id="${h.id}" data-group-id="${g.id}" value="${h.id}" onchange="toggleCampaignHost(this)">
                                     ${escapeHtml(h.hostname || h.ip_address)} <span style="opacity:0.5;">${h.ip_address}</span>
                                     ${h.model ? `<code style="font-size:0.8em;">${escapeHtml(h.model)}</code>` : ''}
                                 </label>`).join('')}
@@ -465,6 +465,8 @@ async function showCreateCampaignModal() {
         }
     });
 
+    refreshCampaignGroupCheckboxStates();
+
     document.getElementById('create-campaign-form').onsubmit = async (e) => {
         e.preventDefault();
         // Build image map from rows
@@ -476,10 +478,11 @@ async function showCreateCampaignModal() {
         });
 
         // Collect host IDs
-        const hostIds = [];
-        document.querySelectorAll('.campaign-host-cb:checked').forEach(cb => {
-            hostIds.push(parseInt(cb.value));
-        });
+        const hostIds = [...new Set(
+            [...document.querySelectorAll('.campaign-host-cb:checked')]
+                .map(cb => parseInt(cb.value, 10))
+                .filter(Number.isFinite)
+        )];
 
         // Collect ad-hoc IPs
         const adhocText = document.getElementById('campaign-adhoc-ips').value;
@@ -543,14 +546,15 @@ async function editCampaign(campaignId) {
     const currentHostIds = new Set(devices.filter(d => d.host_id).map(d => d.host_id));
     const currentAdHocIps = devices.filter(d => !d.host_id).map(d => d.ip_address);
 
-    // Devices that have progress (not all-pending) can't be removed
-    const devicesWithProgress = devices.filter(d =>
-        d.phase !== 'pending' ||
-        d.prestage_status !== 'pending' ||
-        d.transfer_status !== 'pending' ||
-        d.activate_status !== 'pending'
+    // Only devices with an actively running step are locked from removal
+    const runningDevices = devices.filter(d =>
+        d.phase === 'running' ||
+        d.prestage_status === 'running' ||
+        d.transfer_status === 'running' ||
+        d.activate_status === 'running' ||
+        d.verify_status === 'running'
     );
-    const lockedIps = new Set(devicesWithProgress.map(d => d.ip_address));
+    const lockedIps = new Set(runningDevices.map(d => d.ip_address));
 
     const imageOptions = images.map(img =>
         `<option value="${escapeHtml(img.filename)}" data-pattern="${escapeHtml(img.model_pattern || '')}">${escapeHtml(img.filename)} (${escapeHtml(img.model_pattern || 'no pattern')} / v${escapeHtml(img.version || '?')})</option>`
@@ -601,7 +605,7 @@ async function editCampaign(campaignId) {
 
             <fieldset style="border:1px solid var(--glass-border); border-radius:8px; padding:1rem; margin-bottom:1rem;">
                 <legend style="font-weight:600; padding:0 0.5rem;">Target Devices</legend>
-                ${devicesWithProgress.length > 0 ? `<p style="font-size:0.85em; color:var(--warning-color); margin-top:0;">${devicesWithProgress.length} device(s) have upgrade progress and cannot be removed.</p>` : ''}
+                ${runningDevices.length > 0 ? `<p style="font-size:0.85em; color:var(--warning-color); margin-top:0;">${runningDevices.length} device(s) are currently running and cannot be removed.</p>` : ''}
                 <div style="max-height:250px; overflow-y:auto;">
                     ${groups.map(g => {
                         const groupHosts = g.hosts || [];
@@ -616,7 +620,7 @@ async function editCampaign(campaignId) {
                                     const isChecked = currentHostIds.has(h.id);
                                     const isLocked = lockedIps.has(h.ip_address);
                                     return `<label style="display:flex; align-items:center; gap:0.5rem; font-size:0.9em;">
-                                        <input type="checkbox" class="campaign-host-cb" data-host-id="${h.id}" data-group-id="${g.id}" value="${h.id}"
+                                        <input type="checkbox" class="campaign-host-cb" data-host-id="${h.id}" data-group-id="${g.id}" value="${h.id}" onchange="toggleCampaignHost(this)"
                                             ${isChecked ? 'checked' : ''} ${isLocked ? 'disabled' : ''}>
                                         ${escapeHtml(h.hostname || h.ip_address)} <span style="opacity:0.5;">${h.ip_address}</span>
                                         ${h.model ? `<code style="font-size:0.8em;">${escapeHtml(h.model)}</code>` : ''}
@@ -681,14 +685,7 @@ async function editCampaign(campaignId) {
         }
     });
 
-    // Update group checkboxes if all hosts in group are checked
-    document.querySelectorAll('.campaign-group-cb').forEach(groupCb => {
-        const gid = groupCb.dataset.groupId;
-        const hostCbs = document.querySelectorAll(`.campaign-host-cb[data-group-id="${gid}"]`);
-        if (hostCbs.length > 0 && [...hostCbs].every(cb => cb.checked)) {
-            groupCb.checked = true;
-        }
-    });
+    refreshCampaignGroupCheckboxStates();
 
     document.getElementById('edit-campaign-form').onsubmit = async (e) => {
         e.preventDefault();
@@ -700,10 +697,11 @@ async function editCampaign(campaignId) {
             if (pattern && image) imageMap[pattern] = image;
         });
 
-        const hostIds = [];
-        document.querySelectorAll('.campaign-host-cb:checked').forEach(cb => {
-            hostIds.push(parseInt(cb.value));
-        });
+        const hostIds = [...new Set(
+            [...document.querySelectorAll('.campaign-host-cb:checked')]
+                .map(cb => parseInt(cb.value, 10))
+                .filter(Number.isFinite)
+        )];
 
         const adhocText = document.getElementById('campaign-adhoc-ips').value;
         const adHocIps = adhocText.split(/[\n,]+/).map(s => s.trim()).filter(s => s);
@@ -759,11 +757,55 @@ function addImageMapRow() {
 }
 window.addImageMapRow = addImageMapRow;
 
+function refreshCampaignGroupCheckboxStates() {
+    document.querySelectorAll('.campaign-group-cb').forEach(groupCb => {
+        const gid = groupCb.dataset.groupId;
+        const hostCbs = [...document.querySelectorAll(`.campaign-host-cb[data-group-id="${gid}"]`)];
+        if (hostCbs.length === 0) {
+            groupCb.checked = false;
+            groupCb.indeterminate = false;
+            return;
+        }
+
+        const editable = hostCbs.filter(cb => !cb.disabled);
+        const scope = editable.length > 0 ? editable : hostCbs;
+        const checkedCount = scope.filter(cb => cb.checked).length;
+        groupCb.checked = checkedCount === scope.length;
+        groupCb.indeterminate = checkedCount > 0 && checkedCount < scope.length;
+    });
+}
+
+function toggleCampaignHost(checkbox) {
+    const hostId = checkbox.dataset.hostId;
+    if (!hostId) return;
+
+    document.querySelectorAll(`.campaign-host-cb[data-host-id="${hostId}"]`).forEach(cb => {
+        if (cb === checkbox || cb.disabled) return;
+        cb.checked = checkbox.checked;
+    });
+
+    refreshCampaignGroupCheckboxStates();
+}
+window.toggleCampaignHost = toggleCampaignHost;
+
 function toggleCampaignGroupHosts(checkbox, groupId) {
     const checked = checkbox.checked;
+    const changedHostIds = new Set();
+
     document.querySelectorAll(`.campaign-host-cb[data-group-id="${groupId}"]`).forEach(cb => {
+        if (cb.disabled) return;
         cb.checked = checked;
+        if (cb.dataset.hostId) changedHostIds.add(cb.dataset.hostId);
     });
+
+    changedHostIds.forEach(hostId => {
+        document.querySelectorAll(`.campaign-host-cb[data-host-id="${hostId}"]`).forEach(cb => {
+            if (cb.disabled) return;
+            cb.checked = checked;
+        });
+    });
+
+    refreshCampaignGroupCheckboxStates();
 }
 window.toggleCampaignGroupHosts = toggleCampaignGroupHosts;
 
@@ -858,8 +900,14 @@ async function viewCampaign(campaignId) {
         // Connect WebSocket for live updates
         connectUpgradeWebSocket(campaignId,
             (data) => {
+                // Ignore websocket keepalive packets and any non-object payloads
+                if (!data || typeof data !== 'object' || data.type === 'ping') {
+                    return;
+                }
+
                 // Handle live device status updates (checkmarks)
-                if (data.type === 'device_status' && data.device_id) {
+                if (data.type === 'device_status') {
+                    if (!data.device_id) return;
                     const row = document.getElementById(`upgrade-dev-${data.device_id}`);
                     if (row) {
                         const phases = ['prestage', 'transfer', 'activate', 'verify'];
@@ -900,6 +948,10 @@ async function viewCampaign(campaignId) {
                     return;
                 }
 
+                if (typeof data.message !== 'string' || data.message.length === 0) {
+                    return;
+                }
+
                 const output = document.getElementById('upgrade-live-output');
                 if (output) {
                     const line = document.createElement('div');
@@ -931,7 +983,8 @@ async function viewCampaign(campaignId) {
                 if (!output) return;
                 const frag = document.createDocumentFragment();
                 for (const data of events) {
-                    if (data.type === 'device_status') continue;
+                    if (data.type !== 'upgrade_event') continue;
+                    if (typeof data.message !== 'string' || data.message.length === 0) continue;
                     const line = document.createElement('div');
                     line.className = `job-output-line ${data.level || 'info'}`;
                     const ts = data.timestamp ? data.timestamp.substring(11, 19) : '';

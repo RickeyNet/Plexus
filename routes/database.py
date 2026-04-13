@@ -8830,16 +8830,18 @@ async def delete_upgrade_devices_by_campaign(campaign_id):
     db = await get_db()
     try:
         await db.execute(
-            "DELETE FROM upgrade_devices WHERE campaign_id = ? AND phase = 'pending' "
-            "AND prestage_status = 'pending' AND transfer_status = 'pending' "
-            "AND activate_status = 'pending'",
+            "DELETE FROM upgrade_devices WHERE campaign_id = ? "
+            "AND COALESCE(phase, 'pending') != 'running' "
+            "AND COALESCE(prestage_status, 'pending') != 'running' "
+            "AND COALESCE(transfer_status, 'pending') != 'running' "
+            "AND COALESCE(activate_status, 'pending') != 'running' "
+            "AND COALESCE(verify_status, 'pending') != 'running'",
             (campaign_id,),
         )
         await db.commit()
         return True
     finally:
         await db.close()
-
 
 async def add_upgrade_device(campaign_id, host_id, ip_address, hostname):
     db = await get_db()
