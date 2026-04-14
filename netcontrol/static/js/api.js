@@ -749,6 +749,45 @@ export async function runTopologyDiscoveryNow() {
     });
 }
 
+export async function getTopologyStpDiscoveryConfig() {
+    return apiRequest('/admin/topology-stp-discovery');
+}
+
+export async function updateTopologyStpDiscoveryConfig(payload) {
+    return apiRequest('/admin/topology-stp-discovery', {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function runTopologyStpDiscoveryNow() {
+    return apiRequest('/admin/topology-stp-discovery/run-now', {
+        method: 'POST',
+    });
+}
+
+export async function getTopologyStpRootPolicies(groupId = null, vlanId = null, enabledOnly = false, limit = 2000) {
+    const params = new URLSearchParams();
+    if (groupId) params.set('group_id', groupId);
+    if (vlanId) params.set('vlan_id', vlanId);
+    if (enabledOnly) params.set('enabled_only', 'true');
+    params.set('limit', limit);
+    return apiRequest(`/admin/topology-stp-root-policies?${params}`);
+}
+
+export async function upsertTopologyStpRootPolicy(payload) {
+    return apiRequest('/admin/topology-stp-root-policies', {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function deleteTopologyStpRootPolicy(policyId) {
+    return apiRequest(`/admin/topology-stp-root-policies/${policyId}`, {
+        method: 'DELETE',
+    });
+}
+
 // ── Topology ────────────────────────────────────────────────────────────────
 
 export async function getTopology(groupId = null) {

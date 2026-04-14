@@ -1398,6 +1398,50 @@ function templateSettings() {
                 <button type="button" class="btn btn-secondary" onclick="runTopologyDiscoveryNow()">Run Now</button>
             </div>
         </form>
+    </div>
+    <div class="section">
+        <h3>Scheduled STP Polling</h3>
+        <p style="color: var(--text-muted); margin-bottom: 0.75rem; font-size: 0.85rem;">
+            Automatically collect STP state and events to keep VLAN root and blocked-port visibility current.
+        </p>
+        <form id="admin-stp-discovery-form" style="display: grid; grid-template-columns: auto 1fr; gap: 0.75rem 1rem; max-width: 560px; align-items: center;">
+            <label class="form-label" style="margin:0;">Enabled</label>
+            <label><input type="checkbox" id="stp-disc-enabled"> Enable scheduled STP polling</label>
+            <label class="form-label" for="stp-disc-interval" style="margin:0;">Interval (seconds)</label>
+            <input type="number" id="stp-disc-interval" class="form-input" min="300" max="86400" step="60" value="3600">
+            <label class="form-label" style="margin:0;">Scope</label>
+            <label><input type="checkbox" id="stp-disc-all-vlans" checked> Poll all discovered VLANs</label>
+            <label class="form-label" for="stp-disc-vlan" style="margin:0;">Single VLAN</label>
+            <input type="number" id="stp-disc-vlan" class="form-input" min="1" max="4094" value="1">
+            <label class="form-label" for="stp-disc-max-vlans" style="margin:0;">Max VLANs (all)</label>
+            <input type="number" id="stp-disc-max-vlans" class="form-input" min="1" max="256" value="64">
+            <div style="grid-column: 1 / -1; display:flex; gap:0.5rem;">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn btn-secondary" onclick="runTopologyStpDiscoveryNow()">Run Now</button>
+            </div>
+        </form>
+    </div>
+    <div class="section">
+        <h3>STP Expected Root Policy</h3>
+        <p style="color: var(--text-muted); margin-bottom: 0.75rem; font-size: 0.85rem;">
+            Define the expected STP root bridge per group/VLAN so unexpected elections trigger explicit alerts.
+        </p>
+        <form id="admin-stp-root-policy-form" style="display: grid; grid-template-columns: auto 1fr; gap: 0.75rem 1rem; max-width: 680px; align-items: center;">
+            <label class="form-label" for="stp-root-group-id" style="margin:0;">Inventory Group</label>
+            <select id="stp-root-group-id" class="form-select"></select>
+            <label class="form-label" for="stp-root-vlan" style="margin:0;">VLAN</label>
+            <input type="number" id="stp-root-vlan" class="form-input" min="1" max="4094" value="1">
+            <label class="form-label" for="stp-root-bridge-id" style="margin:0;">Expected Root Bridge ID</label>
+            <input type="text" id="stp-root-bridge-id" class="form-input" placeholder="e.g. 32768 00:11:22:33:44:55">
+            <label class="form-label" for="stp-root-hostname" style="margin:0;">Expected Root Hostname</label>
+            <input type="text" id="stp-root-hostname" class="form-input" placeholder="Optional display label">
+            <label class="form-label" style="margin:0;">Enabled</label>
+            <label><input type="checkbox" id="stp-root-enabled" checked> Policy active</label>
+            <div style="grid-column: 1 / -1; display:flex; gap:0.5rem;">
+                <button type="submit" class="btn btn-primary">Save Policy</button>
+            </div>
+        </form>
+        <div id="stp-root-policy-list" style="margin-top:0.85rem;"></div>
     </div>`;
 }
 

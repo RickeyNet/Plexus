@@ -206,6 +206,14 @@ def _safe_int(value, default: int = 0) -> int:
         return default
 
 
+def _as_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _normalize_stp_bridge_id(raw_value) -> str:
     """Normalize bridge IDs into compact, display-safe text."""
     text = str(raw_value).strip()
@@ -446,7 +454,15 @@ async def _create_stp_monitoring_alert(
         pass
 
 
-async def _record_stp_events_for_host(host: dict, vlan_id: int, old_rows: list[dict], snapshot: dict) -> None:
+async def _record_stp_events_for_host(
+    host: dict,
+    vlan_id: int,
+    old_rows: list[dict],
+    snapshot: dict,
+    *,
+    expected_root_bridge_id: str = "",
+    expected_root_hostname: str = "",
+) -> None:
     """Derive STP events/anomalies by comparing old and new snapshots."""
     if not old_rows:
         return
@@ -457,6 +473,8 @@ async def _record_stp_events_for_host(host: dict, vlan_id: int, old_rows: list[d
 
     old_root = str(old_rows[0].get("root_bridge_id", "")).strip() if old_rows else ""
     new_root = str(snapshot.get("root_bridge_id", "")).strip()
+    expected_root = _normalize_stp_bridge_id(expected_root_bridge_id)
+    expected_root_label = (expected_root_hostname or "").strip() or expected_root
     if old_root and new_root and old_root != new_root:
         await db.insert_stp_topology_event(
             host_id=host_id,
@@ -477,6 +495,33 @@ async def _record_stp_events_for_host(host: dict, vlan_id: int, old_rows: list[d
             severity="critical",
             dedup_suffix="root-change",
         )
+
+        if expected_root and new_root != expected_root:
+            await db.insert_stp_topology_event(
+                host_id=host_id,
+                vlan_id=vlan_id,
+                event_type="unexpected_root_election",
+                severity="critical",
+                interface_name="",
+                details=(
+                    f"Unexpected STP root election on {hostname} VLAN {vlan_id} "
+                    f"(expected {expected_root_label}, observed {new_root})"
+                ),
+                old_value=expected_root,
+                new_value=str(new_root),
+            )
+            await _create_stp_monitoring_alert(
+                host_id,
+                vlan_id,
+                alert_type="anomaly",
+                metric="stp_unexpected_root_election",
+                message=(
+                    f"Unexpected STP root bridge on {hostname} VLAN {vlan_id}: "
+                    f"expected {expected_root_label}, observed {new_root}"
+                ),
+                severity="critical",
+                dedup_suffix="unexpected-root",
+            )
 
         recent_root_changes = await db.count_recent_stp_topology_events(
             host_id=host_id,
@@ -714,6 +759,42 @@ async def _topology_discovery_loop() -> None:
             await asyncio.sleep(state.TOPOLOGY_DISCOVERY_DEFAULTS["interval_seconds"])
 
 
+async def _stp_discovery_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(
+                int(
+                    state.STP_DISCOVERY_CONFIG.get(
+                        "interval_seconds",
+                        state.STP_DISCOVERY_DEFAULTS["interval_seconds"],
+                    )
+                )
+            )
+            cfg = state._sanitize_stp_discovery_config(state.STP_DISCOVERY_CONFIG)
+            state.STP_DISCOVERY_CONFIG = cfg
+            result = await _run_stp_discovery_once(
+                vlan_id=int(cfg.get("vlan_id", 1)),
+                all_vlans=bool(cfg.get("all_vlans", False)),
+                max_vlans=int(cfg.get("max_vlans", STP_SCAN_DEFAULT_MAX_VLANS)),
+                require_enabled=True,
+            )
+            if result.get("enabled"):
+                LOGGER.info(
+                    "topology stp scheduled: scanned %d groups, %d hosts, %d ports, %d errors",
+                    int(result.get("groups_scanned", 0)),
+                    int(result.get("hosts_scanned", 0)),
+                    int(result.get("ports_collected", 0)),
+                    int(result.get("errors", 0)),
+                )
+                increment_metric("topology.stp.discovery.scheduled.success")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("topology stp discovery loop failure: %s", redact_value(str(exc)))
+            increment_metric("topology.stp.discovery.scheduled.failed")
+            await asyncio.sleep(state.STP_DISCOVERY_DEFAULTS["interval_seconds"])
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Admin routes (admin_router — registered with require_admin dependency)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -735,6 +816,83 @@ async def admin_update_topology_discovery_config(body: dict):
 async def admin_run_topology_discovery_now():
     result = await _run_topology_discovery_once()
     return {"ok": True, "result": result}
+
+
+@admin_router.get("/api/admin/topology-stp-discovery")
+async def admin_get_topology_stp_discovery_config():
+    return state.STP_DISCOVERY_CONFIG
+
+
+@admin_router.put("/api/admin/topology-stp-discovery")
+async def admin_update_topology_stp_discovery_config(body: dict):
+    state.STP_DISCOVERY_CONFIG = state._sanitize_stp_discovery_config(body)
+    await db.set_auth_setting("topology_stp_discovery", state.STP_DISCOVERY_CONFIG)
+    return state.STP_DISCOVERY_CONFIG
+
+
+@admin_router.post("/api/admin/topology-stp-discovery/run-now")
+async def admin_run_topology_stp_discovery_now():
+    cfg = state._sanitize_stp_discovery_config(state.STP_DISCOVERY_CONFIG)
+    state.STP_DISCOVERY_CONFIG = cfg
+    result = await _run_stp_discovery_once(
+        vlan_id=int(cfg.get("vlan_id", 1)),
+        all_vlans=bool(cfg.get("all_vlans", False)),
+        max_vlans=int(cfg.get("max_vlans", STP_SCAN_DEFAULT_MAX_VLANS)),
+        require_enabled=True,
+    )
+    return {"ok": True, "result": result}
+
+
+@admin_router.get("/api/admin/topology-stp-root-policies")
+async def admin_get_topology_stp_root_policies(
+    group_id: int | None = Query(default=None),
+    vlan_id: int | None = Query(default=None),
+    enabled_only: bool = Query(default=False),
+    limit: int = Query(default=2000, ge=1, le=10000),
+):
+    rows = await db.get_stp_root_policies(
+        group_id=group_id,
+        vlan_id=vlan_id,
+        enabled_only=enabled_only,
+        limit=limit,
+    )
+    return {"policies": rows, "count": len(rows)}
+
+
+@admin_router.put("/api/admin/topology-stp-root-policies")
+async def admin_upsert_topology_stp_root_policy(body: dict):
+    group_id = _safe_int(body.get("group_id"), default=0)
+    if group_id <= 0:
+        raise HTTPException(status_code=400, detail="group_id is required")
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    vlan_id = max(1, min(4094, _safe_int(body.get("vlan_id"), default=1)))
+    expected_root_bridge_id = _normalize_stp_bridge_id(body.get("expected_root_bridge_id"))
+    if not expected_root_bridge_id:
+        raise HTTPException(status_code=400, detail="expected_root_bridge_id is required")
+
+    expected_root_hostname = str(body.get("expected_root_hostname", "")).strip()
+    enabled = _as_bool(body.get("enabled"), default=True)
+
+    await db.upsert_stp_root_policy(
+        group_id=group_id,
+        vlan_id=vlan_id,
+        expected_root_bridge_id=expected_root_bridge_id,
+        expected_root_hostname=expected_root_hostname,
+        enabled=enabled,
+    )
+    policy = await db.get_stp_root_policy(group_id, vlan_id)
+    return {"ok": True, "policy": policy}
+
+
+@admin_router.delete("/api/admin/topology-stp-root-policies/{policy_id}")
+async def admin_delete_topology_stp_root_policy(policy_id: int):
+    deleted = await db.delete_stp_root_policy(policy_id)
+    if deleted <= 0:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    return {"deleted": deleted}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1427,6 +1585,179 @@ async def acknowledge_topology_changes():
         raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
+async def _run_stp_discovery_once(
+    *,
+    group_id: int | None = None,
+    vlan_id: int = 1,
+    all_vlans: bool = False,
+    max_vlans: int = STP_SCAN_DEFAULT_MAX_VLANS,
+    require_enabled: bool = False,
+) -> dict:
+    """Run STP snapshot collection across one group or all SNMP-enabled groups."""
+    if require_enabled and not state.STP_DISCOVERY_CONFIG.get("enabled"):
+        return {
+            "enabled": False,
+            "groups_scanned": 0,
+            "hosts_scanned": 0,
+            "hosts_updated": 0,
+            "ports_collected": 0,
+            "errors": 0,
+            "vlan_id": None,
+            "all_vlans": False,
+            "vlans_scanned": [],
+            "unacknowledged_events": await db.get_stp_topology_events_count(unacknowledged_only=True),
+        }
+
+    group_filter = group_id if (group_id is not None and int(group_id) > 0) else None
+    vlan_id_int = max(0, min(4094, _safe_int(vlan_id, default=1)))
+    max_vlans_int = max(1, min(256, _safe_int(max_vlans, default=STP_SCAN_DEFAULT_MAX_VLANS)))
+    all_vlans_flag = _as_bool(all_vlans, default=False)
+
+    if group_filter is not None:
+        group = await db.get_group(int(group_filter))
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        groups = [group]
+    else:
+        groups = await db.get_all_groups()
+
+    try:
+        policy_rows = await db.get_stp_root_policies(enabled_only=True, limit=10000)
+    except Exception:
+        policy_rows = []
+    policy_by_group_vlan: dict[tuple[int, int], dict] = {
+        (int(row.get("group_id", 0)), int(row.get("vlan_id", 0))): row
+        for row in policy_rows
+    }
+
+    total_hosts = 0
+    updated_hosts = 0
+    total_ports = 0
+    total_errors = 0
+    groups_scanned = 0
+    vlan_ids_seen: set[int] = set()
+
+    for group in groups:
+        snmp_cfg = state._resolve_snmp_discovery_config(group["id"])
+        if not snmp_cfg.get("enabled", False):
+            continue
+
+        hosts = await db.get_hosts_for_group(group["id"])
+        if not hosts:
+            continue
+
+        groups_scanned += 1
+        total_hosts += len(hosts)
+        semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
+
+        async def _collect_host(host: dict, _cfg=snmp_cfg):
+            async with semaphore:
+                target_vlans: list[int]
+                if all_vlans_flag or vlan_id_int == 0:
+                    target_vlans = await _discover_vlan_ids_for_host(
+                        host["ip_address"],
+                        _cfg,
+                        timeout_seconds=5.0,
+                        max_vlans=max_vlans_int,
+                    )
+                else:
+                    target_vlans = [vlan_id_int]
+
+                snapshots: list[dict] = []
+                host_errors = 0
+                for vid in target_vlans:
+                    try:
+                        snap = await _collect_stp_snapshot_for_host(
+                            host, _cfg, vlan_id=vid, timeout_seconds=5.0
+                        )
+                        snapshots.append(snap)
+                    except Exception:
+                        host_errors += 1
+
+                return host, snapshots, host_errors
+
+        collect_results = await asyncio.gather(*[_collect_host(h) for h in hosts])
+
+        for host, snapshots, err_count in collect_results:
+            if not snapshots:
+                total_errors += max(1, int(err_count or 0))
+                LOGGER.warning(
+                    "topology stp: collection failed for %s (%s): %s",
+                    host.get("hostname", ""),
+                    host.get("ip_address", ""),
+                    "no STP snapshots collected",
+                )
+                continue
+
+            host_updated = False
+            for snapshot in snapshots:
+                snapshot_vlan = _safe_int(snapshot.get("vlan_id"), default=1)
+                vlan_ids_seen.add(snapshot_vlan)
+                try:
+                    old_rows = await db.get_stp_port_states(
+                        host_id=host["id"],
+                        vlan_id=snapshot_vlan,
+                        limit=5000,
+                    )
+                    await db.delete_stp_port_states_for_host(host["id"], vlan_id=snapshot_vlan)
+                    for row in snapshot.get("ports", []):
+                        await db.upsert_stp_port_state(
+                            host_id=row["host_id"],
+                            vlan_id=row["vlan_id"],
+                            bridge_port=row["bridge_port"],
+                            if_index=row["if_index"],
+                            interface_name=row["interface_name"],
+                            port_state=row["port_state"],
+                            port_role=row["port_role"],
+                            designated_bridge_id=row["designated_bridge_id"],
+                            root_bridge_id=row["root_bridge_id"],
+                            root_port=row["root_port"],
+                            topology_change_count=row["topology_change_count"],
+                            time_since_topology_change=row["time_since_topology_change"],
+                            is_root_bridge=bool(row["is_root_bridge"]),
+                        )
+
+                    policy = policy_by_group_vlan.get((int(group["id"]), int(snapshot_vlan)), {})
+                    await _record_stp_events_for_host(
+                        host,
+                        snapshot_vlan,
+                        old_rows,
+                        snapshot,
+                        expected_root_bridge_id=str(policy.get("expected_root_bridge_id", "")),
+                        expected_root_hostname=str(policy.get("expected_root_hostname", "")),
+                    )
+                    total_ports += len(snapshot.get("ports", []))
+                    host_updated = True
+                except Exception as exc:
+                    total_errors += 1
+                    LOGGER.warning(
+                        "topology stp: DB write failed for %s (%s) vlan=%d: %s",
+                        host.get("hostname", ""),
+                        host.get("ip_address", ""),
+                        snapshot_vlan,
+                        redact_value(str(exc)),
+                    )
+
+            if host_updated:
+                updated_hosts += 1
+            total_errors += int(err_count or 0)
+
+    unacknowledged = await db.get_stp_topology_events_count(unacknowledged_only=True)
+    return {
+        "enabled": True,
+        "groups_scanned": groups_scanned,
+        "hosts_scanned": total_hosts,
+        "hosts_updated": updated_hosts,
+        "ports_collected": total_ports,
+        "errors": total_errors,
+        "vlan_id": vlan_id_int if vlan_id_int > 0 else None,
+        "all_vlans": bool(all_vlans_flag or vlan_id_int == 0),
+        "max_vlans": max_vlans_int,
+        "vlans_scanned": sorted(vlan_ids_seen),
+        "unacknowledged_events": unacknowledged,
+    }
+
+
 @router.post("/api/topology/stp/discover")
 async def discover_topology_stp(
     group_id: int | None = Query(default=None),
@@ -1437,138 +1768,13 @@ async def discover_topology_stp(
     """Poll Bridge-MIB STP state for all SNMP-enabled hosts (or one group)."""
     try:
         group_id_int = _safe_int(group_id, default=0) if group_id is not None else 0
-        group_filter = group_id_int if group_id_int > 0 else None
-        vlan_id_int = max(0, min(4094, _safe_int(vlan_id, default=1)))
-        max_vlans_int = max(1, min(256, _safe_int(max_vlans, default=STP_SCAN_DEFAULT_MAX_VLANS)))
-        if isinstance(all_vlans, bool):
-            all_vlans_flag = all_vlans
-        else:
-            all_vlans_flag = str(all_vlans).strip().lower() in {"1", "true", "yes", "on"}
-
-        if group_filter is not None:
-            group = await db.get_group(group_filter)
-            if not group:
-                raise HTTPException(status_code=404, detail="Group not found")
-            groups = [group]
-        else:
-            groups = await db.get_all_groups()
-
-        total_hosts = 0
-        updated_hosts = 0
-        total_ports = 0
-        total_errors = 0
-        groups_scanned = 0
-        vlan_ids_seen: set[int] = set()
-
-        for group in groups:
-            snmp_cfg = state._resolve_snmp_discovery_config(group["id"])
-            if not snmp_cfg.get("enabled", False):
-                continue
-
-            hosts = await db.get_hosts_for_group(group["id"])
-            if not hosts:
-                continue
-
-            groups_scanned += 1
-            total_hosts += len(hosts)
-            semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
-
-            async def _collect_host(host: dict, _cfg=snmp_cfg):
-                async with semaphore:
-                    target_vlans: list[int]
-                    if all_vlans_flag or vlan_id_int == 0:
-                        target_vlans = await _discover_vlan_ids_for_host(
-                            host["ip_address"],
-                            _cfg,
-                            timeout_seconds=5.0,
-                            max_vlans=max_vlans_int,
-                        )
-                    else:
-                        target_vlans = [vlan_id_int]
-
-                    snapshots: list[dict] = []
-                    host_errors = 0
-                    for vid in target_vlans:
-                        try:
-                            snap = await _collect_stp_snapshot_for_host(
-                                host, _cfg, vlan_id=vid, timeout_seconds=5.0
-                            )
-                            snapshots.append(snap)
-                        except Exception:
-                            host_errors += 1
-
-                    return host, snapshots, host_errors
-
-            collect_results = await asyncio.gather(*[_collect_host(h) for h in hosts])
-
-            for host, snapshots, err_count in collect_results:
-                if not snapshots:
-                    total_errors += max(1, int(err_count or 0))
-                    LOGGER.warning(
-                        "topology stp: collection failed for %s (%s): %s",
-                        host.get("hostname", ""),
-                        host.get("ip_address", ""),
-                        "no STP snapshots collected",
-                    )
-                    continue
-
-                host_updated = False
-                for snapshot in snapshots:
-                    snapshot_vlan = _safe_int(snapshot.get("vlan_id"), default=1)
-                    vlan_ids_seen.add(snapshot_vlan)
-                    try:
-                        old_rows = await db.get_stp_port_states(
-                            host_id=host["id"],
-                            vlan_id=snapshot_vlan,
-                            limit=5000,
-                        )
-                        await db.delete_stp_port_states_for_host(host["id"], vlan_id=snapshot_vlan)
-                        for row in snapshot.get("ports", []):
-                            await db.upsert_stp_port_state(
-                                host_id=row["host_id"],
-                                vlan_id=row["vlan_id"],
-                                bridge_port=row["bridge_port"],
-                                if_index=row["if_index"],
-                                interface_name=row["interface_name"],
-                                port_state=row["port_state"],
-                                port_role=row["port_role"],
-                                designated_bridge_id=row["designated_bridge_id"],
-                                root_bridge_id=row["root_bridge_id"],
-                                root_port=row["root_port"],
-                                topology_change_count=row["topology_change_count"],
-                                time_since_topology_change=row["time_since_topology_change"],
-                                is_root_bridge=bool(row["is_root_bridge"]),
-                            )
-
-                        await _record_stp_events_for_host(host, snapshot_vlan, old_rows, snapshot)
-                        total_ports += len(snapshot.get("ports", []))
-                        host_updated = True
-                    except Exception as exc:
-                        total_errors += 1
-                        LOGGER.warning(
-                            "topology stp: DB write failed for %s (%s) vlan=%d: %s",
-                            host.get("hostname", ""),
-                            host.get("ip_address", ""),
-                            snapshot_vlan,
-                            redact_value(str(exc)),
-                        )
-
-                if host_updated:
-                    updated_hosts += 1
-                total_errors += int(err_count or 0)
-
-        unacknowledged = await db.get_stp_topology_events_count(unacknowledged_only=True)
-        return {
-            "groups_scanned": groups_scanned,
-            "hosts_scanned": total_hosts,
-            "hosts_updated": updated_hosts,
-            "ports_collected": total_ports,
-            "errors": total_errors,
-            "vlan_id": vlan_id_int if vlan_id_int > 0 else None,
-            "all_vlans": bool(all_vlans_flag or vlan_id_int == 0),
-            "vlans_scanned": sorted(vlan_ids_seen),
-            "unacknowledged_events": unacknowledged,
-        }
+        return await _run_stp_discovery_once(
+            group_id=group_id_int if group_id_int > 0 else None,
+            vlan_id=max(0, min(4094, _safe_int(vlan_id, default=1))),
+            all_vlans=_as_bool(all_vlans, default=False),
+            max_vlans=max(1, min(256, _safe_int(max_vlans, default=STP_SCAN_DEFAULT_MAX_VLANS))),
+            require_enabled=False,
+        )
     except HTTPException:
         raise
     except Exception as exc:

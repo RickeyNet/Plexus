@@ -98,6 +98,21 @@ TOPOLOGY_DISCOVERY_MIN_INTERVAL = 300
 TOPOLOGY_DISCOVERY_MAX_INTERVAL = 86400
 
 
+# ── STP discovery defaults ───────────────────────────────────────────────────
+
+STP_DISCOVERY_DEFAULTS = {
+    "enabled": False,
+    "interval_seconds": 3600,
+    "all_vlans": True,
+    "vlan_id": 1,
+    "max_vlans": int(os.getenv("APP_STP_SCAN_MAX_VLANS", "64")),
+}
+STP_DISCOVERY_MIN_INTERVAL = 300
+STP_DISCOVERY_MAX_INTERVAL = 86400
+STP_DISCOVERY_MIN_MAX_VLANS = 1
+STP_DISCOVERY_MAX_MAX_VLANS = 256
+
+
 # ── Config drift check defaults ─────────────────────────────────────────────
 
 CONFIG_DRIFT_CHECK_DEFAULTS = {
@@ -253,6 +268,7 @@ SNMP_DISCOVERY_PROFILES: dict[int, dict] = {}
 SNMP_PROFILES: dict[str, dict] = {}
 GROUP_SNMP_ASSIGNMENTS: dict[int, str] = {}
 TOPOLOGY_DISCOVERY_CONFIG = dict(TOPOLOGY_DISCOVERY_DEFAULTS)
+STP_DISCOVERY_CONFIG = dict(STP_DISCOVERY_DEFAULTS)
 CONFIG_DRIFT_CHECK_CONFIG = dict(CONFIG_DRIFT_CHECK_DEFAULTS)
 CONFIG_BACKUP_CONFIG = dict(CONFIG_BACKUP_DEFAULTS)
 COMPLIANCE_CHECK_CONFIG = dict(COMPLIANCE_CHECK_DEFAULTS)
@@ -392,6 +408,31 @@ def _sanitize_topology_discovery_config(data: dict | None) -> dict:
         cfg["interval_seconds"] = max(
             TOPOLOGY_DISCOVERY_MIN_INTERVAL,
             min(TOPOLOGY_DISCOVERY_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
+    return cfg
+
+
+def _sanitize_stp_discovery_config(data: dict | None) -> dict:
+    cfg = {
+        "enabled": bool(STP_DISCOVERY_DEFAULTS["enabled"]),
+        "interval_seconds": int(STP_DISCOVERY_DEFAULTS["interval_seconds"]),
+        "all_vlans": bool(STP_DISCOVERY_DEFAULTS["all_vlans"]),
+        "vlan_id": int(STP_DISCOVERY_DEFAULTS["vlan_id"]),
+        "max_vlans": int(STP_DISCOVERY_DEFAULTS["max_vlans"]),
+    }
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
+        cfg["interval_seconds"] = max(
+            STP_DISCOVERY_MIN_INTERVAL,
+            min(STP_DISCOVERY_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
+        cfg["all_vlans"] = bool(data.get("all_vlans", cfg["all_vlans"]))
+        cfg["vlan_id"] = max(1, min(4094, int(data.get("vlan_id", cfg["vlan_id"]))))
+        cfg["max_vlans"] = int(data.get("max_vlans", cfg["max_vlans"]))
+        cfg["max_vlans"] = max(
+            STP_DISCOVERY_MIN_MAX_VLANS,
+            min(STP_DISCOVERY_MAX_MAX_VLANS, cfg["max_vlans"]),
         )
     return cfg
 

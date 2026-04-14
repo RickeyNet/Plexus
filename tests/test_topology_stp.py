@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-import pytest
-import routes.database as db_module
-
 import netcontrol.routes.state as state_module
 import netcontrol.routes.topology as topology_module
+import pytest
+import routes.database as db_module
 
 
 @pytest.fixture
@@ -104,6 +103,30 @@ async def test_stp_topology_events_acknowledge(stp_db):
     assert acked == 1
     count_after = await db_module.get_stp_topology_events_count(unacknowledged_only=True)
     assert count_after == 0
+
+
+@pytest.mark.asyncio
+async def test_stp_root_policy_crud(stp_db):
+    """Root policy helpers should upsert, query, and delete by ID."""
+    policy_id = await db_module.upsert_stp_root_policy(
+        group_id=1,
+        vlan_id=10,
+        expected_root_bridge_id="32768 00:11:22:33:44:55",
+        expected_root_hostname="sw-core-01",
+        enabled=True,
+    )
+    assert policy_id > 0
+
+    rows = await db_module.get_stp_root_policies(group_id=1, vlan_id=10, enabled_only=True)
+    assert len(rows) == 1
+    assert rows[0]["expected_root_hostname"] == "sw-core-01"
+
+    fetched = await db_module.get_stp_root_policy(group_id=1, vlan_id=10)
+    assert fetched is not None
+    assert fetched["expected_root_bridge_id"] == "32768 00:11:22:33:44:55"
+
+    deleted = await db_module.delete_stp_root_policy(policy_id)
+    assert deleted == 1
 
 
 @pytest.mark.asyncio
@@ -246,6 +269,53 @@ async def test_record_stp_events_creates_storm_and_root_instability(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_record_stp_events_creates_unexpected_root_event(monkeypatch):
+    old_rows = [
+        {
+            "bridge_port": 1,
+            "port_state": "forwarding",
+            "port_role": "root",
+            "root_bridge_id": "32768 00:11:22:33:44:55",
+            "topology_change_count": 10,
+        },
+    ]
+    snapshot = {
+        "vlan_id": 10,
+        "root_bridge_id": "32768 00:aa:bb:cc:dd:ee",
+        "topology_change_count": 11,
+        "time_since_topology_change": 15,
+        "ports": [
+            {
+                "bridge_port": 1,
+                "interface_name": "Gi1/0/1",
+                "port_state": "forwarding",
+                "port_role": "root",
+            },
+        ],
+    }
+
+    insert_event_mock = AsyncMock(return_value=1)
+    create_alert_mock = AsyncMock(return_value=1)
+    monkeypatch.setattr(topology_module.db, "insert_stp_topology_event", insert_event_mock)
+    monkeypatch.setattr(topology_module.db, "create_monitoring_alert", create_alert_mock)
+    monkeypatch.setattr(topology_module.db, "count_recent_stp_topology_events", AsyncMock(return_value=1))
+
+    await topology_module._record_stp_events_for_host(
+        {"id": 100, "hostname": "sw-core-01"},
+        vlan_id=10,
+        old_rows=old_rows,
+        snapshot=snapshot,
+        expected_root_bridge_id="32768 00:11:22:33:44:55",
+        expected_root_hostname="sw-core-01",
+    )
+
+    called_event_types = [call.kwargs["event_type"] for call in insert_event_mock.await_args_list]
+    assert "unexpected_root_election" in called_event_types
+    metrics = [call.kwargs.get("metric") for call in create_alert_mock.await_args_list]
+    assert "stp_unexpected_root_election" in metrics
+
+
+@pytest.mark.asyncio
 async def test_discover_topology_stp_route(monkeypatch):
     """STP discovery endpoint should collect and upsert per-host rows."""
     fake_group = {"id": 1, "name": "core"}
@@ -300,6 +370,7 @@ async def test_discover_topology_stp_route(monkeypatch):
     monkeypatch.setattr(topology_module.db, "get_hosts_for_group", AsyncMock(return_value=fake_hosts))
     monkeypatch.setattr(topology_module.db, "get_stp_port_states", AsyncMock(return_value=[]))
     monkeypatch.setattr(topology_module.db, "delete_stp_port_states_for_host", AsyncMock(return_value=0))
+    monkeypatch.setattr(topology_module.db, "get_stp_root_policies", AsyncMock(return_value=[]))
     upsert_mock = AsyncMock(return_value=1)
     monkeypatch.setattr(topology_module.db, "upsert_stp_port_state", upsert_mock)
     monkeypatch.setattr(topology_module.db, "get_stp_topology_events_count", AsyncMock(return_value=2))
@@ -327,6 +398,7 @@ async def test_discover_topology_stp_route_all_vlans(monkeypatch):
     monkeypatch.setattr(topology_module.db, "get_hosts_for_group", AsyncMock(return_value=fake_hosts))
     monkeypatch.setattr(topology_module.db, "get_stp_port_states", AsyncMock(return_value=[]))
     monkeypatch.setattr(topology_module.db, "delete_stp_port_states_for_host", AsyncMock(return_value=0))
+    monkeypatch.setattr(topology_module.db, "get_stp_root_policies", AsyncMock(return_value=[]))
     monkeypatch.setattr(topology_module.db, "upsert_stp_port_state", AsyncMock(return_value=1))
     monkeypatch.setattr(topology_module.db, "get_stp_topology_events_count", AsyncMock(return_value=0))
     monkeypatch.setattr(topology_module, "_record_stp_events_for_host", AsyncMock(return_value=None))
@@ -371,3 +443,13 @@ async def test_discover_topology_stp_route_all_vlans(monkeypatch):
     assert result["ports_collected"] == 2
     assert result["all_vlans"] is True
     assert result["vlans_scanned"] == [1, 10]
+
+
+@pytest.mark.asyncio
+async def test_run_stp_discovery_once_respects_disabled_scheduler(monkeypatch):
+    monkeypatch.setattr(topology_module.state, "STP_DISCOVERY_CONFIG", {"enabled": False})
+    monkeypatch.setattr(topology_module.db, "get_stp_topology_events_count", AsyncMock(return_value=0))
+
+    result = await topology_module._run_stp_discovery_once(require_enabled=True)
+    assert result["enabled"] is False
+    assert result["hosts_scanned"] == 0
