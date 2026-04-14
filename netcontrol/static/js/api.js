@@ -1495,6 +1495,37 @@ export async function getPortDetail(hostId, ifIndex, start = null, end = null) {
     return apiRequest(`/interfaces/${hostId}/port/${ifIndex}${qs ? '?' + qs : ''}`);
 }
 
+// ── Interface Error/Discard Trending ────────────────────────────────────────
+
+export async function getInterfaceErrorSummary(hostId, days = 1) {
+    return apiRequest(`/interfaces/${hostId}/errors?days=${days}`);
+}
+
+export async function getInterfaceErrorDetail(hostId, ifIndex, start = null, end = null) {
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    const qs = params.toString();
+    return apiRequest(`/interfaces/${hostId}/port/${ifIndex}/errors${qs ? '?' + qs : ''}`);
+}
+
+export async function getInterfaceErrorEvents(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/interface-error-events${qs ? '?' + qs : ''}`);
+}
+
+export async function getInterfaceErrorEvent(eventId) {
+    return apiRequest(`/interface-error-events/${eventId}`);
+}
+
+export async function acknowledgeInterfaceErrorEvent(eventId) {
+    return apiRequest(`/interface-error-events/${eventId}/acknowledge`, { method: 'POST' });
+}
+
+export async function resolveInterfaceErrorEvent(eventId) {
+    return apiRequest(`/interface-error-events/${eventId}/resolve`, { method: 'POST' });
+}
+
 // ── Custom OID Profiles ─────────────────────────────────────────────────────
 
 export async function getOidProfiles(vendor = null) {

@@ -18,6 +18,7 @@ import netcontrol.routes.state as state
 from netcontrol.routes.metrics_engine import (
     emit_metric_samples_from_poll,
     run_retention_cleanup as metrics_retention_cleanup,
+    store_interface_error_metrics_from_poll,
     store_interface_ts_from_poll,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
@@ -101,6 +102,12 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             if_hc_in_oid = "1.3.6.1.2.1.31.1.1.1.6"              # ifHCInOctets
             if_hc_out_oid = "1.3.6.1.2.1.31.1.1.1.10"            # ifHCOutOctets
 
+            # Interface error/discard counter OIDs (IF-MIB)
+            if_in_errors_oid = "1.3.6.1.2.1.2.2.1.14"            # ifInErrors
+            if_out_errors_oid = "1.3.6.1.2.1.2.2.1.20"           # ifOutErrors
+            if_in_discards_oid = "1.3.6.1.2.1.2.2.1.13"          # ifInDiscards
+            if_out_discards_oid = "1.3.6.1.2.1.2.2.1.19"         # ifOutDiscards
+
             # Build walk list — skip empty OIDs
             async def _empty_walk():
                 return {}
@@ -114,6 +121,8 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 _walk(if_name_oid), _walk(if_descr_oid), _walk(if_high_speed_oid),
                 _walk(if_hc_in_oid), _walk(if_hc_out_oid),
                 _walk(uptime_oid),
+                _walk(if_in_errors_oid), _walk(if_out_errors_oid),
+                _walk(if_in_discards_oid), _walk(if_out_discards_oid),
             ]
             # Also walk mem_total if the vendor provides a total OID
             if mem_total_oid:
@@ -133,7 +142,11 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             hc_in = walk_results[9]
             hc_out = walk_results[10]
             uptime_vals = walk_results[11]
-            mem_total_vals = walk_results[12] if len(walk_results) > 12 else {}
+            if_in_errs = walk_results[12]
+            if_out_errs = walk_results[13]
+            if_in_disc = walk_results[14]
+            if_out_disc = walk_results[15]
+            mem_total_vals = walk_results[16] if len(walk_results) > 16 else {}
 
             # CPU
             if cpu_vals:
@@ -245,6 +258,40 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 else:
                     result["if_down_count"] += 1
 
+                # Extract error/discard counters
+                in_errors = 0
+                out_errors = 0
+                in_discards = 0
+                out_discards = 0
+                for e_oid, e_val in if_in_errs.items():
+                    if e_oid.endswith("." + idx):
+                        try:
+                            in_errors = int(e_val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+                for e_oid, e_val in if_out_errs.items():
+                    if e_oid.endswith("." + idx):
+                        try:
+                            out_errors = int(e_val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+                for e_oid, e_val in if_in_disc.items():
+                    if e_oid.endswith("." + idx):
+                        try:
+                            in_discards = int(e_val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+                for e_oid, e_val in if_out_disc.items():
+                    if e_oid.endswith("." + idx):
+                        try:
+                            out_discards = int(e_val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+
                 if_details.append({
                     "if_index": int(idx),
                     "name": iface_name,
@@ -252,6 +299,10 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     "speed_mbps": speed_mbps,
                     "in_octets": in_octets,
                     "out_octets": out_octets,
+                    "in_errors": in_errors,
+                    "out_errors": out_errors,
+                    "in_discards": in_discards,
+                    "out_discards": out_discards,
                 })
 
             result["if_details"] = if_details
@@ -637,6 +688,7 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
             try:
                 await emit_metric_samples_from_poll(res)
                 await store_interface_ts_from_poll(res["host_id"], res.get("if_details", []))
+                await store_interface_error_metrics_from_poll(res["host_id"], res.get("if_details", []))
             except Exception as exc:
                 LOGGER.debug("metrics: emission error for host %s: %s",
                              res["host_id"], redact_value(str(exc)))

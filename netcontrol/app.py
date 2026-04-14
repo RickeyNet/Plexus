@@ -110,6 +110,10 @@ from netcontrol.routes.mac_tracking import router as mac_tracking_router
 from netcontrol.routes.flow_collector import router as flow_collector_router
 from netcontrol.routes.baseline_alerting import router as baseline_alerting_router
 from netcontrol.routes.graph_export import router as graph_export_router
+from netcontrol.routes.interface_errors import (
+    init_interface_errors,
+    router as interface_errors_router,
+)
 from netcontrol.routes.deployments import (
     DeploymentCreate,
     DeploymentExecute,
@@ -1228,6 +1232,7 @@ init_compliance(require_auth, require_feature, require_admin)
 init_risk_analysis(require_auth, require_feature)
 init_deployments(require_auth, require_feature, verify_session_token, _get_user_features)
 init_monitoring(require_auth, require_feature, require_admin)
+init_interface_errors(require_auth, require_admin)
 init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
 metrics_engine_inject_auth(require_auth, require_admin)
 
@@ -1342,6 +1347,11 @@ app.include_router(
 # Graph Export (PNG/SVG/embed URLs)
 app.include_router(
     graph_export_router,
+    dependencies=[Depends(require_auth)],
+)
+# Interface Error/Discard Trending
+app.include_router(
+    interface_errors_router,
     dependencies=[Depends(require_auth)],
 )
 # IOS-XE Upgrade Tool

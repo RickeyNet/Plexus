@@ -6546,6 +6546,293 @@ async def delete_old_interface_ts(retention_days: int = 30) -> int:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Interface Error/Discard Tracking
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def get_interface_error_stats_for_host(host_id: int) -> list[dict]:
+    """Fetch current error counter state for all interfaces on a host."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM interface_error_stats WHERE host_id = ?",
+            (host_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def upsert_interface_error_stat(
+    host_id: int,
+    if_index: int,
+    if_name: str,
+    in_errors: int,
+    out_errors: int,
+    in_discards: int,
+    out_discards: int,
+) -> int:
+    """Update or insert interface error counters, shifting current to prev."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, in_errors, out_errors, in_discards, out_discards, polled_at "
+            "FROM interface_error_stats WHERE host_id = ? AND if_index = ?",
+            (host_id, if_index),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            await db.execute(
+                """UPDATE interface_error_stats
+                   SET if_name = ?,
+                       prev_in_errors = in_errors, prev_out_errors = out_errors,
+                       prev_in_discards = in_discards, prev_out_discards = out_discards,
+                       prev_polled_at = polled_at,
+                       in_errors = ?, out_errors = ?,
+                       in_discards = ?, out_discards = ?,
+                       polled_at = datetime('now')
+                   WHERE host_id = ? AND if_index = ?""",
+                (if_name, in_errors, out_errors, in_discards, out_discards,
+                 host_id, if_index),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO interface_error_stats
+                   (host_id, if_index, if_name, in_errors, out_errors,
+                    in_discards, out_discards)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (host_id, if_index, if_name, in_errors, out_errors,
+                 in_discards, out_discards),
+            )
+        await db.commit()
+        return 1
+    finally:
+        await db.close()
+
+
+async def create_interface_error_event(
+    host_id: int,
+    if_index: int,
+    if_name: str,
+    event_type: str,
+    metric_name: str,
+    severity: str,
+    current_rate: float,
+    baseline_rate: float,
+    spike_factor: float,
+    root_cause_hint: str,
+    root_cause_category: str,
+    correlation_details: str = "{}",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO interface_error_events
+               (host_id, if_index, if_name, event_type, metric_name, severity,
+                current_rate, baseline_rate, spike_factor,
+                root_cause_hint, root_cause_category, correlation_details)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (host_id, if_index, if_name, event_type, metric_name, severity,
+             current_rate, baseline_rate, spike_factor,
+             root_cause_hint, root_cause_category, correlation_details),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_interface_error_events(
+    host_id: int | None = None,
+    severity: str | None = None,
+    unresolved_only: bool = False,
+    limit: int = 200,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if host_id is not None:
+            clauses.append("e.host_id = ?")
+            params.append(host_id)
+        if severity:
+            clauses.append("e.severity = ?")
+            params.append(severity)
+        if unresolved_only:
+            clauses.append("e.resolved_at IS NULL")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT e.*, h.hostname, h.ip_address
+                FROM interface_error_events e
+                LEFT JOIN hosts h ON h.id = e.host_id
+                {where}
+                ORDER BY e.created_at DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_interface_error_event(event_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT e.*, h.hostname, h.ip_address
+               FROM interface_error_events e
+               LEFT JOIN hosts h ON h.id = e.host_id
+               WHERE e.id = ?""",
+            (event_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def acknowledge_interface_error_event(event_id: int, user: str) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE interface_error_events SET acknowledged = 1, acknowledged_by = ? WHERE id = ?",
+            (user, event_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def resolve_interface_error_event(event_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE interface_error_events SET resolved_at = datetime('now') WHERE id = ?",
+            (event_id,),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def get_interface_error_summary(
+    host_id: int,
+    days: int = 1,
+) -> list[dict]:
+    """Per-interface error/discard rate summary with totals."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT ms.host_id, ms.labels_json, ms.metric_name,
+                      COUNT(*) AS sample_count,
+                      AVG(ms.value) AS avg_value,
+                      MAX(ms.value) AS max_value,
+                      MIN(ms.value) AS min_value
+               FROM metric_samples ms
+               WHERE ms.host_id = ?
+                 AND ms.metric_name IN ('if_in_errors', 'if_out_errors',
+                                        'if_in_discards', 'if_out_discards')
+                 AND ms.sampled_at >= datetime('now', '-' || ? || ' days')
+               GROUP BY ms.metric_name, ms.labels_json
+               ORDER BY ms.metric_name, ms.labels_json""",
+            (host_id, days),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_interface_error_trending(
+    host_id: int,
+    if_index: int | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 5000,
+) -> list[dict]:
+    """Query error/discard metric_samples for a host, optionally filtered by interface."""
+    db = await get_db()
+    try:
+        clauses = [
+            "host_id = ?",
+            "metric_name IN ('if_in_errors', 'if_out_errors', 'if_in_discards', 'if_out_discards')",
+        ]
+        params: list = [host_id]
+        if if_index is not None:
+            clauses.append("labels_json LIKE ?")
+            params.append(f'%"if_index": {if_index}%')
+        if start:
+            clauses.append("sampled_at >= ?")
+            params.append(start)
+        if end:
+            clauses.append("sampled_at <= ?")
+            params.append(end)
+        where = " AND ".join(clauses)
+        params.append(limit)
+        cursor = await db.execute(
+            f"SELECT * FROM metric_samples WHERE {where} ORDER BY sampled_at ASC LIMIT ?",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_old_interface_error_events(retention_days: int = 90) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM interface_error_events WHERE created_at < datetime('now', '-' || ? || ' days')",
+            (retention_days,),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def get_trap_syslog_events_in_range(
+    host_id: int,
+    start: str,
+    end: str,
+    limit: int = 100,
+) -> list[dict]:
+    """Return trap/syslog events for a host within a time range (for error correlation)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM trap_syslog_events
+               WHERE host_id = ? AND received_at >= ? AND received_at <= ?
+               ORDER BY received_at DESC LIMIT ?""",
+            (host_id, start, end, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_topology_changes_in_range(
+    host_id: int,
+    start: str,
+    end: str,
+    limit: int = 50,
+) -> list[dict]:
+    """Return topology changes for a host within a time range."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM topology_changes
+               WHERE source_host_id = ? AND detected_at >= ? AND detected_at <= ?
+               ORDER BY detected_at DESC LIMIT ?""",
+            (host_id, start, end, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Vendor OID Registry
 # ═════════════════════════════════════════════════════════════════════════════
 

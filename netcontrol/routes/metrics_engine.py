@@ -210,6 +210,276 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 2b. INTERFACE ERROR/DISCARD METRICS  (counter tracking + rate + spike detection)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Spike detection thresholds
+_ERROR_SPIKE_FACTOR = 5.0       # current rate must be ≥5× baseline to trigger
+_ERROR_MIN_RATE = 1.0           # minimum errors/sec to consider a spike (ignore noise)
+_SPIKE_COOLDOWN_SECONDS = 900   # 15 min between duplicate events per interface+metric
+
+# In-memory cooldown tracker: (host_id, if_index, metric_name) → last event timestamp
+_spike_cooldown: dict[tuple, float] = {}
+
+
+async def store_interface_error_metrics_from_poll(
+    host_id: int, if_details: list[dict],
+) -> int:
+    """Store interface error/discard counters as metric_samples and detect spikes.
+
+    For each interface, stores raw counter values in metric_samples with labels.
+    Computes delta rates by comparing with previous counters in interface_error_stats.
+    Detects spikes by comparing current rate to recent baseline average.
+    """
+    if not if_details:
+        return 0
+
+    prev_stats = await db.get_interface_error_stats_for_host(host_id)
+    prev_map: dict[str, dict] = {}
+    for s in prev_stats:
+        prev_map[str(s["if_index"])] = s
+
+    metric_rows: list[tuple] = []
+    counter_fields = [
+        ("in_errors", "if_in_errors"),
+        ("out_errors", "if_out_errors"),
+        ("in_discards", "if_in_discards"),
+        ("out_discards", "if_out_discards"),
+    ]
+
+    for i, iface in enumerate(if_details):
+        if_index = iface.get("if_index") or (i + 1)
+        if_name = iface.get("name", "")
+        labels = json.dumps({"if_index": if_index, "if_name": if_name})
+
+        prev = prev_map.get(str(if_index))
+
+        for field, metric_name in counter_fields:
+            counter_val = iface.get(field, 0) or 0
+            # Store raw counter value as a metric sample
+            metric_rows.append((host_id, metric_name, labels, float(counter_val)))
+
+            # Compute rate if we have a previous sample
+            if prev and prev.get("polled_at") and prev.get("prev_polled_at"):
+                try:
+                    t_prev = datetime.fromisoformat(prev["polled_at"])
+                    t_now = datetime.now(UTC)
+                    dt_sec = (t_now - t_prev).total_seconds()
+                    if dt_sec > 0:
+                        prev_field = f"prev_{field}" if f"prev_{field}" in prev else field
+                        delta = counter_val - (prev.get(field) or 0)
+                        if delta < 0:
+                            delta += 2**32  # 32-bit counter wrap
+                        rate = delta / dt_sec
+
+                        # Store the rate as a separate metric
+                        rate_metric = f"{metric_name}_rate"
+                        metric_rows.append((host_id, rate_metric, labels, rate))
+
+                        # Spike detection: compare to baseline from previous intervals
+                        prev_prev_val = prev.get(f"prev_{field}") or 0
+                        prev_val = prev.get(field) or 0
+                        prev_dt_str = prev.get("prev_polled_at")
+                        polled_str = prev.get("polled_at")
+                        if prev_dt_str and polled_str:
+                            try:
+                                t_pp = datetime.fromisoformat(prev_dt_str)
+                                t_p = datetime.fromisoformat(polled_str)
+                                pp_dt = (t_p - t_pp).total_seconds()
+                                if pp_dt > 0:
+                                    prev_delta = prev_val - prev_prev_val
+                                    if prev_delta < 0:
+                                        prev_delta += 2**32
+                                    baseline_rate = prev_delta / pp_dt
+
+                                    # Check for spike
+                                    if (rate >= _ERROR_MIN_RATE and
+                                            baseline_rate >= 0 and
+                                            (baseline_rate == 0 or rate / max(baseline_rate, 0.001) >= _ERROR_SPIKE_FACTOR)):
+                                        cooldown_key = (host_id, if_index, metric_name)
+                                        now_ts = datetime.now(UTC).timestamp()
+                                        last_event = _spike_cooldown.get(cooldown_key, 0)
+                                        if now_ts - last_event >= _SPIKE_COOLDOWN_SECONDS:
+                                            _spike_cooldown[cooldown_key] = now_ts
+                                            spike_factor = rate / max(baseline_rate, 0.001)
+                                            severity = "critical" if spike_factor >= 20 or rate >= 100 else "warning"
+                                            # Trigger root-cause correlation asynchronously
+                                            asyncio.create_task(_create_correlated_error_event(
+                                                host_id=host_id,
+                                                if_index=if_index,
+                                                if_name=if_name,
+                                                metric_name=metric_name,
+                                                current_rate=rate,
+                                                baseline_rate=baseline_rate,
+                                                spike_factor=spike_factor,
+                                                severity=severity,
+                                            ))
+                            except (ValueError, TypeError):
+                                pass
+                except (ValueError, TypeError):
+                    pass
+
+        # Update interface_error_stats with current counters
+        await db.upsert_interface_error_stat(
+            host_id=host_id,
+            if_index=if_index,
+            if_name=if_name,
+            in_errors=iface.get("in_errors", 0) or 0,
+            out_errors=iface.get("out_errors", 0) or 0,
+            in_discards=iface.get("in_discards", 0) or 0,
+            out_discards=iface.get("out_discards", 0) or 0,
+        )
+
+    stored = await db.create_metric_samples_batch(metric_rows) if metric_rows else 0
+    return stored
+
+
+async def _create_correlated_error_event(
+    host_id: int,
+    if_index: int,
+    if_name: str,
+    metric_name: str,
+    current_rate: float,
+    baseline_rate: float,
+    spike_factor: float,
+    severity: str,
+) -> None:
+    """Create an interface error event with root-cause correlation."""
+    try:
+        now = datetime.now(UTC)
+        window_start = (now - timedelta(minutes=30)).isoformat()
+        window_end = now.isoformat()
+
+        # Gather correlated events within ±30 min window
+        config_changes = await db.get_config_drift_events_in_range(
+            [host_id], window_start, window_end)
+        deployments = await db.get_deployments_for_host_in_range(
+            host_id, window_start, window_end)
+        topology_changes = await db.get_topology_changes_in_range(
+            host_id, window_start, window_end)
+        syslog_events = await db.get_trap_syslog_events_in_range(
+            host_id, window_start, window_end)
+
+        # Classify root cause
+        category, hint = _classify_root_cause(
+            metric_name=metric_name,
+            config_changes=config_changes,
+            deployments=deployments,
+            topology_changes=topology_changes,
+            syslog_events=syslog_events,
+            spike_factor=spike_factor,
+        )
+
+        correlation = {
+            "config_changes": len(config_changes),
+            "deployments": len(deployments),
+            "topology_changes": len(topology_changes),
+            "syslog_events": len(syslog_events),
+            "window": {"start": window_start, "end": window_end},
+        }
+
+        await db.create_interface_error_event(
+            host_id=host_id,
+            if_index=if_index,
+            if_name=if_name,
+            event_type="spike",
+            metric_name=metric_name,
+            severity=severity,
+            current_rate=round(current_rate, 4),
+            baseline_rate=round(baseline_rate, 4),
+            spike_factor=round(spike_factor, 2),
+            root_cause_hint=hint,
+            root_cause_category=category,
+            correlation_details=json.dumps(correlation),
+        )
+        LOGGER.info(
+            "interface_errors: spike detected host=%d if=%s metric=%s "
+            "rate=%.2f/s baseline=%.2f/s (%.1f×) cause=%s",
+            host_id, if_name, metric_name, current_rate, baseline_rate,
+            spike_factor, category,
+        )
+    except Exception as exc:
+        LOGGER.debug("interface_errors: correlation failed: %s", str(exc))
+
+
+def _classify_root_cause(
+    metric_name: str,
+    config_changes: list[dict],
+    deployments: list[dict],
+    topology_changes: list[dict],
+    syslog_events: list[dict],
+    spike_factor: float,
+) -> tuple[str, str]:
+    """Heuristic root-cause classification.
+
+    Returns (category, human-readable hint).
+    Categories: config_change, deployment, topology, physical_layer,
+                congestion, unknown.
+    """
+    # Priority 1: Recent config change or deployment
+    if deployments:
+        dep_names = [d.get("name", "unnamed") for d in deployments[:3]]
+        return ("deployment",
+                f"Deployment detected within 30 min: {', '.join(dep_names)}. "
+                "Error spike may be caused by the deployed configuration change.")
+
+    if config_changes:
+        drift_count = len(config_changes)
+        return ("config_change",
+                f"{drift_count} config change(s) detected within 30 min. "
+                "Error spike correlates with configuration drift — review recent changes.")
+
+    # Priority 2: Topology change (link flap, STP change)
+    if topology_changes:
+        change_types = set(c.get("change_type", "") for c in topology_changes)
+        return ("topology",
+                f"Topology change(s) detected: {', '.join(change_types)}. "
+                "Errors may be caused by link state transitions or reconvergence.")
+
+    # Priority 3: Syslog/trap events (e.g., link down, module reset)
+    physical_keywords = {"link", "duplex", "speed", "sfp", "transceiver",
+                         "optic", "cable", "crc", "err-disabled"}
+    if syslog_events:
+        phys_events = [e for e in syslog_events
+                       if any(kw in (e.get("message", "") or "").lower() for kw in physical_keywords)]
+        if phys_events:
+            return ("physical_layer",
+                    f"Physical layer syslog events detected ({len(phys_events)} events). "
+                    "Suspect cable, SFP/optic, or duplex mismatch issue.")
+
+    # Priority 4: Error type heuristics (no correlated events found)
+    error_hints = {
+        "if_in_errors": (
+            "physical_layer",
+            "Input errors (CRC, frame, runts) with no config change — "
+            "suspect physical layer: check cable, SFP/optic, or duplex mismatch."
+        ),
+        "if_out_errors": (
+            "congestion",
+            "Output errors with no config change — "
+            "suspect interface congestion or speed/duplex mismatch."
+        ),
+        "if_in_discards": (
+            "congestion",
+            "Input discards increasing — "
+            "possible input queue overflow due to high traffic or slow CPU."
+        ),
+        "if_out_discards": (
+            "congestion",
+            "Output discards increasing — "
+            "suspect output queue congestion; check QoS policy and interface speed."
+        ),
+    }
+
+    if metric_name in error_hints:
+        return error_hints[metric_name]
+
+    return ("unknown",
+            f"Error rate spike ({spike_factor:.1f}× baseline) with no correlated events. "
+            "Manual investigation recommended.")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 3.  METRIC SAMPLE EMITTER  (write poll results as flexible metrics)
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -252,6 +522,8 @@ _DOWNSAMPLE_METRICS = [
     "uptime_seconds", "response_time_ms", "packet_loss_pct",
     "if_up_count", "if_down_count", "vpn_tunnels_up", "vpn_tunnels_down",
     "route_count",
+    "if_in_errors", "if_out_errors", "if_in_discards", "if_out_discards",
+    "if_in_errors_rate", "if_out_errors_rate", "if_in_discards_rate", "if_out_discards_rate",
 ]
 
 
@@ -338,12 +610,14 @@ async def run_retention_cleanup() -> dict:
     daily_deleted = await db.delete_old_metric_rollups("daily", 365)
     ifts_deleted = await db.delete_old_interface_ts(30)
     traps_deleted = await db.delete_old_trap_syslog_events(30)
+    error_events_deleted = await db.delete_old_interface_error_events(90)
     return {
         "raw_samples_deleted": raw_deleted,
         "hourly_rollups_deleted": hourly_deleted,
         "daily_rollups_deleted": daily_deleted,
         "interface_ts_deleted": ifts_deleted,
         "trap_events_deleted": traps_deleted,
+        "error_events_deleted": error_events_deleted,
     }
 
 

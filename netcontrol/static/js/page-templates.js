@@ -984,6 +984,7 @@ function templateDeviceDetail() {
         <button class="btn btn-sm btn-secondary dev-tab-btn active" data-dev-tab="overview" onclick="switchDeviceTab('overview')">Overview</button>
         <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="interfaces" onclick="switchDeviceTab('interfaces')">Interfaces</button>
         <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="alerts" onclick="switchDeviceTab('alerts')">Alert History</button>
+        <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="errors" onclick="switchDeviceTab('errors')">Interface Errors</button>
         <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="syslog" onclick="switchDeviceTab('syslog')">Syslog</button>
         <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="compliance" onclick="switchDeviceTab('compliance')">Compliance</button>
     </div>
@@ -1003,6 +1004,9 @@ function templateDeviceDetail() {
     </div>
     <div id="device-tab-alerts" class="device-tab" style="display:none">
         <div id="device-alert-history"></div>
+    </div>
+    <div id="device-tab-errors" class="device-tab" style="display:none">
+        <div id="device-error-trending"></div>
     </div>
     <div id="device-tab-syslog" class="device-tab" style="display:none">
         <div id="device-syslog-events"></div>
