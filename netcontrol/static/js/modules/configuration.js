@@ -35,6 +35,17 @@ function _closeAllWs() {
     _activeWebSockets = [];
 }
 
+// The shared job output modal lives in index.html and calls closeJobOutputModal().
+// On the Configuration page, jobs.js may not be loaded yet, so provide a local fallback.
+if (typeof window.closeJobOutputModal !== 'function') {
+    window.closeJobOutputModal = function() {
+        const modal = document.getElementById('job-output-modal');
+        if (modal) modal.classList.remove('active');
+        _closeAllWs();
+        deactivateFocusTrap('job-output-modal');
+    };
+}
+
 async function loadConfigDrift(options = {}) {
     const { preserveContent = false } = options;
     const container = document.getElementById('drift-events-list');
