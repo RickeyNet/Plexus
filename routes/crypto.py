@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 LOGGER = logging.getLogger("plexus.crypto")
 
-KEY_FILE = os.path.join(os.path.dirname(__file__), "netcontrol.key")
+KEY_FILE = os.getenv("APP_ENCRYPTION_KEY_FILE", os.path.join(os.path.dirname(__file__), "netcontrol.key"))
 
 # AES-256-GCM nonce size (96 bits per NIST recommendation)
 _NONCE_SIZE = 12
@@ -73,6 +73,9 @@ def _load_or_create_key() -> bytes:
         return raw
 
     # Generate new 32-byte AES-256 key, base64-encoded to 44 bytes
+    key_dir = os.path.dirname(KEY_FILE)
+    if key_dir:
+        os.makedirs(key_dir, exist_ok=True)
     key_bytes = AESGCM.generate_key(bit_length=256)  # 32 raw bytes
     key_b64 = base64.urlsafe_b64encode(key_bytes)  # 44 bytes on disk
     tmp_path = KEY_FILE + ".tmp"

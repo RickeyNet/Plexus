@@ -315,11 +315,15 @@ def _extract_api_token(request: Request) -> str:
 # Authentication (DB-backed users)
 # ═════════════════════════════════════════════════════════════════════════════
 
-SECRET_KEY_FILE = os.path.join(os.path.dirname(__file__), "..", "routes", "session.key")
+SECRET_KEY_FILE = os.getenv("APP_SESSION_KEY_FILE", os.path.join(os.path.dirname(__file__), "..", "routes", "session.key"))
 SESSION_MAX_AGE = 86400  # 24 hours
 
 
 def _load_or_create_secret_key() -> str:
+    key_dir = os.path.dirname(SECRET_KEY_FILE)
+    if key_dir:
+        os.makedirs(key_dir, exist_ok=True)
+
     if os.path.isfile(SECRET_KEY_FILE):
         with open(SECRET_KEY_FILE) as f:
             return f.read().strip()
