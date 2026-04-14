@@ -397,10 +397,10 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
         options={**body.options, "credential_id": body.credential_id},
     )
 
-    # Rebuild device list: remove pending devices, re-add from new selections
+    # Rebuild device list: remove non-running devices, then re-add from new selections
     await db.delete_upgrade_devices_by_campaign(campaign_id)
 
-    # Collect existing IPs that weren't deleted (already have progress)
+    # Collect existing IPs that are still running and were intentionally preserved
     remaining = await db.get_upgrade_devices(campaign_id)
     existing_ips = {d["ip_address"] for d in remaining}
 
