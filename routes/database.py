@@ -13,6 +13,8 @@ Tables:
     topology_links    — discovered L2/L3 neighbor relationships between devices
     interface_stats   — SNMP interface counter snapshots for utilization calculation
     topology_changes  — detected topology differences between discovery runs
+    stp_port_states   — latest spanning-tree port states per host/VLAN
+    stp_topology_events — spanning-tree root/state change events
     config_baselines  — intended/golden configuration per host
     config_snapshots  — timestamped running-config captures per host
     config_drift_events — detected configuration drift instances
@@ -72,6 +74,8 @@ _INSERT_ID_TABLES = {
     "topology_links",
     "interface_stats",
     "topology_changes",
+    "stp_port_states",
+    "stp_topology_events",
     "config_baselines",
     "config_snapshots",
     "config_drift_events",
@@ -326,6 +330,49 @@ CREATE TABLE IF NOT EXISTS topology_changes (
     detected_at         TEXT    NOT NULL DEFAULT (datetime('now')),
     acknowledged        INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS stp_port_states (
+    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id                    INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    vlan_id                    INTEGER NOT NULL DEFAULT 1,
+    bridge_port                INTEGER NOT NULL DEFAULT 0,
+    if_index                   INTEGER NOT NULL DEFAULT 0,
+    interface_name             TEXT    NOT NULL DEFAULT '',
+    port_state                 TEXT    NOT NULL DEFAULT '',
+    port_role                  TEXT    NOT NULL DEFAULT '',
+    designated_bridge_id       TEXT    NOT NULL DEFAULT '',
+    root_bridge_id             TEXT    NOT NULL DEFAULT '',
+    root_port                  INTEGER NOT NULL DEFAULT 0,
+    topology_change_count      INTEGER NOT NULL DEFAULT 0,
+    time_since_topology_change INTEGER NOT NULL DEFAULT 0,
+    is_root_bridge             INTEGER NOT NULL DEFAULT 0,
+    collected_at               TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(host_id, vlan_id, bridge_port)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stp_port_states_host_vlan
+ON stp_port_states(host_id, vlan_id, collected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stp_port_states_state
+ON stp_port_states(vlan_id, port_state);
+
+CREATE TABLE IF NOT EXISTS stp_topology_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    vlan_id         INTEGER NOT NULL DEFAULT 1,
+    event_type      TEXT    NOT NULL DEFAULT '',
+    severity        TEXT    NOT NULL DEFAULT 'warning',
+    interface_name  TEXT    NOT NULL DEFAULT '',
+    details         TEXT    NOT NULL DEFAULT '',
+    old_value       TEXT    NOT NULL DEFAULT '',
+    new_value       TEXT    NOT NULL DEFAULT '',
+    acknowledged    INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_stp_events_ack_created
+ON stp_topology_events(acknowledged, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stp_events_host_created
+ON stp_topology_events(host_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS topology_node_positions (
     node_id             TEXT    PRIMARY KEY,
@@ -2962,6 +3009,197 @@ async def delete_old_topology_changes(days: int = 30) -> int:
         cursor = await db.execute(
             "DELETE FROM topology_changes WHERE detected_at < datetime('now', ?)",
             (f"-{days} days",),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STP Topology State + Events
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def upsert_stp_port_state(
+    host_id: int,
+    vlan_id: int,
+    bridge_port: int,
+    if_index: int,
+    interface_name: str,
+    port_state: str,
+    port_role: str,
+    designated_bridge_id: str,
+    root_bridge_id: str,
+    root_port: int,
+    topology_change_count: int,
+    time_since_topology_change: int,
+    is_root_bridge: bool,
+) -> int:
+    """Insert or update one STP port-state row for a host/VLAN/bridge-port."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO stp_port_states
+               (host_id, vlan_id, bridge_port, if_index, interface_name,
+                port_state, port_role, designated_bridge_id, root_bridge_id,
+                root_port, topology_change_count, time_since_topology_change,
+                is_root_bridge, collected_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(host_id, vlan_id, bridge_port)
+               DO UPDATE SET
+                   if_index = excluded.if_index,
+                   interface_name = excluded.interface_name,
+                   port_state = excluded.port_state,
+                   port_role = excluded.port_role,
+                   designated_bridge_id = excluded.designated_bridge_id,
+                   root_bridge_id = excluded.root_bridge_id,
+                   root_port = excluded.root_port,
+                   topology_change_count = excluded.topology_change_count,
+                   time_since_topology_change = excluded.time_since_topology_change,
+                   is_root_bridge = excluded.is_root_bridge,
+                   collected_at = excluded.collected_at""",
+            (
+                host_id, vlan_id, bridge_port, if_index, interface_name,
+                port_state, port_role, designated_bridge_id, root_bridge_id,
+                root_port, topology_change_count, time_since_topology_change,
+                1 if is_root_bridge else 0,
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def delete_stp_port_states_for_host(host_id: int, vlan_id: int | None = None) -> int:
+    """Delete STP port states for a host, optionally restricted to one VLAN."""
+    db = await get_db()
+    try:
+        if vlan_id is None:
+            cursor = await db.execute(
+                "DELETE FROM stp_port_states WHERE host_id = ?",
+                (host_id,),
+            )
+        else:
+            cursor = await db.execute(
+                "DELETE FROM stp_port_states WHERE host_id = ? AND vlan_id = ?",
+                (host_id, vlan_id),
+            )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def get_stp_port_states(
+    group_id: int | None = None,
+    host_id: int | None = None,
+    vlan_id: int | None = None,
+    limit: int = 5000,
+) -> list[dict]:
+    """Return latest STP port states joined with host metadata."""
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if group_id is not None:
+            clauses.append("h.group_id = ?")
+            params.append(group_id)
+        if host_id is not None:
+            clauses.append("s.host_id = ?")
+            params.append(host_id)
+        if vlan_id is not None:
+            clauses.append("s.vlan_id = ?")
+            params.append(vlan_id)
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, min(int(limit), 20000)))
+
+        cursor = await db.execute(
+            f"""SELECT s.*, h.hostname, h.ip_address, h.group_id
+                FROM stp_port_states s
+                JOIN hosts h ON h.id = s.host_id
+                {where_sql}
+                ORDER BY s.collected_at DESC, s.host_id, s.vlan_id, s.bridge_port
+                LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def insert_stp_topology_event(
+    host_id: int,
+    vlan_id: int,
+    event_type: str,
+    severity: str = "warning",
+    interface_name: str = "",
+    details: str = "",
+    old_value: str = "",
+    new_value: str = "",
+) -> int:
+    """Record an STP event (root change, topology change, port-state change)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO stp_topology_events
+               (host_id, vlan_id, event_type, severity, interface_name,
+                details, old_value, new_value, acknowledged, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))""",
+            (
+                host_id, vlan_id, event_type, severity, interface_name,
+                details, old_value, new_value,
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_stp_topology_events(
+    unacknowledged_only: bool = True,
+    limit: int = 200,
+) -> list[dict]:
+    """Return STP events newest-first with host context."""
+    db = await get_db()
+    try:
+        where_sql = "WHERE e.acknowledged = 0" if unacknowledged_only else ""
+        cursor = await db.execute(
+            f"""SELECT e.*, h.hostname, h.ip_address
+                FROM stp_topology_events e
+                JOIN hosts h ON h.id = e.host_id
+                {where_sql}
+                ORDER BY e.created_at DESC, e.id DESC
+                LIMIT ?""",
+            (max(1, min(int(limit), 5000)),),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_stp_topology_events_count(unacknowledged_only: bool = True) -> int:
+    """Return count of STP events."""
+    db = await get_db()
+    try:
+        where_sql = "WHERE acknowledged = 0" if unacknowledged_only else ""
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM stp_topology_events {where_sql}"
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        await db.close()
+
+
+async def acknowledge_stp_topology_events() -> int:
+    """Mark all unacknowledged STP events as acknowledged."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE stp_topology_events SET acknowledged = 1 WHERE acknowledged = 0"
         )
         await db.commit()
         return cursor.rowcount

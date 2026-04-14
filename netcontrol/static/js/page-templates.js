@@ -328,6 +328,12 @@ function templateTopology() {
             <button class="btn btn-secondary" id="topology-fit-btn" onclick="fitTopology()" title="Fit graph to view">Fit</button>
             <button class="btn btn-secondary" id="topology-path-btn" onclick="togglePathMode()" title="Find shortest path between two nodes">Path</button>
             <button class="btn btn-secondary" id="topology-util-btn" onclick="toggleUtilizationOverlay()" title="Toggle interface utilization overlay">Util</button>
+            <input type="number" id="topology-stp-vlan" class="form-input" value="1" min="1" max="4094" style="width:88px;" title="STP instance/VLAN">
+            <button class="btn btn-secondary" id="topology-stp-scan-btn" onclick="scanTopologyStp()" title="Poll STP state from devices">Scan STP</button>
+            <button class="btn btn-secondary" id="topology-stp-btn" onclick="toggleStpOverlay()" title="Overlay STP forwarding/blocked states">STP</button>
+            <button class="btn btn-secondary topology-changes-btn" id="topology-stp-events-btn" onclick="showStpTopologyEvents()" title="View STP topology events">
+                STP Events <span id="topology-stp-event-badge" class="topology-change-badge" style="display:none">0</span>
+            </button>
             <button class="btn btn-secondary topology-changes-btn" id="topology-changes-btn" onclick="showTopologyChanges()" title="View topology changes">
                 Changes <span id="topology-change-badge" class="topology-change-badge" style="display:none">0</span>
             </button>
@@ -375,6 +381,15 @@ function templateTopology() {
         <span class="topology-legend-item"><span class="topology-legend-line topology-legend-line-bgp"></span> BGP</span>
         <span class="topology-legend-item topology-legend-util" id="topology-legend-util" style="display:none">
             <span class="topology-legend-gradient"></span> Utilization (0-100%)
+        </span>
+        <span class="topology-legend-item topology-legend-stp" id="topology-legend-stp-forwarding" style="display:none">
+            <span class="topology-legend-line topology-legend-line-stp-fwd"></span> STP Forwarding
+        </span>
+        <span class="topology-legend-item topology-legend-stp" id="topology-legend-stp-learning" style="display:none">
+            <span class="topology-legend-line topology-legend-line-stp-learn"></span> STP Learning
+        </span>
+        <span class="topology-legend-item topology-legend-stp" id="topology-legend-stp-blocked" style="display:none">
+            <span class="topology-legend-line topology-legend-line-stp-block"></span> STP Blocked
         </span>
     </div>
     <div id="topology-empty" class="empty-state" style="display:none">

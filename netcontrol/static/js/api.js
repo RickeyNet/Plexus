@@ -789,6 +789,31 @@ export async function acknowledgeTopologyChanges() {
     return apiRequest('/topology/changes/acknowledge', { method: 'POST' });
 }
 
+export async function discoverTopologyStp(groupId = null, vlanId = 1) {
+    const params = new URLSearchParams();
+    if (groupId) params.set('group_id', groupId);
+    if (vlanId) params.set('vlan_id', vlanId);
+    const suffix = params.toString() ? `?${params}` : '';
+    return apiRequest(`/topology/stp/discover${suffix}`, { method: 'POST' });
+}
+
+export async function getTopologyStpState(groupId = null, hostId = null, vlanId = 1, limit = 5000) {
+    const params = new URLSearchParams();
+    if (groupId) params.set('group_id', groupId);
+    if (hostId) params.set('host_id', hostId);
+    if (vlanId) params.set('vlan_id', vlanId);
+    params.set('limit', limit);
+    return apiRequest(`/topology/stp?${params}`);
+}
+
+export async function getTopologyStpEvents(unacknowledged = true, limit = 200) {
+    return apiRequest(`/topology/stp/events?unacknowledged=${unacknowledged}&limit=${limit}`);
+}
+
+export async function acknowledgeTopologyStpEvents() {
+    return apiRequest('/topology/stp/events/acknowledge', { method: 'POST' });
+}
+
 // ── Topology Node Positions ──────────────────────────────────────────────────
 
 export async function getTopologyPositions() {
