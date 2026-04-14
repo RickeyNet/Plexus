@@ -378,10 +378,31 @@ async function _onStpVlanChange() {
     }
 }
 
+function _syncStpVlanControlState() {
+    const allVlansEl = document.getElementById('topology-stp-all-vlans');
+    const vlanEl = document.getElementById('topology-stp-vlan');
+    if (!allVlansEl || !vlanEl) return;
+    vlanEl.disabled = Boolean(allVlansEl.checked);
+    vlanEl.title = allVlansEl.checked ? 'Disabled while scanning all VLANs' : 'STP instance/VLAN';
+}
+
+async function _onStpAllVlansToggle() {
+    _syncStpVlanControlState();
+    if (_topoStpOverlay) {
+        try {
+            await _loadStpOverlayData();
+            _refreshTopologyEdgeStyles();
+        } catch (err) {
+            showError('Failed to refresh STP overlay: ' + err.message);
+        }
+    }
+}
+
 async function scanTopologyStp() {
     const btn = document.getElementById('topology-stp-scan-btn');
     const groupFilter = document.getElementById('topology-group-filter')?.value || '';
     const vlanId = _currentStpVlan();
+    const allVlans = Boolean(document.getElementById('topology-stp-all-vlans')?.checked);
 
     if (btn) {
         btn.disabled = true;
@@ -389,8 +410,11 @@ async function scanTopologyStp() {
     }
 
     try {
-        const result = await api.discoverTopologyStp(groupFilter || null, vlanId);
-        const msg = `STP scan complete: ${result.ports_collected} ports from ${result.hosts_updated}/${result.hosts_scanned} hosts` +
+        const result = await api.discoverTopologyStp(groupFilter || null, vlanId, allVlans, 128);
+        const vlanScope = result.all_vlans
+            ? `${(result.vlans_scanned || []).length || 0} VLANs`
+            : `VLAN ${vlanId}`;
+        const msg = `STP scan complete (${vlanScope}): ${result.ports_collected} ports from ${result.hosts_updated}/${result.hosts_scanned} hosts` +
             (result.errors > 0 ? ` (${result.errors} errors)` : '');
         showToast(msg, result.errors > 0 ? 'warning' : 'success');
         _updateStpEventBadge(result.unacknowledged_events || 0);
@@ -1358,6 +1382,8 @@ function _initTopoListeners() {
     document.getElementById('topology-group-filter')?.addEventListener('change', _onTopoGroupFilterChange);
     document.getElementById('topology-layout')?.addEventListener('change', _onTopoLayoutChange);
     document.getElementById('topology-stp-vlan')?.addEventListener('change', _onStpVlanChange);
+    document.getElementById('topology-stp-all-vlans')?.addEventListener('change', _onStpAllVlansToggle);
+    _syncStpVlanControlState();
 }
 
 function _removeTopoDocListeners() {
@@ -1370,6 +1396,7 @@ function _removeTopoDocListeners() {
     document.getElementById('topology-group-filter')?.removeEventListener('change', _onTopoGroupFilterChange);
     document.getElementById('topology-layout')?.removeEventListener('change', _onTopoLayoutChange);
     document.getElementById('topology-stp-vlan')?.removeEventListener('change', _onStpVlanChange);
+    document.getElementById('topology-stp-all-vlans')?.removeEventListener('change', _onStpAllVlansToggle);
 }
 
 // ── Layout Settings ──

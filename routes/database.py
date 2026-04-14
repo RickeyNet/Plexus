@@ -3207,6 +3207,61 @@ async def acknowledge_stp_topology_events() -> int:
         await db.close()
 
 
+async def count_recent_stp_topology_events(
+    host_id: int,
+    vlan_id: int,
+    event_type: str,
+    within_minutes: int = 30,
+    max_rows: int = 500,
+) -> int:
+    """Count STP events of a type for host/VLAN inside a recent time window."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT created_at
+               FROM stp_topology_events
+               WHERE host_id = ?
+                 AND vlan_id = ?
+                 AND event_type = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (
+                host_id,
+                vlan_id,
+                event_type,
+                max(1, min(int(max_rows), 5000)),
+            ),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return 0
+
+        now = datetime.now(UTC)
+        cutoff_seconds = max(1, int(within_minutes)) * 60
+        count = 0
+
+        for row in rows:
+            created_raw = row[0] if isinstance(row, (list, tuple)) else row["created_at"]
+            if not created_raw:
+                continue
+            created_text = str(created_raw).replace(" ", "T")
+            try:
+                dt = datetime.fromisoformat(created_text)
+            except Exception:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            if (now - dt).total_seconds() <= cutoff_seconds:
+                count += 1
+            else:
+                # Rows are ordered newest-first; once outside window, remaining rows will be older.
+                break
+
+        return count
+    finally:
+        await db.close()
+
+
 # ── Topology Node Positions ──────────────────────────────────────────────────
 
 async def get_topology_positions() -> dict:
