@@ -26,6 +26,7 @@ let _topoUtilOverlay = false;    // utilization overlay toggle state
 let _topoStpOverlay = false;     // STP overlay toggle state
 let _topoStpStateByPort = new Map(); // key: "<host_id>|<norm_ifname>" -> stp row
 let _topoThemeColors = null;     // cached theme-aware colors for vis-network
+let _topoLabelsVisible = false;  // edge labels hidden by default
 
 function _getTopoThemeColors() {
     const style = getComputedStyle(document.documentElement);
@@ -131,6 +132,23 @@ function _normalizeIfaceName(name) {
     return n;
 }
 
+function _abbreviateInterface(name) {
+    if (!name) return '';
+    return name
+        .replace(/TwentyFiveGigE(?:thernet)?/gi, '25G')
+        .replace(/HundredGigE(?:thernet)?/gi, '100G')
+        .replace(/FortyGigabitEthernet/gi, '40G')
+        .replace(/TenGigabitEthernet/gi, 'Te')
+        .replace(/TwoGigabitEthernet/gi, '2G')
+        .replace(/FiveGigabitEthernet/gi, '5G')
+        .replace(/GigabitEthernet/gi, 'Gi')
+        .replace(/FastEthernet/gi, 'Fa')
+        .replace(/Port-channel/gi, 'Po')
+        .replace(/Loopback/gi, 'Lo')
+        .replace(/Vlan/gi, 'Vl')
+        .replace(/Ethernet/gi, 'Eth');
+}
+
 function _stpPortKey(hostId, iface) {
     return `${String(hostId)}|${_normalizeIfaceName(iface)}`;
 }
@@ -195,7 +213,11 @@ function _edgeOverlayProps(edge) {
     const stp = _lookupStpForEdge(edge);
     const stpStyle = stp ? _stpStyle(stp.port_state) : null;
 
-    let label = edge.label || '';
+    // Abbreviate interface names for cleaner display
+    const srcIface = _abbreviateInterface(edge.source_interface || '');
+    const tgtIface = _abbreviateInterface(edge.target_interface || '');
+    const ifaceParts = [srcIface, tgtIface].filter(Boolean);
+    let label = ifaceParts.join(' → ') || '';
     if (hasUtil) label = `${label ? label + ' ' : ''}(${utilPct}%)`;
     if (stpStyle) {
         const role = stp.port_role ? `/${stp.port_role}` : '';
@@ -239,9 +261,12 @@ function _refreshTopologyEdgeStyles() {
         const edgesDS = _topologyNetwork.body.data.edges;
         const updates = _topologyData.edges.map(e => {
             const overlay = _edgeOverlayProps(e);
+            const fullLabel = overlay.label;
+            const displayLabel = _topoLabelsVisible ? fullLabel : '';
             return {
                 id: e.id,
-                label: overlay.label,
+                label: displayLabel,
+                title: fullLabel || undefined,
                 color: overlay.color,
                 width: overlay.width,
                 dashes: overlay.dashes,
@@ -249,6 +274,12 @@ function _refreshTopologyEdgeStyles() {
                     enabled: true,
                     color: overlay.shadowColor,
                     size: 6, x: 0, y: 0,
+                },
+                chosen: {
+                    edge: false,
+                    label: !_topoLabelsVisible ? function (values) {
+                        values.size = 10;
+                    } : false,
                 },
             };
         });
@@ -593,11 +624,15 @@ function _buildVisNode(n, savedPos) {
 
 function _buildVisEdge(e) {
     const overlay = _edgeOverlayProps(e);
+    const tc = _topoThemeColors || _getTopoThemeColors();
+    const fullLabel = overlay.label;
+    // Show labels only when toggle is on; always reveal on hover via chosen callback
+    const displayLabel = _topoLabelsVisible ? fullLabel : '';
     return {
         id: e.id,
         from: e.from,
         to: e.to,
-        label: overlay.label,
+        label: displayLabel,
         color: overlay.color,
         dashes: overlay.dashes,
         width: overlay.width,
@@ -608,16 +643,57 @@ function _buildVisEdge(e) {
             color: overlay.shadowColor,
             size: 6, x: 0, y: 0,
         },
-        font: { size: 9, color: (_topoThemeColors || _getTopoThemeColors()).edgeFont, strokeWidth: 2, strokeColor: (_topoThemeColors || _getTopoThemeColors()).edgeFontStroke, align: 'middle' },
-        smooth: { type: 'continuous', roundness: 0.4 },
+        font: { size: 9, color: tc.edgeFont, strokeWidth: 2, strokeColor: tc.edgeFontStroke, align: 'middle' },
+        smooth: { type: 'continuous', roundness: e._roundness || 0.4 },
+        chosen: {
+            edge: false,
+            label: !_topoLabelsVisible ? function (values) {
+                values.size = 10;
+            } : false,
+        },
+        title: fullLabel || undefined, // tooltip always shows full label on hover
         _raw: e,
     };
+}
+
+function _assignParallelEdgeRoundness(edges) {
+    // Group edges by undirected node pair to separate parallel links
+    const pairMap = {};
+    for (const e of edges) {
+        const a = String(e.from) < String(e.to) ? e.from : e.to;
+        const b = a === e.from ? e.to : e.from;
+        const key = `${a}||${b}`;
+        if (!pairMap[key]) pairMap[key] = [];
+        pairMap[key].push(e);
+    }
+    for (const group of Object.values(pairMap)) {
+        if (group.length <= 1) {
+            group[0]._roundness = 0.4;
+            continue;
+        }
+        // Spread roundness evenly: e.g. 2 edges → 0.2, 0.6; 3 → 0.15, 0.4, 0.65
+        const step = 0.5 / group.length;
+        group.forEach((e, i) => {
+            e._roundness = 0.15 + step * i;
+        });
+    }
+}
+
+function toggleEdgeLabels() {
+    _topoLabelsVisible = !_topoLabelsVisible;
+    const btn = document.getElementById('topology-labels-btn');
+    if (btn) btn.classList.toggle('active', _topoLabelsVisible);
+    // Refresh all edge labels in-place
+    _refreshTopologyEdgeStyles();
 }
 
 function renderTopologyGraph(data) {
     _getTopoThemeColors();
     const container = document.getElementById('topology-canvas');
     const layoutMode = document.getElementById('topology-layout').value;
+
+    // Separate parallel edges by varying roundness so they don't overlap
+    _assignParallelEdgeRoundness(data.edges);
 
     _topoNodesDS = new vis.DataSet(data.nodes.map(n => _buildVisNode(n, _topoSavedPositions)));
     _topoEdgesDS = new vis.DataSet(data.edges.map(e => _buildVisEdge(e)));
@@ -647,7 +723,7 @@ function renderTopologyGraph(data) {
     if (isHierarchical) {
         const direction = layoutMode.split('-')[1]; // UD, DU, LR, RL
         layoutConfig = {
-            hierarchical: { direction, sortMethod: 'hubsize', nodeSpacing: 180, levelSeparation: 140 },
+            hierarchical: { direction, sortMethod: 'hubsize', nodeSpacing: 220, levelSeparation: 180 },
         };
     }
 
@@ -655,14 +731,14 @@ function renderTopologyGraph(data) {
         physics: {
             enabled: isCircular ? false : usePhysics,
             barnesHut: {
-                gravitationalConstant: -4000,
-                centralGravity: 0.25,
-                springLength: 180,
-                springConstant: 0.035,
-                damping: 0.1,
-                avoidOverlap: 0.3,
+                gravitationalConstant: -8000,
+                centralGravity: 0.15,
+                springLength: 280,
+                springConstant: 0.025,
+                damping: 0.12,
+                avoidOverlap: 0.5,
             },
-            stabilization: { iterations: 250, updateInterval: 20 },
+            stabilization: { iterations: 300, updateInterval: 20 },
         },
         interaction: {
             hover: true,
@@ -1705,6 +1781,7 @@ window.acknowledgeTopologyChanges = acknowledgeTopologyChanges;
 window.resetTopologyPositions = resetTopologyPositions;
 window.toggleTopologySettings = toggleTopologySettings;
 window.onTopologySettingChange = onTopologySettingChange;
+window.toggleEdgeLabels = toggleEdgeLabels;
 window.printTopology = printTopology;
 
 // ── Cleanup ──
@@ -1717,6 +1794,7 @@ export function destroyTopology() {
     _topoSearchDebounce = null;
     _topoUtilOverlay = false;
     _topoStpOverlay = false;
+    _topoLabelsVisible = false;
     _topoPathMode = false;
     _topoPathSource = null;
     _topoOriginalColors = null;
