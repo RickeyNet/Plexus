@@ -157,7 +157,8 @@ function _renderDriftCard(ev, i) {
         </div>
         <div style="margin-top:0.75rem;display:flex;gap:0.35rem;flex-wrap:wrap">
             <button class="btn btn-sm btn-secondary" onclick="showDriftDiffModal(${ev.id})">View Diff</button>
-            <button class="btn btn-sm btn-secondary" onclick="showHostDriftHistory(${ev.host_id})">History</button>
+            <button class="btn btn-sm btn-secondary" onclick="showDriftEventHistory(${ev.id})">Event Log</button>
+            <button class="btn btn-sm btn-secondary" onclick="showHostDriftHistory(${ev.host_id})">Snapshots</button>
             ${ev.status === 'open' ? `
                 <button class="btn btn-sm btn-primary" onclick="acceptDriftEvent(${ev.id})">Accept</button>
                 <button class="btn btn-sm btn-danger" onclick="showRevertDriftModal(${ev.id})">Revert</button>
@@ -290,6 +291,7 @@ window.showDriftDiffModal = async function(eventId) {
             ${copyableHtmlBlock(diffHtml, ev.diff_text || '', { className: 'drift-diff-viewer' })}
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
                 <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+                <button class="btn btn-secondary" onclick="closeAllModals();showDriftEventHistory(${eventId})">Event Log</button>
                 ${ev.status === 'open' ? `
                     <button class="btn btn-primary" onclick="acceptDriftEvent(${eventId});closeAllModals()">Accept</button>
                     <button class="btn btn-danger" onclick="closeAllModals();showRevertDriftModal(${eventId})">Revert</button>
@@ -300,6 +302,56 @@ window.showDriftDiffModal = async function(eventId) {
         initCopyableBlocks();
     } catch (err) {
         showError('Failed to load drift details: ' + err.message);
+    }
+};
+
+window.showDriftEventHistory = async function(eventId) {
+    try {
+        const [ev, history] = await Promise.all([
+            api.getConfigDriftEvent(eventId),
+            api.getConfigDriftEventHistory(eventId, 500),
+        ]);
+        if (!ev) {
+            showError('Drift event not found');
+            return;
+        }
+
+        const rows = (history || []).map((item) => {
+            const when = item.created_at ? new Date(item.created_at + 'Z').toLocaleString() : '-';
+            const actor = escapeHtml(item.actor || 'system');
+            const action = escapeHtml(item.action || '');
+            const fromStatus = escapeHtml(item.from_status || '-');
+            const toStatus = escapeHtml(item.to_status || '-');
+            const details = escapeHtml(item.details || '');
+            return `<div class="card" style="margin-bottom:0.5rem; padding:0.75rem;">
+                <div style="display:flex; justify-content:space-between; gap:0.5rem; flex-wrap:wrap;">
+                    <strong>${action}</strong>
+                    <span style="font-size:0.85em; color:var(--text-muted)">${when}</span>
+                </div>
+                <div style="margin-top:0.35rem; font-size:0.85em; color:var(--text-muted);">
+                    Actor: ${actor} &bull; Status: ${fromStatus} → ${toStatus}
+                </div>
+                ${details ? `<div style="margin-top:0.35rem; font-size:0.85em;">${details}</div>` : ''}
+            </div>`;
+        }).join('');
+
+        showModal(`Drift Event Log — ${escapeHtml(ev.hostname || ev.ip_address || '')}`, `
+            <div class="drift-event-meta" style="margin-bottom:0.75rem">
+                <span>Event ID: ${ev.id}</span>
+                <span style="opacity:0.4">|</span>
+                <span>Current Status: ${escapeHtml(ev.status || '')}</span>
+                <span style="opacity:0.4">|</span>
+                <span>Detected: ${ev.detected_at ? new Date(ev.detected_at + 'Z').toLocaleString() : ''}</span>
+            </div>
+            <div style="max-height:60vh; overflow:auto;">
+                ${rows || '<div class="card" style="text-align:center;color:var(--text-muted);padding:1rem;">No history entries recorded yet.</div>'}
+            </div>
+            <div style="display:flex; justify-content:flex-end; margin-top:0.75rem;">
+                <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+            </div>
+        `);
+    } catch (err) {
+        showError('Failed to load event history: ' + err.message);
     }
 };
 
@@ -688,16 +740,136 @@ window.refreshConfigDrift = async function() {
     await loadConfigDrift({ preserveContent: false });
 };
 
+function _getConfigBackupSearchState() {
+    if (!listViewState.configBackups.search) {
+        listViewState.configBackups.search = {
+            query: '',
+            mode: 'fulltext',
+            limit: 50,
+            contextLines: 1,
+            results: [],
+            hasMore: false,
+            searched: false,
+            searching: false,
+            activeMode: 'fulltext',
+        };
+    }
+    return listViewState.configBackups.search;
+}
+
+function _getConfigBackupSearchModeUx(mode) {
+    switch ((mode || '').toLowerCase()) {
+        case 'substring':
+            return {
+                placeholder: 'e.g. ip access-list standard',
+                example: 'Example: exact text substring like "ip access-list standard"',
+            };
+        case 'regex':
+            return {
+                placeholder: 'e.g. ^snmp-server community\\s+\\w+\\s+RO$',
+                example: 'Example regex: ^snmp-server community\\s+\\w+\\s+RO$',
+            };
+        case 'fulltext':
+        default:
+            return {
+                placeholder: 'e.g. snmp-server community public',
+                example: 'Example: keyword search like "snmp server public"',
+            };
+    }
+}
+
+function _applyConfigBackupSearchModeUx(mode) {
+    const queryInput = document.getElementById('config-backup-search-query');
+    const exampleEl = document.getElementById('config-backup-search-example');
+    const ux = _getConfigBackupSearchModeUx(mode);
+    if (queryInput) {
+        queryInput.placeholder = ux.placeholder;
+    }
+    if (exampleEl) {
+        exampleEl.textContent = ux.example;
+    }
+}
+
+function _setConfigurationSearchInputState(tab) {
+    const searchInput = document.getElementById('configuration-search');
+    if (!searchInput) return;
+    if (tab === 'search') {
+        searchInput.disabled = true;
+        searchInput.placeholder = 'Use Config Search controls';
+        return;
+    }
+    searchInput.disabled = false;
+    searchInput.placeholder = 'Search...';
+}
+
+function _bindConfigurationSearchInput() {
+    const searchInput = document.getElementById('configuration-search');
+    if (!searchInput || searchInput.dataset.bound === '1') return;
+    searchInput.dataset.bound = '1';
+    searchInput.addEventListener('input', debounce(() => {
+        if (searchInput.disabled) return;
+        const q = searchInput.value;
+        const tab = listViewState.configuration.tab;
+        if (tab === 'drift') {
+            listViewState.configDrift.query = q;
+            renderDriftEventsList(applyDriftFilters());
+            return;
+        }
+        listViewState.configBackups.query = q;
+        renderBackupPolicies(listViewState.configBackups.policies);
+        renderBackupHistory(listViewState.configBackups.backups);
+    }, 200));
+}
+
+function _bindConfigBackupSearchControls() {
+    const queryInput = document.getElementById('config-backup-search-query');
+    const modeSelect = document.getElementById('config-backup-search-mode');
+    const limitInput = document.getElementById('config-backup-search-limit');
+    const searchBtn = document.getElementById('config-backup-search-btn');
+    if (!queryInput || !modeSelect || !limitInput || !searchBtn) return;
+
+    const state = _getConfigBackupSearchState();
+    queryInput.value = state.query || '';
+    modeSelect.value = state.mode || 'fulltext';
+    limitInput.value = String(state.limit || 50);
+    _applyConfigBackupSearchModeUx(modeSelect.value || state.mode || 'fulltext');
+
+    if (queryInput.dataset.bound === '1') return;
+    queryInput.dataset.bound = '1';
+
+    queryInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        runConfigBackupSearch();
+    });
+    modeSelect.addEventListener('change', () => {
+        state.mode = modeSelect.value || 'fulltext';
+        _applyConfigBackupSearchModeUx(state.mode);
+    });
+    limitInput.addEventListener('change', () => {
+        let parsed = parseInt(limitInput.value || '50', 10);
+        if (!Number.isFinite(parsed)) parsed = 50;
+        state.limit = Math.max(1, Math.min(200, parsed));
+        limitInput.value = String(state.limit);
+    });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Configuration Page Tab Switching
 // ═══════════════════════════════════════════════════════════════════════════════
 
 window.switchConfigurationTab = function(tab) {
-    listViewState.configuration.tab = tab;
-    document.querySelectorAll('.config-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-config-tab') === tab));
+    const selected = ['drift', 'policies', 'history', 'search'].includes(tab) ? tab : 'drift';
+    listViewState.configuration.tab = selected;
+    document.querySelectorAll('.config-tab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-config-tab') === selected));
     document.querySelectorAll('.config-tab').forEach(t => t.style.display = 'none');
-    const target = document.getElementById(`config-tab-${tab}`);
+    const target = document.getElementById(`config-tab-${selected}`);
     if (target) target.style.display = '';
+    _setConfigurationSearchInputState(selected);
+    if (selected === 'search') {
+        _bindConfigBackupSearchControls();
+        renderConfigBackupSearchResults();
+    }
 };
 
 window.refreshConfiguration = async function() {
@@ -715,8 +887,9 @@ let _backupCurrentTab = 'policies';
 async function loadConfigBackups(options = {}) {
     const { preserveContent = false } = options;
     const policiesContainer = document.getElementById('backup-policies-list');
-    const historyContainer = document.getElementById('backup-history-list');
     if (!preserveContent && policiesContainer) policiesContainer.innerHTML = skeletonCards(2);
+    _bindConfigurationSearchInput();
+    _bindConfigBackupSearchControls();
     try {
         const [summary, policies, backups] = await Promise.all([
             api.getConfigBackupSummary(),
@@ -730,6 +903,9 @@ async function loadConfigBackups(options = {}) {
         renderBackupHistory(backups || []);
     } catch (error) {
         if (policiesContainer) policiesContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error loading backup data: ${escapeHtml(error.message)}</div>`;
+    } finally {
+        window.switchConfigurationTab(listViewState.configuration.tab || 'drift');
+        renderConfigBackupSearchResults();
     }
 }
 window.loadConfigBackups = loadConfigBackups;
@@ -798,6 +974,7 @@ function renderBackupHistory(backups) {
                 <div style="display:flex; gap:0.5rem; align-items:center;">
                     <span style="color:${statusColor}; font-size:0.85em;">${b.status}</span>
                     <button class="btn btn-sm btn-secondary" onclick="viewBackupDetail(${b.id})">View</button>
+                    ${b.status === 'success' ? `<button class="btn btn-sm btn-secondary" onclick="viewBackupDiff(${b.id})">Diff</button>` : ''}
                     <button class="btn btn-sm btn-secondary" onclick="showRestoreBackupModal(${b.id})">Restore</button>
                     <button class="btn btn-sm btn-danger" onclick="confirmDeleteBackup(${b.id})">Delete</button>
                 </div>
@@ -809,6 +986,121 @@ function renderBackupHistory(backups) {
         </div>`;
     }).join('');
 }
+
+function _renderConfigBackupSearchContext(result) {
+    const beforeLines = Array.isArray(result.context_before_lines) ? result.context_before_lines : [];
+    const afterLines = Array.isArray(result.context_after_lines) ? result.context_after_lines : [];
+    const lineNum = Number(result.match_line_number || 0);
+
+    const rows = [];
+    const beforeStart = lineNum > 0 ? (lineNum - beforeLines.length) : 0;
+    beforeLines.forEach((line, idx) => {
+        const num = beforeStart > 0 ? `${beforeStart + idx}` : '';
+        rows.push(`<span class="diff-context">${num ? `${num}: ` : ''}${escapeHtml(line || '')}</span>`);
+    });
+    rows.push(`<span class="diff-hunk">${lineNum ? `${lineNum}: ` : ''}${escapeHtml(result.match_line || '')}</span>`);
+    afterLines.forEach((line, idx) => {
+        const num = lineNum > 0 ? `${lineNum + idx + 1}` : '';
+        rows.push(`<span class="diff-context">${num ? `${num}: ` : ''}${escapeHtml(line || '')}</span>`);
+    });
+    return `<pre class="drift-diff-viewer" style="max-height:220px; overflow:auto; margin-top:0.75rem;">${rows.join('\n')}</pre>`;
+}
+
+function renderConfigBackupSearchResults() {
+    const container = document.getElementById('config-backup-search-results');
+    if (!container) return;
+
+    const state = _getConfigBackupSearchState();
+    if (state.searching) {
+        container.innerHTML = skeletonCards(2);
+        return;
+    }
+    if (!state.searched) {
+        container.innerHTML = '<div class="card" style="text-align:center; color:var(--text-muted); padding:1.5rem;">Run a search to scan backed-up configurations.</div>';
+        return;
+    }
+    if (!state.results.length) {
+        container.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted); padding:1.5rem;">No matches found for "${escapeHtml(state.query || '')}".</div>`;
+        return;
+    }
+
+    const modeLabel = escapeHtml(state.activeMode || state.mode || 'fulltext');
+    const summary = `<div class="card" style="margin-bottom:0.75rem; padding:0.75rem 1rem; color:var(--text-muted);">
+        Found ${state.results.length} result(s) using <strong>${modeLabel}</strong> mode${state.hasMore ? ' (showing top matches)' : ''}.
+    </div>`;
+
+    container.innerHTML = summary + state.results.map((result) => {
+        const host = escapeHtml(result.hostname || result.ip_address || 'Unknown host');
+        const ip = escapeHtml(result.ip_address || '');
+        const capturedAt = result.captured_at ? new Date(result.captured_at + 'Z').toLocaleString() : 'Unknown';
+        const size = result.config_length ? `${(result.config_length / 1024).toFixed(1)} KB` : '-';
+        return `<div class="card" style="margin-bottom:0.75rem; padding:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                    <strong>${host}</strong>
+                    <span style="margin-left:0.5rem; font-size:0.85em; color:var(--text-muted);">${ip}</span>
+                </div>
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <span style="font-size:0.8em; color:var(--text-muted);">line ${result.match_line_number || '?'}</span>
+                    <button class="btn btn-sm btn-secondary" onclick="viewBackupDetail(${result.backup_id})">View Backup</button>
+                    <button class="btn btn-sm btn-secondary" onclick="viewBackupDiff(${result.backup_id})">View Diff</button>
+                </div>
+            </div>
+            <div style="margin-top:0.5rem; font-size:0.85em; color:var(--text-muted);">
+                Captured: ${capturedAt} &bull; Method: ${escapeHtml(result.capture_method || 'unknown')} &bull; Size: ${size}
+            </div>
+            ${_renderConfigBackupSearchContext(result)}
+        </div>`;
+    }).join('');
+}
+
+async function runConfigBackupSearch() {
+    const queryInput = document.getElementById('config-backup-search-query');
+    const modeSelect = document.getElementById('config-backup-search-mode');
+    const limitInput = document.getElementById('config-backup-search-limit');
+    const state = _getConfigBackupSearchState();
+
+    if (!queryInput || !modeSelect || !limitInput) return;
+    const query = (queryInput.value || '').trim();
+    const mode = (modeSelect.value || 'fulltext').toLowerCase();
+    let limit = parseInt(limitInput.value || '50', 10);
+    if (!Number.isFinite(limit)) limit = 50;
+    limit = Math.max(1, Math.min(200, limit));
+    limitInput.value = String(limit);
+
+    state.query = query;
+    state.mode = mode;
+    state.limit = limit;
+
+    if (!query) {
+        state.results = [];
+        state.searched = false;
+        state.hasMore = false;
+        renderConfigBackupSearchResults();
+        showToast('Enter text to search in configuration backups.', 'warning');
+        return;
+    }
+
+    state.searching = true;
+    renderConfigBackupSearchResults();
+    try {
+        const payload = await api.searchConfigBackups(query, mode, limit, state.contextLines || 1);
+        state.results = payload.results || [];
+        state.hasMore = Boolean(payload.has_more);
+        state.activeMode = payload.mode || mode;
+        state.searched = true;
+    } catch (error) {
+        state.results = [];
+        state.hasMore = false;
+        state.activeMode = mode;
+        state.searched = true;
+        showToast('Search failed: ' + error.message, 'danger');
+    } finally {
+        state.searching = false;
+        renderConfigBackupSearchResults();
+    }
+}
+window.runConfigBackupSearch = runConfigBackupSearch;
 
 function switchBackupTab(tab) {
     _backupCurrentTab = tab;
@@ -991,6 +1283,33 @@ async function viewBackupDetail(id) {
 }
 window.viewBackupDetail = viewBackupDetail;
 
+async function viewBackupDiff(backupId) {
+    try {
+        const diff = await api.getConfigBackupDiff(backupId);
+        const diffHtml = _renderUnifiedDiff(diff.diff_text || '');
+        showModal(`Backup Diff — ${escapeHtml(diff.hostname || diff.ip_address || '')}`, `
+            <div class="drift-event-meta" style="margin-bottom:0.75rem">
+                <span>${escapeHtml(diff.ip_address || '')}</span>
+                <span style="opacity:0.4">|</span>
+                <span>Current: ${diff.captured_at ? new Date(diff.captured_at + 'Z').toLocaleString() : ''}</span>
+                <span style="opacity:0.4">|</span>
+                <span>Previous: ${diff.previous_captured_at ? new Date(diff.previous_captured_at + 'Z').toLocaleString() : ''}</span>
+                <span style="opacity:0.4">|</span>
+                <span class="drift-diff-added">+${diff.diff_lines_added || 0}</span>
+                <span class="drift-diff-removed">-${diff.diff_lines_removed || 0}</span>
+            </div>
+            ${copyableHtmlBlock(diffHtml, diff.diff_text || '', { className: 'drift-diff-viewer' })}
+            <div style="display:flex; justify-content:flex-end; margin-top:1rem;">
+                <button class="btn btn-secondary" onclick="closeAllModals()">Close</button>
+            </div>
+        `);
+        initCopyableBlocks();
+    } catch (error) {
+        showToast('Error: ' + error.message, 'danger');
+    }
+}
+window.viewBackupDiff = viewBackupDiff;
+
 async function showRestoreBackupModal(backupId) {
     let creds = [];
     try { creds = await api.getCredentials(); } catch (e) { /* ignore */ }
@@ -1038,25 +1357,6 @@ async function confirmDeleteBackup(id) {
 }
 window.confirmDeleteBackup = confirmDeleteBackup;
 
-// Search handler for configuration page (drift, backup policies, backup history)
-document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('configuration-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', debounce(() => {
-            const q = searchInput.value;
-            const tab = listViewState.configuration.tab;
-            if (tab === 'drift') {
-                listViewState.configDrift.query = q;
-                renderDriftEventsList(applyDriftFilters());
-            } else {
-                listViewState.configBackups.query = q;
-                renderBackupPolicies(listViewState.configBackups.policies);
-                renderBackupHistory(listViewState.configBackups.backups);
-            }
-        }, 200));
-    }
-});
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Cleanup
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1072,6 +1372,18 @@ function destroyConfiguration() {
     listViewState.configBackups.policies = [];
     listViewState.configBackups.backups = [];
     listViewState.configBackups.query = '';
+    listViewState.configuration.tab = 'drift';
+    const searchState = _getConfigBackupSearchState();
+    searchState.query = '';
+    searchState.mode = 'fulltext';
+    searchState.limit = 50;
+    searchState.contextLines = 1;
+    searchState.results = [];
+    searchState.hasMore = false;
+    searchState.searched = false;
+    searchState.searching = false;
+    searchState.activeMode = 'fulltext';
+    _setConfigurationSearchInputState('drift');
 }
 
 export { loadConfigDrift, loadConfigBackups, destroyConfiguration, applyDriftFilters };
