@@ -1979,3 +1979,61 @@ export async function apiPatch(fullPath, body) {
 export async function apiDelete(fullPath) {
     return rawApiRequest(fullPath, { method: 'DELETE' });
 }
+
+// ── Bandwidth Billing & 95th Percentile ─────────────────────────────────────
+
+export async function getBillingCircuits(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/billing/circuits${qs ? '?' + qs : ''}`);
+}
+
+export async function getBillingCircuit(id) {
+    return apiRequest(`/billing/circuits/${id}`);
+}
+
+export async function createBillingCircuit(data) {
+    return apiRequest('/billing/circuits', { method: 'POST', body: data });
+}
+
+export async function updateBillingCircuit(id, data) {
+    return apiRequest(`/billing/circuits/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteBillingCircuit(id) {
+    return apiRequest(`/billing/circuits/${id}`, { method: 'DELETE' });
+}
+
+export async function getBillingCustomers() {
+    return apiRequest('/billing/customers');
+}
+
+export async function generateBilling(data) {
+    return apiRequest('/billing/generate', { method: 'POST', body: data });
+}
+
+export async function getBillingPeriods(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/billing/periods${qs ? '?' + qs : ''}`);
+}
+
+export async function getBillingPeriod(id) {
+    return apiRequest(`/billing/periods/${id}`);
+}
+
+export async function deleteBillingPeriod(id) {
+    return apiRequest(`/billing/periods/${id}`, { method: 'DELETE' });
+}
+
+export async function getBillingPeriodUsage(id) {
+    return apiRequest(`/billing/periods/${id}/usage`);
+}
+
+export async function getBillingSummary(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/billing/summary${qs ? '?' + qs : ''}`);
+}
+
+export function getBillingExportUrl(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return `/api/billing/export/periods${qs ? '?' + qs : ''}`;
+}

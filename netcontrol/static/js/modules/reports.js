@@ -405,6 +405,7 @@ function switchReportTab(tab) {
     // Lazy load syslog and OID profiles when their tabs are selected
     if (tab === 'events') loadSyslog();
     if (tab === 'oid-profiles' && typeof window.loadOidProfiles === 'function') window.loadOidProfiles();
+    if (tab === 'billing') loadBillingTab();
 }
 window.switchReportTab = switchReportTab;
 
@@ -1157,6 +1158,373 @@ async function deleteOidProfile(profileId) {
 window.deleteOidProfile = deleteOidProfile;
 
 // =============================================================================
+// Bandwidth Billing & 95th Percentile
+// =============================================================================
+
+function formatBps(bps) {
+    if (bps == null || bps === 0) return '0 bps';
+    if (bps >= 1e9) return (bps / 1e9).toFixed(2) + ' Gbps';
+    if (bps >= 1e6) return (bps / 1e6).toFixed(2) + ' Mbps';
+    if (bps >= 1e3) return (bps / 1e3).toFixed(2) + ' Kbps';
+    return bps.toFixed(0) + ' bps';
+}
+
+async function loadBillingTab() {
+    // Populate customer filter
+    try {
+        const custResp = await api.getBillingCustomers();
+        const sel = document.getElementById('billing-customer-filter');
+        if (sel && custResp.customers) {
+            const current = sel.value;
+            sel.innerHTML = '<option value="">All Customers</option>' +
+                custResp.customers.map(c => `<option value="${escapeHtml(c)}"${c === current ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('');
+        }
+    } catch (e) { /* ignore */ }
+
+    const customer = document.getElementById('billing-customer-filter')?.value || '';
+    const params = customer ? { customer } : {};
+
+    // Update export link
+    const exportLink = document.getElementById('billing-export-link');
+    if (exportLink) exportLink.href = api.getBillingExportUrl(params);
+
+    // Load summary cards
+    try {
+        const summary = await api.getBillingSummary(params);
+        const cardsEl = document.getElementById('billing-summary-cards');
+        if (cardsEl) {
+            cardsEl.innerHTML = `
+                <div class="card stat-card"><div class="stat-value">${summary.total_circuits || 0}</div><div class="stat-label">Total Circuits</div></div>
+                <div class="card stat-card"><div class="stat-value">${summary.enabled_circuits || 0}</div><div class="stat-label">Enabled</div></div>
+                <div class="card stat-card"><div class="stat-value">${summary.total_periods || 0}</div><div class="stat-label">Billing Periods</div></div>
+                <div class="card stat-card"><div class="stat-value" style="color:${summary.overage_periods > 0 ? 'var(--danger)' : 'var(--success)'}">${summary.overage_periods || 0}</div><div class="stat-label">Overages</div></div>
+                <div class="card stat-card"><div class="stat-value">${summary.total_overage_cost > 0 ? '$' + summary.total_overage_cost.toLocaleString() : '$0'}</div><div class="stat-label">Total Overage Cost</div></div>
+            `;
+        }
+    } catch (e) {
+        const cardsEl = document.getElementById('billing-summary-cards');
+        if (cardsEl) cardsEl.innerHTML = '';
+    }
+
+    // Load circuits table
+    try {
+        const circResp = await api.getBillingCircuits(params);
+        const listEl = document.getElementById('billing-circuits-list');
+        if (listEl) {
+            if (!circResp.circuits || circResp.circuits.length === 0) {
+                listEl.innerHTML = emptyStateHTML('No billing circuits defined', 'Create a billing circuit to start tracking 95th percentile bandwidth usage.');
+            } else {
+                listEl.innerHTML = `<div class="table-responsive"><table class="data-table"><thead><tr>
+                    <th>Name</th><th>Customer</th><th>Device</th><th>Interface</th>
+                    <th>Commit Rate</th><th>Cost/Mbps</th><th>Cycle</th><th>Status</th><th>Actions</th>
+                </tr></thead><tbody>` +
+                circResp.circuits.map(c => `<tr>
+                    <td>${escapeHtml(c.name)}</td>
+                    <td>${escapeHtml(c.customer || '—')}</td>
+                    <td>${escapeHtml(c.hostname || '—')}</td>
+                    <td>${escapeHtml(c.if_name || 'idx:' + c.if_index)}</td>
+                    <td>${formatBps(c.commit_rate_bps)}</td>
+                    <td>${c.cost_per_mbps > 0 ? '$' + c.cost_per_mbps.toFixed(2) : '—'}</td>
+                    <td>${escapeHtml(c.billing_cycle)}</td>
+                    <td>${c.enabled ? '<span style="color:var(--success)">Enabled</span>' : '<span style="color:var(--text-muted)">Disabled</span>'}</td>
+                    <td style="display:flex; gap:0.25rem;">
+                        <button class="btn btn-xs btn-secondary" onclick="editCircuit(${c.id})">Edit</button>
+                        <button class="btn btn-xs btn-danger" onclick="deleteCircuit(${c.id})">Delete</button>
+                    </td>
+                </tr>`).join('') + '</tbody></table></div>';
+            }
+        }
+    } catch (e) {
+        const listEl = document.getElementById('billing-circuits-list');
+        if (listEl) listEl.innerHTML = `<div class="card" style="color:var(--danger)">Error loading circuits: ${escapeHtml(e.message)}</div>`;
+    }
+
+    // Load billing periods
+    try {
+        const perResp = await api.getBillingPeriods(params);
+        const listEl = document.getElementById('billing-periods-list');
+        if (listEl) {
+            if (!perResp.periods || perResp.periods.length === 0) {
+                listEl.innerHTML = emptyStateHTML('No billing periods generated', 'Generate billing to calculate 95th percentile reports.');
+            } else {
+                listEl.innerHTML = `<div class="table-responsive"><table class="data-table"><thead><tr>
+                    <th>Period</th><th>Customer</th><th>Circuit</th><th>Device</th>
+                    <th>P95 In</th><th>P95 Out</th><th>P95 Billing</th>
+                    <th>Commit</th><th>Overage</th><th>Cost</th><th>Status</th><th></th>
+                </tr></thead><tbody>` +
+                perResp.periods.map(p => {
+                    const isOverage = p.status === 'overage';
+                    return `<tr${isOverage ? ' style="background:rgba(var(--danger-rgb),0.05)"' : ''}>
+                        <td>${escapeHtml((p.period_start || '').substring(0, 10))} – ${escapeHtml((p.period_end || '').substring(0, 10))}</td>
+                        <td>${escapeHtml(p.customer || '—')}</td>
+                        <td>${escapeHtml(p.circuit_name || '—')}</td>
+                        <td>${escapeHtml(p.hostname || '—')}</td>
+                        <td>${formatBps(p.p95_in_bps)}</td>
+                        <td>${formatBps(p.p95_out_bps)}</td>
+                        <td><strong>${formatBps(p.p95_billing_bps)}</strong></td>
+                        <td>${formatBps(p.commit_rate_bps)}</td>
+                        <td>${isOverage ? '<span style="color:var(--danger)">' + formatBps(p.overage_bps) + '</span>' : '—'}</td>
+                        <td>${p.overage_cost > 0 ? '<span style="color:var(--danger)">$' + p.overage_cost.toLocaleString() + '</span>' : '—'}</td>
+                        <td><span class="badge ${isOverage ? 'badge-danger' : 'badge-success'}">${escapeHtml(p.status)}</span></td>
+                        <td><button class="btn btn-xs btn-secondary" onclick="viewBillingPeriod(${p.id})">View</button></td>
+                    </tr>`;
+                }).join('') + '</tbody></table></div>';
+            }
+        }
+    } catch (e) {
+        const listEl = document.getElementById('billing-periods-list');
+        if (listEl) listEl.innerHTML = `<div class="card" style="color:var(--danger)">Error loading periods: ${escapeHtml(e.message)}</div>`;
+    }
+}
+window.loadBillingTab = loadBillingTab;
+
+async function showCreateCircuitModal() {
+    // Fetch hosts for device dropdown
+    let hosts = [];
+    try {
+        const inv = await api.getInventoryAll();
+        hosts = inv.hosts || inv || [];
+    } catch (e) { /* ignore */ }
+
+    const content = `
+        <div class="form-group"><label class="form-label">Circuit Name</label>
+            <input id="circ-name" class="form-input" placeholder="e.g. ISP-A Primary"></div>
+        <div class="form-group"><label class="form-label">Customer</label>
+            <input id="circ-customer" class="form-input" placeholder="e.g. Acme Corp"></div>
+        <div class="form-group"><label class="form-label">Device</label>
+            <select id="circ-host" class="form-select">
+                <option value="">Select device...</option>
+                ${hosts.map(h => `<option value="${h.id}">${escapeHtml(h.hostname || h.ip_address)}</option>`).join('')}
+            </select></div>
+        <div class="form-group"><label class="form-label">Interface Index</label>
+            <input id="circ-ifindex" class="form-input" type="number" placeholder="1"></div>
+        <div class="form-group"><label class="form-label">Interface Name</label>
+            <input id="circ-ifname" class="form-input" placeholder="e.g. GigabitEthernet0/0/0"></div>
+        <div class="form-group"><label class="form-label">Commit Rate (bps)</label>
+            <input id="circ-commit" class="form-input" type="number" placeholder="100000000" value="0"></div>
+        <div class="form-group"><label class="form-label">Burst Limit (bps)</label>
+            <input id="circ-burst" class="form-input" type="number" placeholder="0" value="0"></div>
+        <div class="form-group"><label class="form-label">Cost per Mbps (overage)</label>
+            <input id="circ-cost" class="form-input" type="number" step="0.01" placeholder="0.00" value="0"></div>
+        <div class="form-group"><label class="form-label">Currency</label>
+            <input id="circ-currency" class="form-input" placeholder="USD" value="USD"></div>
+        <div class="form-group"><label class="form-label">Billing Day</label>
+            <input id="circ-day" class="form-input" type="number" min="1" max="28" value="1"></div>
+        <div class="form-group"><label class="form-label">Billing Cycle</label>
+            <select id="circ-cycle" class="form-select">
+                <option value="monthly" selected>Monthly</option>
+                <option value="weekly">Weekly</option>
+            </select></div>
+        <div class="form-group"><label class="form-label">Description</label>
+            <textarea id="circ-desc" class="form-input" rows="2"></textarea></div>
+    `;
+
+    showModal({
+        title: 'Create Billing Circuit',
+        body: content,
+        confirmText: 'Create',
+        onConfirm: async () => {
+            const hostId = parseInt(document.getElementById('circ-host')?.value);
+            const ifIndex = parseInt(document.getElementById('circ-ifindex')?.value);
+            if (!hostId || isNaN(ifIndex)) { showError('Device and interface index are required'); return; }
+            try {
+                await api.createBillingCircuit({
+                    name: document.getElementById('circ-name')?.value || '',
+                    customer: document.getElementById('circ-customer')?.value || '',
+                    host_id: hostId,
+                    if_index: ifIndex,
+                    if_name: document.getElementById('circ-ifname')?.value || '',
+                    commit_rate_bps: parseFloat(document.getElementById('circ-commit')?.value) || 0,
+                    burst_limit_bps: parseFloat(document.getElementById('circ-burst')?.value) || 0,
+                    cost_per_mbps: parseFloat(document.getElementById('circ-cost')?.value) || 0,
+                    currency: document.getElementById('circ-currency')?.value || 'USD',
+                    billing_day: parseInt(document.getElementById('circ-day')?.value) || 1,
+                    billing_cycle: document.getElementById('circ-cycle')?.value || 'monthly',
+                    description: document.getElementById('circ-desc')?.value || '',
+                });
+                closeModal();
+                showSuccess('Billing circuit created');
+                loadBillingTab();
+            } catch (e) { showError(e.message); }
+        },
+    });
+}
+window.showCreateCircuitModal = showCreateCircuitModal;
+
+async function editCircuit(circuitId) {
+    let circuit;
+    try {
+        circuit = await api.getBillingCircuit(circuitId);
+    } catch (e) { showError(e.message); return; }
+
+    const content = `
+        <div class="form-group"><label class="form-label">Circuit Name</label>
+            <input id="circ-edit-name" class="form-input" value="${escapeHtml(circuit.name || '')}"></div>
+        <div class="form-group"><label class="form-label">Customer</label>
+            <input id="circ-edit-customer" class="form-input" value="${escapeHtml(circuit.customer || '')}"></div>
+        <div class="form-group"><label class="form-label">Commit Rate (bps)</label>
+            <input id="circ-edit-commit" class="form-input" type="number" value="${circuit.commit_rate_bps || 0}"></div>
+        <div class="form-group"><label class="form-label">Cost per Mbps</label>
+            <input id="circ-edit-cost" class="form-input" type="number" step="0.01" value="${circuit.cost_per_mbps || 0}"></div>
+        <div class="form-group"><label class="form-label">Billing Day</label>
+            <input id="circ-edit-day" class="form-input" type="number" min="1" max="28" value="${circuit.billing_day || 1}"></div>
+        <div class="form-group"><label class="form-label">Enabled</label>
+            <select id="circ-edit-enabled" class="form-select">
+                <option value="1"${circuit.enabled ? ' selected' : ''}>Yes</option>
+                <option value="0"${!circuit.enabled ? ' selected' : ''}>No</option>
+            </select></div>
+        <div class="form-group"><label class="form-label">Description</label>
+            <textarea id="circ-edit-desc" class="form-input" rows="2">${escapeHtml(circuit.description || '')}</textarea></div>
+    `;
+
+    showModal({
+        title: 'Edit Billing Circuit',
+        body: content,
+        confirmText: 'Save',
+        onConfirm: async () => {
+            try {
+                await api.updateBillingCircuit(circuitId, {
+                    name: document.getElementById('circ-edit-name')?.value,
+                    customer: document.getElementById('circ-edit-customer')?.value,
+                    commit_rate_bps: parseFloat(document.getElementById('circ-edit-commit')?.value) || 0,
+                    cost_per_mbps: parseFloat(document.getElementById('circ-edit-cost')?.value) || 0,
+                    billing_day: parseInt(document.getElementById('circ-edit-day')?.value) || 1,
+                    enabled: parseInt(document.getElementById('circ-edit-enabled')?.value),
+                    description: document.getElementById('circ-edit-desc')?.value,
+                });
+                closeModal();
+                showSuccess('Circuit updated');
+                loadBillingTab();
+            } catch (e) { showError(e.message); }
+        },
+    });
+}
+window.editCircuit = editCircuit;
+
+async function deleteCircuit(circuitId) {
+    if (!await showConfirm({ title: 'Delete Circuit', message: 'Delete this billing circuit and all its periods?', confirmText: 'Delete', confirmClass: 'btn-danger' })) return;
+    try {
+        await api.deleteBillingCircuit(circuitId);
+        showSuccess('Circuit deleted');
+        loadBillingTab();
+    } catch (e) { showError(e.message); }
+}
+window.deleteCircuit = deleteCircuit;
+
+async function showGenerateBillingModal() {
+    // Fetch circuits for dropdown
+    let circuits = [];
+    try {
+        const resp = await api.getBillingCircuits({ enabled: true });
+        circuits = resp.circuits || [];
+    } catch (e) { /* ignore */ }
+
+    const content = `
+        <div class="form-group"><label class="form-label">Circuit (optional — leave blank for all)</label>
+            <select id="gen-circuit" class="form-select">
+                <option value="">All enabled circuits</option>
+                ${circuits.map(c => `<option value="${c.id}">${escapeHtml(c.name)} — ${escapeHtml(c.customer || 'No customer')}</option>`).join('')}
+            </select></div>
+        <div class="form-group"><label class="form-label">Period Start (optional — auto-detect if blank)</label>
+            <input id="gen-start" class="form-input" type="date"></div>
+        <div class="form-group"><label class="form-label">Period End (optional)</label>
+            <input id="gen-end" class="form-input" type="date"></div>
+        <p style="color:var(--text-muted); font-size:0.85rem;">Leave dates blank to auto-calculate the most recent completed billing cycle.</p>
+    `;
+
+    showModal({
+        title: 'Generate 95th Percentile Billing',
+        body: content,
+        confirmText: 'Generate',
+        onConfirm: async () => {
+            const circuitId = document.getElementById('gen-circuit')?.value;
+            const startVal = document.getElementById('gen-start')?.value;
+            const endVal = document.getElementById('gen-end')?.value;
+            const payload = {};
+            if (circuitId) payload.circuit_id = parseInt(circuitId);
+            if (startVal) payload.period_start = startVal + 'T00:00:00';
+            if (endVal) payload.period_end = endVal + 'T00:00:00';
+            try {
+                const result = await api.generateBilling(payload);
+                closeModal();
+                const count = result.count || 0;
+                const overages = (result.periods || []).filter(p => p.status === 'overage').length;
+                showSuccess(`Generated ${count} billing period(s)` + (overages > 0 ? ` — ${overages} overage(s) detected` : ''));
+                loadBillingTab();
+            } catch (e) { showError(e.message); }
+        },
+    });
+}
+window.showGenerateBillingModal = showGenerateBillingModal;
+
+async function viewBillingPeriod(periodId) {
+    let usage;
+    try {
+        usage = await api.getBillingPeriodUsage(periodId);
+    } catch (e) { showError(e.message); return; }
+
+    const p = usage.period || {};
+    const circuit = usage.circuit || {};
+    const samples = usage.samples || [];
+
+    const commitMbps = (p.commit_rate_bps || 0) / 1e6;
+    const p95Mbps = (p.p95_billing_bps || 0) / 1e6;
+
+    let content = `
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem; margin-bottom:1rem;">
+            <div><strong>Circuit:</strong> ${escapeHtml(p.circuit_name || '')}</div>
+            <div><strong>Customer:</strong> ${escapeHtml(p.customer || '—')}</div>
+            <div><strong>Device:</strong> ${escapeHtml(p.hostname || '—')}</div>
+            <div><strong>Interface:</strong> ${escapeHtml(p.if_name || '')}</div>
+            <div><strong>Period:</strong> ${escapeHtml((p.period_start || '').substring(0, 10))} – ${escapeHtml((p.period_end || '').substring(0, 10))}</div>
+            <div><strong>Samples:</strong> ${p.total_samples || 0}</div>
+        </div>
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:0.5rem; margin-bottom:1rem;">
+            <div class="card stat-card" style="padding:0.75rem; text-align:center">
+                <div class="stat-value" style="font-size:1.1rem">${formatBps(p.p95_in_bps)}</div><div class="stat-label">P95 In</div></div>
+            <div class="card stat-card" style="padding:0.75rem; text-align:center">
+                <div class="stat-value" style="font-size:1.1rem">${formatBps(p.p95_out_bps)}</div><div class="stat-label">P95 Out</div></div>
+            <div class="card stat-card" style="padding:0.75rem; text-align:center">
+                <div class="stat-value" style="font-size:1.1rem; color:${p.status === 'overage' ? 'var(--danger)' : 'var(--success)'}">${formatBps(p.p95_billing_bps)}</div><div class="stat-label">P95 Billing</div></div>
+            <div class="card stat-card" style="padding:0.75rem; text-align:center">
+                <div class="stat-value" style="font-size:1.1rem">${formatBps(p.commit_rate_bps)}</div><div class="stat-label">Commit Rate</div></div>
+        </div>
+        ${p.status === 'overage' ? `<div class="card" style="padding:0.75rem; background:rgba(var(--danger-rgb),0.1); margin-bottom:1rem;">
+            <strong style="color:var(--danger)">Overage Detected:</strong>
+            ${formatBps(p.overage_bps)} over commit — Cost: $${(p.overage_cost || 0).toLocaleString()}
+        </div>` : ''}
+        <div id="billing-usage-chart" style="height:300px;"></div>
+    `;
+
+    showModal({ title: 'Billing Period Detail', body: content, size: 'lg', showCancel: false, confirmText: 'Close' });
+
+    // Render usage chart with P95 and commit lines
+    if (samples.length > 0) {
+        setTimeout(() => {
+            const chartEl = document.getElementById('billing-usage-chart');
+            if (!chartEl) return;
+            const timestamps = samples.map(s => s.sampled_at);
+            const inSeries = samples.map(s => ((s.in_rate_bps || 0) / 1e6).toFixed(2));
+            const outSeries = samples.map(s => ((s.out_rate_bps || 0) / 1e6).toFixed(2));
+
+            const chart = new PlexusChart(chartEl, {
+                xAxis: { type: 'category', data: timestamps },
+                yAxis: { type: 'value', name: 'Mbps' },
+                series: [
+                    { name: 'Inbound', type: 'line', data: inSeries, smooth: true, lineStyle: { width: 1 }, areaStyle: { opacity: 0.15 } },
+                    { name: 'Outbound', type: 'line', data: outSeries, smooth: true, lineStyle: { width: 1 }, areaStyle: { opacity: 0.15 } },
+                    { name: '95th Percentile', type: 'line', data: Array(timestamps.length).fill(p95Mbps.toFixed(2)), lineStyle: { type: 'dashed', width: 2, color: '#FF5722' }, symbol: 'none' },
+                    ...(commitMbps > 0 ? [{ name: 'Commit Rate', type: 'line', data: Array(timestamps.length).fill(commitMbps.toFixed(2)), lineStyle: { type: 'dotted', width: 2, color: '#4CAF50' }, symbol: 'none' }] : []),
+                ],
+                tooltip: { trigger: 'axis' },
+                legend: { show: true },
+            });
+        }, 100);
+    }
+}
+window.viewBillingPeriod = viewBillingPeriod;
+
+// =============================================================================
 // Exports
 // =============================================================================
 
@@ -1175,4 +1543,5 @@ export {
     generateAndShowReport,
     formatDuration,
     loadOidProfiles,
+    loadBillingTab,
 };
