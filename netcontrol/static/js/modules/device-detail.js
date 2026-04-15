@@ -97,6 +97,9 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
         // Syslog tab
         renderDeviceSyslogTab(hostId);
 
+        // Interface Errors tab
+        renderDeviceErrorTrendingTab(hostId);
+
         // Overlay deployment/config/alert annotations on metric charts
         try {
             const endISO = new Date().toISOString();
@@ -491,6 +494,203 @@ async function renderDeviceSyslogTab(hostId) {
         container.innerHTML = '<p class="text-muted">Could not load syslog events</p>';
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Interface Error Trending Tab
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function renderDeviceErrorTrendingTab(hostId) {
+    const container = document.getElementById('device-error-trending');
+    if (!container) return;
+
+    try {
+        const [summary, events] = await Promise.all([
+            api.getInterfaceErrorSummary(hostId, 1),
+            api.getInterfaceErrorEvents({ host_id: hostId, limit: 50 }),
+        ]);
+
+        const interfaces = summary?.interfaces || [];
+        const errorEvents = events || [];
+        const activeEvents = errorEvents.filter(e => !e.resolved_at);
+
+        if (!interfaces.length && !errorEvents.length) {
+            container.innerHTML = '<p class="text-muted">No interface error data available. Error counters are collected during SNMP polls and will appear here after two or more polling cycles.</p>';
+            return;
+        }
+
+        let html = '';
+
+        // Active error spike events banner
+        if (activeEvents.length) {
+            html += `<div class="card" style="border-left:3px solid var(--danger); margin-bottom:1rem;">
+                <div class="card-body" style="padding:0.75rem;">
+                    <h4 style="margin:0 0 0.5rem; color:var(--danger);">${activeEvents.length} Active Error Event${activeEvents.length > 1 ? 's' : ''}</h4>
+                    <table class="chart-table" style="font-size:0.82rem;">
+                        <thead><tr><th>Time</th><th>Interface</th><th>Metric</th><th>Rate</th><th>Severity</th><th>Root Cause</th><th>Actions</th></tr></thead>
+                        <tbody>${activeEvents.map(e => {
+                            const sevClass = e.severity === 'critical' ? 'danger' : 'warning';
+                            return `<tr>
+                                <td style="white-space:nowrap;">${new Date(e.created_at).toLocaleString()}</td>
+                                <td><strong>${escapeHtml(e.if_name || 'idx-' + e.if_index)}</strong></td>
+                                <td>${escapeHtml(e.metric_name || '')}</td>
+                                <td>${e.current_rate != null ? e.current_rate.toFixed(2) + '/s' : '-'} <span class="text-muted">(${e.spike_factor != null ? e.spike_factor.toFixed(1) : '?'}× baseline)</span></td>
+                                <td><span class="badge badge-${sevClass}">${escapeHtml(e.severity || '')}</span></td>
+                                <td style="max-width:300px;">${escapeHtml(e.root_cause_hint || e.root_cause_category || 'unknown')}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-secondary" onclick="acknowledgeErrorEvent(${e.id})" style="padding:2px 6px; font-size:0.75em;">${e.acknowledged ? 'Acked' : 'Ack'}</button>
+                                    <button class="btn btn-sm btn-secondary" onclick="resolveErrorEvent(${e.id})" style="padding:2px 6px; font-size:0.75em;">Resolve</button>
+                                </td>
+                            </tr>`;
+                        }).join('')}</tbody>
+                    </table>
+                </div>
+            </div>`;
+        }
+
+        // Per-interface error summary table
+        if (interfaces.length) {
+            html += `<div class="card" style="margin-bottom:1rem;">
+                <div class="card-body" style="padding:0.75rem;">
+                    <h4 style="margin:0 0 0.5rem;">Interface Error Summary (Last 24h)</h4>
+                    <table class="chart-table" style="font-size:0.82rem;">
+                        <thead><tr><th>Interface</th><th>In Errors</th><th>Out Errors</th><th>In Discards</th><th>Out Discards</th></tr></thead>
+                        <tbody>${interfaces.map(iface => {
+                            const m = iface.metrics || {};
+                            const fmtMetric = (key) => {
+                                const d = m[key];
+                                if (!d || d.max_value == null) return '<span class="text-muted">0</span>';
+                                const val = d.max_value;
+                                const color = val > 100 ? 'var(--danger)' : val > 0 ? 'var(--warning)' : 'var(--text-secondary)';
+                                return `<span style="color:${color}; font-weight:${val > 0 ? '600' : '400'};">${val.toLocaleString()}</span>`;
+                            };
+                            return `<tr>
+                                <td><strong>${escapeHtml(iface.if_name || 'idx-' + iface.if_index)}</strong></td>
+                                <td>${fmtMetric('if_in_errors')}</td>
+                                <td>${fmtMetric('if_out_errors')}</td>
+                                <td>${fmtMetric('if_in_discards')}</td>
+                                <td>${fmtMetric('if_out_discards')}</td>
+                            </tr>`;
+                        }).join('')}</tbody>
+                    </table>
+                </div>
+            </div>`;
+
+            // Per-interface error charts (top interfaces with errors)
+            const withErrors = interfaces.filter(iface => {
+                const m = iface.metrics || {};
+                return Object.values(m).some(d => d && d.max_value > 0);
+            }).slice(0, 8);
+
+            if (withErrors.length) {
+                html += `<h4 style="margin:1rem 0 0.5rem;">Error Trending Charts</h4>`;
+                html += '<div class="if-chart-grid">';
+                withErrors.forEach(iface => {
+                    const chartId = `err-chart-${String(iface.if_index).replace(/[^a-zA-Z0-9]/g, '_')}`;
+                    html += `<div class="card" style="margin-bottom:0;">
+                        <div class="card-title" style="font-size:0.85rem; padding:0.5rem 0.75rem;">${escapeHtml(iface.if_name || 'idx-' + iface.if_index)} — Errors</div>
+                        <div id="${chartId}" class="chart-container" style="height:180px;"></div>
+                    </div>`;
+                });
+                html += '</div>';
+            }
+        }
+
+        // Historical error events table
+        if (errorEvents.length) {
+            const resolved = errorEvents.filter(e => e.resolved_at);
+            if (resolved.length) {
+                html += `<div class="card" style="margin-top:1rem;">
+                    <div class="card-body" style="padding:0.75rem;">
+                        <h4 style="margin:0 0 0.5rem;">Recent Error Events</h4>
+                        <table class="chart-table" style="font-size:0.82rem;">
+                            <thead><tr><th>Time</th><th>Interface</th><th>Metric</th><th>Category</th><th>Hint</th><th>Status</th></tr></thead>
+                            <tbody>${resolved.slice(0, 20).map(e => `<tr>
+                                <td style="white-space:nowrap;">${new Date(e.created_at).toLocaleString()}</td>
+                                <td>${escapeHtml(e.if_name || '')}</td>
+                                <td>${escapeHtml(e.metric_name || '')}</td>
+                                <td><span class="badge badge-secondary">${escapeHtml(e.root_cause_category || 'unknown')}</span></td>
+                                <td style="max-width:300px;">${escapeHtml(e.root_cause_hint || '')}</td>
+                                <td>Resolved</td>
+                            </tr>`).join('')}</tbody>
+                        </table>
+                    </div>
+                </div>`;
+            }
+        }
+
+        container.innerHTML = html;
+
+        // Render error charts for interfaces with errors
+        const withErrors = interfaces.filter(iface => {
+            const m = iface.metrics || {};
+            return Object.values(m).some(d => d && d.max_value > 0);
+        }).slice(0, 8);
+
+        if (withErrors.length) {
+            requestAnimationFrame(async () => {
+                for (const iface of withErrors) {
+                    try {
+                        const detail = await api.getInterfaceErrorDetail(hostId, iface.if_index);
+                        const series = detail?.series || {};
+                        const chartId = `err-chart-${String(iface.if_index).replace(/[^a-zA-Z0-9]/g, '_')}`;
+                        const chartSeries = [];
+                        const colors = {
+                            if_in_errors_rate: '#EF4444',
+                            if_out_errors_rate: '#F97316',
+                            if_in_discards_rate: '#A855F7',
+                            if_out_discards_rate: '#EC4899',
+                        };
+                        const labels = {
+                            if_in_errors_rate: 'In Errors/s',
+                            if_out_errors_rate: 'Out Errors/s',
+                            if_in_discards_rate: 'In Discards/s',
+                            if_out_discards_rate: 'Out Discards/s',
+                        };
+                        for (const [key, label] of Object.entries(labels)) {
+                            const data = (series[key] || []).map(d => ({
+                                time: d.sampled_at,
+                                value: d.value || 0,
+                            }));
+                            if (data.length) {
+                                chartSeries.push({ name: label, data, color: colors[key] });
+                            }
+                        }
+                        if (chartSeries.length) {
+                            PlexusChart.timeSeries(chartId, chartSeries, { area: false, yAxisName: 'errors/s', yMin: 0 });
+                        }
+                    } catch { /* non-critical */ }
+                }
+            });
+        }
+    } catch (e) {
+        container.innerHTML = '<p class="text-muted">Could not load interface error data</p>';
+    }
+}
+
+// Global handlers for error event actions
+async function acknowledgeErrorEvent(eventId) {
+    try {
+        await api.acknowledgeInterfaceErrorEvent(eventId);
+        showToast('Error event acknowledged', 'success');
+        const hostId = listViewState.deviceDetail.hostId;
+        if (hostId) renderDeviceErrorTrendingTab(hostId);
+    } catch (e) {
+        showToast('Failed to acknowledge event', 'error');
+    }
+}
+window.acknowledgeErrorEvent = acknowledgeErrorEvent;
+
+async function resolveErrorEvent(eventId) {
+    try {
+        await api.resolveInterfaceErrorEvent(eventId);
+        showToast('Error event resolved', 'success');
+        const hostId = listViewState.deviceDetail.hostId;
+        if (hostId) renderDeviceErrorTrendingTab(hostId);
+    } catch (e) {
+        showToast('Failed to resolve event', 'error');
+    }
+}
+window.resolveErrorEvent = resolveErrorEvent;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Cleanup
