@@ -789,10 +789,12 @@ export async function acknowledgeTopologyChanges() {
     return apiRequest('/topology/changes/acknowledge', { method: 'POST' });
 }
 
-export async function discoverTopologyStp(groupId = null, vlanId = 1) {
+export async function discoverTopologyStp(groupId = null, vlanId = 1, allVlans = false, maxVlans = 64) {
     const params = new URLSearchParams();
     if (groupId) params.set('group_id', groupId);
     if (vlanId) params.set('vlan_id', vlanId);
+    if (allVlans) params.set('all_vlans', 'true');
+    if (maxVlans) params.set('max_vlans', maxVlans);
     const suffix = params.toString() ? `?${params}` : '';
     return apiRequest(`/topology/stp/discover${suffix}`, { method: 'POST' });
 }

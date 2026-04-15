@@ -329,6 +329,9 @@ function templateTopology() {
             <button class="btn btn-secondary" id="topology-path-btn" onclick="togglePathMode()" title="Find shortest path between two nodes">Path</button>
             <button class="btn btn-secondary" id="topology-util-btn" onclick="toggleUtilizationOverlay()" title="Toggle interface utilization overlay">Util</button>
             <input type="number" id="topology-stp-vlan" class="form-input" value="1" min="1" max="4094" style="width:88px;" title="STP instance/VLAN">
+            <label style="display:inline-flex; align-items:center; gap:0.3rem; font-size:0.78rem; color:var(--text-muted); white-space:nowrap;">
+                <input type="checkbox" id="topology-stp-all-vlans"> All VLANs
+            </label>
             <button class="btn btn-secondary" id="topology-stp-scan-btn" onclick="scanTopologyStp()" title="Poll STP state from devices">Scan STP</button>
             <button class="btn btn-secondary" id="topology-stp-btn" onclick="toggleStpOverlay()" title="Overlay STP forwarding/blocked states">STP</button>
             <button class="btn btn-secondary topology-changes-btn" id="topology-stp-events-btn" onclick="showStpTopologyEvents()" title="View STP topology events">
