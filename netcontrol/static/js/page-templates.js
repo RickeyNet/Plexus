@@ -928,12 +928,13 @@ function templateReports() {
         <div class="card" style="padding:1.5rem; max-width:500px;">
             <h3 style="margin-bottom:1rem;">Quick CSV Export</h3>
             <div style="display:flex; flex-direction:column; gap:0.75rem;">
-                <a class="btn btn-secondary" href="/api/reports/export/availability?days=30" download>Availability Report (30d)</a>
-                <a class="btn btn-secondary" href="/api/reports/export/compliance" download>Compliance Report</a>
-                <a class="btn btn-secondary" href="/api/reports/export/interface?days=1" download>Interface Utilization (24h)</a>
-                <a class="btn btn-secondary" href="/api/reports/export/network_documentation" download>Network Documentation (CSV)</a>
-                <a class="btn btn-secondary" href="/api/reports/export/network_documentation.svg" download>Network Topology Diagram (SVG)</a>
-                <a class="btn btn-secondary" href="/api/reports/export/network_documentation.pdf" download>Network Documentation (PDF)</a>
+                <button class="btn btn-secondary" onclick="downloadReportExport('/api/reports/export/availability?days=30', 'availability_report.csv')">Availability Report (30d)</button>
+                <button class="btn btn-secondary" onclick="downloadReportExport('/api/reports/export/compliance', 'compliance_report.csv')">Compliance Report</button>
+                <button class="btn btn-secondary" onclick="downloadReportExport('/api/reports/export/interface?days=1', 'interface_report.csv')">Interface Utilization (24h)</button>
+                <button class="btn btn-secondary" onclick="downloadReportExport('/api/reports/export/network_documentation', 'network_documentation_report.csv')">Network Documentation (CSV)</button>
+                <button class="btn btn-secondary" onclick="downloadReportExport('/api/reports/export/network_documentation.svg', 'network_documentation_topology.svg')">Network Topology Diagram (SVG)</button>
+                <button class="btn btn-secondary" onclick="downloadReportExport('/api/reports/export/network_documentation.drawio', 'network_documentation_topology.drawio')">Network Topology Diagram (draw.io)</button>
+                <button class="btn btn-secondary" onclick="downloadReportExport('/api/reports/export/network_documentation.pdf', 'network_documentation_report.pdf')">Network Documentation (PDF)</button>
             </div>
         </div>
     </div>

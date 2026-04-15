@@ -209,6 +209,7 @@ async def _persist_report_artifacts(
         group_id = params.get("group_id")
         graph = await _build_network_doc_topology(group_id)
         svg = _render_network_doc_svg(graph, group_id)
+        drawio_xml = _render_network_doc_drawio(graph, group_id)
         pdf_bytes = _render_network_doc_pdf(rows, group_id=group_id)
         artifacts.append(
             await db.create_report_artifact(
@@ -218,6 +219,16 @@ async def _persist_report_artifacts(
                 file_name=f"{prefix}.svg",
                 media_type="image/svg+xml",
                 content_text=svg,
+            )
+        )
+        artifacts.append(
+            await db.create_report_artifact(
+                run_id=run_id,
+                report_id=report_id,
+                artifact_type="drawio",
+                file_name=f"{prefix}.drawio",
+                media_type="application/vnd.jgraph.mxfile",
+                content_text=drawio_xml,
             )
         )
         artifacts.append(
@@ -582,6 +593,164 @@ def _render_network_doc_svg(graph: dict, group_id: int | None = None) -> str:
 </svg>"""
 
 
+def _drawio_cell_id(raw_id: str | int, used: set[str]) -> str:
+    base = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(raw_id or "node")).strip("_")
+    if not base:
+        base = "node"
+    candidate = f"n_{base}"
+    suffix = 2
+    while candidate in used:
+        candidate = f"n_{base}_{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _drawio_value(lines: list[str]) -> str:
+    clean = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    return "<br/>".join(clean)
+
+
+def _xml_attr_escape(text: str) -> str:
+    return _xml_escape(str(text or ""), {'"': "&quot;", "'": "&apos;"})
+
+
+def _render_network_doc_drawio(graph: dict, group_id: int | None = None) -> str:
+    """Render a draw.io (.drawio) topology document from network graph data."""
+    nodes = graph.get("nodes") or []
+    edges = graph.get("edges") or []
+
+    width = max(1400, min(2800, 860 + len(nodes) * 38))
+    height = max(900, min(1900, 620 + len(nodes) * 26))
+
+    title = "Plexus Network Documentation Topology"
+    subtitle = f"Generated {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%SZ')}"
+    if group_id is not None:
+        subtitle = f"{subtitle} | Group ID: {group_id}"
+
+    graph_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        "<mxfile host=\"Plexus\" modified=\"{}\" agent=\"Plexus\" version=\"20.8.16\">".format(
+            datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ),
+        "  <diagram id=\"plexus-network-doc\" name=\"Network Topology\">",
+        "    <mxGraphModel dx=\"1264\" dy=\"776\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" pageWidth=\"1600\" pageHeight=\"1200\" math=\"0\" shadow=\"0\">",
+        "      <root>",
+        "        <mxCell id=\"0\" />",
+        "        <mxCell id=\"1\" parent=\"0\" />",
+    ]
+
+    graph_lines.append(
+        f"        <mxCell id=\"title_cell\" value=\"{_xml_attr_escape(title)}\" style=\"text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontStyle=1;fontSize=22;fontColor=#0f172a;\" vertex=\"1\" parent=\"1\">"
+    )
+    graph_lines.append(
+        "          <mxGeometry x=\"480\" y=\"16\" width=\"640\" height=\"30\" as=\"geometry\" />"
+    )
+    graph_lines.append("        </mxCell>")
+
+    graph_lines.append(
+        f"        <mxCell id=\"subtitle_cell\" value=\"{_xml_attr_escape(subtitle)}\" style=\"text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=12;fontColor=#475569;\" vertex=\"1\" parent=\"1\">"
+    )
+    graph_lines.append(
+        "          <mxGeometry x=\"420\" y=\"46\" width=\"760\" height=\"22\" as=\"geometry\" />"
+    )
+    graph_lines.append("        </mxCell>")
+
+    if not nodes:
+        graph_lines.append(
+            "        <mxCell id=\"empty_state\" value=\"No topology nodes available for export.\" style=\"rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;strokeColor=#cbd5e1;fillColor=#f8fafc;fontColor=#334155;fontSize=14;\" vertex=\"1\" parent=\"1\">"
+        )
+        graph_lines.append(
+            "          <mxGeometry x=\"460\" y=\"330\" width=\"680\" height=\"80\" as=\"geometry\" />"
+        )
+        graph_lines.append("        </mxCell>")
+    else:
+        cx = width / 2
+        cy = (height / 2) + 30
+        radius = max(220.0, min(width, height) * 0.34)
+
+        ordered_nodes = sorted(nodes, key=lambda n: str(n.get("label") or n.get("id")))
+        positions: dict[str | int, tuple[float, float]] = {}
+        total = len(ordered_nodes)
+
+        if total == 1:
+            only = ordered_nodes[0]
+            positions[only["id"]] = (cx, cy)
+        else:
+            for idx, node in enumerate(ordered_nodes):
+                angle = (2 * math.pi * idx / total) - (math.pi / 2)
+                positions[node["id"]] = (
+                    cx + radius * math.cos(angle),
+                    cy + radius * math.sin(angle),
+                )
+
+        used_ids: set[str] = set()
+        node_cell_ids: dict[str | int, str] = {}
+        for node in ordered_nodes:
+            node_cell_ids[node["id"]] = _drawio_cell_id(node.get("id") or "node", used_ids)
+
+        for node in ordered_nodes:
+            x, y = positions[node["id"]]
+            label = str(node.get("label") or node.get("id"))
+            ip = str(node.get("ip") or "")
+            group_name = str(node.get("group_name") or "")
+            in_inventory = bool(node.get("in_inventory"))
+            value = _drawio_value(
+                [label, ip, f"Group: {group_name}" if group_name else ""]
+            )
+
+            fill = "#dbeafe" if in_inventory else "#e2e8f0"
+            stroke = "#1d4ed8" if in_inventory else "#475569"
+            text = "#0f172a"
+            style = (
+                "rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;"
+                f"strokeColor={stroke};fillColor={fill};fontColor={text};fontSize=11;"
+            )
+            node_id = node_cell_ids[node["id"]]
+            graph_lines.append(
+                f"        <mxCell id=\"{node_id}\" value=\"{_xml_attr_escape(value)}\" style=\"{style}\" vertex=\"1\" parent=\"1\">"
+            )
+            graph_lines.append(
+                f"          <mxGeometry x=\"{x - 80:.1f}\" y=\"{y - 26:.1f}\" width=\"160\" height=\"52\" as=\"geometry\" />"
+            )
+            graph_lines.append("        </mxCell>")
+
+        edge_counter = 1
+        for edge in edges:
+            src = edge.get("from")
+            dst = edge.get("to")
+            src_cell = node_cell_ids.get(src)
+            dst_cell = node_cell_ids.get(dst)
+            if not src_cell or not dst_cell:
+                continue
+            src_if = str(edge.get("source_interface") or "").strip()
+            dst_if = str(edge.get("target_interface") or "").strip()
+            proto = str(edge.get("protocol") or "").strip().upper()
+            iface = " -> ".join([part for part in (src_if, dst_if) if part])
+            value = _drawio_value([iface, proto])
+            color = _protocol_color(str(edge.get("protocol") or ""))
+            edge_style = (
+                "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+                f"html=1;strokeColor={color};fontSize=10;labelBackgroundColor=#ffffff;"
+            )
+            graph_lines.append(
+                f"        <mxCell id=\"e_{edge_counter}\" value=\"{_xml_attr_escape(value)}\" style=\"{edge_style}\" edge=\"1\" parent=\"1\" source=\"{src_cell}\" target=\"{dst_cell}\">"
+            )
+            graph_lines.append("          <mxGeometry relative=\"1\" as=\"geometry\" />")
+            graph_lines.append("        </mxCell>")
+            edge_counter += 1
+
+    graph_lines.extend(
+        [
+            "      </root>",
+            "    </mxGraphModel>",
+            "  </diagram>",
+            "</mxfile>",
+        ]
+    )
+    return "\n".join(graph_lines)
+
+
 def _pdf_escape(text: str) -> str:
     return (
         str(text or "")
@@ -782,6 +951,20 @@ def _rows_to_csv(rows: list[dict]) -> str:
     return output.getvalue()
 
 
+def _csv_download_response(csv_data: str, file_name: str) -> Response:
+    """Build a CSV download response with explicit content length."""
+    payload = csv_data.encode("utf-8")
+    safe_name = os.path.basename(str(file_name or "report.csv")) or "report.csv"
+    return Response(
+        content=payload,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename={safe_name}",
+            "Content-Length": str(len(payload)),
+        },
+    )
+
+
 @router.get("/api/reports/export/availability")
 async def export_availability_csv(
     group_id: int | None = Query(default=None),
@@ -789,11 +972,7 @@ async def export_availability_csv(
 ):
     rows = await db.generate_availability_report_data(group_id, days)
     csv_data = _rows_to_csv(rows)
-    return StreamingResponse(
-        io.StringIO(csv_data),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=availability_report.csv"},
-    )
+    return _csv_download_response(csv_data, "availability_report.csv")
 
 
 @router.get("/api/reports/export/compliance")
@@ -802,11 +981,7 @@ async def export_compliance_csv(
 ):
     rows = await db.generate_compliance_report_data(group_id)
     csv_data = _rows_to_csv(rows)
-    return StreamingResponse(
-        io.StringIO(csv_data),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=compliance_report.csv"},
-    )
+    return _csv_download_response(csv_data, "compliance_report.csv")
 
 
 @router.get("/api/reports/export/interface")
@@ -817,11 +992,7 @@ async def export_interface_csv(
 ):
     rows = await db.generate_interface_report_data(host_id, group_id, days)
     csv_data = _rows_to_csv(rows)
-    return StreamingResponse(
-        io.StringIO(csv_data),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=interface_report.csv"},
-    )
+    return _csv_download_response(csv_data, "interface_report.csv")
 
 
 @router.get("/api/reports/export/network_documentation")
@@ -830,11 +1001,7 @@ async def export_network_documentation_csv(
 ):
     rows = await db.generate_network_documentation_report_data(group_id)
     csv_data = _rows_to_csv(rows)
-    return StreamingResponse(
-        io.StringIO(csv_data),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=network_documentation_report.csv"},
-    )
+    return _csv_download_response(csv_data, "network_documentation_report.csv")
 
 
 @router.get("/api/reports/export/network_documentation.svg")
@@ -844,14 +1011,39 @@ async def export_network_documentation_svg(
     try:
         graph = await _build_network_doc_topology(group_id)
         svg = _render_network_doc_svg(graph, group_id)
+        payload = svg.encode("utf-8")
         return Response(
-            content=svg,
+            content=payload,
             media_type="image/svg+xml",
-            headers={"Content-Disposition": "attachment; filename=network_documentation_topology.svg"},
+            headers={
+                "Content-Disposition": "attachment; filename=network_documentation_topology.svg",
+                "Content-Length": str(len(payload)),
+            },
         )
     except Exception as exc:
         LOGGER.error("Network documentation SVG export failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to export network documentation SVG")
+
+
+@router.get("/api/reports/export/network_documentation.drawio")
+async def export_network_documentation_drawio(
+    group_id: int | None = Query(default=None),
+):
+    try:
+        graph = await _build_network_doc_topology(group_id)
+        drawio_xml = _render_network_doc_drawio(graph, group_id)
+        payload = drawio_xml.encode("utf-8")
+        return Response(
+            content=payload,
+            media_type="application/vnd.jgraph.mxfile",
+            headers={
+                "Content-Disposition": "attachment; filename=network_documentation_topology.drawio",
+                "Content-Length": str(len(payload)),
+            },
+        )
+    except Exception as exc:
+        LOGGER.error("Network documentation draw.io export failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to export network documentation draw.io")
 
 
 @router.get("/api/reports/export/network_documentation.pdf")
@@ -864,7 +1056,10 @@ async def export_network_documentation_pdf(
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": "attachment; filename=network_documentation_report.pdf"},
+            headers={
+                "Content-Disposition": "attachment; filename=network_documentation_report.pdf",
+                "Content-Length": str(len(pdf_bytes)),
+            },
         )
     except Exception as exc:
         LOGGER.error("Network documentation PDF export failed: %s", exc)
@@ -904,12 +1099,17 @@ async def download_report_artifact(artifact_id: int):
         blob = blob.tobytes()
     if isinstance(blob, (bytes, bytearray)) and len(blob) > 0:
         content: bytes | str = bytes(blob)
+        content_len = len(content)
     else:
         content = str(artifact.get("content_text") or "")
+        content_len = len(content.encode("utf-8"))
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f"attachment; filename={safe_name}"},
+        headers={
+            "Content-Disposition": f"attachment; filename={safe_name}",
+            "Content-Length": str(content_len),
+        },
     )
 
 
@@ -935,7 +1135,10 @@ async def export_report_run_csv(run_id: int):
             return Response(
                 content=payload,
                 media_type=str(full.get("media_type") or "text/csv"),
-                headers={"Content-Disposition": f"attachment; filename={os.path.basename(str(full.get('file_name') or f'report_{run_id}.csv'))}"},
+                headers={
+                    "Content-Disposition": f"attachment; filename={os.path.basename(str(full.get('file_name') or f'report_{run_id}.csv'))}",
+                    "Content-Length": str(len(payload if isinstance(payload, (bytes, bytearray)) else str(payload).encode('utf-8'))),
+                },
             )
 
     try:
@@ -945,11 +1148,7 @@ async def export_report_run_csv(run_id: int):
     if not isinstance(rows, list):
         rows = []
     csv_data = _rows_to_csv(rows)
-    return StreamingResponse(
-        io.StringIO(csv_data),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=report_{run_id}.csv"},
-    )
+    return _csv_download_response(csv_data, f"report_{run_id}.csv")
 
 
 # ── Custom OID Profiles Routes ──────────────────────────────────────────────
