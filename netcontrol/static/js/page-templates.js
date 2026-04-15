@@ -890,6 +890,7 @@ function templateReports() {
         <button class="btn btn-sm btn-secondary report-tab-btn active" data-report-tab="generate" onclick="switchReportTab('generate')">Generate</button>
         <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="history" onclick="switchReportTab('history')">Report History</button>
         <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="export" onclick="switchReportTab('export')">Quick Export</button>
+        <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="billing" onclick="switchReportTab('billing')">Billing</button>
         <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="events" onclick="switchReportTab('events')">Event Log</button>
         <button class="btn btn-sm btn-secondary report-tab-btn" data-report-tab="oid-profiles" onclick="switchReportTab('oid-profiles')">OID Profiles</button>
     </div>
@@ -930,6 +931,22 @@ function templateReports() {
                 <a class="btn btn-secondary" href="/api/reports/export/interface?days=1" download>Interface Utilization (24h)</a>
             </div>
         </div>
+    </div>
+    <!-- Billing Tab -->
+    <div id="report-tab-billing" class="report-tab" style="display:none">
+        <div style="margin-bottom:1rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+            <select id="billing-customer-filter" class="form-select" style="max-width:200px;" onchange="loadBillingTab()">
+                <option value="">All Customers</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="showCreateCircuitModal()">+ New Circuit</button>
+            <button class="btn btn-secondary btn-sm" onclick="showGenerateBillingModal()">Generate Billing</button>
+            <a id="billing-export-link" class="btn btn-secondary btn-sm" href="/api/billing/export/periods" download>Export CSV</a>
+        </div>
+        <div class="drift-summary-grid" id="billing-summary-cards"></div>
+        <h3 style="margin-top:1.5rem; margin-bottom:0.75rem;">Billing Circuits</h3>
+        <div id="billing-circuits-list"></div>
+        <h3 style="margin-top:1.5rem; margin-bottom:0.75rem;">Billing Periods</h3>
+        <div id="billing-periods-list"></div>
     </div>
     <!-- Event Log Tab -->
     <div id="report-tab-events" class="report-tab" style="display:none">
