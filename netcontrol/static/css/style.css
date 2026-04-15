@@ -3808,6 +3808,21 @@ code {
     color: var(--topo-edge-bgp);
 }
 
+.topology-legend-line-stp-fwd {
+    background: #43a047;
+    color: #43a047;
+}
+
+.topology-legend-line-stp-learn {
+    background: #f9a825;
+    color: #f9a825;
+}
+
+.topology-legend-line-stp-block {
+    background: #e53935;
+    color: #e53935;
+}
+
 /* Topology empty state */
 #page-topology .empty-state {
     display: flex;
@@ -3903,6 +3918,12 @@ code {
 
 /* Utilization toggle active state */
 #topology-util-btn.active {
+    background: rgba(var(--topo-accent-rgb), 0.2);
+    border-color: rgba(var(--topo-accent-rgb), 0.5);
+    color: var(--primary-light);
+}
+
+#topology-stp-btn.active {
     background: rgba(var(--topo-accent-rgb), 0.2);
     border-color: rgba(var(--topo-accent-rgb), 0.5);
     color: var(--primary-light);
