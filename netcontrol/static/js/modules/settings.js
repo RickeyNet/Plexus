@@ -27,6 +27,9 @@ let _loginRulesHandler = null;
 let _authConfigHandler = null;
 let _authProviderHandler = null;
 let _topoDiscoveryHandler = null;
+let _stpDiscoveryHandler = null;
+let _stpAllVlansHandler = null;
+let _stpRootPolicyHandler = null;
 let _monitoringHandler = null;
 
 function getGroupNameMap() {
@@ -304,10 +307,14 @@ async function loadAdminSettings(_options = {}) {
         bindLoginRulesForm();
         bindAuthConfigForm();
         bindTopologyDiscoveryForm();
+        bindStpDiscoveryForm();
+        bindStpRootPolicyForm();
         bindMonitoringForm();
         renderLoginRules();
         renderAuthConfig();
         loadTopologyDiscoveryConfig();
+        loadStpDiscoveryConfig();
+        loadStpRootPolicies();
         loadMonitoringConfig();
         initThemeControls();
         initSpaceControls();
@@ -363,6 +370,170 @@ async function runTopologyDiscoveryNow() {
 }
 
 window.runTopologyDiscoveryNow = runTopologyDiscoveryNow;
+
+// -- STP Discovery Schedule + Root Policies --
+
+function _syncStpDiscoveryFormState() {
+    const allEl = document.getElementById('stp-disc-all-vlans');
+    const vlanEl = document.getElementById('stp-disc-vlan');
+    if (!allEl || !vlanEl) return;
+    vlanEl.disabled = !!allEl.checked;
+}
+
+async function loadStpDiscoveryConfig() {
+    try {
+        const cfg = await api.getTopologyStpDiscoveryConfig();
+        document.getElementById('stp-disc-enabled').checked = !!cfg.enabled;
+        document.getElementById('stp-disc-interval').value = cfg.interval_seconds || 3600;
+        document.getElementById('stp-disc-all-vlans').checked = cfg.all_vlans !== false;
+        document.getElementById('stp-disc-vlan').value = cfg.vlan_id || 1;
+        document.getElementById('stp-disc-max-vlans').value = cfg.max_vlans || 64;
+        _syncStpDiscoveryFormState();
+    } catch { /* not admin or feature unavailable */ }
+}
+
+function bindStpDiscoveryForm() {
+    const form = document.getElementById('admin-stp-discovery-form');
+    const allEl = document.getElementById('stp-disc-all-vlans');
+    if (!form || !allEl) return;
+
+    if (_stpDiscoveryHandler) form.removeEventListener('submit', _stpDiscoveryHandler);
+    if (_stpAllVlansHandler) allEl.removeEventListener('change', _stpAllVlansHandler);
+
+    _stpAllVlansHandler = () => _syncStpDiscoveryFormState();
+    allEl.addEventListener('change', _stpAllVlansHandler);
+
+    _stpDiscoveryHandler = async (e) => {
+        e.preventDefault();
+        try {
+            const payload = {
+                enabled: document.getElementById('stp-disc-enabled').checked,
+                interval_seconds: parseInt(document.getElementById('stp-disc-interval').value, 10) || 3600,
+                all_vlans: document.getElementById('stp-disc-all-vlans').checked,
+                vlan_id: parseInt(document.getElementById('stp-disc-vlan').value, 10) || 1,
+                max_vlans: parseInt(document.getElementById('stp-disc-max-vlans').value, 10) || 64,
+            };
+            await api.updateTopologyStpDiscoveryConfig(payload);
+            showToast('STP polling schedule saved', 'success');
+            _syncStpDiscoveryFormState();
+        } catch (err) {
+            showError('Failed to save STP schedule: ' + err.message);
+        }
+    };
+    form.addEventListener('submit', _stpDiscoveryHandler);
+}
+
+async function runTopologyStpDiscoveryNow() {
+    try {
+        showToast('Running STP polling...', 'info');
+        const resp = await api.runTopologyStpDiscoveryNow();
+        const r = resp.result || {};
+        if (!r.enabled) {
+            showToast('Scheduled STP polling is disabled. Enable it or run Scan STP from Topology.', 'info');
+            return;
+        }
+        showToast(
+            `STP polling complete: ${r.groups_scanned || 0} groups, ${r.ports_collected || 0} ports, ${r.errors || 0} errors`,
+            (r.errors > 0) ? 'warning' : 'success',
+        );
+        invalidatePageCache('topology');
+    } catch (err) {
+        showError('STP polling failed: ' + err.message);
+    }
+}
+
+async function loadStpRootPolicies() {
+    const listEl = document.getElementById('stp-root-policy-list');
+    const groupSelect = document.getElementById('stp-root-group-id');
+    if (!listEl || !groupSelect) return;
+
+    try {
+        const [groups, resp] = await Promise.all([
+            api.getInventoryGroups(false),
+            api.getTopologyStpRootPolicies(null, null, false, 2000),
+        ]);
+
+        const currentGroupVal = groupSelect.value;
+        groupSelect.innerHTML = (groups || []).map((g) =>
+            `<option value="${g.id}">${escapeHtml(g.name)}</option>`
+        ).join('');
+        if (currentGroupVal) groupSelect.value = currentGroupVal;
+        if (!groupSelect.value && groups?.length) groupSelect.value = String(groups[0].id);
+
+        const policies = resp.policies || [];
+        if (!policies.length) {
+            listEl.innerHTML = '<div class="card-description">No STP root policies defined yet.</div>';
+            return;
+        }
+
+        listEl.innerHTML = policies.map((p) => `
+            <div class="card" style="margin-bottom:0.55rem; padding:0.65rem 0.8rem;">
+                <div style="display:flex; justify-content:space-between; gap:0.75rem; align-items:flex-start;">
+                    <div>
+                        <div style="font-weight:600; font-size:0.9rem;">${escapeHtml(p.group_name || ('Group ' + p.group_id))} · VLAN ${escapeHtml(p.vlan_id || '')}</div>
+                        <div style="font-family:monospace; font-size:0.78rem; margin-top:0.15rem;">${escapeHtml(p.expected_root_bridge_id || '')}</div>
+                        <div class="card-description">${escapeHtml(p.expected_root_hostname || '')}</div>
+                    </div>
+                    <div style="display:flex; gap:0.4rem; align-items:center;">
+                        <span class="status-badge ${p.enabled ? 'status-running' : 'status-pending'}">${p.enabled ? 'Enabled' : 'Disabled'}</span>
+                        <button class="btn btn-sm btn-danger" onclick="deleteStpRootPolicy(${p.id})">Delete</button>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    } catch (err) {
+        listEl.innerHTML = `<div class="error">Failed loading STP root policies: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function bindStpRootPolicyForm() {
+    const form = document.getElementById('admin-stp-root-policy-form');
+    if (!form) return;
+    if (_stpRootPolicyHandler) form.removeEventListener('submit', _stpRootPolicyHandler);
+
+    _stpRootPolicyHandler = async (e) => {
+        e.preventDefault();
+        try {
+            const payload = {
+                group_id: parseInt(document.getElementById('stp-root-group-id').value, 10) || 0,
+                vlan_id: parseInt(document.getElementById('stp-root-vlan').value, 10) || 1,
+                expected_root_bridge_id: (document.getElementById('stp-root-bridge-id').value || '').trim(),
+                expected_root_hostname: (document.getElementById('stp-root-hostname').value || '').trim(),
+                enabled: document.getElementById('stp-root-enabled').checked,
+            };
+            if (!payload.group_id || !payload.expected_root_bridge_id) {
+                showError('Group and expected root bridge ID are required.');
+                return;
+            }
+            await api.upsertTopologyStpRootPolicy(payload);
+            showToast('STP root policy saved', 'success');
+            await loadStpRootPolicies();
+        } catch (err) {
+            showError('Failed to save STP root policy: ' + err.message);
+        }
+    };
+    form.addEventListener('submit', _stpRootPolicyHandler);
+}
+
+window.runTopologyStpDiscoveryNow = runTopologyStpDiscoveryNow;
+window.deleteStpRootPolicy = async function(policyId) {
+    if (!await showConfirm({
+        title: 'Delete STP Root Policy',
+        message: 'Delete this STP root policy?',
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+        confirmClass: 'btn-danger',
+    })) {
+        return;
+    }
+    try {
+        await api.deleteTopologyStpRootPolicy(policyId);
+        showSuccess('STP root policy deleted');
+        await loadStpRootPolicies();
+    } catch (err) {
+        showError('Failed to delete STP root policy: ' + err.message);
+    }
+};
 
 // -- Monitoring Config --
 
@@ -654,6 +825,18 @@ function destroySettings() {
     if (_topoDiscoveryHandler) {
         document.getElementById('admin-topology-discovery-form')?.removeEventListener('submit', _topoDiscoveryHandler);
         _topoDiscoveryHandler = null;
+    }
+    if (_stpDiscoveryHandler) {
+        document.getElementById('admin-stp-discovery-form')?.removeEventListener('submit', _stpDiscoveryHandler);
+        _stpDiscoveryHandler = null;
+    }
+    if (_stpAllVlansHandler) {
+        document.getElementById('stp-disc-all-vlans')?.removeEventListener('change', _stpAllVlansHandler);
+        _stpAllVlansHandler = null;
+    }
+    if (_stpRootPolicyHandler) {
+        document.getElementById('admin-stp-root-policy-form')?.removeEventListener('submit', _stpRootPolicyHandler);
+        _stpRootPolicyHandler = null;
     }
     if (_monitoringHandler) {
         document.getElementById('admin-monitoring-form')?.removeEventListener('submit', _monitoringHandler);
