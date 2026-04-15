@@ -902,6 +902,7 @@ function templateReports() {
                     <option value="availability">Availability Report</option>
                     <option value="compliance">Compliance Report</option>
                     <option value="interface">Interface Utilization Report</option>
+                    <option value="network_documentation">Network Documentation (Inventory + Topology + IP/VLAN)</option>
                 </select></div>
             <div class="form-group"><label class="form-label">Group (optional)</label>
                 <select id="report-group" class="form-select">
@@ -930,6 +931,9 @@ function templateReports() {
                 <a class="btn btn-secondary" href="/api/reports/export/availability?days=30" download>Availability Report (30d)</a>
                 <a class="btn btn-secondary" href="/api/reports/export/compliance" download>Compliance Report</a>
                 <a class="btn btn-secondary" href="/api/reports/export/interface?days=1" download>Interface Utilization (24h)</a>
+                <a class="btn btn-secondary" href="/api/reports/export/network_documentation" download>Network Documentation (CSV)</a>
+                <a class="btn btn-secondary" href="/api/reports/export/network_documentation.svg" download>Network Topology Diagram (SVG)</a>
+                <a class="btn btn-secondary" href="/api/reports/export/network_documentation.pdf" download>Network Documentation (PDF)</a>
             </div>
         </div>
     </div>

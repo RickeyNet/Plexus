@@ -187,7 +187,7 @@ from netcontrol.routes.playbooks import (
     sync_playbooks_from_registry,
     write_playbook_file,
 )
-from netcontrol.routes.reporting import router as reporting_router
+from netcontrol.routes.reporting import _report_scheduler_loop, router as reporting_router
 from netcontrol.routes.risk_analysis import (
     _CRITICAL_PATTERNS,
     RiskAnalysisRequest,
@@ -813,6 +813,7 @@ async def lifespan(app: FastAPI):
     baseline_task = asyncio.create_task(_baseline_computation_loop())
     downsampling_task = asyncio.create_task(_downsampling_loop())
     rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
+    report_scheduler_task = asyncio.create_task(_report_scheduler_loop())
     try:
         yield
     finally:
@@ -828,6 +829,7 @@ async def lifespan(app: FastAPI):
         baseline_task.cancel()
         downsampling_task.cancel()
         rate_limit_cleanup_task.cancel()
+        report_scheduler_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -874,6 +876,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await rate_limit_cleanup_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await report_scheduler_task
         except asyncio.CancelledError:
             pass
 

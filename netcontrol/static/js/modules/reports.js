@@ -384,6 +384,7 @@ async function loadReports(options = {}) {
                         <td>${r.started_at ? new Date(r.started_at).toLocaleString() : '-'}</td>
                         <td>
                             ${r.status === 'completed' ? `<a class="btn btn-sm btn-secondary" href="/api/reports/runs/${r.id}/csv" download>CSV</a>` : ''}
+                            ${r.status === 'completed' ? `<button class="btn btn-sm btn-secondary" onclick="showReportArtifacts(${r.id})" style="margin-left:0.35rem;">Artifacts</button>` : ''}
                         </td>
                     </tr>`).join('')}</tbody>
                 </table>`;
@@ -394,6 +395,39 @@ async function loadReports(options = {}) {
     }
 }
 window.loadReports = loadReports;
+
+async function showReportArtifacts(runId) {
+    try {
+        const resp = await api.getReportRunArtifacts(runId, 100);
+        const artifacts = resp?.artifacts || [];
+        const listHtml = artifacts.length
+            ? `<div style="display:flex; flex-direction:column; gap:0.45rem;">
+                ${artifacts.map(a => `
+                    <div class="card" style="padding:0.65rem 0.8rem; display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
+                        <div>
+                            <div style="font-weight:600;">${escapeHtml(a.file_name || `artifact_${a.id}`)}</div>
+                            <div class="text-muted" style="font-size:0.82rem;">
+                                ${escapeHtml(a.artifact_type || '')} &middot; ${escapeHtml(a.media_type || '')} &middot; ${Number(a.size_bytes || 0).toLocaleString()} bytes
+                            </div>
+                        </div>
+                        <a class="btn btn-sm btn-secondary" href="${api.getReportArtifactUrl(a.id)}" download>Download</a>
+                    </div>
+                `).join('')}
+            </div>`
+            : '<div class="card" style="padding:1rem;"><p class="text-muted">No persisted artifacts found for this run.</p></div>';
+
+        showModal(`
+            <div class="modal-header"><h3>Run #${runId} Artifacts</h3></div>
+            <div class="modal-body">${listHtml}</div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+            </div>
+        `);
+    } catch (error) {
+        showError('Failed to load report artifacts: ' + error.message);
+    }
+}
+window.showReportArtifacts = showReportArtifacts;
 
 function switchReportTab(tab) {
     document.querySelectorAll('.report-tab').forEach(t => t.style.display = 'none');
@@ -418,8 +452,8 @@ window.showGenerateReport = showGenerateReport;
 function updateReportParams() {
     const type = document.getElementById('report-type')?.value;
     const daysGroup = document.getElementById('report-days-group');
-    // Compliance doesn't use days
-    if (daysGroup) daysGroup.style.display = type === 'compliance' ? 'none' : '';
+    // Some report types do not use a date window.
+    if (daysGroup) daysGroup.style.display = (type === 'compliance' || type === 'network_documentation') ? 'none' : '';
 }
 window.updateReportParams = updateReportParams;
 
@@ -434,7 +468,7 @@ async function generateAndShowReport() {
 
     const params = {};
     if (groupId) params.group_id = parseInt(groupId, 10);
-    if (reportType !== 'compliance') params.days = days;
+    if (reportType !== 'compliance' && reportType !== 'network_documentation') params.days = days;
 
     try {
         const result = await api.generateReport({ report_type: reportType, parameters: params });
@@ -444,10 +478,20 @@ async function generateAndShowReport() {
             return;
         }
         const cols = Object.keys(rows[0]);
+        const svgUrl = reportType === 'network_documentation'
+            ? `/api/reports/export/network_documentation.svg${groupId ? `?group_id=${encodeURIComponent(groupId)}` : ''}`
+            : '';
+        const pdfUrl = reportType === 'network_documentation'
+            ? `/api/reports/export/network_documentation.pdf${groupId ? `?group_id=${encodeURIComponent(groupId)}` : ''}`
+            : '';
         resultEl.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                 <span>${rows.length} row${rows.length !== 1 ? 's' : ''} &middot; Run #${result.run_id || '-'}</span>
-                ${result.run_id ? `<a class="btn btn-sm btn-secondary" href="/api/reports/runs/${result.run_id}/csv" download>Export CSV</a>` : ''}
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                    ${svgUrl ? `<a class="btn btn-sm btn-secondary" href="${svgUrl}" download>Export SVG Diagram</a>` : ''}
+                    ${pdfUrl ? `<a class="btn btn-sm btn-secondary" href="${pdfUrl}" download>Export PDF</a>` : ''}
+                    ${result.run_id ? `<a class="btn btn-sm btn-secondary" href="/api/reports/runs/${result.run_id}/csv" download>Export CSV</a>` : ''}
+                </div>
             </div>
             <div style="overflow-x:auto;">
                 <table class="chart-table">
