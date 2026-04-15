@@ -15,6 +15,7 @@ Tables:
     topology_changes  — detected topology differences between discovery runs
     stp_port_states   — latest spanning-tree port states per host/VLAN
     stp_topology_events — spanning-tree root/state change events
+    stp_root_policies — expected STP root-bridge policy by group/VLAN
     config_baselines  — intended/golden configuration per host
     config_snapshots  — timestamped running-config captures per host
     config_drift_events — detected configuration drift instances
@@ -76,6 +77,7 @@ _INSERT_ID_TABLES = {
     "topology_changes",
     "stp_port_states",
     "stp_topology_events",
+    "stp_root_policies",
     "config_baselines",
     "config_snapshots",
     "config_drift_events",
@@ -373,6 +375,23 @@ CREATE INDEX IF NOT EXISTS idx_stp_events_ack_created
 ON stp_topology_events(acknowledged, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stp_events_host_created
 ON stp_topology_events(host_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS stp_root_policies (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id                 INTEGER NOT NULL REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    vlan_id                  INTEGER NOT NULL DEFAULT 1,
+    expected_root_bridge_id  TEXT    NOT NULL DEFAULT '',
+    expected_root_hostname   TEXT    NOT NULL DEFAULT '',
+    enabled                  INTEGER NOT NULL DEFAULT 1,
+    created_at               TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at               TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(group_id, vlan_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stp_root_policies_group_vlan
+ON stp_root_policies(group_id, vlan_id);
+CREATE INDEX IF NOT EXISTS idx_stp_root_policies_enabled
+ON stp_root_policies(enabled, group_id, vlan_id);
 
 CREATE TABLE IF NOT EXISTS topology_node_positions (
     node_id             TEXT    PRIMARY KEY,
@@ -3258,6 +3277,124 @@ async def count_recent_stp_topology_events(
                 break
 
         return count
+    finally:
+        await db.close()
+
+
+# ── STP Root-Bridge Policies ─────────────────────────────────────────────────
+
+async def upsert_stp_root_policy(
+    group_id: int,
+    vlan_id: int,
+    expected_root_bridge_id: str,
+    expected_root_hostname: str = "",
+    enabled: bool = True,
+) -> int:
+    """Upsert expected STP root-bridge policy for one inventory group/VLAN."""
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO stp_root_policies
+               (group_id, vlan_id, expected_root_bridge_id, expected_root_hostname,
+                enabled, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+               ON CONFLICT(group_id, vlan_id)
+               DO UPDATE SET
+                   expected_root_bridge_id = excluded.expected_root_bridge_id,
+                   expected_root_hostname = excluded.expected_root_hostname,
+                   enabled = excluded.enabled,
+                   updated_at = datetime('now')""",
+            (
+                int(group_id),
+                int(vlan_id),
+                str(expected_root_bridge_id or "").strip(),
+                str(expected_root_hostname or "").strip(),
+                1 if enabled else 0,
+            ),
+        )
+        await db.commit()
+
+        cursor = await db.execute(
+            """SELECT id
+               FROM stp_root_policies
+               WHERE group_id = ? AND vlan_id = ?""",
+            (int(group_id), int(vlan_id)),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        await db.close()
+
+
+async def get_stp_root_policy(group_id: int, vlan_id: int) -> dict | None:
+    """Return one STP root policy for group/VLAN, or None when absent."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT p.*, g.name AS group_name
+               FROM stp_root_policies p
+               JOIN inventory_groups g ON g.id = p.group_id
+               WHERE p.group_id = ? AND p.vlan_id = ?
+               LIMIT 1""",
+            (int(group_id), int(vlan_id)),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        rows = rows_to_list([row])
+        return rows[0] if rows else None
+    finally:
+        await db.close()
+
+
+async def get_stp_root_policies(
+    group_id: int | None = None,
+    vlan_id: int | None = None,
+    enabled_only: bool = False,
+    limit: int = 2000,
+) -> list[dict]:
+    """Return STP root-bridge policies with inventory group context."""
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+
+        if group_id is not None:
+            clauses.append("p.group_id = ?")
+            params.append(int(group_id))
+        if vlan_id is not None:
+            clauses.append("p.vlan_id = ?")
+            params.append(int(vlan_id))
+        if enabled_only:
+            clauses.append("p.enabled = 1")
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, min(int(limit), 10000)))
+
+        cursor = await db.execute(
+            f"""SELECT p.*, g.name AS group_name
+                FROM stp_root_policies p
+                JOIN inventory_groups g ON g.id = p.group_id
+                {where_sql}
+                ORDER BY p.group_id, p.vlan_id, p.id
+                LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_stp_root_policy(policy_id: int) -> int:
+    """Delete one STP root policy by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM stp_root_policies WHERE id = ?",
+            (int(policy_id),),
+        )
+        await db.commit()
+        return cursor.rowcount
     finally:
         await db.close()
 

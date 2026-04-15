@@ -209,6 +209,7 @@ from netcontrol.routes.upgrades import (
 from netcontrol.routes.topology import (
     _calc_interface_utilization,
     _record_topology_changes,
+    _stp_discovery_loop,
     _run_topology_discovery_once,
     _topology_discovery_loop,
     admin_router as topology_admin_router,
@@ -660,6 +661,7 @@ COMPLIANCE_ASSIGNMENT_MIN_INTERVAL = state.COMPLIANCE_ASSIGNMENT_MIN_INTERVAL
 COMPLIANCE_ASSIGNMENT_MAX_INTERVAL = state.COMPLIANCE_ASSIGNMENT_MAX_INTERVAL
 MONITORING_DEFAULTS = state.MONITORING_DEFAULTS
 TOPOLOGY_DISCOVERY_DEFAULTS = state.TOPOLOGY_DISCOVERY_DEFAULTS
+STP_DISCOVERY_DEFAULTS = state.STP_DISCOVERY_DEFAULTS
 DISCOVERY_SYNC_MIN_INTERVAL_SECONDS = state.DISCOVERY_SYNC_MIN_INTERVAL_SECONDS
 DISCOVERY_SYNC_MAX_INTERVAL_SECONDS = state.DISCOVERY_SYNC_MAX_INTERVAL_SECONDS
 
@@ -671,6 +673,7 @@ _sanitize_auth_config = state._sanitize_auth_config
 _effective_job_retention_days = state._effective_job_retention_days
 _sanitize_discovery_sync_config = state._sanitize_discovery_sync_config
 _sanitize_topology_discovery_config = state._sanitize_topology_discovery_config
+_sanitize_stp_discovery_config = state._sanitize_stp_discovery_config
 _sanitize_config_drift_check_config = state._sanitize_config_drift_check_config
 _sanitize_config_backup_config = state._sanitize_config_backup_config
 _sanitize_compliance_check_config = state._sanitize_compliance_check_config
@@ -715,6 +718,7 @@ async def _load_persisted_security_settings():
     snmp_profiles = await db.get_auth_setting("snmp_profiles")
     group_snmp_assignments = await db.get_auth_setting("group_snmp_assignments")
     topology_discovery = await db.get_auth_setting("topology_discovery")
+    topology_stp_discovery = await db.get_auth_setting("topology_stp_discovery")
     state.LOGIN_RULES = _sanitize_login_rules(login_rules)
     state.AUTH_CONFIG = _sanitize_auth_config(auth_config)
     state.DISCOVERY_SYNC_CONFIG = _sanitize_discovery_sync_config(discovery_sync)
@@ -723,6 +727,7 @@ async def _load_persisted_security_settings():
     state.SNMP_PROFILES = _sanitize_snmp_profiles(snmp_profiles)
     state.GROUP_SNMP_ASSIGNMENTS = _sanitize_group_snmp_assignments(group_snmp_assignments)
     state.TOPOLOGY_DISCOVERY_CONFIG = _sanitize_topology_discovery_config(topology_discovery)
+    state.STP_DISCOVERY_CONFIG = _sanitize_stp_discovery_config(topology_stp_discovery)
     config_drift_check = await db.get_auth_setting("config_drift_check")
     state.CONFIG_DRIFT_CHECK_CONFIG = _sanitize_config_drift_check_config(config_drift_check)
     config_backup = await db.get_auth_setting("config_backup")
@@ -791,6 +796,7 @@ async def lifespan(app: FastAPI):
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
     discovery_sync_task = asyncio.create_task(_discovery_sync_loop())
     topology_discovery_task = asyncio.create_task(_topology_discovery_loop())
+    stp_discovery_task = asyncio.create_task(_stp_discovery_loop())
     config_drift_task = asyncio.create_task(_config_drift_check_loop())
     config_backup_task = asyncio.create_task(_config_backup_loop())
     compliance_check_task = asyncio.create_task(_compliance_check_loop())
@@ -805,6 +811,7 @@ async def lifespan(app: FastAPI):
         retention_task.cancel()
         discovery_sync_task.cancel()
         topology_discovery_task.cancel()
+        stp_discovery_task.cancel()
         config_drift_task.cancel()
         config_backup_task.cancel()
         compliance_check_task.cancel()
@@ -823,6 +830,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await topology_discovery_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await stp_discovery_task
         except asyncio.CancelledError:
             pass
         try:
