@@ -182,6 +182,250 @@ def _calc_interface_utilization(stat: dict) -> dict | None:
         return None
 
 
+_STP_PORT_STATE_MAP = {
+    1: "disabled",
+    2: "blocking",
+    3: "listening",
+    4: "learning",
+    5: "forwarding",
+    6: "broken",
+}
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _normalize_stp_bridge_id(raw_value) -> str:
+    """Normalize bridge IDs into compact, display-safe text."""
+    text = str(raw_value).strip()
+    if not text:
+        return ""
+    return " ".join(text.split())
+
+
+def _extract_walk_scalar(table: dict[str, str], base_oid: str) -> str:
+    """Extract scalar value from a walk dict (prefers <oid>.0 key)."""
+    if not table:
+        return ""
+    direct = table.get(f"{base_oid}.0")
+    if direct is not None:
+        return str(direct).strip()
+    for oid, value in table.items():
+        if oid == base_oid or oid.startswith(base_oid + "."):
+            return str(value).strip()
+    return ""
+
+
+def _stp_port_state_name(raw_value) -> str:
+    numeric = _safe_int(raw_value, default=0)
+    return _STP_PORT_STATE_MAP.get(numeric, str(raw_value).strip().lower() or "unknown")
+
+
+def _stp_port_role(port_state: str, bridge_port: int, root_port: int) -> str:
+    state = (port_state or "").strip().lower()
+    if root_port > 0 and bridge_port == root_port:
+        return "root"
+    if state in {"blocking", "discarding", "disabled", "broken"}:
+        return "blocked"
+    if state in {"listening", "learning"}:
+        return "alternate"
+    if state == "forwarding":
+        return "designated"
+    return "unknown"
+
+
+async def _collect_stp_snapshot_for_host(
+    host: dict,
+    snmp_cfg: dict,
+    *,
+    vlan_id: int = 1,
+    timeout_seconds: float = 5.0,
+) -> dict:
+    """Collect Bridge-MIB STP state for one host."""
+    host_id = int(host["id"])
+    ip_address = host["ip_address"]
+
+    # Bridge-MIB OIDs (generic STP instance; vlan_id kept for future PVST/MST expansion)
+    if_name_oid = "1.3.6.1.2.1.31.1.1.1.1"
+    if_descr_oid = "1.3.6.1.2.1.2.2.1.2"
+    dot1d_base_port_ifindex_oid = "1.3.6.1.2.1.17.1.4.1.2"
+    dot1d_stp_port_state_oid = "1.3.6.1.2.1.17.2.15.1.3"
+    dot1d_stp_port_designated_bridge_oid = "1.3.6.1.2.1.17.2.15.1.8"
+    dot1d_stp_designated_root_oid = "1.3.6.1.2.1.17.2.5"
+    dot1d_stp_root_port_oid = "1.3.6.1.2.1.17.2.7"
+    dot1d_stp_top_changes_oid = "1.3.6.1.2.1.17.2.4"
+    dot1d_stp_time_since_change_oid = "1.3.6.1.2.1.17.2.3"
+
+    async def _walk(oid: str, max_rows: int = 800) -> dict[str, str]:
+        return await _snmp_walk(ip_address, timeout_seconds, snmp_cfg, oid, max_rows=max_rows)
+
+    (
+        if_names,
+        if_descr,
+        base_port_ifindex,
+        stp_port_states,
+        stp_port_designated_bridge,
+        designated_root_scalar,
+        root_port_scalar,
+        top_changes_scalar,
+        time_since_change_scalar,
+    ) = await asyncio.gather(
+        _walk(if_name_oid),
+        _walk(if_descr_oid),
+        _walk(dot1d_base_port_ifindex_oid),
+        _walk(dot1d_stp_port_state_oid),
+        _walk(dot1d_stp_port_designated_bridge_oid),
+        _walk(dot1d_stp_designated_root_oid, max_rows=8),
+        _walk(dot1d_stp_root_port_oid, max_rows=8),
+        _walk(dot1d_stp_top_changes_oid, max_rows=8),
+        _walk(dot1d_stp_time_since_change_oid, max_rows=8),
+    )
+
+    effective_if_names = if_names or if_descr
+    if_index_to_name: dict[str, str] = {}
+    for oid, val in effective_if_names.items():
+        idx = oid.rsplit(".", 1)[-1] if "." in oid else ""
+        if idx:
+            if_index_to_name[idx] = str(val).strip()
+
+    bridge_port_to_ifindex: dict[int, int] = {}
+    for oid, val in base_port_ifindex.items():
+        suffix = oid[len(dot1d_base_port_ifindex_oid):].lstrip(".")
+        bridge_port = _safe_int(suffix, default=-1)
+        if bridge_port < 0:
+            continue
+        bridge_port_to_ifindex[bridge_port] = _safe_int(val, default=0)
+
+    designated_bridge_by_port: dict[int, str] = {}
+    for oid, val in stp_port_designated_bridge.items():
+        suffix = oid[len(dot1d_stp_port_designated_bridge_oid):].lstrip(".")
+        bridge_port = _safe_int(suffix, default=-1)
+        if bridge_port < 0:
+            continue
+        designated_bridge_by_port[bridge_port] = _normalize_stp_bridge_id(val)
+
+    root_bridge_id = _normalize_stp_bridge_id(
+        _extract_walk_scalar(designated_root_scalar, dot1d_stp_designated_root_oid)
+    )
+    root_port = _safe_int(_extract_walk_scalar(root_port_scalar, dot1d_stp_root_port_oid), default=0)
+    topology_change_count = _safe_int(
+        _extract_walk_scalar(top_changes_scalar, dot1d_stp_top_changes_oid), default=0
+    )
+    time_since_topology_change = _safe_int(
+        _extract_walk_scalar(time_since_change_scalar, dot1d_stp_time_since_change_oid), default=0
+    )
+    is_root_bridge = root_port == 0 and bool(root_bridge_id)
+
+    port_rows: list[dict] = []
+    for oid, raw_state in stp_port_states.items():
+        suffix = oid[len(dot1d_stp_port_state_oid):].lstrip(".")
+        bridge_port = _safe_int(suffix, default=-1)
+        if bridge_port < 0:
+            continue
+
+        if_index = bridge_port_to_ifindex.get(bridge_port, 0)
+        interface_name = if_index_to_name.get(str(if_index), f"bridge-port-{bridge_port}")
+        port_state = _stp_port_state_name(raw_state)
+        port_role = _stp_port_role(port_state, bridge_port, root_port)
+
+        port_rows.append(
+            {
+                "host_id": host_id,
+                "vlan_id": vlan_id,
+                "bridge_port": bridge_port,
+                "if_index": if_index,
+                "interface_name": interface_name,
+                "port_state": port_state,
+                "port_role": port_role,
+                "designated_bridge_id": designated_bridge_by_port.get(bridge_port, ""),
+                "root_bridge_id": root_bridge_id,
+                "root_port": root_port,
+                "topology_change_count": topology_change_count,
+                "time_since_topology_change": time_since_topology_change,
+                "is_root_bridge": is_root_bridge,
+            }
+        )
+
+    return {
+        "host_id": host_id,
+        "hostname": host.get("hostname", ""),
+        "ip_address": ip_address,
+        "vlan_id": vlan_id,
+        "root_bridge_id": root_bridge_id,
+        "root_port": root_port,
+        "topology_change_count": topology_change_count,
+        "time_since_topology_change": time_since_topology_change,
+        "is_root_bridge": is_root_bridge,
+        "ports": port_rows,
+    }
+
+
+async def _record_stp_events_for_host(host: dict, vlan_id: int, old_rows: list[dict], snapshot: dict) -> None:
+    """Derive STP events by comparing old and new snapshots."""
+    if not old_rows:
+        return
+
+    host_id = int(host["id"])
+    old_by_port = {int(r.get("bridge_port", -1)): r for r in old_rows}
+
+    old_root = str(old_rows[0].get("root_bridge_id", "")).strip() if old_rows else ""
+    new_root = str(snapshot.get("root_bridge_id", "")).strip()
+    if old_root and new_root and old_root != new_root:
+        await db.insert_stp_topology_event(
+            host_id=host_id,
+            vlan_id=vlan_id,
+            event_type="root_changed",
+            severity="critical",
+            interface_name="",
+            details=f"Root bridge changed on {host.get('hostname', host_id)}",
+            old_value=old_root,
+            new_value=new_root,
+        )
+
+    old_top_changes = max((_safe_int(r.get("topology_change_count"), 0) for r in old_rows), default=0)
+    new_top_changes = _safe_int(snapshot.get("topology_change_count"), 0)
+    if new_top_changes > old_top_changes:
+        await db.insert_stp_topology_event(
+            host_id=host_id,
+            vlan_id=vlan_id,
+            event_type="topology_change",
+            severity="warning",
+            interface_name="",
+            details=f"STP topology change counter incremented on {host.get('hostname', host_id)}",
+            old_value=str(old_top_changes),
+            new_value=str(new_top_changes),
+        )
+
+    for row in snapshot.get("ports", []):
+        bridge_port = int(row.get("bridge_port", -1))
+        old = old_by_port.get(bridge_port)
+        if not old:
+            continue
+        old_state = str(old.get("port_state", "")).strip().lower()
+        new_state = str(row.get("port_state", "")).strip().lower()
+        old_role = str(old.get("port_role", "")).strip().lower()
+        new_role = str(row.get("port_role", "")).strip().lower()
+
+        if old_state == new_state and old_role == new_role:
+            continue
+
+        iface = row.get("interface_name", f"bridge-port-{bridge_port}")
+        await db.insert_stp_topology_event(
+            host_id=host_id,
+            vlan_id=vlan_id,
+            event_type="port_state_change",
+            severity="warning",
+            interface_name=iface,
+            details=f"STP port state/role changed on {iface}",
+            old_value=f"{old_state}/{old_role}",
+            new_value=f"{new_state}/{new_role}",
+        )
+
+
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
@@ -1022,6 +1266,197 @@ async def acknowledge_topology_changes():
         return {"acknowledged": count}
     except Exception as exc:
         LOGGER.error("topology: acknowledge error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred.")
+
+
+@router.post("/api/topology/stp/discover")
+async def discover_topology_stp(
+    group_id: int | None = Query(default=None),
+    vlan_id: int = Query(default=1, ge=1, le=4094),
+):
+    """Poll Bridge-MIB STP state for all SNMP-enabled hosts (or one group)."""
+    try:
+        if group_id is not None:
+            group = await db.get_group(group_id)
+            if not group:
+                raise HTTPException(status_code=404, detail="Group not found")
+            groups = [group]
+        else:
+            groups = await db.get_all_groups()
+
+        total_hosts = 0
+        updated_hosts = 0
+        total_ports = 0
+        total_errors = 0
+        groups_scanned = 0
+
+        for group in groups:
+            snmp_cfg = state._resolve_snmp_discovery_config(group["id"])
+            if not snmp_cfg.get("enabled", False):
+                continue
+
+            hosts = await db.get_hosts_for_group(group["id"])
+            if not hosts:
+                continue
+
+            groups_scanned += 1
+            total_hosts += len(hosts)
+            semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
+
+            async def _collect_host(host: dict, _cfg=snmp_cfg):
+                async with semaphore:
+                    try:
+                        snapshot = await _collect_stp_snapshot_for_host(
+                            host, _cfg, vlan_id=vlan_id, timeout_seconds=5.0
+                        )
+                        return host, snapshot, None
+                    except Exception as exc:
+                        return host, None, exc
+
+            collect_results = await asyncio.gather(*[_collect_host(h) for h in hosts])
+
+            for host, snapshot, err in collect_results:
+                if snapshot is None:
+                    total_errors += 1
+                    LOGGER.warning(
+                        "topology stp: collection failed for %s (%s): %s",
+                        host.get("hostname", ""),
+                        host.get("ip_address", ""),
+                        redact_value(str(err)) if err else "unknown",
+                    )
+                    continue
+
+                try:
+                    old_rows = await db.get_stp_port_states(
+                        host_id=host["id"],
+                        vlan_id=vlan_id,
+                        limit=5000,
+                    )
+                    await db.delete_stp_port_states_for_host(host["id"], vlan_id=vlan_id)
+                    for row in snapshot.get("ports", []):
+                        await db.upsert_stp_port_state(
+                            host_id=row["host_id"],
+                            vlan_id=row["vlan_id"],
+                            bridge_port=row["bridge_port"],
+                            if_index=row["if_index"],
+                            interface_name=row["interface_name"],
+                            port_state=row["port_state"],
+                            port_role=row["port_role"],
+                            designated_bridge_id=row["designated_bridge_id"],
+                            root_bridge_id=row["root_bridge_id"],
+                            root_port=row["root_port"],
+                            topology_change_count=row["topology_change_count"],
+                            time_since_topology_change=row["time_since_topology_change"],
+                            is_root_bridge=bool(row["is_root_bridge"]),
+                        )
+
+                    await _record_stp_events_for_host(host, vlan_id, old_rows, snapshot)
+                    updated_hosts += 1
+                    total_ports += len(snapshot.get("ports", []))
+                except Exception as exc:
+                    total_errors += 1
+                    LOGGER.warning(
+                        "topology stp: DB write failed for %s (%s): %s",
+                        host.get("hostname", ""),
+                        host.get("ip_address", ""),
+                        redact_value(str(exc)),
+                    )
+
+        unacknowledged = await db.get_stp_topology_events_count(unacknowledged_only=True)
+        return {
+            "groups_scanned": groups_scanned,
+            "hosts_scanned": total_hosts,
+            "hosts_updated": updated_hosts,
+            "ports_collected": total_ports,
+            "errors": total_errors,
+            "vlan_id": vlan_id,
+            "unacknowledged_events": unacknowledged,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("topology stp: discovery error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred during STP discovery.")
+
+
+@router.get("/api/topology/stp")
+async def get_topology_stp_state(
+    group_id: int | None = Query(default=None),
+    host_id: int | None = Query(default=None),
+    vlan_id: int = Query(default=1, ge=1, le=4094),
+    limit: int = Query(default=5000, ge=1, le=20000),
+):
+    """Return latest STP state rows for topology overlay."""
+    try:
+        rows = await db.get_stp_port_states(
+            group_id=group_id,
+            host_id=host_id,
+            vlan_id=vlan_id,
+            limit=limit,
+        )
+
+        by_state: dict[str, int] = {}
+        root_bridges: list[dict] = []
+        seen_roots: set[tuple[int, int]] = set()
+        for row in rows:
+            state_name = (row.get("port_state") or "unknown").strip().lower() or "unknown"
+            by_state[state_name] = by_state.get(state_name, 0) + 1
+            if row.get("is_root_bridge"):
+                key = (int(row.get("host_id", 0)), int(row.get("vlan_id", vlan_id)))
+                if key not in seen_roots:
+                    seen_roots.add(key)
+                    root_bridges.append(
+                        {
+                            "host_id": row.get("host_id"),
+                            "hostname": row.get("hostname"),
+                            "ip_address": row.get("ip_address"),
+                            "vlan_id": row.get("vlan_id"),
+                            "root_bridge_id": row.get("root_bridge_id", ""),
+                        }
+                    )
+
+        unacknowledged = await db.get_stp_topology_events_count(unacknowledged_only=True)
+        return {
+            "vlan_id": vlan_id,
+            "count": len(rows),
+            "states": rows,
+            "summary": {
+                "by_state": by_state,
+                "root_bridges": root_bridges,
+            },
+            "unacknowledged_events": unacknowledged,
+        }
+    except Exception as exc:
+        LOGGER.error("topology stp: state query failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch STP state")
+
+
+@router.get("/api/topology/stp/events")
+async def get_topology_stp_events(
+    unacknowledged: bool = Query(default=True),
+    limit: int = Query(default=200, ge=1, le=5000),
+):
+    """Return recent STP events (root/state/topology changes)."""
+    try:
+        events = await db.get_stp_topology_events(
+            unacknowledged_only=unacknowledged,
+            limit=limit,
+        )
+        count = await db.get_stp_topology_events_count(unacknowledged_only=True)
+        return {"events": events, "unacknowledged_count": count}
+    except Exception as exc:
+        LOGGER.error("topology stp: events query failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred.")
+
+
+@router.post("/api/topology/stp/events/acknowledge")
+async def acknowledge_topology_stp_events():
+    """Mark all unacknowledged STP events as acknowledged."""
+    try:
+        count = await db.acknowledge_stp_topology_events()
+        return {"acknowledged": count}
+    except Exception as exc:
+        LOGGER.error("topology stp: acknowledge failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 

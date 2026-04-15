@@ -23,6 +23,8 @@ let _topoPathMode = false;
 let _topoPathSource = null;
 let _topoOriginalColors = null;  // stashed node/edge colors for restore
 let _topoUtilOverlay = false;    // utilization overlay toggle state
+let _topoStpOverlay = false;     // STP overlay toggle state
+let _topoStpStateByPort = new Map(); // key: "<host_id>|<norm_ifname>" -> stp row
 let _topoThemeColors = null;     // cached theme-aware colors for vis-network
 
 function _getTopoThemeColors() {
@@ -116,6 +118,101 @@ function _utilShadow(pct) {
     return 'rgba(76,175,80,0.3)';
 }
 
+function _normalizeIfaceName(name) {
+    let n = String(name || '').trim().toLowerCase();
+    if (!n) return '';
+    n = n.replace(/\s+/g, '');
+    n = n
+        .replace(/tengigabitethernet/g, 'te')
+        .replace(/gigabitethernet/g, 'gi')
+        .replace(/fastethernet/g, 'fa')
+        .replace(/port-channel/g, 'po')
+        .replace(/ethernet/g, 'eth');
+    return n;
+}
+
+function _stpPortKey(hostId, iface) {
+    return `${String(hostId)}|${_normalizeIfaceName(iface)}`;
+}
+
+function _stpLegendVisible(visible) {
+    const ids = [
+        'topology-legend-stp-forwarding',
+        'topology-legend-stp-learning',
+        'topology-legend-stp-blocked',
+    ];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = visible ? 'inline-flex' : 'none';
+    }
+}
+
+function _stpStyle(state) {
+    const s = String(state || '').toLowerCase();
+    if (s === 'forwarding') {
+        return {
+            color: { color: '#43a047', highlight: '#66bb6a', hover: '#66bb6a', opacity: 0.9 },
+            width: 4,
+            dashes: false,
+            shadow: 'rgba(67,160,71,0.35)',
+        };
+    }
+    if (s === 'learning' || s === 'listening') {
+        return {
+            color: { color: '#f9a825', highlight: '#fbc02d', hover: '#fbc02d', opacity: 0.95 },
+            width: 4,
+            dashes: [6, 4],
+            shadow: 'rgba(249,168,37,0.35)',
+        };
+    }
+    if (s === 'blocking' || s === 'discarding' || s === 'disabled' || s === 'broken') {
+        return {
+            color: { color: '#e53935', highlight: '#ef5350', hover: '#ef5350', opacity: 0.95 },
+            width: 6,
+            dashes: [4, 3],
+            shadow: 'rgba(229,57,53,0.45)',
+        };
+    }
+    return null;
+}
+
+function _lookupStpForEdge(edge) {
+    if (!_topoStpOverlay) return null;
+    const fromHostId = edge.from_host_id || edge.from;
+    if (!fromHostId || typeof fromHostId !== 'number') return null;
+    const iface = edge.source_interface || '';
+    if (!iface) return null;
+    return _topoStpStateByPort.get(_stpPortKey(fromHostId, iface)) || null;
+}
+
+function _edgeOverlayProps(edge) {
+    const util = edge.utilization;
+    const hasUtil = _topoUtilOverlay && util && util.utilization_pct != null;
+    const utilPct = hasUtil ? util.utilization_pct : 0;
+    const utilWidth = hasUtil ? (util.width || (2 + (utilPct / 100) * 6)) : 2;
+    const utilColor = hasUtil ? (util.color || _utilColor(utilPct)) : null;
+
+    const stp = _lookupStpForEdge(edge);
+    const stpStyle = stp ? _stpStyle(stp.port_state) : null;
+
+    let label = edge.label || '';
+    if (hasUtil) label = `${label ? label + ' ' : ''}(${utilPct}%)`;
+    if (stpStyle) {
+        const role = stp.port_role ? `/${stp.port_role}` : '';
+        label = `${label ? label + ' ' : ''}[STP:${stp.port_state}${role}]`;
+    }
+
+    const baseProtocolShadow = ({ lldp: 'rgba(0,230,118,0.3)', ospf: 'rgba(255,171,64,0.3)', bgp: 'rgba(224,64,251,0.3)' }[edge.protocol] || 'rgba(0,176,255,0.3)');
+
+    return {
+        label,
+        color: stpStyle ? stpStyle.color : (utilColor || _topoEdgeColor(edge.protocol)),
+        width: stpStyle ? Math.max(utilWidth, stpStyle.width) : utilWidth,
+        dashes: stpStyle ? stpStyle.dashes : (edge.protocol === 'lldp' ? [8, 5] : edge.protocol === 'ospf' ? [12, 4, 4, 4] : edge.protocol === 'bgp' ? [4, 4] : false),
+        shadowColor: stpStyle ? stpStyle.shadow : (hasUtil ? _utilShadow(utilPct) : baseProtocolShadow),
+    };
+}
+
 let _utilEventSource = null;
 let _utilReconnectTimer = null;
 
@@ -134,28 +231,23 @@ function toggleUtilizationOverlay() {
     }
 
     // Update edges in-place without rebuilding the graph
-    _applyUtilizationToEdges();
+    _refreshTopologyEdgeStyles();
 }
 
-function _applyUtilizationToEdges() {
+function _refreshTopologyEdgeStyles() {
     if (_topologyNetwork && _topologyData) {
         const edgesDS = _topologyNetwork.body.data.edges;
         const updates = _topologyData.edges.map(e => {
-            const util = e.utilization;
-            const hasUtil = _topoUtilOverlay && util && util.utilization_pct != null;
-            const utilPct = hasUtil ? util.utilization_pct : 0;
-            const utilWidth = hasUtil ? 2 + (utilPct / 100) * 6 : 2;
-            const utilColor = hasUtil ? _utilColor(utilPct) : null;
-            let edgeLabel = e.label || '';
-            if (hasUtil) edgeLabel = `${edgeLabel ? edgeLabel + ' ' : ''}(${utilPct}%)`;
+            const overlay = _edgeOverlayProps(e);
             return {
                 id: e.id,
-                label: edgeLabel,
-                color: utilColor || _topoEdgeColor(e.protocol),
-                width: utilWidth,
+                label: overlay.label,
+                color: overlay.color,
+                width: overlay.width,
+                dashes: overlay.dashes,
                 shadow: {
                     enabled: true,
-                    color: hasUtil ? _utilShadow(utilPct) : ({ lldp: 'rgba(0,230,118,0.3)', ospf: 'rgba(255,171,64,0.3)', bgp: 'rgba(224,64,251,0.3)' }[e.protocol] || 'rgba(0,176,255,0.3)'),
+                    color: overlay.shadowColor,
                     size: 6, x: 0, y: 0,
                 },
             };
@@ -184,7 +276,7 @@ function _startUtilizationStream() {
                             edge.utilization = utilMap[key];
                         }
                     }
-                    if (_topoUtilOverlay) _applyUtilizationToEdges();
+                    if (_topoUtilOverlay || _topoStpOverlay) _refreshTopologyEdgeStyles();
                 }
             } catch (e) { /* parse error, skip */ }
         };
@@ -204,6 +296,176 @@ function _stopUtilizationStream() {
     if (_utilEventSource) {
         _utilEventSource.close();
         _utilEventSource = null;
+    }
+}
+
+function _currentStpVlan() {
+    const el = document.getElementById('topology-stp-vlan');
+    if (!el) return 1;
+    const parsed = parseInt(el.value || '1', 10);
+    if (!Number.isFinite(parsed)) return 1;
+    return Math.max(1, Math.min(4094, parsed));
+}
+
+function _updateStpEventBadge(count) {
+    const badge = document.getElementById('topology-stp-event-badge');
+    const btn = document.getElementById('topology-stp-events-btn');
+    if (!badge || !btn) return;
+    if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : String(count);
+        badge.style.display = 'inline-flex';
+        btn.classList.add('has-changes');
+    } else {
+        badge.style.display = 'none';
+        btn.classList.remove('has-changes');
+    }
+}
+
+function _hydrateStpOverlayState(rows) {
+    _topoStpStateByPort = new Map();
+    for (const row of (rows || [])) {
+        const key = _stpPortKey(row.host_id, row.interface_name || '');
+        if (!key.endsWith('|')) {
+            _topoStpStateByPort.set(key, row);
+        }
+    }
+}
+
+async function _loadStpOverlayData() {
+    const groupFilter = document.getElementById('topology-group-filter')?.value || '';
+    const vlanId = _currentStpVlan();
+    const resp = await api.getTopologyStpState(groupFilter || null, null, vlanId, 20000);
+    _hydrateStpOverlayState(resp.states || []);
+    _updateStpEventBadge(resp.unacknowledged_events || 0);
+    return resp;
+}
+
+async function toggleStpOverlay() {
+    _topoStpOverlay = !_topoStpOverlay;
+    const btn = document.getElementById('topology-stp-btn');
+    if (btn) btn.classList.toggle('active', _topoStpOverlay);
+    _stpLegendVisible(_topoStpOverlay);
+
+    if (!_topoStpOverlay) {
+        _topoStpStateByPort = new Map();
+        _refreshTopologyEdgeStyles();
+        return;
+    }
+
+    try {
+        const resp = await _loadStpOverlayData();
+        if ((resp.count || 0) === 0) {
+            showToast('No STP data yet. Click "Scan STP" to poll devices.', 'info');
+        }
+    } catch (err) {
+        _topoStpOverlay = false;
+        if (btn) btn.classList.remove('active');
+        _stpLegendVisible(false);
+        _topoStpStateByPort = new Map();
+        showError('Failed to load STP overlay: ' + err.message);
+    } finally {
+        _refreshTopologyEdgeStyles();
+    }
+}
+
+async function _onStpVlanChange() {
+    if (!_topoStpOverlay) return;
+    try {
+        await _loadStpOverlayData();
+        _refreshTopologyEdgeStyles();
+    } catch (err) {
+        showError('Failed to refresh STP overlay: ' + err.message);
+    }
+}
+
+async function scanTopologyStp() {
+    const btn = document.getElementById('topology-stp-scan-btn');
+    const groupFilter = document.getElementById('topology-group-filter')?.value || '';
+    const vlanId = _currentStpVlan();
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Scanning...';
+    }
+
+    try {
+        const result = await api.discoverTopologyStp(groupFilter || null, vlanId);
+        const msg = `STP scan complete: ${result.ports_collected} ports from ${result.hosts_updated}/${result.hosts_scanned} hosts` +
+            (result.errors > 0 ? ` (${result.errors} errors)` : '');
+        showToast(msg, result.errors > 0 ? 'warning' : 'success');
+        _updateStpEventBadge(result.unacknowledged_events || 0);
+
+        if (_topoStpOverlay) {
+            await _loadStpOverlayData();
+            _refreshTopologyEdgeStyles();
+        }
+    } catch (err) {
+        showError('STP scan failed: ' + err.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Scan STP';
+        }
+    }
+}
+
+async function showStpTopologyEvents() {
+    try {
+        const resp = await api.getTopologyStpEvents(true, 300);
+        const events = resp.events || [];
+        if (events.length === 0) {
+            showToast('No unacknowledged STP events', 'info');
+            return;
+        }
+
+        const title = document.getElementById('modal-title');
+        const body = document.getElementById('modal-body');
+        title.textContent = 'STP Topology Events';
+
+        let html = `<div style="margin-bottom:0.75rem; display:flex; justify-content:space-between; align-items:center;">
+            <span style="color:var(--text-muted); font-size:0.85rem;">${events.length} unacknowledged event${events.length !== 1 ? 's' : ''}</span>
+            <button class="btn btn-secondary btn-sm" onclick="acknowledgeStpTopologyEvents()">Acknowledge All</button>
+        </div>`;
+        html += '<div style="max-height:420px; overflow-y:auto;">';
+
+        for (const ev of events) {
+            const sev = String(ev.severity || 'warning').toLowerCase();
+            const sevColor = sev === 'critical' ? '#ef5350' : '#ffb300';
+            const iface = ev.interface_name ? `<span style="opacity:0.85;">${escapeHtml(ev.interface_name)}</span>` : '<span style="opacity:0.7;">host-level</span>';
+            const details = escapeHtml(ev.details || ev.event_type || 'stp event');
+            const oldVal = escapeHtml(ev.old_value || '');
+            const newVal = escapeHtml(ev.new_value || '');
+            const delta = oldVal || newVal ? `<div style="font-family:monospace; font-size:0.75rem; margin-top:0.25rem; color:var(--text-muted);">${oldVal} &rarr; ${newVal}</div>` : '';
+
+            html += `<div style="padding:0.55rem 0.7rem; margin-bottom:0.45rem; border-radius:0.35rem; border-left:3px solid ${sevColor}; background:${sevColor}14;">
+                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:0.75rem;">
+                    <strong style="font-size:0.86rem; color:${sevColor};">${escapeHtml((ev.event_type || 'event').replaceAll('_', ' ').toUpperCase())}</strong>
+                    <span style="font-size:0.72rem; color:var(--text-muted);">${new Date((ev.created_at || '') + 'Z').toLocaleString()}</span>
+                </div>
+                <div style="font-size:0.8rem; margin-top:0.2rem;">
+                    <strong>${escapeHtml(ev.hostname || ('Host #' + ev.host_id))}</strong> &middot; VLAN ${escapeHtml(ev.vlan_id || '')} &middot; ${iface}
+                </div>
+                <div style="font-size:0.8rem; margin-top:0.2rem;">${details}</div>
+                ${delta}
+            </div>`;
+        }
+        html += '</div>';
+
+        body.innerHTML = html;
+        document.getElementById('modal-overlay').classList.add('active');
+    } catch (err) {
+        showError('Failed to load STP events: ' + err.message);
+    }
+}
+
+async function acknowledgeStpTopologyEvents() {
+    try {
+        const resp = await api.acknowledgeTopologyStpEvents();
+        showToast(`Acknowledged ${resp.acknowledged} STP event${resp.acknowledged !== 1 ? 's' : ''}`, 'success');
+        _updateStpEventBadge(0);
+        closeAllModals();
+    } catch (err) {
+        showError('Failed to acknowledge STP events: ' + err.message);
     }
 }
 
@@ -250,8 +512,22 @@ async function loadTopology(options = {}) {
         legend.style.display = 'flex';
         emptyEl.style.display = 'none';
         renderTopologyGraph(data);
+        if (_topoStpOverlay) {
+            try {
+                await _loadStpOverlayData();
+            } catch (e) {
+                // keep graph usable even if STP overlay fetch fails
+                _topoStpStateByPort = new Map();
+            }
+            _refreshTopologyEdgeStyles();
+        } else {
+            _refreshTopologyEdgeStyles();
+        }
         // Update change badge
         _updateTopologyChangeBadge(data.unacknowledged_changes || 0);
+        api.getTopologyStpEvents(true, 1)
+            .then(resp => _updateStpEventBadge(resp.unacknowledged_count || 0))
+            .catch(() => {});
     } catch (error) {
         container.style.display = 'none';
         legend.style.display = 'none';
@@ -292,27 +568,20 @@ function _buildVisNode(n, savedPos) {
 }
 
 function _buildVisEdge(e) {
-    const util = e.utilization;
-    const hasUtil = _topoUtilOverlay && util && util.utilization_pct != null;
-    const utilPct = hasUtil ? util.utilization_pct : 0;
-    // Use weathermap color/width from API if available, fallback to local calculation
-    const utilWidth = hasUtil ? (util.width || (2 + (utilPct / 100) * 6)) : 2;
-    const utilColor = hasUtil ? (util.color || _utilColor(utilPct)) : null;
-    let edgeLabel = e.label || '';
-    if (hasUtil) edgeLabel = `${edgeLabel ? edgeLabel + ' ' : ''}(${utilPct}%)`;
+    const overlay = _edgeOverlayProps(e);
     return {
         id: e.id,
         from: e.from,
         to: e.to,
-        label: edgeLabel,
-        color: utilColor || _topoEdgeColor(e.protocol),
-        dashes: e.protocol === 'lldp' ? [8, 5] : e.protocol === 'ospf' ? [12, 4, 4, 4] : e.protocol === 'bgp' ? [4, 4] : false,
-        width: utilWidth,
+        label: overlay.label,
+        color: overlay.color,
+        dashes: overlay.dashes,
+        width: overlay.width,
         hoverWidth: 0.5,
         selectionWidth: 1,
         shadow: {
             enabled: true,
-            color: hasUtil ? _utilShadow(utilPct) : ({ lldp: 'rgba(0,230,118,0.3)', ospf: 'rgba(255,171,64,0.3)', bgp: 'rgba(224,64,251,0.3)' }[e.protocol] || 'rgba(0,176,255,0.3)'),
+            color: overlay.shadowColor,
             size: 6, x: 0, y: 0,
         },
         font: { size: 9, color: (_topoThemeColors || _getTopoThemeColors()).edgeFont, strokeWidth: 2, strokeColor: (_topoThemeColors || _getTopoThemeColors()).edgeFontStroke, align: 'middle' },
@@ -544,10 +813,13 @@ function showTopologyNodeDetails(node, allEdges) {
             const proto = { cdp: 'CDP', lldp: 'LLDP', ospf: 'OSPF', bgp: 'BGP' }[edge.protocol] || edge.protocol?.toUpperCase() || 'L2';
             const util = edge.utilization;
             const utilHtml = util ? `<span style="font-size:0.7rem; padding:0.1rem 0.35rem; border-radius:0.2rem; background:${util.utilization_pct > 75 ? 'rgba(244,67,54,0.2)' : util.utilization_pct > 50 ? 'rgba(255,235,59,0.15)' : 'rgba(76,175,80,0.15)'}; color:${util.utilization_pct > 75 ? '#ef5350' : util.utilization_pct > 50 ? '#fdd835' : '#66bb6a'};">${util.utilization_pct}% (${_formatBps(util.in_bps)} in / ${_formatBps(util.out_bps)} out)</span>` : '';
+            const stp = _lookupStpForEdge(edge);
+            const stpHtml = stp ? `<span style="font-size:0.7rem; padding:0.1rem 0.35rem; border-radius:0.2rem; background:rgba(67,160,71,0.14); color:#81c784;">STP ${escapeHtml(stp.port_state || 'unknown')}${stp.port_role ? '/' + escapeHtml(stp.port_role) : ''} VLAN ${escapeHtml(stp.vlan_id || '')}</span>` : '';
             html += `<div class="topology-detail-row" style="flex-direction:column; align-items:flex-start; gap:0.15rem;">
                 <span style="font-weight:500; color:var(--text-color);">${esc(peerLabel)}</span>
                 <span style="font-size:0.75rem; color:var(--text-muted);">${esc(edge.source_interface || '')} &harr; ${esc(edge.target_interface || '')} &middot; ${esc(proto)}</span>
                 ${utilHtml}
+                ${stpHtml}
             </div>`;
         }
         html += '</div>';
@@ -799,6 +1071,20 @@ async function refreshTopology() {
         if (edgesToRemove.length) _topoEdgesDS.remove(edgesToRemove);
         const edgeUpdates = data.edges.map(e => _buildVisEdge(e));
         _topoEdgesDS.update(edgeUpdates);
+
+        if (_topoStpOverlay) {
+            try {
+                await _loadStpOverlayData();
+            } catch (e) {
+                _topoStpStateByPort = new Map();
+            }
+            _refreshTopologyEdgeStyles();
+        } else {
+            _refreshTopologyEdgeStyles();
+            api.getTopologyStpEvents(true, 1)
+                .then(resp => _updateStpEventBadge(resp.unacknowledged_count || 0))
+                .catch(() => {});
+        }
 
         _updateTopologyChangeBadge(data.unacknowledged_changes || 0);
         showToast('Topology refreshed', 'success');
@@ -1071,6 +1357,7 @@ function _initTopoListeners() {
     document.addEventListener('click', _onTopoDocClick);
     document.getElementById('topology-group-filter')?.addEventListener('change', _onTopoGroupFilterChange);
     document.getElementById('topology-layout')?.addEventListener('change', _onTopoLayoutChange);
+    document.getElementById('topology-stp-vlan')?.addEventListener('change', _onStpVlanChange);
 }
 
 function _removeTopoDocListeners() {
@@ -1082,6 +1369,7 @@ function _removeTopoDocListeners() {
     document.removeEventListener('click', _onTopoDocClick);
     document.getElementById('topology-group-filter')?.removeEventListener('change', _onTopoGroupFilterChange);
     document.getElementById('topology-layout')?.removeEventListener('change', _onTopoLayoutChange);
+    document.getElementById('topology-stp-vlan')?.removeEventListener('change', _onStpVlanChange);
 }
 
 // ── Layout Settings ──
@@ -1381,6 +1669,10 @@ window.exportTopologyPNG = exportTopologyPNG;
 window.exportTopologyJSON = exportTopologyJSON;
 window.exportTopologySVG = exportTopologySVG;
 window.toggleUtilizationOverlay = toggleUtilizationOverlay;
+window.toggleStpOverlay = toggleStpOverlay;
+window.scanTopologyStp = scanTopologyStp;
+window.showStpTopologyEvents = showStpTopologyEvents;
+window.acknowledgeStpTopologyEvents = acknowledgeStpTopologyEvents;
 window.showTopologyChanges = showTopologyChanges;
 window.acknowledgeTopologyChanges = acknowledgeTopologyChanges;
 window.resetTopologyPositions = resetTopologyPositions;
@@ -1397,11 +1689,14 @@ export function destroyTopology() {
     clearTimeout(_topoSearchDebounce);
     _topoSearchDebounce = null;
     _topoUtilOverlay = false;
+    _topoStpOverlay = false;
     _topoPathMode = false;
     _topoPathSource = null;
     _topoOriginalColors = null;
     _topoThemeColors = null;
     _topoSavedPositions = {};
+    _topoStpStateByPort = new Map();
+    _stpLegendVisible(false);
     if (_topologyNetwork) {
         _topologyNetwork.destroy();
     }
