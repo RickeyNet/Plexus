@@ -176,6 +176,61 @@ async def get_config_backup_summary():
     return await db.get_config_backup_summary()
 
 
+@router.get("/api/config-backups/search")
+async def search_config_backup_records(
+    q: str = Query(..., min_length=1, max_length=400),
+    mode: str = Query(default="fulltext"),
+    limit: int = Query(default=50, ge=1, le=200),
+    context_lines: int = Query(default=1, ge=0, le=5),
+):
+    try:
+        return await db.search_config_backups(
+            q,
+            mode=mode,
+            limit=limit,
+            context_lines=context_lines,
+        )
+    except ValueError as exc:
+        code = (exc.args[0] if exc.args else "").strip().lower()
+        if code == "invalid_regex":
+            raise HTTPException(status_code=400, detail="Invalid regex pattern") from exc
+        if code == "invalid_mode":
+            raise HTTPException(status_code=400, detail="Unsupported search mode") from exc
+        raise HTTPException(status_code=400, detail="Invalid search query") from exc
+
+
+@router.get("/api/config-backups/{backup_id}/diff")
+async def get_config_backup_diff(backup_id: int):
+    current = await db.get_config_backup(backup_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    if current.get("status") != "success" or not current.get("config_text"):
+        raise HTTPException(status_code=400, detail="Backup does not contain a successful config capture")
+
+    previous = await db.get_previous_successful_config_backup(backup_id)
+    if not previous or not previous.get("config_text"):
+        raise HTTPException(status_code=404, detail="No previous successful backup available for diff")
+
+    diff_text, added, removed = _compute_config_diff(
+        previous["config_text"],
+        current["config_text"],
+        baseline_label=f"backup-{previous['id']}",
+        actual_label=f"backup-{current['id']}",
+    )
+    return {
+        "backup_id": current["id"],
+        "previous_backup_id": previous["id"],
+        "host_id": current.get("host_id"),
+        "hostname": current.get("hostname"),
+        "ip_address": current.get("ip_address"),
+        "captured_at": current.get("captured_at"),
+        "previous_captured_at": previous.get("captured_at"),
+        "diff_text": diff_text,
+        "diff_lines_added": added,
+        "diff_lines_removed": removed,
+    }
+
+
 @router.get("/api/config-backups/{backup_id}")
 async def get_config_backup_detail(backup_id: int):
     backup = await db.get_config_backup(backup_id)

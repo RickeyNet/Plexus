@@ -423,6 +423,7 @@ function templateConfiguration() {
         <button class="btn btn-sm btn-secondary config-tab-btn active" data-config-tab="drift" onclick="switchConfigurationTab('drift')">Drift Events</button>
         <button class="btn btn-sm btn-secondary config-tab-btn" data-config-tab="policies" onclick="switchConfigurationTab('policies')">Backup Policies</button>
         <button class="btn btn-sm btn-secondary config-tab-btn" data-config-tab="history" onclick="switchConfigurationTab('history')">Backup History</button>
+        <button class="btn btn-sm btn-secondary config-tab-btn" data-config-tab="search" onclick="switchConfigurationTab('search')">Config Search</button>
         <input id="configuration-search" class="form-input list-control-search" type="search" placeholder="Search..." style="margin-left:auto; max-width:220px;">
     </div>
     <!-- Drift Events Tab -->
@@ -460,6 +461,31 @@ function templateConfiguration() {
         <div id="backup-history-list">
             ${skel(2)}
         </div>
+    </div>
+    <!-- Config Search Tab -->
+    <div id="config-tab-search" class="config-tab" style="display:none">
+        <div class="card" style="padding:1rem; margin-bottom:0.75rem;">
+            <div class="list-controls" style="margin-bottom:0.5rem;">
+                <input id="config-backup-search-query" class="form-input list-control-search" type="search" placeholder="e.g. snmp-server community public">
+                <select id="config-backup-search-mode" class="form-select list-control-select">
+                    <option value="fulltext">Full Text</option>
+                    <option value="substring">Substring</option>
+                    <option value="regex">Regex</option>
+                </select>
+                <input id="config-backup-search-limit" class="form-input list-control-select" type="number" min="1" max="200" value="50" style="max-width:110px;" title="Max results">
+                <button id="config-backup-search-btn" class="btn btn-sm btn-primary" onclick="runConfigBackupSearch()">Search</button>
+            </div>
+            <div id="config-backup-search-example" style="font-size:0.8em; color:var(--text-muted); margin-bottom:0.35rem;">
+                Example: <code>snmp-server community public</code>
+            </div>
+            <div style="font-size:0.85em; color:var(--text-muted);">
+                Search all successful backed-up configurations. Results include match context and direct backup diff links.
+            </div>
+        </div>
+        <div id="config-backup-search-results">
+            <div class="card" style="text-align:center; color:var(--text-muted); padding:1.5rem;">Run a search to scan backed-up configurations.</div>
+        </div>
+    </div>
     </div>`;
 }
 
