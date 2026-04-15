@@ -826,6 +826,10 @@ export async function getConfigDriftEvent(eventId) {
     return apiRequest(`/config-drift/events/${eventId}`);
 }
 
+export async function getConfigDriftEventHistory(eventId, limit = 200) {
+    return apiRequest(`/config-drift/events/${eventId}/history?limit=${limit}`);
+}
+
 export async function updateConfigDriftEventStatus(eventId, status) {
     return apiRequest(`/config-drift/events/${eventId}/status`, {
         method: 'PUT',
@@ -948,6 +952,15 @@ export async function runConfigBackupPolicy(id) {
     return apiRequest(`/config-backups/policies/${id}/run-now`, { method: 'POST' });
 }
 
+export async function searchConfigBackups(query, mode = 'fulltext', limit = 50, contextLines = 1) {
+    const params = new URLSearchParams();
+    params.set('q', query || '');
+    params.set('mode', mode || 'fulltext');
+    if (limit) params.set('limit', limit);
+    if (contextLines != null) params.set('context_lines', contextLines);
+    return apiRequest(`/config-backups/search?${params}`);
+}
+
 export async function getConfigBackups(hostId = null, policyId = null, limit = 100) {
     const params = new URLSearchParams();
     if (hostId) params.set('host_id', hostId);
@@ -958,6 +971,10 @@ export async function getConfigBackups(hostId = null, policyId = null, limit = 1
 
 export async function getConfigBackup(id) {
     return apiRequest(`/config-backups/${id}`);
+}
+
+export async function getConfigBackupDiff(id) {
+    return apiRequest(`/config-backups/${id}/diff`);
 }
 
 export async function deleteConfigBackup(id) {

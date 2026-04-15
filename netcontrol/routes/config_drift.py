@@ -278,6 +278,15 @@ async def _analyze_drift_for_host(host_id: int) -> dict:
         diff_lines_added=added,
         diff_lines_removed=removed,
     )
+    await db.create_config_drift_event_history(
+        event_id=event_id,
+        host_id=host_id,
+        action="detected",
+        from_status="",
+        to_status="open",
+        actor="system",
+        details=f"+{added} -{removed} lines changed",
+    )
     return {
         "drifted": True,
         "event_id": event_id,
@@ -466,7 +475,17 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
                 f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Device is now compliant with baseline.\n")
 
         # Mark original event as resolved
+        prev_status = event.get("status", "open")
         await db.update_config_drift_event_status(event["id"], "resolved", resolved_by=user)
+        await db.create_config_drift_event_history(
+            event_id=event["id"],
+            host_id=event["host_id"],
+            action="status_change",
+            from_status=prev_status,
+            to_status="resolved",
+            actor=user,
+            details="resolved after revert job completion",
+        )
         await _broadcast_revert_line(job_id,
             f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift event marked as resolved.\n")
 
@@ -475,6 +494,18 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
         await _finish_revert_job(job_id, "completed")
     except Exception as exc:
         LOGGER.error("config-drift revert failed for %s: %s", hostname, exc)
+        try:
+            await db.create_config_drift_event_history(
+                event_id=event["id"],
+                host_id=event["host_id"],
+                action="revert_failed",
+                from_status=event.get("status", ""),
+                to_status=event.get("status", ""),
+                actor=user,
+                details="revert job failed; see server logs",
+            )
+        except Exception:
+            pass
         await _broadcast_revert_line(job_id,
             f"[{datetime.now(UTC).strftime('%H:%M:%S')}] FAILED: {exc}\n")
         await _finish_revert_job(job_id, "failed")
@@ -889,6 +920,7 @@ async def bulk_accept_drift_events(body: ConfigDriftBulkAcceptRequest, request: 
         event = await db.get_config_drift_event(event_id)
         if not event or event.get("status") != "open":
             continue
+        from_status = event.get("status", "")
         await db.update_config_drift_event_status(event_id, "accepted", resolved_by=user)
         if event.get("snapshot_id"):
             snapshot = await db.get_config_snapshot(event["snapshot_id"])
@@ -902,6 +934,15 @@ async def bulk_accept_drift_events(body: ConfigDriftBulkAcceptRequest, request: 
                     source="accepted-drift",
                     created_by=user,
                 )
+        await db.create_config_drift_event_history(
+            event_id=event_id,
+            host_id=event["host_id"],
+            action="status_change",
+            from_status=from_status,
+            to_status="accepted",
+            actor=user,
+            details="bulk accept",
+        )
         accepted += 1
     await _audit(
         "config-drift", "drift.bulk_accepted",
@@ -921,6 +962,15 @@ async def get_config_drift_event(event_id: int):
     return event
 
 
+@router.get("/api/config-drift/events/{event_id}/history")
+async def get_config_drift_event_history(event_id: int, limit: int = Query(default=200, ge=1, le=2000)):
+    """Return lifecycle history entries for a single drift event."""
+    event = await db.get_config_drift_event(event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Drift event not found")
+    return await db.get_config_drift_event_history(event_id, limit=limit)
+
+
 @router.put("/api/config-drift/events/{event_id}/status")
 async def update_config_drift_event_status(event_id: int, body: ConfigDriftStatusUpdate, request: Request):
     """Update drift event status to resolved or accepted."""
@@ -931,6 +981,7 @@ async def update_config_drift_event_status(event_id: int, body: ConfigDriftStatu
         raise HTTPException(status_code=404, detail="Drift event not found")
     session = _get_session(request)
     user = session["user"] if session else ""
+    from_status = event.get("status", "")
     await db.update_config_drift_event_status(event_id, body.status, resolved_by=user)
 
     # When accepting, update the baseline to match the snapshot (the new config is now the standard)
@@ -947,6 +998,16 @@ async def update_config_drift_event_status(event_id: int, body: ConfigDriftStatu
                 created_by=user,
             )
             LOGGER.info("config-drift: baseline updated for host %s after accepting event %s", event["host_id"], event_id)
+
+    await db.create_config_drift_event_history(
+        event_id=event_id,
+        host_id=event["host_id"],
+        action="status_change",
+        from_status=from_status,
+        to_status=body.status,
+        actor=user,
+        details="single status update",
+    )
 
     await _audit(
         "config-drift", f"drift.{body.status}",
@@ -986,6 +1047,15 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
     _revert_job_sockets[job_id] = []
 
     asyncio.create_task(_run_revert_job(job_id, event, host, baseline, credentials, user))
+    await db.create_config_drift_event_history(
+        event_id=body.event_id,
+        host_id=event["host_id"],
+        action="revert_started",
+        from_status=event.get("status", ""),
+        to_status=event.get("status", ""),
+        actor=user,
+        details=f"revert job started id={job_id}",
+    )
 
     await _audit(
         "config-drift", "drift.revert",
