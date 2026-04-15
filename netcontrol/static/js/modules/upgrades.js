@@ -813,12 +813,59 @@ window.toggleCampaignGroupHosts = toggleCampaignGroupHosts;
 // Campaign Detail View
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function getSelectedUpgradeDeviceIds() {
+    return [...document.querySelectorAll('.upgrade-device-select:checked')]
+        .map(cb => parseInt(cb.value, 10))
+        .filter(id => Number.isInteger(id));
+}
+
+function getUpgradePhaseLabel(phase) {
+    const labels = {
+        prestage: 'Prestage',
+        transfer: 'Transfer',
+        activate: 'Activate',
+        verify: 'Verify Upgrade',
+        verify_prestage: 'Re-Verify Prestage',
+    };
+    return labels[phase] || phase.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function updateUpgradeSelectionSummary() {
+    const el = document.getElementById('upgrade-selected-count');
+    if (!el) return;
+    const count = getSelectedUpgradeDeviceIds().length;
+    el.textContent = count > 0
+        ? `${count} selected`
+        : 'No selection (runs on all devices)';
+}
+window.updateUpgradeSelectionSummary = updateUpgradeSelectionSummary;
+
+function toggleUpgradeDeviceSelectionAll(selectAll) {
+    document.querySelectorAll('.upgrade-device-select').forEach(cb => {
+        cb.checked = !!selectAll;
+    });
+    updateUpgradeSelectionSummary();
+}
+window.toggleUpgradeDeviceSelectionAll = toggleUpgradeDeviceSelectionAll;
+
+function selectUpgradeDevicesByFailedPhase(phase) {
+    const key = `${phase}Status`;
+    document.querySelectorAll('.upgrade-device-select').forEach(cb => {
+        cb.checked = cb.dataset[key] === 'failed';
+    });
+    updateUpgradeSelectionSummary();
+}
+window.selectUpgradeDevicesByFailedPhase = selectUpgradeDevicesByFailedPhase;
+
 async function viewCampaign(campaignId) {
     try {
         const campaign = await api.apiGet(`/api/upgrades/campaigns/${campaignId}`);
         const devices = campaign.devices || [];
         const options = typeof campaign.options === 'string' ? JSON.parse(campaign.options) : (campaign.options || {});
         const imageMap = typeof campaign.image_map === 'string' ? JSON.parse(campaign.image_map) : (campaign.image_map || {});
+        const transferFailedDeviceIds = devices
+            .filter(d => d.transfer_status === 'failed')
+            .map(d => d.id);
 
         const phaseColumns = ['prestage', 'transfer', 'activate', 'verify'];
 
@@ -830,13 +877,33 @@ async function viewCampaign(campaignId) {
             return '<span style="opacity:0.3;">&#8226;</span>';
         };
 
-        const isRunning = campaign.status?.includes('running');
+        const hasRunningStatus = campaign.status?.includes('running');
+        const isRunning = typeof campaign.is_actively_running === 'boolean'
+            ? campaign.is_actively_running
+            : hasRunningStatus;
+        const statusText = !isRunning && hasRunningStatus
+            ? `${campaign.status} (stale)`
+            : (campaign.status || 'created');
+        const statusBadgeClass = campaign.status?.includes('failed')
+            ? 'badge-error'
+            : isRunning
+            ? 'badge-info'
+            : campaign.status?.includes('complete')
+            ? 'badge-success'
+            : 'badge-secondary';
 
         showModal(`Campaign: ${escapeHtml(campaign.name)}`, `
             <div style="margin-bottom:1rem;">
-                <span class="badge ${campaign.status?.includes('failed') ? 'badge-error' : campaign.status?.includes('running') ? 'badge-info' : campaign.status?.includes('complete') ? 'badge-success' : 'badge-secondary'}">${escapeHtml(campaign.status || 'created')}</span>
+                <span class="badge ${statusBadgeClass}">${escapeHtml(statusText)}</span>
                 <span style="opacity:0.7; margin-left:0.5rem; font-size:0.85em;">${devices.length} devices</span>
                 ${Object.entries(imageMap).map(([p, i]) => `<span class="badge badge-secondary" style="margin-left:0.25rem;">${escapeHtml(p)} &rarr; ${escapeHtml(String(i).split('/').pop() || i)}</span>`).join('')}
+            </div>
+
+            <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem; flex-wrap:wrap; align-items:center;">
+                <button class="btn btn-sm btn-secondary" onclick="toggleUpgradeDeviceSelectionAll(true)" ${isRunning ? 'disabled' : ''}>Select All</button>
+                <button class="btn btn-sm btn-secondary" onclick="toggleUpgradeDeviceSelectionAll(false)" ${isRunning ? 'disabled' : ''}>Clear</button>
+                <button class="btn btn-sm btn-secondary" onclick="selectUpgradeDevicesByFailedPhase('transfer')" ${isRunning ? 'disabled' : ''}>Select Transfer Failed</button>
+                <span id="upgrade-selected-count" style="opacity:0.75; font-size:0.85em; margin-left:auto;">No selection (runs on all devices)</span>
             </div>
 
             <!-- Phase Action Buttons -->
@@ -847,8 +914,17 @@ async function viewCampaign(campaignId) {
                 <button class="btn btn-secondary" onclick="executeCampaignPhase(${campaignId}, 'transfer')" ${isRunning ? 'disabled' : ''}>
                     Run Transfer
                 </button>
+                ${transferFailedDeviceIds.length > 0 ? `<button class="btn btn-secondary" onclick='executeCampaignPhase(${campaignId}, "transfer", ${JSON.stringify(transferFailedDeviceIds)})' ${isRunning ? 'disabled' : ''}>
+                    Run Transfer On Failed (${transferFailedDeviceIds.length})
+                </button>` : ''}
                 <button class="btn btn-danger" onclick="executeCampaignPhase(${campaignId}, 'activate')" ${isRunning ? 'disabled' : ''}>
                     Run Activate (Reload!)
+                </button>
+                <button class="btn btn-secondary" onclick="showScheduleActivateModal(${campaignId})" ${isRunning ? 'disabled' : ''}>
+                    Schedule Reload
+                </button>
+                <button class="btn btn-secondary" onclick="executeCampaignPhase(${campaignId}, 'verify_prestage')" ${isRunning ? 'disabled' : ''}>
+                    Re-Verify Prestage
                 </button>
                 <button class="btn btn-secondary" onclick="executeCampaignPhase(${campaignId}, 'verify')" ${isRunning ? 'disabled' : ''}>
                     Verify Upgrade
@@ -863,6 +939,7 @@ async function viewCampaign(campaignId) {
                 <table class="data-table" style="width:100%; font-size:0.85em;">
                     <thead>
                         <tr>
+                            <th style="text-align:center; width:48px;">Sel</th>
                             <th>Device</th>
                             <th>Model</th>
                             <th>Current</th>
@@ -873,6 +950,19 @@ async function viewCampaign(campaignId) {
                     </thead>
                     <tbody>
                         ${devices.map(d => `<tr id="upgrade-dev-${d.id}" style="cursor:pointer;" onclick="viewDeviceUpgradeLog(${campaignId}, ${d.id}, '${escapeHtml(d.ip_address)}')">
+                            <td style="text-align:center;" onclick="event.stopPropagation()">
+                                <input
+                                    type="checkbox"
+                                    class="upgrade-device-select"
+                                    value="${d.id}"
+                                    data-prestage-status="${escapeHtml(d.prestage_status || '')}"
+                                    data-transfer-status="${escapeHtml(d.transfer_status || '')}"
+                                    data-activate-status="${escapeHtml(d.activate_status || '')}"
+                                    data-verify-status="${escapeHtml(d.verify_status || '')}"
+                                    onchange="updateUpgradeSelectionSummary()"
+                                    ${isRunning ? 'disabled' : ''}
+                                >
+                            </td>
                             <td>
                                 <strong>${escapeHtml(d.hostname || d.ip_address)}</strong>
                                 ${d.hostname ? `<br><span style="opacity:0.5; font-size:0.9em;">${escapeHtml(d.ip_address)}</span>` : ''}
@@ -912,11 +1002,11 @@ async function viewCampaign(campaignId) {
                     if (row) {
                         const phases = ['prestage', 'transfer', 'activate', 'verify'];
                         const cells = row.querySelectorAll('td');
-                        // Phase columns start after Device, Model, Current, Target Image (index 4-7)
+                        // Phase columns start after Sel, Device, Model, Current, Target Image (index 5-8)
                         phases.forEach((p, i) => {
                             const statusKey = `${p}_status`;
                             if (data[statusKey]) {
-                                const cell = cells[4 + i];
+                                const cell = cells[5 + i];
                                 if (cell) {
                                     cell.innerHTML = data[statusKey] === 'completed'
                                         ? '<span style="color:var(--success-color);">&#10003;</span>'
@@ -928,6 +1018,13 @@ async function viewCampaign(campaignId) {
                                 }
                             }
                         });
+                        const selectCb = row.querySelector('.upgrade-device-select');
+                        if (selectCb) {
+                            if (data.prestage_status) selectCb.dataset.prestageStatus = data.prestage_status;
+                            if (data.transfer_status) selectCb.dataset.transferStatus = data.transfer_status;
+                            if (data.activate_status) selectCb.dataset.activateStatus = data.activate_status;
+                            if (data.verify_status) selectCb.dataset.verifyStatus = data.verify_status;
+                        }
                         // Update error message / status column (last column)
                         const lastCell = cells[cells.length - 1];
                         if (lastCell) {
@@ -965,7 +1062,8 @@ async function viewCampaign(campaignId) {
             },
             (data) => {
                 // Phase complete — reload campaign detail
-                showToast(`Campaign phase ${data.phase || ''} ${data.status || 'complete'}`, 'success');
+                const label = getUpgradePhaseLabel(data.phase || '');
+                showToast(`${label} ${data.status || 'complete'}`, 'success');
                 viewCampaign(campaignId);
             },
             (err) => {
@@ -996,6 +1094,7 @@ async function viewCampaign(campaignId) {
                 output.scrollTop = output.scrollHeight;
             }
         );
+        updateUpgradeSelectionSummary();
     } catch (err) {
         showToast('Failed to load campaign: ' + err.message, 'error');
     }
@@ -1006,28 +1105,126 @@ window.viewCampaign = viewCampaign;
 // Campaign Phase Execution
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function executeCampaignPhase(campaignId, phase) {
+function formatDateTimeLocalValue(date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+        + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+async function showScheduleActivateModal(campaignId) {
+    const selectedDeviceIds = getSelectedUpgradeDeviceIds();
+    const targetText = selectedDeviceIds.length > 0
+        ? `${selectedDeviceIds.length} selected device(s)`
+        : 'all campaign devices';
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local timezone';
+
+    const minDate = new Date(Date.now() + (60 * 1000));
+    minDate.setSeconds(0, 0);
+    const defaultDate = new Date(Date.now() + (30 * 60 * 1000));
+    defaultDate.setSeconds(0, 0);
+
+    showModal('Schedule Reload (Activate)', `
+        <form id="schedule-activate-form">
+            <p style="margin:0 0 0.75rem; opacity:0.85;">
+                Schedule the activate/reload phase for <strong>${escapeHtml(targetText)}</strong>.
+            </p>
+            <div class="form-group">
+                <label class="form-label" for="schedule-activate-at">Run At (${escapeHtml(timezone)})</label>
+                <input
+                    id="schedule-activate-at"
+                    class="form-input"
+                    type="datetime-local"
+                    required
+                    min="${formatDateTimeLocalValue(minDate)}"
+                    value="${formatDateTimeLocalValue(defaultDate)}"
+                >
+            </div>
+            <p style="font-size:0.85em; opacity:0.75; margin:0.5rem 0 0;">
+                Devices will reload at this time, which can cause downtime.
+            </p>
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-danger">Schedule Reload</button>
+            </div>
+        </form>
+    `);
+
+    const form = document.getElementById('schedule-activate-form');
+    if (!form) return;
+
+    form.onsubmit = async (e) => {
+        e.preventDefault();
+        const input = document.getElementById('schedule-activate-at');
+        const raw = input?.value || '';
+        const when = new Date(raw);
+        if (!raw || Number.isNaN(when.getTime())) {
+            showToast('Choose a valid schedule time', 'error');
+            return;
+        }
+        if (when <= new Date()) {
+            showToast('Schedule time must be in the future', 'error');
+            return;
+        }
+
+        try {
+            await api.apiPost(`/api/upgrades/campaigns/${campaignId}/execute`, {
+                phase: 'activate',
+                device_ids: selectedDeviceIds,
+                scheduled_at: when.toISOString(),
+            });
+            showToast(`Reload scheduled for ${when.toLocaleString()} on ${targetText}`, 'success');
+            viewCampaign(campaignId);
+        } catch (err) {
+            showToast(`Failed to schedule reload: ${err.message}`, 'error');
+        }
+    };
+}
+window.showScheduleActivateModal = showScheduleActivateModal;
+
+async function executeCampaignPhase(campaignId, phase, explicitDeviceIds = null) {
+    const selectedDeviceIds = Array.isArray(explicitDeviceIds)
+        ? explicitDeviceIds.filter(id => Number.isInteger(id))
+        : getSelectedUpgradeDeviceIds();
+    const targetText = selectedDeviceIds.length > 0
+        ? `${selectedDeviceIds.length} selected device(s)`
+        : 'all campaign devices';
+    const phaseLabel = getUpgradePhaseLabel(phase);
     const confirmMsg = phase === 'activate'
-        ? 'This will reload switches and cause downtime. Are you sure?'
+        ? `This will reload switches and cause downtime on ${targetText}. Are you sure?`
         : phase === 'verify'
-        ? 'Connect to each switch and check the running version against the target?'
-        : `Run ${phase} phase on all campaign devices?`;
+        ? `Connect to ${targetText} and check the running version against the target?`
+        : phase === 'verify_prestage'
+        ? `Check install-add unpackaged artifacts on ${targetText}?`
+        : `Run ${phaseLabel} phase on ${targetText}?`;
 
     const confirmed = await showConfirm({
-        title: phase === 'verify' ? 'Verify Upgrade' : `Execute ${phase.charAt(0).toUpperCase() + phase.slice(1)}`,
+        title: phase === 'verify'
+            ? 'Verify Upgrade'
+            : phase === 'verify_prestage'
+            ? 'Re-Verify Prestage'
+            : `Execute ${phaseLabel}`,
         message: confirmMsg,
-        confirmText: phase === 'activate' ? 'Activate & Reload' : phase === 'verify' ? 'Verify' : `Run ${phase}`,
+        confirmText: phase === 'activate'
+            ? 'Activate & Reload'
+            : phase === 'verify'
+            ? 'Verify'
+            : phase === 'verify_prestage'
+            ? 'Run Check'
+            : `Run ${phaseLabel}`,
         confirmClass: phase === 'activate' ? 'btn-danger' : 'btn-primary',
     });
     if (!confirmed) return;
 
     try {
-        await api.apiPost(`/api/upgrades/campaigns/${campaignId}/execute`, { phase });
-        showToast(`${phase} phase started`, 'success');
+        await api.apiPost(`/api/upgrades/campaigns/${campaignId}/execute`, {
+            phase,
+            device_ids: selectedDeviceIds,
+        });
+        showToast(`${phaseLabel} started on ${targetText}`, 'success');
         // Refresh the campaign view to show running state
         viewCampaign(campaignId);
     } catch (err) {
-        showToast(`Failed to start ${phase}: ${err.message}`, 'error');
+        showToast(`Failed to start ${phaseLabel}: ${err.message}`, 'error');
     }
 }
 window.executeCampaignPhase = executeCampaignPhase;
@@ -1077,7 +1274,7 @@ async function viewDeviceUpgradeLog(campaignId, deviceId, ip) {
                 }).join('')}
                 ${events.length === 0 ? '<div style="opacity:0.5;">No events yet for this device</div>' : ''}
             </div>
-        `);
+        `, { wide: true });
     } catch (err) {
         showToast('Failed to load log: ' + err.message, 'error');
     }

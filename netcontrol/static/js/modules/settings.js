@@ -292,14 +292,13 @@ async function refreshAdminData() {
 async function loadAdminSettings(_options = {}) {
     const page = document.getElementById('page-settings');
     if (!page) return;
-    if (currentUserData?.role !== 'admin') {
-        page.innerHTML = '<h2>Settings</h2><div class="error">Admin access is required to view settings.</div>';
-        return;
-    }
 
     try {
         if (!adminState.capabilities) {
             adminState.capabilities = await api.getAdminCapabilities();
+        }
+        if (currentUserData) {
+            currentUserData.role = String(currentUserData.role || 'admin').toLowerCase();
         }
         await refreshAdminData();
         renderAdminUsers();
@@ -319,6 +318,9 @@ async function loadAdminSettings(_options = {}) {
         initThemeControls();
         initSpaceControls();
     } catch (error) {
+        if (page) {
+            page.innerHTML = '<h2>Settings</h2><div class="error">Admin access is required to view settings.</div>';
+        }
         const usersContainer = document.getElementById('admin-users-list');
         if (usersContainer) {
             usersContainer.innerHTML = `<div class="error">Failed loading admin settings: ${escapeHtml(error.message)}</div>`;
