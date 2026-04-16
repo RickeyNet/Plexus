@@ -118,6 +118,10 @@ from netcontrol.routes.billing import (
     init_billing,
     router as billing_router,
 )
+from netcontrol.routes.cloud_visibility import (
+    init_cloud_visibility,
+    router as cloud_visibility_router,
+)
 from netcontrol.routes.deployments import (
     DeploymentCreate,
     DeploymentExecute,
@@ -1244,6 +1248,7 @@ init_deployments(require_auth, require_feature, verify_session_token, _get_user_
 init_monitoring(require_auth, require_feature, require_admin)
 init_interface_errors(require_auth, require_admin)
 init_billing(require_auth, require_admin)
+init_cloud_visibility(require_admin)
 init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
 metrics_engine_inject_auth(require_auth, require_admin)
 
@@ -1369,6 +1374,11 @@ app.include_router(
 app.include_router(
     billing_router,
     dependencies=[Depends(require_auth)],
+)
+# Cloud Visibility (AWS/Azure/GCP hybrid foundation)
+app.include_router(
+    cloud_visibility_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("topology"))],
 )
 # IOS-XE Upgrade Tool
 app.include_router(

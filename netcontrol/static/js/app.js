@@ -23,6 +23,7 @@ const NAV_FEATURE_MAP = {
     templates: 'templates',
     credentials: 'credentials',
     topology: 'topology',
+    'cloud-visibility': 'topology',
     configuration: 'config-drift',
     compliance: 'compliance',
     'change-management': 'risk-analysis',
@@ -38,7 +39,7 @@ const THEME_KEY = 'plexus-theme';
 const VALID_THEMES = ['forest', 'dark-modern', 'astral', 'light', 'void', 'coral', 'sandstone'];
 const DEFAULT_THEME = 'sandstone';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'cloud-visibility', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades'];
 const pageCacheMeta = {};
 
 // ── Space Depth Experience Controls ──────────────────────────────────────────
@@ -850,6 +851,7 @@ function applyFeatureVisibility() {
 // Map child pages to their nav-group id for auto-expand
 const NAV_GROUP_CHILDREN = {
     'topology': 'network',
+    'cloud-visibility': 'network',
     'monitoring': 'network',
     'configuration': 'network',
     'compliance': 'network',
@@ -901,7 +903,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'topology', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades'];
+const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'topology', 'cloud-visibility', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -1000,6 +1002,7 @@ const PAGE_LABELS = {
     templates: 'Config Templates',
     credentials: 'Credentials',
     topology: 'Network Topology',
+    'cloud-visibility': 'Cloud Visibility',
     configuration: 'Configuration',
     compliance: 'Compliance',
     'change-management': 'Change Management',
@@ -1017,6 +1020,7 @@ const PAGE_LABELS = {
 const PAGE_PARENTS = {
     'device-detail': 'monitoring',
     topology: 'dashboard',
+    'cloud-visibility': 'dashboard',
     monitoring: 'dashboard',
     configuration: 'dashboard',
     compliance: 'dashboard',
@@ -1056,6 +1060,10 @@ const PAGE_HELP = {
     topology: {
         title: 'Interactive Network Map',
         text: 'Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data.'
+    },
+    'cloud-visibility': {
+        title: 'Hybrid Cloud Network Visibility',
+        text: 'Track AWS/Azure/GCP network constructs alongside on-prem devices. Manage cloud accounts, refresh topology snapshots, and view cloud and hybrid connectivity paths.'
     },
     configuration: {
         title: 'Configuration Management',
@@ -1210,6 +1218,7 @@ const _destroyMap = {
     'credentials': 'destroyJobs',
     'settings': 'destroySettings',
     'topology': 'destroyTopology',
+    'cloud-visibility': 'destroyCloudVisibility',
     'configuration': 'destroyConfiguration',
     'compliance': 'destroyCompliance',
     'change-management': 'destroyChangeManagement',
@@ -1242,6 +1251,7 @@ async function _loadModule(page) {
         'credentials':      () => import('./modules/jobs.js'),
         'settings':         () => import('./modules/settings.js'),
         'topology':         () => import('./modules/topology.js'),
+        'cloud-visibility': () => import('./modules/cloud-visibility.js'),
         'configuration':    () => import('./modules/configuration.js'),
         'compliance':       () => import('./modules/compliance.js'),
         'change-management': () => import('./modules/change-management.js'),
@@ -1293,6 +1303,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'topology':
                 await mod.loadTopology({ preserveContent });
+                break;
+            case 'cloud-visibility':
+                await mod.loadCloudVisibility({ preserveContent });
                 break;
             case 'configuration':
                 await mod.loadConfigDrift({ preserveContent });
@@ -2359,6 +2372,7 @@ const COMMAND_PALETTE_PAGES = [
     { page: 'jobs',        label: 'Jobs',         icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>' },
     { page: 'templates',   label: 'Templates',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
     { page: 'credentials', label: 'Credentials',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' },
+    { page: 'cloud-visibility', label: 'Cloud Visibility', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a4 4 0 1 1 .8-7.92A5 5 0 0 1 19 13a3 3 0 0 1-1.5 6z"/><path d="M3 19h6"/></svg>' },
     { page: 'monitoring',   label: 'Monitoring',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' },
     { page: 'configuration', label: 'Configuration', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="M9 15l3 3 3-3"/></svg>' },
     { page: 'compliance',  label: 'Compliance',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>' },
