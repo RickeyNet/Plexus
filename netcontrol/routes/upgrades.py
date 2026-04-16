@@ -114,8 +114,9 @@ class CampaignUpdate(BaseModel):
 
 
 class CampaignPhaseRequest(BaseModel):
-    phase: str  # "prestage", "transfer", "activate"
+    phase: str  # "prestage", "transfer", "activate", "verify", "verify_prestage"
     device_ids: list[int] = []  # empty = all devices in campaign
+    scheduled_at: datetime | None = None  # optional future UTC/offset datetime (activate only)
 
 
 # ── Module-level state ───────────────────────────────────────────────────────
@@ -123,6 +124,31 @@ class CampaignPhaseRequest(BaseModel):
 _campaign_sockets: dict[int, list[WebSocket]] = {}
 _campaign_sockets_lock = asyncio.Lock()
 _running_campaigns: dict[int, asyncio.Task] = {}
+
+_SUPPORTED_PHASES = ("prestage", "transfer", "activate", "verify", "verify_prestage")
+_PHASE_STATUS_KEY = {
+    "prestage": "prestage_status",
+    "transfer": "transfer_status",
+    "activate": "activate_status",
+    "verify": "verify_status",
+    # Re-verify prestage acts as transfer-readiness verification.
+    "verify_prestage": "transfer_status",
+}
+_PHASE_LABEL = {
+    "prestage": "Prestage",
+    "transfer": "Transfer",
+    "activate": "Activate",
+    "verify": "Verify",
+    "verify_prestage": "Prestage Verify",
+}
+
+
+def _phase_status_key(phase: str) -> str:
+    return _PHASE_STATUS_KEY.get(phase, f"{phase}_status")
+
+
+def _phase_label(phase: str) -> str:
+    return _PHASE_LABEL.get(phase, phase.replace("_", " ").title())
 
 
 # ── Helper: broadcast event to WebSocket subscribers ─────────────────────────
@@ -173,6 +199,48 @@ async def _emit_device_status(campaign_id: int, device_id: int, **statuses):
         **statuses,
     }
     await _broadcast_upgrade_event(campaign_id, event)
+
+
+def _derive_stale_phase_status(phase: str, devices: list[dict]) -> str:
+    """Derive a terminal campaign status for a stale running phase."""
+    key = _phase_status_key(phase)
+    total = len(devices)
+    if total == 0:
+        return f"{phase}_failed"
+
+    completed = sum(1 for d in devices if d.get(key) == "completed")
+    failed = sum(1 for d in devices if d.get(key) == "failed")
+    cancelled = sum(1 for d in devices if d.get(key) == "cancelled")
+
+    if completed == total:
+        return f"{phase}_complete"
+    if completed + failed + cancelled == total and (completed > 0 or failed > 0):
+        return f"{phase}_partial"
+    if failed == total:
+        return f"{phase}_failed"
+    return f"{phase}_partial"
+
+
+async def _repair_stale_running_campaign(campaign: dict) -> dict:
+    """Normalize stale running_* DB state when no in-memory task is active."""
+    status = campaign.get("status") or ""
+    campaign_id = campaign.get("id")
+    if not isinstance(campaign_id, int):
+        return campaign
+    if campaign_id in _running_campaigns:
+        return campaign
+    if not status.startswith("running_"):
+        return campaign
+
+    phase = status.split("running_", 1)[1].strip()
+    if phase not in _SUPPORTED_PHASES:
+        return campaign
+
+    devices = await db.get_upgrade_devices(campaign_id)
+    recovered_status = _derive_stale_phase_status(phase, devices)
+    await db.update_upgrade_campaign(campaign_id, status=recovered_status)
+    campaign["status"] = recovered_status
+    return campaign
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -359,6 +427,8 @@ async def list_campaigns():
     campaigns = await db.get_all_upgrade_campaigns()
     # Enrich with device counts
     for c in campaigns:
+        c = await _repair_stale_running_campaign(c)
+        c["is_actively_running"] = c["id"] in _running_campaigns
         devices = await db.get_upgrade_devices(c["id"])
         c["device_count"] = len(devices)
         c["devices_completed"] = sum(1 for d in devices if d["phase"] == "completed")
@@ -371,6 +441,8 @@ async def get_campaign(campaign_id: int):
     campaign = await db.get_upgrade_campaign(campaign_id)
     if not campaign:
         raise HTTPException(404, "Campaign not found")
+    campaign = await _repair_stale_running_campaign(campaign)
+    campaign["is_actively_running"] = campaign_id in _running_campaigns
     campaign["devices"] = await db.get_upgrade_devices(campaign_id)
     return campaign
 
@@ -522,7 +594,7 @@ async def delete_backup(filename: str, request: Request):
 
 @router.post("/api/upgrades/campaigns/{campaign_id}/execute")
 async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: Request):
-    """Execute a specific phase (prestage/transfer/activate) for a campaign."""
+    """Execute a specific phase for a campaign."""
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
@@ -533,11 +605,22 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     if not campaign:
         raise HTTPException(404, "Campaign not found")
 
-    if body.phase not in ("prestage", "transfer", "activate", "verify"):
+    if body.phase not in _SUPPORTED_PHASES:
         raise HTTPException(400, f"Invalid phase: {body.phase}")
 
     if campaign_id in _running_campaigns:
         raise HTTPException(409, "Campaign is already running a phase")
+
+    scheduled_at_utc: datetime | None = None
+    if body.scheduled_at is not None:
+        if body.phase != "activate":
+            raise HTTPException(400, "Scheduling is only supported for activate phase")
+        scheduled_at_utc = body.scheduled_at
+        if scheduled_at_utc.tzinfo is None:
+            scheduled_at_utc = scheduled_at_utc.replace(tzinfo=UTC)
+        scheduled_at_utc = scheduled_at_utc.astimezone(UTC)
+        if scheduled_at_utc <= datetime.now(UTC):
+            raise HTTPException(400, "scheduled_at must be in the future")
 
     # Get credential
     options = json.loads(campaign["options"]) if isinstance(campaign["options"], str) else campaign["options"]
@@ -571,14 +654,40 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     # Sort by pattern length descending for specificity matching
     image_map = sorted(image_map_raw.items(), key=lambda x: len(x[0]), reverse=True)
 
-    await db.update_upgrade_campaign(campaign_id, status=f"running_{body.phase}")
-    await _audit("upgrades", "phase_execute", user=user,
-                 detail=f"Executing {body.phase} on campaign {campaign_id} ({len(devices)} devices)")
+    if scheduled_at_utc is not None:
+        await db.update_upgrade_campaign(campaign_id, status=f"scheduled_{body.phase}")
+        await _audit(
+            "upgrades",
+            "phase_execute",
+            user=user,
+            detail=(
+                f"Scheduled {body.phase} on campaign {campaign_id} "
+                f"for {scheduled_at_utc.isoformat()} ({len(devices)} devices)"
+            ),
+        )
 
-    # Launch async task
-    task = asyncio.create_task(
-        _run_phase(campaign_id, body.phase, devices, credentials, image_map, options)
-    )
+        async def _run_scheduled_phase():
+            await _emit(
+                campaign_id,
+                None,
+                "info",
+                f"{body.phase.title()} phase scheduled for {scheduled_at_utc.isoformat()} ({len(devices)} devices)",
+            )
+            delay_seconds = (scheduled_at_utc - datetime.now(UTC)).total_seconds()
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+            await db.update_upgrade_campaign(campaign_id, status=f"running_{body.phase}")
+            await _emit(campaign_id, None, "info", f"Starting scheduled {body.phase} phase now")
+            await _run_phase(campaign_id, body.phase, devices, credentials, image_map, options)
+
+        task = asyncio.create_task(_run_scheduled_phase())
+    else:
+        await db.update_upgrade_campaign(campaign_id, status=f"running_{body.phase}")
+        await _audit("upgrades", "phase_execute", user=user,
+                     detail=f"Executing {body.phase} on campaign {campaign_id} ({len(devices)} devices)")
+        task = asyncio.create_task(
+            _run_phase(campaign_id, body.phase, devices, credentials, image_map, options)
+        )
     _running_campaigns[campaign_id] = task
 
     def _on_done(t):
@@ -586,7 +695,13 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
 
     task.add_done_callback(_on_done)
 
-    return {"ok": True, "phase": body.phase, "device_count": len(devices)}
+    return {
+        "ok": True,
+        "phase": body.phase,
+        "device_count": len(devices),
+        "scheduled": scheduled_at_utc is not None,
+        "scheduled_at": scheduled_at_utc.isoformat() if scheduled_at_utc is not None else None,
+    }
 
 
 @router.post("/api/upgrades/campaigns/{campaign_id}/cancel")
@@ -687,9 +802,11 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
 async def _run_phase(campaign_id, phase, devices, credentials, image_map, options):
     """Orchestrate a phase across all devices with concurrency control."""
     max_workers = min(options.get("parallel", 4), 8)
+    status_key = _phase_status_key(phase)
+    phase_name = _phase_label(phase)
 
     await _emit(campaign_id, None, "info",
-                f"Starting {phase} phase for {len(devices)} device(s) (max {max_workers} concurrent)")
+                f"Starting {phase_name} phase for {len(devices)} device(s) (max {max_workers} concurrent)")
 
     semaphore = asyncio.Semaphore(max_workers)
 
@@ -704,13 +821,15 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
                     await _device_activate(campaign_id, dev, credentials, image_map, options)
                 elif phase == "verify":
                     await _device_verify(campaign_id, dev, credentials, image_map, options)
+                elif phase == "verify_prestage":
+                    await _device_verify_prestage(campaign_id, dev, credentials, image_map, options)
             except asyncio.CancelledError:
-                await db.update_upgrade_device(dev["id"], **{f"{phase}_status": "cancelled", "phase": "cancelled"})
+                await db.update_upgrade_device(dev["id"], **{status_key: "cancelled", "phase": "cancelled"})
                 raise
             except Exception as e:
                 LOGGER.error("Unhandled error on device %s: %s", dev["ip_address"], e, exc_info=True)
                 await db.update_upgrade_device(dev["id"], **{
-                    f"{phase}_status": "failed",
+                    status_key: "failed",
                     "phase": "failed",
                     "error_message": str(e)[:1000],
                 })
@@ -727,7 +846,7 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
 
     # Update campaign status
     all_devs = await db.get_upgrade_devices(campaign_id)
-    failed = sum(1 for d in all_devs if d.get(f"{phase}_status") == "failed")
+    failed = sum(1 for d in all_devs if d.get(status_key) == "failed")
     total = len(all_devs)
 
     if failed == total:
@@ -739,7 +858,7 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
 
     await db.update_upgrade_campaign(campaign_id, status=final_status)
     await _emit(campaign_id, None, "success" if failed == 0 else "warn",
-                f"{phase.title()} phase complete: {total - failed}/{total} succeeded, {failed} failed")
+                f"{phase_name} phase complete: {total - failed}/{total} succeeded, {failed} failed")
 
     # Small delay to ensure all _emit() DB writes are flushed before the
     # frontend reloads and replays history
@@ -796,6 +915,167 @@ def _resolve_image(model, image_map):
         if pattern.upper() in model_upper:
             return image_file
     return None
+
+
+async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, dest_path):
+    """Pre-stage packages so activate can run without a new add."""
+    full_path = f"{dest_path}{image_name}"
+    install_add_cmd = f"install add file {full_path}"
+    await _emit(campaign_id, dev_id, "info", f"Pre-staging image: {install_add_cmd}", host=ip)
+    await _emit(campaign_id, dev_id, "info", "This may take several minutes...", host=ip)
+
+    install_output = ""
+    try:
+        install_output = await asyncio.to_thread(
+            conn.send_command,
+            install_add_cmd,
+            expect_string=r"#|>|proceed|y/n|\[yes/no\]|\[y/n\]",
+            read_timeout=1200,
+        )
+        if any(x in install_output.lower() for x in ["proceed", "y/n", "yes/no"]):
+            install_output += await asyncio.to_thread(
+                conn.send_command,
+                "y",
+                expect_string=r"#|>",
+                read_timeout=1200,
+            )
+    except Exception as e:
+        err_text = str(e).lower()
+        if any(x in err_text for x in ["pattern not detected", "timed out", "read_timeout"]):
+            await _emit(
+                campaign_id,
+                dev_id,
+                "warn",
+                "Prompt detection failed during install add, retrying with timing mode...",
+                host=ip,
+            )
+            try:
+                install_output = await asyncio.to_thread(
+                    conn.send_command_timing,
+                    install_add_cmd,
+                    read_timeout=1200,
+                    strip_prompt=False,
+                    strip_command=False,
+                )
+                if any(x in install_output.lower() for x in ["proceed", "y/n", "yes/no"]):
+                    install_output += await asyncio.to_thread(
+                        conn.send_command_timing,
+                        "y",
+                        read_timeout=1200,
+                        strip_prompt=False,
+                        strip_command=False,
+                    )
+            except Exception as timing_err:
+                timing_text = str(timing_err).lower()
+                if any(tok in timing_text for tok in ("already added", "already present", "already installed")):
+                    await _emit(campaign_id, dev_id, "info", "Image already pre-staged", host=ip)
+                    verify_ok, verify_err = await _verify_install_add_unpacked_files(
+                        conn, campaign_id, dev_id, ip, image_name, dest_path
+                    )
+                    if not verify_ok:
+                        return False, verify_err
+                    return True, None
+                return False, str(timing_err)
+
+        # Some platforms report an already-added state via an exception string.
+        if any(tok in err_text for tok in ("already added", "already present", "already installed")):
+            await _emit(campaign_id, dev_id, "info", "Image already pre-staged", host=ip)
+            verify_ok, verify_err = await _verify_install_add_unpacked_files(
+                conn, campaign_id, dev_id, ip, image_name, dest_path
+            )
+            if not verify_ok:
+                return False, verify_err
+            return True, None
+        if not install_output:
+            return False, str(e)
+
+    output_text = (install_output or "").lower()
+    if any(tok in output_text for tok in ("already added", "already present", "already installed")):
+        await _emit(campaign_id, dev_id, "info", "Image already pre-staged", host=ip)
+    else:
+        await _emit(campaign_id, dev_id, "success", "Image pre-staged successfully", host=ip)
+
+    if install_output:
+        await _emit(campaign_id, dev_id, "info", install_output[-500:], host=ip)
+
+    verify_ok, verify_err = await _verify_install_add_unpacked_files(
+        conn, campaign_id, dev_id, ip, image_name, dest_path
+    )
+    if not verify_ok:
+        return False, verify_err
+
+    return True, None
+
+
+async def _verify_install_add_unpacked_files(conn, campaign_id, dev_id, ip, image_name, dest_path):
+    """Verify install-add unpackaging by checking for non-.bin artifacts of target version."""
+    expected_version = _extract_version(image_name)
+    if not expected_version:
+        return False, f"Cannot extract version from image filename: {image_name}"
+
+    if not re.fullmatch(r"[0-9.]+", expected_version):
+        return False, f"Extracted version is invalid for verification: {expected_version!r}"
+
+    # Use plain "dir" for compatibility across platforms that return empty
+    # output when a filesystem prefix is provided.
+    verify_cmd = f"dir | include {expected_version}"
+    await _emit(campaign_id, dev_id, "info", f"Verifying install-add artifacts: {verify_cmd}", host=ip)
+
+    try:
+        output = await asyncio.to_thread(conn.send_command, verify_cmd, read_timeout=180)
+    except Exception as e:
+        return False, f"Install add verification command failed: {e}"
+
+    version_lines = []
+    unpacked_lines = []
+    bin_lines = []
+    for raw in (output or "").splitlines():
+        line = raw.strip()
+        lower = line.lower()
+        if not line:
+            continue
+        # Ignore echoed command and directory summary noise.
+        if lower.startswith("dir ") or "| include" in lower or "directory of" in lower:
+            continue
+        if "bytes free" in lower or "bytes total" in lower:
+            continue
+        if expected_version not in line:
+            continue
+        version_lines.append(line)
+        if ".bin" in lower:
+            bin_lines.append(line)
+            continue
+        unpacked_lines.append(line)
+
+    if unpacked_lines:
+        await _emit(
+            campaign_id,
+            dev_id,
+            "success",
+            f"Install add verified — found {len(unpacked_lines)} unpackaged entries for {expected_version}",
+            host=ip,
+        )
+        preview_lines = unpacked_lines[:10]
+        for pkg_line in preview_lines:
+            await _emit(campaign_id, dev_id, "info", pkg_line[:500], host=ip)
+        omitted = len(unpacked_lines) - len(preview_lines)
+        if omitted > 0:
+            await _emit(
+                campaign_id,
+                dev_id,
+                "info",
+                f"... {omitted} additional unpackaged entries omitted",
+                host=ip,
+            )
+        return True, None
+
+    if bin_lines and version_lines:
+        return (
+            False,
+            f"Install add verification failed for {expected_version}: only .bin entries found (no unpackaged artifacts)",
+        )
+
+    return False, f"Install add verification failed for {expected_version}: no matching unpackaged files found"
 
 
 async def _detect_model(conn, ip):
@@ -945,7 +1225,7 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
 
 
 async def _device_transfer(campaign_id, dev, credentials, image_map, options):
-    """Transfer: check space, SCP image, verify MD5."""
+    """Transfer: check space, SCP image, verify MD5, install add, and verify unpackaging."""
     ip = dev["ip_address"]
     dev_id = dev["id"]
     dest_path = options.get("dest_path", "flash:")
@@ -1056,20 +1336,33 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
         exists = await asyncio.to_thread(_check_image_exists, conn, image_name, dest_path)
         if exists:
             await _emit(campaign_id, dev_id, "info", f"Image {image_name} already on flash", host=ip)
+            should_prestage = False
             if local_md5 and not options.get("skip_md5"):
                 await _emit(campaign_id, dev_id, "info", "Verifying existing image integrity...", host=ip)
                 md5_ok = await _verify_md5_on_switch(conn, image_name, dest_path, local_md5)
                 if md5_ok:
                     await _emit(campaign_id, dev_id, "success", "Existing image matches - no transfer needed", host=ip)
-                    await db.update_upgrade_device(dev_id, transfer_status="completed", phase="transfer_done")
-                    await _emit_device_status(campaign_id, dev_id, transfer_status="completed")
-                    return
+                    should_prestage = True
                 else:
                     await _emit(campaign_id, dev_id, "warn", "Existing image does NOT match - will re-transfer", host=ip)
             else:
                 await _emit(campaign_id, dev_id, "success", "Image already on flash - skipping transfer", host=ip)
+                should_prestage = True
+
+            if should_prestage:
+                prestage_ok, prestage_err = await _run_install_add_prestage(
+                    conn, campaign_id, dev_id, ip, image_name, dest_path
+                )
+                if not prestage_ok:
+                    await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
+                                                   error_message=prestage_err)
+                    await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=prestage_err)
+                    await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip)
+                    return
+
                 await db.update_upgrade_device(dev_id, transfer_status="completed", phase="transfer_done")
                 await _emit_device_status(campaign_id, dev_id, transfer_status="completed")
+                await _emit(campaign_id, dev_id, "success", "Transfer phase complete", host=ip)
                 return
 
         # Transfer via SCP
@@ -1102,23 +1395,14 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
             except Exception:
                 pass
 
-            # Pre-stage: unpack and add image so activate only needs activate+commit
-            full_path = f"{dest_path}{image_name}"
-            install_add_cmd = f"install add file {full_path}"
-            await _emit(campaign_id, dev_id, "info", f"Pre-staging image: {install_add_cmd}", host=ip)
-            await _emit(campaign_id, dev_id, "info", "This may take several minutes...", host=ip)
-            try:
-                install_output = await asyncio.to_thread(
-                    conn.send_command, install_add_cmd, read_timeout=900,
-                )
-                await _emit(campaign_id, dev_id, "success", "Image pre-staged successfully", host=ip)
-                if install_output:
-                    await _emit(campaign_id, dev_id, "info", install_output[-500:], host=ip)
-            except Exception as e:
+            prestage_ok, prestage_err = await _run_install_add_prestage(
+                conn, campaign_id, dev_id, ip, image_name, dest_path
+            )
+            if not prestage_ok:
                 await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                               error_message=f"install add failed: {e}")
-                await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=f"install add failed: {e}")
-                await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {e}", host=ip)
+                                               error_message=prestage_err)
+                await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=prestage_err)
+                await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip)
                 return
 
             await db.update_upgrade_device(dev_id, transfer_status="completed", phase="transfer_done")
@@ -1153,23 +1437,14 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                             await asyncio.to_thread(verify_conn.send_command, "write memory", read_timeout=60)
                         except Exception:
                             pass
-                        # Pre-stage: unpack and add image so activate only needs activate+commit
-                        full_path = f"{dest_path}{image_name}"
-                        install_add_cmd = f"install add file {full_path}"
-                        await _emit(campaign_id, dev_id, "info", f"Pre-staging image: {install_add_cmd}", host=ip)
-                        await _emit(campaign_id, dev_id, "info", "This may take several minutes...", host=ip)
-                        try:
-                            install_output = await asyncio.to_thread(
-                                verify_conn.send_command, install_add_cmd, read_timeout=900,
-                            )
-                            await _emit(campaign_id, dev_id, "success", "Image pre-staged successfully", host=ip)
-                            if install_output:
-                                await _emit(campaign_id, dev_id, "info", install_output[-500:], host=ip)
-                        except Exception as e:
+                        prestage_ok, prestage_err = await _run_install_add_prestage(
+                            verify_conn, campaign_id, dev_id, ip, image_name, dest_path
+                        )
+                        if not prestage_ok:
                             await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                                           error_message=f"install add failed: {e}")
-                            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=f"install add failed: {e}")
-                            await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {e}", host=ip)
+                                                           error_message=prestage_err)
+                            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=prestage_err)
+                            await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip)
                             try:
                                 await asyncio.to_thread(verify_conn.disconnect)
                             except Exception:
@@ -1490,6 +1765,113 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
                                        error_message=str(e))
         await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message=str(e))
         await _emit(campaign_id, dev_id, "error", f"Verify failed: {e}", host=ip)
+    finally:
+        try:
+            await asyncio.to_thread(conn.disconnect)
+        except Exception:
+            pass
+
+
+async def _device_verify_prestage(campaign_id, dev, credentials, image_map, options):
+    """Re-verify install-add unpackaging using campaign target version artifacts on flash."""
+    ip = dev["ip_address"]
+    dev_id = dev["id"]
+    dest_path = options.get("dest_path", "flash:")
+
+    await db.update_upgrade_device(
+        dev_id,
+        transfer_status="running",
+        phase_detail="Verifying install-add unpackaged artifacts",
+        started_at=datetime.now(UTC).isoformat(),
+    )
+    await _emit_device_status(campaign_id, dev_id, transfer_status="running")
+    await _emit(campaign_id, dev_id, "info", f"Connecting to {ip} for prestage verification...", host=ip)
+
+    try:
+        conn = await _connect_device(ip, credentials, options, retries=options.get("retries", 2))
+    except Exception as e:
+        err_msg = f"Connection failed: {e}"
+        await db.update_upgrade_device(
+            dev_id,
+            transfer_status="failed",
+            phase_detail="Prestage verification failed (connection)",
+            error_message=err_msg,
+        )
+        await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=err_msg)
+        await _emit(campaign_id, dev_id, "error", err_msg, host=ip)
+        return
+
+    try:
+        await _emit(campaign_id, dev_id, "success", "Connected", host=ip)
+
+        model = dev.get("model")
+        target_image = dev.get("target_image", "")
+        if not target_image:
+            det_model, _ = await _detect_model(conn, ip)
+            if det_model:
+                model = det_model
+                await db.update_upgrade_device(dev_id, model=det_model)
+
+        if not target_image and model:
+            image_map_items = image_map if isinstance(image_map, list) else sorted(image_map.items(), key=lambda x: len(x[0]), reverse=True)
+            target_image = _resolve_image(model, image_map_items)
+            if target_image:
+                await db.update_upgrade_device(dev_id, target_image=target_image)
+
+        if not target_image:
+            err_msg = "No target image to verify against"
+            await db.update_upgrade_device(
+                dev_id,
+                transfer_status="failed",
+                phase_detail="Prestage verification failed",
+                error_message=err_msg,
+            )
+            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=err_msg)
+            await _emit(campaign_id, dev_id, "error", err_msg, host=ip)
+            return
+
+        image_name = os.path.basename(target_image)
+        verify_ok, verify_err = await _verify_install_add_unpacked_files(
+            conn, campaign_id, dev_id, ip, image_name, dest_path
+        )
+        if not verify_ok:
+            err_msg = verify_err or "Install add verification failed"
+            await db.update_upgrade_device(
+                dev_id,
+                transfer_status="failed",
+                phase_detail="Prestage verification failed",
+                error_message=err_msg,
+            )
+            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=err_msg)
+            await _emit(campaign_id, dev_id, "error", f"Prestage verification failed: {err_msg}", host=ip)
+            return
+
+        expected_version = _extract_version(image_name)
+        detail = (
+            f"Prestage artifacts verified for {expected_version}"
+            if expected_version
+            else "Prestage artifacts verified"
+        )
+        await db.update_upgrade_device(
+            dev_id,
+            transfer_status="completed",
+            phase_detail=detail,
+            error_message="",
+            completed_at=datetime.now(UTC).isoformat(),
+        )
+        await _emit_device_status(campaign_id, dev_id, transfer_status="completed", error_message="")
+        await _emit(campaign_id, dev_id, "success", "Prestage verification complete", host=ip)
+
+    except Exception as e:
+        err_msg = str(e)
+        await db.update_upgrade_device(
+            dev_id,
+            transfer_status="failed",
+            phase_detail="Prestage verification failed",
+            error_message=err_msg,
+        )
+        await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=err_msg)
+        await _emit(campaign_id, dev_id, "error", f"Prestage verification failed: {e}", host=ip)
     finally:
         try:
             await asyncio.to_thread(conn.disconnect)

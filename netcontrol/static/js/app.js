@@ -817,7 +817,7 @@ export function invalidatePageCache(...pages) {
 }
 
 function canAccessFeature(feature) {
-    if (currentUserData?.role === 'admin') return true;
+    if (String(currentUserData?.role || '').toLowerCase() === 'admin') return true;
     if (!Array.isArray(currentFeatureAccess) || currentFeatureAccess.length === 0) return true;
     return currentFeatureAccess.includes(feature);
 }
@@ -839,7 +839,7 @@ function applyFeatureVisibility() {
 
     const settingsLink = document.querySelector('.nav-link[data-page="settings"]');
     if (settingsLink) {
-        settingsLink.style.display = currentUserData?.role === 'admin' ? '' : 'none';
+        settingsLink.style.display = String(currentUserData?.role || '').toLowerCase() === 'admin' ? '' : 'none';
     }
 }
 
@@ -917,10 +917,6 @@ function getPageFromHash() {
 }
 
 export function navigateToPage(page, { updateHash = true } = {}) {
-    if (page === 'settings' && currentUserData?.role !== 'admin') {
-        showError('Admin access required for Settings');
-        return;
-    }
     if (NAV_FEATURE_MAP[page] && !canAccessFeature(NAV_FEATURE_MAP[page])) {
         showError(`Your account does not have access to ${page}`);
         return;
@@ -1790,7 +1786,10 @@ function showApp(userData) {
     if (userData.csrf_token) {
         setCsrfToken(userData.csrf_token);
     }
-    currentUserData = userData;
+    currentUserData = {
+        ...userData,
+        role: String(userData?.role || '').toLowerCase(),
+    };
     currentUser = userData.username;
     currentFeatureAccess = Array.isArray(userData.feature_access) ? userData.feature_access : [];
     document.getElementById('login-screen').classList.add('hidden');
@@ -1860,7 +1859,10 @@ window.showUserMenu = async function() {
     // Load fresh profile data
     try {
         const profile = await api.getProfile();
-        currentUserData = profile;
+        currentUserData = {
+            ...profile,
+            role: String(profile?.role || '').toLowerCase(),
+        };
 
         const userMenuOverlay = document.getElementById('user-menu-overlay');
         if (!userMenuOverlay) {
@@ -1887,7 +1889,7 @@ window.showUserMenu = async function() {
         avatar.textContent = displayName.charAt(0).toUpperCase();
         displayNameEl.textContent = displayName;
         usernameEl.textContent = `@${profile.username}`;
-        roleEl.textContent = profile.role;
+        roleEl.textContent = String(profile.role || '').toLowerCase();
     } catch (e) {
         console.error('showUserMenu: Error fetching profile, falling back to cached data:', e);
     }
@@ -2393,7 +2395,7 @@ function renderCommandPaletteResults(query) {
     const q = query.toLowerCase().trim();
     commandPaletteFilteredItems = COMMAND_PALETTE_PAGES.filter((item) => {
         // Filter by access
-        if (item.page === 'settings' && currentUserData?.role !== 'admin') return false;
+        if (item.page === 'settings' && String(currentUserData?.role || '').toLowerCase() !== 'admin') return false;
         const feature = NAV_FEATURE_MAP[item.page];
         if (feature && !canAccessFeature(feature)) return false;
         // Filter by search
