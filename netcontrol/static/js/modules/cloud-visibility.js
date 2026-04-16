@@ -61,6 +61,27 @@ async function _ensureProvidersLoaded() {
     }
 }
 
+function _renderProviderCapabilities() {
+    const container = document.getElementById('cloud-provider-capabilities');
+    if (!container) return;
+    if (!_cloudProviders.length) {
+        container.innerHTML = '';
+        return;
+    }
+    container.innerHTML = _cloudProviders.map((provider) => {
+        const missing = Array.isArray(provider?.missing_dependencies) ? provider.missing_dependencies : [];
+        const liveSupported = Boolean(provider?.live_supported);
+        return `
+            <div class="card" style="padding:0.65rem 0.85rem; margin-bottom:0.4rem;">
+                <strong>${escapeHtml(_providerLabel(provider.id))}</strong>
+                <span style="margin-left:0.45rem;" class="badge badge-${liveSupported ? 'success' : 'warning'}">
+                    ${liveSupported ? 'Live collector ready' : 'Live collector unavailable'}
+                </span>
+                ${missing.length ? `<div style="margin-top:0.35rem; color:var(--text-muted); font-size:0.85em;">Missing deps: ${escapeHtml(missing.join(', '))}</div>` : ''}
+            </div>`;
+    }).join('');
+}
+
 function _renderProviderFilter() {
     const select = document.getElementById('cloud-provider-filter');
     if (!select) return;
@@ -94,6 +115,7 @@ async function loadCloudAccounts({ preserveContent = false } = {}) {
     _cloudAccounts = result?.accounts || [];
     _renderProviderFilter();
     _renderAccountFilter();
+    _renderProviderCapabilities();
 
     if (!_cloudAccounts.length) {
         container.innerHTML = `
@@ -134,6 +156,7 @@ async function loadCloudAccounts({ preserveContent = false } = {}) {
                             <span class="badge badge-info">${a.connection_count ?? 0} edges</span>
                         </td>
                         <td style="white-space:nowrap;">
+                            <button class="btn btn-sm btn-secondary" onclick="runCloudValidation(${a.id})">Validate</button>
                             <button class="btn btn-sm btn-secondary" onclick="runCloudDiscovery(${a.id})">Discover</button>
                             <button class="btn btn-sm btn-secondary" onclick="editCloudAccount(${a.id})">Edit</button>
                             <button class="btn btn-sm btn-danger" onclick="deleteCloudAccount(${a.id})">Delete</button>
@@ -341,17 +364,39 @@ async function deleteCloudAccount(accountId) {
 }
 window.deleteCloudAccount = deleteCloudAccount;
 
+async function runCloudValidation(accountId) {
+    const account = _cloudAccounts.find((a) => Number(a.id) === Number(accountId));
+    const result = await api.validateCloudAccount(accountId, { mode: 'live' });
+    const accountLabel = account?.name || `Account #${accountId}`;
+    if (result?.valid) {
+        showSuccess(`${accountLabel}: ${result?.message || 'Cloud account validation succeeded'}`);
+        return;
+    }
+
+    let detail = result?.message || 'Cloud account validation failed';
+    const missing = Array.isArray(result?.missing_dependencies) ? result.missing_dependencies : [];
+    if (result?.status === 'unavailable' && missing.length) {
+        detail += ` (missing: ${missing.join(', ')})`;
+    }
+    showError(`${accountLabel}: ${detail}`);
+}
+window.runCloudValidation = runCloudValidation;
+
 async function runCloudDiscovery(accountId) {
     const account = _cloudAccounts.find((a) => Number(a.id) === Number(accountId));
     const confirmed = await showConfirm({
         title: 'Run Cloud Discovery',
-        message: `Refresh cloud topology snapshot for "${account?.name || `Account #${accountId}`}"?`,
+        message: `Refresh cloud topology snapshot for "${account?.name || `Account #${accountId}`}"? Auto mode will try live provider APIs first, then fall back to sample if dependencies/credentials are missing.`,
         confirmText: 'Discover',
         confirmClass: 'btn-primary',
     });
     if (!confirmed) return;
-    await api.discoverCloudAccount(accountId, { mode: 'sample', include_hybrid_links: true });
-    showSuccess('Cloud discovery snapshot updated');
+    const result = await api.discoverCloudAccount(accountId, { mode: 'auto', include_hybrid_links: true });
+    if (result?.fallback_used) {
+        showSuccess(result?.message || 'Cloud discovery completed with sample fallback');
+    } else {
+        showSuccess(result?.message || 'Cloud discovery snapshot updated');
+    }
     await refreshCloudVisibility();
 }
 window.runCloudDiscovery = runCloudDiscovery;

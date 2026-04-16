@@ -2015,6 +2015,10 @@ export async function discoverCloudAccount(id, data = {}) {
     return apiRequest(`/cloud/accounts/${id}/discover`, { method: 'POST', body: data });
 }
 
+export async function validateCloudAccount(id, data = {}) {
+    return apiRequest(`/cloud/accounts/${id}/validate`, { method: 'POST', body: data });
+}
+
 export async function getCloudResources(params = {}) {
     const qs = new URLSearchParams(params).toString();
     return apiRequest(`/cloud/resources${qs ? '?' + qs : ''}`);
