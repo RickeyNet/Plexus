@@ -128,6 +128,10 @@ _INSERT_ID_TABLES = {
     "upgrade_events",
     "billing_circuits",
     "billing_periods",
+    "cloud_accounts",
+    "cloud_resources",
+    "cloud_connections",
+    "cloud_hybrid_links",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
@@ -10768,3 +10772,473 @@ async def get_billing_customers() -> list[str]:
         return [r[0] for r in await cursor.fetchall()]
     finally:
         await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Cloud Visibility – Accounts, Resources, and Hybrid Connectivity
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _cloud_json_text(value, default: str = "{}") -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or default
+    try:
+        return json.dumps(value, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        return default
+
+
+async def create_cloud_account(
+    provider: str,
+    name: str,
+    account_identifier: str = "",
+    region_scope: str = "",
+    auth_type: str = "manual",
+    auth_config_json: dict | list | str | None = None,
+    notes: str = "",
+    enabled: int = 1,
+    created_by: str = "",
+) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO cloud_accounts
+               (provider, name, account_identifier, region_scope, auth_type,
+                auth_config_json, notes, enabled, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                provider,
+                name,
+                account_identifier,
+                region_scope,
+                auth_type,
+                _cloud_json_text(auth_config_json),
+                notes,
+                int(bool(enabled)),
+                created_by,
+            ),
+        )
+        await db.commit()
+        return await get_cloud_account(cursor.lastrowid)
+    finally:
+        await db.close()
+
+
+async def get_cloud_account(account_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT ca.*,
+                      (SELECT COUNT(*) FROM cloud_resources cr WHERE cr.account_id = ca.id) AS resource_count,
+                      (SELECT COUNT(*) FROM cloud_connections cc WHERE cc.account_id = ca.id) AS connection_count,
+                      (SELECT COUNT(*) FROM cloud_hybrid_links chl WHERE chl.account_id = ca.id) AS hybrid_link_count
+               FROM cloud_accounts ca
+               WHERE ca.id = ?""",
+            (account_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def list_cloud_accounts(
+    provider: str | None = None,
+    enabled_only: bool = False,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if provider:
+            clauses.append("ca.provider = ?")
+            params.append(provider)
+        if enabled_only:
+            clauses.append("ca.enabled = 1")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        cursor = await db.execute(
+            f"""SELECT ca.*,
+                       (SELECT COUNT(*) FROM cloud_resources cr WHERE cr.account_id = ca.id) AS resource_count,
+                       (SELECT COUNT(*) FROM cloud_connections cc WHERE cc.account_id = ca.id) AS connection_count,
+                       (SELECT COUNT(*) FROM cloud_hybrid_links chl WHERE chl.account_id = ca.id) AS hybrid_link_count
+                FROM cloud_accounts ca
+                {where}
+                ORDER BY ca.provider ASC, ca.name ASC""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def update_cloud_account(account_id: int, **kwargs) -> dict | None:
+    db = await get_db()
+    try:
+        allowed = {
+            "provider",
+            "name",
+            "account_identifier",
+            "region_scope",
+            "auth_type",
+            "auth_config_json",
+            "notes",
+            "enabled",
+            "last_sync_at",
+            "last_sync_status",
+            "last_sync_message",
+        }
+        sets: list[str] = []
+        vals: list = []
+        for key, value in kwargs.items():
+            if key not in allowed or value is None:
+                continue
+            if key == "auth_config_json":
+                value = _cloud_json_text(value)
+            if key == "enabled":
+                value = int(bool(value))
+            sets.append(f"{key} = ?")
+            vals.append(value)
+        if not sets:
+            return await get_cloud_account(account_id)
+        sets.append("updated_at = NOW()" if DB_ENGINE == "postgres" else "updated_at = datetime('now')")
+        sql, sql_params = _safe_dynamic_update("cloud_accounts", sets, vals, "id = ?", account_id)
+        await db.execute(sql, sql_params)
+        await db.commit()
+        return await get_cloud_account(account_id)
+    finally:
+        await db.close()
+
+
+async def delete_cloud_account(account_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM cloud_accounts WHERE id = ?", (account_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def set_cloud_account_sync_status(
+    account_id: int,
+    *,
+    status: str,
+    message: str = "",
+    last_sync_at: str | None = None,
+) -> dict | None:
+    sync_time = last_sync_at or datetime.now(UTC).isoformat()
+    return await update_cloud_account(
+        account_id,
+        last_sync_status=status,
+        last_sync_message=message,
+        last_sync_at=sync_time,
+    )
+
+
+async def replace_cloud_discovery_snapshot(
+    account_id: int,
+    *,
+    resources: list[dict] | None = None,
+    connections: list[dict] | None = None,
+    hybrid_links: list[dict] | None = None,
+    sync_status: str = "success",
+    sync_message: str = "",
+) -> dict:
+    resources = resources or []
+    connections = connections or []
+    hybrid_links = hybrid_links or []
+    now_iso = datetime.now(UTC).isoformat()
+
+    db = await get_db()
+    try:
+        account_row = await db.execute(
+            "SELECT id, provider FROM cloud_accounts WHERE id = ?",
+            (account_id,),
+        )
+        account = await account_row.fetchone()
+        if not account:
+            return {"ok": False, "resources": 0, "connections": 0, "hybrid_links": 0}
+        provider = str(account["provider"])
+
+        await db.execute("DELETE FROM cloud_resources WHERE account_id = ?", (account_id,))
+        await db.execute("DELETE FROM cloud_connections WHERE account_id = ?", (account_id,))
+        await db.execute("DELETE FROM cloud_hybrid_links WHERE account_id = ?", (account_id,))
+
+        resource_seen: dict[str, dict] = {}
+        for item in resources:
+            uid = str(item.get("resource_uid") or item.get("id") or "").strip()
+            if not uid:
+                continue
+            resource_seen[uid] = {
+                "provider": str(item.get("provider") or provider or "").strip(),
+                "resource_uid": uid,
+                "resource_type": str(item.get("resource_type") or "resource").strip(),
+                "name": str(item.get("name") or "").strip(),
+                "region": str(item.get("region") or "").strip(),
+                "cidr": str(item.get("cidr") or "").strip(),
+                "status": str(item.get("status") or "").strip(),
+                "metadata_json": _cloud_json_text(item.get("metadata") or item.get("metadata_json")),
+                "discovered_at": str(item.get("discovered_at") or now_iso),
+                "updated_at": str(item.get("updated_at") or now_iso),
+            }
+
+        for item in resource_seen.values():
+            await db.execute(
+                """INSERT INTO cloud_resources
+                   (account_id, provider, resource_uid, resource_type, name, region, cidr,
+                    status, metadata_json, discovered_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    account_id,
+                    item["provider"],
+                    item["resource_uid"],
+                    item["resource_type"],
+                    item["name"],
+                    item["region"],
+                    item["cidr"],
+                    item["status"],
+                    item["metadata_json"],
+                    item["discovered_at"],
+                    item["updated_at"],
+                ),
+            )
+
+        connection_seen: dict[str, dict] = {}
+        for item in connections:
+            src = str(item.get("source_resource_uid") or item.get("source") or "").strip()
+            dst = str(item.get("target_resource_uid") or item.get("target") or "").strip()
+            ctype = str(item.get("connection_type") or "peering").strip()
+            if not src or not dst:
+                continue
+            key = f"{src}|{dst}|{ctype}"
+            connection_seen[key] = {
+                "provider": str(item.get("provider") or provider or "").strip(),
+                "source_resource_uid": src,
+                "target_resource_uid": dst,
+                "connection_type": ctype,
+                "state": str(item.get("state") or "").strip(),
+                "metadata_json": _cloud_json_text(item.get("metadata") or item.get("metadata_json")),
+                "discovered_at": str(item.get("discovered_at") or now_iso),
+            }
+
+        for item in connection_seen.values():
+            await db.execute(
+                """INSERT INTO cloud_connections
+                   (account_id, provider, source_resource_uid, target_resource_uid,
+                    connection_type, state, metadata_json, discovered_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    account_id,
+                    item["provider"],
+                    item["source_resource_uid"],
+                    item["target_resource_uid"],
+                    item["connection_type"],
+                    item["state"],
+                    item["metadata_json"],
+                    item["discovered_at"],
+                ),
+            )
+
+        hybrid_seen: dict[str, dict] = {}
+        for item in hybrid_links:
+            cloud_uid = str(item.get("cloud_resource_uid") or item.get("target_resource_uid") or "").strip()
+            ctype = str(item.get("connection_type") or "vpn").strip()
+            host_id_raw = item.get("host_id")
+            host_id = None
+            if host_id_raw not in (None, ""):
+                try:
+                    host_id = int(host_id_raw)
+                except Exception:
+                    host_id = None
+            host_label = str(item.get("host_label") or item.get("hostname") or "").strip()
+            if not cloud_uid:
+                continue
+            key = f"{host_id}|{host_label}|{cloud_uid}|{ctype}"
+            hybrid_seen[key] = {
+                "provider": str(item.get("provider") or provider or "").strip(),
+                "host_id": host_id,
+                "host_label": host_label,
+                "cloud_resource_uid": cloud_uid,
+                "connection_type": ctype,
+                "state": str(item.get("state") or "").strip(),
+                "metadata_json": _cloud_json_text(item.get("metadata") or item.get("metadata_json")),
+                "discovered_at": str(item.get("discovered_at") or now_iso),
+            }
+
+        for item in hybrid_seen.values():
+            await db.execute(
+                """INSERT INTO cloud_hybrid_links
+                   (account_id, provider, host_id, host_label, cloud_resource_uid,
+                    connection_type, state, metadata_json, discovered_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    account_id,
+                    item["provider"],
+                    item["host_id"],
+                    item["host_label"],
+                    item["cloud_resource_uid"],
+                    item["connection_type"],
+                    item["state"],
+                    item["metadata_json"],
+                    item["discovered_at"],
+                ),
+            )
+
+        await db.execute(
+            """UPDATE cloud_accounts
+               SET last_sync_at = ?,
+                   last_sync_status = ?,
+                   last_sync_message = ?,
+                   updated_at = ?"""
+            + ("::timestamptz" if DB_ENGINE == "postgres" else "")
+            + " WHERE id = ?",
+            (now_iso, sync_status, sync_message, now_iso, account_id),
+        )
+        await db.commit()
+
+        return {
+            "ok": True,
+            "resources": len(resource_seen),
+            "connections": len(connection_seen),
+            "hybrid_links": len(hybrid_seen),
+        }
+    finally:
+        await db.close()
+
+
+async def get_cloud_resources(
+    account_id: int | None = None,
+    provider: str | None = None,
+    resource_type: str | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if account_id is not None:
+            clauses.append("cr.account_id = ?")
+            params.append(account_id)
+        if provider:
+            clauses.append("cr.provider = ?")
+            params.append(provider)
+        if resource_type:
+            clauses.append("cr.resource_type = ?")
+            params.append(resource_type)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        cursor = await db.execute(
+            f"""SELECT cr.*, ca.name AS account_name, ca.account_identifier
+                FROM cloud_resources cr
+                JOIN cloud_accounts ca ON ca.id = cr.account_id
+                {where}
+                ORDER BY cr.provider, cr.resource_type, cr.name, cr.resource_uid""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_cloud_connections(
+    account_id: int | None = None,
+    provider: str | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if account_id is not None:
+            clauses.append("cc.account_id = ?")
+            params.append(account_id)
+        if provider:
+            clauses.append("cc.provider = ?")
+            params.append(provider)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        cursor = await db.execute(
+            f"""SELECT cc.*,
+                       ca.name AS account_name,
+                       src.name AS source_name,
+                       src.resource_type AS source_type,
+                       dst.name AS target_name,
+                       dst.resource_type AS target_type
+                FROM cloud_connections cc
+                JOIN cloud_accounts ca ON ca.id = cc.account_id
+                LEFT JOIN cloud_resources src
+                  ON src.account_id = cc.account_id
+                 AND src.resource_uid = cc.source_resource_uid
+                LEFT JOIN cloud_resources dst
+                  ON dst.account_id = cc.account_id
+                 AND dst.resource_uid = cc.target_resource_uid
+                {where}
+                ORDER BY cc.provider, cc.connection_type, cc.source_resource_uid, cc.target_resource_uid""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_cloud_hybrid_links(
+    account_id: int | None = None,
+    provider: str | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if account_id is not None:
+            clauses.append("chl.account_id = ?")
+            params.append(account_id)
+        if provider:
+            clauses.append("chl.provider = ?")
+            params.append(provider)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        cursor = await db.execute(
+            f"""SELECT chl.*,
+                       ca.name AS account_name,
+                       h.hostname AS host_hostname,
+                       h.ip_address AS host_ip_address,
+                       cr.name AS cloud_resource_name,
+                       cr.resource_type AS cloud_resource_type
+                FROM cloud_hybrid_links chl
+                JOIN cloud_accounts ca ON ca.id = chl.account_id
+                LEFT JOIN hosts h ON h.id = chl.host_id
+                LEFT JOIN cloud_resources cr
+                  ON cr.account_id = chl.account_id
+                 AND cr.resource_uid = chl.cloud_resource_uid
+                {where}
+                ORDER BY chl.provider, COALESCE(h.hostname, chl.host_label), chl.cloud_resource_uid""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_cloud_topology_snapshot(
+    account_id: int | None = None,
+    provider: str | None = None,
+) -> dict:
+    if account_id is not None:
+        account = await get_cloud_account(account_id)
+        accounts = [account] if account else []
+    else:
+        accounts = await list_cloud_accounts(provider=provider)
+    resources = await get_cloud_resources(account_id=account_id, provider=provider)
+    connections = await get_cloud_connections(account_id=account_id, provider=provider)
+    hybrid_links = await get_cloud_hybrid_links(account_id=account_id, provider=provider)
+
+    return {
+        "accounts": accounts,
+        "resources": resources,
+        "connections": connections,
+        "hybrid_links": hybrid_links,
+        "summary": {
+            "account_count": len(accounts),
+            "resource_count": len(resources),
+            "connection_count": len(connections),
+            "hybrid_link_count": len(hybrid_links),
+        },
+    }

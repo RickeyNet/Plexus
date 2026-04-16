@@ -1988,6 +1988,53 @@ export async function apiDelete(fullPath) {
     return rawApiRequest(fullPath, { method: 'DELETE' });
 }
 
+// ── Cloud Visibility (AWS / Azure / GCP) ────────────────────────────────────
+
+export async function getCloudProviders() {
+    return apiRequest('/cloud/providers');
+}
+
+export async function getCloudAccounts(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/accounts${qs ? '?' + qs : ''}`);
+}
+
+export async function createCloudAccount(data) {
+    return apiRequest('/cloud/accounts', { method: 'POST', body: data });
+}
+
+export async function updateCloudAccount(id, data) {
+    return apiRequest(`/cloud/accounts/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteCloudAccount(id) {
+    return apiRequest(`/cloud/accounts/${id}`, { method: 'DELETE' });
+}
+
+export async function discoverCloudAccount(id, data = {}) {
+    return apiRequest(`/cloud/accounts/${id}/discover`, { method: 'POST', body: data });
+}
+
+export async function getCloudResources(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/resources${qs ? '?' + qs : ''}`);
+}
+
+export async function getCloudConnections(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/connections${qs ? '?' + qs : ''}`);
+}
+
+export async function getCloudHybridLinks(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/hybrid-links${qs ? '?' + qs : ''}`);
+}
+
+export async function getCloudTopology(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/topology${qs ? '?' + qs : ''}`);
+}
+
 // ── Bandwidth Billing & 95th Percentile ─────────────────────────────────────
 
 export async function getBillingCircuits(params = {}) {

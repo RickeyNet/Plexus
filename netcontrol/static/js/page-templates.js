@@ -20,6 +20,7 @@ const _templates = {
     compliance: templateCompliance,
     'change-management': templateChangeManagement,
     monitoring: templateMonitoring,
+    'cloud-visibility': templateCloudVisibility,
     reports: templateReports,
     'device-detail': templateDeviceDetail,
     'graph-templates': templateGraphTemplates,
@@ -875,6 +876,52 @@ function templateMonitoring() {
         <div id="cap-plan-empty" class="empty-state" style="display:none">
             <h3>No Capacity Data</h3>
             <p style="color:var(--text-muted);">Enable monitoring and wait for daily rollups to accumulate capacity planning data.</p>
+        </div>
+    </div>`;
+}
+
+function templateCloudVisibility() {
+    return `
+    <div class="page-header">
+        <h2>Cloud Visibility</h2>
+        <div style="display:flex; gap:0.5rem;">
+            <button class="btn btn-secondary" onclick="refreshCloudVisibility()">Refresh</button>
+            <button class="btn btn-primary" onclick="showCreateCloudAccountModal()">+ Add Cloud Account</button>
+        </div>
+    </div>
+
+    <div class="list-controls">
+        <select id="cloud-provider-filter" class="form-select list-control-select" onchange="onCloudProviderFilterChange()">
+            <option value="">All Providers</option>
+        </select>
+        <select id="cloud-account-filter" class="form-select list-control-select" onchange="onCloudAccountFilterChange()">
+            <option value="">All Accounts</option>
+        </select>
+    </div>
+
+    <div class="section">
+        <h3>Cloud Accounts</h3>
+        <div id="cloud-accounts-list">
+            ${skel(2)}
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>Hybrid Topology Snapshot</h3>
+        <div id="cloud-topology-summary" style="margin-bottom:0.85rem;">
+            ${skel(1)}
+        </div>
+        <div class="card" style="padding:1rem; margin-bottom:0.75rem;">
+            <h4 style="margin:0 0 0.55rem;">Resources</h4>
+            <div id="cloud-resources-list">${skel(1)}</div>
+        </div>
+        <div class="card" style="padding:1rem; margin-bottom:0.75rem;">
+            <h4 style="margin:0 0 0.55rem;">Cloud Connections</h4>
+            <div id="cloud-connections-list">${skel(1)}</div>
+        </div>
+        <div class="card" style="padding:1rem;">
+            <h4 style="margin:0 0 0.55rem;">Hybrid Links (On-Prem to Cloud)</h4>
+            <div id="cloud-hybrid-links-list">${skel(1)}</div>
         </div>
     </div>`;
 }
