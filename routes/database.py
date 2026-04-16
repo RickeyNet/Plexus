@@ -10080,6 +10080,141 @@ async def cleanup_old_flow_records(hours: int = 48) -> int:
         await db.close()
 
 
+def _cloud_flow_type(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized not in {"aws", "azure", "gcp"}:
+        raise ValueError("invalid_provider")
+    return f"cloud_{normalized}_flow"
+
+
+def _cloud_flow_exporter(account_id: int) -> str:
+    return f"cloud-account-{int(account_id)}"
+
+
+async def get_cloud_flow_summary(
+    account_id: int | None = None,
+    provider: str | None = None,
+    hours: int = 24,
+) -> dict:
+    db = await get_db()
+    try:
+        clauses = [
+            "received_at >= datetime('now', ? || ' hours')",
+            "flow_type LIKE 'cloud_%'",
+        ]
+        params: list = [f"-{max(1, int(hours))}"]
+        if account_id is not None:
+            clauses.append("exporter_ip = ?")
+            params.append(_cloud_flow_exporter(account_id))
+        if provider:
+            clauses.append("flow_type = ?")
+            params.append(_cloud_flow_type(provider))
+        where = " AND ".join(clauses)
+        cursor = await db.execute(
+            f"""SELECT COUNT(*) as flow_count,
+                       COALESCE(SUM(bytes), 0) as total_bytes,
+                       COALESCE(SUM(packets), 0) as total_packets,
+                       COUNT(DISTINCT src_ip) as unique_sources,
+                       COUNT(DISTINCT dst_ip) as unique_destinations,
+                       MIN(received_at) as first_seen,
+                       MAX(received_at) as last_seen
+               FROM flow_records
+               WHERE {where}""",
+            tuple(params),
+        )
+        return row_to_dict(await cursor.fetchone()) or {
+            "flow_count": 0,
+            "total_bytes": 0,
+            "total_packets": 0,
+            "unique_sources": 0,
+            "unique_destinations": 0,
+            "first_seen": None,
+            "last_seen": None,
+        }
+    finally:
+        await db.close()
+
+
+async def get_cloud_flow_top_talkers(
+    account_id: int | None = None,
+    provider: str | None = None,
+    hours: int = 24,
+    direction: str = "src",
+    limit: int = 20,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        col = "src_ip" if direction == "src" else "dst_ip"
+        clauses = [
+            "received_at >= datetime('now', ? || ' hours')",
+            "flow_type LIKE 'cloud_%'",
+        ]
+        params: list = [f"-{max(1, int(hours))}"]
+        if account_id is not None:
+            clauses.append("exporter_ip = ?")
+            params.append(_cloud_flow_exporter(account_id))
+        if provider:
+            clauses.append("flow_type = ?")
+            params.append(_cloud_flow_type(provider))
+        params.append(max(1, int(limit)))
+        where = " AND ".join(clauses)
+        cursor = await db.execute(
+            f"""SELECT {col} as ip,
+                       SUM(bytes) as total_bytes,
+                       SUM(packets) as total_packets,
+                       COUNT(*) as flow_count
+                FROM flow_records
+                WHERE {where}
+                GROUP BY {col}
+                ORDER BY total_bytes DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_cloud_flow_timeline(
+    account_id: int | None = None,
+    provider: str | None = None,
+    hours: int = 24,
+    bucket_minutes: int = 5,
+) -> list[dict]:
+    bucket_minutes = max(1, min(int(bucket_minutes), 60))
+    db = await get_db()
+    try:
+        clauses = [
+            "received_at >= datetime('now', ? || ' hours')",
+            "flow_type LIKE 'cloud_%'",
+        ]
+        params: list = [f"-{max(1, int(hours))}"]
+        if account_id is not None:
+            clauses.append("exporter_ip = ?")
+            params.append(_cloud_flow_exporter(account_id))
+        if provider:
+            clauses.append("flow_type = ?")
+            params.append(_cloud_flow_type(provider))
+        where = " AND ".join(clauses)
+        cursor = await db.execute(
+            f"""SELECT
+                   strftime('%Y-%m-%dT%H:', received_at) ||
+                   printf('%02d', (CAST(strftime('%M', received_at) AS INTEGER) / {bucket_minutes}) * {bucket_minutes}) ||
+                   ':00' as bucket,
+                   SUM(bytes) as total_bytes,
+                   SUM(packets) as total_packets,
+                   COUNT(*) as flow_count
+               FROM flow_records
+               WHERE {where}
+               GROUP BY bucket
+               ORDER BY bucket""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # METRIC BASELINES  (statistical learning for baseline deviation alerting)
 # ═════════════════════════════════════════════════════════════════════════════

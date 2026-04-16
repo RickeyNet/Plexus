@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -32,6 +33,24 @@ LOGGER = configure_logging("plexus.cloud_visibility")
 _require_admin = None
 
 _VALID_PROVIDERS = {"aws", "azure", "gcp"}
+_VALID_FLOW_INGEST_FORMATS = {"normalized", "aws", "azure", "gcp"}
+
+_FLOW_TYPE_BY_PROVIDER = {
+    "aws": "cloud_aws_flow",
+    "azure": "cloud_azure_flow",
+    "gcp": "cloud_gcp_flow",
+}
+
+_PROTOCOL_NUM_BY_NAME = {
+    "icmp": 1,
+    "tcp": 6,
+    "udp": 17,
+    "gre": 47,
+    "esp": 50,
+    "ah": 51,
+    "ospf": 89,
+    "sctp": 132,
+}
 
 _PROVIDER_INFO = {
     "aws": {
@@ -130,6 +149,336 @@ class CloudDiscoveryRequest(BaseModel):
 
 class CloudValidationRequest(BaseModel):
     mode: str = "live"  # live | sample
+
+
+class CloudFlowIngestRequest(BaseModel):
+    format: str = "normalized"  # normalized | aws | azure | gcp
+    records: list[dict] = Field(default_factory=list)
+    source: str = "api"
+    emit_event: bool = True
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip()
+        if not text:
+            return default
+        if text.isdigit():
+            return int(text)
+        return int(float(text))
+    except Exception:
+        return default
+
+
+def _normalize_protocol(value) -> int:
+    parsed = _safe_int(value, -1)
+    if parsed >= 0:
+        return parsed
+    lowered = str(value or "").strip().lower()
+    return _PROTOCOL_NUM_BY_NAME.get(lowered, 0)
+
+
+def _normalize_timestamp_iso(value) -> str:
+    if value is None:
+        return datetime.now(UTC).isoformat()
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 1_000_000_000_000:
+            ts = ts / 1000.0
+        try:
+            return datetime.fromtimestamp(ts, tz=UTC).isoformat()
+        except Exception:
+            return datetime.now(UTC).isoformat()
+    raw = str(value).strip()
+    if not raw:
+        return datetime.now(UTC).isoformat()
+    if raw.isdigit():
+        return _normalize_timestamp_iso(int(raw))
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC).isoformat()
+    except Exception:
+        return datetime.now(UTC).isoformat()
+
+
+def _normalize_generic_flow_records(records: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        src_ip = str(
+            item.get("src_ip")
+            or item.get("srcaddr")
+            or item.get("source_ip")
+            or item.get("srcIp")
+            or ""
+        ).strip()
+        dst_ip = str(
+            item.get("dst_ip")
+            or item.get("dstaddr")
+            or item.get("destination_ip")
+            or item.get("dstIp")
+            or item.get("dest_ip")
+            or ""
+        ).strip()
+        if not src_ip or not dst_ip:
+            continue
+        start_time = _normalize_timestamp_iso(item.get("start_time") or item.get("start") or item.get("timestamp"))
+        end_time = _normalize_timestamp_iso(item.get("end_time") or item.get("end") or start_time)
+        normalized.append(
+            {
+                "src_ip": src_ip,
+                "dst_ip": dst_ip,
+                "src_port": _safe_int(item.get("src_port") or item.get("srcport")),
+                "dst_port": _safe_int(item.get("dst_port") or item.get("dstport")),
+                "protocol": _normalize_protocol(item.get("protocol")),
+                "bytes": _safe_int(item.get("bytes") or item.get("octets")),
+                "packets": _safe_int(item.get("packets") or item.get("in_pkts")),
+                "start_time": start_time,
+                "end_time": end_time,
+                "action": str(item.get("action") or "").strip().lower(),
+                "direction": str(item.get("direction") or "").strip().lower(),
+                "region": str(item.get("region") or "").strip(),
+                "vpc_id": str(item.get("vpc_id") or item.get("vpc-id") or "").strip(),
+                "subnet_id": str(item.get("subnet_id") or item.get("subnet-id") or "").strip(),
+                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+            }
+        )
+    return normalized
+
+
+def _normalize_aws_flow_records(records: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        src_ip = str(item.get("srcaddr") or item.get("srcAddr") or "").strip()
+        dst_ip = str(item.get("dstaddr") or item.get("dstAddr") or "").strip()
+        if not src_ip or not dst_ip:
+            normalized.extend(_normalize_generic_flow_records([item]))
+            continue
+        start_time = _normalize_timestamp_iso(item.get("start"))
+        end_time = _normalize_timestamp_iso(item.get("end") or start_time)
+        normalized.append(
+            {
+                "src_ip": src_ip,
+                "dst_ip": dst_ip,
+                "src_port": _safe_int(item.get("srcport")),
+                "dst_port": _safe_int(item.get("dstport")),
+                "protocol": _normalize_protocol(item.get("protocol")),
+                "bytes": _safe_int(item.get("bytes")),
+                "packets": _safe_int(item.get("packets")),
+                "start_time": start_time,
+                "end_time": end_time,
+                "action": str(item.get("action") or "").strip().lower(),
+                "direction": str(item.get("flow-direction") or item.get("direction") or "").strip().lower(),
+                "region": str(item.get("region") or "").strip(),
+                "vpc_id": str(item.get("vpc-id") or item.get("vpc_id") or "").strip(),
+                "subnet_id": str(item.get("subnet-id") or item.get("subnet_id") or "").strip(),
+                "metadata": {
+                    "interface_id": str(item.get("interface-id") or item.get("interface_id") or "").strip(),
+                    "log_status": str(item.get("log-status") or item.get("log_status") or "").strip(),
+                },
+            }
+        )
+    return normalized
+
+
+def _normalize_azure_flow_records(records: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        flow_tuples = item.get("flow_tuples") or item.get("flowTuples") or []
+        if isinstance(flow_tuples, list) and flow_tuples:
+            for tuple_item in flow_tuples:
+                parts = [str(p).strip() for p in str(tuple_item or "").split(",")]
+                if len(parts) < 6:
+                    continue
+                src_ip = parts[1] if len(parts) > 1 else ""
+                dst_ip = parts[2] if len(parts) > 2 else ""
+                if not src_ip or not dst_ip:
+                    continue
+                normalized.append(
+                    {
+                        "src_ip": src_ip,
+                        "dst_ip": dst_ip,
+                        "src_port": _safe_int(parts[3] if len(parts) > 3 else 0),
+                        "dst_port": _safe_int(parts[4] if len(parts) > 4 else 0),
+                        "protocol": _normalize_protocol(parts[5] if len(parts) > 5 else 0),
+                        "bytes": _safe_int(parts[9] if len(parts) > 9 else item.get("bytes")),
+                        "packets": _safe_int(parts[8] if len(parts) > 8 else item.get("packets")),
+                        "start_time": _normalize_timestamp_iso(parts[0] if len(parts) > 0 else item.get("start_time")),
+                        "end_time": _normalize_timestamp_iso(item.get("end_time") or parts[0] if len(parts) > 0 else None),
+                        "action": str(parts[7] if len(parts) > 7 else item.get("action") or "").strip().lower(),
+                        "direction": str(parts[6] if len(parts) > 6 else item.get("direction") or "").strip().lower(),
+                        "region": str(item.get("region") or item.get("location") or "").strip(),
+                        "vpc_id": str(item.get("vnet_id") or item.get("vnetId") or "").strip(),
+                        "subnet_id": str(item.get("subnet_id") or item.get("subnetId") or "").strip(),
+                        "metadata": {
+                            "resource_id": str(item.get("resource_id") or item.get("resourceId") or "").strip(),
+                            "rule_name": str(item.get("rule_name") or item.get("ruleName") or "").strip(),
+                        },
+                    }
+                )
+            continue
+        normalized.extend(_normalize_generic_flow_records([item]))
+    return normalized
+
+
+def _normalize_gcp_flow_records(records: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        conn = item.get("connection") if isinstance(item.get("connection"), dict) else {}
+        src_ip = str(
+            item.get("src_ip")
+            or item.get("srcIp")
+            or conn.get("src_ip")
+            or conn.get("srcIp")
+            or ""
+        ).strip()
+        dst_ip = str(
+            item.get("dst_ip")
+            or item.get("dest_ip")
+            or item.get("destIp")
+            or conn.get("dest_ip")
+            or conn.get("destIp")
+            or ""
+        ).strip()
+        if not src_ip or not dst_ip:
+            continue
+        bytes_total = _safe_int(item.get("bytes"))
+        if bytes_total <= 0:
+            bytes_total = _safe_int(item.get("bytes_sent")) + _safe_int(item.get("bytes_received"))
+        packets_total = _safe_int(item.get("packets"))
+        if packets_total <= 0:
+            packets_total = _safe_int(item.get("packets_sent")) + _safe_int(item.get("packets_received"))
+        start_time = _normalize_timestamp_iso(item.get("start_time") or item.get("start"))
+        end_time = _normalize_timestamp_iso(item.get("end_time") or item.get("end") or start_time)
+        normalized.append(
+            {
+                "src_ip": src_ip,
+                "dst_ip": dst_ip,
+                "src_port": _safe_int(item.get("src_port") or conn.get("src_port")),
+                "dst_port": _safe_int(item.get("dst_port") or item.get("dest_port") or conn.get("dest_port")),
+                "protocol": _normalize_protocol(item.get("protocol") or conn.get("protocol")),
+                "bytes": bytes_total,
+                "packets": packets_total,
+                "start_time": start_time,
+                "end_time": end_time,
+                "action": str(item.get("disposition") or item.get("action") or "").strip().lower(),
+                "direction": str(item.get("direction") or item.get("reporter") or "").strip().lower(),
+                "region": str(item.get("region") or item.get("location") or "").strip(),
+                "vpc_id": str(item.get("vpc_id") or item.get("network") or "").strip(),
+                "subnet_id": str(item.get("subnetwork") or item.get("subnet_id") or "").strip(),
+                "metadata": {
+                    "instance": str(item.get("instance") or "").strip(),
+                    "project_id": str(item.get("project_id") or item.get("projectId") or "").strip(),
+                },
+            }
+        )
+    return normalized
+
+
+def _prepare_flow_ingest_records(provider: str, flow_format: str, records: list[dict]) -> list[dict]:
+    normalized_provider = _normalize_provider(provider)
+    mode = str(flow_format or "normalized").strip().lower()
+    if mode not in _VALID_FLOW_INGEST_FORMATS:
+        raise ValueError("unsupported_flow_format")
+    if mode != "normalized" and mode != normalized_provider:
+        raise ValueError("mismatched_flow_format_provider")
+    if mode == "normalized":
+        return _normalize_generic_flow_records(records)
+    if mode == "aws":
+        return _normalize_aws_flow_records(records)
+    if mode == "azure":
+        return _normalize_azure_flow_records(records)
+    return _normalize_gcp_flow_records(records)
+
+
+def _build_flow_rows_for_ingest(account_id: int, provider: str, records: list[dict]) -> list[tuple]:
+    exporter_ip = f"cloud-account-{int(account_id)}"
+    flow_type = _FLOW_TYPE_BY_PROVIDER[provider]
+    rows: list[tuple] = []
+    for record in records:
+        rows.append(
+            (
+                exporter_ip,
+                None,
+                flow_type,
+                str(record.get("src_ip") or ""),
+                str(record.get("dst_ip") or ""),
+                _safe_int(record.get("src_port")),
+                _safe_int(record.get("dst_port")),
+                _safe_int(record.get("protocol")),
+                _safe_int(record.get("bytes")),
+                _safe_int(record.get("packets")),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                _normalize_timestamp_iso(record.get("start_time")),
+                _normalize_timestamp_iso(record.get("end_time")),
+            )
+        )
+    return rows
+
+
+def _summarize_flow_records(records: list[dict]) -> dict:
+    unique_sources = set()
+    unique_destinations = set()
+    actions: dict[str, int] = {}
+    directions: dict[str, int] = {}
+    total_bytes = 0
+    total_packets = 0
+    timestamps: list[str] = []
+
+    for record in records:
+        src_ip = str(record.get("src_ip") or "").strip()
+        dst_ip = str(record.get("dst_ip") or "").strip()
+        if src_ip:
+            unique_sources.add(src_ip)
+        if dst_ip:
+            unique_destinations.add(dst_ip)
+        total_bytes += _safe_int(record.get("bytes"))
+        total_packets += _safe_int(record.get("packets"))
+        action = str(record.get("action") or "").strip().lower()
+        if action:
+            actions[action] = actions.get(action, 0) + 1
+        direction = str(record.get("direction") or "").strip().lower()
+        if direction:
+            directions[direction] = directions.get(direction, 0) + 1
+        start_time = str(record.get("start_time") or "").strip()
+        end_time = str(record.get("end_time") or "").strip()
+        if start_time:
+            timestamps.append(start_time)
+        if end_time:
+            timestamps.append(end_time)
+
+    return {
+        "flow_count": len(records),
+        "total_bytes": total_bytes,
+        "total_packets": total_packets,
+        "unique_sources": len(unique_sources),
+        "unique_destinations": len(unique_destinations),
+        "first_ts": min(timestamps) if timestamps else None,
+        "last_ts": max(timestamps) if timestamps else None,
+        "action_breakdown": actions,
+        "direction_breakdown": directions,
+    }
 
 
 def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]]:
@@ -468,6 +817,82 @@ async def validate_cloud_account_api(account_id: int, request: Request, body: Cl
     }
 
 
+@router.post("/api/cloud/accounts/{account_id}/flow-logs/ingest", dependencies=[Depends(_require_admin_dep)])
+async def ingest_cloud_flow_logs_api(account_id: int, request: Request, body: CloudFlowIngestRequest):
+    account = await db.get_cloud_account(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Cloud account not found")
+
+    flow_format = str(body.format or "normalized").strip().lower()
+    if flow_format not in _VALID_FLOW_INGEST_FORMATS:
+        raise HTTPException(status_code=400, detail="Unsupported cloud flow ingestion format")
+    if not isinstance(body.records, list) or not body.records:
+        raise HTTPException(status_code=400, detail="Flow ingestion requires at least one record")
+    if len(body.records) > 10000:
+        raise HTTPException(status_code=400, detail="Flow ingestion payload exceeds 10,000 records")
+
+    provider = str(account.get("provider") or "").strip().lower()
+    try:
+        normalized_records = _prepare_flow_ingest_records(provider, flow_format, body.records)
+    except ValueError as exc:
+        if str(exc) == "mismatched_flow_format_provider":
+            raise HTTPException(status_code=400, detail="Flow format must match cloud account provider") from None
+        raise HTTPException(status_code=400, detail="Unsupported cloud flow ingestion format") from None
+
+    if not normalized_records:
+        raise HTTPException(status_code=400, detail="No valid flow records found in payload")
+
+    flow_rows = _build_flow_rows_for_ingest(account_id, provider, normalized_records)
+    inserted = await db.create_flow_records_batch(flow_rows)
+    summary = _summarize_flow_records(normalized_records)
+    skipped = max(0, len(body.records) - len(normalized_records))
+
+    if body.emit_event:
+        message = (
+            f"Cloud flow ingest account_id={account_id} provider={provider} "
+            f"ingested={inserted} skipped={skipped}"
+        )
+        raw_data = json.dumps(
+            {
+                "account_id": account_id,
+                "provider": provider,
+                "format": flow_format,
+                "source": str(body.source or "api"),
+                "summary": summary,
+            }
+        )[:2000]
+        await db.create_trap_syslog_event(
+            source_ip=f"cloud:{provider}:{account_id}",
+            event_type="cloud_flow",
+            facility="cloud",
+            severity="info",
+            message=message,
+            raw_data=raw_data,
+        )
+
+    session = _get_session(request) or {}
+    await _audit(
+        "cloud_visibility",
+        "ingest_flow_logs",
+        user=session.get("user", ""),
+        detail=(
+            f"account_id={account_id} provider={provider} format={flow_format} "
+            f"ingested={inserted} skipped={skipped}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "provider": provider,
+        "format": flow_format,
+        "source": str(body.source or "api"),
+        "ingested": inserted,
+        "skipped": skipped,
+        "summary": summary,
+    }
+
+
 @router.post("/api/cloud/accounts/{account_id}/discover", dependencies=[Depends(_require_admin_dep)])
 async def discover_cloud_account_api(account_id: int, request: Request, body: CloudDiscoveryRequest | None = None):
     account = await db.get_cloud_account(account_id)
@@ -576,6 +1001,91 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
         "fallback_used": fallback_used,
         "message": sync_message,
         "summary": summary,
+    }
+
+
+@router.get("/api/cloud/flow-logs/summary")
+async def cloud_flow_summary_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    hours: int = Query(default=24, ge=1, le=720),
+):
+    try:
+        normalized_provider = _normalize_provider(provider) if provider else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+
+    summary = await db.get_cloud_flow_summary(
+        account_id=account_id,
+        provider=normalized_provider,
+        hours=hours,
+    )
+    return {
+        "summary": summary,
+        "hours": hours,
+        "account_id": account_id,
+        "provider": normalized_provider,
+    }
+
+
+@router.get("/api/cloud/flow-logs/top-talkers")
+async def cloud_flow_top_talkers_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    hours: int = Query(default=24, ge=1, le=720),
+    direction: str = Query(default="src"),
+    limit: int = Query(default=20, ge=1, le=200),
+):
+    try:
+        normalized_provider = _normalize_provider(provider) if provider else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+    direction_mode = str(direction or "src").strip().lower()
+    if direction_mode not in {"src", "dst"}:
+        raise HTTPException(status_code=400, detail="direction must be 'src' or 'dst'")
+
+    rows = await db.get_cloud_flow_top_talkers(
+        account_id=account_id,
+        provider=normalized_provider,
+        hours=hours,
+        direction=direction_mode,
+        limit=limit,
+    )
+    return {
+        "talkers": rows,
+        "hours": hours,
+        "direction": direction_mode,
+        "account_id": account_id,
+        "provider": normalized_provider,
+        "count": len(rows),
+    }
+
+
+@router.get("/api/cloud/flow-logs/timeline")
+async def cloud_flow_timeline_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    hours: int = Query(default=24, ge=1, le=720),
+    bucket_minutes: int = Query(default=5, ge=1, le=60),
+):
+    try:
+        normalized_provider = _normalize_provider(provider) if provider else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+
+    rows = await db.get_cloud_flow_timeline(
+        account_id=account_id,
+        provider=normalized_provider,
+        hours=hours,
+        bucket_minutes=bucket_minutes,
+    )
+    return {
+        "timeline": rows,
+        "hours": hours,
+        "bucket_minutes": bucket_minutes,
+        "account_id": account_id,
+        "provider": normalized_provider,
+        "count": len(rows),
     }
 
 

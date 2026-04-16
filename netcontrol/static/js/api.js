@@ -2019,6 +2019,25 @@ export async function validateCloudAccount(id, data = {}) {
     return apiRequest(`/cloud/accounts/${id}/validate`, { method: 'POST', body: data });
 }
 
+export async function ingestCloudFlowLogs(id, data = {}) {
+    return apiRequest(`/cloud/accounts/${id}/flow-logs/ingest`, { method: 'POST', body: data });
+}
+
+export async function getCloudFlowSummary(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/flow-logs/summary${qs ? '?' + qs : ''}`);
+}
+
+export async function getCloudFlowTopTalkers(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/flow-logs/top-talkers${qs ? '?' + qs : ''}`);
+}
+
+export async function getCloudFlowTimeline(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/flow-logs/timeline${qs ? '?' + qs : ''}`);
+}
+
 export async function getCloudResources(params = {}) {
     const qs = new URLSearchParams(params).toString();
     return apiRequest(`/cloud/resources${qs ? '?' + qs : ''}`);

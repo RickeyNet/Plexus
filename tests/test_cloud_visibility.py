@@ -6,6 +6,7 @@ import routes.database as db_module
 from fastapi import HTTPException
 from netcontrol.routes.cloud_visibility import (
     CloudDiscoveryRequest,
+    CloudFlowIngestRequest,
     CloudValidationRequest,
     _build_sample_discovery_snapshot,
 )
@@ -332,3 +333,118 @@ async def test_validate_live_returns_unavailable_when_deps_missing(tmp_path, mon
     assert result["valid"] is False
     assert result["status"] == "unavailable"
     assert isinstance(result["missing_dependencies"], list)
+
+
+@pytest.mark.asyncio
+async def test_ingest_cloud_flow_logs_normalized_and_query_stats(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="aws", name="AWS Flow Logs")
+    assert account is not None
+    account_id = int(account["id"])
+
+    ingest_result = await cloud_visibility_module.ingest_cloud_flow_logs_api(
+        account_id,
+        _DummyRequest(),
+        CloudFlowIngestRequest(
+            format="normalized",
+            source="pytest",
+            records=[
+                {
+                    "src_ip": "10.1.1.10",
+                    "dst_ip": "10.2.2.20",
+                    "src_port": 443,
+                    "dst_port": 51514,
+                    "protocol": "tcp",
+                    "bytes": 4200,
+                    "packets": 14,
+                    "start_time": "2026-04-16T12:00:00Z",
+                    "end_time": "2026-04-16T12:01:00Z",
+                    "action": "accept",
+                    "direction": "egress",
+                },
+                {
+                    "src_ip": "10.1.1.10",
+                    "dst_ip": "10.3.3.30",
+                    "src_port": 443,
+                    "dst_port": 443,
+                    "protocol": 6,
+                    "bytes": 1800,
+                    "packets": 8,
+                    "start_time": "2026-04-16T12:03:00Z",
+                    "end_time": "2026-04-16T12:04:00Z",
+                    "action": "accept",
+                    "direction": "egress",
+                },
+            ],
+        ),
+    )
+
+    assert ingest_result["ok"] is True
+    assert ingest_result["ingested"] == 2
+    assert ingest_result["summary"]["flow_count"] == 2
+    assert ingest_result["summary"]["total_bytes"] == 6000
+    assert ingest_result["summary"]["total_packets"] == 22
+
+    summary = await cloud_visibility_module.cloud_flow_summary_api(
+        account_id=account_id,
+        provider="aws",
+        hours=24,
+    )
+    assert summary["summary"]["flow_count"] == 2
+    assert summary["summary"]["total_bytes"] == 6000
+
+    talkers = await cloud_visibility_module.cloud_flow_top_talkers_api(
+        account_id=account_id,
+        provider="aws",
+        hours=24,
+        direction="src",
+        limit=10,
+    )
+    assert talkers["count"] >= 1
+    assert talkers["talkers"][0]["ip"] == "10.1.1.10"
+
+    timeline = await cloud_visibility_module.cloud_flow_timeline_api(
+        account_id=account_id,
+        provider="aws",
+        hours=24,
+        bucket_minutes=5,
+    )
+    assert timeline["count"] >= 1
+
+    events = await db_module.get_trap_syslog_events(event_type="cloud_flow", limit=20)
+    assert any(e.get("source_ip") == f"cloud:aws:{account_id}" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_ingest_cloud_flow_logs_aws_format(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="aws", name="AWS VPC Flow Feed")
+    assert account is not None
+
+    result = await cloud_visibility_module.ingest_cloud_flow_logs_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudFlowIngestRequest(
+            format="aws",
+            records=[
+                {
+                    "srcaddr": "10.10.0.10",
+                    "dstaddr": "10.20.0.20",
+                    "srcport": 55231,
+                    "dstport": 443,
+                    "protocol": 6,
+                    "packets": 11,
+                    "bytes": 3300,
+                    "start": 1713270000,
+                    "end": 1713270060,
+                    "action": "ACCEPT",
+                    "flow-direction": "egress",
+                    "vpc-id": "vpc-123",
+                }
+            ],
+        ),
+    )
+
+    assert result["ok"] is True
+    assert result["ingested"] == 1
+    assert result["summary"]["action_breakdown"].get("accept") == 1
