@@ -1075,7 +1075,7 @@ const PAGE_HELP = {
     },
     reports: {
         title: 'Reports, Event Log & OID Profiles',
-        text: 'Generate and export availability, compliance, and utilization reports. View syslog events and SNMP traps. Manage custom OID profiles for monitoring.'
+        text: 'Generate and export availability, compliance, utilization, and network documentation reports. View syslog events and SNMP traps. Manage custom OID profiles for monitoring.'
     },
     'graph-templates': {
         title: 'Graph Templates & Auto-Graphing',

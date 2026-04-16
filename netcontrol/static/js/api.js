@@ -1587,6 +1587,14 @@ export async function getReportRun(runId) {
     return apiRequest(`/reports/runs/${runId}`);
 }
 
+export async function getReportRunArtifacts(runId, limit = 20) {
+    return apiRequest(`/reports/runs/${runId}/artifacts?limit=${encodeURIComponent(limit)}`);
+}
+
+export function getReportArtifactUrl(artifactId) {
+    return `/api/reports/artifacts/${artifactId}`;
+}
+
 export function getExportUrl(type, params = {}) {
     const qs = new URLSearchParams(params).toString();
     return `/api/reports/export/${type}${qs ? '?' + qs : ''}`;
