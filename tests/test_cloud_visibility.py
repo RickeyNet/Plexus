@@ -1,8 +1,14 @@
 """Tests for cloud visibility account and topology foundation."""
 
+import netcontrol.routes.cloud_visibility as cloud_visibility_module
 import pytest
 import routes.database as db_module
-from netcontrol.routes.cloud_visibility import _build_sample_discovery_snapshot
+from fastapi import HTTPException
+from netcontrol.routes.cloud_visibility import (
+    CloudDiscoveryRequest,
+    CloudValidationRequest,
+    _build_sample_discovery_snapshot,
+)
 
 
 async def _init(tmp_path, monkeypatch):
@@ -33,6 +39,12 @@ async def _add_host(group_name="core", hostname="core-sw1", ip="10.0.0.10"):
         return cur.lastrowid
     finally:
         await db.close()
+
+
+class _DummyRequest:
+    def __init__(self, correlation_id: str = "test-corr-id"):
+        self.cookies = {}
+        self.state = type("State", (), {"correlation_id": correlation_id})()
 
 
 @pytest.mark.asyncio
@@ -155,3 +167,168 @@ async def test_sample_discovery_snapshot_builds_hybrid_links(tmp_path, monkeypat
     assert any(r["resource_type"] == "cloud_router" for r in resources)
     assert any(c["connection_type"] == "vpn_tunnel" for c in connections)
     assert any(int(link.get("host_id") or 0) == host_id for link in hybrid_links)
+
+
+@pytest.mark.asyncio
+async def test_discover_auto_falls_back_to_sample_when_live_unavailable(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    host_id = await _add_host(hostname="wan-edge-1", ip="10.0.0.30")
+    account = await db_module.create_cloud_account(provider="aws", name="AWS Shared")
+    assert account is not None
+
+    def _raise_unavailable(_account):
+        raise cloud_visibility_module.CloudCollectorUnavailable("missing")
+
+    monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _raise_unavailable)
+
+    result = await cloud_visibility_module.discover_cloud_account_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudDiscoveryRequest(mode="auto", connect_host_ids=[host_id], include_hybrid_links=True),
+    )
+
+    assert result["ok"] is True
+    assert result["effective_mode"] == "sample"
+    assert result["fallback_used"] is True
+    assert "sample" in result["message"].lower()
+
+    snapshot = await db_module.get_cloud_topology_snapshot(account_id=int(account["id"]))
+    assert snapshot["summary"]["resource_count"] > 0
+    assert snapshot["summary"]["connection_count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_discover_live_uses_collector_snapshot(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    host_id = await _add_host(hostname="wan-edge-2", ip="10.0.0.31")
+    account = await db_module.create_cloud_account(provider="aws", name="AWS Live")
+    assert account is not None
+
+    def _collector(_account):
+        return (
+            [
+                {
+                    "provider": "aws",
+                    "resource_uid": "aws:direct_connect:dxcon-123",
+                    "resource_type": "direct_connect",
+                    "name": "dx-primary",
+                    "region": "us-east-1",
+                    "status": "up",
+                },
+                {
+                    "provider": "aws",
+                    "resource_uid": "aws:vpc:vpc-123",
+                    "resource_type": "vpc",
+                    "name": "prod-core",
+                    "region": "us-east-1",
+                    "cidr": "10.10.0.0/16",
+                    "status": "active",
+                },
+            ],
+            [
+                {
+                    "provider": "aws",
+                    "source_resource_uid": "aws:vpc:vpc-123",
+                    "target_resource_uid": "aws:direct_connect:dxcon-123",
+                    "connection_type": "direct_connect_gateway",
+                    "state": "up",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _collector)
+
+    result = await cloud_visibility_module.discover_cloud_account_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudDiscoveryRequest(mode="live", connect_host_ids=[host_id], include_hybrid_links=True),
+    )
+
+    assert result["ok"] is True
+    assert result["effective_mode"] == "live"
+    assert result["fallback_used"] is False
+
+    snapshot = await db_module.get_cloud_topology_snapshot(account_id=int(account["id"]))
+    assert snapshot["summary"]["resource_count"] == 2
+    assert snapshot["summary"]["connection_count"] == 1
+    assert snapshot["summary"]["hybrid_link_count"] >= 1
+    assert any(link.get("host_id") == host_id for link in snapshot["hybrid_links"])
+
+
+@pytest.mark.asyncio
+async def test_discover_live_unavailable_raises_503(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="azure", name="Azure Live")
+    assert account is not None
+
+    def _raise_unavailable(_account):
+        raise cloud_visibility_module.CloudCollectorUnavailable("missing")
+
+    monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _raise_unavailable)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await cloud_visibility_module.discover_cloud_account_api(
+            int(account["id"]),
+            _DummyRequest(),
+            CloudDiscoveryRequest(mode="live"),
+        )
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_validate_live_returns_ready_when_collector_succeeds(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="gcp", name="GCP Validate")
+    assert account is not None
+
+    def _collector(_account):
+        return (
+            [
+                {
+                    "provider": "gcp",
+                    "resource_uid": "gcp:vpc:proj:core",
+                    "resource_type": "vpc",
+                    "name": "core-vpc",
+                    "region": "us-central1",
+                    "status": "active",
+                }
+            ],
+            [],
+        )
+
+    monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _collector)
+
+    result = await cloud_visibility_module.validate_cloud_account_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudValidationRequest(mode="live"),
+    )
+
+    assert result["ok"] is True
+    assert result["valid"] is True
+    assert result["status"] == "ready"
+    assert result["resource_sample_count"] == 1
+    assert result["connection_sample_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_validate_live_returns_unavailable_when_deps_missing(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="aws", name="AWS Validate")
+    assert account is not None
+
+    def _raise_unavailable(_account):
+        raise cloud_visibility_module.CloudCollectorUnavailable("missing")
+
+    monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _raise_unavailable)
+
+    result = await cloud_visibility_module.validate_cloud_account_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudValidationRequest(mode="live"),
+    )
+
+    assert result["ok"] is True
+    assert result["valid"] is False
+    assert result["status"] == "unavailable"
+    assert isinstance(result["missing_dependencies"], list)

@@ -898,6 +898,7 @@ function templateCloudVisibility() {
             <option value="">All Accounts</option>
         </select>
     </div>
+    <div id="cloud-provider-capabilities" style="margin-bottom:0.8rem;"></div>
 
     <div class="section">
         <h3>Cloud Accounts</h3>

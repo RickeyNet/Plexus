@@ -1,0 +1,751 @@
+"""
+cloud_collectors.py -- Provider-specific cloud topology collectors.
+
+The collectors in this module are optional-runtime integrations:
+  - AWS via boto3
+  - Azure via azure-identity + azure-mgmt-network
+  - GCP via google-auth + google-api-python-client
+
+If SDK dependencies are unavailable, callers can fall back to sample mode.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from netcontrol.telemetry import configure_logging
+
+LOGGER = configure_logging("plexus.cloud_collectors")
+
+VALID_PROVIDERS = {"aws", "azure", "gcp"}
+
+
+class CloudCollectorError(RuntimeError):
+    """Base class for collector failures."""
+
+
+class CloudCollectorUnavailable(CloudCollectorError):
+    """Raised when required SDK dependencies are not installed."""
+
+
+class CloudCollectorAuthError(CloudCollectorError):
+    """Raised for provider authentication/authorization failures."""
+
+
+class CloudCollectorExecutionError(CloudCollectorError):
+    """Raised for provider API/runtime execution failures."""
+
+
+def _parse_auth_config(account: dict) -> dict:
+    raw = account.get("auth_config_json") or account.get("auth_config") or "{}"
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return {}
+        try:
+            parsed = json.loads(stripped)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _parse_region_scope(region_scope: str | None) -> list[str]:
+    raw = str(region_scope or "").strip()
+    if not raw:
+        return []
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+def _normalize_resource(
+    provider: str,
+    resource_uid: str,
+    resource_type: str,
+    *,
+    name: str = "",
+    region: str = "",
+    cidr: str = "",
+    status: str = "",
+    metadata: dict | None = None,
+) -> dict:
+    return {
+        "provider": provider,
+        "resource_uid": resource_uid,
+        "resource_type": resource_type,
+        "name": name,
+        "region": region,
+        "cidr": cidr,
+        "status": status,
+        "metadata": metadata or {},
+    }
+
+
+def _normalize_connection(
+    provider: str,
+    source_resource_uid: str,
+    target_resource_uid: str,
+    connection_type: str,
+    *,
+    state: str = "",
+    metadata: dict | None = None,
+) -> dict:
+    return {
+        "provider": provider,
+        "source_resource_uid": source_resource_uid,
+        "target_resource_uid": target_resource_uid,
+        "connection_type": connection_type,
+        "state": state,
+        "metadata": metadata or {},
+    }
+
+
+def _dedupe_resources(resources: list[dict]) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for resource in resources:
+        uid = str(resource.get("resource_uid") or "").strip()
+        if not uid:
+            continue
+        current = merged.get(uid)
+        if current is None:
+            merged[uid] = dict(resource)
+            continue
+        # Keep richer fields when present.
+        for key in ("name", "region", "cidr", "status"):
+            if not current.get(key) and resource.get(key):
+                current[key] = resource.get(key)
+        if resource.get("metadata"):
+            current_meta = current.get("metadata") if isinstance(current.get("metadata"), dict) else {}
+            next_meta = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
+            current["metadata"] = {**current_meta, **next_meta}
+    return list(merged.values())
+
+
+def _dedupe_connections(connections: list[dict]) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for edge in connections:
+        src = str(edge.get("source_resource_uid") or "").strip()
+        dst = str(edge.get("target_resource_uid") or "").strip()
+        ctype = str(edge.get("connection_type") or "").strip()
+        if not src or not dst or not ctype:
+            continue
+        key = f"{src}|{dst}|{ctype}"
+        if key not in merged:
+            merged[key] = dict(edge)
+            continue
+        if not merged[key].get("state") and edge.get("state"):
+            merged[key]["state"] = edge.get("state")
+        if edge.get("metadata"):
+            current_meta = merged[key].get("metadata") if isinstance(merged[key].get("metadata"), dict) else {}
+            next_meta = edge.get("metadata") if isinstance(edge.get("metadata"), dict) else {}
+            merged[key]["metadata"] = {**current_meta, **next_meta}
+    return list(merged.values())
+
+
+def _aws_tag_name(tags: list[dict] | None) -> str:
+    if not tags:
+        return ""
+    for tag in tags:
+        if str(tag.get("Key") or "").lower() == "name":
+            return str(tag.get("Value") or "")
+    return ""
+
+
+def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except Exception as exc:
+        raise CloudCollectorUnavailable("AWS collector requires boto3/botocore") from exc
+
+    auth = _parse_auth_config(account)
+    session_kwargs: dict[str, Any] = {}
+    if auth.get("profile_name"):
+        session_kwargs["profile_name"] = str(auth.get("profile_name"))
+    if auth.get("access_key_id"):
+        session_kwargs["aws_access_key_id"] = str(auth.get("access_key_id"))
+    if auth.get("secret_access_key"):
+        session_kwargs["aws_secret_access_key"] = str(auth.get("secret_access_key"))
+    if auth.get("session_token"):
+        session_kwargs["aws_session_token"] = str(auth.get("session_token"))
+
+    try:
+        session = boto3.Session(**session_kwargs)
+    except Exception as exc:
+        raise CloudCollectorAuthError("Failed to initialize AWS session") from exc
+
+    role_arn = str(auth.get("role_arn") or "").strip()
+    external_id = str(auth.get("external_id") or "").strip()
+    if role_arn:
+        try:
+            sts = session.client("sts")
+            assume_args = {
+                "RoleArn": role_arn,
+                "RoleSessionName": str(auth.get("role_session_name") or "plexus-cloud-visibility"),
+            }
+            if external_id:
+                assume_args["ExternalId"] = external_id
+            creds = sts.assume_role(**assume_args)["Credentials"]
+            session = boto3.Session(
+                aws_access_key_id=creds["AccessKeyId"],
+                aws_secret_access_key=creds["SecretAccessKey"],
+                aws_session_token=creds["SessionToken"],
+            )
+        except Exception as exc:
+            raise CloudCollectorAuthError("Failed to assume AWS IAM role") from exc
+
+    regions = _parse_region_scope(str(account.get("region_scope") or ""))
+    if not regions:
+        regions = ["us-east-1"]
+
+    # Validate credentials early.
+    try:
+        session.client("sts").get_caller_identity()
+    except (BotoCoreError, ClientError) as exc:
+        raise CloudCollectorAuthError("AWS credentials are invalid or unauthorized") from exc
+    except Exception as exc:
+        raise CloudCollectorExecutionError("Failed to validate AWS credentials") from exc
+
+    resources: list[dict] = []
+    connections: list[dict] = []
+
+    for region in regions:
+        ec2 = session.client("ec2", region_name=region)
+        try:
+            vpcs = ec2.describe_vpcs().get("Vpcs", [])
+            for vpc in vpcs:
+                vpc_id = str(vpc.get("VpcId") or "").strip()
+                if not vpc_id:
+                    continue
+                resources.append(
+                    _normalize_resource(
+                        "aws",
+                        f"aws:vpc:{vpc_id}",
+                        "vpc",
+                        name=_aws_tag_name(vpc.get("Tags")),
+                        region=region,
+                        cidr=str(vpc.get("CidrBlock") or ""),
+                        status=str(vpc.get("State") or ""),
+                        metadata={"is_default": bool(vpc.get("IsDefault", False))},
+                    )
+                )
+        except (BotoCoreError, ClientError):
+            LOGGER.debug("aws collector: failed vpc list region=%s", region, exc_info=True)
+
+        try:
+            sec_groups = ec2.describe_security_groups().get("SecurityGroups", [])
+            for group in sec_groups:
+                gid = str(group.get("GroupId") or "").strip()
+                if not gid:
+                    continue
+                resources.append(
+                    _normalize_resource(
+                        "aws",
+                        f"aws:sg:{gid}",
+                        "security_group",
+                        name=str(group.get("GroupName") or ""),
+                        region=region,
+                        status="active",
+                        metadata={"vpc_id": str(group.get("VpcId") or "")},
+                    )
+                )
+        except (BotoCoreError, ClientError):
+            LOGGER.debug("aws collector: failed security group list region=%s", region, exc_info=True)
+
+        try:
+            tgws = ec2.describe_transit_gateways().get("TransitGateways", [])
+            for tgw in tgws:
+                tgw_id = str(tgw.get("TransitGatewayId") or "").strip()
+                if not tgw_id:
+                    continue
+                resources.append(
+                    _normalize_resource(
+                        "aws",
+                        f"aws:tgw:{tgw_id}",
+                        "transit_gateway",
+                        name=_aws_tag_name(tgw.get("Tags")),
+                        region=region,
+                        status=str(tgw.get("State") or ""),
+                    )
+                )
+        except (BotoCoreError, ClientError):
+            LOGGER.debug("aws collector: failed tgw list region=%s", region, exc_info=True)
+
+        try:
+            attachments = ec2.describe_transit_gateway_attachments().get("TransitGatewayAttachments", [])
+            for attachment in attachments:
+                tgw_id = str(attachment.get("TransitGatewayId") or "").strip()
+                res_type = str(attachment.get("ResourceType") or "").strip().lower()
+                res_id = str(attachment.get("ResourceId") or "").strip()
+                if not tgw_id or not res_type or not res_id:
+                    continue
+                source_uid = f"aws:{res_type}:{res_id}"
+                target_uid = f"aws:tgw:{tgw_id}"
+                connections.append(
+                    _normalize_connection(
+                        "aws",
+                        source_uid,
+                        target_uid,
+                        "transit_gateway_attachment",
+                        state=str(attachment.get("State") or ""),
+                    )
+                )
+        except (BotoCoreError, ClientError):
+            LOGGER.debug("aws collector: failed tgw attachment list region=%s", region, exc_info=True)
+
+        try:
+            peerings = ec2.describe_vpc_peering_connections().get("VpcPeeringConnections", [])
+            for peering in peerings:
+                req = peering.get("RequesterVpcInfo") or {}
+                acc = peering.get("AccepterVpcInfo") or {}
+                req_vpc = str(req.get("VpcId") or "").strip()
+                acc_vpc = str(acc.get("VpcId") or "").strip()
+                if not req_vpc or not acc_vpc:
+                    continue
+                connections.append(
+                    _normalize_connection(
+                        "aws",
+                        f"aws:vpc:{req_vpc}",
+                        f"aws:vpc:{acc_vpc}",
+                        "vpc_peering",
+                        state=str((peering.get("Status") or {}).get("Code") or ""),
+                        metadata={"peering_id": str(peering.get("VpcPeeringConnectionId") or "")},
+                    )
+                )
+        except (BotoCoreError, ClientError):
+            LOGGER.debug("aws collector: failed vpc peering list region=%s", region, exc_info=True)
+
+        try:
+            vpns = ec2.describe_vpn_connections().get("VpnConnections", [])
+            for vpn in vpns:
+                vpn_id = str(vpn.get("VpnConnectionId") or "").strip()
+                if not vpn_id:
+                    continue
+                vpn_uid = f"aws:vpn_connection:{vpn_id}"
+                resources.append(
+                    _normalize_resource(
+                        "aws",
+                        vpn_uid,
+                        "vpn_connection",
+                        name=_aws_tag_name(vpn.get("Tags")),
+                        region=region,
+                        status=str(vpn.get("State") or ""),
+                    )
+                )
+                tgw_id = str(vpn.get("TransitGatewayId") or "").strip()
+                vgw_id = str(vpn.get("VpnGatewayId") or "").strip()
+                if tgw_id:
+                    connections.append(
+                        _normalize_connection(
+                            "aws",
+                            vpn_uid,
+                            f"aws:tgw:{tgw_id}",
+                            "vpn_tunnel",
+                            state=str(vpn.get("State") or ""),
+                        )
+                    )
+                if vgw_id:
+                    connections.append(
+                        _normalize_connection(
+                            "aws",
+                            vpn_uid,
+                            f"aws:vpn_gateway:{vgw_id}",
+                            "vpn_attachment",
+                            state=str(vpn.get("State") or ""),
+                        )
+                    )
+        except (BotoCoreError, ClientError):
+            LOGGER.debug("aws collector: failed vpn list region=%s", region, exc_info=True)
+
+    # Direct Connect API is region-bound but global data plane is in us-east-1.
+    try:
+        dx_region = regions[0] if regions else "us-east-1"
+        dx = session.client("directconnect", region_name=dx_region)
+        dx_connections = dx.describe_connections().get("connections", [])
+        for dx_conn in dx_connections:
+            conn_id = str(dx_conn.get("connectionId") or "").strip()
+            if not conn_id:
+                continue
+            resources.append(
+                _normalize_resource(
+                    "aws",
+                    f"aws:direct_connect:{conn_id}",
+                    "direct_connect",
+                    name=str(dx_conn.get("connectionName") or ""),
+                    region=str(dx_conn.get("region") or dx_region),
+                    status=str(dx_conn.get("connectionState") or ""),
+                    metadata={"bandwidth": str(dx_conn.get("bandwidth") or "")},
+                )
+            )
+    except Exception:
+        LOGGER.debug("aws collector: failed direct connect list", exc_info=True)
+
+    return _dedupe_resources(resources), _dedupe_connections(connections)
+
+
+def _azure_resource_parts(resource_id: str) -> dict[str, str]:
+    parts = [p for p in str(resource_id or "").strip("/").split("/") if p]
+    out: dict[str, str] = {}
+    for idx in range(0, len(parts) - 1, 2):
+        out[parts[idx].lower()] = parts[idx + 1]
+    return out
+
+
+def _azure_rg_from_id(resource_id: str) -> str:
+    return _azure_resource_parts(resource_id).get("resourcegroups", "")
+
+
+def _azure_name_from_id(resource_id: str) -> str:
+    parts = [p for p in str(resource_id or "").strip("/").split("/") if p]
+    return parts[-1] if parts else ""
+
+
+def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
+    try:
+        from azure.identity import ClientSecretCredential, DefaultAzureCredential
+        from azure.mgmt.network import NetworkManagementClient
+    except Exception as exc:
+        raise CloudCollectorUnavailable("Azure collector requires azure-identity and azure-mgmt-network") from exc
+
+    auth = _parse_auth_config(account)
+    subscription_id = str(
+        auth.get("subscription_id")
+        or account.get("account_identifier")
+        or ""
+    ).strip()
+    if not subscription_id:
+        raise CloudCollectorAuthError("Azure subscription_id is required")
+
+    tenant_id = str(auth.get("tenant_id") or "").strip()
+    client_id = str(auth.get("client_id") or "").strip()
+    client_secret = str(auth.get("client_secret") or "").strip()
+
+    try:
+        if tenant_id and client_id and client_secret:
+            credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
+        else:
+            credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+        network_client = NetworkManagementClient(credential, subscription_id)
+    except Exception as exc:
+        raise CloudCollectorAuthError("Failed to initialize Azure credentials") from exc
+
+    resources: list[dict] = []
+    connections: list[dict] = []
+
+    try:
+        for vnet in network_client.virtual_networks.list_all():
+            vnet_id = str(vnet.id or "")
+            rg = _azure_rg_from_id(vnet_id)
+            name = str(vnet.name or "")
+            uid = f"azure:vnet:{subscription_id}:{rg}:{name}"
+            cidr = ""
+            if getattr(vnet, "address_space", None) and getattr(vnet.address_space, "address_prefixes", None):
+                prefixes = [str(p) for p in (vnet.address_space.address_prefixes or []) if p]
+                cidr = ",".join(prefixes)
+            region = str(vnet.location or "")
+            status = str(getattr(vnet, "provisioning_state", "") or "")
+            resources.append(
+                _normalize_resource(
+                    "azure",
+                    uid,
+                    "vnet",
+                    name=name,
+                    region=region,
+                    cidr=cidr,
+                    status=status,
+                    metadata={"resource_group": rg},
+                )
+            )
+
+            # VNet peerings for hybrid graph edges.
+            try:
+                if rg and name:
+                    for peering in network_client.virtual_network_peerings.list(rg, name):
+                        remote_id = str(getattr(getattr(peering, "remote_virtual_network", None), "id", "") or "")
+                        remote_rg = _azure_rg_from_id(remote_id)
+                        remote_name = _azure_name_from_id(remote_id)
+                        if not remote_name:
+                            continue
+                        target_uid = f"azure:vnet:{subscription_id}:{remote_rg}:{remote_name}"
+                        connections.append(
+                            _normalize_connection(
+                                "azure",
+                                uid,
+                                target_uid,
+                                "vnet_peering",
+                                state=str(getattr(peering, "peering_state", "") or ""),
+                            )
+                        )
+            except Exception:
+                LOGGER.debug("azure collector: failed to list peerings for vnet=%s", name, exc_info=True)
+    except Exception as exc:
+        raise CloudCollectorAuthError("Azure network API access failed") from exc
+
+    try:
+        for circuit in network_client.express_route_circuits.list_all():
+            circuit_id = str(circuit.id or "")
+            rg = _azure_rg_from_id(circuit_id)
+            name = str(circuit.name or "")
+            uid = f"azure:expressroute:{subscription_id}:{rg}:{name}"
+            resources.append(
+                _normalize_resource(
+                    "azure",
+                    uid,
+                    "expressroute",
+                    name=name,
+                    region=str(circuit.location or ""),
+                    status=str(getattr(circuit, "provisioning_state", "") or ""),
+                )
+            )
+    except Exception:
+        LOGGER.debug("azure collector: failed to list expressroute circuits", exc_info=True)
+
+    try:
+        for nsg in network_client.network_security_groups.list_all():
+            nsg_id = str(nsg.id or "")
+            rg = _azure_rg_from_id(nsg_id)
+            name = str(nsg.name or "")
+            uid = f"azure:nsg:{subscription_id}:{rg}:{name}"
+            resources.append(
+                _normalize_resource(
+                    "azure",
+                    uid,
+                    "network_security_group",
+                    name=name,
+                    region=str(nsg.location or ""),
+                    status=str(getattr(nsg, "provisioning_state", "") or "active"),
+                )
+            )
+    except Exception:
+        LOGGER.debug("azure collector: failed to list nsgs", exc_info=True)
+
+    return _dedupe_resources(resources), _dedupe_connections(connections)
+
+
+def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
+    try:
+        import google.auth
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+    except Exception as exc:
+        raise CloudCollectorUnavailable("GCP collector requires google-auth and google-api-python-client") from exc
+
+    auth = _parse_auth_config(account)
+    project_id = str(auth.get("project_id") or account.get("account_identifier") or "").strip()
+    if not project_id:
+        raise CloudCollectorAuthError("GCP project_id is required")
+
+    credentials = None
+    try:
+        svc_json = auth.get("service_account_json")
+        svc_file = str(auth.get("service_account_file") or "").strip()
+        if isinstance(svc_json, dict) and svc_json:
+            credentials = service_account.Credentials.from_service_account_info(
+                svc_json,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        elif isinstance(svc_json, str) and svc_json.strip().startswith("{"):
+            parsed = json.loads(svc_json)
+            credentials = service_account.Credentials.from_service_account_info(
+                parsed,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        elif svc_file:
+            credentials = service_account.Credentials.from_service_account_file(
+                svc_file,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            credentials, default_project = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            if not project_id and default_project:
+                project_id = str(default_project)
+    except Exception as exc:
+        raise CloudCollectorAuthError("Failed to initialize GCP credentials") from exc
+
+    if not project_id:
+        raise CloudCollectorAuthError("GCP project_id is required")
+
+    try:
+        compute = build("compute", "v1", credentials=credentials, cache_discovery=False)
+    except Exception as exc:
+        raise CloudCollectorExecutionError("Failed to initialize GCP compute client") from exc
+
+    resources: list[dict] = []
+    connections: list[dict] = []
+
+    # Networks
+    try:
+        req = compute.networks().list(project=project_id)
+        while req is not None:
+            resp = req.execute()
+            for network in resp.get("items", []) or []:
+                name = str(network.get("name") or "")
+                uid = f"gcp:vpc:{project_id}:{name}"
+                resources.append(
+                    _normalize_resource(
+                        "gcp",
+                        uid,
+                        "vpc",
+                        name=name,
+                        region="global",
+                        cidr=str(network.get("IPv4Range") or ""),
+                        status="active",
+                    )
+                )
+            req = compute.networks().list_next(previous_request=req, previous_response=resp)
+    except Exception as exc:
+        raise CloudCollectorAuthError("GCP network API access failed") from exc
+
+    # Routers
+    try:
+        req = compute.routers().aggregatedList(project=project_id)
+        while req is not None:
+            resp = req.execute()
+            for scoped in (resp.get("items") or {}).values():
+                for router in scoped.get("routers", []) or []:
+                    name = str(router.get("name") or "")
+                    region_url = str(router.get("region") or "")
+                    region = region_url.split("/")[-1] if region_url else ""
+                    uid = f"gcp:cloud_router:{project_id}:{region}:{name}"
+                    resources.append(
+                        _normalize_resource(
+                            "gcp",
+                            uid,
+                            "cloud_router",
+                            name=name,
+                            region=region,
+                            status="running",
+                        )
+                    )
+                    net_url = str(router.get("network") or "")
+                    net_name = net_url.split("/")[-1] if net_url else ""
+                    if net_name:
+                        connections.append(
+                            _normalize_connection(
+                                "gcp",
+                                f"gcp:vpc:{project_id}:{net_name}",
+                                uid,
+                                "router_attachment",
+                                state="up",
+                            )
+                        )
+            req = compute.routers().aggregatedList_next(previous_request=req, previous_response=resp)
+    except Exception:
+        LOGGER.debug("gcp collector: failed router list", exc_info=True)
+
+    # VPN gateways
+    try:
+        req = compute.vpnGateways().aggregatedList(project=project_id)
+        while req is not None:
+            resp = req.execute()
+            for scoped in (resp.get("items") or {}).values():
+                for gateway in scoped.get("vpnGateways", []) or []:
+                    name = str(gateway.get("name") or "")
+                    region_url = str(gateway.get("region") or "")
+                    region = region_url.split("/")[-1] if region_url else ""
+                    uid = f"gcp:ha_vpn_gateway:{project_id}:{region}:{name}"
+                    resources.append(
+                        _normalize_resource(
+                            "gcp",
+                            uid,
+                            "ha_vpn_gateway",
+                            name=name,
+                            region=region,
+                            status="up",
+                        )
+                    )
+                    net_url = str(gateway.get("network") or "")
+                    net_name = net_url.split("/")[-1] if net_url else ""
+                    if net_name:
+                        connections.append(
+                            _normalize_connection(
+                                "gcp",
+                                f"gcp:vpc:{project_id}:{net_name}",
+                                uid,
+                                "vpn_tunnel",
+                                state="up",
+                            )
+                        )
+            req = compute.vpnGateways().aggregatedList_next(previous_request=req, previous_response=resp)
+    except Exception:
+        LOGGER.debug("gcp collector: failed vpn gateway list", exc_info=True)
+
+    # Firewall policies (network firewalls)
+    try:
+        req = compute.firewalls().list(project=project_id)
+        while req is not None:
+            resp = req.execute()
+            for fw in resp.get("items", []) or []:
+                name = str(fw.get("name") or "")
+                uid = f"gcp:firewall_policy:{project_id}:{name}"
+                resources.append(
+                    _normalize_resource(
+                        "gcp",
+                        uid,
+                        "firewall_policy",
+                        name=name,
+                        region="global",
+                        status="active",
+                    )
+                )
+                net_url = str(fw.get("network") or "")
+                net_name = net_url.split("/")[-1] if net_url else ""
+                if net_name:
+                    connections.append(
+                        _normalize_connection(
+                            "gcp",
+                            f"gcp:vpc:{project_id}:{net_name}",
+                            uid,
+                            "security_boundary",
+                            state="enforced",
+                        )
+                    )
+            req = compute.firewalls().list_next(previous_request=req, previous_response=resp)
+    except Exception:
+        LOGGER.debug("gcp collector: failed firewall list", exc_info=True)
+
+    return _dedupe_resources(resources), _dedupe_connections(connections)
+
+
+def collect_provider_snapshot(account: dict) -> tuple[list[dict], list[dict]]:
+    provider = str(account.get("provider") or "").strip().lower()
+    if provider not in VALID_PROVIDERS:
+        raise CloudCollectorExecutionError("Unsupported cloud provider")
+    if provider == "aws":
+        return _collect_aws(account)
+    if provider == "azure":
+        return _collect_azure(account)
+    return _collect_gcp(account)
+
+
+def get_provider_capabilities() -> dict[str, dict]:
+    capabilities: dict[str, dict] = {}
+    for provider in sorted(VALID_PROVIDERS):
+        missing_dependencies: list[str] = []
+        if provider == "aws":
+            try:
+                import boto3  # noqa: F401
+            except Exception:
+                missing_dependencies = ["boto3", "botocore"]
+        elif provider == "azure":
+            try:
+                import azure.identity  # noqa: F401
+                import azure.mgmt.network  # noqa: F401
+            except Exception:
+                missing_dependencies = ["azure-identity", "azure-mgmt-network"]
+        else:
+            try:
+                import google.auth  # noqa: F401
+                import googleapiclient.discovery  # noqa: F401
+            except Exception:
+                missing_dependencies = ["google-auth", "google-api-python-client"]
+
+        capabilities[provider] = {
+            "live_supported": not missing_dependencies,
+            "missing_dependencies": missing_dependencies,
+        }
+    return capabilities
