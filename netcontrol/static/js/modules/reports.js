@@ -396,6 +396,70 @@ async function loadReports(options = {}) {
 }
 window.loadReports = loadReports;
 
+function _extractFileNameFromDisposition(contentDisposition, fallbackName = 'report.bin') {
+    const raw = String(contentDisposition || '');
+    const utf8Match = raw.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match && utf8Match[1]) {
+        try {
+            return decodeURIComponent(utf8Match[1]).trim() || fallbackName;
+        } catch (_) {
+            // Ignore decode issues and continue fallback parsing.
+        }
+    }
+    const basicMatch = raw.match(/filename=\"?([^\";]+)\"?/i);
+    if (basicMatch && basicMatch[1]) {
+        return basicMatch[1].trim() || fallbackName;
+    }
+    return fallbackName;
+}
+
+async function downloadReportExport(url, fallbackName = 'report.bin') {
+    if (!url) {
+        showError('Download failed: missing export URL.');
+        return;
+    }
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Accept: '*/*' },
+        });
+        if (!response.ok) {
+            let reason = `HTTP ${response.status}`;
+            const ct = (response.headers.get('content-type') || '').toLowerCase();
+            try {
+                if (ct.includes('application/json')) {
+                    const data = await response.json();
+                    if (data?.detail) reason = String(data.detail);
+                } else {
+                    const text = (await response.text() || '').trim();
+                    if (text) reason = text.slice(0, 180);
+                }
+            } catch (_) { /* ignore parse errors */ }
+            throw new Error(reason);
+        }
+        const blob = await response.blob();
+        if (!blob || blob.size <= 0) {
+            throw new Error('Received an empty file.');
+        }
+        const disposition = response.headers.get('content-disposition') || '';
+        const fileName = _extractFileNameFromDisposition(disposition, fallbackName);
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+    } catch (error) {
+        showError('Download failed: ' + (error?.message || 'Unknown error'));
+    }
+}
+window.downloadReportExport = downloadReportExport;
+
 async function showReportArtifacts(runId) {
     try {
         const resp = await api.getReportRunArtifacts(runId, 100);
@@ -410,7 +474,7 @@ async function showReportArtifacts(runId) {
                                 ${escapeHtml(a.artifact_type || '')} &middot; ${escapeHtml(a.media_type || '')} &middot; ${Number(a.size_bytes || 0).toLocaleString()} bytes
                             </div>
                         </div>
-                        <a class="btn btn-sm btn-secondary" href="${api.getReportArtifactUrl(a.id)}" download>Download</a>
+                        <button class="btn btn-sm btn-secondary" onclick="downloadReportExport('${api.getReportArtifactUrl(a.id)}', 'artifact_${Number(a.id || 0)}')">Download</button>
                     </div>
                 `).join('')}
             </div>`
@@ -471,26 +535,44 @@ async function generateAndShowReport() {
     if (reportType !== 'compliance' && reportType !== 'network_documentation') params.days = days;
 
     try {
-        const result = await api.generateReport({ report_type: reportType, parameters: params });
+        const result = await api.generateReport({
+            report_type: reportType,
+            parameters: params,
+            // Network documentation defaults to persisted artifacts server-side, but set
+            // explicitly so export actions can reliably use run artifacts.
+            persist_artifacts: reportType === 'network_documentation',
+        });
         const rows = result?.rows || [];
         if (!rows.length) {
             resultEl.innerHTML = '<div class="card" style="padding:1.5rem;"><p class="text-muted">Report generated with 0 rows. No data found for the selected criteria.</p></div>';
             return;
         }
         const cols = Object.keys(rows[0]);
+        const artifactList = Array.isArray(result?.artifacts) ? result.artifacts : [];
+        const artifactByType = {};
+        artifactList.forEach(a => {
+            if (!a || !a.artifact_type || !a.id) return;
+            artifactByType[String(a.artifact_type)] = a;
+        });
+
+        const fallbackSuffix = groupId ? `?group_id=${encodeURIComponent(groupId)}` : '';
         const svgUrl = reportType === 'network_documentation'
-            ? `/api/reports/export/network_documentation.svg${groupId ? `?group_id=${encodeURIComponent(groupId)}` : ''}`
+            ? (artifactByType.svg ? api.getReportArtifactUrl(artifactByType.svg.id) : `/api/reports/export/network_documentation.svg${fallbackSuffix}`)
+            : '';
+        const drawioUrl = reportType === 'network_documentation'
+            ? (artifactByType.drawio ? api.getReportArtifactUrl(artifactByType.drawio.id) : `/api/reports/export/network_documentation.drawio${fallbackSuffix}`)
             : '';
         const pdfUrl = reportType === 'network_documentation'
-            ? `/api/reports/export/network_documentation.pdf${groupId ? `?group_id=${encodeURIComponent(groupId)}` : ''}`
+            ? (artifactByType.pdf ? api.getReportArtifactUrl(artifactByType.pdf.id) : `/api/reports/export/network_documentation.pdf${fallbackSuffix}`)
             : '';
         resultEl.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                 <span>${rows.length} row${rows.length !== 1 ? 's' : ''} &middot; Run #${result.run_id || '-'}</span>
                 <div style="display:flex; gap:0.4rem; align-items:center;">
-                    ${svgUrl ? `<a class="btn btn-sm btn-secondary" href="${svgUrl}" download>Export SVG Diagram</a>` : ''}
-                    ${pdfUrl ? `<a class="btn btn-sm btn-secondary" href="${pdfUrl}" download>Export PDF</a>` : ''}
-                    ${result.run_id ? `<a class="btn btn-sm btn-secondary" href="/api/reports/runs/${result.run_id}/csv" download>Export CSV</a>` : ''}
+                    ${svgUrl ? `<button class="btn btn-sm btn-secondary" onclick="downloadReportExport('${svgUrl}', 'network_documentation_topology.svg')">Export SVG Diagram</button>` : ''}
+                    ${drawioUrl ? `<button class="btn btn-sm btn-secondary" onclick="downloadReportExport('${drawioUrl}', 'network_documentation_topology.drawio')">Export draw.io</button>` : ''}
+                    ${pdfUrl ? `<button class="btn btn-sm btn-secondary" onclick="downloadReportExport('${pdfUrl}', 'network_documentation_report.pdf')">Export PDF</button>` : ''}
+                    ${result.run_id ? `<button class="btn btn-sm btn-secondary" onclick="downloadReportExport('/api/reports/runs/${result.run_id}/csv', 'report_${result.run_id}.csv')">Export CSV</button>` : ''}
                 </div>
             </div>
             <div style="overflow-x:auto;">

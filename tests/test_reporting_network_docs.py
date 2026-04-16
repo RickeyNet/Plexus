@@ -185,6 +185,45 @@ async def test_export_network_documentation_svg(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_export_network_documentation_drawio(monkeypatch):
+    fake_links = [
+        {
+            "id": 1,
+            "source_host_id": 10,
+            "source_interface": "Gi0/1",
+            "target_host_id": None,
+            "target_ip": "172.16.0.1",
+            "target_device_name": "edge-fw",
+            "target_interface": "port1",
+            "protocol": "cdp",
+        }
+    ]
+    fake_hosts = [
+        {
+            "id": 10,
+            "group_id": 1,
+            "hostname": "core-sw",
+            "ip_address": "10.0.0.1",
+            "device_type": "cisco_ios",
+        }
+    ]
+    fake_groups = [{"id": 1, "name": "Core"}]
+
+    monkeypatch.setattr(reporting_module.db, "get_topology_links", AsyncMock(return_value=fake_links))
+    monkeypatch.setattr(reporting_module.db, "get_hosts_by_ids", AsyncMock(return_value=fake_hosts))
+    monkeypatch.setattr(reporting_module.db, "get_all_groups", AsyncMock(return_value=fake_groups))
+
+    response = await reporting_module.export_network_documentation_drawio(group_id=None)
+    body = response.body.decode("utf-8")
+
+    assert response.media_type == "application/vnd.jgraph.mxfile"
+    assert "network_documentation_topology.drawio" in response.headers.get("Content-Disposition", "")
+    assert "<mxfile" in body
+    assert "Plexus Network Documentation Topology" in body
+    assert "core-sw" in body
+
+
+@pytest.mark.asyncio
 async def test_generate_report_persists_artifacts(docs_db):
     result = await reporting_module.generate_report(
         {
@@ -199,6 +238,7 @@ async def test_generate_report_persists_artifacts(docs_db):
     artifact_types = {a["artifact_type"] for a in artifacts}
     assert "csv" in artifact_types
     assert "svg" in artifact_types
+    assert "drawio" in artifact_types
     assert "pdf" in artifact_types
 
     csv_artifact = next(a for a in artifacts if a["artifact_type"] == "csv")
@@ -215,6 +255,7 @@ async def test_generate_report_persists_artifacts(docs_db):
     listed_types = {a["artifact_type"] for a in listed["artifacts"]}
     assert "csv" in listed_types
     assert "svg" in listed_types
+    assert "drawio" in listed_types
     assert "pdf" in listed_types
 
 
