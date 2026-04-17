@@ -57,6 +57,12 @@ async function loadDashboard(_options = {}) {
 
         // Render groups overview
         renderGroupsOverview(data.groups || []);
+
+        // Render network health overview
+        populateGroupFilter(data.groups || []);
+        renderHealthSummary(data.monitoring || {}, data.device_health || []);
+        renderDeviceHealthTable(data.device_health || []);
+        renderDashboardAlerts(data.open_alerts || []);
     } catch (error) {
         showError('Failed to load dashboard', container);
     }
@@ -122,6 +128,264 @@ function renderGroupsOverview(groups) {
 window.goToInventory = function() {
     navigateToPage('inventory');
 };
+
+
+// =============================================================================
+// Network Health Overview (SolarWinds-style)
+// =============================================================================
+
+/**
+ * Classify a device's overall health based on its latest poll data.
+ * Returns: 'healthy' | 'warning' | 'critical' | 'down' | 'unknown'
+ */
+function classifyDeviceHealth(poll) {
+    if (!poll) return 'unknown';
+    if (poll.poll_status === 'error') return 'down';
+    const cpu = poll.cpu_percent;
+    const mem = poll.memory_percent;
+    const pktLoss = poll.packet_loss_pct;
+    // Critical: CPU > 90%, memory > 95%, or packet loss > 50%
+    if ((cpu != null && cpu >= 90) ||
+        (mem != null && mem >= 95) ||
+        (pktLoss != null && pktLoss >= 50)) return 'critical';
+    // Warning: CPU > 75%, memory > 80%, packet loss > 10%, or interfaces down
+    if ((cpu != null && cpu >= 75) ||
+        (mem != null && mem >= 80) ||
+        (pktLoss != null && pktLoss >= 10) ||
+        (poll.if_down_count > 0)) return 'warning';
+    // If we have data and nothing is bad, it's healthy
+    if (cpu != null || mem != null) return 'healthy';
+    return 'unknown';
+}
+
+function populateGroupFilter(groups) {
+    const sel = document.getElementById('health-group-filter');
+    if (!sel || sel.dataset.populated === '1') return;
+    sel.dataset.populated = '1';
+    groups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name;
+        sel.appendChild(opt);
+    });
+    sel.addEventListener('change', () => filterAndRenderDevices());
+    const sortSel = document.getElementById('health-sort');
+    if (sortSel && sortSel.dataset.populated !== '1') {
+        sortSel.dataset.populated = '1';
+        sortSel.addEventListener('change', () => filterAndRenderDevices());
+    }
+}
+
+function filterAndRenderDevices() {
+    if (!dashboardData) return;
+    const devices = dashboardData.device_health || [];
+    const groupId = document.getElementById('health-group-filter')?.value;
+    const sortBy = document.getElementById('health-sort')?.value || 'severity';
+    let filtered = devices;
+    if (groupId) {
+        filtered = devices.filter(d => String(d.group_id) === groupId);
+    }
+    const sorted = sortDevices(filtered, sortBy);
+    renderHealthSummary(dashboardData.monitoring || {}, sorted);
+    renderDeviceHealthTable(sorted);
+}
+
+function sortDevices(devices, sortBy) {
+    const copy = [...devices];
+    const severityOrder = { down: 0, critical: 1, warning: 2, unknown: 3, healthy: 4 };
+    switch (sortBy) {
+        case 'severity':
+            return copy.sort((a, b) => {
+                const sa = severityOrder[classifyDeviceHealth(a)] ?? 3;
+                const sb = severityOrder[classifyDeviceHealth(b)] ?? 3;
+                return sa - sb;
+            });
+        case 'name':
+            return copy.sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
+        case 'cpu':
+            return copy.sort((a, b) => (b.cpu_percent ?? -1) - (a.cpu_percent ?? -1));
+        case 'memory':
+            return copy.sort((a, b) => (b.memory_percent ?? -1) - (a.memory_percent ?? -1));
+        default:
+            return copy;
+    }
+}
+
+function renderHealthSummary(monitoring, devices) {
+    const container = document.getElementById('health-summary-tiles');
+    if (!container) return;
+
+    // Count devices by health status
+    let healthy = 0, warning = 0, critical = 0, down = 0, unknown = 0;
+    devices.forEach(d => {
+        const status = classifyDeviceHealth(d);
+        if (status === 'healthy') healthy++;
+        else if (status === 'warning') warning++;
+        else if (status === 'critical') critical++;
+        else if (status === 'down') down++;
+        else unknown++;
+    });
+
+    const total = devices.length;
+    const openAlerts = monitoring.open_alerts || 0;
+
+    container.innerHTML = `
+        <div class="health-tile">
+            <div class="health-tile-icon healthy">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="health-tile-value" style="color:#4caf50;">${healthy}</div>
+            <div class="health-tile-label">Healthy</div>
+        </div>
+        <div class="health-tile">
+            <div class="health-tile-icon warning">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div class="health-tile-value" style="color:#ff9800;">${warning}</div>
+            <div class="health-tile-label">Warning</div>
+        </div>
+        <div class="health-tile">
+            <div class="health-tile-icon critical">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            </div>
+            <div class="health-tile-value" style="color:#f44336;">${critical + down}</div>
+            <div class="health-tile-label">Critical / Down</div>
+        </div>
+        <div class="health-tile">
+            <div class="health-tile-icon unknown">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div class="health-tile-value" style="color:#9e9e9e;">${unknown}</div>
+            <div class="health-tile-label">Unknown</div>
+        </div>
+        <div class="health-tile">
+            <div class="health-tile-icon info">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            </div>
+            <div class="health-tile-value">${total}</div>
+            <div class="health-tile-label">Total Monitored</div>
+        </div>
+        <div class="health-tile">
+            <div class="health-tile-icon ${openAlerts > 0 ? 'critical' : 'healthy'}">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+            </div>
+            <div class="health-tile-value" style="color:${openAlerts > 0 ? '#f44336' : '#4caf50'};">${openAlerts}</div>
+            <div class="health-tile-label">Open Alerts</div>
+        </div>`;
+}
+
+function renderUsageBar(pct) {
+    if (pct == null) return '<span class="text-muted">N/A</span>';
+    const clamped = Math.min(Math.max(pct, 0), 100);
+    const level = clamped >= 90 ? 'high' : clamped >= 70 ? 'medium' : 'low';
+    return `<div class="usage-bar-wrap">
+        <div class="usage-bar"><div class="usage-bar-fill ${level}" style="width:${clamped}%"></div></div>
+        <span class="usage-bar-pct">${Math.round(clamped)}%</span>
+    </div>`;
+}
+
+function renderDeviceHealthTable(devices) {
+    const container = document.getElementById('device-health-table-wrap');
+    if (!container) return;
+
+    if (!devices.length) {
+        container.innerHTML = emptyStateHTML('No monitored devices yet', 'monitoring');
+        return;
+    }
+
+    const rows = devices.map(d => {
+        const health = classifyDeviceHealth(d);
+        const statusLabel = health === 'healthy' ? 'Up' :
+                            health === 'warning' ? 'Warning' :
+                            health === 'critical' ? 'Critical' :
+                            health === 'down' ? 'Down' : 'Unknown';
+        const dotClass = health === 'healthy' ? 'up' : health;
+        const statusClass = health === 'healthy' ? 'up' : health;
+        const uptimeStr = d.uptime_seconds != null ? formatUptime(d.uptime_seconds) : '-';
+        const ifStr = d.if_up_count != null
+            ? `<span style="color:#4caf50">${d.if_up_count}&#x25B2;</span> / <span style="color:#f44336">${d.if_down_count || 0}&#x25BC;</span>`
+            : '-';
+        const responseStr = d.response_time_ms != null ? `${Math.round(d.response_time_ms)}ms` : '-';
+        const polledAgo = d.polled_at ? timeAgo(d.polled_at) : '-';
+        return `<tr>
+            <td><div class="device-health-status status-${statusClass}"><span class="status-dot ${dotClass}"></span>${statusLabel}</div></td>
+            <td><strong>${escapeHtml(d.hostname || '-')}</strong></td>
+            <td>${escapeHtml(d.ip_address || '-')}</td>
+            <td>${escapeHtml(d.group_name || '-')}</td>
+            <td>${escapeHtml(d.model || d.device_type || '-')}</td>
+            <td>${renderUsageBar(d.cpu_percent)}</td>
+            <td>${renderUsageBar(d.memory_percent)}</td>
+            <td>${ifStr}</td>
+            <td>${responseStr}</td>
+            <td>${uptimeStr}</td>
+            <td title="${d.polled_at || ''}">${polledAgo}</td>
+        </tr>`;
+    }).join('');
+
+    container.innerHTML = `
+        <table class="device-health-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Hostname</th>
+                    <th>IP Address</th>
+                    <th>Group</th>
+                    <th>Model</th>
+                    <th>CPU</th>
+                    <th>Memory</th>
+                    <th>Interfaces</th>
+                    <th>Response</th>
+                    <th>Uptime</th>
+                    <th>Last Poll</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>`;
+}
+
+function renderDashboardAlerts(alerts) {
+    const container = document.getElementById('dashboard-alerts-list');
+    if (!container) return;
+
+    if (!alerts.length) {
+        container.innerHTML = `<div style="padding:1rem; text-align:center; color:var(--text-muted);">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.4; margin-bottom:0.5rem;"><polyline points="20 6 9 17 4 12"/></svg>
+            <p style="margin:0;">No active alerts &mdash; all systems nominal</p>
+        </div>`;
+        return;
+    }
+
+    container.innerHTML = alerts.slice(0, 20).map(a => {
+        const sev = (a.severity || 'info').toLowerCase();
+        return `<div class="dashboard-alert-item">
+            <span class="alert-severity-badge ${sev}">${escapeHtml(sev)}</span>
+            <span class="dashboard-alert-host">${escapeHtml(a.hostname || '-')}</span>
+            <span class="dashboard-alert-msg">${escapeHtml(a.message || a.metric || '-')}</span>
+            <span class="dashboard-alert-time">${a.created_at ? timeAgo(a.created_at) : ''}</span>
+        </div>`;
+    }).join('');
+}
+
+function formatUptime(seconds) {
+    if (seconds == null) return '-';
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    if (days > 0) return `${days}d ${hours}h`;
+    const mins = Math.floor((seconds % 3600) / 60);
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
+}
+
+function timeAgo(isoStr) {
+    try {
+        const date = new Date(isoStr.endsWith('Z') ? isoStr : isoStr + 'Z');
+        const diff = (Date.now() - date.getTime()) / 1000;
+        if (diff < 60) return 'just now';
+        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+        return `${Math.floor(diff / 86400)}d ago`;
+    } catch { return isoStr; }
+}
 
 
 // =============================================================================

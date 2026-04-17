@@ -5333,9 +5333,12 @@ async def get_latest_monitoring_polls(
     try:
         if group_id is not None:
             cursor = await db.execute(
-                """SELECT p.*, h.hostname, h.ip_address, h.device_type, h.group_id
+                """SELECT p.*, h.hostname, h.ip_address, h.device_type, h.group_id,
+                          h.model, h.software_version, h.status AS host_status,
+                          h.last_seen, g.name AS group_name
                    FROM monitoring_polls p
                    JOIN hosts h ON h.id = p.host_id
+                   LEFT JOIN inventory_groups g ON g.id = h.group_id
                    WHERE h.group_id = ?
                      AND p.id = (SELECT MAX(p2.id) FROM monitoring_polls p2 WHERE p2.host_id = p.host_id)
                    ORDER BY h.hostname
@@ -5344,9 +5347,12 @@ async def get_latest_monitoring_polls(
             )
         else:
             cursor = await db.execute(
-                """SELECT p.*, h.hostname, h.ip_address, h.device_type, h.group_id
+                """SELECT p.*, h.hostname, h.ip_address, h.device_type, h.group_id,
+                          h.model, h.software_version, h.status AS host_status,
+                          h.last_seen, g.name AS group_name
                    FROM monitoring_polls p
                    JOIN hosts h ON h.id = p.host_id
+                   LEFT JOIN inventory_groups g ON g.id = h.group_id
                    WHERE p.id = (SELECT MAX(p2.id) FROM monitoring_polls p2 WHERE p2.host_id = p.host_id)
                    ORDER BY h.hostname
                    LIMIT ?""",
