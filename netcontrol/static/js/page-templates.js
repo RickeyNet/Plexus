@@ -75,16 +75,6 @@ function templateDashboard() {
             <div class="stat-ring-wrap">
                 <svg class="stat-ring" viewBox="0 0 80 80">
                     <circle class="stat-ring-bg" cx="40" cy="40" r="34" />
-                    <circle class="stat-ring-fill" id="ring-groups" cx="40" cy="40" r="34" />
-                </svg>
-                <div class="stat-ring-value" id="stat-groups">-</div>
-            </div>
-            <div class="stat-label">Inventory Groups</div>
-        </div>
-        <div class="stat-card stat-card-ring">
-            <div class="stat-ring-wrap">
-                <svg class="stat-ring" viewBox="0 0 80 80">
-                    <circle class="stat-ring-bg" cx="40" cy="40" r="34" />
                     <circle class="stat-ring-fill" id="ring-hosts" cx="40" cy="40" r="34" />
                 </svg>
                 <div class="stat-ring-value" id="stat-hosts">-</div>
@@ -110,13 +100,6 @@ function templateDashboard() {
                 <div class="stat-ring-value" id="stat-jobs">-</div>
             </div>
             <div class="stat-label">Total Jobs</div>
-        </div>
-    </div>
-
-    <div class="section">
-        <h3>Inventory Groups</h3>
-        <div id="groups-overview" class="groups-grid">
-            ${skel(3)}
         </div>
     </div>
 
@@ -1280,6 +1263,7 @@ function templateSettings() {
                 <option value="void">Void</option>
                 <option value="coral">Coral</option>
                 <option value="sandstone">Sandstone</option>
+                <option value="voyager">Voyager</option>
             </select>
         </div>
         <div style="max-width: 320px; margin-top: 1rem;">
