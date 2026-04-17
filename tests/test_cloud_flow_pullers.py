@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import routes.database as db_module
 
+import sys
+
 import netcontrol.routes.cloud_flow_pullers as pullers_mod
 import netcontrol.routes.cloud_visibility as cloud_visibility_module
 
@@ -166,9 +168,13 @@ async def test_aws_puller_success_with_mock(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
 
-    # Mock boto3 session
-    mock_session = MagicMock()
-    monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: mock_session)
+    # Stub boto3 + botocore so the import guard inside the puller passes
+    fake_boto3 = MagicMock()
+    fake_botocore_exc = type("module", (), {"BotoCoreError": Exception, "ClientError": Exception})()
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "botocore", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
 
     result = await pullers_mod.pull_aws_flow_logs(account)
     assert result["ok"] is True
@@ -249,8 +255,13 @@ async def test_pull_all_processes_configured_accounts(tmp_path, monkeypatch):
         ]
 
     monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
-    mock_session = MagicMock()
-    monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: mock_session)
+
+    fake_boto3 = MagicMock()
+    fake_botocore_exc = type("module", (), {"BotoCoreError": Exception, "ClientError": Exception})()
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "botocore", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
 
     result = await pullers_mod.pull_flow_logs_all_accounts()
     assert result["accounts_processed"] == 1
@@ -315,6 +326,12 @@ async def test_manual_pull_single_account(tmp_path, monkeypatch):
                  "start": str(int(datetime.now(UTC).timestamp()))}]
 
     monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
+
+    fake_boto3 = MagicMock()
+    fake_botocore_exc = type("module", (), {"BotoCoreError": Exception, "ClientError": Exception})()
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "botocore", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
     monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
 
     result = await cloud_visibility_module.trigger_cloud_flow_sync_api(
