@@ -274,6 +274,17 @@ CONFIG_BACKUP_CONFIG = dict(CONFIG_BACKUP_DEFAULTS)
 COMPLIANCE_CHECK_CONFIG = dict(COMPLIANCE_CHECK_DEFAULTS)
 MONITORING_CONFIG = dict(MONITORING_DEFAULTS)
 
+CLOUD_FLOW_SYNC_DEFAULTS = {
+    "enabled": False,
+    "interval_seconds": 300,  # 5 minutes
+    "lookback_minutes": 15,
+}
+
+CLOUD_FLOW_SYNC_MIN_INTERVAL = 60
+CLOUD_FLOW_SYNC_MAX_INTERVAL = 3600
+
+CLOUD_FLOW_SYNC_CONFIG: dict = dict(CLOUD_FLOW_SYNC_DEFAULTS)
+
 
 # ── Sanitizer functions ─────────────────────────────────────────────────────
 
@@ -508,6 +519,19 @@ def _sanitize_monitoring_config(data: dict | None) -> dict:
         cfg["escalation_after_minutes"] = max(5, min(1440, int(data.get("escalation_after_minutes", cfg["escalation_after_minutes"]))))
         cfg["escalation_check_interval"] = max(30, min(3600, int(data.get("escalation_check_interval", cfg["escalation_check_interval"]))))
         cfg["default_cooldown_minutes"] = max(1, min(1440, int(data.get("default_cooldown_minutes", cfg["default_cooldown_minutes"]))))
+    return cfg
+
+
+def _sanitize_cloud_flow_sync_config(data: dict | None) -> dict:
+    cfg = dict(CLOUD_FLOW_SYNC_DEFAULTS)
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
+        cfg["interval_seconds"] = max(
+            CLOUD_FLOW_SYNC_MIN_INTERVAL,
+            min(CLOUD_FLOW_SYNC_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
+        cfg["lookback_minutes"] = max(5, min(1440, int(data.get("lookback_minutes", cfg["lookback_minutes"]))))
     return cfg
 
 
