@@ -122,6 +122,7 @@ from netcontrol.routes.cloud_visibility import (
     init_cloud_visibility,
     router as cloud_visibility_router,
 )
+from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.deployments import (
     DeploymentCreate,
     DeploymentExecute,
@@ -690,6 +691,7 @@ _sanitize_config_drift_check_config = state._sanitize_config_drift_check_config
 _sanitize_config_backup_config = state._sanitize_config_backup_config
 _sanitize_compliance_check_config = state._sanitize_compliance_check_config
 _sanitize_monitoring_config = state._sanitize_monitoring_config
+_sanitize_cloud_flow_sync_config = state._sanitize_cloud_flow_sync_config
 _sanitize_snmp_discovery_config = state._sanitize_snmp_discovery_config
 _sanitize_snmp_discovery_profile = state._sanitize_snmp_discovery_profile
 _sanitize_snmp_discovery_profiles = state._sanitize_snmp_discovery_profiles
@@ -748,6 +750,8 @@ async def _load_persisted_security_settings():
     state.COMPLIANCE_CHECK_CONFIG = _sanitize_compliance_check_config(compliance_check)
     monitoring = await db.get_auth_setting("monitoring")
     state.MONITORING_CONFIG = _sanitize_monitoring_config(monitoring)
+    cloud_flow_sync = await db.get_auth_setting("cloud_flow_sync")
+    state.CLOUD_FLOW_SYNC_CONFIG = _sanitize_cloud_flow_sync_config(cloud_flow_sync)
 
 
 def require_feature(feature_key: str):
@@ -779,6 +783,30 @@ async def require_admin(request: Request):
     if not user or user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return session
+
+
+async def _cloud_flow_sync_loop() -> None:
+    """Periodically pull cloud flow logs for all enabled accounts."""
+    while True:
+        cfg = state.CLOUD_FLOW_SYNC_CONFIG
+        interval = max(60, int(cfg.get("interval_seconds", 300)))
+        await asyncio.sleep(interval)
+        if not cfg.get("enabled"):
+            continue
+        try:
+            result = await pull_flow_logs_all_accounts()
+            total = result.get("total_ingested", 0)
+            processed = result.get("accounts_processed", 0)
+            if total > 0:
+                LOGGER.info(
+                    "Cloud flow sync: ingested %s records from %s account(s)",
+                    total,
+                    processed,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("Cloud flow sync loop failed: %s", type(exc).__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -818,6 +846,7 @@ async def lifespan(app: FastAPI):
     downsampling_task = asyncio.create_task(_downsampling_loop())
     rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
     report_scheduler_task = asyncio.create_task(_report_scheduler_loop())
+    cloud_flow_sync_task = asyncio.create_task(_cloud_flow_sync_loop())
     try:
         yield
     finally:
@@ -834,6 +863,7 @@ async def lifespan(app: FastAPI):
         downsampling_task.cancel()
         rate_limit_cleanup_task.cancel()
         report_scheduler_task.cancel()
+        cloud_flow_sync_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -884,6 +914,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await report_scheduler_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await cloud_flow_sync_task
         except asyncio.CancelledError:
             pass
 

@@ -11377,3 +11377,59 @@ async def get_cloud_topology_snapshot(
             "hybrid_link_count": len(hybrid_links),
         },
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Cloud Flow Sync Cursors
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def get_cloud_flow_sync_cursor(account_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM cloud_flow_sync_cursors WHERE account_id = ?",
+            (account_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def upsert_cloud_flow_sync_cursor(
+    account_id: int,
+    *,
+    last_pull_end: str,
+    extra_json: dict | None = None,
+) -> None:
+    db = await get_db()
+    try:
+        extra_text = _cloud_json_text(extra_json) if extra_json else "{}"
+        now_iso = datetime.now(UTC).isoformat()
+        await db.execute(
+            """INSERT INTO cloud_flow_sync_cursors (account_id, last_pull_end, extra_json, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(account_id) DO UPDATE SET
+                   last_pull_end = excluded.last_pull_end,
+                   extra_json = excluded.extra_json,
+                   updated_at = excluded.updated_at""",
+            (account_id, last_pull_end, extra_text, now_iso),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def list_cloud_flow_sync_cursors() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT c.*, ca.provider, ca.name AS account_name
+               FROM cloud_flow_sync_cursors c
+               JOIN cloud_accounts ca ON ca.id = c.account_id
+               ORDER BY c.account_id""",
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
