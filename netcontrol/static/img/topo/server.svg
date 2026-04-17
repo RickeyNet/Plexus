@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Server/host icon: rack unit -->
+  <rect x="10" y="8" width="44" height="16" rx="3" stroke="#42a5f5" stroke-width="2.5" fill="#0d47a1"/>
+  <rect x="10" y="26" width="44" height="16" rx="3" stroke="#42a5f5" stroke-width="2.5" fill="#0d47a1"/>
+  <rect x="10" y="44" width="44" height="16" rx="3" stroke="#42a5f5" stroke-width="2.5" fill="#0d47a1"/>
+  <!-- Drive bays -->
+  <rect x="16" y="13" width="18" height="6" rx="1" fill="#42a5f5" opacity="0.3"/>
+  <rect x="16" y="31" width="18" height="6" rx="1" fill="#42a5f5" opacity="0.3"/>
+  <rect x="16" y="49" width="18" height="6" rx="1" fill="#42a5f5" opacity="0.3"/>
+  <!-- Status LEDs -->
+  <circle cx="44" cy="16" r="2.5" fill="#69f0ae"/>
+  <circle cx="44" cy="34" r="2.5" fill="#69f0ae"/>
+  <circle cx="44" cy="52" r="2.5" fill="#69f0ae"/>
+</svg>

@@ -62,6 +62,28 @@ function _getTopoThemeColors() {
     return _topoThemeColors;
 }
 
+// Icon path map — device_category → SVG file
+const _TOPO_ICON_MAP = {
+    router:   '/static/img/topo/router.svg',
+    switch:   '/static/img/topo/switch.svg',
+    firewall: '/static/img/topo/firewall.svg',
+    wireless: '/static/img/topo/wireless.svg',
+    wlc:      '/static/img/topo/wlc.svg',
+    phone:    '/static/img/topo/phone.svg',
+    server:   '/static/img/topo/server.svg',
+    unknown:  '/static/img/topo/unknown.svg',
+};
+
+function _topoNodeIcon(node) {
+    // Use device_category if available, otherwise fall back by device_type
+    const cat = (node.device_category || '').toLowerCase();
+    if (cat && _TOPO_ICON_MAP[cat]) return _TOPO_ICON_MAP[cat];
+    // Fallback: infer from device_type
+    if (node.device_type === 'fortinet') return _TOPO_ICON_MAP.firewall;
+    if (!node.in_inventory) return _TOPO_ICON_MAP.unknown;
+    return null; // no icon — will use shape fallback
+}
+
 function _topoNodeShape(deviceType) {
     if (deviceType === 'fortinet') return 'triangle';
     if (['cisco_ios', 'juniper_junos', 'arista_eos'].includes(deviceType)) return 'diamond';
@@ -594,11 +616,15 @@ async function loadTopology(options = {}) {
 
 function _buildVisNode(n, savedPos) {
     const colors = _topoNodeColor(n);
+    const iconUrl = _topoNodeIcon(n);
+    const modelInfo = n.model ? `\nModel: ${n.model}` : '';
+    const categoryInfo = n.device_category ? `\nRole: ${n.device_category}` : '';
     const node = {
         id: n.id,
         label: n.label,
-        title: `${n.label}\n${n.ip || ''}\nType: ${n.device_type}${n.group_name ? '\nGroup: ' + n.group_name : ''}${n.in_inventory ? '' : '\n(External)'}\nDrag to move · Right-click to unpin`,
-        shape: _topoNodeShape(n.device_type),
+        title: `${n.label}\n${n.ip || ''}\nType: ${n.device_type}${categoryInfo}${modelInfo}${n.group_name ? '\nGroup: ' + n.group_name : ''}${n.in_inventory ? '' : '\n(External)'}\nDrag to move · Right-click to unpin`,
+        shape: iconUrl ? 'circularImage' : _topoNodeShape(n.device_type),
+        image: iconUrl || undefined,
         color: colors,
         size: n.in_inventory ? 25 : 18,
         borderWidth: n.in_inventory ? 2.5 : 1.5,
@@ -729,6 +755,9 @@ function renderTopologyGraph(data) {
     }
 
     const graphOptions = {
+        nodes: {
+            brokenImage: '/static/img/topo/unknown.svg',
+        },
         physics: {
             enabled: isCircular ? false : usePhysics,
             barnesHut: {
@@ -892,10 +921,19 @@ function showTopologyNodeDetails(node, allEdges) {
     );
 
     const esc = (s) => escapeHtml(String(s ?? ''));
+    const currentCat = node.device_category || '';
+    const categoryOptions = ['', 'router', 'switch', 'firewall', 'wireless', 'wlc', 'phone', 'server'];
+    const categorySelect = node.in_inventory
+        ? `<select class="topology-category-select" data-host-id="${node.id}" style="font-size:0.8rem; padding:0.15rem 0.3rem; border-radius:0.25rem; border:1px solid var(--border); background:var(--bg-secondary); color:var(--text);">
+            ${categoryOptions.map(c => `<option value="${esc(c)}"${c === currentCat ? ' selected' : ''}>${c || '(auto)'}</option>`).join('')}
+           </select>`
+        : `<span>${esc(currentCat || 'unknown')}</span>`;
     let html = `
         <div class="topology-detail-section">
             <div class="topology-detail-row"><span class="topology-detail-label">IP Address</span><span>${esc(node.ip || 'N/A')}</span></div>
             <div class="topology-detail-row"><span class="topology-detail-label">Device Type</span><span>${esc(node.device_type || 'unknown')}</span></div>
+            <div class="topology-detail-row"><span class="topology-detail-label">Role</span>${categorySelect}</div>
+            ${node.model ? `<div class="topology-detail-row"><span class="topology-detail-label">Model</span><span>${esc(node.model)}</span></div>` : ''}
             <div class="topology-detail-row"><span class="topology-detail-label">Status</span><span class="status-badge status-${esc(node.status || 'unknown')}">${esc(node.status || 'unknown')}</span></div>
             ${node.group_name ? `<div class="topology-detail-row"><span class="topology-detail-label">Group</span><span>${esc(node.group_name)}</span></div>` : ''}
             <div class="topology-detail-row"><span class="topology-detail-label">In Inventory</span><span>${node.in_inventory ? 'Yes' : 'No'}</span></div>
@@ -936,6 +974,28 @@ function showTopologyNodeDetails(node, allEdges) {
     if (addBtn) {
         addBtn.addEventListener('click', () => {
             addTopologyNodeToInventory(addBtn.dataset.hostname, addBtn.dataset.ip);
+        });
+    }
+    const catSelect = content.querySelector('.topology-category-select');
+    if (catSelect) {
+        catSelect.addEventListener('change', async () => {
+            const hostId = parseInt(catSelect.dataset.hostId, 10);
+            const newCat = catSelect.value;
+            try {
+                await api.updateHostCategory(hostId, newCat);
+                // Update local data + vis node icon immediately
+                node.device_category = newCat;
+                const iconUrl = _topoNodeIcon(node);
+                _topoNodesDS.update({
+                    id: hostId,
+                    shape: iconUrl ? 'circularImage' : _topoNodeShape(node.device_type),
+                    image: iconUrl || undefined,
+                    _raw: node,
+                });
+                showToast(`Role updated to ${newCat || '(auto)'}`, 'success');
+            } catch (err) {
+                showError('Failed to update role: ' + err.message);
+            }
         });
     }
     panel.style.display = 'flex';

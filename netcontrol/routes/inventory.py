@@ -282,12 +282,13 @@ async def _sync_group_hosts(
         existing = existing_by_ip.get(ip)
         model = discovered.get("model", "")
         sw_version = discovered.get("software_version", "")
+        category = discovered.get("device_category", "")
         if existing is None:
             _validate_host_ip(discovered["ip_address"])
             new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
             await db.update_host_status(new_id, discovered["status"])
-            if model or sw_version:
-                await db.update_host_device_info(new_id, model, sw_version)
+            if model or sw_version or category:
+                await db.update_host_device_info(new_id, model, sw_version, category)
             # Auto-apply graph templates to newly discovered host
             try:
                 await db.apply_graph_templates_to_host(new_id)
@@ -318,10 +319,11 @@ async def _sync_group_hosts(
             updated += 1
         # Don't blank out model/version with empty values — only update
         # when discovery actually returned data (e.g. via SNMP sysDescr).
-        if model or sw_version:
+        if model or sw_version or category:
             effective_model = model or existing.get("model", "")
             effective_sw = sw_version or existing.get("software_version", "")
-            await db.update_host_device_info(existing["id"], effective_model, effective_sw)
+            effective_cat = category or existing.get("device_category", "")
+            await db.update_host_device_info(existing["id"], effective_model, effective_sw, effective_cat)
         await db.update_host_status(existing["id"], discovered["status"])
 
     if remove_absent:
@@ -626,7 +628,12 @@ async def list_hosts(group_id: int):
 @router.post("/api/inventory/{group_id}/hosts", status_code=201)
 async def add_host(group_id: int, body: HostCreate):
     _validate_host_ip(body.ip_address)
-    hid = await db.add_host(group_id, body.hostname, body.ip_address, body.device_type)
+    try:
+        hid = await db.add_host(group_id, body.hostname, body.ip_address, body.device_type)
+    except Exception as exc:
+        if "UNIQUE constraint failed" in str(exc) or "duplicate key" in str(exc):
+            raise HTTPException(409, "A host with that IP address already exists in this group")
+        raise
     # Auto-apply graph templates to manually added host
     try:
         await db.apply_graph_templates_to_host(hid)
@@ -640,6 +647,26 @@ async def update_host(host_id: int, body: HostUpdate):
     if body.ip_address:
         _validate_host_ip(body.ip_address)
     await db.update_host(host_id, body.hostname, body.ip_address, body.device_type)
+    return {"ok": True}
+
+
+_VALID_CATEGORIES = {"router", "switch", "firewall", "wireless", "wlc", "phone", "server", ""}
+
+
+@router.patch("/api/hosts/{host_id}/category")
+async def update_host_category(host_id: int, body: dict):
+    category = str(body.get("device_category", "")).strip().lower()
+    if category not in _VALID_CATEGORIES:
+        raise HTTPException(400, "Invalid device category")
+    _db = await db.get_db()
+    try:
+        await _db.execute(
+            "UPDATE hosts SET device_category = ? WHERE id = ?",
+            (category, host_id),
+        )
+        await _db.commit()
+    finally:
+        await _db.close()
     return {"ok": True}
 
 

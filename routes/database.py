@@ -2035,14 +2035,21 @@ async def update_host_status(host_id: int, status: str):
         await db.close()
 
 
-async def update_host_device_info(host_id: int, model: str, software_version: str):
-    """Update the model and software_version fields for a host."""
+async def update_host_device_info(host_id: int, model: str, software_version: str,
+                                  device_category: str = ""):
+    """Update the model, software_version, and device_category fields for a host."""
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE hosts SET model = ?, software_version = ? WHERE id = ?",
-            (model, software_version, host_id),
-        )
+        if device_category:
+            await db.execute(
+                "UPDATE hosts SET model = ?, software_version = ?, device_category = ? WHERE id = ?",
+                (model, software_version, device_category, host_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE hosts SET model = ?, software_version = ? WHERE id = ?",
+                (model, software_version, host_id),
+            )
         await db.commit()
     finally:
         await db.close()
