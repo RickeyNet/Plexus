@@ -1265,7 +1265,17 @@ async def dashboard():
     stats = await db.get_dashboard_stats()
     recent_jobs = await db.get_all_jobs(limit=5)
     groups = await db.get_all_groups()
-    return {"stats": stats, "recent_jobs": recent_jobs, "groups": groups}
+    monitoring = await db.get_monitoring_summary()
+    latest_polls = await db.get_latest_monitoring_polls()
+    alerts = await db.get_monitoring_alerts(acknowledged=False, limit=50)
+    return {
+        "stats": stats,
+        "recent_jobs": recent_jobs,
+        "groups": groups,
+        "monitoring": monitoring,
+        "device_health": latest_polls,
+        "open_alerts": alerts,
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════

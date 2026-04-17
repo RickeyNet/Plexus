@@ -120,6 +120,42 @@ function templateDashboard() {
         </div>
     </div>
 
+    <!-- Network Health Overview (SolarWinds-style) -->
+    <div class="section" id="network-health-section">
+        <div class="page-header" style="margin-bottom: 1rem;">
+            <h3>Network Health Overview</h3>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+                <select id="health-group-filter" class="form-select" style="min-width:160px; font-size:0.85rem;">
+                    <option value="">All Groups</option>
+                </select>
+                <select id="health-sort" class="form-select" style="min-width:140px; font-size:0.85rem;">
+                    <option value="severity">Severity</option>
+                    <option value="name">Name A-Z</option>
+                    <option value="cpu">CPU Usage</option>
+                    <option value="memory">Memory Usage</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Health summary tiles -->
+        <div id="health-summary-tiles" class="health-summary-tiles">
+            ${skel(4, 'min-height:80px;')}
+        </div>
+
+        <!-- Device status table -->
+        <div id="device-health-table-wrap" class="device-health-table-wrap" style="margin-top:1rem;">
+            ${skel(2)}
+        </div>
+    </div>
+
+    <!-- Recent Alerts -->
+    <div class="section" id="dashboard-alerts-section">
+        <h3>Active Alerts</h3>
+        <div id="dashboard-alerts-list">
+            ${skel(2)}
+        </div>
+    </div>
+
     <!-- Custom Dashboards Section -->
     <div id="dashboard-default-content-end"></div>
     <div id="dashboards-list-view" class="section">
