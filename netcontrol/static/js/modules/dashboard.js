@@ -37,26 +37,20 @@ async function loadDashboard(_options = {}) {
         const data = await api.getDashboard();
         dashboardData = data;
 
-        const groups = data.stats?.total_groups || 0;
         const hosts = data.stats?.total_hosts || 0;
         const playbooks = data.stats?.total_playbooks || 0;
         const jobs = data.stats?.total_jobs || 0;
 
         // Animate stats
-        animateCounter('stat-groups', groups);
         animateCounter('stat-hosts', hosts);
         animateCounter('stat-playbooks', playbooks);
         animateCounter('stat-jobs', jobs);
 
         // Animate ring charts — use a sensible max so partial rings look meaningful
-        const ringMax = Math.max(groups, hosts, playbooks, jobs, 1);
-        animateRing('ring-groups', groups, ringMax);
+        const ringMax = Math.max(hosts, playbooks, jobs, 1);
         animateRing('ring-hosts', hosts, ringMax);
         animateRing('ring-playbooks', playbooks, ringMax);
         animateRing('ring-jobs', jobs, ringMax);
-
-        // Render groups overview
-        renderGroupsOverview(data.groups || []);
 
         // Render network health overview
         populateGroupFilter(data.groups || []);
@@ -105,24 +99,6 @@ function animateRing(elementId, value, maxValue) {
     requestAnimationFrame(() => {
         el.style.strokeDashoffset = offset;
     });
-}
-
-function renderGroupsOverview(groups) {
-    const container = document.getElementById('groups-overview');
-    if (!groups.length) {
-        container.innerHTML = emptyStateHTML('No inventory groups', 'inventory');
-        return;
-    }
-
-    container.innerHTML = groups.map((group, i) => `
-        <div class="card card-clickable animate-in" style="animation-delay: ${i * 0.06}s" onclick="goToInventory()">
-            <div class="card-title">${escapeHtml(group.name)}</div>
-            <div class="card-description">${escapeHtml(group.description || '')}</div>
-            <div class="card-description" style="margin-top: 0.5rem;">
-                ${group.host_count || 0} host(s)
-            </div>
-        </div>
-    `).join('');
 }
 
 window.goToInventory = function() {
