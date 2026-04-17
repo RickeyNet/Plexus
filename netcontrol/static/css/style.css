@@ -703,6 +703,205 @@
     --topo-dim-edge-hi: rgba(170, 180, 170, 0.4);
 }
 
+/* ─── Voyager (LCARS) ─── */
+[data-theme="voyager"] {
+    --primary: #FF9900;
+    --primary-dark: #CC7A00;
+    --primary-light: #FFBB44;
+    --secondary: #9999CC;
+    --success: #33CC99;
+    --warning: #FFCC00;
+    --danger: #CC3333;
+    --bg: #0C0C1E;
+    --bg-secondary: #111128;
+    --bg-dark: #070714;
+    --card-bg: #161636;
+    --card-bg-hover: #1E1E44;
+    --text: #E0DCCF;
+    --text-light: #CCC8BC;
+    --text-muted: #8888AA;
+    --border: #2A2A50;
+    --border-light: #3A3A60;
+    --primary-soft: rgba(255, 153, 0, 0.12);
+    --primary-soft-strong: rgba(255, 153, 0, 0.24);
+    --primary-glow: rgba(255, 153, 0, 0.22);
+    --overlay: rgba(6, 6, 18, 0.88);
+    --shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(255, 153, 0, 0.06);
+    --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.6), 0 4px 10px rgba(255, 153, 0, 0.08);
+    --topo-accent-rgb: 255, 153, 0;
+
+    --topo-cisco-bg: #1a1a40;       --topo-cisco-border: #FF9900;
+    --topo-cisco-hi-bg: #24244e;    --topo-cisco-hi-border: #FFBB44;
+    --topo-juniper-bg: #0f2a28;     --topo-juniper-border: #33CC99;
+    --topo-juniper-hi-bg: #163a36;  --topo-juniper-hi-border: #66DDbb;
+    --topo-arista-bg: #2a2a10;      --topo-arista-border: #FFCC00;
+    --topo-arista-hi-bg: #3a3a18;   --topo-arista-hi-border: #FFdd44;
+    --topo-fortinet-bg: #2a0f0f;    --topo-fortinet-border: #CC3333;
+    --topo-fortinet-hi-bg: #3a1818; --topo-fortinet-hi-border: #EE5555;
+    --topo-unknown-bg: #1a1a2e;     --topo-unknown-border: #666688;
+    --topo-unknown-hi-bg: #24243c;  --topo-unknown-hi-border: #8888AA;
+
+    --topo-edge-cdp: #FF9900;       --topo-edge-cdp-hi: #FFBB44;
+    --topo-edge-lldp: #33CC99;      --topo-edge-lldp-hi: #66DDbb;
+    --topo-edge-ospf: #FFCC00;      --topo-edge-ospf-hi: #FFdd44;
+    --topo-edge-bgp: #CC99CC;       --topo-edge-bgp-hi: #DDbbDD;
+
+    --topo-path-glow: rgba(255, 153, 0, 0.55);
+    --topo-dim-bg: rgba(12, 12, 30, 0.5);
+    --topo-dim-border: rgba(42, 42, 80, 0.5);
+    --topo-dim-edge: rgba(42, 42, 80, 0.25);
+    --topo-dim-edge-hi: rgba(42, 42, 80, 0.35);
+}
+
+/* LCARS-style element overrides for Star Trek theme */
+[data-theme="voyager"] .sidebar {
+    background: linear-gradient(180deg, #0A0A1A 0%, #0E0E24 100%);
+    border-right: 3px solid #FF9900;
+}
+
+[data-theme="voyager"] .nav-link {
+    border-radius: 0 20px 20px 0;
+    margin-right: 8px;
+    transition: all 0.2s ease;
+}
+
+[data-theme="voyager"] .nav-link:hover {
+    background: rgba(255, 153, 0, 0.15);
+}
+
+[data-theme="voyager"] .nav-link.active {
+    background: linear-gradient(90deg, rgba(255, 153, 0, 0.25) 0%, rgba(153, 153, 204, 0.10) 100%);
+    border-left: none;
+    box-shadow: inset 4px 0 0 #FF9900, 0 0 16px rgba(255, 153, 0, 0.15);
+}
+
+[data-theme="voyager"] .nav-brand-text {
+    color: #FF9900;
+    text-shadow: 0 0 14px rgba(255, 153, 0, 0.4);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+[data-theme="voyager"] .card {
+    border: 1px solid #2A2A50;
+    border-left: 4px solid #FF9900;
+    border-radius: 0 12px 12px 0;
+    background: linear-gradient(135deg, #161636 0%, #1a1a3e 100%);
+}
+
+[data-theme="voyager"] .card:hover {
+    border-left-color: #FFBB44;
+    box-shadow: 0 0 20px rgba(255, 153, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="voyager"] .btn-primary {
+    background: linear-gradient(135deg, #FF9900 0%, #CC7A00 100%);
+    color: #0C0C1E;
+    font-weight: 600;
+    border-radius: 20px;
+    border: none;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    box-shadow: 0 0 10px rgba(255, 153, 0, 0.25);
+}
+
+[data-theme="voyager"] .btn-primary:hover {
+    background: linear-gradient(135deg, #FFBB44 0%, #FF9900 100%);
+    box-shadow: 0 0 18px rgba(255, 153, 0, 0.4);
+}
+
+[data-theme="voyager"] .page h2 {
+    color: #FF9900;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    text-shadow: 0 0 18px rgba(255, 153, 0, 0.3);
+}
+
+[data-theme="voyager"] .stat-value {
+    color: #FFBB44;
+    text-shadow: 0 0 12px rgba(255, 153, 0, 0.35);
+}
+
+[data-theme="voyager"] .stat-ring-fill {
+    stroke: #FF9900;
+    filter: drop-shadow(0 0 4px rgba(255, 153, 0, 0.5));
+}
+
+[data-theme="voyager"] .stat-ring-value {
+    fill: #FFBB44;
+}
+
+[data-theme="voyager"] .data-table th {
+    background: rgba(255, 153, 0, 0.12);
+    color: #FF9900;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.8em;
+    border-bottom: 2px solid #FF9900;
+}
+
+[data-theme="voyager"] .data-table td {
+    border-bottom: 1px solid rgba(42, 42, 80, 0.5);
+}
+
+[data-theme="voyager"] .data-table tr:hover td {
+    background: rgba(255, 153, 0, 0.06);
+}
+
+[data-theme="voyager"] .badge {
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 0.72em;
+}
+
+[data-theme="voyager"] .badge-success {
+    background: rgba(51, 204, 153, 0.25);
+    border: 1px solid rgba(51, 204, 153, 0.4);
+    color: #66DDbb;
+}
+
+[data-theme="voyager"] .badge-warning {
+    background: rgba(255, 204, 0, 0.2);
+    border: 1px solid rgba(255, 204, 0, 0.35);
+    color: #FFdd55;
+}
+
+[data-theme="voyager"] .badge-danger,
+[data-theme="voyager"] .badge-error {
+    background: rgba(204, 51, 51, 0.25);
+    border: 1px solid rgba(204, 51, 51, 0.4);
+    color: #EE6666;
+}
+
+[data-theme="voyager"] .badge-info {
+    background: rgba(153, 153, 204, 0.2);
+    border: 1px solid rgba(153, 153, 204, 0.35);
+    color: #bbbbDD;
+}
+
+[data-theme="voyager"] .login-card {
+    background: linear-gradient(145deg, #12122e 0%, #1a1a40 100%);
+    border: 1px solid #2A2A50;
+    border-top: 4px solid #FF9900;
+    border-radius: 0 0 16px 16px;
+    box-shadow: 0 0 40px rgba(255, 153, 0, 0.1), 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+[data-theme="voyager"] .form-input,
+[data-theme="voyager"] .form-select {
+    background: #0E0E24;
+    border: 1px solid #2A2A50;
+    border-radius: 8px;
+    color: #E0DCCF;
+}
+
+[data-theme="voyager"] .form-input:focus,
+[data-theme="voyager"] .form-select:focus {
+    border-color: #FF9900;
+    box-shadow: 0 0 8px rgba(255, 153, 0, 0.25);
+}
+
 /* Theme-specific space-depth tuning */
 [data-theme="forest"] {
     --space-bg-1: #050a07;
@@ -786,6 +985,18 @@
     --space-star-far-rgb: 105, 130, 110;
     --space-star-near-rgb: 220, 235, 220;
     --space-intensity-base: 0.35;
+}
+
+[data-theme="voyager"] {
+    --space-bg-1: #060618;
+    --space-bg-2: #0C0C28;
+    --space-bg-3: #18103A;
+    --space-nebula-a: rgba(255, 153, 0, 0.18);
+    --space-nebula-b: rgba(153, 153, 204, 0.14);
+    --space-nebula-c: rgba(204, 153, 204, 0.10);
+    --space-star-far-rgb: 180, 170, 140;
+    --space-star-near-rgb: 255, 240, 200;
+    --space-intensity-base: 0.85;
 }
 
 body {
