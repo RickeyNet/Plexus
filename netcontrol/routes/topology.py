@@ -6,6 +6,8 @@ import asyncio
 import json
 import os
 
+import re
+
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -22,6 +24,30 @@ admin_router = APIRouter()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+_IFACE_ABBREV = [
+    (re.compile(r"twentyfivegige(?:thernet)?", re.I), "25g"),
+    (re.compile(r"hundredgige(?:thernet)?", re.I), "100g"),
+    (re.compile(r"fortygigabitethernet", re.I), "40g"),
+    (re.compile(r"tengigabitethernet", re.I), "te"),
+    (re.compile(r"twogigabitethernet", re.I), "2g"),
+    (re.compile(r"fivegigabitethernet", re.I), "5g"),
+    (re.compile(r"gigabitethernet", re.I), "gi"),
+    (re.compile(r"fastethernet", re.I), "fa"),
+    (re.compile(r"port-channel", re.I), "po"),
+    (re.compile(r"ethernet", re.I), "eth"),
+]
+
+
+def _normalize_iface(name: str) -> str:
+    """Canonicalize an interface name for dedup comparison.
+
+    E.g. 'GigabitEthernet1/0/46' and 'Gi1/0/46' both become 'gi1/0/46'.
+    """
+    n = name.strip().lower().replace(" ", "")
+    for pattern, replacement in _IFACE_ABBREV:
+        n = pattern.sub(replacement, n)
+    return n
 
 
 def _normalize_link_key(
@@ -959,6 +985,47 @@ async def get_topology(group_id: int | None = Query(default=None)):
         change_count = await db.get_topology_changes_count(unacknowledged_only=True)
 
         # Build edges + external nodes
+        # Deduplicate bidirectional links: when both A→B and B→A are
+        # discovered via CDP, keep only the first occurrence.  We normalise
+        # interface names so "GigabitEthernet1/0/46" and "Gi1/0/46" match.
+        #
+        # Because target_host_id may not always be resolved (CDP-reported
+        # hostname can include domain suffixes the DB resolver doesn't match),
+        # one direction may use int host IDs while the reverse uses "ext_..."
+        # string IDs for the same physical device.  We build a mapping from
+        # ext_ keys → inventory host IDs so the dedup key is consistent.
+        #
+        # We also handle duplicate inventory hosts (same hostname, different
+        # DB IDs) by mapping all IDs to the lowest canonical ID.
+        _ext_to_host: dict[str, int] = {}
+        _dup_host_map: dict[int, int] = {}  # duplicate host_id -> canonical host_id
+        _hostname_to_canonical: dict[str, int] = {}
+        for nid, ndata in nodes_by_id.items():
+            if isinstance(nid, int):
+                norm = ndata["label"].strip().lower().split(".")[0]
+                ext_key_for = f"ext_{norm}"
+                _ext_to_host[ext_key_for] = nid
+                # Track duplicate inventory hosts by hostname
+                if norm in _hostname_to_canonical:
+                    canonical = _hostname_to_canonical[norm]
+                    _dup_host_map[nid] = canonical
+                else:
+                    _hostname_to_canonical[norm] = nid
+
+        # Remove duplicate inventory nodes (keep the canonical one)
+        for dup_id in _dup_host_map:
+            nodes_by_id.pop(dup_id, None)
+
+        def _canonical_id(node_id) -> str:
+            """Map ext_ and duplicate-host nodes to canonical host ID."""
+            if isinstance(node_id, int) and node_id in _dup_host_map:
+                return str(_dup_host_map[node_id])
+            if isinstance(node_id, str) and node_id in _ext_to_host:
+                return str(_ext_to_host[node_id])
+            return str(node_id)
+
+        seen_edge_keys: set[tuple] = set()
+
         for link in links:
             src_id = link["source_host_id"]
             tgt_host_id = link.get("target_host_id")
@@ -989,6 +1056,18 @@ async def get_topology(group_id: int | None = Query(default=None)):
 
             src_iface = link.get("source_interface", "")
             tgt_iface = link.get("target_interface", "")
+
+            # Build a direction-independent key for dedup: sort the two
+            # endpoint tuples so A→B and B→A produce the same key.
+            norm_src_iface = _normalize_iface(src_iface)
+            norm_tgt_iface = _normalize_iface(tgt_iface)
+            endpoint_a = (_canonical_id(src_id), norm_src_iface)
+            endpoint_b = (_canonical_id(tgt_id), norm_tgt_iface)
+            edge_key = (min(endpoint_a, endpoint_b), max(endpoint_a, endpoint_b))
+            if edge_key in seen_edge_keys:
+                continue
+            seen_edge_keys.add(edge_key)
+
             label_parts = []
             if src_iface:
                 label_parts.append(src_iface)
@@ -996,10 +1075,15 @@ async def get_topology(group_id: int | None = Query(default=None)):
                 label_parts.append(tgt_iface)
             edge_label = " -- ".join(label_parts) if label_parts else ""
 
+            # Remap duplicate host IDs to canonical IDs so edges
+            # reference nodes that exist in the output node list.
+            eff_src = _dup_host_map.get(src_id, src_id)
+            eff_tgt = _dup_host_map.get(tgt_id, tgt_id) if isinstance(tgt_id, int) else tgt_id
+
             edge_data = {
                 "id": link["id"],
-                "from": src_id,
-                "to": tgt_id,
+                "from": eff_src,
+                "to": eff_tgt,
                 "label": edge_label,
                 "protocol": link.get("protocol", "cdp"),
                 "source_interface": src_iface,
