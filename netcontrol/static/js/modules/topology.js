@@ -284,6 +284,7 @@ function _refreshTopologyEdgeStyles() {
             };
         });
         edgesDS.update(updates);
+        _topologyNetwork.redraw();
     }
 }
 
@@ -1532,10 +1533,15 @@ function exportTopologyPNG() {
     const canvas = document.getElementById('topology-canvas')?.querySelector('canvas');
     if (!canvas) { showToast('Canvas not found', 'warning'); return; }
     try {
-        const headerHeight = 48;
+        // Render at 3× resolution for crisp print output
+        const scale = 3;
+        const origW = canvas.width;
+        const origH = canvas.height;
+
+        const headerHeight = 60 * scale;
         const out = document.createElement('canvas');
-        out.width = canvas.width;
-        out.height = canvas.height + headerHeight;
+        out.width = origW * scale;
+        out.height = origH * scale + headerHeight;
         const ctx = out.getContext('2d');
 
         // White background
@@ -1549,15 +1555,70 @@ function exportTopologyPNG() {
         ctx.fillStyle = '#f5f5f5';
         ctx.fillRect(0, 0, out.width, headerHeight);
         ctx.fillStyle = '#333';
-        ctx.font = 'bold 16px Inter, sans-serif';
+        ctx.font = `bold ${20 * scale}px Inter, sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText(`Network Topology — ${groupName}`, out.width / 2, 22);
-        ctx.font = '11px Inter, sans-serif';
+        ctx.fillText(`Network Topology — ${groupName}`, out.width / 2, 28 * scale);
+        ctx.font = `${13 * scale}px Inter, sans-serif`;
         ctx.fillStyle = '#888';
-        ctx.fillText(dateStr, out.width / 2, 38);
+        ctx.fillText(dateStr, out.width / 2, 48 * scale);
 
-        // Draw the topology canvas below the header
-        ctx.drawImage(canvas, 0, headerHeight);
+        // Draw the topology canvas scaled up below the header.
+        // drawImage with destination size lets the browser interpolate, but
+        // for truly sharp output we ask vis.js to re-render into a
+        // high-res off-screen canvas.
+        const hiRes = document.createElement('canvas');
+        hiRes.width = origW * scale;
+        hiRes.height = origH * scale;
+        const hiCtx = hiRes.getContext('2d');
+        hiCtx.scale(scale, scale);
+
+        // vis.js draws relative to the current view — translate so the
+        // full network bounding box is captured at 3× resolution.
+        const bb = _topologyNetwork.getBoundingBox
+            ? (() => {
+                  // Get bounding box of all nodes
+                  const positions = _topologyNetwork.getPositions();
+                  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                  for (const id of Object.keys(positions)) {
+                      const p = positions[id];
+                      minX = Math.min(minX, p.x);
+                      minY = Math.min(minY, p.y);
+                      maxX = Math.max(maxX, p.x);
+                      maxY = Math.max(maxY, p.y);
+                  }
+                  return { minX, minY, maxX, maxY };
+              })()
+            : null;
+
+        if (bb && isFinite(bb.minX)) {
+            // Compute scale to fit all nodes in the output canvas with padding
+            const pad = 80;
+            const nw = bb.maxX - bb.minX + pad * 2;
+            const nh = bb.maxY - bb.minY + pad * 2;
+            const cw = origW;
+            const ch = origH;
+            const fitScale = Math.min(cw / nw, ch / nh, 1.5);
+            const cx = (bb.minX + bb.maxX) / 2;
+            const cy = (bb.minY + bb.maxY) / 2;
+
+            // Use vis.js moveTo to set view, redraw, then capture
+            const origView = _topologyNetwork.getViewPosition();
+            const origScale = _topologyNetwork.getScale();
+            _topologyNetwork.moveTo({ position: { x: cx, y: cy }, scale: fitScale, animation: false });
+            _topologyNetwork.redraw();
+
+            // Capture the freshly-drawn canvas at high res
+            hiCtx.drawImage(canvas, 0, 0);
+            ctx.drawImage(hiRes, 0, headerHeight);
+
+            // Restore original view
+            _topologyNetwork.moveTo({ position: origView, scale: origScale, animation: false });
+            _topologyNetwork.redraw();
+        } else {
+            // Fallback: scale the existing canvas
+            hiCtx.drawImage(canvas, 0, 0);
+            ctx.drawImage(hiRes, 0, headerHeight);
+        }
 
         const link = document.createElement('a');
         link.download = `topology-${new Date().toISOString().slice(0, 10)}.png`;
@@ -1698,7 +1759,7 @@ function _updateTopologyChangeBadge(count) {
 
 async function showTopologyChanges() {
     try {
-        const resp = await api.getTopologyChanges(false, 200);
+        const resp = await api.getTopologyChanges(true, 200);
         const changes = resp.changes || [];
         if (changes.length === 0) {
             showToast('No topology changes recorded', 'info');
