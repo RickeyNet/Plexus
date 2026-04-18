@@ -3,7 +3,7 @@
  * Lazy-loaded when user navigates to #inventory
  */
 import * as api from '../api.js';
-import { getCsrfToken } from '../api.js';
+import { getCsrfToken, invalidateApiCache } from '../api.js';
 import {
     listViewState, escapeHtml, showError, showSuccess, showToast,
     showModal, closeAllModals, showConfirm, formatDate, navigateToPage,
@@ -101,7 +101,7 @@ function renderInventoryGroups(groups) {
     );
 
     // Skip render if data hasn't changed (prevents DOM thrash on redundant search/sort)
-    const fingerprint = JSON.stringify(groups.map(g => g.id)) + '|' + query + '|' + (listViewState.inventory.sort || '');
+    const fingerprint = JSON.stringify(groups.map(g => [g.id, (g.hosts || []).length])) + '|' + query + '|' + (listViewState.inventory.sort || '');
     if (fingerprint === _lastInventoryFingerprint) return;
     _lastInventoryFingerprint = fingerprint;
 
@@ -1024,6 +1024,7 @@ window.addHost = async function(e, groupId) {
     const formData = new FormData(e.target);
     try {
         await api.addHost(groupId, formData.get('hostname'), formData.get('ip_address'), formData.get('device_type'));
+        invalidateApiCache('/inventory');
         closeAllModals();
         await loadInventory();
         showSuccess('Host added successfully');
@@ -1040,6 +1041,7 @@ window.deleteGroup = async function(groupId) {
     if (!await showConfirm('Delete Group', 'This will remove the group and all its hosts. This action cannot be undone.')) return;
     try {
         await api.deleteGroup(groupId);
+        invalidateApiCache('/inventory');
         await loadInventory();
         showSuccess('Group deleted successfully');
     } catch (error) {
@@ -1051,6 +1053,7 @@ window.deleteHost = async function(groupId, hostId) {
     if (!await showConfirm('Delete Host', 'This will permanently remove this host from the inventory.')) return;
     try {
         await api.deleteHost(groupId, hostId);
+        invalidateApiCache('/inventory');
         await loadInventory();
         showSuccess('Host deleted successfully');
     } catch (error) {
@@ -1087,6 +1090,7 @@ window.bulkDeleteHosts = async function(groupId) {
     if (!await showConfirm('Delete Hosts', `This will permanently remove ${hostIds.length} host(s) from the inventory.`)) return;
     try {
         await api.bulkDeleteHosts(hostIds);
+        invalidateApiCache('/inventory');
         await loadInventory();
         showSuccess(`${hostIds.length} host(s) deleted.`);
     } catch (error) {

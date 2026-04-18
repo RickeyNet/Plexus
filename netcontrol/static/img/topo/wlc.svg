@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Wireless Controller icon: switch + antenna -->
+  <rect x="6" y="24" width="52" height="24" rx="4" stroke="#42a5f5" stroke-width="3" fill="#0d47a1"/>
+  <!-- Ports -->
+  <rect x="13" y="30" width="6" height="6" rx="1" fill="#42a5f5" opacity="0.8"/>
+  <rect x="22" y="30" width="6" height="6" rx="1" fill="#42a5f5" opacity="0.8"/>
+  <rect x="31" y="30" width="6" height="6" rx="1" fill="#42a5f5" opacity="0.8"/>
+  <rect x="40" y="30" width="6" height="6" rx="1" fill="#42a5f5" opacity="0.8"/>
+  <!-- LED -->
+  <circle cx="51" cy="33" r="2" fill="#69f0ae"/>
+  <!-- Signal waves above -->
+  <path d="M24 20 A12 12 0 0 1 40 20" stroke="#42a5f5" stroke-width="2" fill="none" opacity="0.7"/>
+  <path d="M18 14 A20 20 0 0 1 46 14" stroke="#42a5f5" stroke-width="2" fill="none" opacity="0.4"/>
+  <!-- Antenna dot -->
+  <circle cx="32" cy="20" r="2.5" fill="#42a5f5"/>
+</svg>
