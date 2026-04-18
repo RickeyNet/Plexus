@@ -3,6 +3,7 @@
  * Lazy-loaded when user navigates to #topology
  */
 import * as api from '../api.js';
+import { invalidateApiCache } from '../api.js';
 import {
     escapeHtml, showToast, showError, showModal, showConfirm, showSuccess,
     PlexusChart, isReducedMotion, navigateToPage, navigateToDeviceDetail,
@@ -966,14 +967,16 @@ function showTopologyNodeDetails(node, allEdges) {
 
     if (!node.in_inventory && node.ip) {
         html += `<button class="btn btn-primary btn-sm topology-add-inventory-btn" style="margin-top:1rem; width:100%;"
-                         data-hostname="${esc(node.label)}" data-ip="${esc(node.ip)}">Add to Inventory</button>`;
+                         data-hostname="${esc(node.label)}" data-ip="${esc(node.ip)}" data-node-id="${esc(String(node.id))}">Add to Inventory</button>`;
     }
 
     content.innerHTML = html;
     const addBtn = content.querySelector('.topology-add-inventory-btn');
     if (addBtn) {
         addBtn.addEventListener('click', () => {
-            addTopologyNodeToInventory(addBtn.dataset.hostname, addBtn.dataset.ip);
+            addBtn.disabled = true;
+            addBtn.textContent = 'Loading...';
+            addTopologyNodeToInventory(addBtn.dataset.hostname, addBtn.dataset.ip, addBtn.dataset.nodeId);
         });
     }
     const catSelect = content.querySelector('.topology-category-select');
@@ -1005,22 +1008,129 @@ function closeTopologyDetails() {
     document.getElementById('topology-details').style.display = 'none';
 }
 
-async function addTopologyNodeToInventory(hostname, ip) {
+async function addTopologyNodeToInventory(hostname, ip, extNodeId) {
     try {
         const groups = await api.getInventoryGroups(false);
-        if (!groups || groups.length === 0) {
-            showError('No inventory groups available. Create a group first.');
-            return;
-        }
-        // Add to the first group by default
-        await api.addHost(groups[0].id, hostname, ip, 'unknown');
-        showToast(`Added ${hostname} (${ip}) to ${groups[0].name}`, 'success');
-        invalidatePageCache('topology');
-        invalidatePageCache('inventory');
-        await loadTopology({ preserveContent: true });
+        _showAddToGroupModal(hostname, ip, groups || [], extNodeId);
     } catch (error) {
-        showError('Failed to add host: ' + error.message);
+        showError('Failed to load groups: ' + error.message);
     }
+}
+
+function _showAddToGroupModal(hostname, ip, groups, extNodeId) {
+    const esc = escapeHtml;
+    const groupOptions = groups.map(g =>
+        `<option value="${g.id}">${esc(g.name)}</option>`
+    ).join('');
+    const hasGroups = groups.length > 0;
+
+    showModal('Add to Inventory', `
+        <div style="padding: 1rem;">
+            <p style="margin-bottom: 1rem; color: var(--text-muted);">
+                Adding <strong>${esc(hostname)}</strong> (${esc(ip)})
+            </p>
+            <div id="topo-add-group-select-row" style="display:${hasGroups ? 'flex' : 'none'}; align-items:center; gap:0.5rem; margin-bottom:1rem;">
+                <select id="topo-add-group-select" class="form-select" style="flex:1;">
+                    ${groupOptions}
+                </select>
+                <button class="btn btn-sm btn-secondary" id="topo-add-new-group-btn" title="Create new group" style="font-size:1.1rem; padding:0.25rem 0.6rem;">+</button>
+            </div>
+            <div id="topo-add-new-group-form" style="display:${hasGroups ? 'none' : 'flex'}; flex-direction:column; gap:0.5rem; margin-bottom:1rem;">
+                <label style="font-size:0.85rem; font-weight:500;">New Group Name</label>
+                <div style="display:flex; gap:0.5rem;">
+                    <input id="topo-add-new-group-name" class="form-input" type="text" placeholder="Group name" style="flex:1;" />
+                    <button class="btn btn-sm btn-primary" id="topo-add-create-group-btn">Create</button>
+                    ${hasGroups ? '<button class="btn btn-sm btn-secondary" id="topo-add-cancel-new-btn">Cancel</button>' : ''}
+                </div>
+            </div>
+            <button class="btn btn-primary" id="topo-add-confirm-btn" style="width:100%;${hasGroups ? '' : ' display:none;'}">
+                Add to Group
+            </button>
+        </div>
+    `);
+
+    const selectRow = document.getElementById('topo-add-group-select-row');
+    const newForm = document.getElementById('topo-add-new-group-form');
+    const confirmBtn = document.getElementById('topo-add-confirm-btn');
+    const select = document.getElementById('topo-add-group-select');
+
+    // Toggle to new group form
+    document.getElementById('topo-add-new-group-btn')?.addEventListener('click', () => {
+        selectRow.style.display = 'none';
+        newForm.style.display = 'flex';
+        confirmBtn.style.display = 'none';
+        document.getElementById('topo-add-new-group-name').focus();
+    });
+
+    // Cancel new group form
+    document.getElementById('topo-add-cancel-new-btn')?.addEventListener('click', () => {
+        selectRow.style.display = 'flex';
+        newForm.style.display = 'none';
+        confirmBtn.style.display = '';
+    });
+
+    // Create new group, then select it
+    document.getElementById('topo-add-create-group-btn')?.addEventListener('click', async () => {
+        const name = document.getElementById('topo-add-new-group-name').value.trim();
+        if (!name) { showError('Group name is required'); return; }
+        try {
+            const created = await api.createGroup(name);
+            invalidateApiCache('/inventory');
+            const opt = document.createElement('option');
+            opt.value = created.id;
+            opt.textContent = name;
+            select.appendChild(opt);
+            select.value = created.id;
+            selectRow.style.display = 'flex';
+            newForm.style.display = 'none';
+            confirmBtn.style.display = '';
+            showToast(`Group "${name}" created`, 'success');
+        } catch (err) {
+            showError('Failed to create group: ' + err.message);
+        }
+    });
+
+    // Confirm add to selected group
+    confirmBtn?.addEventListener('click', async () => {
+        const groupId = parseInt(select.value, 10);
+        const groupName = select.options[select.selectedIndex]?.textContent || '';
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Adding...';
+        // Capture the current canvas position of the ext_ node before it changes ID
+        let oldPos = null;
+        if (extNodeId && _topologyNetwork) {
+            try {
+                const positions = _topologyNetwork.getPositions([extNodeId]);
+                if (positions[extNodeId]) oldPos = positions[extNodeId];
+            } catch (_e) { /* node may not exist */ }
+        }
+        try {
+            const result = await api.addHost(groupId, hostname, ip, 'unknown');
+            // Save the old position under the new numeric host ID
+            if (oldPos && result && result.id) {
+                const newKey = String(result.id);
+                _topoSavedPositions[newKey] = { x: oldPos.x, y: oldPos.y };
+                // Also remove the old ext_ position
+                if (extNodeId) delete _topoSavedPositions[extNodeId];
+                api.saveTopologyPositions({
+                    [newKey]: { x: oldPos.x, y: oldPos.y },
+                    [extNodeId]: null,
+                }).catch(() => {});
+            }
+            invalidateApiCache('/inventory', '/topology');
+            invalidatePageCache('topology');
+            invalidatePageCache('inventory');
+            closeAllModals();
+            closeTopologyDetails();
+            showToast(`Added ${hostname} (${ip}) to ${groupName}`, 'success');
+            // Refresh topology data so node shows as in_inventory
+            await loadTopology({ preserveContent: true });
+        } catch (error) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Add to Group';
+            showError('Failed to add host: ' + error.message);
+        }
+    });
 }
 
 async function discoverTopology() {
