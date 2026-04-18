@@ -63,6 +63,53 @@ except Exception:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+# Model-string patterns → device category.  Order matters: first match wins.
+_CATEGORY_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # Cisco wireless controllers
+    (re.compile(r"C9800|AIR-CT|WLC|C3504", re.I), "wlc"),
+    # Cisco wireless APs
+    (re.compile(r"AIR-AP|AIR-CAP|C9120|C9130|C9136|C9162|C9164|CW916", re.I), "wireless"),
+    # Cisco IP phones
+    (re.compile(r"CP-\d|IP\s?Phone|SEP[0-9A-F]", re.I), "phone"),
+    # Cisco routers — ISR, ASR, CSR, NCS
+    (re.compile(r"ISR\d|ASR\d|CSR1|NCS-|C8[0-9]{3}|CISCO[0-9]{4}", re.I), "router"),
+    # Cisco switches — Catalyst 9xxx, 3xxx, 2xxx series
+    (re.compile(r"C9[0-9]{3}|C3[0-9]{3}|C2[0-9]{3}|WS-C|C1[01][0-9]{2}F?", re.I), "switch"),
+    # Cisco Nexus
+    (re.compile(r"N[3579]K|N[0-9]{4}|Nexus", re.I), "switch"),
+    # Fortinet — everything is a firewall appliance
+    (re.compile(r"forti", re.I), "firewall"),
+    # Juniper routers
+    (re.compile(r"MX\d|PTX|ACX|SRX[0-9]{4}", re.I), "router"),
+    # Juniper switches
+    (re.compile(r"EX\d|QFX", re.I), "switch"),
+    # Juniper firewalls (SRX3xx, SRX1500 etc.)
+    (re.compile(r"SRX[0-9]{2,3}$", re.I), "firewall"),
+    # Arista switches
+    (re.compile(r"DCS-|CCS-", re.I), "switch"),
+    # Palo Alto firewalls
+    (re.compile(r"PA-\d", re.I), "firewall"),
+    # Generic server patterns
+    (re.compile(r"UCS|PowerEdge|ProLiant|server", re.I), "server"),
+]
+
+
+def _infer_device_category(model: str, sys_descr: str, device_type: str) -> str:
+    """Infer a device category from model string, sysDescr, or device_type.
+
+    Returns one of: router, switch, firewall, wireless, wlc, phone, server,
+    or empty string (let the frontend fall back to device_type shape).
+    """
+    for text in (model, sys_descr):
+        for pattern, category in _CATEGORY_PATTERNS:
+            if pattern.search(text or ""):
+                return category
+    # Fallback: Fortinet device_type → firewall
+    if device_type == "fortinet":
+        return "firewall"
+    return ""
+
+
 def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
     lowered = (raw_text or "").lower()
     vendor = "unknown"
@@ -341,10 +388,12 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     # the software image name parsed from sysDescr (like CAT9K_LITE_IOSXE).
     if ent_model.strip():
         hw_model = ent_model.strip()
+    category = _infer_device_category(hw_model, sys_descr, detected_type)
     return {
         "hostname": sys_name or f"snmp-{ip_address.replace('.', '-')}",
         "ip_address": ip_address,
         "device_type": detected_type,
+        "device_category": category,
         "status": "online",
         "model": hw_model,
         "software_version": sw_version,

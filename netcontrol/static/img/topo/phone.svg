@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- IP Phone icon: handset -->
+  <circle cx="32" cy="32" r="22" stroke="#42a5f5" stroke-width="3" fill="#0d47a1"/>
+  <!-- Handset shape -->
+  <path d="M18 22 C18 18 22 16 26 18 L28 20 C29 21 29 24 27 25 L25 26 C24 27 24 28 25 30 L34 39 C36 40 37 40 38 39 L39 37 C40 35 43 35 44 36 L46 38 C48 42 46 46 42 46 L38 46 C30 46 20 36 18 28 Z" fill="#42a5f5"/>
+</svg>

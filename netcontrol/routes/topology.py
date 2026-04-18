@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 import netcontrol.routes.state as state
-from netcontrol.routes.snmp import _discover_neighbors, _snmp_walk  # noqa: F401
+from netcontrol.routes.snmp import _discover_neighbors, _infer_device_category, _snmp_walk  # noqa: F401
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 LOGGER = configure_logging("plexus.topology")
@@ -966,6 +966,8 @@ async def get_topology(group_id: int | None = Query(default=None)):
                 "label": h["hostname"],
                 "ip": h["ip_address"],
                 "device_type": h["device_type"],
+                "device_category": h.get("device_category", ""),
+                "model": h.get("model", ""),
                 "group_id": h["group_id"],
                 "group_name": group_name_map.get(h["group_id"], ""),
                 "status": h["status"],
@@ -1042,16 +1044,20 @@ async def get_topology(group_id: int | None = Query(default=None)):
                 ext_key = f"ext_{norm_name}" if norm_name else f"ext_{norm_ip}"
                 tgt_id = ext_key
                 if ext_key not in nodes_by_id:
+                    tgt_platform = link.get("target_platform", "")
+                    ext_category = _infer_device_category(tgt_platform, "", "unknown")
                     nodes_by_id[ext_key] = {
                         "id": ext_key,
                         "label": tgt_name or tgt_ip or "unknown",
                         "ip": tgt_ip,
                         "device_type": "unknown",
+                        "device_category": ext_category,
+                        "model": tgt_platform,
                         "group_id": None,
                         "group_name": "",
                         "status": "unknown",
                         "in_inventory": False,
-                        "platform": link.get("target_platform", ""),
+                        "platform": tgt_platform,
                     }
 
             src_iface = link.get("source_interface", "")

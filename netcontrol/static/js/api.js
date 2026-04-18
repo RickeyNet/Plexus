@@ -295,6 +295,13 @@ export async function updateHost(hostId, hostname, ipAddress, deviceType = 'cisc
     });
 }
 
+export async function updateHostCategory(hostId, deviceCategory) {
+    return apiRequest(`/hosts/${hostId}/category`, {
+        method: 'PATCH',
+        body: { device_category: deviceCategory },
+    });
+}
+
 export async function deleteHost(groupId, hostId) {
     return apiRequest(`/hosts/${hostId}`, {
         method: 'DELETE',
