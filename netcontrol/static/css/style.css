@@ -4330,6 +4330,17 @@ code {
     margin-bottom: 0;
 }
 
+/* Compliance last scan can be a long timestamp; allow it to wrap within the card. */
+#compliance-summary #compliance-stat-last {
+    flex-shrink: 1;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: right;
+    line-height: 1.25;
+    font-size: clamp(0.95rem, 0.8rem + 0.35vw, 1.1rem);
+}
+
 .drift-compliant { color: var(--success, #66bb6a) !important; }
 .drift-drifted { color: var(--danger, #ef5350) !important; }
 
