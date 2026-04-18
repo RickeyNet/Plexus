@@ -948,6 +948,27 @@ async def get_topology(group_id: int | None = Query(default=None)):
         else:
             hosts = []
 
+        # Also resolve external neighbor IPs to inventory hosts that were
+        # manually added (target_host_id is NULL but the host exists by IP).
+        existing_ids = {h["id"] for h in hosts}
+        ext_ips = {
+            link["target_ip"].strip()
+            for link in links
+            if link.get("target_ip") and not link.get("target_host_id")
+        }
+        if ext_ips:
+            _db = await db.get_db()
+            placeholders = ",".join("?" * len(ext_ips))
+            rows = await _db.execute_fetchall(
+                f"SELECT * FROM hosts WHERE ip_address IN ({placeholders})",
+                list(ext_ips),
+            )
+            for row in rows:
+                h = dict(row)
+                if h["id"] not in existing_ids:
+                    hosts.append(h)
+                    existing_ids.add(h["id"])
+
         # If filtering by group, also include all hosts in that group as nodes
         if group_id is not None:
             group_hosts = await db.get_hosts_for_group(group_id)
@@ -1002,11 +1023,16 @@ async def get_topology(group_id: int | None = Query(default=None)):
         _ext_to_host: dict[str, int] = {}
         _dup_host_map: dict[int, int] = {}  # duplicate host_id -> canonical host_id
         _hostname_to_canonical: dict[str, int] = {}
+        _ip_to_host: dict[str, int] = {}  # IP address -> host_id
         for nid, ndata in nodes_by_id.items():
             if isinstance(nid, int):
                 norm = ndata["label"].strip().lower().split(".")[0]
                 ext_key_for = f"ext_{norm}"
                 _ext_to_host[ext_key_for] = nid
+                # Build IP lookup for resolving external nodes
+                host_ip = (ndata.get("ip") or "").strip()
+                if host_ip:
+                    _ip_to_host[host_ip] = nid
                 # Track duplicate inventory hosts by hostname
                 if norm in _hostname_to_canonical:
                     canonical = _hostname_to_canonical[norm]
@@ -1042,23 +1068,32 @@ async def get_topology(group_id: int | None = Query(default=None)):
                 norm_name = tgt_name.strip().lower().split(".")[0] if tgt_name else ""
                 norm_ip = tgt_ip.strip() if tgt_ip else ""
                 ext_key = f"ext_{norm_name}" if norm_name else f"ext_{norm_ip}"
-                tgt_id = ext_key
-                if ext_key not in nodes_by_id:
-                    tgt_platform = link.get("target_platform", "")
-                    ext_category = _infer_device_category(tgt_platform, "", "unknown")
-                    nodes_by_id[ext_key] = {
-                        "id": ext_key,
-                        "label": tgt_name or tgt_ip or "unknown",
-                        "ip": tgt_ip,
-                        "device_type": "unknown",
-                        "device_category": ext_category,
-                        "model": tgt_platform,
-                        "group_id": None,
-                        "group_name": "",
-                        "status": "unknown",
-                        "in_inventory": False,
-                        "platform": tgt_platform,
-                    }
+
+                # Check if this external neighbor matches an inventory host
+                # by hostname or by IP address
+                matched_host_id = _ext_to_host.get(ext_key)
+                if not matched_host_id and norm_ip:
+                    matched_host_id = _ip_to_host.get(norm_ip)
+                if matched_host_id and matched_host_id in nodes_by_id:
+                    tgt_id = matched_host_id
+                else:
+                    tgt_id = ext_key
+                    if ext_key not in nodes_by_id:
+                        tgt_platform = link.get("target_platform", "")
+                        ext_category = _infer_device_category(tgt_platform, "", "unknown")
+                        nodes_by_id[ext_key] = {
+                            "id": ext_key,
+                            "label": tgt_name or tgt_ip or "unknown",
+                            "ip": tgt_ip,
+                            "device_type": "unknown",
+                            "device_category": ext_category,
+                            "model": tgt_platform,
+                            "group_id": None,
+                            "group_name": "",
+                            "status": "unknown",
+                            "in_inventory": False,
+                            "platform": tgt_platform,
+                        }
 
             src_iface = link.get("source_interface", "")
             tgt_iface = link.get("target_interface", "")
