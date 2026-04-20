@@ -281,7 +281,9 @@ async def test_flow_sync_config_get_and_update(tmp_path, monkeypatch):
     # GET config
     result = await cloud_visibility_module.get_cloud_flow_sync_config_api()
     assert "config" in result
+    assert "status" in result
     assert result["config"]["enabled"] is False
+    assert result["status"]["last_run_at"] == ""
 
     # PUT config
     from netcontrol.routes.cloud_visibility import CloudFlowSyncConfigUpdate
@@ -340,6 +342,14 @@ async def test_manual_pull_single_account(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert result["ingested"] == 1
     assert result["account_id"] == int(account["id"])
+    assert result["status"]["scope"] == "account"
+    assert result["status"]["source"] == "manual"
+    assert result["status"]["account_name"] == "AWS Manual Pull"
+    assert result["status"]["ingested"] == 1
+
+    cfg = await cloud_visibility_module.get_cloud_flow_sync_config_api()
+    assert cfg["status"]["account_id"] == int(account["id"])
+    assert cfg["status"]["source"] == "manual"
 
 
 @pytest.mark.asyncio
