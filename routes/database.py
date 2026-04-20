@@ -11452,3 +11452,163 @@ async def list_cloud_flow_sync_cursors() -> list[dict]:
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
+
+
+async def create_cloud_traffic_metrics_batch(rows: list[tuple]) -> int:
+    """Batch insert normalized cloud traffic metric rows.
+
+    Each tuple:
+      (account_id, provider, metric_name, metric_namespace, resource_uid,
+       direction, statistic, unit, metric_value, interval_start, interval_end,
+       metadata_json, source)
+    """
+    if not rows:
+        return 0
+    db = await get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO cloud_traffic_metrics
+               (account_id, provider, metric_name, metric_namespace, resource_uid,
+                direction, statistic, unit, metric_value, interval_start, interval_end,
+                metadata_json, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        await db.commit()
+        return len(rows)
+    finally:
+        await db.close()
+
+
+async def get_cloud_traffic_metric_summary(
+    account_id: int | None = None,
+    provider: str | None = None,
+    hours: int = 24,
+) -> dict:
+    db = await get_db()
+    try:
+        clauses = [
+            "interval_end >= datetime('now', ? || ' hours')",
+        ]
+        params: list = [f"-{max(1, int(hours))}"]
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(account_id)
+        if provider:
+            clauses.append("provider = ?")
+            params.append(provider)
+        where = " AND ".join(clauses)
+        cursor = await db.execute(
+            f"""SELECT COUNT(*) as sample_count,
+                       COUNT(DISTINCT metric_name) as metric_count,
+                       COUNT(DISTINCT resource_uid) as resource_count,
+                       COALESCE(SUM(metric_value), 0) as total_value,
+                       COALESCE(AVG(metric_value), 0) as avg_value,
+                       COALESCE(MIN(metric_value), 0) as min_value,
+                       COALESCE(MAX(metric_value), 0) as max_value,
+                       MIN(interval_start) as first_seen,
+                       MAX(interval_end) as last_seen
+                FROM cloud_traffic_metrics
+                WHERE {where}""",
+            tuple(params),
+        )
+        return row_to_dict(await cursor.fetchone()) or {
+            "sample_count": 0,
+            "metric_count": 0,
+            "resource_count": 0,
+            "total_value": 0,
+            "avg_value": 0,
+            "min_value": 0,
+            "max_value": 0,
+            "first_seen": None,
+            "last_seen": None,
+        }
+    finally:
+        await db.close()
+
+
+async def get_cloud_traffic_metric_timeline(
+    account_id: int | None = None,
+    provider: str | None = None,
+    metric_name: str | None = None,
+    hours: int = 24,
+    bucket_minutes: int = 5,
+) -> list[dict]:
+    bucket_minutes = max(1, min(int(bucket_minutes), 60))
+    db = await get_db()
+    try:
+        clauses = [
+            "interval_end >= datetime('now', ? || ' hours')",
+        ]
+        params: list = [f"-{max(1, int(hours))}"]
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(account_id)
+        if provider:
+            clauses.append("provider = ?")
+            params.append(provider)
+        if metric_name:
+            clauses.append("metric_name = ?")
+            params.append(metric_name)
+        where = " AND ".join(clauses)
+        cursor = await db.execute(
+            f"""SELECT
+                   strftime('%Y-%m-%dT%H:', interval_end) ||
+                   printf('%02d', (CAST(strftime('%M', interval_end) AS INTEGER) / {bucket_minutes}) * {bucket_minutes}) ||
+                   ':00' as bucket,
+                   COUNT(*) as sample_count,
+                   COALESCE(SUM(metric_value), 0) as total_value,
+                   COALESCE(AVG(metric_value), 0) as avg_value,
+                   COALESCE(MAX(metric_value), 0) as max_value
+               FROM cloud_traffic_metrics
+               WHERE {where}
+               GROUP BY bucket
+               ORDER BY bucket""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_cloud_traffic_metric_top_resources(
+    account_id: int | None = None,
+    provider: str | None = None,
+    metric_name: str | None = None,
+    hours: int = 24,
+    limit: int = 20,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses = [
+            "interval_end >= datetime('now', ? || ' hours')",
+        ]
+        params: list = [f"-{max(1, int(hours))}"]
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(account_id)
+        if provider:
+            clauses.append("provider = ?")
+            params.append(provider)
+        if metric_name:
+            clauses.append("metric_name = ?")
+            params.append(metric_name)
+        params.append(max(1, min(int(limit), 200)))
+        where = " AND ".join(clauses)
+        cursor = await db.execute(
+            f"""SELECT
+                   resource_uid,
+                   COUNT(*) as sample_count,
+                   COALESCE(SUM(metric_value), 0) as total_value,
+                   COALESCE(AVG(metric_value), 0) as avg_value,
+                   COALESCE(MAX(metric_value), 0) as max_value
+               FROM cloud_traffic_metrics
+               WHERE {where}
+               GROUP BY resource_uid
+               ORDER BY total_value DESC
+               LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()

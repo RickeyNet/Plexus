@@ -113,6 +113,19 @@ function _ensureCloudVisibilityLayout() {
             </div>
         </div>
 
+        <h3 style="margin:0.25rem 0 0.5rem;">Cloud Traffic Metrics</h3>
+        <div id="cloud-traffic-metric-summary" style="margin-bottom:1rem;"></div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1rem; margin-bottom:1rem;">
+            <div>
+                <h4 style="margin:0 0 0.45rem;">Top Resources</h4>
+                <div id="cloud-traffic-metric-top-resources"></div>
+            </div>
+            <div>
+                <h4 style="margin:0 0 0.45rem;">Metric Timeline</h4>
+                <div id="cloud-traffic-metric-timeline"></div>
+            </div>
+        </div>
+
         <h3 style="margin:0.25rem 0 0.5rem;">Cloud Accounts</h3>
         <div id="cloud-accounts-list" style="margin-bottom:1rem;"></div>
 
@@ -198,6 +211,14 @@ function _formatBytes(value) {
 
 function _formatCount(value) {
     return Number(value || 0).toLocaleString();
+}
+
+function _formatMetricValue(value) {
+    const numeric = Number(value) || 0;
+    if (Math.abs(numeric) >= 1000) {
+        return numeric.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+    return numeric.toFixed(2);
 }
 
 function _toIsoOrDash(raw) {
@@ -491,6 +512,75 @@ async function loadCloudFlowAnalytics({ preserveContent = false } = {}) {
     }
 }
 
+async function loadCloudTrafficMetricAnalytics({ preserveContent = false } = {}) {
+    const summaryEl = document.getElementById('cloud-traffic-metric-summary');
+    const resourcesEl = document.getElementById('cloud-traffic-metric-top-resources');
+    const timelineEl = document.getElementById('cloud-traffic-metric-timeline');
+    if (!summaryEl || !resourcesEl || !timelineEl) return;
+
+    if (!preserveContent) {
+        summaryEl.innerHTML = skeletonCards(1);
+        resourcesEl.innerHTML = skeletonCards(1);
+        timelineEl.innerHTML = skeletonCards(1);
+    }
+
+    const baseParams = _currentCloudQueryParams();
+    const limit = _currentTalkerLimit();
+    const bucketMinutes = _currentTimelineBucketMinutes();
+
+    const [summaryResp, topResourcesResp, timelineResp] = await Promise.all([
+        api.getCloudTrafficMetricSummary(baseParams),
+        api.getCloudTrafficMetricTopResources({ ...baseParams, limit }),
+        api.getCloudTrafficMetricTimeline({ ...baseParams, bucket_minutes: bucketMinutes }),
+    ]);
+
+    const summary = summaryResp?.summary || {};
+    const resources = Array.isArray(topResourcesResp?.resources) ? topResourcesResp.resources : [];
+    const timeline = Array.isArray(timelineResp?.timeline) ? timelineResp.timeline : [];
+
+    summaryEl.innerHTML = `
+        <div class="drift-summary-grid">
+            <div class="drift-summary-card"><div class="drift-summary-value">${_formatCount(summary.sample_count)}</div><div class="drift-summary-label">Samples</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${_formatCount(summary.metric_count)}</div><div class="drift-summary-label">Metric Names</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${_formatCount(summary.resource_count)}</div><div class="drift-summary-label">Resources</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${escapeHtml(_formatMetricValue(summary.total_value))}</div><div class="drift-summary-label">Total Value</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${escapeHtml(_formatMetricValue(summary.avg_value))}</div><div class="drift-summary-label">Average Value</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value" style="font-size:1rem;">${escapeHtml(_toIsoOrDash(summary.last_seen))}</div><div class="drift-summary-label">Last Seen</div></div>
+        </div>`;
+
+    if (!resources.length) {
+        resourcesEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No traffic metric resources found for current filters.</p></div>';
+    } else {
+        resourcesEl.innerHTML = `
+            <table class="chart-table">
+                <thead><tr><th>Resource</th><th>Total Value</th><th>Average</th><th>Samples</th></tr></thead>
+                <tbody>${resources.map((row) => `
+                    <tr>
+                        <td>${escapeHtml(row.resource_uid || '-')}</td>
+                        <td>${escapeHtml(_formatMetricValue(row.total_value))}</td>
+                        <td>${escapeHtml(_formatMetricValue(row.avg_value))}</td>
+                        <td>${_formatCount(row.sample_count)}</td>
+                    </tr>`).join('')}</tbody>
+            </table>`;
+    }
+
+    if (!timeline.length) {
+        timelineEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No traffic metric timeline data available for current filters.</p></div>';
+    } else {
+        timelineEl.innerHTML = `
+            <table class="chart-table">
+                <thead><tr><th>Bucket</th><th>Total Value</th><th>Average</th><th>Samples</th></tr></thead>
+                <tbody>${timeline.map((row) => `
+                    <tr>
+                        <td>${escapeHtml(_toIsoOrDash(row.bucket))}</td>
+                        <td>${escapeHtml(_formatMetricValue(row.total_value))}</td>
+                        <td>${escapeHtml(_formatMetricValue(row.avg_value))}</td>
+                        <td>${_formatCount(row.sample_count)}</td>
+                    </tr>`).join('')}</tbody>
+            </table>`;
+    }
+}
+
 function _renderFlowSyncControls() {
     const enabledEl = document.getElementById('cloud-flow-sync-enabled');
     const intervalEl = document.getElementById('cloud-flow-sync-interval');
@@ -701,17 +791,20 @@ async function onCloudProviderFilterChange() {
     await loadCloudAccounts({ preserveContent: false });
     await loadCloudTopology({ preserveContent: false });
     await loadCloudFlowAnalytics({ preserveContent: false });
+    await loadCloudTrafficMetricAnalytics({ preserveContent: false });
 }
 window.onCloudProviderFilterChange = onCloudProviderFilterChange;
 
 async function onCloudAccountFilterChange() {
     await loadCloudTopology({ preserveContent: false });
     await loadCloudFlowAnalytics({ preserveContent: false });
+    await loadCloudTrafficMetricAnalytics({ preserveContent: false });
 }
 window.onCloudAccountFilterChange = onCloudAccountFilterChange;
 
 async function onCloudAnalyticsFilterChange() {
     await loadCloudFlowAnalytics({ preserveContent: false });
+    await loadCloudTrafficMetricAnalytics({ preserveContent: false });
 }
 window.onCloudAnalyticsFilterChange = onCloudAnalyticsFilterChange;
 
@@ -746,6 +839,7 @@ async function runCloudFlowSyncPull(selectedOnly = false) {
     await Promise.all([
         loadCloudFlowSync({ preserveContent: false }),
         loadCloudFlowAnalytics({ preserveContent: false }),
+        loadCloudTrafficMetricAnalytics({ preserveContent: false }),
     ]);
 }
 window.runCloudFlowSyncPull = runCloudFlowSyncPull;
@@ -755,6 +849,7 @@ async function refreshCloudVisibility() {
     await Promise.all([
         loadCloudTopology({ preserveContent: false }),
         loadCloudFlowAnalytics({ preserveContent: false }),
+        loadCloudTrafficMetricAnalytics({ preserveContent: false }),
         loadCloudFlowSync({ preserveContent: false }),
     ]);
 }
@@ -765,10 +860,12 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
     const accountsEl = document.getElementById('cloud-accounts-list');
     const topologyEl = document.getElementById('cloud-topology-summary');
     const summaryEl = document.getElementById('cloud-flow-summary');
+    const trafficMetricSummaryEl = document.getElementById('cloud-traffic-metric-summary');
     const syncStatusEl = document.getElementById('cloud-flow-sync-status');
     if (accountsEl && !preserveContent) accountsEl.innerHTML = skeletonCards(2);
     if (topologyEl && !preserveContent) topologyEl.innerHTML = skeletonCards(1);
     if (summaryEl && !preserveContent) summaryEl.innerHTML = skeletonCards(1);
+    if (trafficMetricSummaryEl && !preserveContent) trafficMetricSummaryEl.innerHTML = skeletonCards(1);
     if (syncStatusEl && !preserveContent) syncStatusEl.textContent = 'Loading flow sync config...';
 
     await _ensureProvidersLoaded();
@@ -776,6 +873,7 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
     await Promise.all([
         loadCloudTopology({ preserveContent }),
         loadCloudFlowAnalytics({ preserveContent }),
+        loadCloudTrafficMetricAnalytics({ preserveContent }),
         loadCloudFlowSync({ preserveContent }),
     ]);
 }

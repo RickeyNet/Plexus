@@ -4,6 +4,7 @@ cloud_visibility.py -- Cloud network visibility APIs (AWS/Azure/GCP).
 Provides:
   - Cloud account CRUD (provider metadata + auth references)
   - Discovery snapshot ingestion (sample/live/auto modes)
+    - Cloud traffic-metric ingestion + analytics APIs
   - Cloud resource + connection + hybrid-link APIs for UI topology rendering
 """
 
@@ -34,6 +35,7 @@ _require_admin = None
 
 _VALID_PROVIDERS = {"aws", "azure", "gcp"}
 _VALID_FLOW_INGEST_FORMATS = {"normalized", "aws", "azure", "gcp"}
+_VALID_TRAFFIC_INGEST_FORMATS = {"normalized", "aws", "azure", "gcp"}
 
 _FLOW_TYPE_BY_PROVIDER = {
     "aws": "cloud_aws_flow",
@@ -156,6 +158,29 @@ class CloudFlowIngestRequest(BaseModel):
     records: list[dict] = Field(default_factory=list)
     source: str = "api"
     emit_event: bool = True
+
+
+class CloudTrafficMetricIngestRequest(BaseModel):
+    format: str = "normalized"  # normalized | aws | azure | gcp
+    records: list[dict] = Field(default_factory=list)
+    source: str = "api"
+    emit_event: bool = True
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return float(int(value))
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value).strip()
+        if not text:
+            return default
+        return float(text)
+    except Exception:
+        return default
 
 
 def _safe_int(value, default: int = 0) -> int:
@@ -478,6 +503,335 @@ def _summarize_flow_records(records: list[dict]) -> dict:
         "last_ts": max(timestamps) if timestamps else None,
         "action_breakdown": actions,
         "direction_breakdown": directions,
+    }
+
+
+def _extract_resource_uid_from_dimensions(dimensions) -> str:
+    if not isinstance(dimensions, list):
+        return ""
+    preferred_keys = {
+        "vpcid",
+        "subnetid",
+        "instanceid",
+        "transitgatewayid",
+        "networkinterfaceid",
+        "loadbalancer",
+        "natgatewayid",
+        "resourceid",
+    }
+    first_fallback = ""
+    for item in dimensions:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("Name") or "").strip()
+        value = str(item.get("value") or item.get("Value") or "").strip()
+        if not value:
+            continue
+        if not first_fallback:
+            first_fallback = value
+        if name.lower() in preferred_keys:
+            return value
+    return first_fallback
+
+
+def _normalize_generic_traffic_metric_records(records: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        metric_name = str(
+            item.get("metric_name")
+            or item.get("metricName")
+            or item.get("name")
+            or ""
+        ).strip()
+        if not metric_name:
+            continue
+        interval_start = _normalize_timestamp_iso(
+            item.get("interval_start")
+            or item.get("start_time")
+            or item.get("start")
+            or item.get("timestamp")
+            or item.get("time")
+        )
+        interval_end = _normalize_timestamp_iso(
+            item.get("interval_end")
+            or item.get("end_time")
+            or item.get("end")
+            or item.get("timestamp")
+            or item.get("time")
+            or interval_start
+        )
+        value = _safe_float(item.get("value"), None)
+        if value is None:
+            for alt in ("sum", "total", "average", "avg", "maximum", "max", "minimum", "min"):
+                value = _safe_float(item.get(alt), None)
+                if value is not None:
+                    break
+        if value is None:
+            continue
+
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        normalized.append(
+            {
+                "metric_name": metric_name,
+                "metric_namespace": str(item.get("metric_namespace") or item.get("namespace") or "").strip(),
+                "resource_uid": str(
+                    item.get("resource_uid")
+                    or item.get("resource_id")
+                    or item.get("resourceId")
+                    or item.get("resource")
+                    or ""
+                ).strip(),
+                "direction": str(item.get("direction") or "").strip().lower(),
+                "statistic": str(item.get("statistic") or item.get("aggregation") or "").strip().lower(),
+                "unit": str(item.get("unit") or "").strip(),
+                "value": value,
+                "interval_start": interval_start,
+                "interval_end": interval_end,
+                "metadata": metadata,
+            }
+        )
+    return normalized
+
+
+def _normalize_aws_traffic_metric_records(records: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        metric_name = str(item.get("MetricName") or item.get("metric_name") or "").strip()
+        if not metric_name:
+            normalized.extend(_normalize_generic_traffic_metric_records([item]))
+            continue
+        timestamp = _normalize_timestamp_iso(item.get("Timestamp") or item.get("timestamp"))
+        value = _safe_float(item.get("Value"), None)
+        if value is None:
+            for alt in ("Sum", "Average", "Maximum", "Minimum", "SampleCount"):
+                value = _safe_float(item.get(alt), None)
+                if value is not None:
+                    break
+        if value is None:
+            continue
+        dimensions = item.get("Dimensions")
+        metadata = {
+            "dimensions": dimensions if isinstance(dimensions, list) else [],
+        }
+        normalized.append(
+            {
+                "metric_name": metric_name,
+                "metric_namespace": str(item.get("Namespace") or item.get("namespace") or "").strip(),
+                "resource_uid": _extract_resource_uid_from_dimensions(dimensions),
+                "direction": str(item.get("direction") or "").strip().lower(),
+                "statistic": str(item.get("Statistic") or item.get("statistic") or "").strip().lower(),
+                "unit": str(item.get("Unit") or item.get("unit") or "").strip(),
+                "value": value,
+                "interval_start": timestamp,
+                "interval_end": timestamp,
+                "metadata": metadata,
+            }
+        )
+    return normalized
+
+
+def _normalize_azure_traffic_metric_records(records: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        metric_name_raw = item.get("metricName")
+        if isinstance(metric_name_raw, dict):
+            metric_name = str(metric_name_raw.get("value") or metric_name_raw.get("localizedValue") or "").strip()
+        else:
+            metric_name = str(metric_name_raw or item.get("metric_name") or "").strip()
+        if not metric_name:
+            normalized.extend(_normalize_generic_traffic_metric_records([item]))
+            continue
+        value = None
+        statistic = ""
+        for alt_name, alt_stat in (("total", "total"), ("average", "avg"), ("maximum", "max"), ("minimum", "min")):
+            alt = _safe_float(item.get(alt_name), None)
+            if alt is not None:
+                value = alt
+                statistic = alt_stat
+                break
+        if value is None:
+            value = _safe_float(item.get("value"), None)
+        if value is None:
+            continue
+        timestamp = _normalize_timestamp_iso(item.get("timeStamp") or item.get("timestamp"))
+        normalized.append(
+            {
+                "metric_name": metric_name,
+                "metric_namespace": str(item.get("namespace") or "azure.monitor").strip(),
+                "resource_uid": str(item.get("resourceId") or item.get("resource_id") or "").strip(),
+                "direction": str(item.get("direction") or "").strip().lower(),
+                "statistic": str(item.get("statistic") or statistic).strip().lower(),
+                "unit": str(item.get("unit") or "").strip(),
+                "value": value,
+                "interval_start": timestamp,
+                "interval_end": timestamp,
+                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+            }
+        )
+    return normalized
+
+
+def _normalize_gcp_traffic_metric_records(records: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        metric = item.get("metric") if isinstance(item.get("metric"), dict) else {}
+        resource = item.get("resource") if isinstance(item.get("resource"), dict) else {}
+        points = item.get("points") if isinstance(item.get("points"), list) else []
+        metric_name = str(item.get("metric_name") or item.get("metricType") or metric.get("type") or "").strip()
+        if not metric_name:
+            normalized.extend(_normalize_generic_traffic_metric_records([item]))
+            continue
+        resource_labels = resource.get("labels") if isinstance(resource.get("labels"), dict) else {}
+        resource_uid = str(
+            resource_labels.get("instance_id")
+            or resource_labels.get("subnetwork_name")
+            or resource_labels.get("network_name")
+            or item.get("resource_id")
+            or ""
+        ).strip()
+        if not points:
+            value = _safe_float(item.get("value"), None)
+            if value is None:
+                continue
+            ts = _normalize_timestamp_iso(item.get("timestamp") or item.get("time"))
+            normalized.append(
+                {
+                    "metric_name": metric_name,
+                    "metric_namespace": str(item.get("metric_namespace") or "gcp.monitoring").strip(),
+                    "resource_uid": resource_uid,
+                    "direction": str(item.get("direction") or "").strip().lower(),
+                    "statistic": str(item.get("statistic") or "").strip().lower(),
+                    "unit": str(item.get("unit") or "").strip(),
+                    "value": value,
+                    "interval_start": ts,
+                    "interval_end": ts,
+                    "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                }
+            )
+            continue
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            interval = point.get("interval") if isinstance(point.get("interval"), dict) else {}
+            value_obj = point.get("value") if isinstance(point.get("value"), dict) else {}
+            value = None
+            for key in ("doubleValue", "int64Value", "distributionValue"):
+                if key == "distributionValue":
+                    dist = value_obj.get(key)
+                    if isinstance(dist, dict):
+                        value = _safe_float(dist.get("mean"), None)
+                else:
+                    value = _safe_float(value_obj.get(key), None)
+                if value is not None:
+                    break
+            if value is None:
+                continue
+            normalized.append(
+                {
+                    "metric_name": metric_name,
+                    "metric_namespace": str(item.get("metric_namespace") or "gcp.monitoring").strip(),
+                    "resource_uid": resource_uid,
+                    "direction": str(item.get("direction") or "").strip().lower(),
+                    "statistic": str(item.get("statistic") or "").strip().lower(),
+                    "unit": str(item.get("unit") or "").strip(),
+                    "value": value,
+                    "interval_start": _normalize_timestamp_iso(interval.get("startTime") or point.get("startTime")),
+                    "interval_end": _normalize_timestamp_iso(interval.get("endTime") or point.get("endTime")),
+                    "metadata": {
+                        "metric_labels": metric.get("labels") if isinstance(metric.get("labels"), dict) else {},
+                        "resource_labels": resource_labels,
+                    },
+                }
+            )
+    return normalized
+
+
+def _prepare_traffic_metric_ingest_records(provider: str, ingest_format: str, records: list[dict]) -> list[dict]:
+    normalized_provider = _normalize_provider(provider)
+    mode = str(ingest_format or "normalized").strip().lower()
+    if mode not in _VALID_TRAFFIC_INGEST_FORMATS:
+        raise ValueError("unsupported_traffic_format")
+    if mode != "normalized" and mode != normalized_provider:
+        raise ValueError("mismatched_traffic_format_provider")
+    if mode == "normalized":
+        return _normalize_generic_traffic_metric_records(records)
+    if mode == "aws":
+        return _normalize_aws_traffic_metric_records(records)
+    if mode == "azure":
+        return _normalize_azure_traffic_metric_records(records)
+    return _normalize_gcp_traffic_metric_records(records)
+
+
+def _build_traffic_metric_rows_for_ingest(
+    account_id: int,
+    provider: str,
+    records: list[dict],
+    *,
+    source: str,
+) -> list[tuple]:
+    rows: list[tuple] = []
+    for record in records:
+        rows.append(
+            (
+                int(account_id),
+                provider,
+                str(record.get("metric_name") or "").strip(),
+                str(record.get("metric_namespace") or "").strip(),
+                str(record.get("resource_uid") or "").strip(),
+                str(record.get("direction") or "").strip().lower(),
+                str(record.get("statistic") or "").strip().lower(),
+                str(record.get("unit") or "").strip(),
+                _safe_float(record.get("value")),
+                _normalize_timestamp_iso(record.get("interval_start")),
+                _normalize_timestamp_iso(record.get("interval_end")),
+                json.dumps(record.get("metadata") or {})[:2000],
+                source,
+            )
+        )
+    return rows
+
+
+def _summarize_traffic_metric_records(records: list[dict]) -> dict:
+    metric_names = set()
+    resource_uids = set()
+    values: list[float] = []
+    timestamps: list[str] = []
+    for record in records:
+        metric_name = str(record.get("metric_name") or "").strip()
+        resource_uid = str(record.get("resource_uid") or "").strip()
+        if metric_name:
+            metric_names.add(metric_name)
+        if resource_uid:
+            resource_uids.add(resource_uid)
+        value = _safe_float(record.get("value"), None)
+        if value is not None:
+            values.append(value)
+        start_time = str(record.get("interval_start") or "").strip()
+        end_time = str(record.get("interval_end") or "").strip()
+        if start_time:
+            timestamps.append(start_time)
+        if end_time:
+            timestamps.append(end_time)
+
+    total = sum(values) if values else 0.0
+    return {
+        "sample_count": len(records),
+        "metric_count": len(metric_names),
+        "resource_count": len(resource_uids),
+        "total_value": total,
+        "avg_value": (total / len(values)) if values else 0.0,
+        "min_value": min(values) if values else 0.0,
+        "max_value": max(values) if values else 0.0,
+        "first_ts": min(timestamps) if timestamps else None,
+        "last_ts": max(timestamps) if timestamps else None,
     }
 
 
@@ -893,6 +1247,87 @@ async def ingest_cloud_flow_logs_api(account_id: int, request: Request, body: Cl
     }
 
 
+@router.post("/api/cloud/accounts/{account_id}/traffic-metrics/ingest", dependencies=[Depends(_require_admin_dep)])
+async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, body: CloudTrafficMetricIngestRequest):
+    account = await db.get_cloud_account(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Cloud account not found")
+
+    ingest_format = str(body.format or "normalized").strip().lower()
+    if ingest_format not in _VALID_TRAFFIC_INGEST_FORMATS:
+        raise HTTPException(status_code=400, detail="Unsupported cloud traffic metric ingestion format")
+    if not isinstance(body.records, list) or not body.records:
+        raise HTTPException(status_code=400, detail="Traffic metric ingestion requires at least one record")
+    if len(body.records) > 20000:
+        raise HTTPException(status_code=400, detail="Traffic metric ingestion payload exceeds 20,000 records")
+
+    provider = str(account.get("provider") or "").strip().lower()
+    try:
+        normalized_records = _prepare_traffic_metric_ingest_records(provider, ingest_format, body.records)
+    except ValueError as exc:
+        if str(exc) == "mismatched_traffic_format_provider":
+            raise HTTPException(status_code=400, detail="Traffic metric format must match cloud account provider") from None
+        raise HTTPException(status_code=400, detail="Unsupported cloud traffic metric ingestion format") from None
+
+    if not normalized_records:
+        raise HTTPException(status_code=400, detail="No valid traffic metric records found in payload")
+
+    metric_rows = _build_traffic_metric_rows_for_ingest(
+        account_id,
+        provider,
+        normalized_records,
+        source=str(body.source or "api"),
+    )
+    inserted = await db.create_cloud_traffic_metrics_batch(metric_rows)
+    skipped = max(0, len(body.records) - len(normalized_records))
+    summary = _summarize_traffic_metric_records(normalized_records)
+
+    if body.emit_event:
+        message = (
+            f"Cloud traffic metric ingest account_id={account_id} provider={provider} "
+            f"ingested={inserted} skipped={skipped}"
+        )
+        raw_data = json.dumps(
+            {
+                "account_id": account_id,
+                "provider": provider,
+                "format": ingest_format,
+                "source": str(body.source or "api"),
+                "summary": summary,
+            }
+        )[:2000]
+        await db.create_trap_syslog_event(
+            source_ip=f"cloud:{provider}:{account_id}",
+            event_type="cloud_traffic_metric",
+            facility="cloud",
+            severity="info",
+            message=message,
+            raw_data=raw_data,
+        )
+
+    session = _get_session(request) or {}
+    await _audit(
+        "cloud_visibility",
+        "ingest_traffic_metrics",
+        user=session.get("user", ""),
+        detail=(
+            f"account_id={account_id} provider={provider} format={ingest_format} "
+            f"ingested={inserted} skipped={skipped}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "provider": provider,
+        "format": ingest_format,
+        "source": str(body.source or "api"),
+        "ingested": inserted,
+        "skipped": skipped,
+        "summary": summary,
+    }
+
+
 @router.post("/api/cloud/accounts/{account_id}/discover", dependencies=[Depends(_require_admin_dep)])
 async def discover_cloud_account_api(account_id: int, request: Request, body: CloudDiscoveryRequest | None = None):
     account = await db.get_cloud_account(account_id)
@@ -1085,6 +1520,91 @@ async def cloud_flow_timeline_api(
         "bucket_minutes": bucket_minutes,
         "account_id": account_id,
         "provider": normalized_provider,
+        "count": len(rows),
+    }
+
+
+@router.get("/api/cloud/traffic-metrics/summary")
+async def cloud_traffic_metric_summary_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    hours: int = Query(default=24, ge=1, le=720),
+):
+    try:
+        normalized_provider = _normalize_provider(provider) if provider else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+
+    summary = await db.get_cloud_traffic_metric_summary(
+        account_id=account_id,
+        provider=normalized_provider,
+        hours=hours,
+    )
+    return {
+        "summary": summary,
+        "hours": hours,
+        "account_id": account_id,
+        "provider": normalized_provider,
+    }
+
+
+@router.get("/api/cloud/traffic-metrics/timeline")
+async def cloud_traffic_metric_timeline_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    metric_name: str | None = Query(default=None),
+    hours: int = Query(default=24, ge=1, le=720),
+    bucket_minutes: int = Query(default=5, ge=1, le=60),
+):
+    try:
+        normalized_provider = _normalize_provider(provider) if provider else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+
+    rows = await db.get_cloud_traffic_metric_timeline(
+        account_id=account_id,
+        provider=normalized_provider,
+        metric_name=metric_name.strip() if metric_name else None,
+        hours=hours,
+        bucket_minutes=bucket_minutes,
+    )
+    return {
+        "timeline": rows,
+        "hours": hours,
+        "bucket_minutes": bucket_minutes,
+        "account_id": account_id,
+        "provider": normalized_provider,
+        "metric_name": metric_name,
+        "count": len(rows),
+    }
+
+
+@router.get("/api/cloud/traffic-metrics/top-resources")
+async def cloud_traffic_metric_top_resources_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    metric_name: str | None = Query(default=None),
+    hours: int = Query(default=24, ge=1, le=720),
+    limit: int = Query(default=20, ge=1, le=200),
+):
+    try:
+        normalized_provider = _normalize_provider(provider) if provider else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+
+    rows = await db.get_cloud_traffic_metric_top_resources(
+        account_id=account_id,
+        provider=normalized_provider,
+        metric_name=metric_name.strip() if metric_name else None,
+        hours=hours,
+        limit=limit,
+    )
+    return {
+        "resources": rows,
+        "hours": hours,
+        "account_id": account_id,
+        "provider": normalized_provider,
+        "metric_name": metric_name,
         "count": len(rows),
     }
 
