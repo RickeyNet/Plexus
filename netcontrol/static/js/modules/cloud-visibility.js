@@ -15,6 +15,121 @@ import {
 
 let _cloudProviders = [];
 let _cloudAccounts = [];
+let _cloudFlowSyncConfig = null;
+let _cloudFlowSyncCursors = [];
+
+function _ensureCloudVisibilityLayout() {
+    const page = document.getElementById('page-cloud-visibility');
+    if (!page) return null;
+    if (page.querySelector('#cloud-accounts-list')) return page;
+
+    page.innerHTML = `
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
+            <h2 style="margin:0;">Cloud Visibility</h2>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                <button class="btn btn-primary" onclick="showCreateCloudAccountModal()">Add Cloud Account</button>
+                <button class="btn btn-secondary" onclick="refreshCloudVisibility()">Refresh</button>
+            </div>
+        </div>
+
+        <div class="card" style="padding:0.9rem; margin-bottom:1rem;">
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem;">
+                <label>Provider Filter
+                    <select id="cloud-provider-filter" class="form-select" onchange="onCloudProviderFilterChange()">
+                        <option value="">All Providers</option>
+                    </select>
+                </label>
+                <label>Account Filter
+                    <select id="cloud-account-filter" class="form-select" onchange="onCloudAccountFilterChange()">
+                        <option value="">All Accounts</option>
+                    </select>
+                </label>
+                <label>Flow Hours
+                    <select id="cloud-flow-hours" class="form-select" onchange="onCloudAnalyticsFilterChange()">
+                        <option value="1">Last 1 hour</option>
+                        <option value="6">Last 6 hours</option>
+                        <option value="24" selected>Last 24 hours</option>
+                        <option value="72">Last 72 hours</option>
+                        <option value="168">Last 7 days</option>
+                    </select>
+                </label>
+                <label>Top Talkers
+                    <select id="cloud-flow-direction" class="form-select" onchange="onCloudAnalyticsFilterChange()">
+                        <option value="src" selected>Source IP</option>
+                        <option value="dst">Destination IP</option>
+                    </select>
+                </label>
+                <label>Talker Limit
+                    <input id="cloud-flow-limit" class="form-input" type="number" min="5" max="200" value="20" oninput="onCloudAnalyticsFilterChange()">
+                </label>
+                <label>Timeline Bucket
+                    <select id="cloud-flow-bucket" class="form-select" onchange="onCloudAnalyticsFilterChange()">
+                        <option value="1">1 minute</option>
+                        <option value="5" selected>5 minutes</option>
+                        <option value="15">15 minutes</option>
+                        <option value="30">30 minutes</option>
+                        <option value="60">60 minutes</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+
+        <h3 style="margin:0.25rem 0 0.5rem;">Provider Capability Hints</h3>
+        <div id="cloud-provider-capabilities" style="margin-bottom:1rem;"></div>
+
+        <h3 style="margin:0.25rem 0 0.5rem;">Flow Sync Controls</h3>
+        <div class="card" style="padding:0.9rem; margin-bottom:1rem;">
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem; align-items:end;">
+                <label style="display:flex; align-items:center; gap:0.5rem; margin:0;">
+                    <input id="cloud-flow-sync-enabled" type="checkbox">
+                    Enable Scheduled Pulling
+                </label>
+                <label>Interval Seconds
+                    <input id="cloud-flow-sync-interval" class="form-input" type="number" min="60" max="3600" value="300">
+                </label>
+                <label>Lookback Minutes
+                    <input id="cloud-flow-sync-lookback" class="form-input" type="number" min="1" max="1440" value="15">
+                </label>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                    <button class="btn btn-secondary" onclick="saveCloudFlowSyncConfig()">Save Sync Config</button>
+                    <button class="btn btn-primary" onclick="runCloudFlowSyncPull()">Pull All Accounts</button>
+                    <button class="btn btn-secondary" onclick="runCloudFlowSyncPull(true)">Pull Selected Account</button>
+                </div>
+            </div>
+            <div id="cloud-flow-sync-status" style="margin-top:0.6rem; color:var(--text-muted);"></div>
+            <div id="cloud-flow-cursors" style="margin-top:0.75rem;"></div>
+        </div>
+
+        <h3 style="margin:0.25rem 0 0.5rem;">Cloud Flow Analytics</h3>
+        <div id="cloud-flow-summary" style="margin-bottom:1rem;"></div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1rem; margin-bottom:1rem;">
+            <div>
+                <h4 style="margin:0 0 0.45rem;">Top Talkers</h4>
+                <div id="cloud-flow-top-talkers"></div>
+            </div>
+            <div>
+                <h4 style="margin:0 0 0.45rem;">Traffic Timeline</h4>
+                <div id="cloud-flow-timeline"></div>
+            </div>
+        </div>
+
+        <h3 style="margin:0.25rem 0 0.5rem;">Cloud Accounts</h3>
+        <div id="cloud-accounts-list" style="margin-bottom:1rem;"></div>
+
+        <h3 style="margin:0.25rem 0 0.5rem;">Hybrid Topology Snapshot</h3>
+        <div id="cloud-topology-summary" style="margin-bottom:1rem;"></div>
+
+        <h4 style="margin:0.25rem 0 0.45rem;">Resources</h4>
+        <div id="cloud-resources-list" style="margin-bottom:1rem;"></div>
+
+        <h4 style="margin:0.25rem 0 0.45rem;">Connections</h4>
+        <div id="cloud-connections-list" style="margin-bottom:1rem;"></div>
+
+        <h4 style="margin:0.25rem 0 0.45rem;">Hybrid Links</h4>
+        <div id="cloud-hybrid-links-list"></div>
+    `;
+    return page;
+}
 
 function _providerLabel(provider) {
     const p = String(provider || '').toLowerCase();
@@ -38,6 +153,60 @@ function _currentAccountFilter() {
     const raw = document.getElementById('cloud-account-filter')?.value || '';
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function _currentFlowHours() {
+    const raw = document.getElementById('cloud-flow-hours')?.value || '24';
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 24;
+}
+
+function _currentTalkerDirection() {
+    const value = String(document.getElementById('cloud-flow-direction')?.value || 'src').toLowerCase();
+    return value === 'dst' ? 'dst' : 'src';
+}
+
+function _currentTalkerLimit() {
+    const raw = document.getElementById('cloud-flow-limit')?.value || '20';
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? Math.max(5, Math.min(parsed, 200)) : 20;
+}
+
+function _currentTimelineBucketMinutes() {
+    const raw = document.getElementById('cloud-flow-bucket')?.value || '5';
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? Math.max(1, Math.min(parsed, 60)) : 5;
+}
+
+function _currentCloudQueryParams() {
+    const params = { hours: _currentFlowHours() };
+    const provider = _currentProviderFilter();
+    const accountId = _currentAccountFilter();
+    if (provider) params.provider = provider;
+    if (accountId) params.account_id = accountId;
+    return params;
+}
+
+function _formatBytes(value) {
+    const bytes = Number(value) || 0;
+    if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(2)} TB`;
+    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
+    if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(2)} MB`;
+    if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(2)} KB`;
+    return `${bytes} B`;
+}
+
+function _formatCount(value) {
+    return Number(value || 0).toLocaleString();
+}
+
+function _toIsoOrDash(raw) {
+    if (!raw) return '-';
+    try {
+        return formatDate(raw);
+    } catch {
+        return String(raw);
+    }
 }
 
 function _parseJsonInput(raw, fallback = {}) {
@@ -252,6 +421,132 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
     }
 }
 
+async function loadCloudFlowAnalytics({ preserveContent = false } = {}) {
+    const summaryEl = document.getElementById('cloud-flow-summary');
+    const talkersEl = document.getElementById('cloud-flow-top-talkers');
+    const timelineEl = document.getElementById('cloud-flow-timeline');
+    if (!summaryEl || !talkersEl || !timelineEl) return;
+
+    if (!preserveContent) {
+        summaryEl.innerHTML = skeletonCards(1);
+        talkersEl.innerHTML = skeletonCards(1);
+        timelineEl.innerHTML = skeletonCards(1);
+    }
+
+    const baseParams = _currentCloudQueryParams();
+    const direction = _currentTalkerDirection();
+    const limit = _currentTalkerLimit();
+    const bucketMinutes = _currentTimelineBucketMinutes();
+
+    const [summaryResp, talkersResp, timelineResp] = await Promise.all([
+        api.getCloudFlowSummary(baseParams),
+        api.getCloudFlowTopTalkers({ ...baseParams, direction, limit }),
+        api.getCloudFlowTimeline({ ...baseParams, bucket_minutes: bucketMinutes }),
+    ]);
+
+    const summary = summaryResp?.summary || {};
+    const talkers = Array.isArray(talkersResp?.talkers) ? talkersResp.talkers : [];
+    const timeline = Array.isArray(timelineResp?.timeline) ? timelineResp.timeline : [];
+
+    summaryEl.innerHTML = `
+        <div class="drift-summary-grid">
+            <div class="drift-summary-card"><div class="drift-summary-value">${_formatCount(summary.flow_count)}</div><div class="drift-summary-label">Flows</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${escapeHtml(_formatBytes(summary.total_bytes))}</div><div class="drift-summary-label">Total Bytes</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${_formatCount(summary.total_packets)}</div><div class="drift-summary-label">Total Packets</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${_formatCount(summary.unique_sources)}</div><div class="drift-summary-label">Unique Sources</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${_formatCount(summary.unique_destinations)}</div><div class="drift-summary-label">Unique Destinations</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value" style="font-size:1rem;">${escapeHtml(_toIsoOrDash(summary.last_seen))}</div><div class="drift-summary-label">Last Seen</div></div>
+        </div>`;
+
+    if (!talkers.length) {
+        talkersEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No flow talkers found for current filters.</p></div>';
+    } else {
+        talkersEl.innerHTML = `
+            <table class="chart-table">
+                <thead><tr><th>${direction === 'dst' ? 'Destination IP' : 'Source IP'}</th><th>Bytes</th><th>Packets</th><th>Flows</th></tr></thead>
+                <tbody>${talkers.map((row) => `
+                    <tr>
+                        <td>${escapeHtml(row.ip || '-')}</td>
+                        <td>${escapeHtml(_formatBytes(row.total_bytes))}</td>
+                        <td>${_formatCount(row.total_packets)}</td>
+                        <td>${_formatCount(row.flow_count)}</td>
+                    </tr>`).join('')}</tbody>
+            </table>`;
+    }
+
+    if (!timeline.length) {
+        timelineEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No timeline data available for current filters.</p></div>';
+    } else {
+        timelineEl.innerHTML = `
+            <table class="chart-table">
+                <thead><tr><th>Bucket</th><th>Bytes</th><th>Packets</th><th>Flows</th></tr></thead>
+                <tbody>${timeline.map((row) => `
+                    <tr>
+                        <td>${escapeHtml(_toIsoOrDash(row.bucket))}</td>
+                        <td>${escapeHtml(_formatBytes(row.total_bytes))}</td>
+                        <td>${_formatCount(row.total_packets)}</td>
+                        <td>${_formatCount(row.flow_count)}</td>
+                    </tr>`).join('')}</tbody>
+            </table>`;
+    }
+}
+
+function _renderFlowSyncControls() {
+    const enabledEl = document.getElementById('cloud-flow-sync-enabled');
+    const intervalEl = document.getElementById('cloud-flow-sync-interval');
+    const lookbackEl = document.getElementById('cloud-flow-sync-lookback');
+    const statusEl = document.getElementById('cloud-flow-sync-status');
+    if (!enabledEl || !intervalEl || !lookbackEl || !statusEl) return;
+
+    const config = _cloudFlowSyncConfig || {};
+    enabledEl.checked = Boolean(config.enabled);
+    intervalEl.value = String(config.interval_seconds || 300);
+    lookbackEl.value = String(config.lookback_minutes || 15);
+    statusEl.textContent = `Current config: ${config.enabled ? 'enabled' : 'disabled'}, interval ${config.interval_seconds || 300}s, lookback ${config.lookback_minutes || 15}m.`;
+}
+
+function _renderFlowSyncCursors() {
+    const container = document.getElementById('cloud-flow-cursors');
+    if (!container) return;
+
+    if (!_cloudFlowSyncCursors.length) {
+        container.innerHTML = '<div class="card" style="padding:0.75rem;"><p class="text-muted" style="margin:0;">No flow-sync cursors yet. Run a manual pull or wait for scheduler.</p></div>';
+        return;
+    }
+
+    container.innerHTML = `
+        <table class="chart-table">
+            <thead><tr><th>Account</th><th>Provider</th><th>Last Pull End</th><th>Updated</th></tr></thead>
+            <tbody>${_cloudFlowSyncCursors.map((c) => `
+                <tr>
+                    <td>${escapeHtml(c.account_name || `Account #${c.account_id}`)}</td>
+                    <td>${escapeHtml(_providerLabel(c.provider || ''))}</td>
+                    <td>${escapeHtml(_toIsoOrDash(c.last_pull_end))}</td>
+                    <td>${escapeHtml(_toIsoOrDash(c.updated_at))}</td>
+                </tr>`).join('')}</tbody>
+        </table>`;
+}
+
+async function loadCloudFlowSync({ preserveContent = false } = {}) {
+    const statusEl = document.getElementById('cloud-flow-sync-status');
+    const cursorsEl = document.getElementById('cloud-flow-cursors');
+    if (!statusEl || !cursorsEl) return;
+
+    if (!preserveContent) {
+        statusEl.textContent = 'Loading flow sync config...';
+        cursorsEl.innerHTML = skeletonCards(1);
+    }
+
+    const [configResp, cursorsResp] = await Promise.all([
+        api.getCloudFlowSyncConfig(),
+        api.getCloudFlowSyncCursors(),
+    ]);
+    _cloudFlowSyncConfig = configResp?.config || null;
+    _cloudFlowSyncCursors = Array.isArray(cursorsResp?.cursors) ? cursorsResp.cursors : [];
+    _renderFlowSyncControls();
+    _renderFlowSyncCursors();
+}
+
 function _buildAccountFormHtml(account = null) {
     const providers = _normalizeProviderOptions();
     const providerOptions = providers.length ? providers : ['aws', 'azure', 'gcp'];
@@ -405,32 +700,89 @@ async function onCloudProviderFilterChange() {
     _renderAccountFilter();
     await loadCloudAccounts({ preserveContent: false });
     await loadCloudTopology({ preserveContent: false });
+    await loadCloudFlowAnalytics({ preserveContent: false });
 }
 window.onCloudProviderFilterChange = onCloudProviderFilterChange;
 
 async function onCloudAccountFilterChange() {
     await loadCloudTopology({ preserveContent: false });
+    await loadCloudFlowAnalytics({ preserveContent: false });
 }
 window.onCloudAccountFilterChange = onCloudAccountFilterChange;
 
+async function onCloudAnalyticsFilterChange() {
+    await loadCloudFlowAnalytics({ preserveContent: false });
+}
+window.onCloudAnalyticsFilterChange = onCloudAnalyticsFilterChange;
+
+async function saveCloudFlowSyncConfig() {
+    const enabled = Boolean(document.getElementById('cloud-flow-sync-enabled')?.checked);
+    const intervalRaw = document.getElementById('cloud-flow-sync-interval')?.value || '300';
+    const lookbackRaw = document.getElementById('cloud-flow-sync-lookback')?.value || '15';
+    const intervalSeconds = Number.parseInt(intervalRaw, 10);
+    const lookbackMinutes = Number.parseInt(lookbackRaw, 10);
+    const payload = {
+        enabled,
+        interval_seconds: Number.isFinite(intervalSeconds) ? intervalSeconds : 300,
+        lookback_minutes: Number.isFinite(lookbackMinutes) ? lookbackMinutes : 15,
+    };
+    const result = await api.updateCloudFlowSyncConfig(payload);
+    _cloudFlowSyncConfig = result?.config || payload;
+    _renderFlowSyncControls();
+    showSuccess('Cloud flow sync config saved');
+}
+window.saveCloudFlowSyncConfig = saveCloudFlowSyncConfig;
+
+async function runCloudFlowSyncPull(selectedOnly = false) {
+    const accountId = _currentAccountFilter();
+    const params = selectedOnly && accountId ? { account_id: accountId } : {};
+    const result = await api.triggerCloudFlowSyncPull(params);
+    const ingested = Number(result?.ingested ?? result?.total_ingested ?? 0);
+    if (selectedOnly && accountId) {
+        showSuccess(`Cloud flow pull complete for account ${accountId}: ${ingested} ingested`);
+    } else {
+        showSuccess(`Cloud flow pull complete: ${ingested} ingested`);
+    }
+    await Promise.all([
+        loadCloudFlowSync({ preserveContent: false }),
+        loadCloudFlowAnalytics({ preserveContent: false }),
+    ]);
+}
+window.runCloudFlowSyncPull = runCloudFlowSyncPull;
+
 async function refreshCloudVisibility() {
     await loadCloudAccounts({ preserveContent: false });
-    await loadCloudTopology({ preserveContent: false });
+    await Promise.all([
+        loadCloudTopology({ preserveContent: false }),
+        loadCloudFlowAnalytics({ preserveContent: false }),
+        loadCloudFlowSync({ preserveContent: false }),
+    ]);
 }
 window.refreshCloudVisibility = refreshCloudVisibility;
 
 export async function loadCloudVisibility({ preserveContent = false } = {}) {
+    _ensureCloudVisibilityLayout();
     const accountsEl = document.getElementById('cloud-accounts-list');
     const topologyEl = document.getElementById('cloud-topology-summary');
+    const summaryEl = document.getElementById('cloud-flow-summary');
+    const syncStatusEl = document.getElementById('cloud-flow-sync-status');
     if (accountsEl && !preserveContent) accountsEl.innerHTML = skeletonCards(2);
     if (topologyEl && !preserveContent) topologyEl.innerHTML = skeletonCards(1);
+    if (summaryEl && !preserveContent) summaryEl.innerHTML = skeletonCards(1);
+    if (syncStatusEl && !preserveContent) syncStatusEl.textContent = 'Loading flow sync config...';
 
     await _ensureProvidersLoaded();
     await loadCloudAccounts({ preserveContent });
-    await loadCloudTopology({ preserveContent });
+    await Promise.all([
+        loadCloudTopology({ preserveContent }),
+        loadCloudFlowAnalytics({ preserveContent }),
+        loadCloudFlowSync({ preserveContent }),
+    ]);
 }
 
 export function destroyCloudVisibility() {
     _cloudProviders = [];
     _cloudAccounts = [];
+    _cloudFlowSyncConfig = null;
+    _cloudFlowSyncCursors = [];
 }
