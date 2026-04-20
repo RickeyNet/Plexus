@@ -3,6 +3,8 @@ shared.py -- Cross-domain helper functions used by multiple route modules.
 
 Provides audit logging, config capture/push/diff, and session helpers.
 """
+from __future__ import annotations
+
 
 import asyncio
 import difflib

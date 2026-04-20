@@ -152,7 +152,7 @@ Notes:
 - The built-in healthcheck pings `/api/health`; compose restarts the container if it becomes unhealthy.
 - Named volumes persist runtime state at `/app/state` (SQLite DB + key files) and certs at `/app/certs` across restarts.
 - Compose now includes a PostgreSQL service; SQLite remains available as a backend option.
-- Docker runtime base image is currently `python:3.12-slim`.
+- Docker runtime base image is currently `python:3.14-slim`.
 - For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables.
 
 ## Database Backends

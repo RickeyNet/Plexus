@@ -4,6 +4,8 @@ deployments.py -- Deployment orchestration with rollback support.
 Includes deployment creation, execution with pre/post checkpoints,
 rollback via pre-deployment snapshots, and WebSocket streaming.
 """
+from __future__ import annotations
+
 
 import asyncio
 import json

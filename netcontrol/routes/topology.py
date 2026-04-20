@@ -1,6 +1,8 @@
 """
 topology.py -- Topology visualization, discovery, and change-tracking routes.
 """
+from __future__ import annotations
+
 
 import asyncio
 import json

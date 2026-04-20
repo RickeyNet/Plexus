@@ -1,6 +1,8 @@
 """
 config_drift.py -- Config drift detection routes: baselines, snapshots, drift events, revert, analysis.
 """
+from __future__ import annotations
+
 
 import asyncio
 import uuid

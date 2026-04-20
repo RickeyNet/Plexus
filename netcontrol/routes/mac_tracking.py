@@ -7,6 +7,8 @@ Provides:
   - MAC/ARP search and history API endpoints
   - Background collection loop integration
 """
+from __future__ import annotations
+
 
 import asyncio
 import json

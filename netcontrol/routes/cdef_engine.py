@@ -7,6 +7,8 @@ Provides:
   - Built-in functions: SUM, AVG, MIN, MAX, ABS, PERCENTILE_95, NEGATE
   - Expression evaluation endpoint for testing
 """
+from __future__ import annotations
+
 
 import math
 import routes.database as db

@@ -1,6 +1,8 @@
 """
 jobs.py -- Job orchestration routes: launch, cancel, retry, priority, queue, WebSocket streaming.
 """
+from __future__ import annotations
+
 
 import asyncio
 import ipaddress

@@ -5,6 +5,8 @@ access-groups CRUD, audit-events, login-rules, auth-config, retention cleanup.
 Domain-specific admin routes (discovery-sync, topology-discovery, config-drift,
 config-backups, compliance, monitoring, SNMP) remain in app.py for now.
 """
+from __future__ import annotations
+
 
 import os
 import secrets

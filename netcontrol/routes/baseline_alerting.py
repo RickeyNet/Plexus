@@ -8,6 +8,8 @@ Provides:
   - Integration with the monitoring poll loop for live deviation checks
   - Background loop for periodic baseline recomputation
 """
+from __future__ import annotations
+
 
 import math
 from datetime import UTC, datetime, timedelta

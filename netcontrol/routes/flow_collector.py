@@ -9,6 +9,8 @@ Provides:
   - Traffic analysis API endpoints (top talkers, applications, conversations)
   - Background collection and cleanup loops
 """
+from __future__ import annotations
+
 
 import asyncio
 import json

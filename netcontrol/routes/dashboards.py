@@ -1,6 +1,8 @@
 """
 dashboards.py -- User-defined dashboards with configurable panels
 """
+from __future__ import annotations
+
 
 import logging
 

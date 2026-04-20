@@ -5,6 +5,8 @@ REST API for inventory, playbooks, templates, credentials, and jobs.
 WebSocket endpoint for real-time job output streaming.
 Session-based authentication with signed cookies.
 """
+from __future__ import annotations
+
 
 import asyncio
 import difflib
@@ -137,6 +139,10 @@ from netcontrol.routes.deployments import (
     init_deployments,
     router as deployments_router,
     ws_router as deployments_ws_router,
+)
+from netcontrol.routes.ansible_inventory import (
+    init_ansible_inventory,
+    router as ansible_inventory_router,
 )
 from netcontrol.routes.inventory import (
     DiscoveryOnboardRequest,
@@ -1294,6 +1300,7 @@ init_interface_errors(require_auth, require_admin)
 init_billing(require_auth, require_admin)
 init_cloud_visibility(require_admin)
 init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
+init_ansible_inventory(require_auth)
 metrics_engine_inject_auth(require_auth, require_admin)
 
 # Jobs
@@ -1310,6 +1317,11 @@ app.include_router(
 app.include_router(
     inventory_admin_router,
     dependencies=[Depends(require_admin)],
+)
+# Ansible dynamic inventory provider
+app.include_router(
+    ansible_inventory_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
 )
 # Topology + admin
 app.include_router(

@@ -2,6 +2,8 @@
 reporting.py -- Report generation and CSV export for availability,
 compliance, and interface utilization data.
 """
+from __future__ import annotations
+
 
 import asyncio
 import csv

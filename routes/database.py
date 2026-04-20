@@ -36,6 +36,8 @@ Tables:
     report_artifacts       — persisted report outputs (CSV/SVG/etc) by run
 """
 
+from __future__ import annotations
+
 import ipaddress
 import json
 import os
@@ -1798,7 +1800,8 @@ async def get_all_groups_with_hosts() -> list[dict]:
                 h.status AS host_status,
                 h.last_seen AS host_last_seen,
                 h.model AS host_model,
-                h.software_version AS host_software_version
+                h.software_version AS host_software_version,
+                h.device_category AS host_device_category
             FROM inventory_groups g
             LEFT JOIN hosts h ON h.group_id = g.id
             ORDER BY g.name, h.ip_address
@@ -1836,6 +1839,7 @@ async def get_all_groups_with_hosts() -> list[dict]:
             "last_seen": row["host_last_seen"],
             "model": row["host_model"] or "",
             "software_version": row["host_software_version"] or "",
+            "device_category": row["host_device_category"] or "",
         })
         group["host_count"] += 1
 

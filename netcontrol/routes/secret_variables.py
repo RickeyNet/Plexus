@@ -5,6 +5,8 @@ Secret variables are referenced in config templates via {{secret.NAME}}
 and resolved at job execution time.  Values are AES-256-GCM encrypted at rest.
 Only admins can create/update/delete secret variables.
 """
+from __future__ import annotations
+
 
 import re
 

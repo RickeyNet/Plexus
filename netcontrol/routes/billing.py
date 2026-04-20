@@ -8,6 +8,8 @@ Provides:
   - CSV export for invoices
   - Overage alerting integration
 """
+from __future__ import annotations
+
 
 import csv
 import io
