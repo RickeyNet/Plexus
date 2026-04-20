@@ -33,13 +33,14 @@ const NAV_FEATURE_MAP = {
     'mac-tracking': 'mac-tracking',
     'traffic-analysis': 'traffic-analysis',
     'upgrades': 'upgrades',
+    'federation': 'federation',
 };
 
 const THEME_KEY = 'plexus-theme';
 const VALID_THEMES = ['forest', 'dark-modern', 'astral', 'light', 'void', 'coral', 'sandstone', 'voyager'];
 const DEFAULT_THEME = 'sandstone';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'cloud-visibility', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'cloud-visibility', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades', 'federation'];
 const pageCacheMeta = {};
 
 // ── Space Depth Experience Controls ──────────────────────────────────────────
@@ -1101,6 +1102,10 @@ const PAGE_HELP = {
         title: 'IOS-XE Upgrade Management',
         text: 'Plan and execute firmware upgrades across your network devices. Stage images, schedule maintenance windows, and track upgrade campaigns with rollback support.'
     },
+    federation: {
+        title: 'Multi-Instance Federation',
+        text: 'Manage and monitor multiple Plexus instances from a single pane of glass. Register remote peers, sync device counts, alert summaries, and compliance scores across sites or customers.'
+    },
     settings: {
         title: 'Application Settings',
         text: 'Configure polling intervals, feature toggles, default credentials, and other application-wide settings. Admin access required.'
@@ -1229,6 +1234,7 @@ const _destroyMap = {
     'mac-tracking': 'destroyNetworkTools',
     'traffic-analysis': 'destroyNetworkTools',
     'upgrades': 'destroyUpgrades',
+    'federation': 'destroyFederation',
 };
 
 function _destroyCurrentPage(page) {
@@ -1262,6 +1268,7 @@ async function _loadModule(page) {
         'mac-tracking':     () => import('./modules/network-tools.js'),
         'traffic-analysis': () => import('./modules/network-tools.js'),
         'upgrades':         () => import('./modules/upgrades.js'),
+        'federation':       () => import('./modules/federation.js'),
     };
     const loader = moduleMap[page];
     if (!loader) return null;
@@ -1338,6 +1345,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'upgrades':
                 await mod.loadUpgradesPage({ preserveContent });
+                break;
+            case 'federation':
+                await mod.loadFederation({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);

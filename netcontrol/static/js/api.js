@@ -2122,3 +2122,37 @@ export function getBillingExportUrl(params = {}) {
     const qs = new URLSearchParams(params).toString();
     return `/api/billing/export/periods${qs ? '?' + qs : ''}`;
 }
+
+// ── Federation ──────────────────────────────────────────────────────────────
+
+export async function getFederationPeers() {
+    return apiRequest('/federation/peers');
+}
+
+export async function createFederationPeer(data) {
+    return apiRequest('/federation/peers', { method: 'POST', body: data });
+}
+
+export async function getFederationPeer(id) {
+    return apiRequest(`/federation/peers/${id}`);
+}
+
+export async function updateFederationPeer(id, data) {
+    return apiRequest(`/federation/peers/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteFederationPeer(id) {
+    return apiRequest(`/federation/peers/${id}`, { method: 'DELETE' });
+}
+
+export async function testFederationPeer(id) {
+    return apiRequest(`/federation/peers/${id}/test`, { method: 'POST' });
+}
+
+export async function syncFederationPeer(id) {
+    return apiRequest(`/federation/peers/${id}/sync`, { method: 'POST' });
+}
+
+export async function getFederationOverview() {
+    return apiRequest('/federation/overview');
+}
