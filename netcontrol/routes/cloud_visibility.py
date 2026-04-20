@@ -1687,6 +1687,12 @@ class CloudFlowSyncConfigUpdate(BaseModel):
     lookback_minutes: int | None = None
 
 
+class CloudTrafficSyncConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
+    lookback_minutes: int | None = None
+
+
 @router.get("/api/cloud/flow-sync/config")
 async def get_cloud_flow_sync_config_api():
     import netcontrol.routes.state as state
@@ -1755,6 +1761,89 @@ async def trigger_cloud_flow_sync_api(
 async def get_cloud_flow_sync_cursors_api():
     """Return per-account flow-log sync watermarks."""
     cursors = await db.list_cloud_flow_sync_cursors()
+    for c in cursors:
+        c["extra"] = _json_loads_safe(c.get("extra_json"), {})
+    return {"cursors": cursors, "count": len(cursors)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Cloud Traffic Metric Sync Configuration & Manual Pull
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/api/cloud/traffic-sync/config")
+async def get_cloud_traffic_sync_config_api():
+    import netcontrol.routes.state as state
+
+    return {"config": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG)}
+
+
+@router.put("/api/cloud/traffic-sync/config", dependencies=[Depends(_require_admin_dep)])
+async def update_cloud_traffic_sync_config_api(request: Request, body: CloudTrafficSyncConfigUpdate):
+    import netcontrol.routes.state as state
+
+    current = dict(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG)
+    if body.enabled is not None:
+        current["enabled"] = body.enabled
+    if body.interval_seconds is not None:
+        current["interval_seconds"] = body.interval_seconds
+    if body.lookback_minutes is not None:
+        current["lookback_minutes"] = body.lookback_minutes
+
+    sanitized = state._sanitize_cloud_traffic_metric_sync_config(current)
+    state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG = sanitized
+    await db.set_auth_setting("cloud_traffic_metric_sync", sanitized)
+
+    session = _get_session(request) or {}
+    await _audit(
+        "cloud_visibility",
+        "update_traffic_sync_config",
+        user=session.get("user", ""),
+        detail=f"enabled={sanitized['enabled']} interval={sanitized['interval_seconds']}s",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "config": sanitized}
+
+
+@router.post("/api/cloud/traffic-sync/pull", dependencies=[Depends(_require_admin_dep)])
+async def trigger_cloud_traffic_sync_api(
+    request: Request,
+    account_id: int | None = Query(default=None),
+):
+    """Manually trigger cloud traffic-metric pull for one or all accounts."""
+    from netcontrol.routes.cloud_metric_pullers import (
+        pull_traffic_metrics_all_accounts,
+        pull_traffic_metrics_for_account,
+    )
+
+    import netcontrol.routes.state as state
+
+    lookback = int(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG.get("lookback_minutes", 15))
+
+    if account_id is not None:
+        account = await db.get_cloud_account(account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Cloud account not found")
+        result = await pull_traffic_metrics_for_account(account, lookback_minutes=lookback)
+        result["account_id"] = account_id
+    else:
+        result = await pull_traffic_metrics_all_accounts(lookback_minutes=lookback)
+
+    session = _get_session(request) or {}
+    await _audit(
+        "cloud_visibility",
+        "manual_traffic_sync_pull",
+        user=session.get("user", ""),
+        detail=f"account_id={account_id} ingested={result.get('ingested', result.get('total_ingested', 0))}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, **result}
+
+
+@router.get("/api/cloud/traffic-sync/cursors")
+async def get_cloud_traffic_sync_cursors_api():
+    """Return per-account traffic-metric sync watermarks."""
+    cursors = await db.list_cloud_traffic_metric_sync_cursors()
     for c in cursors:
         c["extra"] = _json_loads_safe(c.get("extra_json"), {})
     return {"cursors": cursors, "count": len(cursors)}
