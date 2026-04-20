@@ -17,6 +17,8 @@ let _cloudProviders = [];
 let _cloudAccounts = [];
 let _cloudFlowSyncConfig = null;
 let _cloudFlowSyncCursors = [];
+let _cloudTrafficSyncConfig = null;
+let _cloudTrafficSyncCursors = [];
 
 function _ensureCloudVisibilityLayout() {
     const page = document.getElementById('page-cloud-visibility');
@@ -114,6 +116,28 @@ function _ensureCloudVisibilityLayout() {
         </div>
 
         <h3 style="margin:0.25rem 0 0.5rem;">Cloud Traffic Metrics</h3>
+        <div class="card" style="padding:0.9rem; margin-bottom:1rem;">
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem; align-items:end;">
+                <label style="display:flex; align-items:center; gap:0.5rem; margin:0;">
+                    <input id="cloud-traffic-sync-enabled" type="checkbox">
+                    Enable Scheduled Metric Pulling
+                </label>
+                <label>Interval Seconds
+                    <input id="cloud-traffic-sync-interval" class="form-input" type="number" min="60" max="3600" value="300">
+                </label>
+                <label>Lookback Minutes
+                    <input id="cloud-traffic-sync-lookback" class="form-input" type="number" min="1" max="1440" value="15">
+                </label>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                    <button class="btn btn-secondary" onclick="saveCloudTrafficSyncConfig()">Save Metric Sync Config</button>
+                    <button class="btn btn-primary" onclick="runCloudTrafficSyncPull()">Pull All Accounts</button>
+                    <button class="btn btn-secondary" onclick="runCloudTrafficSyncPull(true)">Pull Selected Account</button>
+                </div>
+            </div>
+            <div id="cloud-traffic-sync-status" style="margin-top:0.6rem; color:var(--text-muted);"></div>
+            <div id="cloud-traffic-cursors" style="margin-top:0.75rem;"></div>
+        </div>
+
         <div id="cloud-traffic-metric-summary" style="margin-bottom:1rem;"></div>
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1rem; margin-bottom:1rem;">
             <div>
@@ -637,6 +661,62 @@ async function loadCloudFlowSync({ preserveContent = false } = {}) {
     _renderFlowSyncCursors();
 }
 
+function _renderTrafficSyncControls() {
+    const enabledEl = document.getElementById('cloud-traffic-sync-enabled');
+    const intervalEl = document.getElementById('cloud-traffic-sync-interval');
+    const lookbackEl = document.getElementById('cloud-traffic-sync-lookback');
+    const statusEl = document.getElementById('cloud-traffic-sync-status');
+    if (!enabledEl || !intervalEl || !lookbackEl || !statusEl) return;
+
+    const config = _cloudTrafficSyncConfig || {};
+    enabledEl.checked = Boolean(config.enabled);
+    intervalEl.value = String(config.interval_seconds || 300);
+    lookbackEl.value = String(config.lookback_minutes || 15);
+    statusEl.textContent = `Current config: ${config.enabled ? 'enabled' : 'disabled'}, interval ${config.interval_seconds || 300}s, lookback ${config.lookback_minutes || 15}m.`;
+}
+
+function _renderTrafficSyncCursors() {
+    const container = document.getElementById('cloud-traffic-cursors');
+    if (!container) return;
+
+    if (!_cloudTrafficSyncCursors.length) {
+        container.innerHTML = '<div class="card" style="padding:0.75rem;"><p class="text-muted" style="margin:0;">No traffic-sync cursors yet. Run a manual pull or wait for scheduler.</p></div>';
+        return;
+    }
+
+    container.innerHTML = `
+        <table class="chart-table">
+            <thead><tr><th>Account</th><th>Provider</th><th>Last Pull End</th><th>Updated</th></tr></thead>
+            <tbody>${_cloudTrafficSyncCursors.map((c) => `
+                <tr>
+                    <td>${escapeHtml(c.account_name || `Account #${c.account_id}`)}</td>
+                    <td>${escapeHtml(_providerLabel(c.provider || ''))}</td>
+                    <td>${escapeHtml(_toIsoOrDash(c.last_pull_end))}</td>
+                    <td>${escapeHtml(_toIsoOrDash(c.updated_at))}</td>
+                </tr>`).join('')}</tbody>
+        </table>`;
+}
+
+async function loadCloudTrafficSync({ preserveContent = false } = {}) {
+    const statusEl = document.getElementById('cloud-traffic-sync-status');
+    const cursorsEl = document.getElementById('cloud-traffic-cursors');
+    if (!statusEl || !cursorsEl) return;
+
+    if (!preserveContent) {
+        statusEl.textContent = 'Loading traffic sync config...';
+        cursorsEl.innerHTML = skeletonCards(1);
+    }
+
+    const [configResp, cursorsResp] = await Promise.all([
+        api.getCloudTrafficSyncConfig(),
+        api.getCloudTrafficSyncCursors(),
+    ]);
+    _cloudTrafficSyncConfig = configResp?.config || null;
+    _cloudTrafficSyncCursors = Array.isArray(cursorsResp?.cursors) ? cursorsResp.cursors : [];
+    _renderTrafficSyncControls();
+    _renderTrafficSyncCursors();
+}
+
 function _buildAccountFormHtml(account = null) {
     const providers = _normalizeProviderOptions();
     const providerOptions = providers.length ? providers : ['aws', 'azure', 'gcp'];
@@ -844,6 +924,41 @@ async function runCloudFlowSyncPull(selectedOnly = false) {
 }
 window.runCloudFlowSyncPull = runCloudFlowSyncPull;
 
+async function saveCloudTrafficSyncConfig() {
+    const enabled = Boolean(document.getElementById('cloud-traffic-sync-enabled')?.checked);
+    const intervalRaw = document.getElementById('cloud-traffic-sync-interval')?.value || '300';
+    const lookbackRaw = document.getElementById('cloud-traffic-sync-lookback')?.value || '15';
+    const intervalSeconds = Number.parseInt(intervalRaw, 10);
+    const lookbackMinutes = Number.parseInt(lookbackRaw, 10);
+    const payload = {
+        enabled,
+        interval_seconds: Number.isFinite(intervalSeconds) ? intervalSeconds : 300,
+        lookback_minutes: Number.isFinite(lookbackMinutes) ? lookbackMinutes : 15,
+    };
+    const result = await api.updateCloudTrafficSyncConfig(payload);
+    _cloudTrafficSyncConfig = result?.config || payload;
+    _renderTrafficSyncControls();
+    showSuccess('Cloud traffic sync config saved');
+}
+window.saveCloudTrafficSyncConfig = saveCloudTrafficSyncConfig;
+
+async function runCloudTrafficSyncPull(selectedOnly = false) {
+    const accountId = _currentAccountFilter();
+    const params = selectedOnly && accountId ? { account_id: accountId } : {};
+    const result = await api.triggerCloudTrafficSyncPull(params);
+    const ingested = Number(result?.ingested ?? result?.total_ingested ?? 0);
+    if (selectedOnly && accountId) {
+        showSuccess(`Cloud traffic metric pull complete for account ${accountId}: ${ingested} ingested`);
+    } else {
+        showSuccess(`Cloud traffic metric pull complete: ${ingested} ingested`);
+    }
+    await Promise.all([
+        loadCloudTrafficSync({ preserveContent: false }),
+        loadCloudTrafficMetricAnalytics({ preserveContent: false }),
+    ]);
+}
+window.runCloudTrafficSyncPull = runCloudTrafficSyncPull;
+
 async function refreshCloudVisibility() {
     await loadCloudAccounts({ preserveContent: false });
     await Promise.all([
@@ -851,6 +966,7 @@ async function refreshCloudVisibility() {
         loadCloudFlowAnalytics({ preserveContent: false }),
         loadCloudTrafficMetricAnalytics({ preserveContent: false }),
         loadCloudFlowSync({ preserveContent: false }),
+        loadCloudTrafficSync({ preserveContent: false }),
     ]);
 }
 window.refreshCloudVisibility = refreshCloudVisibility;
@@ -862,11 +978,13 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
     const summaryEl = document.getElementById('cloud-flow-summary');
     const trafficMetricSummaryEl = document.getElementById('cloud-traffic-metric-summary');
     const syncStatusEl = document.getElementById('cloud-flow-sync-status');
+    const trafficSyncStatusEl = document.getElementById('cloud-traffic-sync-status');
     if (accountsEl && !preserveContent) accountsEl.innerHTML = skeletonCards(2);
     if (topologyEl && !preserveContent) topologyEl.innerHTML = skeletonCards(1);
     if (summaryEl && !preserveContent) summaryEl.innerHTML = skeletonCards(1);
     if (trafficMetricSummaryEl && !preserveContent) trafficMetricSummaryEl.innerHTML = skeletonCards(1);
     if (syncStatusEl && !preserveContent) syncStatusEl.textContent = 'Loading flow sync config...';
+    if (trafficSyncStatusEl && !preserveContent) trafficSyncStatusEl.textContent = 'Loading traffic sync config...';
 
     await _ensureProvidersLoaded();
     await loadCloudAccounts({ preserveContent });
@@ -875,6 +993,7 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
         loadCloudFlowAnalytics({ preserveContent }),
         loadCloudTrafficMetricAnalytics({ preserveContent }),
         loadCloudFlowSync({ preserveContent }),
+        loadCloudTrafficSync({ preserveContent }),
     ]);
 }
 
@@ -883,4 +1002,6 @@ export function destroyCloudVisibility() {
     _cloudAccounts = [];
     _cloudFlowSyncConfig = null;
     _cloudFlowSyncCursors = [];
+    _cloudTrafficSyncConfig = null;
+    _cloudTrafficSyncCursors = [];
 }
