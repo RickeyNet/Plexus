@@ -21,6 +21,8 @@ let _cloudFlowSyncLastResult = null;
 let _cloudTrafficSyncConfig = null;
 let _cloudTrafficSyncCursors = [];
 let _cloudTrafficSyncLastResult = null;
+let _cloudPolicyEffectiveViews = [];
+let _cloudPolicyRules = [];
 
 function _ensureCloudVisibilityLayout() {
     const page = document.getElementById('page-cloud-visibility');
@@ -154,6 +156,18 @@ function _ensureCloudVisibilityLayout() {
             </div>
         </div>
 
+        <h3 style="margin:0.25rem 0 0.5rem;">Cloud Policy Visibility</h3>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1rem; margin-bottom:1rem;">
+            <div>
+                <h4 style="margin:0 0 0.45rem;">Effective Policy Views</h4>
+                <div id="cloud-policy-summary"></div>
+            </div>
+            <div>
+                <h4 style="margin:0 0 0.45rem;">Rule Inventory</h4>
+                <div id="cloud-policy-rules"></div>
+            </div>
+        </div>
+
         <h3 style="margin:0.25rem 0 0.5rem;">Cloud Accounts</h3>
         <div id="cloud-accounts-list" style="margin-bottom:1rem;"></div>
 
@@ -221,6 +235,15 @@ function _currentTimelineBucketMinutes() {
 
 function _currentCloudQueryParams() {
     const params = { hours: _currentFlowHours() };
+    const provider = _currentProviderFilter();
+    const accountId = _currentAccountFilter();
+    if (provider) params.provider = provider;
+    if (accountId) params.account_id = accountId;
+    return params;
+}
+
+function _policyQueryParams() {
+    const params = {};
     const provider = _currentProviderFilter();
     const accountId = _currentAccountFilter();
     if (provider) params.provider = provider;
@@ -782,6 +805,84 @@ async function loadCloudTrafficMetricAnalytics({ preserveContent = false } = {})
     }
 }
 
+function _renderCloudPolicyVisibility() {
+    const summaryEl = document.getElementById('cloud-policy-summary');
+    const rulesEl = document.getElementById('cloud-policy-rules');
+    if (!summaryEl || !rulesEl) return;
+
+    if (!_cloudPolicyEffectiveViews.length) {
+        summaryEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No effective cloud policy views available for current filters.</p></div>';
+    } else {
+        const totals = _cloudPolicyEffectiveViews.reduce((acc, row) => {
+            acc.resources += 1;
+            acc.rules += Number(row.rule_count || 0);
+            acc.publicIngress += Number(row.public_ingress_count || 0);
+            acc.openEgress += Number(row.open_egress_count || 0);
+            acc.denies += Number(row.deny_count || 0);
+            return acc;
+        }, { resources: 0, rules: 0, publicIngress: 0, openEgress: 0, denies: 0 });
+        summaryEl.innerHTML = `
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:0.75rem; margin-bottom:0.75rem;">
+                <div class="card" style="padding:0.75rem;"><div class="text-muted" style="font-size:0.75rem;">Policy Resources</div><div style="font-size:1.35rem; font-weight:700;">${_formatCount(totals.resources)}</div></div>
+                <div class="card" style="padding:0.75rem;"><div class="text-muted" style="font-size:0.75rem;">Rules</div><div style="font-size:1.35rem; font-weight:700;">${_formatCount(totals.rules)}</div></div>
+                <div class="card" style="padding:0.75rem;"><div class="text-muted" style="font-size:0.75rem;">Public Ingress</div><div style="font-size:1.35rem; font-weight:700;">${_formatCount(totals.publicIngress)}</div></div>
+                <div class="card" style="padding:0.75rem;"><div class="text-muted" style="font-size:0.75rem;">Open Egress</div><div style="font-size:1.35rem; font-weight:700;">${_formatCount(totals.openEgress)}</div></div>
+                <div class="card" style="padding:0.75rem;"><div class="text-muted" style="font-size:0.75rem;">Deny Rules</div><div style="font-size:1.35rem; font-weight:700;">${_formatCount(totals.denies)}</div></div>
+            </div>
+            <table class="chart-table">
+                <thead><tr><th>Resource</th><th>Provider</th><th>Rules</th><th>Public Ingress</th><th>Open Egress</th><th>Deny</th></tr></thead>
+                <tbody>${_cloudPolicyEffectiveViews.map((row) => `
+                    <tr>
+                        <td>${escapeHtml(row.resource_name || row.resource_uid || '-')}<div class="text-muted" style="font-size:0.75rem;">${escapeHtml(row.resource_type || '')}</div></td>
+                        <td>${escapeHtml(_providerLabel(row.provider || ''))}</td>
+                        <td>${_formatCount(row.rule_count)}</td>
+                        <td>${_formatCount(row.public_ingress_count)}</td>
+                        <td>${_formatCount(row.open_egress_count)}</td>
+                        <td>${_formatCount(row.deny_count)}</td>
+                    </tr>`).join('')}</tbody>
+            </table>`;
+    }
+
+    if (!_cloudPolicyRules.length) {
+        rulesEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No cloud policy rules discovered yet. Run discovery for a cloud account to populate security-group, NSG, or firewall rules.</p></div>';
+        return;
+    }
+
+    rulesEl.innerHTML = `
+        <table class="chart-table">
+            <thead><tr><th>Resource</th><th>Rule</th><th>Direction</th><th>Action</th><th>Protocol / Ports</th><th>Selectors</th></tr></thead>
+            <tbody>${_cloudPolicyRules.map((row) => `
+                <tr>
+                    <td>${escapeHtml(row.resource_name || row.resource_uid || '-')}<div class="text-muted" style="font-size:0.75rem;">${escapeHtml(_providerLabel(row.provider || ''))}</div></td>
+                    <td>${escapeHtml(row.rule_name || row.rule_uid || '-')}<div class="text-muted" style="font-size:0.75rem;">Priority: ${escapeHtml(row.priority ?? '-')}</div></td>
+                    <td>${escapeHtml(row.direction || '-')}</td>
+                    <td>${escapeHtml(row.action || '-')}</td>
+                    <td>${escapeHtml((row.protocol || 'all').toUpperCase())}<div class="text-muted" style="font-size:0.75rem;">${escapeHtml(row.port_expression || 'all')}</div></td>
+                    <td><div class="text-muted" style="font-size:0.75rem;">Src</div>${escapeHtml(row.source_selector || '-')}<div class="text-muted" style="font-size:0.75rem; margin-top:0.35rem;">Dst</div>${escapeHtml(row.destination_selector || '-')}</td>
+                </tr>`).join('')}</tbody>
+        </table>`;
+}
+
+async function loadCloudPolicyVisibility({ preserveContent = false } = {}) {
+    const summaryEl = document.getElementById('cloud-policy-summary');
+    const rulesEl = document.getElementById('cloud-policy-rules');
+    if (!summaryEl || !rulesEl) return;
+
+    if (!preserveContent) {
+        summaryEl.innerHTML = skeletonCards(1);
+        rulesEl.innerHTML = skeletonCards(1);
+    }
+
+    const params = _policyQueryParams();
+    const [effectiveResp, rulesResp] = await Promise.all([
+        api.getCloudPolicyEffectiveViews(params),
+        api.getCloudPolicyRules({ ...params, limit: 200 }),
+    ]);
+    _cloudPolicyEffectiveViews = Array.isArray(effectiveResp?.resources) ? effectiveResp.resources : [];
+    _cloudPolicyRules = Array.isArray(rulesResp?.rules) ? rulesResp.rules : [];
+    _renderCloudPolicyVisibility();
+}
+
 function _renderFlowSyncControls() {
     const enabledEl = document.getElementById('cloud-flow-sync-enabled');
     const intervalEl = document.getElementById('cloud-flow-sync-interval');
@@ -1077,6 +1178,7 @@ async function onCloudProviderFilterChange() {
     await loadCloudTopology({ preserveContent: false });
     await loadCloudFlowAnalytics({ preserveContent: false });
     await loadCloudTrafficMetricAnalytics({ preserveContent: false });
+    await loadCloudPolicyVisibility({ preserveContent: false });
 }
 window.onCloudProviderFilterChange = onCloudProviderFilterChange;
 
@@ -1084,6 +1186,7 @@ async function onCloudAccountFilterChange() {
     await loadCloudTopology({ preserveContent: false });
     await loadCloudFlowAnalytics({ preserveContent: false });
     await loadCloudTrafficMetricAnalytics({ preserveContent: false });
+    await loadCloudPolicyVisibility({ preserveContent: false });
 }
 window.onCloudAccountFilterChange = onCloudAccountFilterChange;
 
@@ -1206,6 +1309,7 @@ async function refreshCloudVisibility() {
         loadCloudTopology({ preserveContent: false }),
         loadCloudFlowAnalytics({ preserveContent: false }),
         loadCloudTrafficMetricAnalytics({ preserveContent: false }),
+        loadCloudPolicyVisibility({ preserveContent: false }),
         loadCloudFlowSync({ preserveContent: false }),
         loadCloudTrafficSync({ preserveContent: false }),
     ]);
@@ -1218,6 +1322,8 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
     const topologyEl = document.getElementById('cloud-topology-summary');
     const summaryEl = document.getElementById('cloud-flow-summary');
     const trafficMetricSummaryEl = document.getElementById('cloud-traffic-metric-summary');
+    const policySummaryEl = document.getElementById('cloud-policy-summary');
+    const policyRulesEl = document.getElementById('cloud-policy-rules');
     const syncStatusEl = document.getElementById('cloud-flow-sync-status');
     const flowLastResultEl = document.getElementById('cloud-flow-sync-last-result');
     const trafficSyncStatusEl = document.getElementById('cloud-traffic-sync-status');
@@ -1226,6 +1332,8 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
     if (topologyEl && !preserveContent) topologyEl.innerHTML = skeletonCards(1);
     if (summaryEl && !preserveContent) summaryEl.innerHTML = skeletonCards(1);
     if (trafficMetricSummaryEl && !preserveContent) trafficMetricSummaryEl.innerHTML = skeletonCards(1);
+    if (policySummaryEl && !preserveContent) policySummaryEl.innerHTML = skeletonCards(1);
+    if (policyRulesEl && !preserveContent) policyRulesEl.innerHTML = skeletonCards(1);
     if (syncStatusEl && !preserveContent) syncStatusEl.textContent = 'Loading flow sync config...';
     if (flowLastResultEl && !preserveContent) flowLastResultEl.textContent = _syncResultLabel(_cloudFlowSyncLastResult, 'Flow');
     if (trafficSyncStatusEl && !preserveContent) trafficSyncStatusEl.textContent = 'Loading traffic sync config...';
@@ -1237,6 +1345,7 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
         loadCloudTopology({ preserveContent }),
         loadCloudFlowAnalytics({ preserveContent }),
         loadCloudTrafficMetricAnalytics({ preserveContent }),
+        loadCloudPolicyVisibility({ preserveContent }),
         loadCloudFlowSync({ preserveContent }),
         loadCloudTrafficSync({ preserveContent }),
     ]);
@@ -1251,4 +1360,6 @@ export function destroyCloudVisibility() {
     _cloudTrafficSyncConfig = null;
     _cloudTrafficSyncCursors = [];
     _cloudTrafficSyncLastResult = null;
+    _cloudPolicyEffectiveViews = [];
+    _cloudPolicyRules = [];
 }

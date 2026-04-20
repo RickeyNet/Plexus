@@ -102,6 +102,182 @@ def _normalize_connection(
     }
 
 
+def _join_policy_selectors(values: list[str]) -> str:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return ", ".join(out)
+
+
+def _port_expression(protocol: str, from_port, to_port) -> str:
+    proto = str(protocol or "").strip().lower()
+    if proto in {"-1", "all", "*", ""}:
+        return "all"
+    if from_port in (None, "") and to_port in (None, ""):
+        return "all"
+    try:
+        start = int(from_port)
+    except Exception:
+        start = None
+    try:
+        end = int(to_port)
+    except Exception:
+        end = None
+    if start is None and end is None:
+        return "all"
+    if start is None:
+        return str(end)
+    if end is None or end == start:
+        return str(start)
+    return f"{start}-{end}"
+
+
+def _aws_security_group_rules(group: dict, *, resource_uid: str) -> list[dict]:
+    rules: list[dict] = []
+
+    def _selectors(permission: dict) -> str:
+        values: list[str] = []
+        for item in permission.get("IpRanges", []) or []:
+            cidr = str(item.get("CidrIp") or "").strip()
+            if cidr:
+                values.append(cidr)
+        for item in permission.get("Ipv6Ranges", []) or []:
+            cidr = str(item.get("CidrIpv6") or "").strip()
+            if cidr:
+                values.append(cidr)
+        for item in permission.get("UserIdGroupPairs", []) or []:
+            group_id = str(item.get("GroupId") or "").strip()
+            user_id = str(item.get("UserId") or "").strip()
+            if group_id:
+                values.append(f"{user_id + '/' if user_id else ''}sg:{group_id}")
+        for item in permission.get("PrefixListIds", []) or []:
+            prefix_id = str(item.get("PrefixListId") or "").strip()
+            if prefix_id:
+                values.append(f"prefix:{prefix_id}")
+        return _join_policy_selectors(values) or "any"
+
+    for direction, key in (("inbound", "IpPermissions"), ("outbound", "IpPermissionsEgress")):
+        for idx, permission in enumerate(group.get(key, []) or []):
+            protocol = str(permission.get("IpProtocol") or "all").strip().lower()
+            if protocol == "-1":
+                protocol = "all"
+            rules.append(
+                {
+                    "rule_uid": f"{resource_uid}:{direction}:{idx + 1}",
+                    "rule_name": f"{direction}-{idx + 1}",
+                    "direction": direction,
+                    "action": "allow",
+                    "protocol": protocol,
+                    "source_selector": _selectors(permission) if direction == "inbound" else "self",
+                    "destination_selector": _selectors(permission) if direction == "outbound" else "self",
+                    "port_expression": _port_expression(protocol, permission.get("FromPort"), permission.get("ToPort")),
+                    "priority": None,
+                }
+            )
+    return rules
+
+
+def _azure_selector(rule_obj, singular: str, plural: str) -> str:
+    values: list[str] = []
+    single = getattr(rule_obj, singular, None)
+    if single not in (None, ""):
+        values.append(str(single))
+    for item in getattr(rule_obj, plural, None) or []:
+        text = str(item or "").strip()
+        if text:
+            values.append(text)
+    return _join_policy_selectors(values) or "any"
+
+
+def _azure_nsg_rules(nsg) -> list[dict]:
+    rules: list[dict] = []
+    explicit = list(getattr(nsg, "security_rules", None) or [])
+    default = list(getattr(nsg, "default_security_rules", None) or [])
+    for rule_obj in explicit + default:
+        direction = str(getattr(rule_obj, "direction", "") or "").strip().lower()
+        if direction == "ingress":
+            direction = "inbound"
+        elif direction == "egress":
+            direction = "outbound"
+        action = str(getattr(rule_obj, "access", "") or "").strip().lower()
+        protocol = str(getattr(rule_obj, "protocol", "all") or "all").strip().lower()
+        if protocol == "*":
+            protocol = "all"
+        rules.append(
+            {
+                "rule_uid": str(getattr(rule_obj, "id", "") or getattr(rule_obj, "name", "") or "").strip(),
+                "rule_name": str(getattr(rule_obj, "name", "") or "").strip(),
+                "direction": direction,
+                "action": action,
+                "protocol": protocol,
+                "source_selector": _azure_selector(rule_obj, "source_address_prefix", "source_address_prefixes"),
+                "destination_selector": _azure_selector(rule_obj, "destination_address_prefix", "destination_address_prefixes"),
+                "port_expression": _join_policy_selectors(
+                    [str(getattr(rule_obj, "destination_port_range", "") or "").strip()]
+                    + [str(item or "").strip() for item in (getattr(rule_obj, "destination_port_ranges", None) or [])]
+                ) or "all",
+                "priority": getattr(rule_obj, "priority", None),
+                "metadata": {
+                    "is_default": rule_obj in default,
+                    "description": str(getattr(rule_obj, "description", "") or "").strip(),
+                },
+            }
+        )
+    return rules
+
+
+def _gcp_firewall_rules(fw: dict, *, resource_uid: str) -> list[dict]:
+    rules: list[dict] = []
+    direction = str(fw.get("direction") or "INGRESS").strip().lower()
+    if direction == "ingress":
+        normalized_direction = "inbound"
+    elif direction == "egress":
+        normalized_direction = "outbound"
+    else:
+        normalized_direction = direction
+
+    source_selector = _join_policy_selectors([str(item or "").strip() for item in (fw.get("sourceRanges") or [])])
+    destination_selector = _join_policy_selectors([str(item or "").strip() for item in (fw.get("destinationRanges") or [])])
+    if not source_selector:
+        source_selector = "any" if normalized_direction == "inbound" else "self"
+    if not destination_selector:
+        destination_selector = "any" if normalized_direction == "outbound" else "self"
+
+    entries: list[tuple[str, dict]] = []
+    for action, key in (("allow", "allowed"), ("deny", "denied")):
+        for item in fw.get(key, []) or []:
+            entries.append((action, item))
+    if not entries:
+        entries.append(("allow", {}))
+
+    for idx, (action, item) in enumerate(entries):
+        protocol = str(item.get("IPProtocol") or "all").strip().lower() or "all"
+        ports = _join_policy_selectors([str(port or "").strip() for port in (item.get("ports") or [])]) or "all"
+        rules.append(
+            {
+                "rule_uid": f"{resource_uid}:{action}:{idx + 1}",
+                "rule_name": str(fw.get("name") or "firewall-rule").strip(),
+                "direction": normalized_direction,
+                "action": action,
+                "protocol": protocol,
+                "source_selector": source_selector,
+                "destination_selector": destination_selector,
+                "port_expression": ports,
+                "priority": fw.get("priority"),
+                "metadata": {
+                    "disabled": bool(fw.get("disabled", False)),
+                    "target_tags": [str(tag).strip() for tag in (fw.get("targetTags") or []) if str(tag).strip()],
+                },
+            }
+        )
+    return rules
+
+
 def _dedupe_resources(resources: list[dict]) -> list[dict]:
     merged: dict[str, dict] = {}
     for resource in resources:
@@ -248,7 +424,10 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         name=str(group.get("GroupName") or ""),
                         region=region,
                         status="active",
-                        metadata={"vpc_id": str(group.get("VpcId") or "")},
+                        metadata={
+                            "vpc_id": str(group.get("VpcId") or ""),
+                            "policy_rules": _aws_security_group_rules(group, resource_uid=f"aws:sg:{gid}"),
+                        },
                     )
                 )
         except (BotoCoreError, ClientError):
@@ -516,6 +695,10 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                     name=name,
                     region=str(nsg.location or ""),
                     status=str(getattr(nsg, "provisioning_state", "") or "active"),
+                    metadata={
+                        "resource_group": rg,
+                        "policy_rules": _azure_nsg_rules(nsg),
+                    },
                 )
             )
     except Exception:
@@ -690,6 +873,10 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
                         name=name,
                         region="global",
                         status="active",
+                        metadata={
+                            "network": net_name,
+                            "policy_rules": _gcp_firewall_rules(fw, resource_uid=uid),
+                        },
                     )
                 )
                 net_url = str(fw.get("network") or "")

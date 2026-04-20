@@ -258,6 +258,76 @@ async def test_discover_live_uses_collector_snapshot(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_discover_live_persists_cloud_policy_rules(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="aws", name="AWS Policy Live")
+    assert account is not None
+
+    def _collector(_account):
+        return (
+            [
+                {
+                    "provider": "aws",
+                    "resource_uid": "aws:sg:app-edge",
+                    "resource_type": "security_group",
+                    "name": "sg-app-edge",
+                    "region": "us-east-1",
+                    "status": "active",
+                    "metadata": {
+                        "policy_rules": [
+                            {
+                                "rule_uid": "aws:sg:app-edge:ingress:https",
+                                "rule_name": "HTTPS ingress",
+                                "direction": "inbound",
+                                "action": "allow",
+                                "protocol": "tcp",
+                                "source_selector": "0.0.0.0/0",
+                                "destination_selector": "self",
+                                "port_expression": "443",
+                            },
+                            {
+                                "rule_uid": "aws:sg:app-edge:egress:any",
+                                "rule_name": "All egress",
+                                "direction": "outbound",
+                                "action": "allow",
+                                "protocol": "all",
+                                "source_selector": "self",
+                                "destination_selector": "0.0.0.0/0",
+                                "port_expression": "all",
+                            },
+                        ]
+                    },
+                }
+            ],
+            [],
+        )
+
+    monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _collector)
+
+    result = await cloud_visibility_module.discover_cloud_account_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudDiscoveryRequest(mode="live", include_hybrid_links=False),
+    )
+
+    assert result["ok"] is True
+    assert result["summary"]["policy_rules"] == 2
+
+    rules = await cloud_visibility_module.cloud_policy_rules_api(account_id=int(account["id"]), provider="aws")
+    assert rules["count"] == 2
+    assert {row["direction"] for row in rules["rules"]} == {"inbound", "outbound"}
+
+    effective = await cloud_visibility_module.cloud_policy_effective_views_api(
+        account_id=int(account["id"]),
+        provider="aws",
+    )
+    assert effective["count"] == 1
+    assert effective["resources"][0]["rule_count"] == 2
+    assert effective["resources"][0]["public_ingress_count"] == 1
+    assert effective["resources"][0]["open_egress_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_discover_live_unavailable_raises_503(tmp_path, monkeypatch):
     await _init(tmp_path, monkeypatch)
     account = await db_module.create_cloud_account(provider="azure", name="Azure Live")
@@ -567,3 +637,30 @@ async def test_ingest_cloud_traffic_metrics_aws_format(tmp_path, monkeypatch):
     assert result["summary"]["sample_count"] == 1
     assert result["summary"]["metric_count"] == 1
     assert result["summary"]["resource_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sample_discovery_policy_rules_visible_via_api(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="gcp", name="GCP Sample Policy")
+    assert account is not None
+
+    result = await cloud_visibility_module.discover_cloud_account_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudDiscoveryRequest(mode="sample", include_hybrid_links=False),
+    )
+
+    assert result["ok"] is True
+    assert result["summary"]["policy_rules"] >= 2
+
+    rules = await cloud_visibility_module.cloud_policy_rules_api(provider="gcp", account_id=int(account["id"]))
+    assert rules["count"] >= 2
+    assert any(row["action"] == "deny" for row in rules["rules"])
+
+    effective = await cloud_visibility_module.cloud_policy_effective_views_api(
+        provider="gcp",
+        account_id=int(account["id"]),
+    )
+    assert effective["count"] >= 1
+    assert effective["resources"][0]["rule_count"] >= 2
