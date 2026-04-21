@@ -5,6 +5,8 @@ Provides pysnmp helpers, SNMP get/walk, CDP address parsing,
 neighbor discovery, and vendor-OS inference used by inventory
 and topology route modules.
 """
+from __future__ import annotations
+
 
 import asyncio
 import json

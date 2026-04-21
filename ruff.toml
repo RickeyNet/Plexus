@@ -1,6 +1,6 @@
 line-length = 120
 src = ["netcontrol", "templates", "tests"]
-target-version = "py311"
+target-version = "py314"
 
 [lint]
 select = ["E", "F", "I", "UP", "ASYNC"]

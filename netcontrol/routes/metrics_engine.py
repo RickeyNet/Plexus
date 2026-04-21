@@ -7,6 +7,8 @@ metrics_engine.py -- Prometheus-style metrics infrastructure:
   - Structured metrics query API
   - SNMP trap / syslog UDP receiver
 """
+from __future__ import annotations
+
 
 import asyncio
 import json

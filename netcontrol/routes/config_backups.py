@@ -1,6 +1,8 @@
 """
 config_backups.py -- Config backup routes: policies, backup records, restore, admin schedule.
 """
+from __future__ import annotations
+
 
 import asyncio
 

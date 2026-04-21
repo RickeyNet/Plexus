@@ -2,6 +2,8 @@
 monitoring.py -- Real-time device monitoring, alerting, SLA dashboards,
 and background poll/escalation loops.
 """
+from __future__ import annotations
+
 
 import asyncio
 import hashlib

@@ -1,6 +1,8 @@
 """
 risk_analysis.py -- Pre-change risk analysis engine and API routes.
 """
+from __future__ import annotations
+
 
 import asyncio
 import json

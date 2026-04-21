@@ -9,6 +9,8 @@ Provides API endpoints for:
 - Graph Trees (hierarchical navigation)
 - Data Source Profiles (per-device poll configuration)
 """
+from __future__ import annotations
+
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
