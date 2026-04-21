@@ -2045,6 +2045,25 @@ export async function getCloudFlowTimeline(params = {}) {
     return apiRequest(`/cloud/flow-logs/timeline${qs ? '?' + qs : ''}`);
 }
 
+export async function ingestCloudTrafficMetrics(id, data = {}) {
+    return apiRequest(`/cloud/accounts/${id}/traffic-metrics/ingest`, { method: 'POST', body: data });
+}
+
+export async function getCloudTrafficMetricSummary(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/traffic-metrics/summary${qs ? '?' + qs : ''}`);
+}
+
+export async function getCloudTrafficMetricTimeline(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/traffic-metrics/timeline${qs ? '?' + qs : ''}`);
+}
+
+export async function getCloudTrafficMetricTopResources(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/traffic-metrics/top-resources${qs ? '?' + qs : ''}`);
+}
+
 export async function getCloudFlowSyncConfig() {
     return apiRequest('/cloud/flow-sync/config');
 }

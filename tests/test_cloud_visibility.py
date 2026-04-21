@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from netcontrol.routes.cloud_visibility import (
     CloudDiscoveryRequest,
     CloudFlowIngestRequest,
+    CloudTrafficMetricIngestRequest,
     CloudValidationRequest,
     _build_sample_discovery_snapshot,
 )
@@ -448,3 +449,121 @@ async def test_ingest_cloud_flow_logs_aws_format(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert result["ingested"] == 1
     assert result["summary"]["action_breakdown"].get("accept") == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_cloud_traffic_metrics_normalized_and_query_stats(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="azure", name="Azure Traffic Metrics")
+    assert account is not None
+    account_id = int(account["id"])
+
+    ingest_result = await cloud_visibility_module.ingest_cloud_traffic_metrics_api(
+        account_id,
+        _DummyRequest(),
+        CloudTrafficMetricIngestRequest(
+            format="normalized",
+            source="pytest",
+            records=[
+                {
+                    "metric_name": "bytes_in",
+                    "metric_namespace": "azure.monitor",
+                    "resource_uid": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.Network/networkInterfaces/nic-a",
+                    "statistic": "total",
+                    "unit": "bytes",
+                    "value": 120000,
+                    "interval_start": "2026-04-20T12:00:00Z",
+                    "interval_end": "2026-04-20T12:05:00Z",
+                },
+                {
+                    "metric_name": "bytes_in",
+                    "metric_namespace": "azure.monitor",
+                    "resource_uid": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.Network/networkInterfaces/nic-a",
+                    "statistic": "total",
+                    "unit": "bytes",
+                    "value": 80000,
+                    "interval_start": "2026-04-20T12:05:00Z",
+                    "interval_end": "2026-04-20T12:10:00Z",
+                },
+                {
+                    "metric_name": "packets_out",
+                    "metric_namespace": "azure.monitor",
+                    "resource_uid": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.Network/networkInterfaces/nic-b",
+                    "statistic": "total",
+                    "unit": "count",
+                    "value": 2300,
+                    "interval_start": "2026-04-20T12:00:00Z",
+                    "interval_end": "2026-04-20T12:05:00Z",
+                },
+            ],
+        ),
+    )
+
+    assert ingest_result["ok"] is True
+    assert ingest_result["ingested"] == 3
+    assert ingest_result["summary"]["sample_count"] == 3
+    assert ingest_result["summary"]["metric_count"] == 2
+    assert ingest_result["summary"]["resource_count"] == 2
+
+    summary = await cloud_visibility_module.cloud_traffic_metric_summary_api(
+        account_id=account_id,
+        provider="azure",
+        hours=24,
+    )
+    assert summary["summary"]["sample_count"] == 3
+    assert summary["summary"]["metric_count"] == 2
+    assert summary["summary"]["resource_count"] == 2
+
+    top_resources = await cloud_visibility_module.cloud_traffic_metric_top_resources_api(
+        account_id=account_id,
+        provider="azure",
+        metric_name="bytes_in",
+        hours=24,
+        limit=10,
+    )
+    assert top_resources["count"] >= 1
+    assert "nic-a" in top_resources["resources"][0]["resource_uid"]
+
+    timeline = await cloud_visibility_module.cloud_traffic_metric_timeline_api(
+        account_id=account_id,
+        provider="azure",
+        metric_name="bytes_in",
+        hours=24,
+        bucket_minutes=5,
+    )
+    assert timeline["count"] >= 1
+
+    events = await db_module.get_trap_syslog_events(event_type="cloud_traffic_metric", limit=20)
+    assert any(e.get("source_ip") == f"cloud:azure:{account_id}" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_ingest_cloud_traffic_metrics_aws_format(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="aws", name="AWS Traffic Metrics")
+    assert account is not None
+
+    result = await cloud_visibility_module.ingest_cloud_traffic_metrics_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudTrafficMetricIngestRequest(
+            format="aws",
+            records=[
+                {
+                    "Namespace": "AWS/EC2",
+                    "MetricName": "NetworkIn",
+                    "Dimensions": [{"Name": "InstanceId", "Value": "i-abc123"}],
+                    "Timestamp": "2026-04-20T10:00:00Z",
+                    "Value": 3210.5,
+                    "Unit": "Bytes",
+                    "Statistic": "Sum",
+                }
+            ],
+        ),
+    )
+
+    assert result["ok"] is True
+    assert result["ingested"] == 1
+    assert result["summary"]["sample_count"] == 1
+    assert result["summary"]["metric_count"] == 1
+    assert result["summary"]["resource_count"] == 1
