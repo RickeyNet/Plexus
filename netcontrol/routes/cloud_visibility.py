@@ -195,6 +195,12 @@ def _serialize_hybrid_link(link: dict) -> dict:
     return item
 
 
+def _serialize_policy_rule(rule: dict) -> dict:
+    item = dict(rule)
+    item["metadata"] = _json_loads_safe(item.get("metadata_json"), {})
+    return item
+
+
 class CloudAccountCreate(BaseModel):
     provider: str
     name: str = Field(min_length=1)
@@ -915,7 +921,37 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
             {"resource_uid": "aws:vpc:core", "resource_type": "vpc", "name": "prod-core-vpc", "region": "us-east-1", "cidr": "10.200.0.0/16", "status": "active"},
             {"resource_uid": "aws:tgw:global", "resource_type": "transit_gateway", "name": "global-tgw", "region": "us-east-1", "status": "active"},
             {"resource_uid": "aws:dx:primary", "resource_type": "direct_connect", "name": "dx-primary", "region": "us-east-1", "status": "up"},
-            {"resource_uid": "aws:sg:app-edge", "resource_type": "security_group", "name": "sg-app-edge", "region": "us-east-1", "status": "active"},
+            {
+                "resource_uid": "aws:sg:app-edge",
+                "resource_type": "security_group",
+                "name": "sg-app-edge",
+                "region": "us-east-1",
+                "status": "active",
+                "metadata": {
+                    "policy_rules": [
+                        {
+                            "rule_uid": "aws:sg:app-edge:ingress:https",
+                            "rule_name": "HTTPS ingress",
+                            "direction": "inbound",
+                            "action": "allow",
+                            "protocol": "tcp",
+                            "source_selector": "0.0.0.0/0",
+                            "destination_selector": "self",
+                            "port_expression": "443",
+                        },
+                        {
+                            "rule_uid": "aws:sg:app-edge:egress:any",
+                            "rule_name": "All egress",
+                            "direction": "outbound",
+                            "action": "allow",
+                            "protocol": "all",
+                            "source_selector": "self",
+                            "destination_selector": "0.0.0.0/0",
+                            "port_expression": "all",
+                        },
+                    ],
+                },
+            },
         ]
         connections = [
             {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:tgw:global", "connection_type": "transit_gateway_attachment", "state": "attached"},
@@ -929,7 +965,39 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
             {"resource_uid": "azure:vnet:core", "resource_type": "vnet", "name": "corp-core-vnet", "region": "centralus", "cidr": "10.210.0.0/16", "status": "connected"},
             {"resource_uid": "azure:vnet:shared", "resource_type": "vnet", "name": "shared-services-vnet", "region": "centralus", "cidr": "10.211.0.0/16", "status": "connected"},
             {"resource_uid": "azure:er:primary", "resource_type": "expressroute", "name": "er-primary", "region": "centralus", "status": "provisioned"},
-            {"resource_uid": "azure:nsg:edge", "resource_type": "network_security_group", "name": "nsg-edge", "region": "centralus", "status": "active"},
+            {
+                "resource_uid": "azure:nsg:edge",
+                "resource_type": "network_security_group",
+                "name": "nsg-edge",
+                "region": "centralus",
+                "status": "active",
+                "metadata": {
+                    "policy_rules": [
+                        {
+                            "rule_uid": "azure:nsg:edge:allow-web",
+                            "rule_name": "AllowWeb",
+                            "direction": "inbound",
+                            "action": "allow",
+                            "protocol": "tcp",
+                            "source_selector": "10.0.0.0/8",
+                            "destination_selector": "10.210.10.0/24",
+                            "port_expression": "80,443",
+                            "priority": 100,
+                        },
+                        {
+                            "rule_uid": "azure:nsg:edge:deny-internet",
+                            "rule_name": "DenyInternet",
+                            "direction": "outbound",
+                            "action": "deny",
+                            "protocol": "all",
+                            "source_selector": "10.210.10.0/24",
+                            "destination_selector": "Internet",
+                            "port_expression": "all",
+                            "priority": 4096,
+                        },
+                    ],
+                },
+            },
         ]
         connections = [
             {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:vnet:shared", "connection_type": "vnet_peering", "state": "connected"},
@@ -942,7 +1010,39 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
         {"resource_uid": "gcp:vpc:core", "resource_type": "vpc", "name": "gcp-core-vpc", "region": "us-central1", "cidr": "10.220.0.0/16", "status": "active"},
         {"resource_uid": "gcp:router:core", "resource_type": "cloud_router", "name": "cr-core", "region": "us-central1", "status": "running"},
         {"resource_uid": "gcp:vpn:ha", "resource_type": "ha_vpn_gateway", "name": "ha-vpn-gw", "region": "us-central1", "status": "up"},
-        {"resource_uid": "gcp:fw:edge", "resource_type": "firewall_policy", "name": "fw-edge-policy", "region": "global", "status": "active"},
+        {
+            "resource_uid": "gcp:fw:edge",
+            "resource_type": "firewall_policy",
+            "name": "fw-edge-policy",
+            "region": "global",
+            "status": "active",
+            "metadata": {
+                "policy_rules": [
+                    {
+                        "rule_uid": "gcp:fw:edge:allow-https",
+                        "rule_name": "allow-https",
+                        "direction": "inbound",
+                        "action": "allow",
+                        "protocol": "tcp",
+                        "source_selector": "35.191.0.0/16, 130.211.0.0/22",
+                        "destination_selector": "self",
+                        "port_expression": "443",
+                        "priority": 1000,
+                    },
+                    {
+                        "rule_uid": "gcp:fw:edge:deny-ssh",
+                        "rule_name": "deny-ssh",
+                        "direction": "inbound",
+                        "action": "deny",
+                        "protocol": "tcp",
+                        "source_selector": "0.0.0.0/0",
+                        "destination_selector": "self",
+                        "port_expression": "22",
+                        "priority": 1100,
+                    },
+                ],
+            },
+        },
     ]
     connections = [
         {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:router:core", "connection_type": "router_attachment", "state": "up"},
@@ -1728,6 +1828,65 @@ async def cloud_hybrid_links_api(
 
     links = await db.get_cloud_hybrid_links(account_id=account_id, provider=normalized_provider)
     return {"links": [_serialize_hybrid_link(link) for link in links], "count": len(links)}
+
+
+@router.get("/api/cloud/policies/rules")
+async def cloud_policy_rules_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    resource_uid: str | None = Query(default=None),
+    direction: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=2000),
+):
+    try:
+        provider_value = provider if isinstance(provider, str) else None
+        normalized_provider = _normalize_provider(provider_value) if provider_value else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+
+    direction_value = direction if isinstance(direction, str) else None
+    normalized_direction = str(direction_value or "").strip().lower() or None
+    if normalized_direction and normalized_direction not in {"inbound", "outbound", "ingress", "egress"}:
+        raise HTTPException(status_code=400, detail="Unsupported policy direction")
+    if normalized_direction == "ingress":
+        normalized_direction = "inbound"
+    elif normalized_direction == "egress":
+        normalized_direction = "outbound"
+
+    action_value = action if isinstance(action, str) else None
+    normalized_action = str(action_value or "").strip().lower() or None
+    if normalized_action and normalized_action not in {"allow", "deny"}:
+        raise HTTPException(status_code=400, detail="Unsupported policy action")
+
+    resource_uid_value = resource_uid if isinstance(resource_uid, str) else None
+
+    limit_value = limit if isinstance(limit, int) else 200
+
+    rules = await db.get_cloud_policy_rules(
+        account_id=account_id,
+        provider=normalized_provider,
+        resource_uid=resource_uid_value.strip() if resource_uid_value else None,
+        direction=normalized_direction,
+        action=normalized_action,
+        limit=limit_value,
+    )
+    return {"rules": [_serialize_policy_rule(rule) for rule in rules], "count": len(rules)}
+
+
+@router.get("/api/cloud/policies/effective")
+async def cloud_policy_effective_views_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+):
+    try:
+        provider_value = provider if isinstance(provider, str) else None
+        normalized_provider = _normalize_provider(provider_value) if provider_value else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+
+    rows = await db.get_cloud_policy_effective_views(account_id=account_id, provider=normalized_provider)
+    return {"resources": rows, "count": len(rows)}
 
 
 @router.get("/api/cloud/topology")
