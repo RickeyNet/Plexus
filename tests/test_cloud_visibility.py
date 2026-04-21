@@ -664,3 +664,64 @@ async def test_sample_discovery_policy_rules_visible_via_api(tmp_path, monkeypat
     )
     assert effective["count"] >= 1
     assert effective["resources"][0]["rule_count"] >= 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "resource_types", "connection_types"),
+    [
+        ("aws", {"route_table", "internet_gateway", "nat_gateway"}, {"route_table_association", "route_next_hop", "internet_gateway_attachment"}),
+        ("azure", {"route_table", "virtual_network_gateway", "local_network_gateway"}, {"route_table_association", "virtual_network_gateway_attachment", "ipsec"}),
+        ("gcp", {"route_entry", "interconnect_attachment"}, {"route_table_association", "interconnect_attachment", "vpc_peering"}),
+    ],
+)
+async def test_sample_discovery_snapshot_includes_phase_d_topology(tmp_path, monkeypatch, provider, resource_types, connection_types):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider=provider, name=f"{provider} Sample Topology")
+    assert account is not None
+
+    resources, connections, _hybrid_links = await _build_sample_discovery_snapshot(
+        account,
+        connect_host_ids=[],
+        include_hybrid_links=False,
+    )
+
+    discovered_resource_types = {row["resource_type"] for row in resources}
+    discovered_connection_types = {row["connection_type"] for row in connections}
+
+    assert resource_types.issubset(discovered_resource_types)
+    assert connection_types.issubset(discovered_connection_types)
+
+
+@pytest.mark.asyncio
+async def test_cloud_policy_rules_api_supports_action_direction_and_resource_filters(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="gcp", name="GCP Filtered Policy")
+    assert account is not None
+
+    result = await cloud_visibility_module.discover_cloud_account_api(
+        int(account["id"]),
+        _DummyRequest(),
+        CloudDiscoveryRequest(mode="sample", include_hybrid_links=False),
+    )
+
+    assert result["ok"] is True
+
+    deny_rules = await cloud_visibility_module.cloud_policy_rules_api(
+        provider="gcp",
+        account_id=int(account["id"]),
+        action="deny",
+    )
+    assert deny_rules["count"] == 1
+    deny_rule = deny_rules["rules"][0]
+    assert deny_rule["action"] == "deny"
+
+    resource_rules = await cloud_visibility_module.cloud_policy_rules_api(
+        provider="gcp",
+        account_id=int(account["id"]),
+        resource_uid=deny_rule["resource_uid"],
+        direction="inbound",
+        action="deny",
+    )
+    assert resource_rules["count"] == 1
+    assert resource_rules["rules"][0]["rule_uid"] == deny_rule["rule_uid"]

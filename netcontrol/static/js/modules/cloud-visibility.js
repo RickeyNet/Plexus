@@ -23,6 +23,11 @@ let _cloudTrafficSyncCursors = [];
 let _cloudTrafficSyncLastResult = null;
 let _cloudPolicyEffectiveViews = [];
 let _cloudPolicyRules = [];
+let _cloudSelectedPolicyResourceUid = '';
+let _cloudSelectedPolicyResourceName = '';
+let _cloudPolicyExposureFilter = 'all';
+let _cloudPolicyDirectionFilter = '';
+let _cloudPolicyActionFilter = '';
 
 function _ensureCloudVisibilityLayout() {
     const page = document.getElementById('page-cloud-visibility');
@@ -157,6 +162,34 @@ function _ensureCloudVisibilityLayout() {
         </div>
 
         <h3 style="margin:0.25rem 0 0.5rem;">Cloud Policy Visibility</h3>
+        <div class="card" style="padding:0.9rem; margin-bottom:1rem;">
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem; align-items:end;">
+                <label>Exposure Filter
+                    <select id="cloud-policy-exposure-filter" class="form-select" onchange="onCloudPolicyFilterChange()">
+                        <option value="all" selected>All Policy Resources</option>
+                        <option value="public">Public Exposure Only</option>
+                    </select>
+                </label>
+                <label>Direction Filter
+                    <select id="cloud-policy-direction-filter" class="form-select" onchange="onCloudPolicyFilterChange()">
+                        <option value="">All Directions</option>
+                        <option value="inbound">Inbound</option>
+                        <option value="outbound">Outbound</option>
+                    </select>
+                </label>
+                <label>Action Filter
+                    <select id="cloud-policy-action-filter" class="form-select" onchange="onCloudPolicyFilterChange()">
+                        <option value="">All Actions</option>
+                        <option value="allow">Allow</option>
+                        <option value="deny">Deny</option>
+                    </select>
+                </label>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                    <button class="btn btn-secondary" onclick="clearCloudPolicyResourceSelection()">Clear Drilldown</button>
+                    <div id="cloud-policy-selection" style="color:var(--text-muted); font-size:0.9em;"></div>
+                </div>
+            </div>
+        </div>
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1rem; margin-bottom:1rem;">
             <div>
                 <h4 style="margin:0 0 0.45rem;">Effective Policy Views</h4>
@@ -249,6 +282,82 @@ function _policyQueryParams() {
     if (provider) params.provider = provider;
     if (accountId) params.account_id = accountId;
     return params;
+}
+
+function _isRouteResourceType(resourceType) {
+    const normalized = String(resourceType || '').toLowerCase();
+    return normalized === 'route_table' || normalized === 'route_entry';
+}
+
+function _isGatewayResourceType(resourceType) {
+    const normalized = String(resourceType || '').toLowerCase();
+    return [
+        'internet_gateway',
+        'nat_gateway',
+        'vpn_gateway',
+        'virtual_network_gateway',
+        'local_network_gateway',
+        'ha_vpn_gateway',
+        'cloud_router',
+        'expressroute',
+        'direct_connect',
+        'interconnect_attachment',
+        'vpn_tunnel',
+    ].includes(normalized);
+}
+
+function _isAttachmentConnection(connectionType) {
+    const normalized = String(connectionType || '').toLowerCase();
+    return normalized.includes('attachment') || normalized.includes('gateway') || normalized.includes('peering') || normalized.includes('route');
+}
+
+function _resourceMetadataSummary(resource) {
+    const metadata = resource && typeof resource.metadata === 'object' ? resource.metadata : {};
+    const parts = [];
+    if (metadata.resource_group) parts.push(`RG ${metadata.resource_group}`);
+    if (metadata.vpc_id) parts.push(`VPC ${metadata.vpc_id}`);
+    if (metadata.route_count) parts.push(`${_formatCount(metadata.route_count)} routes`);
+    if (metadata.association_count) parts.push(`${_formatCount(metadata.association_count)} attachments`);
+    if (metadata.gateway_type) parts.push(String(metadata.gateway_type));
+    if (metadata.vpn_type) parts.push(String(metadata.vpn_type));
+    if (metadata.bandwidth) parts.push(String(metadata.bandwidth));
+    if (metadata.next_hop) parts.push(`Next hop ${metadata.next_hop}`);
+    if (metadata.connectivity_type) parts.push(String(metadata.connectivity_type));
+    return parts.length ? parts.join(' | ') : '-';
+}
+
+function _connectionMetadataSummary(connection) {
+    const metadata = connection && typeof connection.metadata === 'object' ? connection.metadata : {};
+    const parts = [];
+    if (metadata.destination) parts.push(String(metadata.destination));
+    if (metadata.subnet_name) parts.push(`Subnet ${metadata.subnet_name}`);
+    if (metadata.origin) parts.push(`Origin ${metadata.origin}`);
+    if (metadata.peering_name) parts.push(`Peering ${metadata.peering_name}`);
+    if (metadata.connection_status) parts.push(`Status ${metadata.connection_status}`);
+    return parts.length ? parts.join(' | ') : '-';
+}
+
+function _isPublicPolicyRule(rule) {
+    const direction = String(rule?.direction || '').toLowerCase();
+    const source = String(rule?.source_selector || '').toLowerCase();
+    const destination = String(rule?.destination_selector || '').toLowerCase();
+    const inboundPublic = direction === 'inbound' && (source.includes('0.0.0.0/0') || source.includes('::/0') || source === 'any');
+    const outboundPublic = direction === 'outbound' && (destination.includes('0.0.0.0/0') || destination.includes('::/0') || destination === 'any');
+    return inboundPublic || outboundPublic;
+}
+
+function _filteredCloudPolicyEffectiveViews() {
+    if (_cloudPolicyExposureFilter !== 'public') {
+        return _cloudPolicyEffectiveViews;
+    }
+    return _cloudPolicyEffectiveViews.filter((row) => Number(row.public_ingress_count || 0) > 0 || Number(row.open_egress_count || 0) > 0);
+}
+
+function _filteredCloudPolicyRules() {
+    if (_cloudPolicyExposureFilter !== 'public') {
+        return _cloudPolicyRules;
+    }
+    return _cloudPolicyRules.filter((rule) => _isPublicPolicyRule(rule));
 }
 
 function _formatBytes(value) {
@@ -605,12 +714,18 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
     const connections = snapshot?.connections || [];
     const hybridLinks = snapshot?.hybrid_links || [];
     const summary = snapshot?.summary || {};
+    const routeResourceCount = resources.filter((resource) => _isRouteResourceType(resource.resource_type)).length;
+    const gatewayResourceCount = resources.filter((resource) => _isGatewayResourceType(resource.resource_type)).length;
+    const attachmentLinkCount = connections.filter((connection) => _isAttachmentConnection(connection.connection_type)).length;
 
     summaryEl.innerHTML = `
         <div class="drift-summary-grid">
             <div class="drift-summary-card"><div class="drift-summary-value">${summary.account_count ?? 0}</div><div class="drift-summary-label">Accounts</div></div>
             <div class="drift-summary-card"><div class="drift-summary-value">${summary.resource_count ?? 0}</div><div class="drift-summary-label">Cloud Resources</div></div>
             <div class="drift-summary-card"><div class="drift-summary-value">${summary.connection_count ?? 0}</div><div class="drift-summary-label">Cloud Links</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${routeResourceCount}</div><div class="drift-summary-label">Route Objects</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${gatewayResourceCount}</div><div class="drift-summary-label">Gateways</div></div>
+            <div class="drift-summary-card"><div class="drift-summary-value">${attachmentLinkCount}</div><div class="drift-summary-label">Attachment Links</div></div>
             <div class="drift-summary-card"><div class="drift-summary-value">${summary.hybrid_link_count ?? 0}</div><div class="drift-summary-label">Hybrid Links</div></div>
         </div>`;
 
@@ -619,7 +734,7 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
     } else {
         resourcesEl.innerHTML = `
             <table class="chart-table">
-                <thead><tr><th>Provider</th><th>Type</th><th>Name</th><th>Region</th><th>CIDR</th><th>Status</th></tr></thead>
+                <thead><tr><th>Provider</th><th>Type</th><th>Name</th><th>Region</th><th>CIDR</th><th>Status</th><th>Details</th></tr></thead>
                 <tbody>${resources.map((r) => `
                     <tr>
                         <td>${escapeHtml(_providerLabel(r.provider))}</td>
@@ -628,6 +743,7 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
                         <td>${escapeHtml(r.region || '-')}</td>
                         <td>${escapeHtml(r.cidr || '-')}</td>
                         <td>${escapeHtml(r.status || '-')}</td>
+                        <td>${escapeHtml(_resourceMetadataSummary(r))}</td>
                     </tr>`).join('')}</tbody>
             </table>`;
     }
@@ -637,7 +753,7 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
     } else {
         connectionsEl.innerHTML = `
             <table class="chart-table">
-                <thead><tr><th>Provider</th><th>From</th><th>To</th><th>Type</th><th>State</th></tr></thead>
+                <thead><tr><th>Provider</th><th>From</th><th>To</th><th>Type</th><th>State</th><th>Details</th></tr></thead>
                 <tbody>${connections.map((c) => `
                     <tr>
                         <td>${escapeHtml(_providerLabel(c.provider))}</td>
@@ -645,6 +761,7 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
                         <td>${escapeHtml(c.target_name || c.target_resource_uid || '')}</td>
                         <td>${escapeHtml(c.connection_type || '')}</td>
                         <td>${escapeHtml(c.state || '-')}</td>
+                        <td>${escapeHtml(_connectionMetadataSummary(c))}</td>
                     </tr>`).join('')}</tbody>
             </table>`;
     }
@@ -808,12 +925,21 @@ async function loadCloudTrafficMetricAnalytics({ preserveContent = false } = {})
 function _renderCloudPolicyVisibility() {
     const summaryEl = document.getElementById('cloud-policy-summary');
     const rulesEl = document.getElementById('cloud-policy-rules');
-    if (!summaryEl || !rulesEl) return;
+    const selectionEl = document.getElementById('cloud-policy-selection');
+    if (!summaryEl || !rulesEl || !selectionEl) return;
 
-    if (!_cloudPolicyEffectiveViews.length) {
+    const filteredViews = _filteredCloudPolicyEffectiveViews();
+    const filteredRules = _filteredCloudPolicyRules();
+    if (_cloudSelectedPolicyResourceUid) {
+        selectionEl.innerHTML = `Drilldown: <strong>${escapeHtml(_cloudSelectedPolicyResourceName || _cloudSelectedPolicyResourceUid)}</strong>`;
+    } else {
+        selectionEl.textContent = 'Click a policy resource row to drill into its rules.';
+    }
+
+    if (!filteredViews.length) {
         summaryEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No effective cloud policy views available for current filters.</p></div>';
     } else {
-        const totals = _cloudPolicyEffectiveViews.reduce((acc, row) => {
+        const totals = filteredViews.reduce((acc, row) => {
             acc.resources += 1;
             acc.rules += Number(row.rule_count || 0);
             acc.publicIngress += Number(row.public_ingress_count || 0);
@@ -830,20 +956,30 @@ function _renderCloudPolicyVisibility() {
                 <div class="card" style="padding:0.75rem;"><div class="text-muted" style="font-size:0.75rem;">Deny Rules</div><div style="font-size:1.35rem; font-weight:700;">${_formatCount(totals.denies)}</div></div>
             </div>
             <table class="chart-table">
-                <thead><tr><th>Resource</th><th>Provider</th><th>Rules</th><th>Public Ingress</th><th>Open Egress</th><th>Deny</th></tr></thead>
-                <tbody>${_cloudPolicyEffectiveViews.map((row) => `
-                    <tr>
+                <thead><tr><th>Resource</th><th>Provider</th><th>Rules</th><th>Public Ingress</th><th>Open Egress</th><th>Deny</th><th></th></tr></thead>
+                <tbody>${filteredViews.map((row) => {
+                    const highlighted = Number(row.public_ingress_count || 0) > 0 || Number(row.open_egress_count || 0) > 0;
+                    const selected = _cloudSelectedPolicyResourceUid && row.resource_uid === _cloudSelectedPolicyResourceUid;
+                    const rowStyle = selected
+                        ? 'background:rgba(25,118,210,0.14);'
+                        : highlighted
+                            ? 'background:rgba(255,145,0,0.12);'
+                            : '';
+                    return `
+                    <tr style="${rowStyle}">
                         <td>${escapeHtml(row.resource_name || row.resource_uid || '-')}<div class="text-muted" style="font-size:0.75rem;">${escapeHtml(row.resource_type || '')}</div></td>
                         <td>${escapeHtml(_providerLabel(row.provider || ''))}</td>
                         <td>${_formatCount(row.rule_count)}</td>
                         <td>${_formatCount(row.public_ingress_count)}</td>
                         <td>${_formatCount(row.open_egress_count)}</td>
                         <td>${_formatCount(row.deny_count)}</td>
-                    </tr>`).join('')}</tbody>
+                        <td><button class="btn btn-sm btn-secondary" onclick="selectCloudPolicyResource('${encodeURIComponent(row.resource_uid || '')}')">${selected ? 'Selected' : 'View Rules'}</button></td>
+                    </tr>`;
+                }).join('')}</tbody>
             </table>`;
     }
 
-    if (!_cloudPolicyRules.length) {
+    if (!filteredRules.length) {
         rulesEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No cloud policy rules discovered yet. Run discovery for a cloud account to populate security-group, NSG, or firewall rules.</p></div>';
         return;
     }
@@ -851,15 +987,19 @@ function _renderCloudPolicyVisibility() {
     rulesEl.innerHTML = `
         <table class="chart-table">
             <thead><tr><th>Resource</th><th>Rule</th><th>Direction</th><th>Action</th><th>Protocol / Ports</th><th>Selectors</th></tr></thead>
-            <tbody>${_cloudPolicyRules.map((row) => `
-                <tr>
+            <tbody>${filteredRules.map((row) => {
+                const highlighted = _isPublicPolicyRule(row);
+                const rowStyle = highlighted ? 'background:rgba(255,145,0,0.12);' : '';
+                return `
+                <tr style="${rowStyle}">
                     <td>${escapeHtml(row.resource_name || row.resource_uid || '-')}<div class="text-muted" style="font-size:0.75rem;">${escapeHtml(_providerLabel(row.provider || ''))}</div></td>
                     <td>${escapeHtml(row.rule_name || row.rule_uid || '-')}<div class="text-muted" style="font-size:0.75rem;">Priority: ${escapeHtml(row.priority ?? '-')}</div></td>
                     <td>${escapeHtml(row.direction || '-')}</td>
                     <td>${escapeHtml(row.action || '-')}</td>
                     <td>${escapeHtml((row.protocol || 'all').toUpperCase())}<div class="text-muted" style="font-size:0.75rem;">${escapeHtml(row.port_expression || 'all')}</div></td>
                     <td><div class="text-muted" style="font-size:0.75rem;">Src</div>${escapeHtml(row.source_selector || '-')}<div class="text-muted" style="font-size:0.75rem; margin-top:0.35rem;">Dst</div>${escapeHtml(row.destination_selector || '-')}</td>
-                </tr>`).join('')}</tbody>
+                </tr>`;
+            }).join('')}</tbody>
         </table>`;
 }
 
@@ -874,12 +1014,25 @@ async function loadCloudPolicyVisibility({ preserveContent = false } = {}) {
     }
 
     const params = _policyQueryParams();
+    if (_cloudPolicyDirectionFilter) params.direction = _cloudPolicyDirectionFilter;
+    if (_cloudPolicyActionFilter) params.action = _cloudPolicyActionFilter;
+    if (_cloudSelectedPolicyResourceUid) params.resource_uid = _cloudSelectedPolicyResourceUid;
     const [effectiveResp, rulesResp] = await Promise.all([
         api.getCloudPolicyEffectiveViews(params),
         api.getCloudPolicyRules({ ...params, limit: 200 }),
     ]);
     _cloudPolicyEffectiveViews = Array.isArray(effectiveResp?.resources) ? effectiveResp.resources : [];
     _cloudPolicyRules = Array.isArray(rulesResp?.rules) ? rulesResp.rules : [];
+    if (_cloudSelectedPolicyResourceUid) {
+        const selected = _cloudPolicyEffectiveViews.find((row) => row.resource_uid === _cloudSelectedPolicyResourceUid)
+            || _cloudPolicyRules.find((row) => row.resource_uid === _cloudSelectedPolicyResourceUid);
+        if (selected) {
+            _cloudSelectedPolicyResourceName = selected.resource_name || selected.resource_uid || _cloudSelectedPolicyResourceUid;
+        } else {
+            _cloudSelectedPolicyResourceUid = '';
+            _cloudSelectedPolicyResourceName = '';
+        }
+    }
     _renderCloudPolicyVisibility();
 }
 
@@ -1173,6 +1326,8 @@ async function runCloudDiscovery(accountId) {
 window.runCloudDiscovery = runCloudDiscovery;
 
 async function onCloudProviderFilterChange() {
+    _cloudSelectedPolicyResourceUid = '';
+    _cloudSelectedPolicyResourceName = '';
     _renderAccountFilter();
     await loadCloudAccounts({ preserveContent: false });
     await loadCloudTopology({ preserveContent: false });
@@ -1183,12 +1338,39 @@ async function onCloudProviderFilterChange() {
 window.onCloudProviderFilterChange = onCloudProviderFilterChange;
 
 async function onCloudAccountFilterChange() {
+    _cloudSelectedPolicyResourceUid = '';
+    _cloudSelectedPolicyResourceName = '';
     await loadCloudTopology({ preserveContent: false });
     await loadCloudFlowAnalytics({ preserveContent: false });
     await loadCloudTrafficMetricAnalytics({ preserveContent: false });
     await loadCloudPolicyVisibility({ preserveContent: false });
 }
 window.onCloudAccountFilterChange = onCloudAccountFilterChange;
+
+async function onCloudPolicyFilterChange() {
+    _cloudPolicyExposureFilter = String(document.getElementById('cloud-policy-exposure-filter')?.value || 'all').toLowerCase();
+    _cloudPolicyDirectionFilter = String(document.getElementById('cloud-policy-direction-filter')?.value || '').toLowerCase();
+    _cloudPolicyActionFilter = String(document.getElementById('cloud-policy-action-filter')?.value || '').toLowerCase();
+    await loadCloudPolicyVisibility({ preserveContent: false });
+}
+window.onCloudPolicyFilterChange = onCloudPolicyFilterChange;
+
+async function selectCloudPolicyResource(encodedResourceUid) {
+    const resourceUid = decodeURIComponent(String(encodedResourceUid || ''));
+    _cloudSelectedPolicyResourceUid = resourceUid;
+    const selected = _cloudPolicyEffectiveViews.find((row) => row.resource_uid === resourceUid)
+        || _cloudPolicyRules.find((row) => row.resource_uid === resourceUid);
+    _cloudSelectedPolicyResourceName = selected?.resource_name || resourceUid;
+    await loadCloudPolicyVisibility({ preserveContent: false });
+}
+window.selectCloudPolicyResource = selectCloudPolicyResource;
+
+async function clearCloudPolicyResourceSelection() {
+    _cloudSelectedPolicyResourceUid = '';
+    _cloudSelectedPolicyResourceName = '';
+    await loadCloudPolicyVisibility({ preserveContent: false });
+}
+window.clearCloudPolicyResourceSelection = clearCloudPolicyResourceSelection;
 
 async function onCloudAnalyticsFilterChange() {
     await loadCloudFlowAnalytics({ preserveContent: false });
@@ -1318,6 +1500,9 @@ window.refreshCloudVisibility = refreshCloudVisibility;
 
 export async function loadCloudVisibility({ preserveContent = false } = {}) {
     _ensureCloudVisibilityLayout();
+    const exposureFilterEl = document.getElementById('cloud-policy-exposure-filter');
+    const directionFilterEl = document.getElementById('cloud-policy-direction-filter');
+    const actionFilterEl = document.getElementById('cloud-policy-action-filter');
     const accountsEl = document.getElementById('cloud-accounts-list');
     const topologyEl = document.getElementById('cloud-topology-summary');
     const summaryEl = document.getElementById('cloud-flow-summary');
@@ -1338,6 +1523,9 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
     if (flowLastResultEl && !preserveContent) flowLastResultEl.textContent = _syncResultLabel(_cloudFlowSyncLastResult, 'Flow');
     if (trafficSyncStatusEl && !preserveContent) trafficSyncStatusEl.textContent = 'Loading traffic sync config...';
     if (trafficLastResultEl && !preserveContent) trafficLastResultEl.textContent = _syncResultLabel(_cloudTrafficSyncLastResult, 'Traffic');
+    if (exposureFilterEl) exposureFilterEl.value = _cloudPolicyExposureFilter;
+    if (directionFilterEl) directionFilterEl.value = _cloudPolicyDirectionFilter;
+    if (actionFilterEl) actionFilterEl.value = _cloudPolicyActionFilter;
 
     await _ensureProvidersLoaded();
     await loadCloudAccounts({ preserveContent });
@@ -1362,4 +1550,9 @@ export function destroyCloudVisibility() {
     _cloudTrafficSyncLastResult = null;
     _cloudPolicyEffectiveViews = [];
     _cloudPolicyRules = [];
+    _cloudSelectedPolicyResourceUid = '';
+    _cloudSelectedPolicyResourceName = '';
+    _cloudPolicyExposureFilter = 'all';
+    _cloudPolicyDirectionFilter = '';
+    _cloudPolicyActionFilter = '';
 }
