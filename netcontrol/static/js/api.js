@@ -2081,6 +2081,23 @@ export async function getCloudFlowSyncCursors() {
     return apiRequest('/cloud/flow-sync/cursors');
 }
 
+export async function getCloudTrafficSyncConfig() {
+    return apiRequest('/cloud/traffic-sync/config');
+}
+
+export async function updateCloudTrafficSyncConfig(data = {}) {
+    return apiRequest('/cloud/traffic-sync/config', { method: 'PUT', body: data });
+}
+
+export async function triggerCloudTrafficSyncPull(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/traffic-sync/pull${qs ? '?' + qs : ''}`, { method: 'POST' });
+}
+
+export async function getCloudTrafficSyncCursors() {
+    return apiRequest('/cloud/traffic-sync/cursors');
+}
+
 export async function getCloudResources(params = {}) {
     const qs = new URLSearchParams(params).toString();
     return apiRequest(`/cloud/resources${qs ? '?' + qs : ''}`);
