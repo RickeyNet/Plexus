@@ -287,6 +287,21 @@ CLOUD_FLOW_SYNC_MAX_INTERVAL = 3600
 
 CLOUD_FLOW_SYNC_CONFIG: dict = dict(CLOUD_FLOW_SYNC_DEFAULTS)
 
+CLOUD_SYNC_STATUS_DEFAULTS = {
+    "last_run_at": "",
+    "source": "",
+    "scope": "",
+    "account_id": None,
+    "account_name": "",
+    "ok": None,
+    "ingested": 0,
+    "accounts_processed": 0,
+    "error_count": 0,
+    "errors": [],
+}
+
+CLOUD_FLOW_SYNC_STATUS: dict = dict(CLOUD_SYNC_STATUS_DEFAULTS)
+
 CLOUD_TRAFFIC_METRIC_SYNC_DEFAULTS = {
     "enabled": False,
     "interval_seconds": 300,  # 5 minutes
@@ -297,6 +312,7 @@ CLOUD_TRAFFIC_METRIC_SYNC_MIN_INTERVAL = 60
 CLOUD_TRAFFIC_METRIC_SYNC_MAX_INTERVAL = 3600
 
 CLOUD_TRAFFIC_METRIC_SYNC_CONFIG: dict = dict(CLOUD_TRAFFIC_METRIC_SYNC_DEFAULTS)
+CLOUD_TRAFFIC_METRIC_SYNC_STATUS: dict = dict(CLOUD_SYNC_STATUS_DEFAULTS)
 
 
 # ── Sanitizer functions ─────────────────────────────────────────────────────
@@ -558,6 +574,28 @@ def _sanitize_cloud_traffic_metric_sync_config(data: dict | None) -> dict:
             min(CLOUD_TRAFFIC_METRIC_SYNC_MAX_INTERVAL, cfg["interval_seconds"]),
         )
         cfg["lookback_minutes"] = max(5, min(1440, int(data.get("lookback_minutes", cfg["lookback_minutes"]))))
+    return cfg
+
+
+def _sanitize_cloud_sync_status(data: dict | None) -> dict:
+    cfg = dict(CLOUD_SYNC_STATUS_DEFAULTS)
+    if isinstance(data, dict):
+        cfg["last_run_at"] = str(data.get("last_run_at", cfg["last_run_at"]) or "").strip()
+        source = str(data.get("source", cfg["source"]) or "").strip().lower()
+        cfg["source"] = source if source in {"manual", "scheduled"} else ""
+        scope = str(data.get("scope", cfg["scope"]) or "").strip().lower()
+        cfg["scope"] = scope if scope in {"account", "all"} else ""
+        account_id = data.get("account_id")
+        cfg["account_id"] = int(account_id) if account_id is not None else None
+        cfg["account_name"] = str(data.get("account_name", cfg["account_name"]) or "").strip()
+        ok_value = data.get("ok")
+        cfg["ok"] = bool(ok_value) if isinstance(ok_value, bool) else None
+        cfg["ingested"] = max(0, int(data.get("ingested", cfg["ingested"])))
+        cfg["accounts_processed"] = max(0, int(data.get("accounts_processed", cfg["accounts_processed"])))
+        errors = data.get("errors", [])
+        if isinstance(errors, list):
+            cfg["errors"] = [str(item).strip() for item in errors if str(item).strip()][:50]
+        cfg["error_count"] = max(0, int(data.get("error_count", len(cfg["errors"]))))
     return cfg
 
 

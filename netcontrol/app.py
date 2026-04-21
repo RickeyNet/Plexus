@@ -121,7 +121,10 @@ from netcontrol.routes.billing import (
     router as billing_router,
 )
 from netcontrol.routes.cloud_visibility import (
+    build_cloud_sync_status,
     init_cloud_visibility,
+    persist_cloud_flow_sync_status,
+    persist_cloud_traffic_sync_status,
     router as cloud_visibility_router,
 )
 from netcontrol.routes.federation import (
@@ -765,8 +768,12 @@ async def _load_persisted_security_settings():
     state.MONITORING_CONFIG = _sanitize_monitoring_config(monitoring)
     cloud_flow_sync = await db.get_auth_setting("cloud_flow_sync")
     state.CLOUD_FLOW_SYNC_CONFIG = _sanitize_cloud_flow_sync_config(cloud_flow_sync)
+    cloud_flow_sync_status = await db.get_auth_setting("cloud_flow_sync_status")
+    state.CLOUD_FLOW_SYNC_STATUS = state._sanitize_cloud_sync_status(cloud_flow_sync_status)
     cloud_traffic_metric_sync = await db.get_auth_setting("cloud_traffic_metric_sync")
     state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG = _sanitize_cloud_traffic_metric_sync_config(cloud_traffic_metric_sync)
+    cloud_traffic_metric_sync_status = await db.get_auth_setting("cloud_traffic_metric_sync_status")
+    state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS = state._sanitize_cloud_sync_status(cloud_traffic_metric_sync_status)
 
 
 def require_feature(feature_key: str):
@@ -810,6 +817,9 @@ async def _cloud_flow_sync_loop() -> None:
             continue
         try:
             result = await pull_flow_logs_all_accounts()
+            await persist_cloud_flow_sync_status(
+                build_cloud_sync_status(result, source="scheduled", scope="all")
+            )
             total = result.get("total_ingested", 0)
             processed = result.get("accounts_processed", 0)
             if total > 0:
@@ -821,6 +831,9 @@ async def _cloud_flow_sync_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            await persist_cloud_flow_sync_status(
+                build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
+            )
             LOGGER.warning("Cloud flow sync loop failed: %s", type(exc).__name__)
 
 
@@ -835,6 +848,9 @@ async def _cloud_traffic_metric_sync_loop() -> None:
         try:
             lookback = max(5, int(cfg.get("lookback_minutes", 15)))
             result = await pull_traffic_metrics_all_accounts(lookback_minutes=lookback)
+            await persist_cloud_traffic_sync_status(
+                build_cloud_sync_status(result, source="scheduled", scope="all")
+            )
             total = result.get("total_ingested", 0)
             processed = result.get("accounts_processed", 0)
             if total > 0:
@@ -846,6 +862,9 @@ async def _cloud_traffic_metric_sync_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            await persist_cloud_traffic_sync_status(
+                build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
+            )
             LOGGER.warning("Cloud traffic sync loop failed: %s", type(exc).__name__)
 
 

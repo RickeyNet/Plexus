@@ -97,6 +97,80 @@ def _json_loads_safe(raw: str | None, fallback):
         return fallback
 
 
+def _collect_sync_errors(result: dict) -> list[str]:
+    errors: list[str] = []
+    direct_errors = result.get("errors")
+    if isinstance(direct_errors, list):
+        errors.extend(str(item).strip() for item in direct_errors if str(item).strip())
+
+    nested = result.get("results")
+    if isinstance(nested, dict):
+        for item in nested.values():
+            if not isinstance(item, dict):
+                continue
+            nested_errors = item.get("errors")
+            if isinstance(nested_errors, list):
+                errors.extend(str(err).strip() for err in nested_errors if str(err).strip())
+            nested_error = str(item.get("error") or "").strip()
+            if nested_error:
+                errors.append(nested_error)
+
+    return errors[:50]
+
+
+def build_cloud_sync_status(
+    result: dict,
+    *,
+    source: str,
+    scope: str,
+    account_id: int | None = None,
+    account_name: str = "",
+) -> dict:
+    import netcontrol.routes.state as state
+
+    ingested = int(result.get("ingested", result.get("total_ingested", 0)) or 0)
+    accounts_processed = int(result.get("accounts_processed", 1 if scope == "account" else 0) or 0)
+    errors = _collect_sync_errors(result)
+    ok_value = result.get("ok")
+    if isinstance(ok_value, bool):
+        ok = ok_value
+    else:
+        ok = len(errors) == 0
+
+    return state._sanitize_cloud_sync_status(
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "source": source,
+            "scope": scope,
+            "account_id": account_id,
+            "account_name": account_name,
+            "ok": ok,
+            "ingested": ingested,
+            "accounts_processed": accounts_processed,
+            "error_count": len(errors),
+            "errors": errors,
+        }
+    )
+
+
+async def persist_cloud_flow_sync_status(status: dict) -> dict:
+    import netcontrol.routes.state as state
+
+    sanitized = state._sanitize_cloud_sync_status(status)
+    state.CLOUD_FLOW_SYNC_STATUS = sanitized
+    await db.set_auth_setting("cloud_flow_sync_status", sanitized)
+    return sanitized
+
+
+async def persist_cloud_traffic_sync_status(status: dict) -> dict:
+    import netcontrol.routes.state as state
+
+    sanitized = state._sanitize_cloud_sync_status(status)
+    state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS = sanitized
+    await db.set_auth_setting("cloud_traffic_metric_sync_status", sanitized)
+    return sanitized
+
+
 def _serialize_account(account: dict) -> dict:
     item = dict(account)
     item["auth_config"] = _json_loads_safe(item.get("auth_config_json"), {})
@@ -1696,7 +1770,7 @@ class CloudTrafficSyncConfigUpdate(BaseModel):
 @router.get("/api/cloud/flow-sync/config")
 async def get_cloud_flow_sync_config_api():
     import netcontrol.routes.state as state
-    return {"config": dict(state.CLOUD_FLOW_SYNC_CONFIG)}
+    return {"config": dict(state.CLOUD_FLOW_SYNC_CONFIG), "status": dict(state.CLOUD_FLOW_SYNC_STATUS)}
 
 
 @router.put("/api/cloud/flow-sync/config", dependencies=[Depends(_require_admin_dep)])
@@ -1743,8 +1817,20 @@ async def trigger_cloud_flow_sync_api(
             raise HTTPException(status_code=404, detail="Cloud account not found")
         result = await pull_flow_logs_for_account(account)
         result["account_id"] = account_id
+        status = await persist_cloud_flow_sync_status(
+            build_cloud_sync_status(
+                result,
+                source="manual",
+                scope="account",
+                account_id=account_id,
+                account_name=str(account.get("name") or "").strip(),
+            )
+        )
     else:
         result = await pull_flow_logs_all_accounts()
+        status = await persist_cloud_flow_sync_status(
+            build_cloud_sync_status(result, source="manual", scope="all")
+        )
 
     session = _get_session(request) or {}
     await _audit(
@@ -1754,7 +1840,7 @@ async def trigger_cloud_flow_sync_api(
         detail=f"account_id={account_id} ingested={result.get('ingested', result.get('total_ingested', 0))}",
         correlation_id=_corr_id(request),
     )
-    return {"ok": True, **result}
+    return {"ok": True, **result, "status": status}
 
 
 @router.get("/api/cloud/flow-sync/cursors")
@@ -1775,7 +1861,7 @@ async def get_cloud_flow_sync_cursors_api():
 async def get_cloud_traffic_sync_config_api():
     import netcontrol.routes.state as state
 
-    return {"config": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG)}
+    return {"config": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG), "status": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS)}
 
 
 @router.put("/api/cloud/traffic-sync/config", dependencies=[Depends(_require_admin_dep)])
@@ -1826,8 +1912,20 @@ async def trigger_cloud_traffic_sync_api(
             raise HTTPException(status_code=404, detail="Cloud account not found")
         result = await pull_traffic_metrics_for_account(account, lookback_minutes=lookback)
         result["account_id"] = account_id
+        status = await persist_cloud_traffic_sync_status(
+            build_cloud_sync_status(
+                result,
+                source="manual",
+                scope="account",
+                account_id=account_id,
+                account_name=str(account.get("name") or "").strip(),
+            )
+        )
     else:
         result = await pull_traffic_metrics_all_accounts(lookback_minutes=lookback)
+        status = await persist_cloud_traffic_sync_status(
+            build_cloud_sync_status(result, source="manual", scope="all")
+        )
 
     session = _get_session(request) or {}
     await _audit(
@@ -1837,7 +1935,7 @@ async def trigger_cloud_traffic_sync_api(
         detail=f"account_id={account_id} ingested={result.get('ingested', result.get('total_ingested', 0))}",
         correlation_id=_corr_id(request),
     )
-    return {"ok": True, **result}
+    return {"ok": True, **result, "status": status}
 
 
 @router.get("/api/cloud/traffic-sync/cursors")
