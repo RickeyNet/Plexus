@@ -87,6 +87,19 @@ def _peer_row_to_dict(row) -> dict:
     return d
 
 
+def _is_missing_federation_table_error(exc: Exception) -> bool:
+    """Return True when the backing federation tables are not available yet."""
+    message = str(exc).lower()
+    return (
+        "federation_" in message
+        and (
+            "no such table" in message
+            or "does not exist" in message
+            or "undefined table" in message
+        )
+    )
+
+
 async def _get_peer_or_404(peer_id: int) -> dict:
     """Fetch a peer by ID or raise 404."""
     cur = await db.get_db()
@@ -485,9 +498,10 @@ async def federation_overview(request: Request, _user=Depends(_require_admin_dep
 
 async def federation_sync_loop() -> None:
     """Periodically sync data from all enabled federation peers."""
+    missing_tables_logged = False
     while True:
-        await asyncio.sleep(_SYNC_INTERVAL_SECONDS)
         try:
+            await asyncio.sleep(_SYNC_INTERVAL_SECONDS)
             cur = await db.get_db()
             try:
                 c = await cur.execute(
@@ -542,5 +556,14 @@ async def federation_sync_loop() -> None:
                             await cur2.close()
                     except Exception:
                         LOGGER.warning("Failed to update sync status for peer %d", peer["id"])
-        except Exception:
-            LOGGER.exception("Federation sync loop iteration failed")
+            missing_tables_logged = False
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if _is_missing_federation_table_error(exc):
+                if not missing_tables_logged:
+                    LOGGER.warning("Federation sync loop waiting for federation tables to be available")
+                    missing_tables_logged = True
+                continue
+            missing_tables_logged = False
+            LOGGER.warning("Federation sync loop iteration failed: %s", exc, exc_info=True)

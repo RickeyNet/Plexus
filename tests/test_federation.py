@@ -11,11 +11,13 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import netcontrol.app as app_module
+import netcontrol.routes.federation as federation_module
 import pytest
 import routes.database as db_module
 
@@ -106,6 +108,42 @@ async def test_federation_tables_exist_after_init(tmp_path, monkeypatch):
         assert row is not None, "federation_snapshots table should exist"
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_federation_sync_loop_waits_for_tables(monkeypatch):
+    """Background sync loop should not crash or spam stack traces before migration 0014 exists."""
+
+    class _MissingTableConn:
+        async def execute(self, _sql, _params=None):
+            raise RuntimeError("no such table: federation_peers")
+
+        async def close(self):
+            return None
+
+    sleep_calls = 0
+
+    async def _fake_sleep(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError()
+
+    async def _fake_get_db():
+        return _MissingTableConn()
+
+    warning_mock = MagicMock()
+
+    monkeypatch.setattr(federation_module.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(federation_module.db, "get_db", _fake_get_db)
+    monkeypatch.setattr(federation_module.LOGGER, "warning", warning_mock)
+
+    with pytest.raises(asyncio.CancelledError):
+        await federation_module.federation_sync_loop()
+
+    warning_mock.assert_called_once_with(
+        "Federation sync loop waiting for federation tables to be available"
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════

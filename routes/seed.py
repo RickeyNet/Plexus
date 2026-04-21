@@ -71,10 +71,37 @@ async def seed():
     ]
 
     for group_name, desc, hosts in groups:
-        gid = await create_group(group_name, desc)
+        try:
+            gid = await create_group(group_name, desc)
+        except Exception as e:
+            # Seed can be entered concurrently in test/app startup paths.
+            # If the group already exists, re-use it instead of failing.
+            if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
+                db2 = await get_db()
+                try:
+                    row = await (await db2.execute(
+                        "SELECT id FROM inventory_groups WHERE name = ?",
+                        (group_name,),
+                    )).fetchone()
+                    if not row:
+                        raise
+                    gid = row[0]
+                finally:
+                    await db2.close()
+            else:
+                raise
+
+        seeded_hosts = 0
         for hostname, ip in hosts:
-            await add_host(gid, hostname, ip)
-        print(f"  + Group '{group_name}' with {len(hosts)} hosts")
+            try:
+                await add_host(gid, hostname, ip)
+                seeded_hosts += 1
+            except Exception as e:
+                # Same idempotency guard for host inserts.
+                if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
+                    continue
+                raise
+        print(f"  + Group '{group_name}' with {seeded_hosts} hosts")
 
     # ── Playbooks (from registry) ────────────────────────────────────────
     from routes.database import sync_playbook_filename

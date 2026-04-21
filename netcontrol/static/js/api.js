@@ -2098,6 +2098,16 @@ export async function getCloudTrafficSyncCursors() {
     return apiRequest('/cloud/traffic-sync/cursors');
 }
 
+export async function getCloudPolicyRules(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/policies/rules${qs ? '?' + qs : ''}`);
+}
+
+export async function getCloudPolicyEffectiveViews(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/policies/effective${qs ? '?' + qs : ''}`);
+}
+
 export async function getCloudResources(params = {}) {
     const qs = new URLSearchParams(params).toString();
     return apiRequest(`/cloud/resources${qs ? '?' + qs : ''}`);

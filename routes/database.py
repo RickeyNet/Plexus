@@ -134,6 +134,7 @@ _INSERT_ID_TABLES = {
     "cloud_resources",
     "cloud_connections",
     "cloud_hybrid_links",
+    "cloud_policy_rules",
     "federation_peers",
     "federation_snapshots",
 }
@@ -11106,6 +11107,59 @@ async def replace_cloud_discovery_snapshot(
     hybrid_links = hybrid_links or []
     now_iso = datetime.now(UTC).isoformat()
 
+    def _extract_policy_rules(resource_item: dict) -> list[dict]:
+        metadata = resource_item.get("metadata")
+        if metadata is None and resource_item.get("metadata_json"):
+            try:
+                metadata = json.loads(str(resource_item.get("metadata_json") or "{}"))
+            except Exception:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            return []
+        rules = metadata.get("policy_rules")
+        return rules if isinstance(rules, list) else []
+
+    def _normalize_policy_rule(resource_item: dict, rule: dict, index: int, provider_name: str) -> dict | None:
+        resource_uid = str(resource_item.get("resource_uid") or resource_item.get("id") or "").strip()
+        if not resource_uid or not isinstance(rule, dict):
+            return None
+        rule_name = str(rule.get("rule_name") or rule.get("name") or "").strip()
+        direction = str(rule.get("direction") or "").strip().lower()
+        if direction == "ingress":
+            direction = "inbound"
+        elif direction == "egress":
+            direction = "outbound"
+        action = str(rule.get("action") or "").strip().lower()
+        protocol = str(rule.get("protocol") or "all").strip().lower() or "all"
+        source_selector = str(rule.get("source_selector") or rule.get("source") or "").strip()
+        destination_selector = str(rule.get("destination_selector") or rule.get("destination") or "").strip()
+        port_expression = str(rule.get("port_expression") or rule.get("ports") or "").strip()
+        raw_priority = rule.get("priority")
+        priority = None
+        if raw_priority not in (None, ""):
+            try:
+                priority = int(raw_priority)
+            except Exception:
+                priority = None
+        raw_uid = str(rule.get("rule_uid") or rule.get("id") or "").strip()
+        rule_uid = raw_uid or f"{resource_uid}:rule:{index + 1}:{direction or 'any'}:{action or 'any'}:{rule_name or 'unnamed'}"
+        metadata = rule.get("metadata") if isinstance(rule.get("metadata"), dict) else {}
+        return {
+            "provider": str(resource_item.get("provider") or provider_name or "").strip(),
+            "resource_uid": resource_uid,
+            "rule_uid": rule_uid,
+            "rule_name": rule_name,
+            "direction": direction,
+            "action": action,
+            "protocol": protocol,
+            "source_selector": source_selector,
+            "destination_selector": destination_selector,
+            "port_expression": port_expression,
+            "priority": priority,
+            "metadata_json": _cloud_json_text(metadata),
+            "discovered_at": str(rule.get("discovered_at") or now_iso),
+        }
+
     db = await get_db()
     try:
         account_row = await db.execute(
@@ -11120,8 +11174,10 @@ async def replace_cloud_discovery_snapshot(
         await db.execute("DELETE FROM cloud_resources WHERE account_id = ?", (account_id,))
         await db.execute("DELETE FROM cloud_connections WHERE account_id = ?", (account_id,))
         await db.execute("DELETE FROM cloud_hybrid_links WHERE account_id = ?", (account_id,))
+        await db.execute("DELETE FROM cloud_policy_rules WHERE account_id = ?", (account_id,))
 
         resource_seen: dict[str, dict] = {}
+        policy_rule_seen: dict[str, dict] = {}
         for item in resources:
             uid = str(item.get("resource_uid") or item.get("id") or "").strip()
             if not uid:
@@ -11138,6 +11194,11 @@ async def replace_cloud_discovery_snapshot(
                 "discovered_at": str(item.get("discovered_at") or now_iso),
                 "updated_at": str(item.get("updated_at") or now_iso),
             }
+            for index, raw_rule in enumerate(_extract_policy_rules(item)):
+                normalized_rule = _normalize_policy_rule(item, raw_rule, index, provider)
+                if not normalized_rule:
+                    continue
+                policy_rule_seen[normalized_rule["rule_uid"]] = normalized_rule
 
         for item in resource_seen.values():
             await db.execute(
@@ -11241,6 +11302,31 @@ async def replace_cloud_discovery_snapshot(
                 ),
             )
 
+        for item in policy_rule_seen.values():
+            await db.execute(
+                """INSERT INTO cloud_policy_rules
+                   (account_id, provider, resource_uid, rule_uid, rule_name, direction,
+                    action, protocol, source_selector, destination_selector,
+                    port_expression, priority, metadata_json, discovered_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    account_id,
+                    item["provider"],
+                    item["resource_uid"],
+                    item["rule_uid"],
+                    item["rule_name"],
+                    item["direction"],
+                    item["action"],
+                    item["protocol"],
+                    item["source_selector"],
+                    item["destination_selector"],
+                    item["port_expression"],
+                    item["priority"],
+                    item["metadata_json"],
+                    item["discovered_at"],
+                ),
+            )
+
         await db.execute(
             """UPDATE cloud_accounts
                SET last_sync_at = ?,
@@ -11258,7 +11344,129 @@ async def replace_cloud_discovery_snapshot(
             "resources": len(resource_seen),
             "connections": len(connection_seen),
             "hybrid_links": len(hybrid_seen),
+            "policy_rules": len(policy_rule_seen),
         }
+    finally:
+        await db.close()
+
+
+async def get_cloud_policy_rules(
+    account_id: int | None = None,
+    provider: str | None = None,
+    resource_uid: str | None = None,
+    direction: str | None = None,
+    action: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if account_id is not None:
+            clauses.append("pr.account_id = ?")
+            params.append(account_id)
+        if provider:
+            clauses.append("pr.provider = ?")
+            params.append(provider)
+        if resource_uid:
+            clauses.append("pr.resource_uid = ?")
+            params.append(resource_uid)
+        if direction:
+            clauses.append("LOWER(pr.direction) = ?")
+            params.append(direction.lower())
+        if action:
+            clauses.append("LOWER(pr.action) = ?")
+            params.append(action.lower())
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, min(int(limit), 2000)))
+        cursor = await db.execute(
+            f"""SELECT pr.*, ca.name AS account_name,
+                       cr.name AS resource_name,
+                       cr.resource_type,
+                       cr.region AS resource_region
+                FROM cloud_policy_rules pr
+                JOIN cloud_accounts ca ON ca.id = pr.account_id
+                LEFT JOIN cloud_resources cr
+                  ON cr.account_id = pr.account_id
+                 AND cr.resource_uid = pr.resource_uid
+                {where}
+                ORDER BY pr.provider,
+                         COALESCE(cr.name, pr.resource_uid),
+                         pr.direction,
+                         CASE WHEN pr.priority IS NULL THEN 2147483647 ELSE pr.priority END,
+                         pr.rule_name,
+                         pr.rule_uid
+                LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_cloud_policy_effective_views(
+    account_id: int | None = None,
+    provider: str | None = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses = [
+            "cr.resource_type IN ('security_group', 'network_security_group', 'firewall_policy')",
+        ]
+        params: list = []
+        if account_id is not None:
+            clauses.append("cr.account_id = ?")
+            params.append(account_id)
+        if provider:
+            clauses.append("cr.provider = ?")
+            params.append(provider)
+        where = " AND ".join(clauses)
+        cursor = await db.execute(
+            f"""SELECT cr.account_id,
+                       ca.name AS account_name,
+                       cr.provider,
+                       cr.resource_uid,
+                       cr.resource_type,
+                       cr.name AS resource_name,
+                       cr.region,
+                       COUNT(pr.id) AS rule_count,
+                       COALESCE(SUM(CASE WHEN LOWER(COALESCE(pr.direction, '')) = 'inbound'
+                                             AND LOWER(COALESCE(pr.action, '')) = 'allow'
+                                        THEN 1 ELSE 0 END), 0) AS inbound_allow_count,
+                       COALESCE(SUM(CASE WHEN LOWER(COALESCE(pr.direction, '')) = 'outbound'
+                                             AND LOWER(COALESCE(pr.action, '')) = 'allow'
+                                        THEN 1 ELSE 0 END), 0) AS outbound_allow_count,
+                       COALESCE(SUM(CASE WHEN LOWER(COALESCE(pr.action, '')) = 'deny'
+                                        THEN 1 ELSE 0 END), 0) AS deny_count,
+                       COALESCE(SUM(CASE WHEN LOWER(COALESCE(pr.direction, '')) = 'inbound'
+                                             AND LOWER(COALESCE(pr.action, '')) = 'allow'
+                                             AND (
+                                                 pr.source_selector LIKE '%0.0.0.0/0%'
+                                                 OR pr.source_selector LIKE '%::/0%'
+                                                 OR pr.source_selector = '*'
+                                                 OR LOWER(pr.source_selector) = 'any'
+                                             )
+                                        THEN 1 ELSE 0 END), 0) AS public_ingress_count,
+                       COALESCE(SUM(CASE WHEN LOWER(COALESCE(pr.direction, '')) = 'outbound'
+                                             AND LOWER(COALESCE(pr.action, '')) = 'allow'
+                                             AND (
+                                                 pr.destination_selector LIKE '%0.0.0.0/0%'
+                                                 OR pr.destination_selector LIKE '%::/0%'
+                                                 OR pr.destination_selector = '*'
+                                                 OR LOWER(pr.destination_selector) = 'any'
+                                             )
+                                        THEN 1 ELSE 0 END), 0) AS open_egress_count
+                FROM cloud_resources cr
+                JOIN cloud_accounts ca ON ca.id = cr.account_id
+                LEFT JOIN cloud_policy_rules pr
+                  ON pr.account_id = cr.account_id
+                 AND pr.resource_uid = cr.resource_uid
+                WHERE {where}
+                GROUP BY cr.account_id, ca.name, cr.provider, cr.resource_uid, cr.resource_type, cr.name, cr.region
+                ORDER BY public_ingress_count DESC, rule_count DESC, cr.provider, cr.name, cr.resource_uid""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
