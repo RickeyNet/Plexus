@@ -287,6 +287,17 @@ CLOUD_FLOW_SYNC_MAX_INTERVAL = 3600
 
 CLOUD_FLOW_SYNC_CONFIG: dict = dict(CLOUD_FLOW_SYNC_DEFAULTS)
 
+CLOUD_TRAFFIC_METRIC_SYNC_DEFAULTS = {
+    "enabled": False,
+    "interval_seconds": 300,  # 5 minutes
+    "lookback_minutes": 15,
+}
+
+CLOUD_TRAFFIC_METRIC_SYNC_MIN_INTERVAL = 60
+CLOUD_TRAFFIC_METRIC_SYNC_MAX_INTERVAL = 3600
+
+CLOUD_TRAFFIC_METRIC_SYNC_CONFIG: dict = dict(CLOUD_TRAFFIC_METRIC_SYNC_DEFAULTS)
+
 
 # ── Sanitizer functions ─────────────────────────────────────────────────────
 
@@ -532,6 +543,19 @@ def _sanitize_cloud_flow_sync_config(data: dict | None) -> dict:
         cfg["interval_seconds"] = max(
             CLOUD_FLOW_SYNC_MIN_INTERVAL,
             min(CLOUD_FLOW_SYNC_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
+        cfg["lookback_minutes"] = max(5, min(1440, int(data.get("lookback_minutes", cfg["lookback_minutes"]))))
+    return cfg
+
+
+def _sanitize_cloud_traffic_metric_sync_config(data: dict | None) -> dict:
+    cfg = dict(CLOUD_TRAFFIC_METRIC_SYNC_DEFAULTS)
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
+        cfg["interval_seconds"] = max(
+            CLOUD_TRAFFIC_METRIC_SYNC_MIN_INTERVAL,
+            min(CLOUD_TRAFFIC_METRIC_SYNC_MAX_INTERVAL, cfg["interval_seconds"]),
         )
         cfg["lookback_minutes"] = max(5, min(1440, int(data.get("lookback_minutes", cfg["lookback_minutes"]))))
     return cfg
