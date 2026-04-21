@@ -6,6 +6,8 @@ here so that every module can ``import netcontrol.routes.state as state`` and
 reference ``state.CONFIG_X`` without circular-import issues.
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 

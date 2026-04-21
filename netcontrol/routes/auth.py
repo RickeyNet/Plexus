@@ -3,6 +3,8 @@ auth.py -- Authentication routes: login, register, logout, status, profile, chan
 
 Includes RADIUS authentication helpers and login rate-limiting logic.
 """
+from __future__ import annotations
+
 
 import asyncio
 import hashlib

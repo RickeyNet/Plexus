@@ -2,6 +2,8 @@
 compliance.py -- Compliance profile CRUD, assignment management, scan execution,
 admin scheduling, and background compliance check loop.
 """
+from __future__ import annotations
+
 
 import json
 

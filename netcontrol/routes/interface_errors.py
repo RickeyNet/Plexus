@@ -7,6 +7,8 @@ Provides API endpoints for:
   - Error spike events with root-cause correlation details
   - Event acknowledgement and resolution
 """
+from __future__ import annotations
+
 
 import json
 

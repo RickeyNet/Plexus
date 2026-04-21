@@ -6,6 +6,8 @@ image management, and real-time WebSocket streaming.
 
 Ported from standalone iosxe_upgrade.py into the Plexus platform.
 """
+from __future__ import annotations
+
 
 import asyncio
 import hashlib
