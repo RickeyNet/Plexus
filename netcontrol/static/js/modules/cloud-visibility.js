@@ -17,8 +17,10 @@ let _cloudProviders = [];
 let _cloudAccounts = [];
 let _cloudFlowSyncConfig = null;
 let _cloudFlowSyncCursors = [];
+let _cloudFlowSyncLastResult = null;
 let _cloudTrafficSyncConfig = null;
 let _cloudTrafficSyncCursors = [];
+let _cloudTrafficSyncLastResult = null;
 
 function _ensureCloudVisibilityLayout() {
     const page = document.getElementById('page-cloud-visibility');
@@ -99,6 +101,7 @@ function _ensureCloudVisibilityLayout() {
                 </div>
             </div>
             <div id="cloud-flow-sync-status" style="margin-top:0.6rem; color:var(--text-muted);"></div>
+            <div id="cloud-flow-sync-last-result" style="margin-top:0.35rem; color:var(--text-muted);"></div>
             <div id="cloud-flow-cursors" style="margin-top:0.75rem;"></div>
         </div>
 
@@ -135,6 +138,7 @@ function _ensureCloudVisibilityLayout() {
                 </div>
             </div>
             <div id="cloud-traffic-sync-status" style="margin-top:0.6rem; color:var(--text-muted);"></div>
+            <div id="cloud-traffic-sync-last-result" style="margin-top:0.35rem; color:var(--text-muted);"></div>
             <div id="cloud-traffic-cursors" style="margin-top:0.75rem;"></div>
         </div>
 
@@ -319,6 +323,175 @@ function _renderAccountFilter() {
     }
 }
 
+function _accountAuthConfig(account) {
+    const raw = account?.auth_config || account?.auth_config_json || {};
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        return raw;
+    }
+    try {
+        return _parseJsonInput(raw, {});
+    } catch {
+        return {};
+    }
+}
+
+function _hasNonEmptyList(value) {
+    if (Array.isArray(value)) {
+        return value.some((item) => String(item || '').trim());
+    }
+    if (typeof value === 'string') {
+        const text = value.trim();
+        if (!text) return false;
+        if (text.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(text);
+                return Array.isArray(parsed) && parsed.some((item) => String(item || '').trim());
+            } catch {
+                return false;
+            }
+        }
+        return text.split(',').some((item) => item.trim());
+    }
+    return false;
+}
+
+function _computeSyncReadiness(account) {
+    const provider = String(account?.provider || '').toLowerCase();
+    const auth = _accountAuthConfig(account);
+    const flowMissing = [];
+    const trafficMissing = [];
+
+    if (provider === 'aws') {
+        if (!String(auth.log_group_name || '').trim()) flowMissing.push('log_group_name');
+        if (!_hasNonEmptyList(auth.resource_ids)) trafficMissing.push('resource_ids');
+    } else if (provider === 'azure') {
+        if (!String(auth.storage_account_name || '').trim()) flowMissing.push('storage_account_name');
+        if (!String(auth.container_name || '').trim()) flowMissing.push('container_name');
+        if (!_hasNonEmptyList(auth.resource_ids)) trafficMissing.push('resource_ids');
+    } else if (provider === 'gcp') {
+        if (!String(auth.project_id || '').trim()) flowMissing.push('project_id');
+        if (!String(auth.project_id || '').trim()) trafficMissing.push('project_id');
+    }
+
+    return {
+        flowReady: flowMissing.length === 0,
+        trafficReady: trafficMissing.length === 0,
+        flowMissing,
+        trafficMissing,
+    };
+}
+
+function _renderSyncReadiness(account) {
+    const readiness = _computeSyncReadiness(account);
+    const flowTone = readiness.flowReady ? 'success' : 'warning';
+    const trafficTone = readiness.trafficReady ? 'success' : 'warning';
+    const hintParts = [];
+    if (!readiness.flowReady) {
+        hintParts.push(`Flow: missing ${readiness.flowMissing.join(', ')}`);
+    }
+    if (!readiness.trafficReady) {
+        hintParts.push(`Traffic: missing ${readiness.trafficMissing.join(', ')}`);
+    }
+    return `
+        <div style="display:flex; gap:0.35rem; flex-wrap:wrap; margin-bottom:${hintParts.length ? '0.35rem' : '0'};">
+            <span class="badge badge-${flowTone}">Flow ${readiness.flowReady ? 'ready' : 'needs config'}</span>
+            <span class="badge badge-${trafficTone}">Traffic ${readiness.trafficReady ? 'ready' : 'needs config'}</span>
+        </div>
+        ${hintParts.length ? `<small style="color:var(--text-muted);">${escapeHtml(hintParts.join(' | '))}</small>` : ''}`;
+}
+
+function _syncResultLabel(result, kind) {
+    if (!result) {
+        return `No ${kind} sync action has been run in this session.`;
+    }
+    const source = result.source === 'scheduled' ? 'Scheduled' : 'Manual';
+    const scope = result.scope === 'account'
+        ? `${result.accountName || `Account #${result.accountId}`}`
+        : 'all eligible accounts';
+    const ingested = Number(result.ingested || 0).toLocaleString();
+    const errorCount = Array.isArray(result.errors) ? result.errors.length : 0;
+    const outcome = result.ok === false ? 'failed' : 'completed';
+    return `${escapeHtml(_toIsoOrDash(result.at))}: ${source} ${kind.toLowerCase()} sync ${outcome} for ${escapeHtml(scope)}. Ingested ${ingested}.${errorCount ? ` Errors: ${errorCount}.` : ''}`;
+}
+
+function _renderFlowSyncLastResult() {
+    const container = document.getElementById('cloud-flow-sync-last-result');
+    if (!container) return;
+    container.innerHTML = _syncResultLabel(_cloudFlowSyncLastResult, 'Flow');
+}
+
+function _renderTrafficSyncLastResult() {
+    const container = document.getElementById('cloud-traffic-sync-last-result');
+    if (!container) return;
+    container.innerHTML = _syncResultLabel(_cloudTrafficSyncLastResult, 'Traffic');
+}
+
+function _authConfigHintContent(provider) {
+    const normalized = String(provider || '').toLowerCase();
+    if (normalized === 'aws') {
+        return {
+            flow: 'Flow sync requires log_group_name for VPC Flow Logs in CloudWatch Logs.',
+            traffic: 'Traffic sync requires resource_ids and optionally metric_names, metric_namespace, and resource_dimension_name.',
+            example: {
+                log_group_name: '/aws/vpc/flow-logs',
+                resource_ids: ['i-1234567890abcdef0'],
+                metric_names: ['NetworkIn', 'NetworkOut'],
+                metric_namespace: 'AWS/EC2',
+                resource_dimension_name: 'InstanceId',
+            },
+        };
+    }
+    if (normalized === 'azure') {
+        return {
+            flow: 'Flow sync requires storage_account_name and container_name for NSG flow log blobs.',
+            traffic: 'Traffic sync requires resource_ids and can use metric_names plus service principal or DefaultAzureCredential settings.',
+            example: {
+                storage_account_name: 'mystorageacct',
+                container_name: 'insights-logs-networksecuritygroupflowevent',
+                resource_ids: ['/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/networkInterfaces/nic-1'],
+                metric_names: ['BytesIn', 'BytesOut'],
+            },
+        };
+    }
+    if (normalized === 'gcp') {
+        return {
+            flow: 'Flow sync requires project_id for Cloud Logging queries.',
+            traffic: 'Traffic sync requires project_id and can optionally override metric_types or provide service_account_json.',
+            example: {
+                project_id: 'my-gcp-project',
+                metric_types: [
+                    'compute.googleapis.com/instance/network/received_bytes_count',
+                    'compute.googleapis.com/instance/network/sent_bytes_count',
+                ],
+            },
+        };
+    }
+    return {
+        flow: 'Choose a provider to see required sync auth keys.',
+        traffic: 'Choose a provider to see traffic metric sync requirements.',
+        example: {},
+    };
+}
+
+function _cloudAccountAuthHintHtml(provider) {
+    const hint = _authConfigHintContent(provider);
+    const exampleJson = JSON.stringify(hint.example, null, 2);
+    return `
+        <div class="card" style="padding:0.75rem; background:rgba(255,255,255,0.04);">
+            <div style="font-weight:600; margin-bottom:0.35rem;">Provider Sync Requirements</div>
+            <div style="color:var(--text-muted); font-size:0.9em; margin-bottom:0.25rem;">${escapeHtml(hint.flow)}</div>
+            <div style="color:var(--text-muted); font-size:0.9em; margin-bottom:0.45rem;">${escapeHtml(hint.traffic)}</div>
+            ${exampleJson !== '{}' ? `<pre style="margin:0; white-space:pre-wrap; font-size:0.82em;">${escapeHtml(exampleJson)}</pre>` : ''}
+        </div>`;
+}
+
+function _renderCloudAccountAuthHint() {
+    const container = document.getElementById('cloud-account-auth-hint');
+    const provider = document.getElementById('cloud-account-provider')?.value || '';
+    if (!container) return;
+    container.innerHTML = _cloudAccountAuthHintHtml(provider);
+}
+
 async function loadCloudAccounts({ preserveContent = false } = {}) {
     const container = document.getElementById('cloud-accounts-list');
     if (!container) return;
@@ -350,6 +523,7 @@ async function loadCloudAccounts({ preserveContent = false } = {}) {
                     <th>Account</th>
                     <th>Scope</th>
                     <th>Last Sync</th>
+                    <th>Sync Readiness</th>
                     <th>Resources</th>
                     <th>Actions</th>
                 </tr>
@@ -365,6 +539,7 @@ async function loadCloudAccounts({ preserveContent = false } = {}) {
                             <div>${escapeHtml(a.last_sync_status || 'never')}</div>
                             <small style="color:var(--text-muted);">${escapeHtml(a.last_sync_at ? formatDate(a.last_sync_at) : 'Never')}</small>
                         </td>
+                        <td>${_renderSyncReadiness(a)}</td>
                         <td>
                             <span class="badge badge-info">${a.resource_count ?? 0} nodes</span>
                             <span class="badge badge-info">${a.connection_count ?? 0} edges</span>
@@ -372,6 +547,8 @@ async function loadCloudAccounts({ preserveContent = false } = {}) {
                         <td style="white-space:nowrap;">
                             <button class="btn btn-sm btn-secondary" onclick="runCloudValidation(${a.id})">Validate</button>
                             <button class="btn btn-sm btn-secondary" onclick="runCloudDiscovery(${a.id})">Discover</button>
+                            <button class="btn btn-sm btn-secondary" onclick="runCloudFlowSyncForAccount(${a.id})">Pull Flow</button>
+                            <button class="btn btn-sm btn-secondary" onclick="runCloudTrafficSyncForAccount(${a.id})">Pull Traffic</button>
                             <button class="btn btn-sm btn-secondary" onclick="editCloudAccount(${a.id})">Edit</button>
                             <button class="btn btn-sm btn-danger" onclick="deleteCloudAccount(${a.id})">Delete</button>
                         </td>
@@ -617,6 +794,7 @@ function _renderFlowSyncControls() {
     intervalEl.value = String(config.interval_seconds || 300);
     lookbackEl.value = String(config.lookback_minutes || 15);
     statusEl.textContent = `Current config: ${config.enabled ? 'enabled' : 'disabled'}, interval ${config.interval_seconds || 300}s, lookback ${config.lookback_minutes || 15}m.`;
+    _renderFlowSyncLastResult();
 }
 
 function _renderFlowSyncCursors() {
@@ -656,6 +834,16 @@ async function loadCloudFlowSync({ preserveContent = false } = {}) {
         api.getCloudFlowSyncCursors(),
     ]);
     _cloudFlowSyncConfig = configResp?.config || null;
+    _cloudFlowSyncLastResult = configResp?.status ? {
+        at: configResp.status.last_run_at || '',
+        source: configResp.status.source || '',
+        scope: configResp.status.scope || '',
+        accountId: configResp.status.account_id ?? null,
+        accountName: configResp.status.account_name || '',
+        ingested: configResp.status.ingested || 0,
+        errors: Array.isArray(configResp.status.errors) ? configResp.status.errors : [],
+        ok: typeof configResp.status.ok === 'boolean' ? configResp.status.ok : null,
+    } : null;
     _cloudFlowSyncCursors = Array.isArray(cursorsResp?.cursors) ? cursorsResp.cursors : [];
     _renderFlowSyncControls();
     _renderFlowSyncCursors();
@@ -673,6 +861,7 @@ function _renderTrafficSyncControls() {
     intervalEl.value = String(config.interval_seconds || 300);
     lookbackEl.value = String(config.lookback_minutes || 15);
     statusEl.textContent = `Current config: ${config.enabled ? 'enabled' : 'disabled'}, interval ${config.interval_seconds || 300}s, lookback ${config.lookback_minutes || 15}m.`;
+    _renderTrafficSyncLastResult();
 }
 
 function _renderTrafficSyncCursors() {
@@ -712,6 +901,16 @@ async function loadCloudTrafficSync({ preserveContent = false } = {}) {
         api.getCloudTrafficSyncCursors(),
     ]);
     _cloudTrafficSyncConfig = configResp?.config || null;
+    _cloudTrafficSyncLastResult = configResp?.status ? {
+        at: configResp.status.last_run_at || '',
+        source: configResp.status.source || '',
+        scope: configResp.status.scope || '',
+        accountId: configResp.status.account_id ?? null,
+        accountName: configResp.status.account_name || '',
+        ingested: configResp.status.ingested || 0,
+        errors: Array.isArray(configResp.status.errors) ? configResp.status.errors : [],
+        ok: typeof configResp.status.ok === 'boolean' ? configResp.status.ok : null,
+    } : null;
     _cloudTrafficSyncCursors = Array.isArray(cursorsResp?.cursors) ? cursorsResp.cursors : [];
     _renderTrafficSyncControls();
     _renderTrafficSyncCursors();
@@ -724,7 +923,7 @@ function _buildAccountFormHtml(account = null) {
     return `
         <form id="cloud-account-form" class="settings-grid" style="display:grid; gap:0.75rem;">
             <label>Provider
-                <select id="cloud-account-provider" class="form-select">
+                <select id="cloud-account-provider" class="form-select" onchange="onCloudAccountProviderChange()">
                     ${providerOptions.map((provider) => `
                         <option value="${escapeHtml(provider)}" ${String(account?.provider || '').toLowerCase() === provider ? 'selected' : ''}>
                             ${escapeHtml(_providerLabel(provider))}
@@ -749,6 +948,7 @@ function _buildAccountFormHtml(account = null) {
             <label>Auth Config (JSON references, non-secret)
                 <textarea id="cloud-account-auth-config" class="form-input" rows="4" placeholder='{"secret_ref":"aws-prod-readonly"}'>${escapeHtml(authConfigText)}</textarea>
             </label>
+            <div id="cloud-account-auth-hint">${_cloudAccountAuthHintHtml(account?.provider || providerOptions[0] || '')}</div>
             <label>Notes
                 <textarea id="cloud-account-notes" class="form-input" rows="3" placeholder="Optional notes">${escapeHtml(account?.notes || '')}</textarea>
             </label>
@@ -829,6 +1029,11 @@ async function deleteCloudAccount(accountId) {
 }
 window.deleteCloudAccount = deleteCloudAccount;
 
+function onCloudAccountProviderChange() {
+    _renderCloudAccountAuthHint();
+}
+window.onCloudAccountProviderChange = onCloudAccountProviderChange;
+
 async function runCloudValidation(accountId) {
     const account = _cloudAccounts.find((a) => Number(a.id) === Number(accountId));
     const result = await api.validateCloudAccount(accountId, { mode: 'live' });
@@ -907,12 +1112,26 @@ async function saveCloudFlowSyncConfig() {
 window.saveCloudFlowSyncConfig = saveCloudFlowSyncConfig;
 
 async function runCloudFlowSyncPull(selectedOnly = false) {
-    const accountId = _currentAccountFilter();
-    const params = selectedOnly && accountId ? { account_id: accountId } : {};
+    return runCloudFlowSyncAction({ selectedOnly });
+}
+window.runCloudFlowSyncPull = runCloudFlowSyncPull;
+
+async function runCloudFlowSyncAction({ selectedOnly = false, accountId = null } = {}) {
+    const resolvedAccountId = accountId || (selectedOnly ? _currentAccountFilter() : null);
+    const params = resolvedAccountId ? { account_id: resolvedAccountId } : {};
     const result = await api.triggerCloudFlowSyncPull(params);
     const ingested = Number(result?.ingested ?? result?.total_ingested ?? 0);
-    if (selectedOnly && accountId) {
-        showSuccess(`Cloud flow pull complete for account ${accountId}: ${ingested} ingested`);
+    _cloudFlowSyncLastResult = {
+        ok: result?.ok,
+        at: new Date().toISOString(),
+        scope: resolvedAccountId ? 'account' : 'all',
+        accountId: resolvedAccountId,
+        accountName: resolvedAccountId ? (_cloudAccounts.find((a) => Number(a.id) === Number(resolvedAccountId))?.name || '') : '',
+        ingested,
+        errors: result?.errors || [],
+    };
+    if (resolvedAccountId) {
+        showSuccess(`Cloud flow pull complete for account ${resolvedAccountId}: ${ingested} ingested`);
     } else {
         showSuccess(`Cloud flow pull complete: ${ingested} ingested`);
     }
@@ -922,7 +1141,11 @@ async function runCloudFlowSyncPull(selectedOnly = false) {
         loadCloudTrafficMetricAnalytics({ preserveContent: false }),
     ]);
 }
-window.runCloudFlowSyncPull = runCloudFlowSyncPull;
+
+async function runCloudFlowSyncForAccount(accountId) {
+    await runCloudFlowSyncAction({ accountId });
+}
+window.runCloudFlowSyncForAccount = runCloudFlowSyncForAccount;
 
 async function saveCloudTrafficSyncConfig() {
     const enabled = Boolean(document.getElementById('cloud-traffic-sync-enabled')?.checked);
@@ -943,12 +1166,26 @@ async function saveCloudTrafficSyncConfig() {
 window.saveCloudTrafficSyncConfig = saveCloudTrafficSyncConfig;
 
 async function runCloudTrafficSyncPull(selectedOnly = false) {
-    const accountId = _currentAccountFilter();
-    const params = selectedOnly && accountId ? { account_id: accountId } : {};
+    return runCloudTrafficSyncAction({ selectedOnly });
+}
+window.runCloudTrafficSyncPull = runCloudTrafficSyncPull;
+
+async function runCloudTrafficSyncAction({ selectedOnly = false, accountId = null } = {}) {
+    const resolvedAccountId = accountId || (selectedOnly ? _currentAccountFilter() : null);
+    const params = resolvedAccountId ? { account_id: resolvedAccountId } : {};
     const result = await api.triggerCloudTrafficSyncPull(params);
     const ingested = Number(result?.ingested ?? result?.total_ingested ?? 0);
-    if (selectedOnly && accountId) {
-        showSuccess(`Cloud traffic metric pull complete for account ${accountId}: ${ingested} ingested`);
+    _cloudTrafficSyncLastResult = {
+        ok: result?.ok,
+        at: new Date().toISOString(),
+        scope: resolvedAccountId ? 'account' : 'all',
+        accountId: resolvedAccountId,
+        accountName: resolvedAccountId ? (_cloudAccounts.find((a) => Number(a.id) === Number(resolvedAccountId))?.name || '') : '',
+        ingested,
+        errors: result?.errors || [],
+    };
+    if (resolvedAccountId) {
+        showSuccess(`Cloud traffic metric pull complete for account ${resolvedAccountId}: ${ingested} ingested`);
     } else {
         showSuccess(`Cloud traffic metric pull complete: ${ingested} ingested`);
     }
@@ -957,7 +1194,11 @@ async function runCloudTrafficSyncPull(selectedOnly = false) {
         loadCloudTrafficMetricAnalytics({ preserveContent: false }),
     ]);
 }
-window.runCloudTrafficSyncPull = runCloudTrafficSyncPull;
+
+async function runCloudTrafficSyncForAccount(accountId) {
+    await runCloudTrafficSyncAction({ accountId });
+}
+window.runCloudTrafficSyncForAccount = runCloudTrafficSyncForAccount;
 
 async function refreshCloudVisibility() {
     await loadCloudAccounts({ preserveContent: false });
@@ -978,13 +1219,17 @@ export async function loadCloudVisibility({ preserveContent = false } = {}) {
     const summaryEl = document.getElementById('cloud-flow-summary');
     const trafficMetricSummaryEl = document.getElementById('cloud-traffic-metric-summary');
     const syncStatusEl = document.getElementById('cloud-flow-sync-status');
+    const flowLastResultEl = document.getElementById('cloud-flow-sync-last-result');
     const trafficSyncStatusEl = document.getElementById('cloud-traffic-sync-status');
+    const trafficLastResultEl = document.getElementById('cloud-traffic-sync-last-result');
     if (accountsEl && !preserveContent) accountsEl.innerHTML = skeletonCards(2);
     if (topologyEl && !preserveContent) topologyEl.innerHTML = skeletonCards(1);
     if (summaryEl && !preserveContent) summaryEl.innerHTML = skeletonCards(1);
     if (trafficMetricSummaryEl && !preserveContent) trafficMetricSummaryEl.innerHTML = skeletonCards(1);
     if (syncStatusEl && !preserveContent) syncStatusEl.textContent = 'Loading flow sync config...';
+    if (flowLastResultEl && !preserveContent) flowLastResultEl.textContent = _syncResultLabel(_cloudFlowSyncLastResult, 'Flow');
     if (trafficSyncStatusEl && !preserveContent) trafficSyncStatusEl.textContent = 'Loading traffic sync config...';
+    if (trafficLastResultEl && !preserveContent) trafficLastResultEl.textContent = _syncResultLabel(_cloudTrafficSyncLastResult, 'Traffic');
 
     await _ensureProvidersLoaded();
     await loadCloudAccounts({ preserveContent });
@@ -1002,6 +1247,8 @@ export function destroyCloudVisibility() {
     _cloudAccounts = [];
     _cloudFlowSyncConfig = null;
     _cloudFlowSyncCursors = [];
+    _cloudFlowSyncLastResult = null;
     _cloudTrafficSyncConfig = null;
     _cloudTrafficSyncCursors = [];
+    _cloudTrafficSyncLastResult = null;
 }
