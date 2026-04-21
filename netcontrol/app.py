@@ -130,6 +130,7 @@ from netcontrol.routes.federation import (
     router as federation_router,
 )
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
+from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.deployments import (
     DeploymentCreate,
     DeploymentExecute,
@@ -703,6 +704,7 @@ _sanitize_config_backup_config = state._sanitize_config_backup_config
 _sanitize_compliance_check_config = state._sanitize_compliance_check_config
 _sanitize_monitoring_config = state._sanitize_monitoring_config
 _sanitize_cloud_flow_sync_config = state._sanitize_cloud_flow_sync_config
+_sanitize_cloud_traffic_metric_sync_config = state._sanitize_cloud_traffic_metric_sync_config
 _sanitize_snmp_discovery_config = state._sanitize_snmp_discovery_config
 _sanitize_snmp_discovery_profile = state._sanitize_snmp_discovery_profile
 _sanitize_snmp_discovery_profiles = state._sanitize_snmp_discovery_profiles
@@ -763,6 +765,8 @@ async def _load_persisted_security_settings():
     state.MONITORING_CONFIG = _sanitize_monitoring_config(monitoring)
     cloud_flow_sync = await db.get_auth_setting("cloud_flow_sync")
     state.CLOUD_FLOW_SYNC_CONFIG = _sanitize_cloud_flow_sync_config(cloud_flow_sync)
+    cloud_traffic_metric_sync = await db.get_auth_setting("cloud_traffic_metric_sync")
+    state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG = _sanitize_cloud_traffic_metric_sync_config(cloud_traffic_metric_sync)
 
 
 def require_feature(feature_key: str):
@@ -820,6 +824,31 @@ async def _cloud_flow_sync_loop() -> None:
             LOGGER.warning("Cloud flow sync loop failed: %s", type(exc).__name__)
 
 
+async def _cloud_traffic_metric_sync_loop() -> None:
+    """Periodically pull cloud traffic metrics for all enabled accounts."""
+    while True:
+        cfg = state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG
+        interval = max(60, int(cfg.get("interval_seconds", 300)))
+        await asyncio.sleep(interval)
+        if not cfg.get("enabled"):
+            continue
+        try:
+            lookback = max(5, int(cfg.get("lookback_minutes", 15)))
+            result = await pull_traffic_metrics_all_accounts(lookback_minutes=lookback)
+            total = result.get("total_ingested", 0)
+            processed = result.get("accounts_processed", 0)
+            if total > 0:
+                LOGGER.info(
+                    "Cloud traffic sync: ingested %s metric samples from %s account(s)",
+                    total,
+                    processed,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("Cloud traffic sync loop failed: %s", type(exc).__name__)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # App Lifecycle
 # ═════════════════════════════════════════════════════════════════════════════
@@ -858,6 +887,7 @@ async def lifespan(app: FastAPI):
     rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
     report_scheduler_task = asyncio.create_task(_report_scheduler_loop())
     cloud_flow_sync_task = asyncio.create_task(_cloud_flow_sync_loop())
+    cloud_traffic_sync_task = asyncio.create_task(_cloud_traffic_metric_sync_loop())
     federation_task = asyncio.create_task(federation_sync_loop())
     try:
         yield
@@ -876,6 +906,7 @@ async def lifespan(app: FastAPI):
         rate_limit_cleanup_task.cancel()
         report_scheduler_task.cancel()
         cloud_flow_sync_task.cancel()
+        cloud_traffic_sync_task.cancel()
         federation_task.cancel()
         try:
             await retention_task
@@ -931,6 +962,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await cloud_flow_sync_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await cloud_traffic_sync_task
         except asyncio.CancelledError:
             pass
         try:
