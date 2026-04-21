@@ -124,6 +124,11 @@ from netcontrol.routes.cloud_visibility import (
     init_cloud_visibility,
     router as cloud_visibility_router,
 )
+from netcontrol.routes.federation import (
+    init_federation,
+    federation_sync_loop,
+    router as federation_router,
+)
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.deployments import (
     DeploymentCreate,
@@ -853,6 +858,7 @@ async def lifespan(app: FastAPI):
     rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
     report_scheduler_task = asyncio.create_task(_report_scheduler_loop())
     cloud_flow_sync_task = asyncio.create_task(_cloud_flow_sync_loop())
+    federation_task = asyncio.create_task(federation_sync_loop())
     try:
         yield
     finally:
@@ -870,6 +876,7 @@ async def lifespan(app: FastAPI):
         rate_limit_cleanup_task.cancel()
         report_scheduler_task.cancel()
         cloud_flow_sync_task.cancel()
+        federation_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -924,6 +931,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await cloud_flow_sync_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await federation_task
         except asyncio.CancelledError:
             pass
 
@@ -1299,6 +1310,7 @@ init_monitoring(require_auth, require_feature, require_admin)
 init_interface_errors(require_auth, require_admin)
 init_billing(require_auth, require_admin)
 init_cloud_visibility(require_admin)
+init_federation(require_admin)
 init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
 init_ansible_inventory(require_auth)
 metrics_engine_inject_auth(require_auth, require_admin)
@@ -1435,6 +1447,11 @@ app.include_router(
 app.include_router(
     cloud_visibility_router,
     dependencies=[Depends(require_auth), Depends(require_feature("topology"))],
+)
+# Multi-Instance Federation
+app.include_router(
+    federation_router,
+    dependencies=[Depends(require_auth)],
 )
 # IOS-XE Upgrade Tool
 app.include_router(
