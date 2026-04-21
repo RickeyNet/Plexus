@@ -294,6 +294,7 @@ auditors review every tool with credentials, and medical devices have unique net
   - [ ] Next slice (phase B): add cloud flow-log and traffic-metric ingestion (AWS VPC Flow Logs, Azure NSG Flow Logs, GCP VPC Flow Logs) into Plexus metrics/events.
     - [x] Phase B slice 1: add cloud flow-log ingestion API (`/api/cloud/accounts/{id}/flow-logs/ingest`) with normalized/AWS/Azure/GCP payload support, cloud flow analytics endpoints (summary/top-talkers/timeline), and cloud_flow event emission.
     - [x] Phase B slice 2: add scheduled flow-log pullers (AWS CloudWatch Logs Insights, Azure Blob Storage NSG logs, GCP Cloud Logging) with per-account watermark cursors, configurable sync interval, background loop in app lifespan, and API endpoints for config/trigger/status.
+    - [x] Phase B slice 3: complete Cloud Visibility frontend for flow telemetry with flow analytics cards/tables (summary/top-talkers/timeline), flow-sync configuration controls, manual pull actions, and per-account watermark cursor visibility.
   - [ ] Next slice (phase C): add rule-level security visibility for cloud policies (AWS security group rules, Azure NSG rules, GCP firewall rules) with effective-policy views.
   - [ ] Next slice (phase D): expand topology coverage for route tables, gateways, interconnects, and peering/attachment relationships per provider.
   - [ ] Next slice (phase E): implement hybrid path modeling for on-prem ↔ cloud connectivity (VPN/Direct Connect/ExpressRoute) with inferred path hops.
