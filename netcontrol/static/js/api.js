@@ -2045,6 +2045,23 @@ export async function getCloudFlowTimeline(params = {}) {
     return apiRequest(`/cloud/flow-logs/timeline${qs ? '?' + qs : ''}`);
 }
 
+export async function getCloudFlowSyncConfig() {
+    return apiRequest('/cloud/flow-sync/config');
+}
+
+export async function updateCloudFlowSyncConfig(data = {}) {
+    return apiRequest('/cloud/flow-sync/config', { method: 'PUT', body: data });
+}
+
+export async function triggerCloudFlowSyncPull(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/cloud/flow-sync/pull${qs ? '?' + qs : ''}`, { method: 'POST' });
+}
+
+export async function getCloudFlowSyncCursors() {
+    return apiRequest('/cloud/flow-sync/cursors');
+}
+
 export async function getCloudResources(params = {}) {
     const qs = new URLSearchParams(params).toString();
     return apiRequest(`/cloud/resources${qs ? '?' + qs : ''}`);
