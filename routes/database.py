@@ -134,6 +134,8 @@ _INSERT_ID_TABLES = {
     "cloud_resources",
     "cloud_connections",
     "cloud_hybrid_links",
+    "federation_peers",
+    "federation_snapshots",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
