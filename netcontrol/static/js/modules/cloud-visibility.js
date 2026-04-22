@@ -28,6 +28,7 @@ let _cloudSelectedPolicyResourceName = '';
 let _cloudPolicyExposureFilter = 'all';
 let _cloudPolicyDirectionFilter = '';
 let _cloudPolicyActionFilter = '';
+let _cloudTopologyRouteFilter = 'all';
 
 function _ensureCloudVisibilityLayout() {
     const page = document.getElementById('page-cloud-visibility');
@@ -335,6 +336,340 @@ function _connectionMetadataSummary(connection) {
     if (metadata.peering_name) parts.push(`Peering ${metadata.peering_name}`);
     if (metadata.connection_status) parts.push(`Status ${metadata.connection_status}`);
     return parts.length ? parts.join(' | ') : '-';
+}
+
+function _topologyLabel(value) {
+    const normalized = String(value || '').trim();
+    if (!normalized) return '';
+    return normalized
+        .split('_')
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+}
+
+function _topologyBadge(tone, text) {
+    return `<span class="badge badge-${tone}" style="margin-right:0.35rem; margin-bottom:0.35rem;">${escapeHtml(text)}</span>`;
+}
+
+function _topologyCountBadge(tone, count, singular, plural) {
+    const normalizedCount = Number(count || 0);
+    if (normalizedCount <= 0) return '';
+    const label = normalizedCount === 1 ? singular : (plural || `${singular}s`);
+    return _topologyBadge(tone, `${normalizedCount} ${label}`);
+}
+
+function _attachmentBucketLabel(connectionType) {
+    const normalized = String(connectionType || '').toLowerCase();
+    if (normalized.includes('peering')) return 'Peering';
+    if (normalized.includes('gateway')) return 'Gateway';
+    if (normalized.includes('attachment')) return 'Attachment';
+    if (normalized.includes('route')) return 'Route';
+    if (normalized.includes('vpn') || normalized.includes('ipsec')) return 'VPN';
+    if (normalized.includes('security')) return 'Security';
+    return _topologyLabel(normalized || 'link');
+}
+
+function _attachmentBucketTone(label) {
+    if (label === 'Gateway') return 'success';
+    if (label === 'Attachment') return 'info';
+    if (label === 'Route') return 'secondary';
+    if (label === 'VPN') return 'warning';
+    if (label === 'Security') return 'danger';
+    return 'info';
+}
+
+function _resourceLookup(resources) {
+    const lookup = new Map();
+    resources.forEach((resource) => {
+        const uid = String(resource?.resource_uid || '').trim();
+        if (uid) lookup.set(uid, resource);
+    });
+    return lookup;
+}
+
+function _providerTopologyGroups(resources, connections, hybridLinks) {
+    const providers = new Set();
+    resources.forEach((resource) => {
+        if (resource?.provider) providers.add(String(resource.provider).toLowerCase());
+    });
+    connections.forEach((connection) => {
+        if (connection?.provider) providers.add(String(connection.provider).toLowerCase());
+    });
+    hybridLinks.forEach((link) => {
+        if (link?.provider) providers.add(String(link.provider).toLowerCase());
+    });
+
+    return [...providers].sort().map((provider) => ({
+        provider,
+        resources: resources.filter((resource) => String(resource?.provider || '').toLowerCase() === provider),
+        connections: connections.filter((connection) => String(connection?.provider || '').toLowerCase() === provider),
+        hybridLinks: hybridLinks.filter((link) => String(link?.provider || '').toLowerCase() === provider),
+    }));
+}
+
+function _providerAttachmentBadgeHtml(group) {
+    const routeCount = group.resources.filter((resource) => _isRouteResourceType(resource.resource_type)).length;
+    const gatewayCount = group.resources.filter((resource) => _isGatewayResourceType(resource.resource_type)).length;
+    const attachmentCounts = group.connections.reduce((acc, connection) => {
+        if (!_isAttachmentConnection(connection.connection_type)) return acc;
+        const label = _attachmentBucketLabel(connection.connection_type);
+        acc[label] = (acc[label] || 0) + 1;
+        return acc;
+    }, {});
+
+    const orderedAttachmentLabels = Object.keys(attachmentCounts).sort((left, right) => attachmentCounts[right] - attachmentCounts[left] || left.localeCompare(right));
+    const badges = [
+        _topologyCountBadge('info', routeCount, 'route object'),
+        _topologyCountBadge('success', gatewayCount, 'gateway'),
+        _topologyCountBadge('secondary', group.hybridLinks.length, 'hybrid link'),
+    ].filter(Boolean);
+    orderedAttachmentLabels.forEach((label) => {
+        badges.push(_topologyCountBadge(_attachmentBucketTone(label), attachmentCounts[label], label.toLowerCase()));
+    });
+    if (!badges.length) {
+        return '<span class="text-muted">No route or attachment details</span>';
+    }
+    return badges.join('');
+}
+
+function _topologyGroupLinkItems(items) {
+    const groups = new Map();
+    items.forEach((item) => {
+        const label = String(item?.label || 'Link').trim() || 'Link';
+        const tone = String(item?.tone || 'info').trim() || 'info';
+        const key = `${tone}:${label}`;
+        let group = groups.get(key);
+        if (!group) {
+            group = { label, tone, items: [] };
+            groups.set(key, group);
+        }
+        group.items.push({
+            target: String(item?.target || '-').trim() || '-',
+            detail: String(item?.detail || '').trim(),
+        });
+    });
+    return [...groups.values()];
+}
+
+function _renderTopologyLinkGroups(groups, emptyLabel) {
+    if (!groups.length) {
+        return `<span class="text-muted">${escapeHtml(emptyLabel)}</span>`;
+    }
+    return groups.map((group) => `
+        <div style="margin-bottom:0.45rem;">
+            <div>${_topologyBadge(group.tone, group.label)}</div>
+            ${group.items.map((item) => `
+                <div style="padding-left:0.15rem; margin-top:0.1rem;">
+                    <div>${escapeHtml(item.target)}</div>
+                    ${item.detail ? `<div class="text-muted" style="font-size:0.75rem;">${escapeHtml(item.detail)}</div>` : ''}
+                </div>`).join('')}
+        </div>`).join('');
+}
+
+function _isPublicRouteDestination(destination) {
+    const normalized = String(destination || '').trim().toLowerCase();
+    return normalized.includes('0.0.0.0/0') || normalized.includes('::/0') || normalized === 'internet';
+}
+
+function _looksPublicNextHop(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized.includes('internet') || normalized.includes('nat') || normalized.includes('egress');
+}
+
+function _isHybridConnectionType(connectionType) {
+    const normalized = String(connectionType || '').trim().toLowerCase();
+    return normalized.includes('vpn')
+        || normalized.includes('ipsec')
+        || normalized.includes('expressroute')
+        || normalized.includes('direct_connect')
+        || normalized.includes('interconnect')
+        || normalized.includes('router_attachment');
+}
+
+function _isHybridResourceType(resourceType) {
+    const normalized = String(resourceType || '').trim().toLowerCase();
+    return normalized === 'direct_connect'
+        || normalized === 'expressroute'
+        || normalized === 'virtual_network_gateway'
+        || normalized === 'local_network_gateway'
+        || normalized === 'ha_vpn_gateway'
+        || normalized === 'cloud_router'
+        || normalized === 'interconnect_attachment'
+        || normalized === 'vpn_gateway'
+        || normalized === 'vpn_tunnel';
+}
+
+function _reachableProviderConnections(startUids, connections, maxDepth = 2) {
+    const seen = new Set(startUids.filter(Boolean));
+    let frontier = startUids.filter(Boolean);
+    const discovered = [];
+
+    for (let depth = 0; depth < maxDepth && frontier.length; depth += 1) {
+        const frontierSet = new Set(frontier);
+        const next = [];
+        connections.forEach((connection) => {
+            const sourceUid = String(connection?.source_resource_uid || '');
+            const targetUid = String(connection?.target_resource_uid || '');
+            if (!sourceUid || !frontierSet.has(sourceUid)) return;
+            discovered.push(connection);
+            if (targetUid && !seen.has(targetUid)) {
+                seen.add(targetUid);
+                next.push(targetUid);
+            }
+        });
+        frontier = next;
+    }
+
+    return discovered;
+}
+
+function _routeExposureHighlights(routeResource, incoming, outgoing, group, resourceLookup) {
+    const metadata = routeResource && typeof routeResource.metadata === 'object' ? routeResource.metadata : {};
+    const attachedSourceUids = incoming
+        .map((connection) => String(connection?.source_resource_uid || ''))
+        .filter(Boolean);
+    const hybridEntryUids = new Set(
+        (group?.hybridLinks || [])
+            .map((link) => String(link?.cloud_resource_uid || ''))
+            .filter(Boolean)
+    );
+    const reachableConnections = [
+        ...outgoing,
+        ..._reachableProviderConnections(attachedSourceUids, group?.connections || [], 2),
+    ];
+
+    const hasPublicDestination = _isPublicRouteDestination(routeResource?.cidr || metadata.destination || '');
+    const hasPublicNextHop = outgoing.some((connection) => {
+        const targetUid = String(connection?.target_resource_uid || '');
+        const targetResource = resourceLookup.get(targetUid);
+        return _looksPublicNextHop(connection?.connection_type)
+            || _looksPublicNextHop(connection?.target_name)
+            || _looksPublicNextHop(targetResource?.name)
+            || _looksPublicNextHop(targetResource?.resource_type)
+            || _looksPublicNextHop(connection?.metadata?.destination);
+    }) || _looksPublicNextHop(metadata.next_hop);
+
+    const hasHybridPath = reachableConnections.some((connection) => {
+        const sourceUid = String(connection?.source_resource_uid || '');
+        const targetUid = String(connection?.target_resource_uid || '');
+        const sourceResource = resourceLookup.get(sourceUid);
+        const targetResource = resourceLookup.get(targetUid);
+        return hybridEntryUids.has(sourceUid)
+            || hybridEntryUids.has(targetUid)
+            || _isHybridConnectionType(connection?.connection_type)
+            || _isHybridResourceType(sourceResource?.resource_type)
+            || _isHybridResourceType(targetResource?.resource_type);
+    });
+
+    const highlights = [];
+    if (hasPublicDestination && hasPublicNextHop) {
+        highlights.push({ tone: 'warning', text: 'Public egress' });
+    }
+    if (hasHybridPath) {
+        highlights.push({ tone: 'success', text: 'Hybrid path' });
+    }
+    return highlights;
+}
+
+function _renderRouteHighlights(highlights) {
+    if (!highlights.length) return '';
+    return `<div style="margin-bottom:0.35rem;">${highlights.map((highlight) => _topologyBadge(highlight.tone, highlight.text)).join('')}</div>`;
+}
+
+function _routeMatchesTopologyFilter(row) {
+    const highlights = Array.isArray(row?.highlights) ? row.highlights : [];
+    if (_cloudTopologyRouteFilter === 'flagged') {
+        return highlights.length > 0;
+    }
+    if (_cloudTopologyRouteFilter === 'public-egress') {
+        return highlights.some((highlight) => String(highlight?.text || '').toLowerCase() === 'public egress');
+    }
+    if (_cloudTopologyRouteFilter === 'hybrid-path') {
+        return highlights.some((highlight) => String(highlight?.text || '').toLowerCase() === 'hybrid path');
+    }
+    return true;
+}
+
+function _filterTopologyRouteGroups(routeGroups) {
+    return routeGroups
+        .map((group) => ({
+            ...group,
+            routeRows: (group.routeRows || []).filter((row) => _routeMatchesTopologyFilter(row)),
+        }))
+        .filter((group) => group.routeRows.length);
+}
+
+function _renderTopologyRouteFilterControls(totalRoutes, filteredRoutes) {
+    return `
+        <div class="card" style="padding:0.85rem; margin-bottom:0.75rem;">
+            <div style="display:flex; align-items:end; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;">
+                <label style="min-width:220px; margin:0;">
+                    Route Focus
+                    <select id="cloud-topology-route-filter" class="form-select" onchange="onCloudTopologyRouteFilterChange()">
+                        <option value="all" ${_cloudTopologyRouteFilter === 'all' ? 'selected' : ''}>All routes</option>
+                        <option value="flagged" ${_cloudTopologyRouteFilter === 'flagged' ? 'selected' : ''}>Flagged routes</option>
+                        <option value="public-egress" ${_cloudTopologyRouteFilter === 'public-egress' ? 'selected' : ''}>Public egress</option>
+                        <option value="hybrid-path" ${_cloudTopologyRouteFilter === 'hybrid-path' ? 'selected' : ''}>Hybrid path</option>
+                    </select>
+                </label>
+                <div class="text-muted" style="font-size:0.85rem;">Showing ${_formatCount(filteredRoutes)} of ${_formatCount(totalRoutes)} route objects</div>
+            </div>
+        </div>`;
+}
+
+function _routePathRowsForGroup(group, resourceLookup) {
+    return group.resources
+        .filter((resource) => _isRouteResourceType(resource.resource_type))
+        .map((routeResource) => {
+            const routeUid = String(routeResource.resource_uid || '');
+            const incoming = group.connections.filter((connection) => String(connection.target_resource_uid || '') === routeUid);
+            const outgoing = group.connections.filter((connection) => String(connection.source_resource_uid || '') === routeUid);
+            const attachedTo = incoming.map((connection) => {
+                const sourceUid = String(connection.source_resource_uid || '');
+                const sourceResource = resourceLookup.get(sourceUid);
+                const detail = _connectionMetadataSummary(connection);
+                return {
+                    label: _topologyLabel(connection.connection_type || 'attachment'),
+                    tone: _attachmentBucketTone(_attachmentBucketLabel(connection.connection_type)),
+                    target: connection.source_name || sourceResource?.name || sourceUid || '-',
+                    detail: detail !== '-' ? detail : '',
+                };
+            });
+            const attachmentGroups = _topologyGroupLinkItems(attachedTo);
+            const pathParts = outgoing.map((connection) => {
+                const targetUid = String(connection.target_resource_uid || '');
+                const targetResource = resourceLookup.get(targetUid);
+                const targetLabel = connection.target_name || targetResource?.name || targetUid || '-';
+                const detail = _connectionMetadataSummary(connection);
+                return {
+                    label: _topologyLabel(connection.connection_type || 'link'),
+                    tone: _attachmentBucketTone(_attachmentBucketLabel(connection.connection_type)),
+                    target: targetLabel,
+                    detail: detail !== '-' ? detail : '',
+                };
+            });
+            if (!pathParts.length) {
+                const metadata = routeResource && typeof routeResource.metadata === 'object' ? routeResource.metadata : {};
+                if (metadata.next_hop) {
+                    pathParts.push({
+                        label: 'Next Hop',
+                        tone: 'secondary',
+                        target: String(metadata.next_hop),
+                        detail: metadata.destination ? String(metadata.destination) : '',
+                    });
+                }
+            }
+            return {
+                name: routeResource.name || routeUid || '-',
+                type: routeResource.resource_type || '',
+                destination: routeResource.cidr || '-',
+                attachmentGroups,
+                pathGroups: _topologyGroupLinkItems(pathParts),
+                highlights: _routeExposureHighlights(routeResource, incoming, outgoing, group, resourceLookup),
+                details: _resourceMetadataSummary(routeResource),
+            };
+        });
 }
 
 function _isPublicPolicyRule(rule) {
@@ -717,9 +1052,17 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
     const routeResourceCount = resources.filter((resource) => _isRouteResourceType(resource.resource_type)).length;
     const gatewayResourceCount = resources.filter((resource) => _isGatewayResourceType(resource.resource_type)).length;
     const attachmentLinkCount = connections.filter((connection) => _isAttachmentConnection(connection.connection_type)).length;
+    const resourceLookup = _resourceLookup(resources);
+    const providerGroups = _providerTopologyGroups(resources, connections, hybridLinks);
+    const routeGroups = providerGroups
+        .map((group) => ({ ...group, routeRows: _routePathRowsForGroup(group, resourceLookup) }))
+        .filter((group) => group.routeRows.length);
+    const filteredRouteGroups = _filterTopologyRouteGroups(routeGroups);
+    const totalRouteRows = routeGroups.reduce((sum, group) => sum + group.routeRows.length, 0);
+    const filteredRouteRows = filteredRouteGroups.reduce((sum, group) => sum + group.routeRows.length, 0);
 
     summaryEl.innerHTML = `
-        <div class="drift-summary-grid">
+        <div class="drift-summary-grid" style="margin-bottom:0.75rem;">
             <div class="drift-summary-card"><div class="drift-summary-value">${summary.account_count ?? 0}</div><div class="drift-summary-label">Accounts</div></div>
             <div class="drift-summary-card"><div class="drift-summary-value">${summary.resource_count ?? 0}</div><div class="drift-summary-label">Cloud Resources</div></div>
             <div class="drift-summary-card"><div class="drift-summary-value">${summary.connection_count ?? 0}</div><div class="drift-summary-label">Cloud Links</div></div>
@@ -727,7 +1070,44 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
             <div class="drift-summary-card"><div class="drift-summary-value">${gatewayResourceCount}</div><div class="drift-summary-label">Gateways</div></div>
             <div class="drift-summary-card"><div class="drift-summary-value">${attachmentLinkCount}</div><div class="drift-summary-label">Attachment Links</div></div>
             <div class="drift-summary-card"><div class="drift-summary-value">${summary.hybrid_link_count ?? 0}</div><div class="drift-summary-label">Hybrid Links</div></div>
-        </div>`;
+        </div>
+        ${providerGroups.length ? `
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:0.75rem; margin-bottom:0.75rem;">
+                ${providerGroups.map((group) => `
+                    <div class="card" style="padding:0.85rem;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+                            <strong>${escapeHtml(_providerLabel(group.provider))}</strong>
+                            <span class="text-muted" style="font-size:0.8rem;">${_formatCount(group.resources.length)} resources / ${_formatCount(group.connections.length)} links</span>
+                        </div>
+                        <div style="display:flex; flex-wrap:wrap;">${_providerAttachmentBadgeHtml(group)}</div>
+                    </div>`).join('')}
+            </div>` : ''}
+        ${routeGroups.length ? `
+            ${_renderTopologyRouteFilterControls(totalRouteRows, filteredRouteRows)}
+            ${filteredRouteGroups.length ? `
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:0.75rem;">
+                ${filteredRouteGroups.map((group) => `
+                    <div class="card" style="padding:0.85rem;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+                            <strong>${escapeHtml(_providerLabel(group.provider))} Route Paths</strong>
+                            <span class="text-muted" style="font-size:0.8rem;">${_formatCount(group.routeRows.length)} route objects</span>
+                        </div>
+                        <table class="chart-table">
+                            <thead><tr><th>Route Object</th><th>Attached To</th><th>Path</th></tr></thead>
+                            <tbody>${group.routeRows.map((row) => `
+                                <tr>
+                                    <td>
+                                        ${escapeHtml(row.name)}
+                                        <div class="text-muted" style="font-size:0.75rem;">${escapeHtml(_topologyLabel(row.type || ''))} | ${escapeHtml(row.destination || '-')}</div>
+                                        <div class="text-muted" style="font-size:0.75rem; margin-top:0.2rem;">${escapeHtml(row.details)}</div>
+                                    </td>
+                                    <td>${_renderTopologyLinkGroups(row.attachmentGroups, 'No route associations')}</td>
+                                    <td>${_renderRouteHighlights(row.highlights)}${_renderTopologyLinkGroups(row.pathGroups, 'No route path details available')}</td>
+                                </tr>`).join('')}</tbody>
+                        </table>
+                    </div>`).join('')}
+            </div>` : `<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No route objects match the current topology filter.</p></div>`}
+        ` : ''}`;
 
     if (!resources.length) {
         resourcesEl.innerHTML = '<div class="card" style="padding:1rem;"><p class="text-muted" style="margin:0;">No cloud resources yet. Run discovery on an account.</p></div>';
@@ -1354,6 +1734,12 @@ async function onCloudPolicyFilterChange() {
     await loadCloudPolicyVisibility({ preserveContent: false });
 }
 window.onCloudPolicyFilterChange = onCloudPolicyFilterChange;
+
+async function onCloudTopologyRouteFilterChange() {
+    _cloudTopologyRouteFilter = String(document.getElementById('cloud-topology-route-filter')?.value || 'all').toLowerCase();
+    await loadCloudTopology({ preserveContent: true });
+}
+window.onCloudTopologyRouteFilterChange = onCloudTopologyRouteFilterChange;
 
 async function selectCloudPolicyResource(encodedResourceUid) {
     const resourceUid = decodeURIComponent(String(encodedResourceUid || ''));
