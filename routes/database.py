@@ -8243,6 +8243,28 @@ def _infer_ip_network(ip_text: str) -> str:
         return ""
 
 
+def _parse_cidr_values(raw_value: str) -> list[str]:
+    """Parse one or more CIDR strings into normalized network text values."""
+    values: list[str] = []
+    for part in str(raw_value or "").split(","):
+        cidr = str(part or "").strip()
+        if not cidr:
+            continue
+        try:
+            values.append(str(ipaddress.ip_network(cidr, strict=False)))
+        except Exception:
+            continue
+    return values
+
+
+def _network_sort_key(value: str) -> tuple:
+    try:
+        net = ipaddress.ip_network(value, strict=False)
+        return (net.version, int(net.network_address), net.prefixlen)
+    except Exception:
+        return (99, value, 0)
+
+
 def _normalize_iface_for_doc(name: str) -> str:
     """Normalize interface names for loose circuit/link matching."""
     value = str(name or "").strip().lower()
@@ -8506,14 +8528,7 @@ async def generate_network_documentation_report_data(
             )
             rows.append(row)
 
-        def _subnet_sort_key(subnet: str) -> tuple:
-            try:
-                net = ipaddress.ip_network(subnet, strict=False)
-                return (net.version, int(net.network_address), net.prefixlen)
-            except Exception:
-                return (99, subnet, 0)
-
-        for subnet in sorted(subnet_map.keys(), key=_subnet_sort_key):
+        for subnet in sorted(subnet_map.keys(), key=_network_sort_key):
             entry = subnet_map[subnet]
             host_names = sorted(entry["hosts"])
             group_names = sorted(entry["groups"])
@@ -8575,6 +8590,212 @@ async def generate_network_documentation_report_data(
         rows.insert(0, summary)
 
         return rows
+    finally:
+        await db.close()
+
+
+async def get_ipam_overview(
+    group_id: int | None = None,
+    include_cloud: bool = True,
+) -> dict:
+    """Return a lightweight IPAM overview derived from inventory and cloud CIDRs."""
+    db = await get_db()
+    try:
+        host_where = ""
+        host_params: list = []
+        if group_id is not None:
+            host_where = "WHERE h.group_id = ?"
+            host_params.append(group_id)
+
+        host_cursor = await db.execute(
+            f"""SELECT h.id AS host_id,
+                       h.group_id,
+                       h.hostname,
+                       h.ip_address,
+                       h.status,
+                       ig.name AS group_name
+                FROM hosts h
+                LEFT JOIN inventory_groups ig ON ig.id = h.group_id
+                {host_where}
+                ORDER BY ig.name, h.hostname, h.ip_address""",
+            tuple(host_params),
+        )
+        hosts = rows_to_list(await host_cursor.fetchall())
+
+        cloud_resources: list[dict] = []
+        if include_cloud:
+            cloud_cursor = await db.execute(
+                """SELECT cr.account_id,
+                          cr.provider,
+                          cr.resource_uid,
+                          cr.resource_type,
+                          cr.name,
+                          cr.region,
+                          cr.cidr,
+                          ca.name AS account_name,
+                          ca.account_identifier
+                   FROM cloud_resources cr
+                   JOIN cloud_accounts ca ON ca.id = cr.account_id
+                   WHERE COALESCE(TRIM(cr.cidr), '') <> ''
+                   ORDER BY cr.provider, ca.name, cr.resource_type, cr.name, cr.resource_uid"""
+            )
+            cloud_resources = rows_to_list(await cloud_cursor.fetchall())
+
+        subnet_index: dict[str, dict] = {}
+        host_index: dict[str, list[dict]] = {}
+
+        for host in hosts:
+            raw_ip = str(host.get("ip_address") or "").strip()
+            if not raw_ip:
+                continue
+            try:
+                host_ip = str(ipaddress.ip_interface(raw_ip).ip) if "/" in raw_ip else str(ipaddress.ip_address(raw_ip))
+            except Exception:
+                continue
+
+            subnet = _infer_ip_network(raw_ip)
+            if not subnet:
+                continue
+            network = ipaddress.ip_network(subnet, strict=False)
+            entry = subnet_index.setdefault(
+                subnet,
+                {
+                    "subnet": subnet,
+                    "version": network.version,
+                    "prefix_length": network.prefixlen,
+                    "total_addresses": int(network.num_addresses),
+                    "inventory_host_count": 0,
+                    "group_names": set(),
+                    "hostnames": set(),
+                    "cloud_resource_count": 0,
+                    "cloud_providers": set(),
+                    "cloud_accounts": set(),
+                    "cloud_resource_types": set(),
+                    "cloud_resource_names": set(),
+                },
+            )
+            entry["inventory_host_count"] += 1
+            if host.get("group_name"):
+                entry["group_names"].add(str(host.get("group_name")))
+            if host.get("hostname"):
+                entry["hostnames"].add(str(host.get("hostname")))
+
+            host_index.setdefault(host_ip, []).append(
+                {
+                    "host_id": host.get("host_id"),
+                    "hostname": host.get("hostname") or "",
+                    "group_id": host.get("group_id"),
+                    "group_name": host.get("group_name") or "",
+                    "status": host.get("status") or "",
+                    "raw_ip": raw_ip,
+                }
+            )
+
+        cloud_resource_rows = 0
+        for resource in cloud_resources:
+            cidr_values = _parse_cidr_values(str(resource.get("cidr") or ""))
+            if not cidr_values:
+                continue
+            for subnet in cidr_values:
+                network = ipaddress.ip_network(subnet, strict=False)
+                entry = subnet_index.setdefault(
+                    subnet,
+                    {
+                        "subnet": subnet,
+                        "version": network.version,
+                        "prefix_length": network.prefixlen,
+                        "total_addresses": int(network.num_addresses),
+                        "inventory_host_count": 0,
+                        "group_names": set(),
+                        "hostnames": set(),
+                        "cloud_resource_count": 0,
+                        "cloud_providers": set(),
+                        "cloud_accounts": set(),
+                        "cloud_resource_types": set(),
+                        "cloud_resource_names": set(),
+                    },
+                )
+                entry["cloud_resource_count"] += 1
+                if resource.get("provider"):
+                    entry["cloud_providers"].add(str(resource.get("provider")))
+                if resource.get("account_name"):
+                    entry["cloud_accounts"].add(str(resource.get("account_name")))
+                if resource.get("resource_type"):
+                    entry["cloud_resource_types"].add(str(resource.get("resource_type")))
+                if resource.get("name"):
+                    entry["cloud_resource_names"].add(str(resource.get("name")))
+                cloud_resource_rows += 1
+
+        duplicate_ips: list[dict] = []
+        for ip_address, matches in sorted(host_index.items(), key=lambda item: _network_sort_key(f"{item[0]}/32")):
+            if len(matches) < 2:
+                continue
+            hosts_sorted = sorted(matches, key=lambda item: (str(item.get("group_name") or ""), str(item.get("hostname") or "")))
+            duplicate_ips.append(
+                {
+                    "ip_address": ip_address,
+                    "host_count": len(hosts_sorted),
+                    "groups": sorted({str(item.get("group_name") or "") for item in hosts_sorted if str(item.get("group_name") or "")} ),
+                    "hosts": hosts_sorted,
+                }
+            )
+
+        subnets: list[dict] = []
+        exact_source_overlaps = 0
+        for subnet in sorted(subnet_index.keys(), key=_network_sort_key):
+            entry = subnet_index[subnet]
+            group_names = sorted(entry["group_names"])
+            hostnames = sorted(entry["hostnames"])
+            cloud_providers = sorted(entry["cloud_providers"])
+            cloud_accounts = sorted(entry["cloud_accounts"])
+            cloud_types = sorted(entry["cloud_resource_types"])
+            cloud_names = sorted(entry["cloud_resource_names"])
+            utilization_pct = 0.0
+            if entry["total_addresses"] > 0:
+                utilization_pct = round((entry["inventory_host_count"] / entry["total_addresses"]) * 100, 2)
+            if entry["inventory_host_count"] > 0 and entry["cloud_resource_count"] > 0:
+                exact_source_overlaps += 1
+            subnets.append(
+                {
+                    "subnet": subnet,
+                    "version": entry["version"],
+                    "prefix_length": entry["prefix_length"],
+                    "total_addresses": entry["total_addresses"],
+                    "inventory_host_count": entry["inventory_host_count"],
+                    "utilization_pct": utilization_pct,
+                    "group_names": group_names,
+                    "hostnames_preview": hostnames[:8],
+                    "host_preview_truncated": max(0, len(hostnames) - 8),
+                    "cloud_resource_count": entry["cloud_resource_count"],
+                    "cloud_providers": cloud_providers,
+                    "cloud_accounts": cloud_accounts,
+                    "cloud_resource_types": cloud_types,
+                    "cloud_resource_names_preview": cloud_names[:6],
+                    "cloud_preview_truncated": max(0, len(cloud_names) - 6),
+                    "source_types": [
+                        *(["inventory"] if entry["inventory_host_count"] > 0 else []),
+                        *(["cloud"] if entry["cloud_resource_count"] > 0 else []),
+                    ],
+                }
+            )
+
+        inventory_subnets = sum(1 for item in subnets if item["inventory_host_count"] > 0)
+        cloud_subnets = sum(1 for item in subnets if item["cloud_resource_count"] > 0)
+
+        return {
+            "summary": {
+                "group_id": group_id,
+                "inventory_host_count": len(hosts),
+                "total_subnets": len(subnets),
+                "inventory_subnets": inventory_subnets,
+                "cloud_subnets": cloud_subnets,
+                "duplicate_ip_count": len(duplicate_ips),
+                "exact_source_overlap_count": exact_source_overlaps,
+                "cloud_resource_rows": cloud_resource_rows,
+            },
+            "subnets": subnets,
+            "duplicate_ips": duplicate_ips,
+        }
     finally:
         await db.close()
 

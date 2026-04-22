@@ -127,6 +127,7 @@ from netcontrol.routes.cloud_visibility import (
     persist_cloud_traffic_sync_status,
     router as cloud_visibility_router,
 )
+from netcontrol.routes.ipam import router as ipam_router
 from netcontrol.routes.federation import (
     init_federation,
     federation_sync_loop,
@@ -1501,6 +1502,11 @@ app.include_router(
 app.include_router(
     cloud_visibility_router,
     dependencies=[Depends(require_auth), Depends(require_feature("topology"))],
+)
+# IP Address Management
+app.include_router(
+    ipam_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
 )
 # Multi-Instance Federation
 app.include_router(
