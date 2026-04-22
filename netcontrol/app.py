@@ -128,6 +128,7 @@ from netcontrol.routes.cloud_visibility import (
     router as cloud_visibility_router,
 )
 from netcontrol.routes.ipam import init_ipam, router as ipam_router
+from netcontrol.routes.ipam_adapters import IpamAdapterError, collect_ipam_snapshot
 from netcontrol.routes.federation import (
     init_federation,
     federation_sync_loop,
@@ -808,6 +809,53 @@ async def require_admin(request: Request):
     return session
 
 
+async def _ipam_sync_loop() -> None:
+    """Periodically sync all enabled external IPAM sources."""
+    while True:
+        cfg = state.IPAM_SYNC_CONFIG
+        interval = max(state.IPAM_SYNC_MIN_INTERVAL, int(cfg.get("interval_seconds", 1800)))
+        await asyncio.sleep(interval)
+        if not cfg.get("enabled"):
+            continue
+        try:
+            sources = await db.list_ipam_sources(enabled_only=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("IPAM sync loop: failed to list sources: %s", type(exc).__name__)
+            continue
+        for source in sources:
+            source_id = source.get("id")
+            if not source_id:
+                continue
+            try:
+                auth_config = await db.get_ipam_source_auth_config(source_id)
+                snapshot = await collect_ipam_snapshot(source, auth_config)
+                await db.replace_ipam_source_snapshot(
+                    source_id,
+                    prefixes=snapshot.get("prefixes") or [],
+                    allocations=snapshot.get("allocations") or [],
+                    sync_status="success",
+                    sync_message=(
+                        f"Scheduled sync: {int(snapshot.get('summary', {}).get('prefix_count', 0))} subnets, "
+                        f"{int(snapshot.get('summary', {}).get('allocation_count', 0))} allocations"
+                    ),
+                )
+                LOGGER.info(
+                    "IPAM scheduled sync: source_id=%s provider=%s success",
+                    source_id,
+                    source.get("provider", ""),
+                )
+            except asyncio.CancelledError:
+                raise
+            except IpamAdapterError as exc:
+                await db.set_ipam_source_sync_status(source_id, status="error", message=str(exc))
+                LOGGER.warning("IPAM scheduled sync: source_id=%s adapter error: %s", source_id, exc)
+            except Exception as exc:
+                await db.set_ipam_source_sync_status(source_id, status="error", message="Scheduled sync failed")
+                LOGGER.warning("IPAM scheduled sync: source_id=%s error: %s", source_id, type(exc).__name__)
+
+
 async def _cloud_flow_sync_loop() -> None:
     """Periodically pull cloud flow logs for all enabled accounts."""
     while True:
@@ -909,6 +957,7 @@ async def lifespan(app: FastAPI):
     cloud_flow_sync_task = asyncio.create_task(_cloud_flow_sync_loop())
     cloud_traffic_sync_task = asyncio.create_task(_cloud_traffic_metric_sync_loop())
     federation_task = asyncio.create_task(federation_sync_loop())
+    ipam_sync_task = asyncio.create_task(_ipam_sync_loop())
     try:
         yield
     finally:
@@ -928,6 +977,7 @@ async def lifespan(app: FastAPI):
         cloud_flow_sync_task.cancel()
         cloud_traffic_sync_task.cancel()
         federation_task.cancel()
+        ipam_sync_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -990,6 +1040,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await federation_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await ipam_sync_task
         except asyncio.CancelledError:
             pass
 
