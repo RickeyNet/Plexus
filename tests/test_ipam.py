@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import netcontrol.app as app_module
+import netcontrol.routes.ipam as ipam_routes
 import pytest
 import routes.database as db_module
 
@@ -137,6 +138,44 @@ def _seed_ipam_data():
     return _seed()
 
 
+def _seed_external_ipam_snapshot():
+    async def _seed():
+        source = await db_module.create_ipam_source(
+            provider="netbox",
+            name="NetBox Lab",
+            base_url="https://netbox.example/api",
+            auth_type="token",
+            auth_config={"token": "token-value"},
+            enabled=1,
+            verify_tls=0,
+            created_by="admin",
+        )
+        assert source is not None
+        await db_module.replace_ipam_source_snapshot(
+            int(source["id"]),
+            prefixes=[
+                {
+                    "external_id": "prefix-100",
+                    "subnet": "10.0.0.0/24",
+                    "description": "Campus users",
+                    "status": "active",
+                }
+            ],
+            allocations=[
+                {
+                    "address": "10.0.0.30",
+                    "dns_name": "user-vip.example",
+                    "status": "active",
+                    "description": "VIP",
+                    "prefix_subnet": "10.0.0.0/24",
+                }
+            ],
+        )
+        return source
+
+    return _seed()
+
+
 def test_ipam_overview_returns_subnets_and_duplicates(tmp_path, monkeypatch):
     client = _auth_client(tmp_path, monkeypatch)
     try:
@@ -190,5 +229,111 @@ def test_ipam_overview_group_filter_scopes_inventory_only(tmp_path, monkeypatch)
         assert subnet_map["10.0.0.0/24"]["inventory_host_count"] == 1
         assert subnet_map["10.0.0.0/24"]["group_names"] == ["IPAM Core"]
         assert body["duplicate_ips"] == []
+    finally:
+        client._client.__exit__(None, None, None)
+
+
+def test_ipam_subnet_detail_reports_available_capacity_and_allocations(tmp_path, monkeypatch):
+    client = _auth_client(tmp_path, monkeypatch)
+    try:
+        import asyncio
+
+        asyncio.run(_seed_ipam_data())
+        asyncio.run(_seed_external_ipam_snapshot())
+
+        reservation_response = client.post(
+            "/api/ipam/subnets/10.0.0.0%2F24/reservations",
+            json={
+                "start_ip": "10.0.0.1",
+                "end_ip": "10.0.0.10",
+                "reason": "Gateway and DHCP reserve",
+            },
+        )
+        assert reservation_response.status_code == 200
+
+        response = client.get("/api/ipam/subnets/10.0.0.0%2F24")
+        assert response.status_code == 200
+        body = response.json()
+
+        summary = body["summary"]
+        assert summary["inventory_host_count"] == 3
+        assert summary["external_allocation_count"] == 1
+        assert summary["usable_address_count"] == 254
+        assert summary["reserved_address_count"] == 10
+        assert summary["allocated_address_count"] == 2
+        assert summary["available_address_count"] == 242
+
+        allocations = body["allocations"]
+        assert any(item["source_type"] == "inventory" and item["ip_address"] == "10.0.0.20" for item in allocations)
+        assert any(item["source_type"] == "external" and item["ip_address"] == "10.0.0.30" for item in allocations)
+        assert any(item["is_reserved"] for item in allocations if item["ip_address"] == "10.0.0.1")
+
+        reservations = body["reservations"]
+        assert any(item["kind"] == "custom" and item["address_count"] == 10 for item in reservations)
+        assert body["available_preview"][0] == "10.0.0.11"
+    finally:
+        client._client.__exit__(None, None, None)
+
+
+def test_ipam_source_sync_updates_overview_contract(tmp_path, monkeypatch):
+    client = _auth_client(tmp_path, monkeypatch)
+    try:
+        async def _fake_collect_ipam_snapshot(source, auth_config):
+            assert source["provider"] == "netbox"
+            assert auth_config["token"] == "netbox-token"
+            return {
+                "prefixes": [
+                    {
+                        "external_id": "netbox-prefix-1",
+                        "subnet": "10.20.0.0/24",
+                        "description": "WAN pool",
+                        "status": "active",
+                    }
+                ],
+                "allocations": [
+                    {
+                        "address": "10.20.0.5",
+                        "dns_name": "wan-edge-1.example",
+                        "status": "active",
+                        "description": "WAN edge",
+                        "prefix_subnet": "10.20.0.0/24",
+                    }
+                ],
+                "summary": {"provider": "netbox", "prefix_count": 1, "allocation_count": 1},
+            }
+
+        monkeypatch.setattr(ipam_routes, "collect_ipam_snapshot", _fake_collect_ipam_snapshot)
+
+        create_response = client.post(
+            "/api/ipam/sources",
+            json={
+                "provider": "netbox",
+                "name": "NetBox Prod",
+                "base_url": "https://netbox.example",
+                "auth_type": "token",
+                "auth_config": {"token": "netbox-token"},
+                "enabled": True,
+                "verify_tls": False,
+            },
+        )
+        assert create_response.status_code == 201
+        source_id = create_response.json()["source"]["id"]
+
+        sync_response = client.post(f"/api/ipam/sources/{source_id}/sync")
+        assert sync_response.status_code == 200
+        sync_body = sync_response.json()
+        assert sync_body["summary"]["prefix_count"] == 1
+        assert sync_body["sync"]["prefixes"] == 1
+        assert sync_body["sync"]["allocations"] == 1
+
+        overview_response = client.get("/api/ipam/overview")
+        assert overview_response.status_code == 200
+        overview = overview_response.json()
+        assert overview["summary"]["external_subnets"] == 1
+
+        subnet_map = {item["subnet"]: item for item in overview["subnets"]}
+        assert subnet_map["10.20.0.0/24"]["external_prefix_count"] == 1
+        assert subnet_map["10.20.0.0/24"]["external_allocation_count"] == 1
+        assert "external" in subnet_map["10.20.0.0/24"]["source_types"]
     finally:
         client._client.__exit__(None, None, None)

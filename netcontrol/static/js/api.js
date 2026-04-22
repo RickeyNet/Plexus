@@ -271,6 +271,18 @@ export async function getIpamOverview(groupId = null, includeCloud = true) {
     return cachedGet(key, () => apiRequest(key), 15_000);
 }
 
+export async function getIpamSubnetDetail(subnet, groupId = null, includeCloud = true, includeExternal = true) {
+    const params = new URLSearchParams();
+    if (groupId !== null && groupId !== undefined && groupId !== '') {
+        params.set('group_id', String(groupId));
+    }
+    params.set('include_cloud', includeCloud ? 'true' : 'false');
+    params.set('include_external', includeExternal ? 'true' : 'false');
+    const encodedSubnet = encodeURIComponent(String(subnet || '').trim());
+    const key = `/ipam/subnets/${encodedSubnet}?${params.toString()}`;
+    return cachedGet(key, () => apiRequest(key), 15_000);
+}
+
 export async function createGroup(name, description = '') {
     return apiRequest('/inventory', {
         method: 'POST',

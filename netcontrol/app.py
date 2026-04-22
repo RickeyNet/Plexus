@@ -127,7 +127,7 @@ from netcontrol.routes.cloud_visibility import (
     persist_cloud_traffic_sync_status,
     router as cloud_visibility_router,
 )
-from netcontrol.routes.ipam import router as ipam_router
+from netcontrol.routes.ipam import init_ipam, router as ipam_router
 from netcontrol.routes.federation import (
     init_federation,
     federation_sync_loop,
@@ -1365,6 +1365,7 @@ init_monitoring(require_auth, require_feature, require_admin)
 init_interface_errors(require_auth, require_admin)
 init_billing(require_auth, require_admin)
 init_cloud_visibility(require_admin)
+init_ipam(require_admin)
 init_federation(require_admin)
 init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
 init_ansible_inventory(require_auth)
