@@ -261,6 +261,16 @@ export async function getGroup(groupId) {
     return cachedGet(`/inventory/${groupId}`, () => apiRequest(`/inventory/${groupId}`));
 }
 
+export async function getIpamOverview(groupId = null, includeCloud = true) {
+    const params = new URLSearchParams();
+    if (groupId !== null && groupId !== undefined && groupId !== '') {
+        params.set('group_id', String(groupId));
+    }
+    params.set('include_cloud', includeCloud ? 'true' : 'false');
+    const key = `/ipam/overview?${params.toString()}`;
+    return cachedGet(key, () => apiRequest(key), 15_000);
+}
+
 export async function createGroup(name, description = '') {
     return apiRequest('/inventory', {
         method: 'POST',

@@ -348,6 +348,10 @@ function _topologyLabel(value) {
         .join(' ');
 }
 
+function _topologyNormalizedText(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
 function _topologyBadge(tone, text) {
     return `<span class="badge badge-${tone}" style="margin-right:0.35rem; margin-bottom:0.35rem;">${escapeHtml(text)}</span>`;
 }
@@ -357,6 +361,74 @@ function _topologyCountBadge(tone, count, singular, plural) {
     if (normalizedCount <= 0) return '';
     const label = normalizedCount === 1 ? singular : (plural || `${singular}s`);
     return _topologyBadge(tone, `${normalizedCount} ${label}`);
+}
+
+function _topologyResourceTypeLabel(resourceType, provider) {
+    const normalized = _topologyNormalizedText(resourceType);
+    const providerKey = _topologyNormalizedText(provider);
+    const labels = {
+        route_table: 'Route Table',
+        route_entry: 'Route Entry',
+        transit_gateway: 'Transit Gateway',
+        direct_connect: 'Direct Connect',
+        internet_gateway: 'Internet Gateway',
+        nat_gateway: 'NAT Gateway',
+        expressroute: 'ExpressRoute',
+        virtual_network_gateway: 'Virtual Network Gateway',
+        local_network_gateway: 'Local Network Gateway',
+        cloud_router: 'Cloud Router',
+        ha_vpn_gateway: 'HA VPN Gateway',
+        interconnect_attachment: providerKey === 'gcp' ? 'Interconnect Attachment' : 'Interconnect',
+        vpn_tunnel: 'VPN Tunnel',
+        vpc: 'VPC',
+        vnet: 'VNet',
+        security_group: 'Security Group',
+        network_security_group: 'Network Security Group',
+        firewall_policy: 'Firewall Policy',
+    };
+    return labels[normalized] || _topologyLabel(normalized || resourceType || 'resource');
+}
+
+function _topologyConnectionLabel(connectionType, provider, metadata = {}) {
+    const normalized = _topologyNormalizedText(connectionType);
+    const providerKey = _topologyNormalizedText(provider);
+    if (normalized === 'route_table_association') {
+        if (metadata?.subnet_name) return 'Attached Subnet';
+        return providerKey === 'azure' ? 'Route Association' : 'Attached Network';
+    }
+    const labels = {
+        route_next_hop: 'Next Hop',
+        transit_gateway_attachment: 'Transit Gateway',
+        direct_connect_gateway: 'Direct Connect',
+        internet_gateway_attachment: 'Internet Gateway',
+        expressroute_gateway: 'ExpressRoute',
+        virtual_network_gateway_attachment: 'VNet Gateway',
+        ipsec: 'IPsec Tunnel',
+        router_attachment: 'Cloud Router',
+        vpn_tunnel: 'HA VPN Tunnel',
+        interconnect_attachment: 'Interconnect',
+        vnet_peering: 'VNet Peering',
+        vpc_peering: 'VPC Peering',
+        security_boundary: 'Security Boundary',
+    };
+    return labels[normalized] || _topologyLabel(normalized || connectionType || 'link');
+}
+
+function _compactTopologyDetail(detail, duplicates = []) {
+    const normalizedDuplicates = new Set(
+        duplicates
+            .map((value) => _topologyNormalizedText(value))
+            .filter(Boolean)
+    );
+    const parts = String(detail || '')
+        .split('|')
+        .map((part) => String(part || '').trim())
+        .filter(Boolean)
+        .filter((part, index, all) => {
+            const normalized = _topologyNormalizedText(part);
+            return normalized && !normalizedDuplicates.has(normalized) && all.findIndex((candidate) => _topologyNormalizedText(candidate) === normalized) === index;
+        });
+    return parts.join(' | ');
 }
 
 function _attachmentBucketLabel(connectionType) {
@@ -623,17 +695,19 @@ function _routePathRowsForGroup(group, resourceLookup) {
         .filter((resource) => _isRouteResourceType(resource.resource_type))
         .map((routeResource) => {
             const routeUid = String(routeResource.resource_uid || '');
+            const routeType = String(routeResource.resource_type || '');
+            const routeDestination = String(routeResource.cidr || '').trim();
             const incoming = group.connections.filter((connection) => String(connection.target_resource_uid || '') === routeUid);
             const outgoing = group.connections.filter((connection) => String(connection.source_resource_uid || '') === routeUid);
             const attachedTo = incoming.map((connection) => {
                 const sourceUid = String(connection.source_resource_uid || '');
                 const sourceResource = resourceLookup.get(sourceUid);
-                const detail = _connectionMetadataSummary(connection);
+                const detail = _compactTopologyDetail(_connectionMetadataSummary(connection), [connection.source_name, sourceResource?.name, routeDestination]);
                 return {
-                    label: _topologyLabel(connection.connection_type || 'attachment'),
+                    label: _topologyConnectionLabel(connection.connection_type, group.provider, connection.metadata),
                     tone: _attachmentBucketTone(_attachmentBucketLabel(connection.connection_type)),
                     target: connection.source_name || sourceResource?.name || sourceUid || '-',
-                    detail: detail !== '-' ? detail : '',
+                    detail,
                 };
             });
             const attachmentGroups = _topologyGroupLinkItems(attachedTo);
@@ -641,12 +715,12 @@ function _routePathRowsForGroup(group, resourceLookup) {
                 const targetUid = String(connection.target_resource_uid || '');
                 const targetResource = resourceLookup.get(targetUid);
                 const targetLabel = connection.target_name || targetResource?.name || targetUid || '-';
-                const detail = _connectionMetadataSummary(connection);
+                const detail = _compactTopologyDetail(_connectionMetadataSummary(connection), [targetLabel, routeDestination]);
                 return {
-                    label: _topologyLabel(connection.connection_type || 'link'),
+                    label: _topologyConnectionLabel(connection.connection_type, group.provider, connection.metadata),
                     tone: _attachmentBucketTone(_attachmentBucketLabel(connection.connection_type)),
                     target: targetLabel,
-                    detail: detail !== '-' ? detail : '',
+                    detail,
                 };
             });
             if (!pathParts.length) {
@@ -662,7 +736,8 @@ function _routePathRowsForGroup(group, resourceLookup) {
             }
             return {
                 name: routeResource.name || routeUid || '-',
-                type: routeResource.resource_type || '',
+                provider: group.provider,
+                type: routeType,
                 destination: routeResource.cidr || '-',
                 attachmentGroups,
                 pathGroups: _topologyGroupLinkItems(pathParts),
@@ -1098,7 +1173,7 @@ async function loadCloudTopology({ preserveContent = false } = {}) {
                                 <tr>
                                     <td>
                                         ${escapeHtml(row.name)}
-                                        <div class="text-muted" style="font-size:0.75rem;">${escapeHtml(_topologyLabel(row.type || ''))} | ${escapeHtml(row.destination || '-')}</div>
+                                        <div class="text-muted" style="font-size:0.75rem;">${escapeHtml(_topologyResourceTypeLabel(row.type || '', row.provider || ''))} | ${escapeHtml(row.destination || '-')}</div>
                                         <div class="text-muted" style="font-size:0.75rem; margin-top:0.2rem;">${escapeHtml(row.details)}</div>
                                     </td>
                                     <td>${_renderTopologyLinkGroups(row.attachmentGroups, 'No route associations')}</td>

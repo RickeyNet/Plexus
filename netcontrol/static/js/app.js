@@ -18,6 +18,7 @@ let currentFeatureAccess = [];
 const NAV_FEATURE_MAP = {
     dashboard: 'dashboard',
     inventory: 'inventory',
+    ipam: 'inventory',
     playbooks: 'playbooks',
     jobs: 'jobs',
     templates: 'templates',
@@ -40,7 +41,7 @@ const THEME_KEY = 'plexus-theme';
 const VALID_THEMES = ['forest', 'dark-modern', 'astral', 'light', 'void', 'coral', 'sandstone', 'voyager'];
 const DEFAULT_THEME = 'sandstone';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'cloud-visibility', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades', 'federation'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'ipam', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'cloud-visibility', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades', 'federation'];
 const pageCacheMeta = {};
 
 // ── Space Depth Experience Controls ──────────────────────────────────────────
@@ -904,7 +905,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials', 'topology', 'cloud-visibility', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades'];
+const VALID_PAGES = ['dashboard', 'inventory', 'ipam', 'playbooks', 'jobs', 'templates', 'credentials', 'topology', 'cloud-visibility', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades', 'federation'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -998,6 +999,7 @@ window.navigateToPage = navigateToPage;
 const PAGE_LABELS = {
     dashboard: 'Dashboard',
     inventory: 'Inventory Management',
+    ipam: 'IP Address Management',
     playbooks: 'Playbooks',
     jobs: 'Job Execution',
     templates: 'Config Templates',
@@ -1021,6 +1023,7 @@ const PAGE_LABELS = {
 const PAGE_PARENTS = {
     'device-detail': 'monitoring',
     topology: 'dashboard',
+    ipam: 'dashboard',
     'cloud-visibility': 'dashboard',
     monitoring: 'dashboard',
     configuration: 'dashboard',
@@ -1041,6 +1044,10 @@ const PAGE_HELP = {
     inventory: {
         title: 'Manage Your Devices',
         text: 'Add, edit, and organize network devices into groups. Devices added here are used across monitoring, backups, compliance, and automation features.'
+    },
+    ipam: {
+        title: 'Address Space, Utilization & Conflicts',
+        text: 'Review inferred on-prem subnets, discovered cloud CIDRs, and duplicate IP conflicts in one place so addressing issues are visible before they become outages.'
     },
     playbooks: {
         title: 'Automation Playbooks',
@@ -1217,6 +1224,7 @@ const _moduleCache = {};
 const _destroyMap = {
     'dashboard': 'destroyDashboard',
     'inventory': 'destroyInventory',
+    'ipam': 'destroyIpam',
     'playbooks': 'destroyJobs',
     'jobs': 'destroyJobs',
     'templates': 'destroyJobs',
@@ -1251,6 +1259,7 @@ async function _loadModule(page) {
     const moduleMap = {
         'dashboard':        () => import('./modules/dashboard.js'),
         'inventory':        () => import('./modules/inventory.js'),
+        'ipam':             () => import('./modules/ipam.js'),
         'playbooks':        () => import('./modules/jobs.js'),
         'jobs':             () => import('./modules/jobs.js'),
         'templates':        () => import('./modules/jobs.js'),
@@ -1292,6 +1301,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'inventory':
                 await mod.loadInventory({ preserveContent });
+                break;
+            case 'ipam':
+                await mod.loadIpam({ preserveContent });
                 break;
             case 'playbooks':
                 await mod.loadPlaybooks({ preserveContent });
@@ -2378,6 +2390,7 @@ function closeMobileSidebar() {
 const COMMAND_PALETTE_PAGES = [
     { page: 'dashboard',   label: 'Dashboard',   icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>' },
     { page: 'inventory',   label: 'Inventory',   icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
+    { page: 'ipam',        label: 'IP Address Management', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18"/><path d="M6 3v8"/><path d="M18 3v8"/><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 15h4"/><path d="M13 15h4"/><path d="M7 18h10"/></svg>' },
     { page: 'playbooks',   label: 'Playbooks',   icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>' },
     { page: 'jobs',        label: 'Jobs',         icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>' },
     { page: 'templates',   label: 'Templates',    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
