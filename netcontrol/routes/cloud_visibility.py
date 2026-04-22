@@ -921,6 +921,9 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
             {"resource_uid": "aws:vpc:core", "resource_type": "vpc", "name": "prod-core-vpc", "region": "us-east-1", "cidr": "10.200.0.0/16", "status": "active"},
             {"resource_uid": "aws:tgw:global", "resource_type": "transit_gateway", "name": "global-tgw", "region": "us-east-1", "status": "active"},
             {"resource_uid": "aws:dx:primary", "resource_type": "direct_connect", "name": "dx-primary", "region": "us-east-1", "status": "up"},
+            {"resource_uid": "aws:internet_gateway:igw-core", "resource_type": "internet_gateway", "name": "igw-core", "region": "us-east-1", "status": "attached"},
+            {"resource_uid": "aws:nat_gateway:nat-core-a", "resource_type": "nat_gateway", "name": "nat-core-a", "region": "us-east-1", "status": "available"},
+            {"resource_uid": "aws:route_table:rtb-core", "resource_type": "route_table", "name": "rtb-core", "region": "us-east-1", "status": "active", "metadata": {"route_count": 3, "association_count": 2}},
             {
                 "resource_uid": "aws:sg:app-edge",
                 "resource_type": "security_group",
@@ -956,6 +959,9 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
         connections = [
             {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:tgw:global", "connection_type": "transit_gateway_attachment", "state": "attached"},
             {"source_resource_uid": "aws:tgw:global", "target_resource_uid": "aws:dx:primary", "connection_type": "direct_connect_gateway", "state": "up"},
+            {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:internet_gateway:igw-core", "connection_type": "internet_gateway_attachment", "state": "attached"},
+            {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:route_table:rtb-core", "connection_type": "route_table_association", "state": "attached"},
+            {"source_resource_uid": "aws:route_table:rtb-core", "target_resource_uid": "aws:nat_gateway:nat-core-a", "connection_type": "route_next_hop", "state": "active", "metadata": {"destination": "0.0.0.0/0"}},
             {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:sg:app-edge", "connection_type": "security_boundary", "state": "enforced"},
         ]
         return resources, connections
@@ -965,6 +971,9 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
             {"resource_uid": "azure:vnet:core", "resource_type": "vnet", "name": "corp-core-vnet", "region": "centralus", "cidr": "10.210.0.0/16", "status": "connected"},
             {"resource_uid": "azure:vnet:shared", "resource_type": "vnet", "name": "shared-services-vnet", "region": "centralus", "cidr": "10.211.0.0/16", "status": "connected"},
             {"resource_uid": "azure:er:primary", "resource_type": "expressroute", "name": "er-primary", "region": "centralus", "status": "provisioned"},
+            {"resource_uid": "azure:virtual_network_gateway:core", "resource_type": "virtual_network_gateway", "name": "vgw-core", "region": "centralus", "status": "active", "metadata": {"gateway_type": "Vpn"}},
+            {"resource_uid": "azure:local_network_gateway:hq", "resource_type": "local_network_gateway", "name": "lng-hq", "region": "centralus", "status": "active"},
+            {"resource_uid": "azure:route_table:core", "resource_type": "route_table", "name": "rt-core", "region": "centralus", "status": "active", "metadata": {"route_count": 2}},
             {
                 "resource_uid": "azure:nsg:edge",
                 "resource_type": "network_security_group",
@@ -1002,14 +1011,20 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
         connections = [
             {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:vnet:shared", "connection_type": "vnet_peering", "state": "connected"},
             {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:er:primary", "connection_type": "expressroute_gateway", "state": "up"},
+            {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:virtual_network_gateway:core", "connection_type": "virtual_network_gateway_attachment", "state": "attached"},
+            {"source_resource_uid": "azure:virtual_network_gateway:core", "target_resource_uid": "azure:local_network_gateway:hq", "connection_type": "ipsec", "state": "connected"},
+            {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:route_table:core", "connection_type": "route_table_association", "state": "attached", "metadata": {"subnet_name": "GatewaySubnet"}},
             {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:nsg:edge", "connection_type": "security_boundary", "state": "enforced"},
         ]
         return resources, connections
 
     resources = [
         {"resource_uid": "gcp:vpc:core", "resource_type": "vpc", "name": "gcp-core-vpc", "region": "us-central1", "cidr": "10.220.0.0/16", "status": "active"},
+        {"resource_uid": "gcp:vpc:shared", "resource_type": "vpc", "name": "gcp-shared-vpc", "region": "us-central1", "cidr": "10.221.0.0/16", "status": "active"},
         {"resource_uid": "gcp:router:core", "resource_type": "cloud_router", "name": "cr-core", "region": "us-central1", "status": "running"},
         {"resource_uid": "gcp:vpn:ha", "resource_type": "ha_vpn_gateway", "name": "ha-vpn-gw", "region": "us-central1", "status": "up"},
+        {"resource_uid": "gcp:interconnect_attachment:core", "resource_type": "interconnect_attachment", "name": "ia-core", "region": "us-central1", "status": "AVAILABLE"},
+        {"resource_uid": "gcp:route:default-egress", "resource_type": "route_entry", "name": "default-egress", "region": "global", "cidr": "0.0.0.0/0", "status": "active", "metadata": {"next_hop": "default-internet-gateway", "priority": 1000}},
         {
             "resource_uid": "gcp:fw:edge",
             "resource_type": "firewall_policy",
@@ -1047,6 +1062,9 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
     connections = [
         {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:router:core", "connection_type": "router_attachment", "state": "up"},
         {"source_resource_uid": "gcp:router:core", "target_resource_uid": "gcp:vpn:ha", "connection_type": "vpn_tunnel", "state": "up"},
+        {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:vpc:shared", "connection_type": "vpc_peering", "state": "ACTIVE"},
+        {"source_resource_uid": "gcp:router:core", "target_resource_uid": "gcp:interconnect_attachment:core", "connection_type": "interconnect_attachment", "state": "AVAILABLE"},
+        {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:route:default-egress", "connection_type": "route_table_association", "state": "active"},
         {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:fw:edge", "connection_type": "security_boundary", "state": "enforced"},
     ]
     return resources, connections
