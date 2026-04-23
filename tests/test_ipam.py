@@ -421,3 +421,44 @@ def test_ipam_reservation_delete_removes_entry(tmp_path, monkeypatch):
         assert del_404.status_code == 404
     finally:
         client._client.__exit__(None, None, None)
+
+
+def test_ipam_address_context_returns_subnet_and_conflict(tmp_path, monkeypatch):
+    """GET /api/ipam/address/{ip} returns matched subnet and conflict status."""
+    import asyncio
+
+    client = _auth_client(tmp_path, monkeypatch)
+    try:
+        asyncio.run(_seed_ipam_data())
+
+        # IP that belongs to the 10.0.0.0/24 subnet with no conflict
+        resp = client.get("/api/ipam/address/10.0.0.1")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ip"] == "10.0.0.1"
+        assert body["matched_subnet"] is not None
+        assert body["matched_subnet"]["subnet"] == "10.0.0.0/24"
+        assert body["is_conflict"] is False
+        assert body["conflict_groups"] == []
+
+        # IP that appears in two groups — should be flagged as conflict
+        resp_conflict = client.get("/api/ipam/address/10.0.0.20")
+        assert resp_conflict.status_code == 200
+        conflict_body = resp_conflict.json()
+        assert conflict_body["ip"] == "10.0.0.20"
+        assert conflict_body["matched_subnet"]["subnet"] == "10.0.0.0/24"
+        assert conflict_body["is_conflict"] is True
+        assert len(conflict_body["conflict_groups"]) >= 2
+
+        # IP outside any known subnet — no match
+        resp_miss = client.get("/api/ipam/address/192.168.99.1")
+        assert resp_miss.status_code == 200
+        miss_body = resp_miss.json()
+        assert miss_body["matched_subnet"] is None
+        assert miss_body["is_conflict"] is False
+
+        # Invalid IP address — 400
+        resp_bad = client.get("/api/ipam/address/not-an-ip")
+        assert resp_bad.status_code == 400
+    finally:
+        client._client.__exit__(None, None, None)

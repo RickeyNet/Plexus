@@ -1070,6 +1070,7 @@ function templateDeviceDetail() {
         </div>
     </div>
     <div id="device-detail-info" class="device-info-bar"></div>
+    <div id="device-ipam-context" style="padding:0.3rem 0 0.5rem; min-height:1.4rem;"></div>
     <div class="tab-controls">
         <button class="btn btn-sm btn-secondary dev-tab-btn active" data-dev-tab="overview" onclick="switchDeviceTab('overview')">Overview</button>
         <button class="btn btn-sm btn-secondary dev-tab-btn" data-dev-tab="interfaces" onclick="switchDeviceTab('interfaces')">Interfaces</button>

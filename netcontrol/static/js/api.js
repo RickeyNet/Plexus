@@ -261,77 +261,6 @@ export async function getGroup(groupId) {
     return cachedGet(`/inventory/${groupId}`, () => apiRequest(`/inventory/${groupId}`));
 }
 
-export async function getIpamOverview(groupId = null, includeCloud = true) {
-    const params = new URLSearchParams();
-    if (groupId !== null && groupId !== undefined && groupId !== '') {
-        params.set('group_id', String(groupId));
-    }
-    params.set('include_cloud', includeCloud ? 'true' : 'false');
-    const key = `/ipam/overview?${params.toString()}`;
-    return cachedGet(key, () => apiRequest(key), 15_000);
-}
-
-export async function getIpamSubnetDetail(subnet, groupId = null, includeCloud = true, includeExternal = true) {
-    const params = new URLSearchParams();
-    if (groupId !== null && groupId !== undefined && groupId !== '') {
-        params.set('group_id', String(groupId));
-    }
-    params.set('include_cloud', includeCloud ? 'true' : 'false');
-    params.set('include_external', includeExternal ? 'true' : 'false');
-    const encodedSubnet = encodeURIComponent(String(subnet || '').trim());
-    const key = `/ipam/subnets/${encodedSubnet}?${params.toString()}`;
-    return cachedGet(key, () => apiRequest(key), 15_000);
-}
-
-export async function getIpamProviders() {
-    return cachedGet('/ipam/providers', () => apiRequest('/ipam/providers'), 300_000);
-}
-
-export async function getIpamSources(provider = null, enabledOnly = false) {
-    const params = new URLSearchParams();
-    if (provider) params.set('provider', provider);
-    if (enabledOnly) params.set('enabled_only', 'true');
-    const key = `/ipam/sources?${params.toString()}`;
-    return apiRequest(key);
-}
-
-export async function createIpamSource(payload) {
-    return apiRequest('/ipam/sources', { method: 'POST', body: payload });
-}
-
-export async function updateIpamSource(sourceId, payload) {
-    return apiRequest(`/ipam/sources/${sourceId}`, { method: 'PUT', body: payload });
-}
-
-export async function deleteIpamSource(sourceId) {
-    return apiRequest(`/ipam/sources/${sourceId}`, { method: 'DELETE' });
-}
-
-export async function syncIpamSource(sourceId) {
-    return apiRequest(`/ipam/sources/${sourceId}/sync`, { method: 'POST' });
-}
-
-export async function validateIpamSource(sourceId) {
-    return apiRequest(`/ipam/sources/${sourceId}/validate`, { method: 'POST' });
-}
-
-export async function getIpamSyncConfig() {
-    return apiRequest('/ipam/sync-config');
-}
-
-export async function updateIpamSyncConfig(payload) {
-    return apiRequest('/ipam/sync-config', { method: 'PUT', body: payload });
-}
-
-export async function createIpamReservation(subnet, payload) {
-    const encodedSubnet = encodeURIComponent(String(subnet || '').trim());
-    return apiRequest(`/ipam/subnets/${encodedSubnet}/reservations`, { method: 'POST', body: payload });
-}
-
-export async function deleteIpamReservation(reservationId) {
-    return apiRequest(`/ipam/reservations/${reservationId}`, { method: 'DELETE' });
-}
-
 export async function createGroup(name, description = '') {
     return apiRequest('/inventory', {
         method: 'POST',
@@ -2289,4 +2218,77 @@ export async function syncFederationPeer(id) {
 
 export async function getFederationOverview() {
     return apiRequest('/federation/overview');
+}
+
+// ── IPAM ─────────────────────────────────────────────────────────────────────
+
+export async function getIpamOverview(groupId = null, includeCloud = true, includeExternal = true) {
+    const params = {};
+    if (groupId) params.group_id = groupId;
+    if (!includeCloud) params.include_cloud = 'false';
+    if (!includeExternal) params.include_external = 'false';
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/ipam/overview${qs ? '?' + qs : ''}`);
+}
+
+export async function getIpamSubnetDetail(subnet, groupId = null, includeCloud = true, includeExternal = true) {
+    const params = {};
+    if (groupId) params.group_id = groupId;
+    if (!includeCloud) params.include_cloud = 'false';
+    if (!includeExternal) params.include_external = 'false';
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/ipam/subnets/${encodeURIComponent(subnet)}${qs ? '?' + qs : ''}`);
+}
+
+export async function getIpamProviders() {
+    return apiRequest('/ipam/providers');
+}
+
+export async function getIpamSources(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiRequest(`/ipam/sources${qs ? '?' + qs : ''}`);
+}
+
+export async function createIpamSource(data) {
+    return apiRequest('/ipam/sources', { method: 'POST', body: data });
+}
+
+export async function updateIpamSource(id, data) {
+    return apiRequest(`/ipam/sources/${id}`, { method: 'PUT', body: data });
+}
+
+export async function deleteIpamSource(id) {
+    return apiRequest(`/ipam/sources/${id}`, { method: 'DELETE' });
+}
+
+export async function validateIpamSource(id) {
+    return apiRequest(`/ipam/sources/${id}/validate`, { method: 'POST' });
+}
+
+export async function syncIpamSource(id) {
+    return apiRequest(`/ipam/sources/${id}/sync`, { method: 'POST' });
+}
+
+export async function getIpamSubnetReservations(subnet) {
+    return apiRequest(`/ipam/subnets/${encodeURIComponent(subnet)}/reservations`);
+}
+
+export async function createIpamReservation(subnet, data) {
+    return apiRequest(`/ipam/subnets/${encodeURIComponent(subnet)}/reservations`, { method: 'POST', body: data });
+}
+
+export async function deleteIpamReservation(id) {
+    return apiRequest(`/ipam/reservations/${id}`, { method: 'DELETE' });
+}
+
+export async function getIpamSyncConfig() {
+    return apiRequest('/ipam/sync-config');
+}
+
+export async function updateIpamSyncConfig(data) {
+    return apiRequest('/ipam/sync-config', { method: 'PUT', body: data });
+}
+
+export async function getIpamAddressContext(ip) {
+    return apiRequest(`/ipam/address/${encodeURIComponent(ip)}`);
 }

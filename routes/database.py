@@ -52,7 +52,6 @@ except Exception:  # pragma: no cover - optional dependency for postgres mode
     asyncpg = None
 
 from netcontrol.telemetry import configure_logging
-from routes.crypto import decrypt, encrypt
 
 _LOGGER = configure_logging("plexus.db")
 
@@ -136,10 +135,6 @@ _INSERT_ID_TABLES = {
     "cloud_connections",
     "cloud_hybrid_links",
     "cloud_policy_rules",
-    "ipam_sources",
-    "ipam_prefixes",
-    "ipam_allocations",
-    "ipam_reservations",
     "federation_peers",
     "federation_snapshots",
 }
@@ -8248,207 +8243,6 @@ def _infer_ip_network(ip_text: str) -> str:
         return ""
 
 
-def _parse_cidr_values(raw_value: str) -> list[str]:
-    """Parse one or more CIDR strings into normalized network text values."""
-    values: list[str] = []
-    for part in str(raw_value or "").split(","):
-        cidr = str(part or "").strip()
-        if not cidr:
-            continue
-        try:
-            values.append(str(ipaddress.ip_network(cidr, strict=False)))
-        except Exception:
-            continue
-    return values
-
-
-def _network_sort_key(value: str) -> tuple:
-    try:
-        net = ipaddress.ip_network(value, strict=False)
-        return (net.version, int(net.network_address), net.prefixlen)
-    except Exception:
-        return (99, value, 0)
-
-
-_IPAM_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("224.0.0.0/4"),
-    ipaddress.ip_network("255.255.255.255/32"),
-]
-
-
-def _json_loads_safe(raw_value, default):
-    if raw_value in (None, ""):
-        return default
-    try:
-        return json.loads(str(raw_value))
-    except Exception:
-        return default
-
-
-def _normalize_ip_address_text(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    try:
-        if "/" in raw:
-            return str(ipaddress.ip_interface(raw).ip)
-        return str(ipaddress.ip_address(raw))
-    except Exception:
-        return ""
-
-
-def _usable_ip_bounds(network: ipaddress._BaseNetwork) -> tuple[int, int] | None:
-    start = int(network.network_address)
-    end = int(network.broadcast_address)
-    if network.version == 4 and network.prefixlen < 31:
-        start += 1
-        end -= 1
-    if start > end:
-        return None
-    return (start, end)
-
-
-def _usable_ip_count(network: ipaddress._BaseNetwork) -> int:
-    bounds = _usable_ip_bounds(network)
-    if not bounds:
-        return 0
-    return (bounds[1] - bounds[0]) + 1
-
-
-def _merge_ip_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    merged: list[list[int]] = []
-    for start, end in sorted(ranges):
-        if not merged or start > merged[-1][1] + 1:
-            merged.append([start, end])
-            continue
-        merged[-1][1] = max(merged[-1][1], end)
-    return [(item[0], item[1]) for item in merged]
-
-
-def _ip_range_count(ranges: list[tuple[int, int]]) -> int:
-    return sum((end - start) + 1 for start, end in ranges)
-
-
-def _ip_in_ranges(ranges: list[tuple[int, int]], ip_int: int) -> bool:
-    for start, end in ranges:
-        if start <= ip_int <= end:
-            return True
-    return False
-
-
-def _ipam_auth_config_encrypt(value) -> str:
-    text = _cloud_json_text(value)
-    if text in ("", "{}"):
-        return ""
-    return encrypt(text)
-
-
-def _ipam_auth_config_decrypt(ciphertext: str) -> dict:
-    if not ciphertext:
-        return {}
-    plaintext = decrypt(ciphertext)
-    parsed = _json_loads_safe(plaintext, {})
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _normalize_ipam_subnet(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    return str(ipaddress.ip_network(raw, strict=False))
-
-
-def _builtin_ipam_reservations(network: ipaddress._BaseNetwork) -> list[dict]:
-    bounds = _usable_ip_bounds(network)
-    if not bounds:
-        return []
-    lower, upper = bounds
-    reservations: list[dict] = []
-    for blocked in _IPAM_BLOCKED_NETWORKS:
-        if blocked.version != network.version or not blocked.overlaps(network):
-            continue
-        start = max(lower, int(blocked.network_address))
-        end = min(upper, int(blocked.broadcast_address))
-        if start > end:
-            continue
-        reservations.append(
-            {
-                "id": None,
-                "kind": "system",
-                "reason": f"Reserved range {blocked}",
-                "start_int": start,
-                "end_int": end,
-                "start_ip": str(ipaddress.ip_address(start)),
-                "end_ip": str(ipaddress.ip_address(end)),
-                "address_count": (end - start) + 1,
-            }
-        )
-    return reservations
-
-
-def _normalize_custom_reservation(row: dict, network: ipaddress._BaseNetwork) -> dict | None:
-    start_text = _normalize_ip_address_text(str(row.get("start_ip") or ""))
-    end_text = _normalize_ip_address_text(str(row.get("end_ip") or row.get("start_ip") or ""))
-    if not start_text or not end_text:
-        return None
-    start_ip = ipaddress.ip_address(start_text)
-    end_ip = ipaddress.ip_address(end_text)
-    if start_ip.version != network.version or end_ip.version != network.version:
-        return None
-    start_int = int(start_ip)
-    end_int = int(end_ip)
-    if end_int < start_int:
-        start_int, end_int = end_int, start_int
-    bounds = _usable_ip_bounds(network)
-    if not bounds:
-        return None
-    lower, upper = bounds
-    start_int = max(lower, start_int)
-    end_int = min(upper, end_int)
-    if start_int > end_int:
-        return None
-    return {
-        "id": row.get("id"),
-        "kind": "custom",
-        "reason": str(row.get("reason") or "Reserved range").strip() or "Reserved range",
-        "created_by": str(row.get("created_by") or "").strip(),
-        "created_at": row.get("created_at"),
-        "start_int": start_int,
-        "end_int": end_int,
-        "start_ip": str(ipaddress.ip_address(start_int)),
-        "end_ip": str(ipaddress.ip_address(end_int)),
-        "address_count": (end_int - start_int) + 1,
-    }
-
-
-def _available_ip_preview(
-    network: ipaddress._BaseNetwork,
-    reserved_ranges: list[tuple[int, int]],
-    allocated_ip_ints: set[int],
-    *,
-    limit: int = 12,
-    scan_ceiling: int = 4096,
-) -> list[str]:
-    if int(network.num_addresses) > scan_ceiling:
-        return []
-    bounds = _usable_ip_bounds(network)
-    if not bounds:
-        return []
-    preview: list[str] = []
-    for value in range(bounds[0], bounds[1] + 1):
-        if _ip_in_ranges(reserved_ranges, value) or value in allocated_ip_ints:
-            continue
-        preview.append(str(ipaddress.ip_address(value)))
-        if len(preview) >= limit:
-            break
-    return preview
-
-
 def _normalize_iface_for_doc(name: str) -> str:
     """Normalize interface names for loose circuit/link matching."""
     value = str(name or "").strip().lower()
@@ -8712,7 +8506,14 @@ async def generate_network_documentation_report_data(
             )
             rows.append(row)
 
-        for subnet in sorted(subnet_map.keys(), key=_network_sort_key):
+        def _subnet_sort_key(subnet: str) -> tuple:
+            try:
+                net = ipaddress.ip_network(subnet, strict=False)
+                return (net.version, int(net.network_address), net.prefixlen)
+            except Exception:
+                return (99, subnet, 0)
+
+        for subnet in sorted(subnet_map.keys(), key=_subnet_sort_key):
             entry = subnet_map[subnet]
             host_names = sorted(entry["hosts"])
             group_names = sorted(entry["groups"])
@@ -8774,879 +8575,6 @@ async def generate_network_documentation_report_data(
         rows.insert(0, summary)
 
         return rows
-    finally:
-        await db.close()
-
-
-async def create_ipam_source(
-    provider: str,
-    name: str,
-    base_url: str,
-    auth_type: str = "token",
-    auth_config: dict | None = None,
-    sync_scope: str = "",
-    notes: str = "",
-    enabled: int = 1,
-    verify_tls: int = 1,
-    created_by: str = "",
-) -> dict | None:
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            """INSERT INTO ipam_sources
-               (provider, name, base_url, auth_type, auth_config_enc, sync_scope,
-                notes, enabled, verify_tls, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                str(provider or "").strip().lower(),
-                str(name or "").strip(),
-                str(base_url or "").strip().rstrip("/"),
-                str(auth_type or "token").strip().lower(),
-                _ipam_auth_config_encrypt(auth_config or {}),
-                str(sync_scope or "").strip(),
-                str(notes or "").strip(),
-                int(bool(enabled)),
-                int(bool(verify_tls)),
-                str(created_by or "").strip(),
-            ),
-        )
-        await db.commit()
-        return await get_ipam_source(cursor.lastrowid)
-    finally:
-        await db.close()
-
-
-async def get_ipam_source(source_id: int) -> dict | None:
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            """SELECT s.*,
-                      (SELECT COUNT(*) FROM ipam_prefixes p WHERE p.source_id = s.id) AS prefix_count,
-                      (SELECT COUNT(*) FROM ipam_allocations a WHERE a.source_id = s.id) AS allocation_count
-               FROM ipam_sources s
-               WHERE s.id = ?""",
-            (source_id,),
-        )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
-    finally:
-        await db.close()
-
-
-async def list_ipam_sources(
-    provider: str | None = None,
-    enabled_only: bool = False,
-) -> list[dict]:
-    db = await get_db()
-    try:
-        clauses: list[str] = []
-        params: list = []
-        if provider:
-            clauses.append("s.provider = ?")
-            params.append(str(provider).strip().lower())
-        if enabled_only:
-            clauses.append("s.enabled = 1")
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        cursor = await db.execute(
-            f"""SELECT s.*,
-                       (SELECT COUNT(*) FROM ipam_prefixes p WHERE p.source_id = s.id) AS prefix_count,
-                       (SELECT COUNT(*) FROM ipam_allocations a WHERE a.source_id = s.id) AS allocation_count
-                FROM ipam_sources s
-                {where}
-                ORDER BY s.provider ASC, s.name ASC""",
-            tuple(params),
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
-
-
-async def update_ipam_source(source_id: int, **kwargs) -> dict | None:
-    db = await get_db()
-    try:
-        allowed = {
-            "provider",
-            "name",
-            "base_url",
-            "auth_type",
-            "auth_config",
-            "sync_scope",
-            "notes",
-            "enabled",
-            "verify_tls",
-            "last_sync_at",
-            "last_sync_status",
-            "last_sync_message",
-        }
-        sets: list[str] = []
-        values: list = []
-        for key, value in kwargs.items():
-            if key not in allowed or value is None:
-                continue
-            column = key
-            normalized = value
-            if key == "provider":
-                normalized = str(value).strip().lower()
-            elif key == "base_url":
-                normalized = str(value).strip().rstrip("/")
-            elif key == "auth_type":
-                normalized = str(value).strip().lower()
-            elif key == "auth_config":
-                column = "auth_config_enc"
-                normalized = _ipam_auth_config_encrypt(value)
-            elif key in {"enabled", "verify_tls"}:
-                normalized = int(bool(value))
-            else:
-                normalized = str(value).strip() if isinstance(value, str) else value
-            sets.append(f"{column} = ?")
-            values.append(normalized)
-        if not sets:
-            return await get_ipam_source(source_id)
-        sets.append("updated_at = NOW()" if DB_ENGINE == "postgres" else "updated_at = datetime('now')")
-        sql, sql_params = _safe_dynamic_update("ipam_sources", sets, values, "id = ?", source_id)
-        await db.execute(sql, sql_params)
-        await db.commit()
-        return await get_ipam_source(source_id)
-    finally:
-        await db.close()
-
-
-async def delete_ipam_source(source_id: int) -> bool:
-    db = await get_db()
-    try:
-        cursor = await db.execute("DELETE FROM ipam_sources WHERE id = ?", (source_id,))
-        await db.commit()
-        return cursor.rowcount > 0
-    finally:
-        await db.close()
-
-
-async def set_ipam_source_sync_status(
-    source_id: int,
-    *,
-    status: str,
-    message: str = "",
-    last_sync_at: str | None = None,
-) -> dict | None:
-    sync_time = last_sync_at or datetime.now(UTC).isoformat()
-    return await update_ipam_source(
-        source_id,
-        last_sync_status=status,
-        last_sync_message=message,
-        last_sync_at=sync_time,
-    )
-
-
-async def get_ipam_source_auth_config(source_id: int) -> dict:
-    source = await get_ipam_source(source_id)
-    if not source:
-        return {}
-    return _ipam_auth_config_decrypt(str(source.get("auth_config_enc") or ""))
-
-
-async def replace_ipam_source_snapshot(
-    source_id: int,
-    *,
-    prefixes: list[dict] | None = None,
-    allocations: list[dict] | None = None,
-    sync_status: str = "success",
-    sync_message: str = "",
-) -> dict:
-    prefixes = prefixes or []
-    allocations = allocations or []
-    now_iso = datetime.now(UTC).isoformat()
-    db = await get_db()
-    try:
-        source_cursor = await db.execute(
-            "SELECT id FROM ipam_sources WHERE id = ?",
-            (source_id,),
-        )
-        source = await source_cursor.fetchone()
-        if not source:
-            return {"ok": False, "prefixes": 0, "allocations": 0}
-
-        await db.execute("DELETE FROM ipam_allocations WHERE source_id = ?", (source_id,))
-        await db.execute("DELETE FROM ipam_prefixes WHERE source_id = ?", (source_id,))
-
-        prefix_rows: dict[tuple[str, str], dict] = {}
-        for item in prefixes:
-            try:
-                subnet = _normalize_ipam_subnet(str(item.get("subnet") or item.get("prefix") or ""))
-            except Exception:
-                continue
-            external_id = str(item.get("external_id") or item.get("id") or subnet).strip() or subnet
-            key = (external_id, subnet)
-            prefix_rows[key] = {
-                "external_id": external_id,
-                "subnet": subnet,
-                "description": str(item.get("description") or "").strip(),
-                "status": str(item.get("status") or "").strip(),
-                "vrf": str(item.get("vrf") or "").strip(),
-                "tenant": str(item.get("tenant") or "").strip(),
-                "site": str(item.get("site") or "").strip(),
-                "vlan": str(item.get("vlan") or "").strip(),
-                "metadata_json": _cloud_json_text(item.get("metadata") or item.get("metadata_json")),
-                "discovered_at": str(item.get("discovered_at") or now_iso),
-                "updated_at": str(item.get("updated_at") or now_iso),
-            }
-
-        prefix_networks: list[tuple[ipaddress._BaseNetwork, str]] = []
-        for item in prefix_rows.values():
-            prefix_networks.append((ipaddress.ip_network(item["subnet"], strict=False), item["subnet"]))
-            await db.execute(
-                """INSERT INTO ipam_prefixes
-                   (source_id, external_id, subnet, description, status, vrf, tenant,
-                    site, vlan, metadata_json, discovered_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    source_id,
-                    item["external_id"],
-                    item["subnet"],
-                    item["description"],
-                    item["status"],
-                    item["vrf"],
-                    item["tenant"],
-                    item["site"],
-                    item["vlan"],
-                    item["metadata_json"],
-                    item["discovered_at"],
-                    item["updated_at"],
-                ),
-            )
-
-        allocation_rows: dict[str, dict] = {}
-        for item in allocations:
-            address = _normalize_ip_address_text(str(item.get("address") or item.get("ip_address") or ""))
-            if not address:
-                continue
-            prefix_subnet = ""
-            raw_prefix = str(item.get("prefix_subnet") or item.get("subnet") or "").strip()
-            if raw_prefix:
-                try:
-                    prefix_subnet = _normalize_ipam_subnet(raw_prefix)
-                except Exception:
-                    prefix_subnet = ""
-            if not prefix_subnet:
-                address_obj = ipaddress.ip_address(address)
-                candidates = [
-                    (network.prefixlen, subnet)
-                    for network, subnet in prefix_networks
-                    if address_obj.version == network.version and address_obj in network
-                ]
-                if candidates:
-                    prefix_subnet = sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
-            allocation_rows[address] = {
-                "prefix_subnet": prefix_subnet,
-                "address": address,
-                "dns_name": str(item.get("dns_name") or item.get("hostname") or "").strip(),
-                "status": str(item.get("status") or "").strip(),
-                "description": str(item.get("description") or "").strip(),
-                "metadata_json": _cloud_json_text(item.get("metadata") or item.get("metadata_json")),
-                "discovered_at": str(item.get("discovered_at") or now_iso),
-            }
-
-        for item in allocation_rows.values():
-            await db.execute(
-                """INSERT INTO ipam_allocations
-                   (source_id, prefix_subnet, address, dns_name, status, description,
-                    metadata_json, discovered_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    source_id,
-                    item["prefix_subnet"],
-                    item["address"],
-                    item["dns_name"],
-                    item["status"],
-                    item["description"],
-                    item["metadata_json"],
-                    item["discovered_at"],
-                ),
-            )
-
-        await db.execute(
-            """UPDATE ipam_sources
-               SET last_sync_at = ?,
-                   last_sync_status = ?,
-                   last_sync_message = ?,
-                   updated_at = ?"""
-            + ("::timestamptz" if DB_ENGINE == "postgres" else "")
-            + " WHERE id = ?",
-            (now_iso, sync_status, sync_message, now_iso, source_id),
-        )
-        await db.commit()
-        return {
-            "ok": True,
-            "prefixes": len(prefix_rows),
-            "allocations": len(allocation_rows),
-        }
-    finally:
-        await db.close()
-
-
-async def list_ipam_reservations(subnet: str | None = None) -> list[dict]:
-    db = await get_db()
-    try:
-        params: list = []
-        where = ""
-        if subnet:
-            where = "WHERE subnet = ?"
-            params.append(_normalize_ipam_subnet(subnet))
-        cursor = await db.execute(
-            f"""SELECT *
-                FROM ipam_reservations
-                {where}
-                ORDER BY subnet, start_ip, end_ip, id""",
-            tuple(params),
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
-
-
-async def create_ipam_reservation(
-    subnet: str,
-    start_ip: str,
-    end_ip: str | None = None,
-    reason: str = "",
-    created_by: str = "",
-) -> dict | None:
-    normalized_subnet = _normalize_ipam_subnet(subnet)
-    network = ipaddress.ip_network(normalized_subnet, strict=False)
-    start_text = _normalize_ip_address_text(start_ip)
-    end_text = _normalize_ip_address_text(end_ip or start_ip)
-    if not start_text or not end_text:
-        raise ValueError("Invalid reservation address")
-    start_obj = ipaddress.ip_address(start_text)
-    end_obj = ipaddress.ip_address(end_text)
-    if start_obj.version != network.version or end_obj.version != network.version:
-        raise ValueError("Reservation address family does not match subnet")
-    if start_obj not in network or end_obj not in network:
-        raise ValueError("Reservation must stay within the subnet")
-    start_norm = str(start_obj)
-    end_norm = str(end_obj)
-    if int(end_obj) < int(start_obj):
-        start_norm, end_norm = end_norm, start_norm
-
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            """INSERT INTO ipam_reservations
-               (subnet, start_ip, end_ip, reason, created_by)
-               VALUES (?, ?, ?, ?, ?)""",
-            (
-                normalized_subnet,
-                start_norm,
-                end_norm,
-                str(reason or "Reserved range").strip() or "Reserved range",
-                str(created_by or "").strip(),
-            ),
-        )
-        await db.commit()
-        reservation_cursor = await db.execute(
-            "SELECT * FROM ipam_reservations WHERE id = ?",
-            (cursor.lastrowid,),
-        )
-        row = await reservation_cursor.fetchone()
-        return dict(row) if row else None
-    finally:
-        await db.close()
-
-
-async def delete_ipam_reservation(reservation_id: int) -> bool:
-    db = await get_db()
-    try:
-        cursor = await db.execute("DELETE FROM ipam_reservations WHERE id = ?", (reservation_id,))
-        await db.commit()
-        return cursor.rowcount > 0
-    finally:
-        await db.close()
-
-
-async def _load_ipam_context(
-    db,
-    *,
-    group_id: int | None,
-    include_cloud: bool,
-    include_external: bool,
-) -> dict:
-    host_where = ""
-    host_params: list = []
-    if group_id is not None:
-        host_where = "WHERE h.group_id = ?"
-        host_params.append(group_id)
-    host_cursor = await db.execute(
-        f"""SELECT h.id AS host_id,
-                   h.group_id,
-                   h.hostname,
-                   h.ip_address,
-                   h.status,
-                   ig.name AS group_name
-            FROM hosts h
-            LEFT JOIN inventory_groups ig ON ig.id = h.group_id
-            {host_where}
-            ORDER BY ig.name, h.hostname, h.ip_address""",
-        tuple(host_params),
-    )
-    hosts = rows_to_list(await host_cursor.fetchall())
-
-    cloud_resources: list[dict] = []
-    if include_cloud:
-        cloud_cursor = await db.execute(
-            """SELECT cr.account_id,
-                      cr.provider,
-                      cr.resource_uid,
-                      cr.resource_type,
-                      cr.name,
-                      cr.region,
-                      cr.cidr,
-                      ca.name AS account_name,
-                      ca.account_identifier
-               FROM cloud_resources cr
-               JOIN cloud_accounts ca ON ca.id = cr.account_id
-               WHERE COALESCE(TRIM(cr.cidr), '') <> ''
-               ORDER BY cr.provider, ca.name, cr.resource_type, cr.name, cr.resource_uid"""
-        )
-        cloud_resources = rows_to_list(await cloud_cursor.fetchall())
-
-    external_prefixes: list[dict] = []
-    external_allocations: list[dict] = []
-    if include_external:
-        prefix_cursor = await db.execute(
-            """SELECT p.*, s.provider, s.name AS source_name
-               FROM ipam_prefixes p
-               JOIN ipam_sources s ON s.id = p.source_id
-               WHERE s.enabled = 1
-               ORDER BY s.provider, s.name, p.subnet, p.external_id"""
-        )
-        external_prefixes = rows_to_list(await prefix_cursor.fetchall())
-
-        allocation_cursor = await db.execute(
-            """SELECT a.*, s.provider, s.name AS source_name
-               FROM ipam_allocations a
-               JOIN ipam_sources s ON s.id = a.source_id
-               WHERE s.enabled = 1
-               ORDER BY a.prefix_subnet, a.address, s.name"""
-        )
-        external_allocations = rows_to_list(await allocation_cursor.fetchall())
-
-    reservation_cursor = await db.execute(
-        "SELECT * FROM ipam_reservations ORDER BY subnet, start_ip, end_ip, id"
-    )
-    reservations = rows_to_list(await reservation_cursor.fetchall())
-
-    return {
-        "hosts": hosts,
-        "cloud_resources": cloud_resources,
-        "external_prefixes": external_prefixes,
-        "external_allocations": external_allocations,
-        "reservations": reservations,
-    }
-
-
-def _new_ipam_entry(subnet: str) -> dict:
-    network = ipaddress.ip_network(subnet, strict=False)
-    return {
-        "subnet": subnet,
-        "version": network.version,
-        "prefix_length": network.prefixlen,
-        "total_addresses": int(network.num_addresses),
-        "inventory_host_count": 0,
-        "group_names": set(),
-        "hostnames": set(),
-        "cloud_resource_count": 0,
-        "cloud_providers": set(),
-        "cloud_accounts": set(),
-        "cloud_resource_types": set(),
-        "cloud_resource_names": set(),
-        "external_prefix_count": 0,
-        "external_source_names": set(),
-        "external_providers": set(),
-        "external_prefix_names": set(),
-        "external_allocation_count": 0,
-        "allocated_ips": set(),
-    }
-
-
-def _build_ipam_capacity(subnet: str, allocated_ips: set[str], reservation_rows: list[dict]) -> dict:
-    network = ipaddress.ip_network(subnet, strict=False)
-    system_reservations = _builtin_ipam_reservations(network)
-    custom_reservations = [
-        item
-        for item in (_normalize_custom_reservation(row, network) for row in reservation_rows)
-        if item is not None
-    ]
-    merged_reserved_ranges = _merge_ip_ranges(
-        [(item["start_int"], item["end_int"]) for item in [*system_reservations, *custom_reservations]]
-    )
-
-    usable_bounds = _usable_ip_bounds(network)
-    allocated_ip_ints: set[int] = set()
-    if usable_bounds:
-        for ip_text in allocated_ips:
-            try:
-                ip_int = int(ipaddress.ip_address(ip_text))
-            except Exception:
-                continue
-            if usable_bounds[0] <= ip_int <= usable_bounds[1]:
-                allocated_ip_ints.add(ip_int)
-
-    non_reserved_allocated = {
-        value for value in allocated_ip_ints if not _ip_in_ranges(merged_reserved_ranges, value)
-    }
-    usable_address_count = _usable_ip_count(network)
-    reserved_address_count = _ip_range_count(merged_reserved_ranges)
-    allocatable_address_count = max(usable_address_count - reserved_address_count, 0)
-    allocated_address_count = len(non_reserved_allocated)
-    available_address_count = max(allocatable_address_count - allocated_address_count, 0)
-    utilization_pct = round((allocated_address_count / allocatable_address_count) * 100, 2) if allocatable_address_count else 0.0
-
-    def _serialize_reservation(item: dict) -> dict:
-        return {
-            key: value
-            for key, value in item.items()
-            if key not in {"start_int", "end_int"}
-        }
-
-    return {
-        "usable_address_count": usable_address_count,
-        "reserved_address_count": reserved_address_count,
-        "allocatable_address_count": allocatable_address_count,
-        "allocated_address_count": allocated_address_count,
-        "available_address_count": available_address_count,
-        "utilization_pct": utilization_pct,
-        "custom_reservation_count": len(custom_reservations),
-        "system_reservation_count": len(system_reservations),
-        "available_preview": _available_ip_preview(network, merged_reserved_ranges, allocated_ip_ints),
-        "reservations": [
-            *[_serialize_reservation(item) for item in system_reservations],
-            *[_serialize_reservation(item) for item in custom_reservations],
-        ],
-        "reserved_collision_ips": [
-            str(ipaddress.ip_address(value))
-            for value in sorted(allocated_ip_ints)
-            if _ip_in_ranges(merged_reserved_ranges, value)
-        ],
-    }
-
-
-async def get_ipam_overview(
-    group_id: int | None = None,
-    include_cloud: bool = True,
-    include_external: bool = True,
-) -> dict:
-    """Return a lightweight IPAM overview derived from inventory, cloud, and synced IPAM sources."""
-    db = await get_db()
-    try:
-        context = await _load_ipam_context(
-            db,
-            group_id=group_id,
-            include_cloud=include_cloud,
-            include_external=include_external,
-        )
-        hosts = context["hosts"]
-        cloud_resources = context["cloud_resources"]
-        external_prefixes = context["external_prefixes"]
-        external_allocations = context["external_allocations"]
-
-        reservations_by_subnet: dict[str, list[dict]] = {}
-        for row in context["reservations"]:
-            subnet = str(row.get("subnet") or "").strip()
-            if subnet:
-                reservations_by_subnet.setdefault(subnet, []).append(row)
-
-        subnet_index: dict[str, dict] = {}
-        host_index: dict[str, list[dict]] = {}
-
-        for host in hosts:
-            raw_ip = str(host.get("ip_address") or "").strip()
-            host_ip = _normalize_ip_address_text(raw_ip)
-            subnet = _infer_ip_network(raw_ip)
-            if not host_ip or not subnet:
-                continue
-            entry = subnet_index.setdefault(subnet, _new_ipam_entry(subnet))
-            entry["inventory_host_count"] += 1
-            entry["allocated_ips"].add(host_ip)
-            if host.get("group_name"):
-                entry["group_names"].add(str(host.get("group_name")))
-            if host.get("hostname"):
-                entry["hostnames"].add(str(host.get("hostname")))
-            host_index.setdefault(host_ip, []).append(
-                {
-                    "host_id": host.get("host_id"),
-                    "hostname": host.get("hostname") or "",
-                    "group_id": host.get("group_id"),
-                    "group_name": host.get("group_name") or "",
-                    "status": host.get("status") or "",
-                    "raw_ip": raw_ip,
-                }
-            )
-
-        cloud_resource_rows = 0
-        for resource in cloud_resources:
-            for subnet in _parse_cidr_values(str(resource.get("cidr") or "")):
-                entry = subnet_index.setdefault(subnet, _new_ipam_entry(subnet))
-                entry["cloud_resource_count"] += 1
-                if resource.get("provider"):
-                    entry["cloud_providers"].add(str(resource.get("provider")))
-                if resource.get("account_name"):
-                    entry["cloud_accounts"].add(str(resource.get("account_name")))
-                if resource.get("resource_type"):
-                    entry["cloud_resource_types"].add(str(resource.get("resource_type")))
-                if resource.get("name"):
-                    entry["cloud_resource_names"].add(str(resource.get("name")))
-                cloud_resource_rows += 1
-
-        for prefix in external_prefixes:
-            subnet = str(prefix.get("subnet") or "").strip()
-            if not subnet:
-                continue
-            entry = subnet_index.setdefault(subnet, _new_ipam_entry(subnet))
-            entry["external_prefix_count"] += 1
-            if prefix.get("source_name"):
-                entry["external_source_names"].add(str(prefix.get("source_name")))
-            if prefix.get("provider"):
-                entry["external_providers"].add(str(prefix.get("provider")))
-            if prefix.get("description"):
-                entry["external_prefix_names"].add(str(prefix.get("description")))
-
-        for allocation in external_allocations:
-            address = _normalize_ip_address_text(str(allocation.get("address") or ""))
-            prefix_subnet = str(allocation.get("prefix_subnet") or "").strip()
-            if not address or not prefix_subnet:
-                continue
-            entry = subnet_index.setdefault(prefix_subnet, _new_ipam_entry(prefix_subnet))
-            entry["allocated_ips"].add(address)
-            entry["external_allocation_count"] += 1
-            if allocation.get("source_name"):
-                entry["external_source_names"].add(str(allocation.get("source_name")))
-            if allocation.get("provider"):
-                entry["external_providers"].add(str(allocation.get("provider")))
-
-        duplicate_ips: list[dict] = []
-        for ip_address, matches in sorted(host_index.items(), key=lambda item: _network_sort_key(f"{item[0]}/32")):
-            if len(matches) < 2:
-                continue
-            hosts_sorted = sorted(matches, key=lambda item: (str(item.get("group_name") or ""), str(item.get("hostname") or "")))
-            duplicate_ips.append(
-                {
-                    "ip_address": ip_address,
-                    "host_count": len(hosts_sorted),
-                    "groups": sorted({str(item.get("group_name") or "") for item in hosts_sorted if str(item.get("group_name") or "")}),
-                    "hosts": hosts_sorted,
-                }
-            )
-
-        subnets: list[dict] = []
-        exact_source_overlaps = 0
-        for subnet in sorted(subnet_index.keys(), key=_network_sort_key):
-            entry = subnet_index[subnet]
-            capacity = _build_ipam_capacity(subnet, entry["allocated_ips"], reservations_by_subnet.get(subnet, []))
-            if entry["inventory_host_count"] > 0 and entry["cloud_resource_count"] > 0:
-                exact_source_overlaps += 1
-            group_names = sorted(entry["group_names"])
-            hostnames = sorted(entry["hostnames"])
-            cloud_names = sorted(entry["cloud_resource_names"])
-            external_source_names = sorted(entry["external_source_names"])
-            subnets.append(
-                {
-                    "subnet": subnet,
-                    "version": entry["version"],
-                    "prefix_length": entry["prefix_length"],
-                    "total_addresses": entry["total_addresses"],
-                    "inventory_host_count": entry["inventory_host_count"],
-                    "group_names": group_names,
-                    "hostnames_preview": hostnames[:8],
-                    "host_preview_truncated": max(0, len(hostnames) - 8),
-                    "cloud_resource_count": entry["cloud_resource_count"],
-                    "cloud_providers": sorted(entry["cloud_providers"]),
-                    "cloud_accounts": sorted(entry["cloud_accounts"]),
-                    "cloud_resource_types": sorted(entry["cloud_resource_types"]),
-                    "cloud_resource_names_preview": cloud_names[:6],
-                    "cloud_preview_truncated": max(0, len(cloud_names) - 6),
-                    "external_prefix_count": entry["external_prefix_count"],
-                    "external_allocation_count": entry["external_allocation_count"],
-                    "external_providers": sorted(entry["external_providers"]),
-                    "external_source_names_preview": external_source_names[:4],
-                    "external_source_preview_truncated": max(0, len(external_source_names) - 4),
-                    "source_types": [
-                        *(["inventory"] if entry["inventory_host_count"] > 0 else []),
-                        *(["cloud"] if entry["cloud_resource_count"] > 0 else []),
-                        *(["external"] if entry["external_prefix_count"] > 0 or entry["external_allocation_count"] > 0 else []),
-                    ],
-                    "usable_address_count": capacity["usable_address_count"],
-                    "reserved_address_count": capacity["reserved_address_count"],
-                    "allocatable_address_count": capacity["allocatable_address_count"],
-                    "allocated_address_count": capacity["allocated_address_count"],
-                    "available_address_count": capacity["available_address_count"],
-                    "custom_reservation_count": capacity["custom_reservation_count"],
-                    "utilization_pct": capacity["utilization_pct"],
-                    "available_preview": capacity["available_preview"],
-                }
-            )
-
-        inventory_subnets = sum(1 for item in subnets if item["inventory_host_count"] > 0)
-        cloud_subnets = sum(1 for item in subnets if item["cloud_resource_count"] > 0)
-        external_subnets = sum(1 for item in subnets if item["external_prefix_count"] > 0 or item["external_allocation_count"] > 0)
-
-        return {
-            "summary": {
-                "group_id": group_id,
-                "inventory_host_count": len(hosts),
-                "total_subnets": len(subnets),
-                "inventory_subnets": inventory_subnets,
-                "cloud_subnets": cloud_subnets,
-                "external_subnets": external_subnets,
-                "duplicate_ip_count": len(duplicate_ips),
-                "exact_source_overlap_count": exact_source_overlaps,
-                "cloud_resource_rows": cloud_resource_rows,
-                "external_allocation_count": sum(item["external_allocation_count"] for item in subnets),
-            },
-            "subnets": subnets,
-            "duplicate_ips": duplicate_ips,
-        }
-    finally:
-        await db.close()
-
-
-async def get_ipam_subnet_detail(
-    subnet: str,
-    *,
-    group_id: int | None = None,
-    include_cloud: bool = True,
-    include_external: bool = True,
-) -> dict:
-    normalized_subnet = _normalize_ipam_subnet(subnet)
-    network = ipaddress.ip_network(normalized_subnet, strict=False)
-    db = await get_db()
-    try:
-        context = await _load_ipam_context(
-            db,
-            group_id=group_id,
-            include_cloud=include_cloud,
-            include_external=include_external,
-        )
-        reservation_rows = [
-            row for row in context["reservations"] if str(row.get("subnet") or "") == normalized_subnet
-        ]
-
-        allocations: list[dict] = []
-        allocated_ips: set[str] = set()
-        duplicate_tracker: dict[str, int] = {}
-
-        for host in context["hosts"]:
-            raw_ip = str(host.get("ip_address") or "").strip()
-            ip_text = _normalize_ip_address_text(raw_ip)
-            if not ip_text:
-                continue
-            ip_obj = ipaddress.ip_address(ip_text)
-            if ip_obj.version != network.version or ip_obj not in network:
-                continue
-            allocated_ips.add(ip_text)
-            duplicate_tracker[ip_text] = duplicate_tracker.get(ip_text, 0) + 1
-            allocations.append(
-                {
-                    "ip_address": ip_text,
-                    "raw_ip": raw_ip,
-                    "source_type": "inventory",
-                    "hostname": str(host.get("hostname") or "").strip(),
-                    "group_name": str(host.get("group_name") or "").strip(),
-                    "status": str(host.get("status") or "").strip(),
-                    "description": "",
-                    "provider": "",
-                    "source_name": "Inventory",
-                    "dns_name": "",
-                }
-            )
-
-        matching_prefixes = [
-            row for row in context["external_prefixes"] if str(row.get("subnet") or "") == normalized_subnet
-        ]
-        for allocation in context["external_allocations"]:
-            ip_text = _normalize_ip_address_text(str(allocation.get("address") or ""))
-            if not ip_text:
-                continue
-            prefix_subnet = str(allocation.get("prefix_subnet") or "").strip()
-            ip_obj = ipaddress.ip_address(ip_text)
-            if ip_obj.version != network.version:
-                continue
-            if prefix_subnet != normalized_subnet and ip_obj not in network:
-                continue
-            allocated_ips.add(ip_text)
-            duplicate_tracker[ip_text] = duplicate_tracker.get(ip_text, 0) + 1
-            allocations.append(
-                {
-                    "ip_address": ip_text,
-                    "raw_ip": ip_text,
-                    "source_type": "external",
-                    "hostname": str(allocation.get("dns_name") or "").strip(),
-                    "group_name": "",
-                    "status": str(allocation.get("status") or "").strip(),
-                    "description": str(allocation.get("description") or "").strip(),
-                    "provider": str(allocation.get("provider") or "").strip(),
-                    "source_name": str(allocation.get("source_name") or "External IPAM").strip(),
-                    "dns_name": str(allocation.get("dns_name") or "").strip(),
-                }
-            )
-
-        capacity = _build_ipam_capacity(normalized_subnet, allocated_ips, reservation_rows)
-        reserved_collision_set = set(capacity["reserved_collision_ips"])
-        for item in allocations:
-            item["duplicate_count"] = duplicate_tracker.get(item["ip_address"], 0)
-            item["is_duplicate"] = item["duplicate_count"] > 1
-            item["is_reserved"] = item["ip_address"] in reserved_collision_set
-
-        allocations.sort(key=lambda item: (_network_sort_key(f"{item['ip_address']}/32"), item["source_type"], item["hostname"], item["source_name"]))
-
-        cloud_resources = []
-        for resource in context["cloud_resources"]:
-            cidr_values = _parse_cidr_values(str(resource.get("cidr") or ""))
-            if normalized_subnet not in cidr_values:
-                continue
-            cloud_resources.append(
-                {
-                    "provider": str(resource.get("provider") or "").strip(),
-                    "account_name": str(resource.get("account_name") or "").strip(),
-                    "resource_type": str(resource.get("resource_type") or "").strip(),
-                    "name": str(resource.get("name") or "").strip(),
-                    "region": str(resource.get("region") or "").strip(),
-                }
-            )
-
-        return {
-            "subnet": normalized_subnet,
-            "summary": {
-                "group_id": group_id,
-                "total_addresses": int(network.num_addresses),
-                "inventory_host_count": sum(1 for item in allocations if item["source_type"] == "inventory"),
-                "external_allocation_count": sum(1 for item in allocations if item["source_type"] == "external"),
-                "external_prefix_count": len(matching_prefixes),
-                "cloud_resource_count": len(cloud_resources),
-                "duplicate_ip_count": sum(1 for count in duplicate_tracker.values() if count > 1),
-                "usable_address_count": capacity["usable_address_count"],
-                "reserved_address_count": capacity["reserved_address_count"],
-                "allocatable_address_count": capacity["allocatable_address_count"],
-                "allocated_address_count": capacity["allocated_address_count"],
-                "available_address_count": capacity["available_address_count"],
-                "utilization_pct": capacity["utilization_pct"],
-            },
-            "allocations": allocations,
-            "reservations": capacity["reservations"],
-            "available_preview": capacity["available_preview"],
-            "cloud_resources": cloud_resources,
-            "external_prefixes": [
-                {
-                    "source_name": str(row.get("source_name") or "").strip(),
-                    "provider": str(row.get("provider") or "").strip(),
-                    "description": str(row.get("description") or "").strip(),
-                    "status": str(row.get("status") or "").strip(),
-                    "vrf": str(row.get("vrf") or "").strip(),
-                    "tenant": str(row.get("tenant") or "").strip(),
-                    "site": str(row.get("site") or "").strip(),
-                    "vlan": str(row.get("vlan") or "").strip(),
-                }
-                for row in matching_prefixes
-            ],
-        }
     finally:
         await db.close()
 
@@ -11710,6 +10638,739 @@ async def get_upgrade_events(campaign_id, device_id=None, limit=10000):
                 (campaign_id, limit),
             )
         return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# IPAM — Lightweight IP Address Management
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _infer_subnet(ip_str: str) -> str | None:
+    """Infer network CIDR from a host IP string.
+
+    Handles both notated (10.0.0.1/24) and plain (10.0.0.1) forms.
+    Plain IPv4 defaults to /24; plain IPv6 defaults to /64.
+    Returns canonical network string (e.g. "10.0.0.0/24") or None on error.
+    """
+    if not ip_str:
+        return None
+    ip_str = ip_str.strip()
+    try:
+        if "/" in ip_str:
+            net = ipaddress.ip_interface(ip_str).network
+        else:
+            addr = ipaddress.ip_address(ip_str)
+            prefix = 64 if addr.version == 6 else 24
+            net = ipaddress.ip_network(f"{ip_str}/{prefix}", strict=False)
+        return str(net)
+    except ValueError:
+        return None
+
+
+def _ip_in_reservation(addr: ipaddress.IPv4Address | ipaddress.IPv6Address, rsv: dict) -> bool:
+    """Return True if *addr* falls within the reservation IP range."""
+    try:
+        start = ipaddress.ip_address(rsv["start_ip"])
+        end = ipaddress.ip_address(rsv["end_ip"])
+        return start <= addr <= end
+    except (ValueError, KeyError):
+        return False
+
+
+async def get_ipam_overview(
+    group_id: int | None = None,
+    include_cloud: bool = True,
+    include_external: bool = True,
+) -> dict:
+    """Return a merged IPAM overview across inventory, cloud, and external sources."""
+    db = await get_db()
+    try:
+        # ── 1. Inventory hosts ──────────────────────────────────────────────
+        if group_id is not None:
+            cursor = await db.execute(
+                """SELECT h.ip_address, g.name AS group_name
+                   FROM hosts h
+                   JOIN inventory_groups g ON h.group_id = g.id
+                   WHERE h.group_id = ? AND h.ip_address != '' AND h.ip_address IS NOT NULL""",
+                (group_id,),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT h.ip_address, g.name AS group_name
+                   FROM hosts h
+                   JOIN inventory_groups g ON h.group_id = g.id
+                   WHERE h.ip_address != '' AND h.ip_address IS NOT NULL"""
+            )
+        host_rows = rows_to_list(await cursor.fetchall())
+
+        # Build per-subnet aggregation structures
+        subnet_hosts: dict[str, list[dict]] = {}  # subnet → [{ip, group}]
+        ip_groups: dict[str, set[str]] = {}  # ip → {group_names}
+
+        for row in host_rows:
+            ip = row["ip_address"].strip().split("/")[0]  # normalise "10.0.0.1/24" → "10.0.0.1"
+            group = row["group_name"]
+            sn = _infer_subnet(ip)
+            if sn is None:
+                continue
+            subnet_hosts.setdefault(sn, []).append({"ip": ip, "group": group})
+            ip_groups.setdefault(ip, set()).add(group)
+
+        # ── 2. Cloud resources ──────────────────────────────────────────────
+        cloud_subnets: set[str] = set()
+        subnet_cloud_count: dict[str, int] = {}
+
+        if include_cloud:
+            cursor = await db.execute(
+                """SELECT DISTINCT cr.cidr
+                   FROM cloud_resources cr
+                   WHERE cr.cidr != '' AND cr.cidr IS NOT NULL"""
+            )
+            cloud_rows = await cursor.fetchall()
+            for row in cloud_rows:
+                cidr = row[0].strip()
+                try:
+                    net = ipaddress.ip_network(cidr, strict=False)
+                    sn = str(net)
+                except ValueError:
+                    continue
+                cloud_subnets.add(sn)
+                subnet_cloud_count[sn] = subnet_cloud_count.get(sn, 0) + 1
+
+        # ── 3. External IPAM prefixes ───────────────────────────────────────
+        external_subnets: set[str] = set()
+        subnet_ext_prefix_count: dict[str, int] = {}
+        subnet_ext_alloc_count: dict[str, int] = {}
+
+        if include_external:
+            cursor = await db.execute(
+                "SELECT DISTINCT subnet FROM ipam_prefixes WHERE subnet != '' AND subnet IS NOT NULL"
+            )
+            ext_prefix_rows = await cursor.fetchall()
+            for row in ext_prefix_rows:
+                sn = row[0].strip()
+                external_subnets.add(sn)
+                subnet_ext_prefix_count[sn] = subnet_ext_prefix_count.get(sn, 0) + 1
+
+            cursor = await db.execute(
+                """SELECT p.subnet, COUNT(a.id) AS cnt
+                   FROM ipam_prefixes p
+                   LEFT JOIN ipam_allocations a
+                     ON a.source_id = p.source_id AND a.prefix_subnet = p.subnet
+                   GROUP BY p.subnet"""
+            )
+            alloc_rows = rows_to_list(await cursor.fetchall())
+            for row in alloc_rows:
+                sn = row["subnet"]
+                subnet_ext_alloc_count[sn] = (
+                    subnet_ext_alloc_count.get(sn, 0) + int(row.get("cnt") or 0)
+                )
+
+        # ── 4. Merge all subnets ────────────────────────────────────────────
+        all_subnets: set[str] = (
+            set(subnet_hosts.keys()) | cloud_subnets | external_subnets
+        )
+
+        inventory_subnets = set(subnet_hosts.keys())
+        exact_overlaps = inventory_subnets & cloud_subnets  # subnets in both inventory AND cloud
+
+        subnets_out: list[dict] = []
+        for sn in sorted(all_subnets):
+            hosts_in = subnet_hosts.get(sn, [])
+            unique_ips = {h["ip"] for h in hosts_in}
+            group_names = sorted({h["group"] for h in hosts_in})
+            src_types: list[str] = []
+            if sn in inventory_subnets:
+                src_types.append("inventory")
+            if sn in cloud_subnets:
+                src_types.append("cloud")
+            if sn in external_subnets:
+                src_types.append("external")
+            try:
+                net = ipaddress.ip_network(sn, strict=False)
+                total = net.num_addresses
+                usable = max(0, total - 2) if net.prefixlen < 31 else total
+            except ValueError:
+                total = usable = 0
+            used = len(unique_ips)
+            utilization_pct = round((used / usable * 100), 1) if usable else 0.0
+            subnets_out.append({
+                "subnet": sn,
+                "inventory_host_count": len(hosts_in),
+                "cloud_resource_count": subnet_cloud_count.get(sn, 0),
+                "external_prefix_count": subnet_ext_prefix_count.get(sn, 0),
+                "external_allocation_count": subnet_ext_alloc_count.get(sn, 0),
+                "group_names": group_names,
+                "source_types": src_types,
+                "used_count": used,
+                "total_count": usable,
+                "utilization_pct": utilization_pct,
+            })
+
+        # ── 5. Duplicate IP detection ───────────────────────────────────────
+        duplicates_out: list[dict] = []
+        for ip, groups in sorted(ip_groups.items()):
+            if len(groups) > 1:
+                # Count total host rows with this IP
+                host_count = sum(
+                    1 for row in host_rows if row["ip_address"].strip().split("/")[0] == ip
+                )
+                duplicates_out.append({
+                    "ip_address": ip,
+                    "host_count": host_count,
+                    "groups": sorted(groups),
+                })
+
+        # ── 6. Summary ──────────────────────────────────────────────────────
+        total_ext_allocs = sum(subnet_ext_alloc_count.values())
+        summary: dict = {
+            "inventory_host_count": len(host_rows),
+            "total_subnets": len(all_subnets),
+            "inventory_subnets": len(inventory_subnets),
+            "cloud_subnets": len(cloud_subnets),
+            "external_subnets": len(external_subnets),
+            "duplicate_ip_count": len(duplicates_out),
+            "exact_source_overlap_count": len(exact_overlaps),
+            "external_allocation_count": total_ext_allocs,
+        }
+        if group_id is not None:
+            summary["group_id"] = group_id
+
+        return {
+            "summary": summary,
+            "subnets": subnets_out,
+            "duplicate_ips": duplicates_out,
+        }
+    finally:
+        await db.close()
+
+
+async def get_ipam_subnet_detail(
+    subnet: str,
+    group_id: int | None = None,
+    include_cloud: bool = True,
+    include_external: bool = True,
+) -> dict:
+    """Return per-subnet utilisation detail: allocations, reservations, available preview."""
+    db = await get_db()
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+        net_str = str(net)
+        prefix_len = net.prefixlen
+
+        # ── Inventory hosts in this subnet ──────────────────────────────────
+        if group_id is not None:
+            cursor = await db.execute(
+                """SELECT h.ip_address, h.hostname, g.name AS group_name
+                   FROM hosts h
+                   JOIN inventory_groups g ON h.group_id = g.id
+                   WHERE h.group_id = ? AND h.ip_address != '' AND h.ip_address IS NOT NULL""",
+                (group_id,),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT h.ip_address, h.hostname, g.name AS group_name
+                   FROM hosts h
+                   JOIN inventory_groups g ON h.group_id = g.id
+                   WHERE h.ip_address != '' AND h.ip_address IS NOT NULL"""
+            )
+        all_host_rows = rows_to_list(await cursor.fetchall())
+
+        inv_in_subnet: list[dict] = []
+        for row in all_host_rows:
+            ip_s = row["ip_address"].strip().split("/")[0]
+            try:
+                addr = ipaddress.ip_address(ip_s)
+                if addr in net:
+                    inv_in_subnet.append({"ip": ip_s, "hostname": row["hostname"], "group": row["group_name"]})
+            except ValueError:
+                continue
+
+        # ── Custom reservations ─────────────────────────────────────────────
+        cursor = await db.execute(
+            "SELECT * FROM ipam_reservations WHERE subnet = ? ORDER BY start_ip",
+            (net_str,),
+        )
+        raw_reservations = rows_to_list(await cursor.fetchall())
+
+        # ── External allocations for this prefix ────────────────────────────
+        ext_allocs: list[dict] = []
+        if include_external:
+            cursor = await db.execute(
+                """SELECT a.address, a.dns_name, a.description, a.metadata_json,
+                          s.provider, s.name AS source_name
+                   FROM ipam_allocations a
+                   JOIN ipam_sources s ON s.id = a.source_id
+                   WHERE a.prefix_subnet = ?""",
+                (net_str,),
+            )
+            ext_allocs = rows_to_list(await cursor.fetchall())
+
+        # ── Utilisation math ────────────────────────────────────────────────
+        if prefix_len >= 31:
+            usable = net.num_addresses
+        else:
+            usable = net.num_addresses - 2  # exclude network + broadcast
+
+        # Count IPs covered by reservations
+        reserved_ips: set[str] = set()
+        for rsv in raw_reservations:
+            try:
+                start = ipaddress.ip_address(rsv["start_ip"])
+                end = ipaddress.ip_address(rsv["end_ip"])
+                cur_ip = start
+                while cur_ip <= end:
+                    reserved_ips.add(str(cur_ip))
+                    cur_ip += 1
+            except ValueError:
+                continue
+
+        reserved_count = len(reserved_ips)
+
+        # Unique inventory IPs in subnet
+        inv_unique_ips: set[str] = {h["ip"] for h in inv_in_subnet}
+        # External allocation IPs
+        ext_unique_ips: set[str] = set()
+        for ea in ext_allocs:
+            ip_s = (ea.get("address") or "").strip()
+            try:
+                if ipaddress.ip_address(ip_s) in net:
+                    ext_unique_ips.add(ip_s)
+            except ValueError:
+                continue
+
+        # Allocated = unique IPs from all sources NOT already counted as reserved
+        allocated_ips = (inv_unique_ips | ext_unique_ips) - reserved_ips
+        allocated_count = len(allocated_ips)
+
+        available_count = max(0, usable - reserved_count - allocated_count)
+
+        # ── Build allocations list ──────────────────────────────────────────
+        allocations_out: list[dict] = []
+
+        # Inventory entries (include even if reserved — flag them)
+        for h in inv_in_subnet:
+            ip_s = h["ip"]
+            allocations_out.append({
+                "ip_address": ip_s,
+                "source_type": "inventory",
+                "hostname": h["hostname"],
+                "group_name": h["group"],
+                "is_reserved": ip_s in reserved_ips,
+            })
+
+        # External allocations
+        for ea in ext_allocs:
+            ip_s = (ea.get("address") or "").strip()
+            allocations_out.append({
+                "ip_address": ip_s,
+                "source_type": "external",
+                "hostname": ea.get("dns_name") or "",
+                "group_name": ea.get("source_name") or "",
+                "is_reserved": ip_s in reserved_ips,
+            })
+
+        # Sort by IP
+        def _ip_sort_key(item: dict):
+            try:
+                return int(ipaddress.ip_address(item["ip_address"]))
+            except ValueError:
+                return 0
+
+        allocations_out.sort(key=_ip_sort_key)
+
+        # ── Reservations list with address_count ────────────────────────────
+        reservations_out: list[dict] = []
+        for rsv in raw_reservations:
+            try:
+                start = ipaddress.ip_address(rsv["start_ip"])
+                end = ipaddress.ip_address(rsv["end_ip"])
+                addr_count = max(0, int(end) - int(start) + 1)
+            except ValueError:
+                addr_count = 0
+            reservations_out.append({
+                "id": rsv.get("id"),
+                "kind": "custom",
+                "subnet": rsv.get("subnet"),
+                "start_ip": rsv.get("start_ip"),
+                "end_ip": rsv.get("end_ip"),
+                "address_count": addr_count,
+                "reason": rsv.get("reason") or "",
+                "created_by": rsv.get("created_by") or "",
+                "created_at": rsv.get("created_at"),
+            })
+
+        # ── Available preview (first N free IPs) ────────────────────────────
+        occupied = reserved_ips | inv_unique_ips | ext_unique_ips
+        available_preview: list[str] = []
+        for addr in net.hosts():
+            if len(available_preview) >= 20:
+                break
+            if str(addr) not in occupied:
+                available_preview.append(str(addr))
+
+        summary_out = {
+            "subnet": net_str,
+            "prefix_length": prefix_len,
+            "inventory_host_count": len(inv_in_subnet),
+            "external_allocation_count": len(ext_allocs),
+            "usable_address_count": usable,
+            "reserved_address_count": reserved_count,
+            "allocated_address_count": allocated_count,
+            "available_address_count": available_count,
+        }
+
+        return {
+            "subnet": net_str,
+            "summary": summary_out,
+            "allocations": allocations_out,
+            "reservations": reservations_out,
+            "available_preview": available_preview,
+        }
+    finally:
+        await db.close()
+
+
+def _serialize_ipam_source(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "provider": row.get("provider"),
+        "name": row.get("name"),
+        "base_url": row.get("base_url") or "",
+        "auth_type": row.get("auth_type") or "",
+        "sync_scope": row.get("sync_scope") or "",
+        "notes": row.get("notes") or "",
+        "enabled": bool(row.get("enabled")),
+        "verify_tls": bool(row.get("verify_tls", 1)),
+        "last_sync_at": row.get("last_sync_at"),
+        "last_sync_status": row.get("last_sync_status") or "never",
+        "last_sync_message": row.get("last_sync_message") or "",
+        "created_by": row.get("created_by") or "",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "prefix_count": int(row.get("prefix_count") or 0),
+        "allocation_count": int(row.get("allocation_count") or 0),
+        "has_auth_config": bool(row.get("auth_config_enc")),
+    }
+
+
+async def list_ipam_sources(
+    provider: str | None = None,
+    enabled_only: bool = False,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if provider:
+            clauses.append("s.provider = ?")
+            params.append(provider)
+        if enabled_only:
+            clauses.append("s.enabled = 1")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        cursor = await db.execute(
+            f"""SELECT s.*,
+                       (SELECT COUNT(*) FROM ipam_prefixes p WHERE p.source_id = s.id) AS prefix_count,
+                       (SELECT COUNT(*) FROM ipam_allocations a WHERE a.source_id = s.id) AS allocation_count
+                FROM ipam_sources s
+                {where}
+                ORDER BY s.provider ASC, s.name ASC""",
+            tuple(params),
+        )
+        return [_serialize_ipam_source(dict(r)) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def create_ipam_source(
+    provider: str,
+    name: str,
+    base_url: str = "",
+    auth_type: str = "none",
+    auth_config: dict | None = None,
+    sync_scope: str = "",
+    notes: str = "",
+    enabled: bool = True,
+    verify_tls: bool = True,
+    created_by: str = "",
+) -> dict | None:
+    from routes.crypto import encrypt as _enc
+
+    auth_config_enc = ""
+    if auth_config:
+        auth_config_enc = _enc(json.dumps(auth_config, separators=(",", ":")))
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO ipam_sources
+               (provider, name, base_url, auth_type, auth_config_enc,
+                sync_scope, notes, enabled, verify_tls, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                provider,
+                name,
+                base_url,
+                auth_type,
+                auth_config_enc,
+                sync_scope,
+                notes,
+                int(bool(enabled)),
+                int(bool(verify_tls)),
+                created_by,
+            ),
+        )
+        await db.commit()
+        return await get_ipam_source(cursor.lastrowid)
+    finally:
+        await db.close()
+
+
+async def get_ipam_source(source_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT s.*,
+                      (SELECT COUNT(*) FROM ipam_prefixes p WHERE p.source_id = s.id) AS prefix_count,
+                      (SELECT COUNT(*) FROM ipam_allocations a WHERE a.source_id = s.id) AS allocation_count
+               FROM ipam_sources s
+               WHERE s.id = ?""",
+            (source_id,),
+        )
+        row = await cursor.fetchone()
+        return _serialize_ipam_source(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def get_ipam_source_auth_config(source_id: int) -> dict:
+    """Return the decrypted auth_config dict for an IPAM source."""
+    from routes.crypto import decrypt as _dec
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT auth_config_enc FROM ipam_sources WHERE id = ?",
+            (source_id,),
+        )
+        row = await cursor.fetchone()
+        if not row or not row[0]:
+            return {}
+        try:
+            return json.loads(_dec(row[0]))
+        except Exception:
+            return {}
+    finally:
+        await db.close()
+
+
+async def update_ipam_source(source_id: int, **kwargs) -> dict | None:
+    from routes.crypto import encrypt as _enc
+
+    allowed = {
+        "provider", "name", "base_url", "auth_type", "sync_scope",
+        "notes", "enabled", "verify_tls", "last_sync_at",
+        "last_sync_status", "last_sync_message",
+    }
+    sets: list[str] = []
+    vals: list = []
+
+    # Handle auth_config dict separately (needs encryption)
+    auth_config = kwargs.pop("auth_config", None)
+    if auth_config is not None:
+        enc = _enc(json.dumps(auth_config, separators=(",", ":")))
+        sets.append("auth_config_enc = ?")
+        vals.append(enc)
+
+    for key, value in kwargs.items():
+        if key not in allowed or value is None:
+            continue
+        if key in ("enabled", "verify_tls"):
+            value = int(bool(value))
+        sets.append(f"{key} = ?")
+        vals.append(value)
+
+    if not sets:
+        return await get_ipam_source(source_id)
+
+    sets.append("updated_at = datetime('now')")
+    db = await get_db()
+    try:
+        sql, sql_params = _safe_dynamic_update("ipam_sources", sets, vals, "id = ?", source_id)
+        await db.execute(sql, sql_params)
+        await db.commit()
+        return await get_ipam_source(source_id)
+    finally:
+        await db.close()
+
+
+async def delete_ipam_source(source_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM ipam_sources WHERE id = ?", (source_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def replace_ipam_source_snapshot(
+    source_id: int,
+    prefixes: list[dict],
+    allocations: list[dict],
+    sync_status: str = "success",
+    sync_message: str = "",
+) -> dict:
+    """Replace all prefixes/allocations for a source and update sync status."""
+    db = await get_db()
+    try:
+        # Clear existing snapshot data
+        await db.execute("DELETE FROM ipam_prefixes WHERE source_id = ?", (source_id,))
+        await db.execute("DELETE FROM ipam_allocations WHERE source_id = ?", (source_id,))
+
+        prefix_count = 0
+        for pref in prefixes:
+            subnet = (pref.get("subnet") or "").strip()
+            if not subnet:
+                continue
+            external_id = str(pref.get("external_id") or pref.get("id") or "")
+            await db.execute(
+                """INSERT OR IGNORE INTO ipam_prefixes
+                   (source_id, external_id, subnet, description, vrf, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    source_id,
+                    external_id,
+                    subnet,
+                    pref.get("description") or "",
+                    pref.get("vrf") or "",
+                    json.dumps(pref.get("metadata") or {}, separators=(",", ":")),
+                ),
+            )
+            prefix_count += 1
+
+        alloc_count = 0
+        for alloc in allocations:
+            address = (alloc.get("address") or "").strip()
+            if not address:
+                continue
+            await db.execute(
+                """INSERT OR IGNORE INTO ipam_allocations
+                   (source_id, prefix_subnet, address, dns_name, status, description, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    source_id,
+                    alloc.get("prefix_subnet") or "",
+                    address,
+                    alloc.get("dns_name") or "",
+                    alloc.get("status") or "",
+                    alloc.get("description") or "",
+                    json.dumps(alloc.get("metadata") or {}, separators=(",", ":")),
+                ),
+            )
+            alloc_count += 1
+
+        now_iso = datetime.now(UTC).isoformat()
+        await db.execute(
+            """UPDATE ipam_sources
+               SET last_sync_at = ?,
+                   last_sync_status = ?,
+                   last_sync_message = ?,
+                   updated_at = ?
+               WHERE id = ?""",
+            (now_iso, sync_status, sync_message, now_iso, source_id),
+        )
+        await db.commit()
+        return {"prefixes": prefix_count, "allocations": alloc_count}
+    finally:
+        await db.close()
+
+
+async def set_ipam_source_sync_status(
+    source_id: int,
+    status: str,
+    message: str = "",
+) -> None:
+    """Update only the sync status fields of an IPAM source."""
+    db = await get_db()
+    try:
+        now_iso = datetime.now(UTC).isoformat()
+        await db.execute(
+            """UPDATE ipam_sources
+               SET last_sync_status = ?,
+                   last_sync_message = ?,
+                   last_sync_at = ?,
+                   updated_at = ?
+               WHERE id = ?""",
+            (status, message, now_iso, now_iso, source_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def list_ipam_reservations(subnet: str) -> list[dict]:
+    """Return all custom reservations for a subnet."""
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+        subnet_key = str(net)
+    except ValueError:
+        subnet_key = subnet
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM ipam_reservations WHERE subnet = ? ORDER BY start_ip",
+            (subnet_key,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def create_ipam_reservation(
+    subnet: str,
+    start_ip: str,
+    end_ip: str,
+    reason: str = "",
+    created_by: str = "",
+) -> dict | None:
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+        subnet_key = str(net)
+    except ValueError:
+        subnet_key = subnet
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO ipam_reservations (subnet, start_ip, end_ip, reason, created_by)
+               VALUES (?, ?, ?, ?, ?)""",
+            (subnet_key, start_ip, end_ip, reason, created_by),
+        )
+        await db.commit()
+        rsv_id = cursor.lastrowid
+        cursor2 = await db.execute(
+            "SELECT * FROM ipam_reservations WHERE id = ?", (rsv_id,)
+        )
+        row = await cursor2.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def delete_ipam_reservation(reservation_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM ipam_reservations WHERE id = ?", (reservation_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
     finally:
         await db.close()
 
