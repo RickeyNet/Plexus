@@ -283,6 +283,55 @@ export async function getIpamSubnetDetail(subnet, groupId = null, includeCloud =
     return cachedGet(key, () => apiRequest(key), 15_000);
 }
 
+export async function getIpamProviders() {
+    return cachedGet('/ipam/providers', () => apiRequest('/ipam/providers'), 300_000);
+}
+
+export async function getIpamSources(provider = null, enabledOnly = false) {
+    const params = new URLSearchParams();
+    if (provider) params.set('provider', provider);
+    if (enabledOnly) params.set('enabled_only', 'true');
+    const key = `/ipam/sources?${params.toString()}`;
+    return apiRequest(key);
+}
+
+export async function createIpamSource(payload) {
+    return apiRequest('/ipam/sources', { method: 'POST', body: payload });
+}
+
+export async function updateIpamSource(sourceId, payload) {
+    return apiRequest(`/ipam/sources/${sourceId}`, { method: 'PUT', body: payload });
+}
+
+export async function deleteIpamSource(sourceId) {
+    return apiRequest(`/ipam/sources/${sourceId}`, { method: 'DELETE' });
+}
+
+export async function syncIpamSource(sourceId) {
+    return apiRequest(`/ipam/sources/${sourceId}/sync`, { method: 'POST' });
+}
+
+export async function validateIpamSource(sourceId) {
+    return apiRequest(`/ipam/sources/${sourceId}/validate`, { method: 'POST' });
+}
+
+export async function getIpamSyncConfig() {
+    return apiRequest('/ipam/sync-config');
+}
+
+export async function updateIpamSyncConfig(payload) {
+    return apiRequest('/ipam/sync-config', { method: 'PUT', body: payload });
+}
+
+export async function createIpamReservation(subnet, payload) {
+    const encodedSubnet = encodeURIComponent(String(subnet || '').trim());
+    return apiRequest(`/ipam/subnets/${encodedSubnet}/reservations`, { method: 'POST', body: payload });
+}
+
+export async function deleteIpamReservation(reservationId) {
+    return apiRequest(`/ipam/reservations/${reservationId}`, { method: 'DELETE' });
+}
+
 export async function createGroup(name, description = '') {
     return apiRequest('/inventory', {
         method: 'POST',
