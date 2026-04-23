@@ -1,14 +1,14 @@
 # NetControl Automation Hub - Requirements
 # ─────────────────────────────────────────
 # Core
-fastapi>=0.135.1
-uvicorn[standard]>=0.41.0
+fastapi>=0.136.1
+uvicorn[standard]>=0.46.0
 aiosqlite>=0.22.1
 aiofiles>=25.1.0
-cryptography>=46.0.5
+cryptography>=46.0.7
 pyyaml>=6.0.3
 itsdangerous>=2.2.0
-python-multipart>=0.0.22
+python-multipart>=0.0.26
 
 # Network automation (install when connecting to real devices)
 netmiko>=4.6.0
