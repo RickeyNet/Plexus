@@ -49,10 +49,31 @@ function _ensureIpamLayout() {
         <div style="display:grid;grid-template-columns:minmax(0,2.1fr) minmax(320px,1fr);gap:1rem;align-items:start;">
             <div class="card" style="padding:1rem;overflow:auto;">
                 <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:0.75rem;flex-wrap:wrap;">
-                    <h3 style="margin:0;">Subnet Inventory</h3>
-                    <div class="text-muted" id="ipam-subnet-count"></div>
+                    <div>
+                        <h3 style="margin:0;">Subnet Inventory</h3>
+                        <div class="text-muted" id="ipam-subnet-count" style="font-size:0.88em;margin-top:0.2rem;"></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="openDefineSubnetModal()">+ Define Subnet</button>
                 </div>
                 <div id="ipam-subnets"></div>
+                <div id="ipam-define-subnet-modal" style="display:none;margin-top:1rem;padding:0.9rem;background:rgba(255,255,255,0.04);border-radius:10px;border:1px solid rgba(255,255,255,0.12);">
+                    <div style="font-weight:600;margin-bottom:0.75rem;">Define a Subnet</div>
+                    <form onsubmit="submitDefineSubnetForm(event)" style="display:grid;gap:0.65rem;">
+                        <label style="font-size:0.9em;">CIDR <span class="text-muted">(e.g. 192.168.10.0/24)</span>
+                            <input class="form-control" type="text" name="subnet" required placeholder="10.0.0.0/24" style="margin-top:0.25rem;">
+                        </label>
+                        <label style="font-size:0.9em;">Description <span class="text-muted">(optional)</span>
+                            <input class="form-control" type="text" name="description" maxlength="255" placeholder="e.g. Server VLAN" style="margin-top:0.25rem;">
+                        </label>
+                        <label style="font-size:0.9em;">VRF <span class="text-muted">(optional)</span>
+                            <input class="form-control" type="text" name="vrf" maxlength="120" placeholder="global" style="margin-top:0.25rem;">
+                        </label>
+                        <div style="display:flex;gap:0.5rem;">
+                            <button type="submit" class="btn btn-primary">Add Subnet</button>
+                            <button type="button" class="btn btn-secondary" onclick="closeDefineSubnetModal()">Cancel</button>
+                        </div>
+                    </form>
+                </div>
             </div>
             <div style="display:grid;gap:1rem;">
                 <div class="card" style="padding:1rem;">
@@ -161,6 +182,7 @@ function _renderSummary() {
         { label: 'External Subnets', value: summary.external_subnets || 0 },
         { label: 'Duplicate IPs', value: summary.duplicate_ip_count || 0, color: 'var(--danger-color)' },
         { label: 'Inventory Subnets', value: summary.inventory_subnets || 0 },
+        { label: 'Local Subnets', value: summary.local_subnets || 0 },
         { label: 'External Allocations', value: summary.external_allocation_count || 0 },
         { label: 'Inventory / Cloud Overlaps', value: summary.exact_source_overlap_count || 0, color: 'var(--warning-color)' },
     ];
@@ -291,17 +313,33 @@ function _renderDrilldown() {
                                             ${item.description ? ` · ${escapeHtml(item.description)}` : ''}
                                         </div>
                                     </div>
-                                    <div style="display:flex;gap:0.35rem;flex-wrap:wrap;justify-content:flex-end;">
-                                        <span class="badge badge-secondary">${escapeHtml(item.source_type || 'allocation')}</span>
+                                    <div style="display:flex;gap:0.35rem;flex-wrap:wrap;justify-content:flex-end;align-items:center;">
+                                        <span class="badge ${item.source_type === 'local' ? 'badge-success' : 'badge-secondary'}">${escapeHtml(item.source_type || 'allocation')}</span>
                                         ${item.status ? `<span class="badge badge-secondary">${escapeHtml(item.status)}</span>` : ''}
                                         ${item.is_duplicate ? '<span class="badge badge-danger">Duplicate</span>' : ''}
                                         ${item.is_reserved ? '<span class="badge badge-warning">Reserved</span>' : ''}
+                                        ${item.source_type === 'local' && item.allocation_id ? `<button class="btn btn-secondary" style="padding:0.15rem 0.45rem;font-size:0.78em;color:var(--danger-color);" onclick="deleteIpamAllocationById(${Number(item.allocation_id)}, '${encodeURIComponent(_selectedSubnet)}')" title="Remove local allocation">✕</button>` : ''}
                                     </div>
                                 </div>
                             </div>
                         `).join('')}
                     </div>
                 ` : '<p class="text-muted" style="margin:0;">No allocations tracked for this subnet.</p>'}
+                <details style="margin-top:0.75rem;">
+                    <summary style="cursor:pointer;font-size:0.9em;color:var(--accent-color);">+ Add IP Allocation</summary>
+                    <form onsubmit="submitIpamAllocationForm(event, '${encodeURIComponent(_selectedSubnet)}')" style="display:grid;gap:0.6rem;margin-top:0.65rem;">
+                        <label style="font-size:0.9em;">IP Address
+                            <input class="form-control" type="text" name="address" required placeholder="10.0.0.50" style="margin-top:0.25rem;">
+                        </label>
+                        <label style="font-size:0.9em;">Hostname / Label <span class="text-muted">(optional)</span>
+                            <input class="form-control" type="text" name="hostname" maxlength="255" placeholder="e.g. printer-floor2" style="margin-top:0.25rem;">
+                        </label>
+                        <label style="font-size:0.9em;">Description <span class="text-muted">(optional)</span>
+                            <input class="form-control" type="text" name="description" maxlength="255" placeholder="e.g. Managed by IT" style="margin-top:0.25rem;">
+                        </label>
+                        <button type="submit" class="btn btn-primary" style="justify-self:start;">Add Allocation</button>
+                    </form>
+                </details>
             </div>
             ${(externalPrefixes.length || cloudResources.length) ? `
                 <div style="display:grid;gap:0.75rem;">
@@ -783,6 +821,81 @@ window.submitIpamReservation = async function (event, encodedSubnet) {
     }
 };
 
+window.openDefineSubnetModal = function () {
+    const modal = document.getElementById('ipam-define-subnet-modal');
+    if (modal) modal.style.display = '';
+};
+
+window.closeDefineSubnetModal = function () {
+    const modal = document.getElementById('ipam-define-subnet-modal');
+    if (modal) modal.style.display = 'none';
+};
+
+window.submitDefineSubnetForm = async function (event) {
+    event.preventDefault();
+    const form = event.target;
+    const subnet = form.elements.subnet?.value?.trim();
+    const description = form.elements.description?.value?.trim() || '';
+    const vrf = form.elements.vrf?.value?.trim() || '';
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
+    try {
+        await api.createIpamPrefix({ subnet, description, vrf });
+        form.reset();
+        window.closeDefineSubnetModal();
+        api.invalidateApiCache('/ipam/overview', '/ipam/subnets');
+        await loadIpam({ preserveContent: false });
+    } catch (error) {
+        showError(`Failed to define subnet: ${error.message}`);
+    } finally {
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Add Subnet'; }
+    }
+};
+
+window.submitIpamAllocationForm = async function (event, encodedSubnet) {
+    event.preventDefault();
+    const subnet = decodeURIComponent(String(encodedSubnet || ''));
+    const form = event.target;
+    const address = form.elements.address?.value?.trim();
+    const hostname = form.elements.hostname?.value?.trim() || '';
+    const description = form.elements.description?.value?.trim() || '';
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
+    try {
+        await api.createIpamAllocation(subnet, { address, hostname, description });
+        form.reset();
+        _subnetDetailLoading = true;
+        _renderDrilldown();
+        const groupId = _selectedGroupId ? Number(_selectedGroupId) : null;
+        _subnetDetail = await api.getIpamSubnetDetail(subnet, groupId, _includeCloud, true).catch(() => null);
+        _selectedSubnet = subnet;
+    } catch (error) {
+        showError(`Failed to add allocation: ${error.message}`);
+    } finally {
+        _subnetDetailLoading = false;
+        _renderDrilldown();
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Add Allocation'; }
+    }
+};
+
+window.deleteIpamAllocationById = async function (allocationId, encodedSubnet) {
+    if (!confirm('Remove this local allocation?')) return;
+    const subnet = decodeURIComponent(String(encodedSubnet || ''));
+    try {
+        await api.deleteIpamAllocation(allocationId);
+        _subnetDetailLoading = true;
+        _renderDrilldown();
+        const groupId = _selectedGroupId ? Number(_selectedGroupId) : null;
+        _subnetDetail = await api.getIpamSubnetDetail(subnet, groupId, _includeCloud, true).catch(() => null);
+        _selectedSubnet = subnet;
+    } catch (error) {
+        showError(`Failed to remove allocation: ${error.message}`);
+    } finally {
+        _subnetDetailLoading = false;
+        _renderDrilldown();
+    }
+};
+
 window.deleteIpamReservationById = async function (reservationId, encodedSubnet) {
     if (!confirm('Delete this reserved range?')) return;
     const subnet = decodeURIComponent(String(encodedSubnet || ''));
@@ -821,4 +934,9 @@ export function destroyIpam() {
     delete window.submitIpamSyncConfig;
     delete window.submitIpamReservation;
     delete window.deleteIpamReservationById;
+    delete window.openDefineSubnetModal;
+    delete window.closeDefineSubnetModal;
+    delete window.submitDefineSubnetForm;
+    delete window.submitIpamAllocationForm;
+    delete window.deleteIpamAllocationById;
 }

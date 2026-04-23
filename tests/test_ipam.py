@@ -462,3 +462,76 @@ def test_ipam_address_context_returns_subnet_and_conflict(tmp_path, monkeypatch)
         assert resp_bad.status_code == 400
     finally:
         client._client.__exit__(None, None, None)
+
+
+def test_ipam_local_prefix_and_allocation_crud(tmp_path, monkeypatch):
+    """Native Plexus IPAM: create prefix, allocate IP, verify in overview and detail, then delete both."""
+    import asyncio
+
+    client = _auth_client(tmp_path, monkeypatch)
+    try:
+        # Create a local subnet prefix via the native API
+        r = client.post("/api/ipam/prefixes", json={"subnet": "192.168.10.0/24", "description": "Test LAN"})
+        assert r.status_code == 201, r.text
+        prefix = r.json()["prefix"]
+        prefix_id = prefix["id"]
+
+        # Verify it appears in the IPAM overview with local_subnets count
+        overview = client.get("/api/ipam/overview").json()
+        assert overview["summary"]["local_subnets"] >= 1
+        subnet_map = {s["subnet"]: s for s in overview["subnets"]}
+        assert "192.168.10.0/24" in subnet_map
+        assert "local" in subnet_map["192.168.10.0/24"]["source_types"]
+
+        # Add an IP allocation within that subnet
+        r2 = client.post(
+            "/api/ipam/subnets/192.168.10.0%2F24/allocations",
+            json={"address": "192.168.10.5", "hostname": "printer-01", "description": "Floor 2 printer"},
+        )
+        assert r2.status_code == 201, r2.text
+        alloc_id = r2.json()["allocation"]["id"]
+
+        # Verify the allocation appears in the subnet detail with source_type="local"
+        detail = client.get("/api/ipam/subnets/192.168.10.0%2F24").json()
+        local_allocs = [a for a in detail["allocations"] if a.get("source_type") == "local"]
+        assert any(a["ip_address"] == "192.168.10.5" for a in local_allocs)
+
+        # Reject an IP that is outside the subnet
+        r_bad = client.post(
+            "/api/ipam/subnets/192.168.10.0%2F24/allocations",
+            json={"address": "10.0.0.1"},
+        )
+        assert r_bad.status_code == 400
+
+        # Delete the allocation
+        r_del_alloc = client.delete(f"/api/ipam/allocations/{alloc_id}")
+        assert r_del_alloc.status_code == 200
+
+        # Delete the prefix
+        r_del_prefix = client.delete(f"/api/ipam/prefixes/{prefix_id}")
+        assert r_del_prefix.status_code == 200
+
+        # Prefix should be gone from the overview
+        overview2 = client.get("/api/ipam/overview").json()
+        subnet_map2 = {s["subnet"]: s for s in overview2["subnets"]}
+        local_sources2 = subnet_map2.get("192.168.10.0/24", {}).get("source_types", [])
+        assert "local" not in local_sources2
+    finally:
+        client._client.__exit__(None, None, None)
+
+
+def test_ipam_builtin_source_cannot_be_deleted(tmp_path, monkeypatch):
+    """The built-in Plexus IPAM source must not be deletable via the API."""
+    import asyncio
+
+    client = _auth_client(tmp_path, monkeypatch)
+    try:
+        builtin = asyncio.run(db_module.get_or_create_builtin_ipam_source())
+        source_id = builtin["id"]
+        r = client.delete(f"/api/ipam/sources/{source_id}")
+        assert r.status_code == 400
+        body = r.json()
+        message = body.get("detail", "") or body.get("error", {}).get("message", "")
+        assert "built-in" in message.lower()
+    finally:
+        client._client.__exit__(None, None, None)
