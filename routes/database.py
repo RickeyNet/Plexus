@@ -11060,6 +11060,7 @@ def _serialize_ipam_source(row: dict) -> dict:
         "sync_scope": row.get("sync_scope") or "",
         "notes": row.get("notes") or "",
         "enabled": bool(row.get("enabled")),
+        "push_enabled": bool(row.get("push_enabled", 0)),
         "verify_tls": bool(row.get("verify_tls", 1)),
         "last_sync_at": row.get("last_sync_at"),
         "last_sync_status": row.get("last_sync_status") or "never",
@@ -11110,6 +11111,7 @@ async def create_ipam_source(
     sync_scope: str = "",
     notes: str = "",
     enabled: bool = True,
+    push_enabled: bool = False,
     verify_tls: bool = True,
     created_by: str = "",
 ) -> dict | None:
@@ -11124,8 +11126,8 @@ async def create_ipam_source(
         cursor = await db.execute(
             """INSERT INTO ipam_sources
                (provider, name, base_url, auth_type, auth_config_enc,
-                sync_scope, notes, enabled, verify_tls, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                sync_scope, notes, enabled, push_enabled, verify_tls, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 provider,
                 name,
@@ -11135,6 +11137,7 @@ async def create_ipam_source(
                 sync_scope,
                 notes,
                 int(bool(enabled)),
+                int(bool(push_enabled)),
                 int(bool(verify_tls)),
                 created_by,
             ),
@@ -11188,7 +11191,7 @@ async def update_ipam_source(source_id: int, **kwargs) -> dict | None:
 
     allowed = {
         "provider", "name", "base_url", "auth_type", "sync_scope",
-        "notes", "enabled", "verify_tls", "last_sync_at",
+        "notes", "enabled", "push_enabled", "verify_tls", "last_sync_at",
         "last_sync_status", "last_sync_message",
     }
     sets: list[str] = []
@@ -11204,7 +11207,7 @@ async def update_ipam_source(source_id: int, **kwargs) -> dict | None:
     for key, value in kwargs.items():
         if key not in allowed or value is None:
             continue
-        if key in ("enabled", "verify_tls"):
+        if key in ("enabled", "push_enabled", "verify_tls"):
             value = int(bool(value))
         sets.append(f"{key} = ?")
         vals.append(value)

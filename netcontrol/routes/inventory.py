@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 import netcontrol.routes.state as state
+from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,  # noqa: F401
@@ -289,6 +290,11 @@ async def _sync_group_hosts(
             _validate_host_ip(discovered["ip_address"])
             new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
             await db.update_host_status(new_id, discovered["status"])
+            await push_inventory_host_allocation(
+                hostname=discovered["hostname"],
+                ip_address=discovered["ip_address"],
+                source_hint="discovery-add",
+            )
             if model or sw_version or category:
                 await db.update_host_device_info(new_id, model, sw_version, category)
             # Auto-apply graph templates to newly discovered host
@@ -318,6 +324,11 @@ async def _sync_group_hosts(
             or existing.get("device_type") != new_device_type
         ):
             await db.update_host(existing["id"], effective_hostname, discovered["ip_address"], new_device_type)
+            await push_inventory_host_allocation(
+                hostname=effective_hostname,
+                ip_address=discovered["ip_address"],
+                source_hint="discovery-update",
+            )
             updated += 1
         # Don't blank out model/version with empty values — only update
         # when discovery actually returned data (e.g. via SNMP sysDescr).
@@ -641,6 +652,11 @@ async def add_host(group_id: int, body: HostCreate):
         await db.apply_graph_templates_to_host(hid)
     except Exception:
         pass
+    await push_inventory_host_allocation(
+        hostname=body.hostname,
+        ip_address=body.ip_address,
+        source_hint="inventory-add",
+    )
     return {"id": hid}
 
 
@@ -649,6 +665,11 @@ async def update_host(host_id: int, body: HostUpdate):
     if body.ip_address:
         _validate_host_ip(body.ip_address)
     await db.update_host(host_id, body.hostname, body.ip_address, body.device_type)
+    await push_inventory_host_allocation(
+        hostname=body.hostname,
+        ip_address=body.ip_address,
+        source_hint="inventory-update",
+    )
     return {"ok": True}
 
 

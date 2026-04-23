@@ -622,6 +622,7 @@ async def test_get_topology_builds_graph(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_all_groups", AsyncMock(return_value=fake_groups))
     monkeypatch.setattr(app_module.db, "get_interface_stats_by_hosts", AsyncMock(return_value=[]))
     monkeypatch.setattr(app_module.db, "get_topology_changes_count", AsyncMock(return_value=0))
+    monkeypatch.setattr(app_module.db, "get_ipam_overview", AsyncMock(return_value={"subnets": []}))
     monkeypatch.setattr(topology_module, "db", app_module.db)
 
     result = await topology_module.get_topology(group_id=None)
@@ -657,10 +658,72 @@ async def test_get_topology_empty(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_all_groups", AsyncMock(return_value=[]))
     monkeypatch.setattr(app_module.db, "get_interface_stats_by_hosts", AsyncMock(return_value=[]))
     monkeypatch.setattr(app_module.db, "get_topology_changes_count", AsyncMock(return_value=0))
+    monkeypatch.setattr(app_module.db, "get_ipam_overview", AsyncMock(return_value={"subnets": []}))
     monkeypatch.setattr(topology_module, "db", app_module.db)
 
     result = await topology_module.get_topology(group_id=None)
     assert result == {"nodes": [], "edges": [], "unacknowledged_changes": 0}
+
+
+@pytest.mark.asyncio
+async def test_get_topology_enriches_nodes_with_ipam_utilization(monkeypatch):
+    fake_links = [
+        {
+            "id": 1,
+            "source_host_id": 10,
+            "target_host_id": None,
+            "target_device_name": "ext-switch",
+            "target_ip": "172.16.0.1",
+            "target_platform": "cisco WS-C2960",
+            "source_interface": "Gi0/1",
+            "target_interface": "Gi0/2",
+            "protocol": "cdp",
+        },
+    ]
+    fake_hosts = [
+        {
+            "id": 10,
+            "hostname": "core-sw",
+            "ip_address": "10.0.0.1/24",
+            "device_type": "cisco_ios",
+            "group_id": 1,
+            "status": "online",
+        },
+    ]
+    fake_groups = [{"id": 1, "name": "Core"}]
+    fake_ipam = {
+        "subnets": [
+            {
+                "subnet": "10.0.0.0/24",
+                "utilization_pct": 73.2,
+                "source_types": ["inventory", "external"],
+            },
+            {
+                "subnet": "172.16.0.0/24",
+                "utilization_pct": 41.0,
+                "source_types": ["inventory"],
+            },
+        ]
+    }
+
+    monkeypatch.setattr(app_module.db, "get_topology_links", AsyncMock(return_value=fake_links))
+    monkeypatch.setattr(app_module.db, "get_hosts_by_ids", AsyncMock(return_value=fake_hosts))
+    monkeypatch.setattr(app_module.db, "get_all_groups", AsyncMock(return_value=fake_groups))
+    monkeypatch.setattr(app_module.db, "get_interface_stats_by_hosts", AsyncMock(return_value=[]))
+    monkeypatch.setattr(app_module.db, "get_topology_changes_count", AsyncMock(return_value=0))
+    monkeypatch.setattr(app_module.db, "get_ipam_overview", AsyncMock(return_value=fake_ipam))
+    monkeypatch.setattr(topology_module, "db", app_module.db)
+
+    result = await topology_module.get_topology(group_id=None)
+
+    inv_node = next(n for n in result["nodes"] if n["id"] == 10)
+    assert inv_node["ipam_subnet"] == "10.0.0.0/24"
+    assert inv_node["ipam_utilization_pct"] == 73.2
+    assert "inventory" in inv_node["ipam_source_types"]
+
+    ext_node = next(n for n in result["nodes"] if n["id"] == "ext_ext-switch")
+    assert ext_node["ipam_subnet"] == "172.16.0.0/24"
+    assert ext_node["ipam_utilization_pct"] == 41.0
 
 
 # ═════════════════════════════════════════════════════════════════════════════

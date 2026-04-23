@@ -141,6 +141,9 @@ function _ensureIpamLayout() {
                             <input id="ipam-form-enabled" type="checkbox" checked> Enabled
                         </label>
                         <label style="display:flex;align-items:center;gap:0.5rem;">
+                            <input id="ipam-form-push-enabled" type="checkbox"> Push host updates
+                        </label>
+                        <label style="display:flex;align-items:center;gap:0.5rem;">
                             <input id="ipam-form-tls" type="checkbox" checked> Verify TLS
                         </label>
                     </div>
@@ -424,6 +427,7 @@ function _renderSources() {
                     <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
                         <span class="badge ${statusClass}">${escapeHtml(src.last_sync_status || 'never')}</span>
                         ${!src.enabled ? '<span class="badge badge-secondary">Disabled</span>' : ''}
+                        ${src.push_enabled ? '<span class="badge badge-success">Push on</span>' : ''}
                     </div>
                 </div>
                 <div class="text-muted" style="font-size:0.82em;margin:0.3rem 0;">${escapeHtml(syncTime)}${src.last_sync_message ? ` · ${escapeHtml(src.last_sync_message)}` : ''}</div>
@@ -673,6 +677,7 @@ window.openIpamSourceModal = function (sourceId) {
         document.getElementById('ipam-form-scope').value = '';
         document.getElementById('ipam-form-notes').value = '';
         document.getElementById('ipam-form-enabled').checked = true;
+        document.getElementById('ipam-form-push-enabled').checked = false;
         document.getElementById('ipam-form-tls').checked = true;
     } else {
         const src = _sources.find((s) => s.id === sourceId);
@@ -689,6 +694,7 @@ window.openIpamSourceModal = function (sourceId) {
         document.getElementById('ipam-form-scope').value = src.sync_scope || '';
         document.getElementById('ipam-form-notes').value = src.notes || '';
         document.getElementById('ipam-form-enabled').checked = src.enabled;
+        document.getElementById('ipam-form-push-enabled').checked = src.push_enabled === true;
         document.getElementById('ipam-form-tls').checked = src.verify_tls !== false;
     }
     _updateAuthTypeVisibility();
@@ -712,6 +718,7 @@ window.submitIpamSourceForm = async function (event) {
     const sync_scope = document.getElementById('ipam-form-scope')?.value?.trim() || '';
     const notes = document.getElementById('ipam-form-notes')?.value?.trim() || '';
     const enabled = document.getElementById('ipam-form-enabled')?.checked ?? true;
+    const push_enabled = document.getElementById('ipam-form-push-enabled')?.checked ?? false;
     const verify_tls = document.getElementById('ipam-form-tls')?.checked ?? true;
 
     const auth_config = {};
@@ -724,7 +731,7 @@ window.submitIpamSourceForm = async function (event) {
         }
     }
 
-    const payload = { provider, name, base_url, auth_type, auth_config, sync_scope, notes, enabled, verify_tls };
+    const payload = { provider, name, base_url, auth_type, auth_config, sync_scope, notes, enabled, push_enabled, verify_tls };
 
     const submitBtn = document.getElementById('ipam-form-submit');
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
