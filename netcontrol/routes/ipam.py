@@ -6,6 +6,7 @@ import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+import netcontrol.routes.state as state
 from netcontrol.routes.ipam_adapters import (
     IpamAdapterError,
     collect_ipam_snapshot,
@@ -16,6 +17,11 @@ from netcontrol.routes.shared import _audit, _corr_id, _get_session
 
 router = APIRouter()
 _require_admin = None
+
+
+class IpamSyncConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
 
 
 class IpamSourceCreate(BaseModel):
@@ -316,3 +322,31 @@ async def delete_ipam_reservation_api(reservation_id: int, request: Request):
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
+
+
+@router.get("/api/ipam/sync-config")
+async def get_ipam_sync_config_api():
+    return {"config": dict(state.IPAM_SYNC_CONFIG)}
+
+
+@router.put("/api/ipam/sync-config", dependencies=[Depends(_require_admin_dep)])
+async def update_ipam_sync_config_api(body: IpamSyncConfigUpdate, request: Request):
+    updates = body.model_dump(exclude_none=True)
+    cfg = dict(state.IPAM_SYNC_CONFIG)
+    if "enabled" in updates:
+        cfg["enabled"] = bool(updates["enabled"])
+    if "interval_seconds" in updates:
+        cfg["interval_seconds"] = max(
+            state.IPAM_SYNC_MIN_INTERVAL,
+            min(state.IPAM_SYNC_MAX_INTERVAL, int(updates["interval_seconds"])),
+        )
+    state.IPAM_SYNC_CONFIG = cfg
+    session = _get_session(request) or {}
+    await _audit(
+        "ipam",
+        "update_sync_config",
+        user=session.get("user", ""),
+        detail=f"enabled={cfg['enabled']},interval={cfg['interval_seconds']}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "config": cfg}

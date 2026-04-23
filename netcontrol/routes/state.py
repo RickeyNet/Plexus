@@ -314,6 +314,28 @@ CLOUD_TRAFFIC_METRIC_SYNC_MAX_INTERVAL = 3600
 CLOUD_TRAFFIC_METRIC_SYNC_CONFIG: dict = dict(CLOUD_TRAFFIC_METRIC_SYNC_DEFAULTS)
 CLOUD_TRAFFIC_METRIC_SYNC_STATUS: dict = dict(CLOUD_SYNC_STATUS_DEFAULTS)
 
+IPAM_SYNC_DEFAULTS = {
+    "enabled": True,
+    "interval_seconds": 1800,  # 30 minutes
+}
+
+IPAM_SYNC_MIN_INTERVAL = 300   # 5 minutes
+IPAM_SYNC_MAX_INTERVAL = 86400  # 24 hours
+
+IPAM_SYNC_CONFIG: dict = dict(IPAM_SYNC_DEFAULTS)
+
+
+def _sanitize_ipam_sync_config(data: dict | None) -> dict:
+    cfg = dict(IPAM_SYNC_DEFAULTS)
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
+        cfg["interval_seconds"] = max(
+            IPAM_SYNC_MIN_INTERVAL,
+            min(IPAM_SYNC_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
+    return cfg
+
 
 # ── Sanitizer functions ─────────────────────────────────────────────────────
 

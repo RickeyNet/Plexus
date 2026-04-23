@@ -25,6 +25,14 @@ class _AuthClient:
         self._merge_headers(kw)
         return self._client.post(url, **kw)
 
+    def put(self, url, **kw):
+        self._merge_headers(kw)
+        return self._client.put(url, **kw)
+
+    def delete(self, url, **kw):
+        self._merge_headers(kw)
+        return self._client.delete(url, **kw)
+
 
 def _auth_client(tmp_path, monkeypatch):
     db_path = str(tmp_path / "ipam_test.db")
@@ -335,5 +343,81 @@ def test_ipam_source_sync_updates_overview_contract(tmp_path, monkeypatch):
         assert subnet_map["10.20.0.0/24"]["external_prefix_count"] == 1
         assert subnet_map["10.20.0.0/24"]["external_allocation_count"] == 1
         assert "external" in subnet_map["10.20.0.0/24"]["source_types"]
+    finally:
+        client._client.__exit__(None, None, None)
+
+
+def test_ipam_sync_config_get_and_update(tmp_path, monkeypatch):
+    import netcontrol.routes.state as state_module
+
+    client = _auth_client(tmp_path, monkeypatch)
+    try:
+        # GET returns current config
+        response = client.get("/api/ipam/sync-config")
+        assert response.status_code == 200
+        body = response.json()
+        assert "config" in body
+        assert "enabled" in body["config"]
+        assert "interval_seconds" in body["config"]
+
+        # PUT updates config
+        put_response = client.put(
+            "/api/ipam/sync-config",
+            json={"enabled": False, "interval_seconds": 900},
+        )
+        assert put_response.status_code == 200
+        updated = put_response.json()
+        assert updated["ok"] is True
+        assert updated["config"]["enabled"] is False
+        assert updated["config"]["interval_seconds"] == 900
+
+        # Interval clamped to minimum
+        clamped_response = client.put(
+            "/api/ipam/sync-config",
+            json={"enabled": True, "interval_seconds": 1},
+        )
+        assert clamped_response.status_code == 200
+        assert clamped_response.json()["config"]["interval_seconds"] == state_module.IPAM_SYNC_MIN_INTERVAL
+    finally:
+        import netcontrol.routes.state as sm
+        sm.IPAM_SYNC_CONFIG = dict(sm.IPAM_SYNC_DEFAULTS)
+        client._client.__exit__(None, None, None)
+
+
+def test_ipam_reservation_delete_removes_entry(tmp_path, monkeypatch):
+    client = _auth_client(tmp_path, monkeypatch)
+    try:
+        import asyncio
+
+        asyncio.run(_seed_ipam_data())
+
+        # Create a reservation
+        create_resp = client.post(
+            "/api/ipam/subnets/10.0.0.0%2F24/reservations",
+            json={"start_ip": "10.0.0.200", "end_ip": "10.0.0.210", "reason": "Test reserve"},
+        )
+        assert create_resp.status_code == 200
+        reservation_id = create_resp.json()["reservation"]["id"]
+
+        # Drilldown shows the reservation
+        detail_resp = client.get("/api/ipam/subnets/10.0.0.0%2F24")
+        assert detail_resp.status_code == 200
+        custom_reservations = [r for r in detail_resp.json()["reservations"] if r["kind"] == "custom"]
+        assert any(r["id"] == reservation_id for r in custom_reservations)
+
+        # Delete it
+        del_resp = client.delete(f"/api/ipam/reservations/{reservation_id}")
+        assert del_resp.status_code == 200
+        assert del_resp.json()["ok"] is True
+
+        # Drilldown no longer shows it
+        detail_after = client.get("/api/ipam/subnets/10.0.0.0%2F24")
+        assert detail_after.status_code == 200
+        custom_after = [r for r in detail_after.json()["reservations"] if r["kind"] == "custom"]
+        assert not any(r["id"] == reservation_id for r in custom_after)
+
+        # 404 on second delete
+        del_404 = client.delete(f"/api/ipam/reservations/{reservation_id}")
+        assert del_404.status_code == 404
     finally:
         client._client.__exit__(None, None, None)
