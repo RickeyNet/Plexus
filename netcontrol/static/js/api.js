@@ -654,6 +654,23 @@ export async function updateAuthConfig(payload) {
     });
 }
 
+export async function getSyslogConfig() {
+    return apiRequest('/admin/syslog-config');
+}
+
+export async function updateSyslogConfig(payload) {
+    return apiRequest('/admin/syslog-config', {
+        method: 'PUT',
+        body: payload,
+    });
+}
+
+export async function testSyslogConfig() {
+    return apiRequest('/admin/syslog-config/test', {
+        method: 'POST',
+    });
+}
+
 export async function getDiscoverySyncConfig() {
     return apiRequest('/admin/discovery-sync');
 }

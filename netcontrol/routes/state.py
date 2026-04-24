@@ -172,6 +172,25 @@ MONITORING_MIN_INTERVAL = 60
 MONITORING_MAX_INTERVAL = 86400
 
 
+# ── Outbound syslog defaults ────────────────────────────────────────────────
+
+SYSLOG_DEFAULTS = {
+    "enabled": False,
+    "host": "",
+    "port": 514,
+    "protocol": "udp",
+    "facility": "local0",
+    "level": "INFO",
+    "app_name": "plexus",
+}
+SYSLOG_FACILITIES = {
+    "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news",
+    "uucp", "cron", "local0", "local1", "local2", "local3", "local4",
+    "local5", "local6", "local7",
+}
+SYSLOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
 # ── Auth & login defaults ───────────────────────────────────────────────────
 
 DEFAULT_LOGIN_RULES = {
@@ -209,6 +228,7 @@ AUTH_CONFIG_DEFAULTS = {
         "timeout": 5,
         "fallback_to_local": True,
         "fallback_on_reject": False,
+        "default_group_ids": [],
     },
     "ldap": {
         "enabled": False,
@@ -242,6 +262,14 @@ FEATURE_FLAGS = [
     "config-backups",
     "compliance",
     "risk-analysis",
+    "monitoring",
+    "reports",
+    "graph-templates",
+    "mac-tracking",
+    "traffic-analysis",
+    "upgrades",
+    "federation",
+    "deployments",
 ]
 
 RADIUS_DICTIONARY_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "routes", "radius.dictionary")
@@ -275,6 +303,7 @@ CONFIG_DRIFT_CHECK_CONFIG = dict(CONFIG_DRIFT_CHECK_DEFAULTS)
 CONFIG_BACKUP_CONFIG = dict(CONFIG_BACKUP_DEFAULTS)
 COMPLIANCE_CHECK_CONFIG = dict(COMPLIANCE_CHECK_DEFAULTS)
 MONITORING_CONFIG = dict(MONITORING_DEFAULTS)
+SYSLOG_CONFIG = dict(SYSLOG_DEFAULTS)
 
 CLOUD_FLOW_SYNC_DEFAULTS = {
     "enabled": False,
@@ -351,6 +380,20 @@ def _sanitize_login_rules(data: dict | None) -> dict:
     }
 
 
+def _sanitize_positive_int_list(value) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    result: set[int] = set()
+    for item in value:
+        try:
+            parsed = int(item)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            result.add(parsed)
+    return sorted(result)
+
+
 def _sanitize_auth_config(data: dict | None) -> dict:
     cfg = dict(AUTH_CONFIG_DEFAULTS)
     cfg["radius"] = dict(AUTH_CONFIG_DEFAULTS["radius"])
@@ -373,10 +416,16 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "timeout": int(radius.get("timeout", cfg["radius"]["timeout"])),
                 "fallback_to_local": bool(radius.get("fallback_to_local", cfg["radius"]["fallback_to_local"])),
                 "fallback_on_reject": bool(radius.get("fallback_on_reject", cfg["radius"]["fallback_on_reject"])),
+                "default_group_ids": _sanitize_positive_int_list(
+                    radius.get("default_group_ids", cfg["radius"]["default_group_ids"])
+                ),
             })
     cfg["job_retention_days"] = max(JOB_RETENTION_MIN_DAYS, int(cfg.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
     cfg["radius"]["port"] = max(1, min(65535, cfg["radius"]["port"]))
     cfg["radius"]["timeout"] = max(1, min(30, cfg["radius"]["timeout"]))
+    cfg["radius"]["default_group_ids"] = _sanitize_positive_int_list(
+        cfg["radius"].get("default_group_ids", [])
+    )
     # LDAP config sanitization
     ldap = data.get("ldap") if isinstance(data, dict) else None
     if isinstance(ldap, dict):
@@ -570,6 +619,37 @@ def _sanitize_monitoring_config(data: dict | None) -> dict:
         cfg["escalation_after_minutes"] = max(5, min(1440, int(data.get("escalation_after_minutes", cfg["escalation_after_minutes"]))))
         cfg["escalation_check_interval"] = max(30, min(3600, int(data.get("escalation_check_interval", cfg["escalation_check_interval"]))))
         cfg["default_cooldown_minutes"] = max(1, min(1440, int(data.get("default_cooldown_minutes", cfg["default_cooldown_minutes"]))))
+    return cfg
+
+
+def _sanitize_syslog_config(data: dict | None) -> dict:
+    cfg = dict(SYSLOG_DEFAULTS)
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["host"] = str(data.get("host", cfg["host"]) or "").strip()
+        cfg["port"] = int(data.get("port", cfg["port"]))
+
+        protocol = str(data.get("protocol", cfg["protocol"]) or "").strip().lower()
+        if protocol in {"udp", "tcp"}:
+            cfg["protocol"] = protocol
+
+        facility = str(data.get("facility", cfg["facility"]) or "").strip().lower()
+        if facility in SYSLOG_FACILITIES:
+            cfg["facility"] = facility
+
+        level = str(data.get("level", cfg["level"]) or "").strip().upper()
+        if level in SYSLOG_LEVELS:
+            cfg["level"] = level
+
+        app_name = str(data.get("app_name", cfg["app_name"]) or "").strip()
+        if app_name:
+            cfg["app_name"] = "".join(
+                ch for ch in app_name if ch.isalnum() or ch in "._-"
+            )[:64] or SYSLOG_DEFAULTS["app_name"]
+
+    cfg["port"] = max(1, min(65535, int(cfg["port"])))
+    if cfg["enabled"] and not cfg["host"]:
+        cfg["enabled"] = False
     return cfg
 
 

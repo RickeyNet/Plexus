@@ -1377,6 +1377,11 @@ function templateSettings() {
                         <input type="number" id="radius-timeout" class="form-input" min="1">
                     </div>
                 </div>
+                <div class="form-group">
+                    <label class="form-label">Default Access Groups for New RADIUS Users</label>
+                    <div id="radius-default-groups" style="display:grid; gap:0.35rem; max-height:160px; overflow:auto; border:1px solid var(--border); border-radius:0.375rem; padding:0.6rem;"></div>
+                    <small style="color: var(--text-muted);">Applied only when a RADIUS user signs in for the first time. Existing users keep their assigned groups.</small>
+                </div>
             </div>
             <div id="ldap-config-panel" style="display:none; border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 0.5rem; padding: 0.75rem;">
                 <div class="form-group">
@@ -1431,6 +1436,60 @@ function templateSettings() {
             </div>
             <div>
                 <button type="submit" class="btn btn-primary">Save Auth Configuration</button>
+            </div>
+        </form>
+    </div>
+    <div class="section">
+        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">
+            <h3 style="margin:0;">Outbound Syslog</h3>
+            <span id="syslog-status" class="status-badge">Disabled</span>
+        </div>
+        <form id="admin-syslog-form" style="display: grid; grid-template-columns: auto minmax(180px, 1fr); gap: 0.75rem 1rem; max-width: 700px; align-items: center;">
+            <label class="form-label" style="margin:0;">Enabled</label>
+            <label><input type="checkbox" id="syslog-enabled"> Send Plexus logs and audit events to syslog</label>
+
+            <label class="form-label" for="syslog-host" style="margin:0;">Server</label>
+            <input type="text" id="syslog-host" class="form-input" placeholder="10.0.0.25">
+
+            <label class="form-label" for="syslog-port" style="margin:0;">Port</label>
+            <input type="number" id="syslog-port" class="form-input" min="1" max="65535" value="514">
+
+            <label class="form-label" for="syslog-protocol" style="margin:0;">Protocol</label>
+            <select id="syslog-protocol" class="form-select">
+                <option value="udp">UDP</option>
+                <option value="tcp">TCP</option>
+            </select>
+
+            <label class="form-label" for="syslog-facility" style="margin:0;">Facility</label>
+            <select id="syslog-facility" class="form-select">
+                <option value="local0">local0</option>
+                <option value="local1">local1</option>
+                <option value="local2">local2</option>
+                <option value="local3">local3</option>
+                <option value="local4">local4</option>
+                <option value="local5">local5</option>
+                <option value="local6">local6</option>
+                <option value="local7">local7</option>
+                <option value="daemon">daemon</option>
+                <option value="auth">auth</option>
+                <option value="user">user</option>
+            </select>
+
+            <label class="form-label" for="syslog-level" style="margin:0;">Minimum Level</label>
+            <select id="syslog-level" class="form-select">
+                <option value="DEBUG">Debug</option>
+                <option value="INFO">Info</option>
+                <option value="WARNING">Warning</option>
+                <option value="ERROR">Error</option>
+                <option value="CRITICAL">Critical</option>
+            </select>
+
+            <label class="form-label" for="syslog-app-name" style="margin:0;">App Name</label>
+            <input type="text" id="syslog-app-name" class="form-input" value="plexus" maxlength="64">
+
+            <div style="grid-column: 1 / -1; display:flex; gap:0.5rem; flex-wrap:wrap;">
+                <button type="submit" class="btn btn-primary">Save Syslog</button>
+                <button type="button" class="btn btn-secondary" onclick="sendSyslogTest()">Send Test</button>
             </div>
         </form>
     </div>

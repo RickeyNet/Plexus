@@ -29,6 +29,14 @@ async def _audit(
     """Fire-and-forget audit record.  Never raises to the caller."""
     try:
         await db.add_audit_event(category, action, user=user, detail=detail, correlation_id=correlation_id)
+        LOGGER.info(
+            "audit: category=%s action=%s user=%s correlation_id=%s detail=%s",
+            category,
+            action,
+            user,
+            correlation_id,
+            detail,
+        )
     except Exception:
         LOGGER.warning("Failed to write audit event category=%s action=%s", category, action)
 
