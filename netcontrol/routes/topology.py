@@ -5,6 +5,7 @@ from __future__ import annotations
 
 
 import asyncio
+import ipaddress
 import json
 import os
 
@@ -68,6 +69,57 @@ def _normalize_link_key(
         tgt,
         target_interface.strip().lower(),
     )
+
+
+def _normalize_ip_text(raw_ip: str) -> str:
+    text = str(raw_ip or "").strip()
+    if not text:
+        return ""
+    try:
+        if "/" in text:
+            return str(ipaddress.ip_interface(text).ip)
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        return ""
+
+
+def _build_ipam_subnet_index(subnets: list[dict]) -> list[tuple[ipaddress._BaseNetwork, dict]]:
+    indexed: list[tuple[ipaddress._BaseNetwork, dict]] = []
+    for row in subnets:
+        subnet_text = str(row.get("subnet") or "").strip()
+        if not subnet_text:
+            continue
+        try:
+            network = ipaddress.ip_network(subnet_text, strict=False)
+        except ValueError:
+            continue
+        indexed.append((network, row))
+    return indexed
+
+
+def _match_ipam_subnet(ip_text: str, subnet_index: list[tuple[ipaddress._BaseNetwork, dict]]) -> dict | None:
+    normalized = _normalize_ip_text(ip_text)
+    if not normalized:
+        return None
+    try:
+        addr = ipaddress.ip_address(normalized)
+    except ValueError:
+        return None
+
+    best_match: tuple[int, dict] | None = None
+    for network, row in subnet_index:
+        if addr.version != network.version or addr not in network:
+            continue
+        if best_match is None or network.prefixlen > best_match[0]:
+            best_match = (network.prefixlen, row)
+    if best_match is None:
+        return None
+    row = best_match[1]
+    return {
+        "subnet": row.get("subnet") or "",
+        "utilization_pct": row.get("utilization_pct"),
+        "source_types": list(row.get("source_types") or []),
+    }
 
 
 async def _record_topology_changes(
@@ -982,8 +1034,16 @@ async def get_topology(group_id: int | None = Query(default=None)):
         groups = await db.get_all_groups()
         group_name_map = {g["id"]: g["name"] for g in groups}
 
+        # Pull IPAM overview once and attach longest-prefix subnet context to nodes.
+        try:
+            ipam_overview = await db.get_ipam_overview(group_id=group_id, include_cloud=True, include_external=True)
+            ipam_subnet_index = _build_ipam_subnet_index(ipam_overview.get("subnets") or [])
+        except Exception:
+            ipam_subnet_index = []
+
         # Build inventory nodes
         for h in hosts:
+            ipam_match = _match_ipam_subnet(h.get("ip_address") or "", ipam_subnet_index)
             nodes_by_id[h["id"]] = {
                 "id": h["id"],
                 "label": h["hostname"],
@@ -995,6 +1055,9 @@ async def get_topology(group_id: int | None = Query(default=None)):
                 "group_name": group_name_map.get(h["group_id"], ""),
                 "status": h["status"],
                 "in_inventory": True,
+                "ipam_subnet": (ipam_match or {}).get("subnet", ""),
+                "ipam_utilization_pct": (ipam_match or {}).get("utilization_pct"),
+                "ipam_source_types": (ipam_match or {}).get("source_types", []),
             }
 
         # Fetch interface stats for utilization overlay
@@ -1083,6 +1146,7 @@ async def get_topology(group_id: int | None = Query(default=None)):
                     if ext_key not in nodes_by_id:
                         tgt_platform = link.get("target_platform", "")
                         ext_category = _infer_device_category(tgt_platform, "", "unknown")
+                        ipam_match = _match_ipam_subnet(tgt_ip, ipam_subnet_index)
                         nodes_by_id[ext_key] = {
                             "id": ext_key,
                             "label": tgt_name or tgt_ip or "unknown",
@@ -1095,6 +1159,9 @@ async def get_topology(group_id: int | None = Query(default=None)):
                             "status": "unknown",
                             "in_inventory": False,
                             "platform": tgt_platform,
+                            "ipam_subnet": (ipam_match or {}).get("subnet", ""),
+                            "ipam_utilization_pct": (ipam_match or {}).get("utilization_pct"),
+                            "ipam_source_types": (ipam_match or {}).get("source_types", []),
                         }
 
             src_iface = link.get("source_interface", "")

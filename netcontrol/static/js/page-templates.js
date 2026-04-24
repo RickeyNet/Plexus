@@ -404,7 +404,7 @@ function templateTopology() {
         <span class="topology-legend-item"><span class="topology-legend-line topology-legend-line-ospf"></span> OSPF</span>
         <span class="topology-legend-item"><span class="topology-legend-line topology-legend-line-bgp"></span> BGP</span>
         <span class="topology-legend-item topology-legend-util" id="topology-legend-util" style="display:none">
-            <span class="topology-legend-gradient"></span> Utilization (0-100%)
+            <span class="topology-legend-gradient"></span> Utilization (links + IPAM nodes, 0-100%)
         </span>
         <span class="topology-legend-item topology-legend-stp" id="topology-legend-stp-forwarding" style="display:none">
             <span class="topology-legend-line topology-legend-line-stp-fwd"></span> STP Forwarding

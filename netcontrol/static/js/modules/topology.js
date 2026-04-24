@@ -258,6 +258,44 @@ function _edgeOverlayProps(edge) {
     };
 }
 
+function _nodeOverlayProps(node) {
+    const baseColor = _topoNodeColor(node);
+    const baseBorder = node.in_inventory ? 2.5 : 1.5;
+    const pctRaw = node?.ipam_utilization_pct;
+    const hasIpamUtil = _topoUtilOverlay && pctRaw != null && !Number.isNaN(Number(pctRaw));
+    if (!hasIpamUtil) {
+        return {
+            color: baseColor,
+            borderWidth: baseBorder,
+            shadowColor: baseColor.border,
+            shadowSize: node.in_inventory ? 18 : 8,
+        };
+    }
+    const pct = Math.max(0, Math.min(100, Number(pctRaw)));
+    const utilHex = _utilColor(pct).color;
+    return {
+        color: {
+            ...baseColor,
+            border: utilHex,
+            highlight: { ...(baseColor.highlight || {}), border: utilHex },
+            hover: { ...(baseColor.hover || {}), border: utilHex },
+        },
+        borderWidth: node.in_inventory ? 5 : 3,
+        shadowColor: _utilShadow(pct),
+        shadowSize: node.in_inventory ? 22 : 12,
+    };
+}
+
+function _topoNodeTitle(node) {
+    const modelInfo = node.model ? `\nModel: ${node.model}` : '';
+    const categoryInfo = node.device_category ? `\nRole: ${node.device_category}` : '';
+    const ipamSubnet = node.ipam_subnet || '';
+    const hasPct = node.ipam_utilization_pct != null && !Number.isNaN(Number(node.ipam_utilization_pct));
+    const ipamPct = hasPct ? `${Math.round(Number(node.ipam_utilization_pct))}%` : 'n/a';
+    const ipamInfo = ipamSubnet ? `\nIPAM: ${ipamSubnet} (${ipamPct})` : '';
+    return `${node.label}\n${node.ip || ''}\nType: ${node.device_type}${categoryInfo}${modelInfo}${node.group_name ? '\nGroup: ' + node.group_name : ''}${node.in_inventory ? '' : '\n(External)'}${ipamInfo}\nDrag to move · Right-click to unpin`;
+}
+
 let _utilEventSource = null;
 let _utilReconnectTimer = null;
 
@@ -277,6 +315,7 @@ function toggleUtilizationOverlay() {
 
     // Update edges in-place without rebuilding the graph
     _refreshTopologyEdgeStyles();
+    _refreshTopologyNodeStyles();
 }
 
 function _refreshTopologyEdgeStyles() {
@@ -307,6 +346,30 @@ function _refreshTopologyEdgeStyles() {
             };
         });
         edgesDS.update(updates);
+        _topologyNetwork.redraw();
+    }
+}
+
+function _refreshTopologyNodeStyles() {
+    if (_topologyNetwork && _topologyData) {
+        const nodesDS = _topologyNetwork.body.data.nodes;
+        const updates = _topologyData.nodes.map((n) => {
+            const overlay = _nodeOverlayProps(n);
+            return {
+                id: n.id,
+                color: overlay.color,
+                borderWidth: overlay.borderWidth,
+                shadow: {
+                    enabled: true,
+                    color: overlay.shadowColor,
+                    size: overlay.shadowSize,
+                    x: 0,
+                    y: 0,
+                },
+                title: _topoNodeTitle(n),
+            };
+        });
+        nodesDS.update(updates);
         _topologyNetwork.redraw();
     }
 }
@@ -599,8 +662,10 @@ async function loadTopology(options = {}) {
                 _topoStpStateByPort = new Map();
             }
             _refreshTopologyEdgeStyles();
+            _refreshTopologyNodeStyles();
         } else {
             _refreshTopologyEdgeStyles();
+            _refreshTopologyNodeStyles();
         }
         // Update change badge
         _updateTopologyChangeBadge(data.unacknowledged_changes || 0);
@@ -616,22 +681,21 @@ async function loadTopology(options = {}) {
 }
 
 function _buildVisNode(n, savedPos) {
-    const colors = _topoNodeColor(n);
+    const overlay = _nodeOverlayProps(n);
+    const colors = overlay.color;
     const iconUrl = _topoNodeIcon(n);
-    const modelInfo = n.model ? `\nModel: ${n.model}` : '';
-    const categoryInfo = n.device_category ? `\nRole: ${n.device_category}` : '';
     const node = {
         id: n.id,
         label: n.label,
-        title: `${n.label}\n${n.ip || ''}\nType: ${n.device_type}${categoryInfo}${modelInfo}${n.group_name ? '\nGroup: ' + n.group_name : ''}${n.in_inventory ? '' : '\n(External)'}\nDrag to move · Right-click to unpin`,
+        title: _topoNodeTitle(n),
         shape: iconUrl ? 'circularImage' : _topoNodeShape(n.device_type),
         image: iconUrl || undefined,
         color: colors,
         size: n.in_inventory ? 25 : 18,
-        borderWidth: n.in_inventory ? 2.5 : 1.5,
+        borderWidth: overlay.borderWidth,
         borderWidthSelected: 4,
         shapeProperties: { borderDashes: n.in_inventory ? false : [5, 5] },
-        shadow: { enabled: true, color: colors.border, size: n.in_inventory ? 18 : 8, x: 0, y: 0 },
+        shadow: { enabled: true, color: overlay.shadowColor, size: overlay.shadowSize, x: 0, y: 0 },
         font: { color: (_topoThemeColors || _getTopoThemeColors()).nodeFont, size: 12, face: 'Inter, sans-serif', strokeWidth: 3, strokeColor: (_topoThemeColors || _getTopoThemeColors()).nodeFontStroke },
         _raw: n,
     };
