@@ -55,6 +55,19 @@ class IpamReservationCreate(BaseModel):
     reason: str = "Reserved range"
 
 
+class IpamPrefixCreate(BaseModel):
+    subnet: str
+    description: str = ""
+    vrf: str = ""
+    notes: str = ""
+
+
+class IpamAllocationCreate(BaseModel):
+    address: str
+    hostname: str = ""
+    description: str = ""
+
+
 def init_ipam(require_admin):
     global _require_admin
     _require_admin = require_admin
@@ -239,6 +252,8 @@ async def delete_ipam_source_api(source_id: int, request: Request):
     existing = await db.get_ipam_source(source_id)
     if not existing:
         raise HTTPException(status_code=404, detail="IPAM source not found")
+    if existing.get("provider") == "plexus":
+        raise HTTPException(status_code=400, detail="Cannot delete the built-in Plexus IPAM source")
     deleted = await db.delete_ipam_source(source_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="IPAM source not found")
@@ -386,3 +401,110 @@ async def update_ipam_sync_config_api(body: IpamSyncConfigUpdate, request: Reque
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "config": cfg}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plexus-native (local) subnet and allocation management
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/api/ipam/prefixes", status_code=201, dependencies=[Depends(_require_admin_dep)])
+async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
+    """Define a subnet in the built-in Plexus IPAM source."""
+    try:
+        import ipaddress as _ip
+        _ip.ip_network(body.subnet, strict=False)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid subnet CIDR") from None
+
+    builtin = await db.get_or_create_builtin_ipam_source()
+    prefix = await db.create_ipam_prefix(
+        source_id=builtin["id"],
+        subnet=body.subnet,
+        description=body.description,
+        vrf=body.vrf,
+        notes=body.notes,
+    )
+    if not prefix:
+        raise HTTPException(status_code=409, detail="Subnet already defined")
+    session = _get_session(request) or {}
+    await _audit(
+        "ipam",
+        "create_prefix",
+        user=session.get("user", ""),
+        detail=f"subnet={body.subnet}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "prefix": prefix}
+
+
+@router.delete("/api/ipam/prefixes/{prefix_id}", dependencies=[Depends(_require_admin_dep)])
+async def delete_ipam_prefix_api(prefix_id: int, request: Request):
+    """Remove a locally-defined subnet prefix."""
+    deleted = await db.delete_ipam_prefix(prefix_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="IPAM prefix not found")
+    session = _get_session(request) or {}
+    await _audit(
+        "ipam",
+        "delete_prefix",
+        user=session.get("user", ""),
+        detail=f"prefix_id={prefix_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
+
+
+@router.post(
+    "/api/ipam/subnets/{subnet:path}/allocations",
+    status_code=201,
+    dependencies=[Depends(_require_admin_dep)],
+)
+async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, request: Request):
+    """Manually assign an IP address within a subnet."""
+    try:
+        import ipaddress as _ip
+        net = _ip.ip_network(subnet, strict=False)
+        addr = _ip.ip_address(body.address)
+        if addr not in net:
+            raise HTTPException(status_code=400, detail="Address is not within the specified subnet")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid subnet or IP address") from None
+
+    builtin = await db.get_or_create_builtin_ipam_source()
+    session = _get_session(request) or {}
+    alloc = await db.create_local_ipam_allocation(
+        source_id=builtin["id"],
+        subnet=subnet,
+        address=body.address,
+        hostname=body.hostname,
+        description=body.description,
+        created_by=session.get("user", ""),
+    )
+    if not alloc:
+        raise HTTPException(status_code=409, detail="IP address already allocated in this source")
+    await _audit(
+        "ipam",
+        "create_allocation",
+        user=session.get("user", ""),
+        detail=f"subnet={subnet},address={body.address}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "allocation": alloc}
+
+
+@router.delete("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(_require_admin_dep)])
+async def delete_ipam_allocation_api(allocation_id: int, request: Request):
+    """Remove a manually-defined IP allocation."""
+    deleted = await db.delete_ipam_allocation(allocation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="IPAM allocation not found")
+    session = _get_session(request) or {}
+    await _audit(
+        "ipam",
+        "delete_allocation",
+        user=session.get("user", ""),
+        detail=f"allocation_id={allocation_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}

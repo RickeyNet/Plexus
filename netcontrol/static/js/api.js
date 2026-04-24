@@ -2292,3 +2292,19 @@ export async function updateIpamSyncConfig(data) {
 export async function getIpamAddressContext(ip) {
     return apiRequest(`/ipam/address/${encodeURIComponent(ip)}`);
 }
+
+export async function createIpamPrefix(data) {
+    return apiRequest('/ipam/prefixes', { method: 'POST', body: data });
+}
+
+export async function deleteIpamPrefix(id) {
+    return apiRequest(`/ipam/prefixes/${id}`, { method: 'DELETE' });
+}
+
+export async function createIpamAllocation(subnet, data) {
+    return apiRequest(`/ipam/subnets/${encodeURIComponent(subnet)}/allocations`, { method: 'POST', body: data });
+}
+
+export async function deleteIpamAllocation(id) {
+    return apiRequest(`/ipam/allocations/${id}`, { method: 'DELETE' });
+}
