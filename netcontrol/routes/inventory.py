@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import netcontrol.routes.state as state
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _run_show_command
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,  # noqa: F401
     _discover_neighbors,  # noqa: F401
@@ -80,6 +80,10 @@ class HostUpdate(BaseModel):
     hostname: str
     ip_address: str
     device_type: str = "cisco_ios"
+
+
+class FetchSerialRequest(BaseModel):
+    credential_id: int
 
 
 class DiscoveryScanRequest(BaseModel):
@@ -697,6 +701,102 @@ async def update_host_category(host_id: int, body: dict):
 async def remove_host(host_id: int):
     await db.remove_host(host_id)
     return {"ok": True}
+
+
+@router.post("/api/hosts/{host_id}/fetch-serial")
+async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Request):
+    """SSH to the device and run 'show version | include System Serial Number'.
+
+    Stores the parsed serial in the DB and returns it.  Requires a stored
+    credential ID so the caller selects which credential set to use.
+    """
+    host = await db.get_host(host_id)
+    if not host:
+        raise HTTPException(404, "Host not found")
+    cred = await db.get_credential_raw(body.credential_id)
+    if not cred:
+        raise HTTPException(404, "Credential not found")
+
+    try:
+        output = await _run_show_command(
+            host, cred, "show version | include System Serial Number"
+        )
+    except Exception:
+        LOGGER.warning("fetch-serial SSH failed for host_id=%s ip=%s", host_id, host.get("ip_address"))
+        raise HTTPException(502, "Could not connect to device")
+
+    # Output example: "System Serial Number: FCW2346L0AJ"
+    serial = ""
+    for line in output.splitlines():
+        if "System Serial Number" in line:
+            parts = line.split(":", 1)
+            if len(parts) == 2:
+                serial = parts[1].strip()
+                break
+
+    if not serial:
+        raise HTTPException(422, "Serial number not found in command output")
+
+    await db.update_host_serial(host_id, serial)
+    session = _get_session(request)
+    await _audit(
+        "inventory", "host.serial_fetched",
+        user=session["user"] if session else "",
+        detail=f"host_id={host_id} serial={serial}",
+        correlation_id=_corr_id(request),
+    )
+    return {"host_id": host_id, "serial_number": serial}
+
+
+@router.post("/api/groups/{group_id}/fetch-serials")
+async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, request: Request):
+    """Fetch serial numbers for all hosts in a group concurrently (max 5 SSH at a time)."""
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    cred = await db.get_credential_raw(body.credential_id)
+    if not cred:
+        raise HTTPException(404, "Credential not found")
+    hosts = await db.get_hosts_for_group(group_id)
+    if not hosts:
+        return {"results": []}
+
+    sem = asyncio.Semaphore(5)
+
+    async def _fetch_one(host: dict) -> dict:
+        async with sem:
+            try:
+                output = await _run_show_command(
+                    host, cred, "show version | include System Serial Number"
+                )
+                serial = ""
+                for line in output.splitlines():
+                    if "System Serial Number" in line:
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            serial = parts[1].strip()
+                            break
+                if serial:
+                    await db.update_host_serial(host["id"], serial)
+                    return {"host_id": host["id"], "hostname": host["hostname"], "serial_number": serial, "ok": True}
+                return {"host_id": host["id"], "hostname": host["hostname"], "error": "Not found in output", "ok": False}
+            except Exception:
+                LOGGER.warning(
+                    "bulk-fetch-serial SSH failed for host_id=%s ip=%s",
+                    host["id"], host.get("ip_address"),
+                )
+                return {"host_id": host["id"], "hostname": host["hostname"], "error": "Connection failed", "ok": False}
+
+    results = list(await asyncio.gather(*[_fetch_one(h) for h in hosts]))
+    session = _get_session(request)
+    ok_count = sum(1 for r in results if r.get("ok"))
+    await _audit(
+        "inventory", "host.serial_bulk_fetched",
+        user=session["user"] if session else "",
+        detail=f"group_id={group_id} total={len(hosts)} ok={ok_count}",
+        correlation_id=_corr_id(request),
+    )
+    return {"results": results}
 
 
 @router.post("/api/hosts/bulk-delete")

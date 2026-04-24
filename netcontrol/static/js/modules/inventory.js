@@ -127,6 +127,7 @@ function renderInventoryGroups(groups) {
                         <option value="">No SNMP Profile</option>
                     </select>
                     <button class="btn btn-sm btn-secondary" onclick="showDiscoveryModal('sync', ${group.id})">Sync</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showBulkSerialModal(${group.id})">Fetch Serials</button>
                     <button class="btn btn-sm btn-secondary" onclick="showEditGroupModal(${group.id})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteGroup(${group.id})">Delete</button>
                 </div>
@@ -152,6 +153,7 @@ function renderInventoryGroups(groups) {
                         <span class="host-col-ip">IP Address</span>
                         <span class="host-col-type">Type</span>
                         <span class="host-col-model">Model</span>
+                        <span class="host-col-serial">Serial Number</span>
                         <span class="host-col-sw">Software Version</span>
                         <span class="host-col-actions"></span>
                     </div>` +
@@ -166,8 +168,10 @@ function renderInventoryGroups(groups) {
                             <span class="host-col-ip host-ip">${escapeHtml(host.ip_address)}</span>
                             <span class="host-col-type host-type">${escapeHtml(host.device_type || 'cisco_ios')}</span>
                             <span class="host-col-model">${escapeHtml(host.model || '\u2014')}</span>
+                            <span class="host-col-serial" id="serial-cell-${host.id}">${escapeHtml(host.serial_number || '\u2014')}</span>
                             <span class="host-col-sw">${escapeHtml(host.software_version || '\u2014')}</span>
                             <span class="host-col-actions">
+                                <button class="btn btn-sm btn-secondary" onclick="showFetchSerialModal(${host.id})">Serial</button>
                                 <button class="btn btn-sm btn-secondary" onclick="showEditHostModal(${host.id})">Edit</button>
                                 <button class="btn btn-sm btn-danger" onclick="deleteHost(${group.id}, ${host.id})">Delete</button>
                             </span>
@@ -221,8 +225,124 @@ window.assignSnmpProfile = async function(groupId, profileId) {
     }
 };
 
-window.showGlobalDiscoveryModal = function() {
-    const groups = Object.values(_groupCache);
+window.showFetchSerialModal = async function(hostId) {
+    let credentials = [];
+    try {
+        credentials = await api.getCredentials();
+    } catch (e) {
+        showError('Failed to load credentials: ' + e.message);
+        return;
+    }
+    if (!credentials.length) {
+        showError('No credentials found. Add credentials under the Credentials section first.');
+        return;
+    }
+    const credOptions = credentials.map(c =>
+        `<option value="${escapeHtml(String(c.id))}">${escapeHtml(c.name)}</option>`
+    ).join('');
+    showModal('Fetch Serial Number', `
+        <p style="margin-bottom:1rem; color:var(--text-muted); font-size:0.88rem;">
+            Runs <code>show version | include System Serial Number</code> via SSH
+            and stores the result.
+        </p>
+        <form onsubmit="doFetchSerial(event, ${hostId})">
+            <div class="form-group">
+                <label class="form-label">Credential</label>
+                <select class="form-select" name="credential_id" required>${credOptions}</select>
+            </div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="fetch-serial-btn">Fetch</button>
+            </div>
+        </form>
+    `);
+};
+
+window.doFetchSerial = async function(event, hostId) {
+    event.preventDefault();
+    const form = event.target;
+    const credentialId = parseInt(form.credential_id.value, 10);
+    const btn = document.getElementById('fetch-serial-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+    try {
+        const result = await api.fetchHostSerial(hostId, credentialId);
+        closeAllModals();
+        // Update the serial cell in-place
+        const cell = document.getElementById(`serial-cell-${hostId}`);
+        if (cell) cell.textContent = result.serial_number;
+        showToast(`Serial: ${result.serial_number}`, 'success');
+    } catch (error) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Fetch'; }
+        showError('Failed to fetch serial: ' + error.message);
+    }
+};
+
+window.showBulkSerialModal = async function(groupId) {
+    let credentials = [];
+    try {
+        credentials = await api.getCredentials();
+    } catch (e) {
+        showError('Failed to load credentials: ' + e.message);
+        return;
+    }
+    if (!credentials.length) {
+        showError('No credentials found. Add credentials under the Credentials section first.');
+        return;
+    }
+    const credOptions = credentials.map(c =>
+        `<option value="${escapeHtml(String(c.id))}">${escapeHtml(c.name)}</option>`
+    ).join('');
+    showModal('Fetch All Serials', `
+        <p style="margin-bottom:1rem; color:var(--text-muted); font-size:0.88rem;">
+            Runs <code>show version | include System Serial Number</code> on every host in this
+            group via SSH (up to 5 concurrent connections) and stores the results.
+        </p>
+        <form onsubmit="doBulkFetchSerial(event, ${groupId})">
+            <div class="form-group">
+                <label class="form-label">Credential</label>
+                <select class="form-select" name="credential_id" required>${credOptions}</select>
+            </div>
+            <div id="bulk-serial-progress" style="display:none; margin-top:0.75rem; font-size:0.82rem; color:var(--text-muted);"></div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="bulk-serial-btn">Fetch All</button>
+            </div>
+        </form>
+    `);
+};
+
+window.doBulkFetchSerial = async function(event, groupId) {
+    event.preventDefault();
+    const form = event.target;
+    const credentialId = parseInt(form.credential_id.value, 10);
+    const btn = document.getElementById('bulk-serial-btn');
+    const progress = document.getElementById('bulk-serial-progress');
+    if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+    if (progress) { progress.style.display = ''; progress.textContent = 'Connecting to devices…'; }
+    try {
+        const result = await api.fetchGroupSerials(groupId, credentialId);
+        const results = result.results || [];
+        const ok = results.filter(r => r.ok);
+        const failed = results.filter(r => !r.ok);
+        // Update serial cells in-place for successful results
+        for (const r of ok) {
+            const cell = document.getElementById(`serial-cell-${r.host_id}`);
+            if (cell) cell.textContent = r.serial_number;
+        }
+        closeAllModals();
+        if (failed.length === 0) {
+            showToast(`Fetched ${ok.length} serial number${ok.length !== 1 ? 's' : ''}.`, 'success');
+        } else {
+            showToast(`${ok.length} succeeded, ${failed.length} failed. Check device connectivity.`, 'warning');
+        }
+    } catch (error) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Fetch All'; }
+        if (progress) { progress.style.display = 'none'; }
+        showError('Bulk serial fetch failed: ' + error.message);
+    }
+};
+
+window.showGlobalDiscoveryModal = function() {    const groups = Object.values(_groupCache);
     if (!groups.length) {
         showError('No inventory groups found. Create a group first before discovering devices.');
         return;

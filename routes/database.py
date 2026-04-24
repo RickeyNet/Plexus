@@ -1804,7 +1804,8 @@ async def get_all_groups_with_hosts() -> list[dict]:
                 h.last_seen AS host_last_seen,
                 h.model AS host_model,
                 h.software_version AS host_software_version,
-                h.device_category AS host_device_category
+                h.device_category AS host_device_category,
+                h.serial_number AS host_serial_number
             FROM inventory_groups g
             LEFT JOIN hosts h ON h.group_id = g.id
             ORDER BY g.name, h.ip_address
@@ -1843,6 +1844,7 @@ async def get_all_groups_with_hosts() -> list[dict]:
             "model": row["host_model"] or "",
             "software_version": row["host_software_version"] or "",
             "device_category": row["host_device_category"] or "",
+            "serial_number": row["host_serial_number"] or "",
         })
         group["host_count"] += 1
 
@@ -2057,6 +2059,19 @@ async def update_host_device_info(host_id: int, model: str, software_version: st
                 "UPDATE hosts SET model = ?, software_version = ? WHERE id = ?",
                 (model, software_version, host_id),
             )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_host_serial(host_id: int, serial_number: str) -> None:
+    """Update the serial_number field for a host."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE hosts SET serial_number = ? WHERE id = ?",
+            (serial_number, host_id),
+        )
         await db.commit()
     finally:
         await db.close()
