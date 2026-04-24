@@ -2308,3 +2308,77 @@ export async function createIpamAllocation(subnet, data) {
 export async function deleteIpamAllocation(id) {
     return apiRequest(`/ipam/allocations/${id}`, { method: 'DELETE' });
 }
+
+
+// ─── Geolocation / Floor Plan API ────────────────────────────────────────────
+
+export async function getGeoOverview() {
+    return apiRequest('/geo/overview');
+}
+
+export async function listGeoSites() {
+    return apiRequest('/geo/sites');
+}
+
+export async function getGeoSite(siteId) {
+    return apiRequest(`/geo/sites/${siteId}`);
+}
+
+export async function createGeoSite(data) {
+    return apiRequest('/geo/sites', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateGeoSite(siteId, data) {
+    return apiRequest(`/geo/sites/${siteId}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+
+export async function deleteGeoSite(siteId) {
+    return apiRequest(`/geo/sites/${siteId}`, { method: 'DELETE' });
+}
+
+export async function createGeoFloor(siteId, data) {
+    return apiRequest(`/geo/sites/${siteId}/floors`, { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function getGeoFloor(floorId) {
+    return apiRequest(`/geo/floors/${floorId}`);
+}
+
+export async function updateGeoFloor(floorId, data) {
+    return apiRequest(`/geo/floors/${floorId}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+
+export async function deleteGeoFloor(floorId) {
+    return apiRequest(`/geo/floors/${floorId}`, { method: 'DELETE' });
+}
+
+export async function uploadFloorImage(floorId, file) {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`/api/geo/floors/${floorId}/image`, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': getCsrfToken() },
+        body: form,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
+export function floorImageUrl(floorId) {
+    return `/api/geo/floors/${floorId}/image`;
+}
+
+export async function getFloorPlacements(floorId) {
+    return apiRequest(`/geo/floors/${floorId}/placements`);
+}
+
+export async function upsertFloorPlacement(floorId, hostId, xPct, yPct) {
+    return apiRequest(`/geo/floors/${floorId}/placements/${hostId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ x_pct: xPct, y_pct: yPct }),
+    });
+}
+
+export async function deleteFloorPlacement(floorId, hostId) {
+    return apiRequest(`/geo/floors/${floorId}/placements/${hostId}`, { method: 'DELETE' });
+}

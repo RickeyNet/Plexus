@@ -248,5 +248,8 @@ device_configs/
 
 # Software images (IOS-XE upgrade binaries)
 software_images/
+
+# Floor plan images (uploaded by users, not source assets)
+floor_plans/
 *.cfg.backup
 *.config

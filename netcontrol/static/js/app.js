@@ -41,7 +41,7 @@ const THEME_KEY = 'plexus-theme';
 const VALID_THEMES = ['forest', 'dark-modern', 'astral', 'light', 'void', 'coral', 'sandstone', 'voyager'];
 const DEFAULT_THEME = 'sandstone';
 const PAGE_CACHE_TTL_MS = 30 * 1000;
-const CACHEABLE_PAGES = ['dashboard', 'inventory', 'ipam', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'cloud-visibility', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades', 'federation'];
+const CACHEABLE_PAGES = ['dashboard', 'inventory', 'ipam', 'playbooks', 'jobs', 'templates', 'credentials', 'settings', 'topology', 'cloud-visibility', 'configuration', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades', 'federation', 'floor-plan'];
 const pageCacheMeta = {};
 
 // ── Space Depth Experience Controls ──────────────────────────────────────────
@@ -905,7 +905,7 @@ function initNavigation() {
     });
 }
 
-const VALID_PAGES = ['dashboard', 'inventory', 'ipam', 'playbooks', 'jobs', 'templates', 'credentials', 'topology', 'cloud-visibility', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades', 'federation'];
+const VALID_PAGES = ['dashboard', 'inventory', 'ipam', 'playbooks', 'jobs', 'templates', 'credentials', 'topology', 'cloud-visibility', 'monitoring', 'configuration', 'settings', 'device-detail', 'compliance', 'change-management', 'reports', 'graph-templates', 'mac-tracking', 'traffic-analysis', 'upgrades', 'federation', 'floor-plan'];
 
 function getPageFromHash() {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -1278,6 +1278,7 @@ async function _loadModule(page) {
         'traffic-analysis': () => import('./modules/network-tools.js'),
         'upgrades':         () => import('./modules/upgrades.js'),
         'federation':       () => import('./modules/federation.js'),
+        'floor-plan':       () => import('./modules/floor-plan.js'),
     };
     const loader = moduleMap[page];
     if (!loader) return null;
@@ -1360,6 +1361,9 @@ async function loadPageData(page, options = {}) {
                 break;
             case 'federation':
                 await mod.loadFederation({ preserveContent });
+                break;
+            case 'floor-plan':
+                await mod.loadFloorPlan({ preserveContent });
                 break;
         }
         markPageCacheFresh(page);
