@@ -932,6 +932,10 @@ function destroyDashboard() {
     listViewState.customDashboards.items = [];
     listViewState.customDashboards.currentId = null;
     listViewState.customDashboards.editMode = false;
+    // Invalidate page cache so returning to this page always reloads data.
+    // Without this, the 30-second page cache would skip loadDashboard() on
+    // return, leaving the DOM stale (no charts, no dashboard list populated).
+    invalidatePageCache('dashboard');
 }
 
 

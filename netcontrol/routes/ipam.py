@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -101,6 +102,41 @@ async def ipam_overview_api(
         include_cloud=include_cloud,
         include_external=include_external,
     )
+
+
+@router.get("/api/ipam/address/{ip}")
+async def ipam_address_context_api(ip: str):
+    """Return the best-matching subnet, utilization, and conflict status for a given IP address."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid IP address") from None
+
+    overview = await db.get_ipam_overview(include_cloud=False, include_external=True)
+    subnets = overview.get("subnets", [])
+
+    # Find the most specific (longest prefix) subnet that contains the address
+    best: dict | None = None
+    best_prefixlen = -1
+    for s in subnets:
+        try:
+            network = ipaddress.ip_network(s["subnet"], strict=False)
+            if addr in network and network.prefixlen > best_prefixlen:
+                best = s
+                best_prefixlen = network.prefixlen
+        except ValueError:
+            continue
+
+    # Detect if this IP appears in conflict list
+    duplicates = overview.get("duplicate_ips", [])
+    conflict_entry = next((d for d in duplicates if d.get("ip_address") == ip), None)
+
+    return {
+        "ip": ip,
+        "matched_subnet": best,
+        "is_conflict": conflict_entry is not None,
+        "conflict_groups": conflict_entry.get("groups", []) if conflict_entry else [],
+    }
 
 
 @router.get("/api/ipam/subnets/{subnet:path}")
