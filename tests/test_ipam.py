@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import netcontrol.app as app_module
 import netcontrol.routes.ipam as ipam_routes
+import netcontrol.routes.ipam_push as ipam_push
 import pytest
 import routes.database as db_module
 
@@ -535,3 +536,112 @@ def test_ipam_builtin_source_cannot_be_deleted(tmp_path, monkeypatch):
         assert "built-in" in message.lower()
     finally:
         client._client.__exit__(None, None, None)
+
+
+def test_ipam_source_create_and_update_push_toggle(tmp_path, monkeypatch):
+    client = _auth_client(tmp_path, monkeypatch)
+    try:
+        create_response = client.post(
+            "/api/ipam/sources",
+            json={
+                "provider": "netbox",
+                "name": "Push NetBox",
+                "base_url": "https://netbox.example",
+                "auth_type": "token",
+                "auth_config": {"token": "abc"},
+                "enabled": True,
+                "push_enabled": True,
+                "verify_tls": True,
+            },
+        )
+        assert create_response.status_code == 201
+        source = create_response.json()["source"]
+        assert source["push_enabled"] is True
+
+        source_id = source["id"]
+        update_response = client.put(
+            f"/api/ipam/sources/{source_id}",
+            json={"push_enabled": False},
+        )
+        assert update_response.status_code == 200
+        updated = update_response.json()["source"]
+        assert updated["push_enabled"] is False
+    finally:
+        client._client.__exit__(None, None, None)
+
+
+def test_ipam_push_helper_only_targets_push_enabled_sources(monkeypatch):
+    async def _fake_list_ipam_sources(enabled_only=False, provider=None):
+        assert enabled_only is True
+        assert provider is None
+        return [
+            {
+                "id": 11,
+                "provider": "netbox",
+                "name": "NetBox Push",
+                "push_enabled": True,
+                "enabled": True,
+                "base_url": "https://netbox.example",
+                "auth_type": "token",
+                "verify_tls": True,
+            },
+            {
+                "id": 12,
+                "provider": "phpipam",
+                "name": "phpIPAM Pull Only",
+                "push_enabled": False,
+                "enabled": True,
+                "base_url": "https://phpipam.example/api/app",
+                "auth_type": "token",
+                "verify_tls": True,
+            },
+            {
+                "id": 13,
+                "provider": "plexus",
+                "name": "Built-in",
+                "push_enabled": True,
+                "enabled": True,
+                "base_url": "",
+                "auth_type": "none",
+                "verify_tls": True,
+            },
+        ]
+
+    async def _fake_get_auth_config(source_id):
+        return {"token": f"token-{source_id}"}
+
+    pushed = []
+
+    async def _fake_push_to_provider(source, auth_config, **kwargs):
+        pushed.append(
+            {
+                "source_id": source["id"],
+                "provider": source["provider"],
+                "auth_config": auth_config,
+                "address": kwargs.get("address"),
+                "dns_name": kwargs.get("dns_name"),
+            }
+        )
+
+    monkeypatch.setattr(ipam_push.db, "list_ipam_sources", _fake_list_ipam_sources)
+    monkeypatch.setattr(ipam_push.db, "get_ipam_source_auth_config", _fake_get_auth_config)
+    monkeypatch.setattr(ipam_push, "push_allocation_to_provider", _fake_push_to_provider)
+
+    import asyncio
+
+    result = asyncio.run(
+        ipam_push.push_inventory_host_allocation(
+            hostname="edge-sw-01",
+            ip_address="10.50.60.70/24",
+            source_hint="test-case",
+        )
+    )
+
+    assert result["attempted"] == 1
+    assert result["pushed"] == 1
+    assert result["failed"] == 0
+    assert len(pushed) == 1
+    assert pushed[0]["source_id"] == 11
+    assert pushed[0]["provider"] == "netbox"
+    assert pushed[0]["address"] == "10.50.60.70"
+    assert pushed[0]["dns_name"] == "edge-sw-01"

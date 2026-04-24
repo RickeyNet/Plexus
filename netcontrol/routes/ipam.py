@@ -34,6 +34,7 @@ class IpamSourceCreate(BaseModel):
     sync_scope: str = ""
     notes: str = ""
     enabled: bool = True
+    push_enabled: bool = False
     verify_tls: bool = True
 
 
@@ -46,6 +47,7 @@ class IpamSourceUpdate(BaseModel):
     sync_scope: str | None = None
     notes: str | None = None
     enabled: bool | None = None
+    push_enabled: bool | None = None
     verify_tls: bool | None = None
 
 
@@ -89,6 +91,7 @@ def _serialize_source(row: dict) -> dict:
         "sync_scope": row.get("sync_scope") or "",
         "notes": row.get("notes") or "",
         "enabled": bool(row.get("enabled")),
+        "push_enabled": bool(row.get("push_enabled", 0)),
         "verify_tls": bool(row.get("verify_tls", 1)),
         "last_sync_at": row.get("last_sync_at"),
         "last_sync_status": row.get("last_sync_status") or "never",
@@ -207,6 +210,7 @@ async def create_ipam_source_api(body: IpamSourceCreate, request: Request):
         sync_scope=body.sync_scope.strip(),
         notes=body.notes.strip(),
         enabled=1 if body.enabled else 0,
+        push_enabled=1 if body.push_enabled else 0,
         verify_tls=1 if body.verify_tls else 0,
         created_by=session.get("user", ""),
     )
