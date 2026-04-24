@@ -10741,18 +10741,26 @@ async def get_ipam_overview(
 
         # ── 3. External IPAM prefixes ───────────────────────────────────────
         external_subnets: set[str] = set()
+        local_subnets: set[str] = set()  # plexus-native prefixes
         subnet_ext_prefix_count: dict[str, int] = {}
         subnet_ext_alloc_count: dict[str, int] = {}
 
         if include_external:
+            # Fetch all prefixes grouped by source provider to distinguish local vs external
             cursor = await db.execute(
-                "SELECT DISTINCT subnet FROM ipam_prefixes WHERE subnet != '' AND subnet IS NOT NULL"
+                """SELECT p.subnet, s.provider
+                   FROM ipam_prefixes p
+                   JOIN ipam_sources s ON s.id = p.source_id
+                   WHERE p.subnet != '' AND p.subnet IS NOT NULL"""
             )
-            ext_prefix_rows = await cursor.fetchall()
+            ext_prefix_rows = rows_to_list(await cursor.fetchall())
             for row in ext_prefix_rows:
-                sn = row[0].strip()
-                external_subnets.add(sn)
-                subnet_ext_prefix_count[sn] = subnet_ext_prefix_count.get(sn, 0) + 1
+                sn = row["subnet"].strip()
+                if row["provider"] == "plexus":
+                    local_subnets.add(sn)
+                else:
+                    external_subnets.add(sn)
+                    subnet_ext_prefix_count[sn] = subnet_ext_prefix_count.get(sn, 0) + 1
 
             cursor = await db.execute(
                 """SELECT p.subnet, COUNT(a.id) AS cnt
@@ -10770,7 +10778,7 @@ async def get_ipam_overview(
 
         # ── 4. Merge all subnets ────────────────────────────────────────────
         all_subnets: set[str] = (
-            set(subnet_hosts.keys()) | cloud_subnets | external_subnets
+            set(subnet_hosts.keys()) | cloud_subnets | external_subnets | local_subnets
         )
 
         inventory_subnets = set(subnet_hosts.keys())
@@ -10786,6 +10794,8 @@ async def get_ipam_overview(
                 src_types.append("inventory")
             if sn in cloud_subnets:
                 src_types.append("cloud")
+            if sn in local_subnets:
+                src_types.append("local")
             if sn in external_subnets:
                 src_types.append("external")
             try:
@@ -10830,6 +10840,7 @@ async def get_ipam_overview(
             "total_subnets": len(all_subnets),
             "inventory_subnets": len(inventory_subnets),
             "cloud_subnets": len(cloud_subnets),
+            "local_subnets": len(local_subnets),
             "external_subnets": len(external_subnets),
             "duplicate_ip_count": len(duplicates_out),
             "exact_source_overlap_count": len(exact_overlaps),
@@ -10895,7 +10906,7 @@ async def get_ipam_subnet_detail(
         )
         raw_reservations = rows_to_list(await cursor.fetchall())
 
-        # ── External allocations for this prefix ────────────────────────────
+        # ── External and local allocations for this prefix ─────────────────
         ext_allocs: list[dict] = []
         if include_external:
             cursor = await db.execute(
@@ -10958,18 +10969,24 @@ async def get_ipam_subnet_detail(
                 "source_type": "inventory",
                 "hostname": h["hostname"],
                 "group_name": h["group"],
+                "description": "",
                 "is_reserved": ip_s in reserved_ips,
+                "allocation_id": None,
             })
 
         # External allocations
         for ea in ext_allocs:
             ip_s = (ea.get("address") or "").strip()
+            provider = ea.get("provider") or ""
+            source_type = "local" if provider == "plexus" else "external"
             allocations_out.append({
                 "ip_address": ip_s,
-                "source_type": "external",
+                "source_type": source_type,
                 "hostname": ea.get("dns_name") or "",
                 "group_name": ea.get("source_name") or "",
+                "description": ea.get("description") or "",
                 "is_reserved": ip_s in reserved_ips,
+                "allocation_id": ea.get("id"),
             })
 
         # Sort by IP
@@ -11368,6 +11385,160 @@ async def delete_ipam_reservation(reservation_id: int) -> bool:
     try:
         cursor = await db.execute(
             "DELETE FROM ipam_reservations WHERE id = ?", (reservation_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def get_or_create_builtin_ipam_source() -> dict:
+    """Return the built-in Plexus IPAM source, creating it idempotently on first call."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM ipam_sources WHERE provider = 'plexus' LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        if row:
+            return _serialize_ipam_source(dict(row))
+    finally:
+        await db.close()
+    # Create the built-in source
+    return await create_ipam_source(
+        provider="plexus",
+        name="Plexus (Built-in)",
+        base_url="",
+        auth_type="none",
+        auth_config={},
+        sync_scope="",
+        notes="Managed directly by Plexus. Subnets and allocations defined here are authoritative.",
+        enabled=True,
+        verify_tls=True,
+        created_by="system",
+    )
+
+
+async def create_ipam_prefix(
+    source_id: int,
+    subnet: str,
+    description: str = "",
+    vrf: str = "",
+    notes: str = "",
+) -> dict | None:
+    """Create a manually-defined subnet prefix under the given IPAM source."""
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+        subnet_key = str(net)
+    except ValueError:
+        return None
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT OR IGNORE INTO ipam_prefixes
+               (source_id, external_id, subnet, description, vrf, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (source_id, subnet_key, subnet_key, description, vrf, json.dumps({"notes": notes})),
+        )
+        await db.commit()
+        prefix_id = cursor.lastrowid
+        if not prefix_id:
+            # Already existed — fetch it
+            cursor2 = await db.execute(
+                "SELECT * FROM ipam_prefixes WHERE source_id = ? AND subnet = ? LIMIT 1",
+                (source_id, subnet_key),
+            )
+            row = await cursor2.fetchone()
+            return dict(row) if row else None
+        cursor3 = await db.execute(
+            "SELECT * FROM ipam_prefixes WHERE id = ?", (prefix_id,)
+        )
+        row = await cursor3.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def get_ipam_prefix(prefix_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM ipam_prefixes WHERE id = ?", (prefix_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def delete_ipam_prefix(prefix_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM ipam_prefixes WHERE id = ?", (prefix_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def create_local_ipam_allocation(
+    source_id: int,
+    subnet: str,
+    address: str,
+    hostname: str = "",
+    description: str = "",
+    created_by: str = "",
+) -> dict | None:
+    """Manually record an IP address allocation within a subnet."""
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+        subnet_key = str(net)
+        ipaddress.ip_address(address)  # validate
+    except ValueError:
+        return None
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT OR IGNORE INTO ipam_allocations
+               (source_id, prefix_subnet, address, dns_name, status, description, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                source_id,
+                subnet_key,
+                address,
+                hostname,
+                "active",
+                description,
+                json.dumps({"created_by": created_by}),
+            ),
+        )
+        await db.commit()
+        alloc_id = cursor.lastrowid
+        if not alloc_id:
+            cursor2 = await db.execute(
+                "SELECT * FROM ipam_allocations WHERE source_id = ? AND address = ? LIMIT 1",
+                (source_id, address),
+            )
+            row = await cursor2.fetchone()
+            return dict(row) if row else None
+        cursor3 = await db.execute(
+            "SELECT * FROM ipam_allocations WHERE id = ?", (alloc_id,)
+        )
+        row = await cursor3.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def delete_ipam_allocation(allocation_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM ipam_allocations WHERE id = ?", (allocation_id,)
         )
         await db.commit()
         return cursor.rowcount > 0
