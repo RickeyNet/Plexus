@@ -3,7 +3,6 @@ jobs.py -- Job orchestration routes: launch, cancel, retry, priority, queue, Web
 """
 from __future__ import annotations
 
-
 import asyncio
 import ipaddress
 import json
@@ -24,7 +23,7 @@ from routes.secret_resolver import (
 )
 
 import netcontrol.routes.state as state
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_credential_access
 from netcontrol.telemetry import configure_logging
 
 # Grace period (seconds) after a live job before re-probing SNMP on affected
@@ -137,8 +136,8 @@ async def _reprobe_hosts_after_job(hosts: list[dict], credentials: dict, dry_run
     await asyncio.sleep(_POST_JOB_REPROBE_DELAY)
 
     try:
-        from netcontrol.routes.snmp import _probe_discovery_target_snmp
         from netcontrol.routes.inventory import _sync_group_hosts
+        from netcontrol.routes.snmp import _probe_discovery_target_snmp
 
         # Group hosts by their inventory group for efficient sync
         groups: dict[int, list[dict]] = {}
@@ -238,17 +237,26 @@ async def _process_job_queue_inner():
         await db.add_job_event(job_id, "error", "No hosts found for this job")
         return
 
-    # Get credentials — use job-specific, then app-wide default
+    # Get credentials — use job-specific, then app-wide default.  Revalidate
+    # ownership against the job's original submitter (launched_by) so a queued
+    # job can never execute with a credential the submitter doesn't own.
     credentials = None
     cred_id = next_job.get("credential_id") or state.AUTH_CONFIG.get("default_credential_id")
     if cred_id:
-        cred = await db.get_credential_raw(cred_id)
-        if cred:
+        try:
+            cred = await require_credential_access(
+                cred_id,
+                submitter_username=next_job.get("launched_by") or None,
+            )
             credentials = {
                 "username": cred["username"],
                 "password": decrypt(cred["password"]),
                 "secret": decrypt(cred["secret"]) if cred["secret"] else "",
             }
+        except HTTPException as exc:
+            await db.update_job_status(job_id, "failed")
+            await db.add_job_event(job_id, "error", f"Credential check failed: {exc.detail}")
+            return
     if not credentials:
         await db.update_job_status(job_id, "failed")
         await db.add_job_event(job_id, "error", "No credential configured — set a default credential in Settings or select one when launching the job")
@@ -583,22 +591,18 @@ async def launch_job(body: JobLaunch, request: Request):
     if not hosts:
         raise HTTPException(400, "Must specify host_ids, ad_hoc_ips, or inventory_group_id")
 
-    # Get credentials — use job-specific, then app-wide default
-    credentials = None
+    # Get credentials — use job-specific, then app-wide default.  The default
+    # credential is only usable by callers who actually own it (or are admin);
+    # it does not grant regular users implicit access to another user's creds.
     cred_id = body.credential_id or state.AUTH_CONFIG.get("default_credential_id")
-    if cred_id:
-        cred = await db.get_credential_raw(cred_id)
-        if not cred:
-            raise HTTPException(404, "Credential not found")
-        if body.credential_id and cred.get("owner_id") and session and cred["owner_id"] != session["user_id"]:
-            raise HTTPException(403, "You can only use your own credentials")
-        credentials = {
-            "username": cred["username"],
-            "password": decrypt(cred["password"]),
-            "secret": decrypt(cred["secret"]) if cred["secret"] else "",
-        }
-    if not credentials:
+    if not cred_id:
         raise HTTPException(400, "No credential configured — set a default credential in Settings or select one when launching the job")
+    cred = await require_credential_access(cred_id, session=session)
+    credentials = {
+        "username": cred["username"],
+        "password": decrypt(cred["password"]),
+        "secret": decrypt(cred["secret"]) if cred["secret"] else "",
+    }
 
     # Get template commands
     template_commands = []
@@ -872,7 +876,7 @@ async def websocket_job(websocket: WebSocket, job_id: int):
         while True:
             try:
                 await asyncio.wait_for(websocket.receive_text(), timeout=120)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 try:
                     await websocket.send_json({"type": "ping"})
                 except Exception:
