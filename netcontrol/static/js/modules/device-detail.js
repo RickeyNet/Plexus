@@ -60,6 +60,11 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
         const latestPoll = pollHistory.status === 'fulfilled' ? (pollHistory.value?.polls || pollHistory.value || [])[0] : null;
         renderDeviceInfoBar(hostId, latestPoll);
 
+        // IPAM context (non-blocking)
+        if (latestPoll?.ip_address) {
+            renderDeviceIpamContext(latestPoll.ip_address);
+        }
+
         // Title
         const title = document.getElementById('device-detail-title');
         if (title) title.textContent = latestPoll?.hostname || `Device #${hostId}`;
@@ -691,6 +696,44 @@ async function resolveErrorEvent(eventId) {
     }
 }
 window.resolveErrorEvent = resolveErrorEvent;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// IPAM Context Panel
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function renderDeviceIpamContext(ip) {
+    const el = document.getElementById('device-ipam-context');
+    if (!el || !ip) return;
+    el.innerHTML = '<span class="text-muted" style="font-size:0.82rem;">Loading IPAM…</span>';
+    try {
+        const ctx = await api.getIpamAddressContext(ip);
+        const s = ctx.matched_subnet;
+        if (!s) {
+            el.innerHTML = '<span class="text-muted" style="font-size:0.82rem;">No IPAM subnet match</span>';
+            return;
+        }
+        const pct = s.utilization_pct != null ? Math.round(s.utilization_pct) : null;
+        const barColor = pct >= 90 ? 'var(--danger)' : pct >= 75 ? 'var(--warning)' : 'var(--success)';
+        const conflictBadge = ctx.is_conflict
+            ? `<span class="badge badge-danger" title="IP appears in: ${escapeHtml((ctx.conflict_groups || []).join(', '))}">IP Conflict</span>`
+            : '';
+        el.innerHTML = `
+            <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+                <span style="font-size:0.82rem;"><strong>Subnet:</strong>
+                    <a href="#ipam" onclick="navigateToPage('ipam')" style="font-family:monospace;">${escapeHtml(s.subnet)}</a>
+                </span>
+                ${pct != null ? `<span style="font-size:0.82rem;"><strong>Utilization:</strong>
+                    <span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin:0 4px;">
+                        <span style="display:block;height:100%;width:${pct}%;background:${barColor};border-radius:4px;"></span>
+                    </span>
+                    ${pct}% (${s.used_count ?? '?'}/${s.total_count ?? '?'})
+                </span>` : ''}
+                ${conflictBadge}
+            </div>`;
+    } catch {
+        el.innerHTML = '';
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Cleanup
