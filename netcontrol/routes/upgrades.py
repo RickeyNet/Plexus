@@ -85,7 +85,145 @@ def init_upgrades(require_auth, require_feature, verify_session_token=None, get_
     _get_user_features = get_user_features
 
 
-# ── Pydantic Models ──────────────────────────────────────────────────────────
+async def rehydrate_scheduled_upgrades():
+    """Re-create asyncio tasks for scheduled campaigns after a server restart.
+
+    Queries for any campaign with status='scheduled_activate' and a persisted
+    scheduled_at time.  If scheduled_at is still in the future the task sleeps
+    until that time; if it has already passed the phase runs immediately so the
+    operator sees it complete rather than being silently lost.
+    """
+    try:
+        campaigns = await db.get_all_upgrade_campaigns()
+    except Exception:
+        LOGGER.exception("rehydrate_scheduled_upgrades: failed to query campaigns")
+        return
+
+    for campaign in campaigns:
+        if campaign.get("status") != "scheduled_activate":
+            continue
+        scheduled_at_raw = campaign.get("scheduled_at")
+        if not scheduled_at_raw:
+            # No persisted time — mark failed so operator knows to reschedule
+            LOGGER.warning(
+                "Campaign %s is scheduled_activate but has no scheduled_at; marking failed",
+                campaign["id"],
+            )
+            try:
+                await db.update_upgrade_campaign(campaign["id"], status="activate_failed")
+            except Exception:
+                pass
+            continue
+
+        try:
+            scheduled_at_utc = datetime.fromisoformat(scheduled_at_raw)
+            if scheduled_at_utc.tzinfo is None:
+                scheduled_at_utc = scheduled_at_utc.replace(tzinfo=UTC)
+            else:
+                scheduled_at_utc = scheduled_at_utc.astimezone(UTC)
+        except ValueError:
+            LOGGER.warning(
+                "Campaign %s has unparseable scheduled_at %r; marking failed",
+                campaign["id"],
+                scheduled_at_raw,
+            )
+            try:
+                await db.update_upgrade_campaign(campaign["id"], status="activate_failed")
+            except Exception:
+                pass
+            continue
+
+        campaign_id = campaign["id"]
+        if campaign_id in _running_campaigns:
+            continue  # already running (shouldn't happen on startup)
+
+        # Resolve credentials
+        try:
+            options = (
+                json.loads(campaign["options"])
+                if isinstance(campaign["options"], str)
+                else campaign["options"]
+            )
+            cred_id = options.get("credential_id")
+            cred = await db.get_credential_raw(cred_id) if cred_id else None
+            if not cred:
+                raise ValueError(f"Credential {cred_id} not found")
+            credentials = {
+                "username": cred["username"],
+                "password": decrypt(cred["password"]),
+                "secret": decrypt(cred["secret"]) if cred.get("secret") else "",
+            }
+            devices = await db.get_upgrade_devices(campaign_id)
+            image_map_raw = (
+                json.loads(campaign["image_map"])
+                if isinstance(campaign["image_map"], str)
+                else campaign["image_map"]
+            )
+            image_map = sorted(image_map_raw.items(), key=lambda x: len(x[0]), reverse=True)
+        except Exception:
+            LOGGER.exception("Campaign %s rehydration failed resolving credentials/devices", campaign_id)
+            try:
+                await db.update_upgrade_campaign(campaign_id, status="activate_failed")
+            except Exception:
+                pass
+            continue
+
+        # If the scheduled window has already passed, do not run automatically —
+        # require the operator to reschedule to avoid an unintended out-of-window reload.
+        if scheduled_at_utc <= datetime.now(UTC):
+            LOGGER.warning(
+                "Campaign %s scheduled_at %s has already passed; marking missed so operator can reschedule",
+                campaign_id,
+                scheduled_at_utc.isoformat(),
+            )
+            try:
+                await db.update_upgrade_campaign(
+                    campaign_id,
+                    status="activate_missed",
+                    scheduled_at=None,
+                )
+                await _emit(
+                    campaign_id,
+                    None,
+                    "warn",
+                    f"Scheduled activate window ({scheduled_at_utc.isoformat()}) was missed due to a server restart. "
+                    "Please reschedule the activate phase.",
+                )
+            except Exception:
+                pass
+            continue
+
+        LOGGER.info(
+            "Rehydrating scheduled activate for campaign %s (scheduled_at=%s)",
+            campaign_id,
+            scheduled_at_utc.isoformat(),
+        )
+
+        async def _run_rehydrated(
+            _cid=campaign_id,
+            _sat=scheduled_at_utc,
+            _devs=devices,
+            _creds=credentials,
+            _imap=image_map,
+            _opts=options,
+        ):
+            delay_seconds = (_sat - datetime.now(UTC)).total_seconds()
+            if delay_seconds > 0:
+                await _emit(_cid, None, "info", f"Resuming scheduled activate (rehydrated after restart); fires at {_sat.isoformat()}")
+                await asyncio.sleep(delay_seconds)
+            await db.update_upgrade_campaign(_cid, status="running_activate", scheduled_at=None)
+            await _emit(_cid, None, "info", "Starting activate phase now")
+            await _run_phase(_cid, "activate", _devs, _creds, _imap, _opts)
+
+        task = asyncio.create_task(_run_rehydrated())
+        _running_campaigns[campaign_id] = task
+
+        def _on_done(t, _cid=campaign_id):
+            _running_campaigns.pop(_cid, None)
+
+        task.add_done_callback(_on_done)
+
+
 
 
 class ImageUpdate(BaseModel):
@@ -657,7 +795,11 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     image_map = sorted(image_map_raw.items(), key=lambda x: len(x[0]), reverse=True)
 
     if scheduled_at_utc is not None:
-        await db.update_upgrade_campaign(campaign_id, status=f"scheduled_{body.phase}")
+        await db.update_upgrade_campaign(
+            campaign_id,
+            status=f"scheduled_{body.phase}",
+            scheduled_at=scheduled_at_utc.isoformat(),
+        )
         await _audit(
             "upgrades",
             "phase_execute",
@@ -678,7 +820,11 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
             delay_seconds = (scheduled_at_utc - datetime.now(UTC)).total_seconds()
             if delay_seconds > 0:
                 await asyncio.sleep(delay_seconds)
-            await db.update_upgrade_campaign(campaign_id, status=f"running_{body.phase}")
+            await db.update_upgrade_campaign(
+                campaign_id,
+                status=f"running_{body.phase}",
+                scheduled_at=None,
+            )
             await _emit(campaign_id, None, "info", f"Starting scheduled {body.phase} phase now")
             await _run_phase(campaign_id, body.phase, devices, credentials, image_map, options)
 

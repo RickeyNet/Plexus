@@ -234,6 +234,7 @@ from netcontrol.routes.snmp import (
 from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
 from netcontrol.routes.upgrades import (
     init_upgrades,
+    rehydrate_scheduled_upgrades,
     router as upgrades_router,
     ws_router as upgrades_ws_router,
 )
@@ -941,6 +942,7 @@ async def lifespan(app: FastAPI):
     await db.seed_built_in_cdefs()
     await db.get_or_create_builtin_ipam_source()
     await _cleanup_expired_jobs()
+    await rehydrate_scheduled_upgrades()
     await _run_discovery_sync_once()
     state.API_RATE_LIMIT_LOCK = asyncio.Lock()
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
