@@ -153,6 +153,49 @@ async def _capture_running_config(host: dict, credentials: dict) -> str:
     return await asyncio.to_thread(_do_capture)
 
 
+async def _run_show_command(host: dict, credentials: dict, command: str) -> str:
+    """SSH to a device and run a single show command via Netmiko.
+
+    Uses the same autodetect logic as _capture_running_config.
+    Returns the raw command output string.
+    """
+    import netmiko
+    from netmiko import SSHDetect
+    from routes.crypto import decrypt
+
+    def _do_run():
+        device = {
+            "device_type": host.get("device_type", "cisco_ios"),
+            "host": host["ip_address"],
+            "username": credentials["username"],
+            "password": decrypt(credentials["password"]),
+            "secret": decrypt(credentials.get("secret", "")),
+        }
+
+        if device["device_type"] in ("cisco_ios", "unknown"):
+            try:
+                detect_device = {**device, "device_type": "autodetect"}
+                guesser = SSHDetect(**detect_device)
+                best = guesser.autodetect()
+                if best:
+                    LOGGER.info("Autodetected device_type %s for %s (was %s)",
+                                best, device["host"], device["device_type"])
+                    device["device_type"] = best
+                guesser.connection.disconnect()
+            except Exception:
+                LOGGER.debug("SSHDetect failed for %s, using %s",
+                             device["host"], device["device_type"])
+
+        net_connect = netmiko.ConnectHandler(**device)
+        if device["secret"]:
+            net_connect.enable()
+        output = net_connect.send_command(command)
+        net_connect.disconnect()
+        return output
+
+    return await asyncio.to_thread(_do_run)
+
+
 async def _push_config_to_device(host: dict, credentials: dict, config_lines: list[str]) -> str:
     """SSH to a device and push config lines via Netmiko."""
     import netmiko

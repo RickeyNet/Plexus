@@ -2626,7 +2626,7 @@ input[type="number"].form-input {
 .host-columns-header,
 .host-columns-row {
     display: grid;
-    grid-template-columns: 28px 1.5fr 1fr 0.8fr 1fr 1fr auto;
+    grid-template-columns: 28px 1.5fr 1fr 0.8fr 1fr 1fr 1fr 172px;
     align-items: center;
     gap: 0.5rem;
     padding: 0.35rem 0.6rem;
@@ -2636,14 +2636,12 @@ input[type="number"].form-input {
 
 .host-columns-header {
     font-weight: 600;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+    font-size: 0.75rem;
     color: var(--text-muted);
     padding-bottom: 0.3rem;
-    border-bottom: 1px solid var(--border);
+    border: 1px solid transparent;
+    border-bottom-color: var(--border);
     margin-bottom: 0.15rem;
-    text-align: left;
 }
 
 .host-columns-header > span,
@@ -2698,6 +2696,18 @@ input[type="number"].form-input {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.host-col-serial {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
 }
 
 .host-col-actions {
