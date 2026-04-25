@@ -2382,3 +2382,19 @@ export async function upsertFloorPlacement(floorId, hostId, xPct, yPct) {
 export async function deleteFloorPlacement(floorId, hostId) {
     return apiRequest(`/geo/floors/${floorId}/placements/${hostId}`, { method: 'DELETE' });
 }
+
+// ── Inventory: Serial Number ──────────────────────────────────────────────────
+
+export async function fetchHostSerial(hostId, credentialId) {
+    return apiRequest(`/hosts/${hostId}/fetch-serial`, {
+        method: 'POST',
+        body: JSON.stringify({ credential_id: credentialId }),
+    });
+}
+
+export async function fetchGroupSerials(groupId, credentialId) {
+    return apiRequest(`/groups/${groupId}/fetch-serials`, {
+        method: 'POST',
+        body: JSON.stringify({ credential_id: credentialId }),
+    });
+}
