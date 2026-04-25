@@ -20,12 +20,14 @@ const adminState = {
     groups: [],
     loginRules: null,
     authConfig: null,
+    syslogConfig: null,
 };
 
 // Named handler references for proper cleanup
 let _loginRulesHandler = null;
 let _authConfigHandler = null;
 let _authProviderHandler = null;
+let _syslogHandler = null;
 let _topoDiscoveryHandler = null;
 let _stpDiscoveryHandler = null;
 let _stpAllVlansHandler = null;
@@ -55,11 +57,11 @@ function renderFeatureCheckboxes(selected = []) {
     `).join('');
 }
 
-function renderGroupCheckboxes(selected = []) {
+function renderGroupCheckboxes(selected = [], name = 'group_ids') {
     const selectedSet = new Set((selected || []).map((v) => Number(v)));
     return (adminState.groups || []).map((group) => `
         <label style="display:flex; align-items:center; gap:0.35rem;">
-            <input type="checkbox" name="group_ids" value="${group.id}" ${selectedSet.has(Number(group.id)) ? 'checked' : ''}>
+            <input type="checkbox" name="${name}" value="${group.id}" ${selectedSet.has(Number(group.id)) ? 'checked' : ''}>
             <span>${escapeHtml(group.name)}</span>
         </label>
     `).join('');
@@ -190,6 +192,7 @@ function bindAuthConfigForm() {
                     port: Number(document.getElementById('radius-port').value),
                     secret: document.getElementById('radius-secret').value,
                     timeout: Number(document.getElementById('radius-timeout').value),
+                    default_group_ids: collectCheckedValues(form, 'radius_default_group_ids').map((v) => Number(v)),
                 },
                 ldap: {
                     enabled: document.getElementById('ldap-enabled').checked,
@@ -240,6 +243,11 @@ async function renderAuthConfig() {
     document.getElementById('radius-port').value = cfg.radius?.port || 1812;
     document.getElementById('radius-secret').value = cfg.radius?.secret || '';
     document.getElementById('radius-timeout').value = cfg.radius?.timeout || 5;
+    const radiusGroups = document.getElementById('radius-default-groups');
+    if (radiusGroups) {
+        radiusGroups.innerHTML = renderGroupCheckboxes(cfg.radius?.default_group_ids || [], 'radius_default_group_ids') ||
+            '<span class="card-description">Create access groups first.</span>';
+    }
     const radiusPanel = document.getElementById('radius-config-panel');
     if (radiusPanel) {
         radiusPanel.style.display = cfg.provider === 'radius' ? '' : 'none';
@@ -277,16 +285,18 @@ async function renderAuthConfig() {
 }
 
 async function refreshAdminData() {
-    const [users, groups, loginRules, authConfig] = await Promise.all([
+    const [users, groups, loginRules, authConfig, syslogConfig] = await Promise.all([
         api.getAdminUsers(),
         api.getAccessGroups(),
         api.getLoginRules(),
         api.getAuthConfig(),
+        api.getSyslogConfig(),
     ]);
     adminState.users = users;
     adminState.groups = groups;
     adminState.loginRules = loginRules;
     adminState.authConfig = authConfig;
+    adminState.syslogConfig = syslogConfig;
 }
 
 async function loadAdminSettings(_options = {}) {
@@ -305,12 +315,14 @@ async function loadAdminSettings(_options = {}) {
         renderAdminGroups();
         bindLoginRulesForm();
         bindAuthConfigForm();
+        bindSyslogForm();
         bindTopologyDiscoveryForm();
         bindStpDiscoveryForm();
         bindStpRootPolicyForm();
         bindMonitoringForm();
         renderLoginRules();
         renderAuthConfig();
+        renderSyslogConfig();
         loadTopologyDiscoveryConfig();
         loadStpDiscoveryConfig();
         loadStpRootPolicies();
@@ -327,6 +339,61 @@ async function loadAdminSettings(_options = {}) {
         }
     }
 }
+
+function renderSyslogConfig() {
+    if (!adminState.syslogConfig) return;
+    const cfg = adminState.syslogConfig;
+    const el = (id) => document.getElementById(id);
+    if (el('syslog-enabled')) el('syslog-enabled').checked = !!cfg.enabled;
+    if (el('syslog-host')) el('syslog-host').value = cfg.host || '';
+    if (el('syslog-port')) el('syslog-port').value = cfg.port || 514;
+    if (el('syslog-protocol')) el('syslog-protocol').value = cfg.protocol || 'udp';
+    if (el('syslog-facility')) el('syslog-facility').value = cfg.facility || 'local0';
+    if (el('syslog-level')) el('syslog-level').value = cfg.level || 'INFO';
+    if (el('syslog-app-name')) el('syslog-app-name').value = cfg.app_name || 'plexus';
+    const status = el('syslog-status');
+    if (status) {
+        status.textContent = cfg.active ? 'Active' : (cfg.enabled ? 'Configured' : 'Disabled');
+        status.className = cfg.active ? 'status-badge status-running' : 'status-badge';
+    }
+}
+
+function bindSyslogForm() {
+    const form = document.getElementById('admin-syslog-form');
+    if (!form) return;
+    if (_syslogHandler) form.removeEventListener('submit', _syslogHandler);
+    _syslogHandler = async (e) => {
+        e.preventDefault();
+        try {
+            const payload = {
+                enabled: document.getElementById('syslog-enabled').checked,
+                host: document.getElementById('syslog-host').value.trim(),
+                port: Number(document.getElementById('syslog-port').value),
+                protocol: document.getElementById('syslog-protocol').value,
+                facility: document.getElementById('syslog-facility').value,
+                level: document.getElementById('syslog-level').value,
+                app_name: document.getElementById('syslog-app-name').value.trim() || 'plexus',
+            };
+            adminState.syslogConfig = await api.updateSyslogConfig(payload);
+            renderSyslogConfig();
+            showSuccess('Syslog settings saved');
+        } catch (error) {
+            showError(`Failed to save syslog settings: ${error.message}`);
+        }
+    };
+    form.addEventListener('submit', _syslogHandler);
+}
+
+async function sendSyslogTest() {
+    try {
+        await api.testSyslogConfig();
+        showSuccess('Syslog test message sent');
+    } catch (error) {
+        showError(`Failed to send syslog test: ${error.message}`);
+    }
+}
+
+window.sendSyslogTest = sendSyslogTest;
 
 // -- Topology Discovery Schedule --
 
@@ -824,6 +891,10 @@ function destroySettings() {
         document.getElementById('auth-provider')?.removeEventListener('change', _authProviderHandler);
         _authProviderHandler = null;
     }
+    if (_syslogHandler) {
+        document.getElementById('admin-syslog-form')?.removeEventListener('submit', _syslogHandler);
+        _syslogHandler = null;
+    }
     if (_topoDiscoveryHandler) {
         document.getElementById('admin-topology-discovery-form')?.removeEventListener('submit', _topoDiscoveryHandler);
         _topoDiscoveryHandler = null;
@@ -850,6 +921,7 @@ function destroySettings() {
     adminState.groups = [];
     adminState.loginRules = null;
     adminState.authConfig = null;
+    adminState.syslogConfig = null;
 }
 
 export { loadAdminSettings, destroySettings };

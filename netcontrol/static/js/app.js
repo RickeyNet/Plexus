@@ -820,9 +820,36 @@ export function invalidatePageCache(...pages) {
 }
 
 function canAccessFeature(feature) {
+    if (!feature) return true;
     if (String(currentUserData?.role || '').toLowerCase() === 'admin') return true;
-    if (!Array.isArray(currentFeatureAccess) || currentFeatureAccess.length === 0) return true;
+    if (!Array.isArray(currentFeatureAccess)) return false;
     return currentFeatureAccess.includes(feature);
+}
+
+function firstAccessiblePage() {
+    const orderedPages = ['dashboard', 'inventory', 'ipam', 'playbooks', 'jobs', 'templates', 'credentials'];
+    return orderedPages.find((page) => canAccessFeature(NAV_FEATURE_MAP[page])) || null;
+}
+
+function showNoFeatureAccess() {
+    document.querySelectorAll('.page.active').forEach((pageEl) => pageEl.classList.remove('active'));
+    const dashboardPage = document.getElementById('page-dashboard');
+    if (dashboardPage) {
+        dashboardPage.innerHTML = `
+            <div class="section" style="max-width:720px;">
+                <h2>Access Pending</h2>
+                <p class="card-description">Your profile is active, but no feature access has been assigned yet. Ask an administrator to add this user to an access group.</p>
+            </div>
+        `;
+        dashboardPage.dataset.initialized = 'true';
+        dashboardPage.classList.add('active');
+    }
+    currentPage = 'dashboard';
+    updateBreadcrumb('dashboard');
+    updateTimeRangeBarVisibility('dashboard');
+    if (window.location.hash !== '#dashboard') {
+        history.replaceState(null, '', '#dashboard');
+    }
 }
 
 function applyFeatureVisibility() {
@@ -1844,8 +1871,11 @@ function showApp(userData) {
         return;
     }
 
-    const orderedPages = ['dashboard', 'inventory', 'playbooks', 'jobs', 'templates', 'credentials'];
-    const firstAllowed = orderedPages.find((page) => canAccessFeature(NAV_FEATURE_MAP[page])) || 'dashboard';
+    const firstAllowed = firstAccessiblePage();
+    if (!firstAllowed) {
+        showNoFeatureAccess();
+        return;
+    }
     // Restore page from URL hash if present, otherwise go to first allowed page
     const hashPage = getPageFromHash();
     const startPage = hashPage && canAccessFeature(NAV_FEATURE_MAP[hashPage] || hashPage) ? hashPage : firstAllowed;

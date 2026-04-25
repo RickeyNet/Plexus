@@ -167,6 +167,53 @@ def test_sanitize_auth_config_enforces_job_retention_minimum():
     assert cfg["job_retention_days"] == 30
 
 
+def test_sanitize_auth_config_keeps_radius_default_groups():
+    cfg = app_module._sanitize_auth_config(
+        {
+            "provider": "radius",
+            "radius": {
+                "enabled": True,
+                "server": "radius.local",
+                "secret": "secret",
+                "default_group_ids": [2, "3", 0, -1, "2", "bad"],
+            },
+        }
+    )
+
+    assert cfg["radius"]["default_group_ids"] == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_radius_shadow_user_gets_default_access_groups(tmp_path, monkeypatch):
+    db_file = tmp_path / "radius_access.db"
+    monkeypatch.setattr(db_module, "DB_PATH", str(db_file))
+    await db_module.init_db()
+
+    group_id = await db_module.create_access_group(
+        "RADIUS Operators",
+        "Default RADIUS access",
+        ["dashboard", "inventory"],
+    )
+    cfg = app_module._sanitize_auth_config(
+        {
+            "provider": "radius",
+            "radius": {
+                "enabled": True,
+                "server": "radius.local",
+                "secret": "secret",
+                "default_group_ids": [group_id],
+            },
+        }
+    )
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", cfg)
+
+    user = await app_module.upsert_radius_user("radius-user")
+
+    assert user is not None
+    assert await db_module.get_user_group_ids(user["id"]) == [group_id]
+    assert await app_module._get_user_features(user) == ["dashboard", "inventory"]
+
+
 @pytest.mark.asyncio
 async def test_admin_run_retention_cleanup_now_returns_summary(monkeypatch):
     async def fake_cleanup_expired_jobs():
