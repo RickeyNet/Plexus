@@ -5,12 +5,12 @@ Provides audit logging, config capture/push/diff, and session helpers.
 """
 from __future__ import annotations
 
-
 import asyncio
 import difflib
 import re
 
 import routes.database as db
+from fastapi import HTTPException
 
 from netcontrol.telemetry import configure_logging
 
@@ -65,6 +65,63 @@ def _get_session(request) -> dict | None:
     if _verify_session_token_fn is None:
         return None
     return _verify_session_token_fn(token)
+
+
+# ── Credential ownership enforcement ─────────────────────────────────────────
+
+async def require_credential_access(
+    credential_id,
+    *,
+    session: dict | None = None,
+    submitter_username: str | None = None,
+) -> dict:
+    """Fetch a credential and enforce that the caller is allowed to use it.
+
+    Pass either a live `session` dict (HTTP request context) or a
+    `submitter_username` (background worker / scheduler running a task that
+    was originally queued by a user).  At least one must be provided.
+
+    Rules:
+      - Admins and API-token callers may use any credential.
+      - Otherwise the credential's ``owner_id`` must match the caller's user id.
+      - Unowned credentials (``owner_id`` is NULL) are admin-only.
+
+    Raises HTTPException(400/401/403/404) on any failure so callers that
+    already propagate HTTPException don't need extra handling.
+    """
+    if credential_id is None:
+        raise HTTPException(status_code=400, detail="credential_id is required")
+
+    cred = await db.get_credential_raw(credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    # Admins and API tokens bypass the owner check.
+    if session is not None:
+        if session.get("auth_mode") == "token":
+            return cred
+        user_id = session.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        user = await db.get_user_by_id(int(user_id))
+        if user and user.get("role") == "admin":
+            return cred
+        if cred.get("owner_id") == int(user_id):
+            return cred
+        raise HTTPException(status_code=403, detail="You can only use your own credentials")
+
+    if submitter_username:
+        user = await db.get_user_by_username(submitter_username)
+        if not user:
+            # Submitter no longer exists (deleted account). Fail closed.
+            raise HTTPException(status_code=403, detail="Submitter account is no longer valid")
+        if user.get("role") == "admin":
+            return cred
+        if cred.get("owner_id") == int(user["id"]):
+            return cred
+        raise HTTPException(status_code=403, detail="Credential is not owned by the task submitter")
+
+    raise HTTPException(status_code=401, detail="Not authenticated")
 
 
 # ── Config capture/push/diff ────────────────────────────────────────────────
