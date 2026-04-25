@@ -7,7 +7,6 @@ config-backups, compliance, monitoring, SNMP) remain in app.py for now.
 """
 from __future__ import annotations
 
-
 import os
 import secrets
 import sys
@@ -19,7 +18,7 @@ from pydantic import BaseModel, Field
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.state import _env_flag
-from netcontrol.telemetry import configure_logging
+from netcontrol.telemetry import configure_logging, configure_syslog_logging, syslog_logging_enabled
 
 LOGGER = configure_logging("plexus.admin")
 
@@ -107,6 +106,7 @@ class RadiusConfigRequest(BaseModel):
     timeout: int = 5
     fallback_to_local: bool = True
     fallback_on_reject: bool = False
+    default_group_ids: list[int] = []
 
 
 class LdapConfigRequest(BaseModel):
@@ -134,6 +134,16 @@ class AuthConfigRequest(BaseModel):
     job_retention_days: int = Field(default=30, ge=30)
     radius: RadiusConfigRequest = RadiusConfigRequest()
     ldap: LdapConfigRequest = LdapConfigRequest()
+
+
+class SyslogConfigRequest(BaseModel):
+    enabled: bool = False
+    host: str = ""
+    port: int = Field(default=514, ge=1, le=65535)
+    protocol: str = "udp"
+    facility: str = "local0"
+    level: str = "INFO"
+    app_name: str = "plexus"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -457,6 +467,71 @@ async def admin_update_auth_config(body: AuthConfigRequest):
     state.AUTH_CONFIG = state._sanitize_auth_config(data)
     await db.set_auth_setting("auth_config", state.AUTH_CONFIG)
     return _redact_auth_config(state.AUTH_CONFIG)
+
+
+def _syslog_config_payload() -> dict:
+    payload = dict(state.SYSLOG_CONFIG)
+    payload["active"] = syslog_logging_enabled()
+    return payload
+
+
+@router.get("/api/admin/syslog-config")
+async def admin_get_syslog_config():
+    return _syslog_config_payload()
+
+
+@router.put("/api/admin/syslog-config")
+async def admin_update_syslog_config(body: SyslogConfigRequest, request: Request):
+    data = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    if data.get("enabled") and not str(data.get("host", "")).strip():
+        raise HTTPException(status_code=400, detail="Syslog host is required when enabled")
+
+    sanitized = state._sanitize_syslog_config(data)
+    if sanitized.get("enabled") and not configure_syslog_logging(sanitized):
+        LOGGER.warning("syslog: failed to configure outbound logging handler")
+        raise HTTPException(status_code=400, detail="Unable to configure syslog logging")
+
+    if not sanitized.get("enabled"):
+        configure_syslog_logging(sanitized)
+
+    state.SYSLOG_CONFIG = sanitized
+    await db.set_auth_setting("syslog_config", state.SYSLOG_CONFIG)
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "syslog.config.updated",
+        user=session["user"] if session else "",
+        detail=(
+            f"enabled={state.SYSLOG_CONFIG['enabled']} "
+            f"target={state.SYSLOG_CONFIG['host']}:{state.SYSLOG_CONFIG['port']} "
+            f"protocol={state.SYSLOG_CONFIG['protocol']}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return _syslog_config_payload()
+
+
+@router.post("/api/admin/syslog-config/test")
+async def admin_test_syslog_config(request: Request):
+    if not state.SYSLOG_CONFIG.get("enabled") or not syslog_logging_enabled():
+        raise HTTPException(status_code=400, detail="Syslog logging is not enabled")
+
+    session = _get_session(request)
+    LOGGER.info(
+        "syslog: test message requested by user=%s target=%s:%s protocol=%s",
+        session["user"] if session else "",
+        state.SYSLOG_CONFIG.get("host", ""),
+        state.SYSLOG_CONFIG.get("port", ""),
+        state.SYSLOG_CONFIG.get("protocol", ""),
+    )
+    await _audit(
+        "system",
+        "syslog.test",
+        user=session["user"] if session else "",
+        detail="sent syslog test message",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
 
 
 @router.post("/api/admin/retention/cleanup-now")

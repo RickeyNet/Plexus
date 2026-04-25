@@ -5,7 +5,6 @@ Includes RADIUS authentication helpers and login rate-limiting logic.
 """
 from __future__ import annotations
 
-
 import asyncio
 import hashlib
 import os
@@ -191,7 +190,17 @@ async def upsert_external_user(username: str, display_name: str = "",
 
 async def upsert_radius_user(username: str) -> dict | None:
     """Ensure a local shadow user exists for RADIUS-authenticated identities."""
-    return await upsert_external_user(username)
+    existing = await db.get_user_by_username(username)
+    user = existing or await upsert_external_user(username)
+    if user and not existing:
+        group_ids = state.AUTH_CONFIG.get("radius", {}).get("default_group_ids", [])
+        if group_ids:
+            try:
+                await db.set_user_groups(int(user["id"]), group_ids)
+                user = await db.get_user_by_id(int(user["id"]))
+            except ValueError:
+                LOGGER.warning("radius: default access group assignment failed for user '%s'", username)
+    return user
 
 
 # ── LDAP / Active Directory helpers ──────────────────────────────────────────

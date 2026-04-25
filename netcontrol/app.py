@@ -47,10 +47,14 @@ from netcontrol.routes.admin import (
     AdminUserUpdateRequest,
     AuthConfigRequest,
     RadiusConfigRequest,
+    SyslogConfigRequest,
     _admin_user_payload,
     _security_check_payload,
     _validate_feature_keys,
+    admin_get_syslog_config,
     admin_run_retention_cleanup_now,
+    admin_test_syslog_config,
+    admin_update_syslog_config,
     init_admin,
     router as admin_router,
 )
@@ -267,7 +271,7 @@ except ImportError:
 # Auto-register all playbooks
 from templates import playbooks  # noqa: F401
 
-from netcontrol.telemetry import configure_logging, increment_metric, observe_timing, redact_value, snapshot_metrics
+from netcontrol.telemetry import configure_logging, configure_syslog_logging, increment_metric, observe_timing, redact_value, snapshot_metrics
 from netcontrol.version import APP_VERSION
 
 LOGGER = configure_logging("plexus.app")
@@ -668,6 +672,7 @@ CONFIG_DRIFT_CHECK_CONFIG = state.CONFIG_DRIFT_CHECK_CONFIG
 CONFIG_BACKUP_CONFIG = state.CONFIG_BACKUP_CONFIG
 COMPLIANCE_CHECK_CONFIG = state.COMPLIANCE_CHECK_CONFIG
 MONITORING_CONFIG = state.MONITORING_CONFIG
+SYSLOG_CONFIG = state.SYSLOG_CONFIG
 DISCOVERY_DEFAULT_TIMEOUT_SECONDS = state.DISCOVERY_DEFAULT_TIMEOUT_SECONDS
 DISCOVERY_DEFAULT_MAX_HOSTS = state.DISCOVERY_DEFAULT_MAX_HOSTS
 DISCOVERY_MAX_CONCURRENT_PROBES = state.DISCOVERY_MAX_CONCURRENT_PROBES
@@ -692,6 +697,7 @@ COMPLIANCE_CHECK_DEFAULTS = state.COMPLIANCE_CHECK_DEFAULTS
 COMPLIANCE_ASSIGNMENT_MIN_INTERVAL = state.COMPLIANCE_ASSIGNMENT_MIN_INTERVAL
 COMPLIANCE_ASSIGNMENT_MAX_INTERVAL = state.COMPLIANCE_ASSIGNMENT_MAX_INTERVAL
 MONITORING_DEFAULTS = state.MONITORING_DEFAULTS
+SYSLOG_DEFAULTS = state.SYSLOG_DEFAULTS
 TOPOLOGY_DISCOVERY_DEFAULTS = state.TOPOLOGY_DISCOVERY_DEFAULTS
 STP_DISCOVERY_DEFAULTS = state.STP_DISCOVERY_DEFAULTS
 DISCOVERY_SYNC_MIN_INTERVAL_SECONDS = state.DISCOVERY_SYNC_MIN_INTERVAL_SECONDS
@@ -710,6 +716,7 @@ _sanitize_config_drift_check_config = state._sanitize_config_drift_check_config
 _sanitize_config_backup_config = state._sanitize_config_backup_config
 _sanitize_compliance_check_config = state._sanitize_compliance_check_config
 _sanitize_monitoring_config = state._sanitize_monitoring_config
+_sanitize_syslog_config = state._sanitize_syslog_config
 _sanitize_cloud_flow_sync_config = state._sanitize_cloud_flow_sync_config
 _sanitize_cloud_traffic_metric_sync_config = state._sanitize_cloud_traffic_metric_sync_config
 _sanitize_snmp_discovery_config = state._sanitize_snmp_discovery_config
@@ -770,6 +777,10 @@ async def _load_persisted_security_settings():
     state.COMPLIANCE_CHECK_CONFIG = _sanitize_compliance_check_config(compliance_check)
     monitoring = await db.get_auth_setting("monitoring")
     state.MONITORING_CONFIG = _sanitize_monitoring_config(monitoring)
+    syslog_config = await db.get_auth_setting("syslog_config")
+    state.SYSLOG_CONFIG = _sanitize_syslog_config(syslog_config)
+    if not configure_syslog_logging(state.SYSLOG_CONFIG):
+        LOGGER.warning("syslog: persisted outbound logging configuration could not be applied")
     cloud_flow_sync = await db.get_auth_setting("cloud_flow_sync")
     state.CLOUD_FLOW_SYNC_CONFIG = _sanitize_cloud_flow_sync_config(cloud_flow_sync)
     cloud_flow_sync_status = await db.get_auth_setting("cloud_flow_sync_status")
@@ -1510,52 +1521,52 @@ app.include_router(
 # Dashboards & Annotations
 app.include_router(
     dashboards_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))],
 )
 # Graph Templates (Cacti-parity)
 app.include_router(
     graph_templates_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("graph-templates"))],
 )
 
 app.include_router(
     reporting_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
 )
 # CDEF Engine (calculated data sources)
 app.include_router(
     cdef_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("graph-templates"))],
 )
 # MAC/ARP Tracking
 app.include_router(
     mac_tracking_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("mac-tracking"))],
 )
 # NetFlow / sFlow / IPFIX
 app.include_router(
     flow_collector_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("traffic-analysis"))],
 )
 # Baseline Deviation Alerting
 app.include_router(
     baseline_alerting_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
 )
 # Graph Export (PNG/SVG/embed URLs)
 app.include_router(
     graph_export_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
 )
 # Interface Error/Discard Trending
 app.include_router(
     interface_errors_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
 )
 # Bandwidth Billing & 95th Percentile
 app.include_router(
     billing_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
 )
 # Cloud Visibility (AWS/Azure/GCP hybrid foundation)
 app.include_router(
@@ -1575,7 +1586,7 @@ app.include_router(
 # Multi-Instance Federation
 app.include_router(
     federation_router,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_feature("federation"))],
 )
 # IOS-XE Upgrade Tool
 app.include_router(
