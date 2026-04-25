@@ -129,6 +129,7 @@ from netcontrol.routes.cloud_visibility import (
 )
 from netcontrol.routes.ipam import init_ipam, router as ipam_router
 from netcontrol.routes.ipam_adapters import IpamAdapterError, collect_ipam_snapshot
+from netcontrol.routes.geolocation import router as geolocation_router
 from netcontrol.routes.federation import (
     init_federation,
     federation_sync_loop,
@@ -1562,6 +1563,11 @@ app.include_router(
 # IP Address Management
 app.include_router(
     ipam_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+)
+# Geolocation and Floor Plan Mapping
+app.include_router(
+    geolocation_router,
     dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
 )
 # Multi-Instance Federation
