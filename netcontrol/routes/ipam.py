@@ -14,6 +14,7 @@ from netcontrol.routes.ipam_adapters import (
     get_ipam_provider_catalog,
     normalize_ipam_provider,
 )
+from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.ipam_reconciliation import (
     VALID_RESOLUTIONS,
     resolve_diff as reconcile_resolve_diff,
@@ -78,6 +79,16 @@ class IpamAllocationCreate(BaseModel):
 class IpamReconciliationResolve(BaseModel):
     resolution: str
     note: str = ""
+
+
+class IpamAllocateRequest(BaseModel):
+    subnet: str
+    vrf_name: str = ""
+    hostname: str = ""
+    description: str = ""
+    source_id: int | None = None
+    push: bool = False
+    ttl_seconds: int = 900
 
 
 def init_ipam(require_admin):
@@ -643,3 +654,151 @@ async def resolve_reconciliation_diff_api(
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "diff": resolved}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IPAM-driven provisioning (Phase H) — /api/ipam/allocate
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/api/ipam/allocate",
+    status_code=201,
+    dependencies=[Depends(_require_admin_dep)],
+)
+async def allocate_ip_api(body: IpamAllocateRequest, request: Request):
+    """Reserve the next available IP in a subnet.
+
+    Creates a pending allocation row that participates in subsequent
+    next-IP selection so concurrent calls don't collide. Optionally pushes
+    the allocation to enabled external IPAM sources for cross-system visibility
+    (push failures do not fail the reservation — call /release to undo).
+    """
+    try:
+        ipaddress.ip_network(body.subnet, strict=False)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid subnet CIDR") from None
+
+    session = _get_session(request) or {}
+    try:
+        pending = await db.allocate_next_ip(
+            subnet=body.subnet,
+            vrf_name=body.vrf_name,
+            hostname=body.hostname,
+            description=body.description,
+            source_id=body.source_id,
+            ttl_seconds=body.ttl_seconds,
+            created_by=session.get("user", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    push_summary: dict | None = None
+    if body.push and pending.get("address"):
+        push_summary = await push_inventory_host_allocation(
+            hostname=body.hostname,
+            ip_address=pending["address"],
+            source_hint="allocate",
+        )
+
+    await _audit(
+        "ipam",
+        "allocate_ip",
+        user=session.get("user", ""),
+        detail=(
+            f"subnet={body.subnet},address={pending.get('address')},"
+            f"vrf={body.vrf_name},pending_id={pending.get('id')}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "allocation": pending, "push": push_summary}
+
+
+@router.post(
+    "/api/ipam/allocate/{allocation_id}/commit",
+    dependencies=[Depends(_require_admin_dep)],
+)
+async def commit_allocation_api(allocation_id: int, request: Request):
+    """Promote a pending allocation into the built-in (or original) IPAM source."""
+    pending = await db.get_pending_allocation(allocation_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail="Pending allocation not found")
+    if pending["state"] != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Allocation is already {pending['state']}",
+        )
+
+    session = _get_session(request) or {}
+    target_source_id = pending.get("source_id")
+    if not target_source_id:
+        builtin = await db.get_or_create_builtin_ipam_source()
+        target_source_id = builtin["id"]
+
+    alloc = await db.create_local_ipam_allocation(
+        source_id=int(target_source_id),
+        subnet=pending["subnet"],
+        address=pending["address"],
+        hostname=pending.get("hostname", ""),
+        description=pending.get("description", ""),
+        created_by=session.get("user", ""),
+    )
+    if not alloc:
+        raise HTTPException(
+            status_code=409,
+            detail="Address already allocated in target IPAM source",
+        )
+
+    updated = await db.update_pending_allocation_state(
+        allocation_id, state="committed", source_id=int(target_source_id)
+    )
+    await _audit(
+        "ipam",
+        "allocate_commit",
+        user=session.get("user", ""),
+        detail=(
+            f"pending_id={allocation_id},address={pending['address']},"
+            f"source_id={target_source_id}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "allocation": updated, "ipam_allocation": alloc}
+
+
+@router.post(
+    "/api/ipam/allocate/{allocation_id}/release",
+    dependencies=[Depends(_require_admin_dep)],
+)
+async def release_allocation_api(allocation_id: int, request: Request):
+    """Release a pending allocation (rollback). Idempotent on already-released rows."""
+    pending = await db.get_pending_allocation(allocation_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail="Pending allocation not found")
+    if pending["state"] == "committed":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot release a committed allocation; delete the underlying IPAM allocation instead",
+        )
+
+    session = _get_session(request) or {}
+    updated = await db.update_pending_allocation_state(allocation_id, state="released")
+    await _audit(
+        "ipam",
+        "allocate_release",
+        user=session.get("user", ""),
+        detail=f"pending_id={allocation_id},address={pending.get('address')}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "allocation": updated}
+
+
+@router.get("/api/ipam/allocate/pending")
+async def list_pending_allocations_api(
+    state: str | None = Query(default=None),
+    include_expired: bool = Query(default=False),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    rows = await db.list_pending_allocations(
+        state=state, include_expired=include_expired, limit=limit
+    )
+    return {"allocations": rows, "count": len(rows)}
