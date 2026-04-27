@@ -1975,18 +1975,45 @@ async def add_host(group_id: int, hostname: str, ip_address: str,
             (group_id, hostname, ip_address, device_type, vrf_name or "", str(vlan_id or "")),
         )
         await db.commit()
-        return cursor.lastrowid
+        new_id = cursor.lastrowid
     finally:
         await db.close()
+    if ip_address:
+        try:
+            await record_ip_assignment(
+                address=ip_address, hostname=hostname or "",
+                vrf_name=vrf_name or "", source_type="host",
+                source_ref=str(new_id), note="host added",
+            )
+        except Exception:
+            pass
+    return new_id
 
 
 async def remove_host(host_id: int):
     db = await get_db()
     try:
+        cur = await db.execute(
+            "SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,)
+        )
+        row = await cur.fetchone()
+        prior_ip = ""
+        prior_vrf = ""
+        if row:
+            d = dict(row)
+            prior_ip = (d.get("ip_address") or "").strip()
+            prior_vrf = (d.get("vrf_name") or "").strip()
         await db.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
         await db.commit()
     finally:
         await db.close()
+    if prior_ip:
+        try:
+            await record_ip_release(
+                address=prior_ip, vrf_name=prior_vrf, note="host removed"
+            )
+        except Exception:
+            pass
 
 
 async def update_host(host_id: int, hostname: str, ip_address: str,
@@ -1994,6 +2021,14 @@ async def update_host(host_id: int, hostname: str, ip_address: str,
                       vrf_name: str | None = None, vlan_id: str | None = None):
     db = await get_db()
     try:
+        cur = await db.execute(
+            "SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,)
+        )
+        prior_row = await cur.fetchone()
+        prior = dict(prior_row) if prior_row else {}
+        prior_ip = (prior.get("ip_address") or "").strip()
+        prior_vrf = (prior.get("vrf_name") or "").strip()
+
         if vrf_name is None and vlan_id is None:
             await db.execute(
                 "UPDATE hosts SET hostname=?, ip_address=?, device_type=? WHERE id=?",
@@ -2009,6 +2044,22 @@ async def update_host(host_id: int, hostname: str, ip_address: str,
         await db.commit()
     finally:
         await db.close()
+
+    new_vrf = (vrf_name or prior_vrf) if vrf_name is not None else prior_vrf
+    new_ip = (ip_address or "").strip()
+    try:
+        if prior_ip and (prior_ip != new_ip or prior_vrf != new_vrf):
+            await record_ip_release(
+                address=prior_ip, vrf_name=prior_vrf, note="host updated"
+            )
+        if new_ip:
+            await record_ip_assignment(
+                address=new_ip, hostname=hostname or "",
+                vrf_name=new_vrf or "", source_type="host",
+                source_ref=str(host_id), note="host updated",
+            )
+    except Exception:
+        pass
 
 
 async def move_hosts(host_ids: list[int], target_group_id: int) -> int:
@@ -2033,14 +2084,30 @@ async def bulk_delete_hosts(host_ids: list[int]) -> int:
     db = await get_db()
     try:
         placeholders = ",".join("?" for _ in host_ids)
+        cur = await db.execute(
+            f"SELECT ip_address, vrf_name FROM hosts WHERE id IN ({placeholders})",
+            tuple(host_ids),
+        )
+        prior_rows = [dict(r) for r in await cur.fetchall()]
         cursor = await db.execute(
             f"DELETE FROM hosts WHERE id IN ({placeholders})",
             tuple(host_ids),
         )
         await db.commit()
-        return cursor.rowcount
+        rowcount = cursor.rowcount
     finally:
         await db.close()
+    for r in prior_rows:
+        ip = (r.get("ip_address") or "").strip()
+        vrf = (r.get("vrf_name") or "").strip()
+        if ip:
+            try:
+                await record_ip_release(
+                    address=ip, vrf_name=vrf, note="bulk host delete"
+                )
+            except Exception:
+                pass
+    return rowcount
 
 
 async def update_host_status(host_id: int, status: str):
@@ -11604,21 +11671,50 @@ async def create_local_ipam_allocation(
             "SELECT * FROM ipam_allocations WHERE id = ?", (alloc_id,)
         )
         row = await cursor3.fetchone()
-        return dict(row) if row else None
+        result = dict(row) if row else None
     finally:
         await db.close()
+    if result:
+        try:
+            await record_ip_assignment(
+                address=address, hostname=hostname or "",
+                vrf_name=(result.get("vrf_name") or "").strip(),
+                source_type="ipam_allocation",
+                source_ref=str(result.get("id") or ""),
+                recorded_by=created_by or "",
+                note=description or "",
+            )
+        except Exception:
+            pass
+    return result
 
 
 async def delete_ipam_allocation(allocation_id: int) -> bool:
     db = await get_db()
     try:
+        cur = await db.execute(
+            "SELECT address, vrf_name FROM ipam_allocations WHERE id = ?",
+            (allocation_id,),
+        )
+        prior = await cur.fetchone()
+        prior_d = dict(prior) if prior else {}
         cursor = await db.execute(
             "DELETE FROM ipam_allocations WHERE id = ?", (allocation_id,)
         )
         await db.commit()
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
     finally:
         await db.close()
+    if deleted and prior_d.get("address"):
+        try:
+            await record_ip_release(
+                address=prior_d["address"],
+                vrf_name=(prior_d.get("vrf_name") or "").strip(),
+                note="ipam allocation deleted",
+            )
+        except Exception:
+            pass
+    return deleted
 
 
 async def list_ipam_allocations_for_source(source_id: int) -> list[dict]:
@@ -11895,6 +11991,442 @@ async def expire_stale_pending_allocations() -> int:
                SET state = 'released', released_at = ?
                WHERE state = 'pending' AND expires_at < ?""",
             (now_iso, now_iso),
+        )
+        await db.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        await db.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Historical IP allocation tracking (Phase I)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _serialize_ip_history(row: dict) -> dict:
+    return {
+        "id": int(row.get("id") or 0),
+        "address": row.get("address") or "",
+        "vrf_name": row.get("vrf_name") or "",
+        "hostname": row.get("hostname") or "",
+        "source_type": row.get("source_type") or "",
+        "source_ref": row.get("source_ref") or "",
+        "started_at": row.get("started_at"),
+        "ended_at": row.get("ended_at"),
+        "recorded_by": row.get("recorded_by") or "",
+        "note": row.get("note") or "",
+    }
+
+
+def _serialize_subnet_utilization(row: dict) -> dict:
+    return {
+        "id": int(row.get("id") or 0),
+        "subnet": row.get("subnet") or "",
+        "vrf_name": row.get("vrf_name") or "",
+        "total": int(row.get("total") or 0),
+        "used": int(row.get("used") or 0),
+        "reserved": int(row.get("reserved") or 0),
+        "pending": int(row.get("pending") or 0),
+        "free": int(row.get("free") or 0),
+        "utilization_pct": float(row.get("utilization_pct") or 0.0),
+        "captured_at": row.get("captured_at"),
+    }
+
+
+async def record_ip_assignment(
+    *,
+    address: str,
+    hostname: str = "",
+    vrf_name: str = "",
+    source_type: str = "",
+    source_ref: str = "",
+    recorded_by: str = "",
+    note: str = "",
+) -> dict | None:
+    """Record that `address` (in optional VRF) is now assigned to `hostname`.
+
+    Closes any existing open history row for the same (address, vrf) before
+    inserting the new open row, so the timeline stays consistent. No-op if
+    the address is already open with the same hostname/source.
+    """
+    address = (address or "").strip()
+    if not address:
+        return None
+    try:
+        ipaddress.ip_address(address.split("/")[0])
+    except ValueError:
+        return None
+    vrf_name = (vrf_name or "").strip()
+    now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
+
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT id, hostname, source_type, source_ref FROM ipam_ip_history
+               WHERE address = ? AND vrf_name = ? AND ended_at IS NULL
+               ORDER BY started_at DESC LIMIT 1""",
+            (address, vrf_name),
+        )
+        existing = await cur.fetchone()
+        if existing:
+            existing_d = dict(existing)
+            if (
+                (existing_d.get("hostname") or "") == hostname
+                and (existing_d.get("source_type") or "") == source_type
+                and (existing_d.get("source_ref") or "") == source_ref
+            ):
+                cur2 = await db.execute(
+                    "SELECT * FROM ipam_ip_history WHERE id = ?", (existing_d["id"],)
+                )
+                row = await cur2.fetchone()
+                return _serialize_ip_history(dict(row)) if row else None
+            await db.execute(
+                "UPDATE ipam_ip_history SET ended_at = ? WHERE id = ?",
+                (now_iso, existing_d["id"]),
+            )
+
+        cur3 = await db.execute(
+            """INSERT INTO ipam_ip_history
+                  (address, vrf_name, hostname, source_type, source_ref,
+                   started_at, recorded_by, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                address,
+                vrf_name,
+                hostname or "",
+                source_type or "",
+                source_ref or "",
+                now_iso,
+                recorded_by or "",
+                note or "",
+            ),
+        )
+        await db.commit()
+        new_id = cur3.lastrowid
+        cur4 = await db.execute(
+            "SELECT * FROM ipam_ip_history WHERE id = ?", (new_id,)
+        )
+        row = await cur4.fetchone()
+        return _serialize_ip_history(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def record_ip_release(
+    *,
+    address: str,
+    vrf_name: str = "",
+    recorded_by: str = "",
+    note: str = "",
+) -> int:
+    """Close the open history row for (address, vrf). Returns rows updated."""
+    address = (address or "").strip()
+    if not address:
+        return 0
+    vrf_name = (vrf_name or "").strip()
+    now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """UPDATE ipam_ip_history
+               SET ended_at = ?,
+                   note = CASE WHEN ? = '' THEN note ELSE ? END
+               WHERE address = ? AND vrf_name = ? AND ended_at IS NULL""",
+            (now_iso, note or "", note or "", address, vrf_name),
+        )
+        # recorded_by is intentionally not stored on release — it's an event,
+        # not a new assignment. Caller can pass via note if needed.
+        _ = recorded_by
+        await db.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        await db.close()
+
+
+async def get_ip_history(
+    address: str,
+    vrf_name: str = "",
+    limit: int = 100,
+) -> list[dict]:
+    """Return assignment history for an IP, newest first."""
+    address = (address or "").strip()
+    if not address:
+        return []
+    vrf_name = (vrf_name or "").strip()
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT * FROM ipam_ip_history
+               WHERE address = ? AND vrf_name = ?
+               ORDER BY started_at DESC LIMIT ?""",
+            (address, vrf_name, int(limit)),
+        )
+        rows = rows_to_list(await cur.fetchall())
+        return [_serialize_ip_history(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def find_ip_owner_at(
+    address: str,
+    when_iso: str,
+    vrf_name: str = "",
+) -> dict | None:
+    """Who held `address` at timestamp `when_iso`? Returns the matching history row or None."""
+    address = (address or "").strip()
+    when_iso = (when_iso or "").strip()
+    if not address or not when_iso:
+        return None
+    vrf_name = (vrf_name or "").strip()
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT * FROM ipam_ip_history
+               WHERE address = ? AND vrf_name = ?
+                 AND started_at <= ?
+                 AND (ended_at IS NULL OR ended_at >= ?)
+               ORDER BY started_at DESC LIMIT 1""",
+            (address, vrf_name, when_iso, when_iso),
+        )
+        row = await cur.fetchone()
+        return _serialize_ip_history(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def list_ip_history_for_hostname(
+    hostname: str, limit: int = 200
+) -> list[dict]:
+    """All IPs ever assigned to `hostname`, newest first."""
+    hostname = (hostname or "").strip()
+    if not hostname:
+        return []
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT * FROM ipam_ip_history
+               WHERE hostname = ?
+               ORDER BY started_at DESC LIMIT ?""",
+            (hostname, int(limit)),
+        )
+        rows = rows_to_list(await cur.fetchall())
+        return [_serialize_ip_history(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def snapshot_subnet_utilization(
+    subnet: str, vrf_name: str = ""
+) -> dict | None:
+    """Compute utilization for a subnet+vrf and persist a time-series row."""
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+    except ValueError:
+        return None
+    vrf_name = (vrf_name or "").strip()
+    sn = str(net)
+
+    if net.prefixlen == 32 or net.prefixlen == 128:
+        total = 1
+        host_iter = [net.network_address]
+    else:
+        total = max(0, net.num_addresses - 2)
+        host_iter = list(net.hosts())
+    host_set = {str(h) for h in host_iter}
+
+    db = await get_db()
+    try:
+        used_set: set[str] = set()
+        cur = await db.execute(
+            "SELECT ip_address, vrf_name FROM hosts WHERE ip_address != '' AND ip_address IS NOT NULL"
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            ip_s = (row["ip_address"] or "").strip().split("/")[0]
+            h_vrf = (row.get("vrf_name") or "").strip()
+            if vrf_name and h_vrf != vrf_name:
+                continue
+            if ip_s in host_set:
+                used_set.add(ip_s)
+
+        cur = await db.execute(
+            "SELECT address, vrf_name FROM ipam_allocations WHERE prefix_subnet = ?",
+            (sn,),
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            a_vrf = (row.get("vrf_name") or "").strip()
+            if vrf_name and a_vrf and a_vrf != vrf_name:
+                continue
+            ip_s = (row.get("address") or "").strip()
+            if ip_s in host_set:
+                used_set.add(ip_s)
+
+        reserved_set: set[str] = set()
+        cur = await db.execute(
+            "SELECT start_ip, end_ip FROM ipam_reservations WHERE subnet = ?",
+            (sn,),
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            try:
+                start = ipaddress.ip_address(row["start_ip"])
+                end = ipaddress.ip_address(row["end_ip"])
+                cur_ip = start
+                while cur_ip <= end:
+                    s = str(cur_ip)
+                    if s in host_set:
+                        reserved_set.add(s)
+                    cur_ip += 1
+            except ValueError:
+                continue
+
+        pending_set: set[str] = set()
+        now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
+        cur = await db.execute(
+            """SELECT address, vrf_name, expires_at FROM ipam_pending_allocations
+               WHERE state = 'pending' AND subnet = ?""",
+            (sn,),
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            p_vrf = (row.get("vrf_name") or "").strip()
+            if vrf_name and p_vrf != vrf_name:
+                continue
+            exp = row.get("expires_at") or ""
+            if exp and exp < now_iso:
+                continue
+            ip_s = (row.get("address") or "").strip()
+            if ip_s in host_set:
+                pending_set.add(ip_s)
+
+        # Sets may overlap; deduplicate so counts sum correctly.
+        used = len(used_set)
+        reserved = len(reserved_set - used_set)
+        pending = len(pending_set - used_set - reserved_set)
+        consumed = used + reserved + pending
+        free = max(0, total - consumed)
+        pct = (consumed / total * 100.0) if total > 0 else 0.0
+
+        cur = await db.execute(
+            """INSERT INTO ipam_subnet_utilization
+                  (subnet, vrf_name, total, used, reserved, pending, free, utilization_pct)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (sn, vrf_name, total, used, reserved, pending, free, pct),
+        )
+        await db.commit()
+        new_id = cur.lastrowid
+        cur2 = await db.execute(
+            "SELECT * FROM ipam_subnet_utilization WHERE id = ?", (new_id,)
+        )
+        row = await cur2.fetchone()
+        return _serialize_subnet_utilization(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def snapshot_all_subnet_utilization() -> int:
+    """Snapshot utilization for every (subnet, vrf) Plexus knows about.
+
+    Subnet sources: external/local IPAM prefixes plus inferred-from-inventory
+    subnets. Returns the number of snapshot rows written.
+    """
+    pairs: set[tuple[str, str]] = set()
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT DISTINCT subnet, vrf FROM ipam_prefixes WHERE subnet IS NOT NULL AND subnet != ''"
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            sn = (row.get("subnet") or "").strip()
+            vrf = (row.get("vrf") or "").strip()
+            if sn:
+                pairs.add((sn, vrf))
+
+        cur = await db.execute(
+            "SELECT ip_address, vrf_name FROM hosts WHERE ip_address != '' AND ip_address IS NOT NULL"
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            ip_s = (row["ip_address"] or "").strip().split("/")[0]
+            vrf = (row.get("vrf_name") or "").strip()
+            sn = _infer_subnet(ip_s)
+            if sn:
+                pairs.add((sn, vrf))
+    finally:
+        await db.close()
+
+    written = 0
+    for subnet, vrf in pairs:
+        result = await snapshot_subnet_utilization(subnet, vrf)
+        if result is not None:
+            written += 1
+    return written
+
+
+async def list_subnet_utilization(
+    subnet: str | None = None,
+    vrf_name: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    """Return time-series utilization rows, newest first."""
+    clauses: list[str] = []
+    params: list = []
+    if subnet:
+        clauses.append("subnet = ?")
+        params.append(subnet)
+    if vrf_name is not None:
+        clauses.append("vrf_name = ?")
+        params.append(vrf_name)
+    if since:
+        clauses.append("captured_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append("captured_at <= ?")
+        params.append(until)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(int(limit))
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            f"SELECT * FROM ipam_subnet_utilization{where} "
+            f"ORDER BY captured_at DESC LIMIT ?",
+            tuple(params),
+        )
+        rows = rows_to_list(await cur.fetchall())
+        return [_serialize_subnet_utilization(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def prune_ip_history(retention_days: int = 365) -> int:
+    """Delete closed history rows older than retention_days. Returns rows removed."""
+    if retention_days <= 0:
+        return 0
+    cutoff = (
+        datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(retention_days))
+    ).isoformat()
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "DELETE FROM ipam_ip_history WHERE ended_at IS NOT NULL AND ended_at < ?",
+            (cutoff,),
+        )
+        await db.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        await db.close()
+
+
+async def prune_subnet_utilization(retention_days: int = 365) -> int:
+    """Delete utilization snapshots older than retention_days."""
+    if retention_days <= 0:
+        return 0
+    cutoff = (
+        datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(retention_days))
+    ).isoformat()
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "DELETE FROM ipam_subnet_utilization WHERE captured_at < ?",
+            (cutoff,),
         )
         await db.commit()
         return int(cur.rowcount or 0)
