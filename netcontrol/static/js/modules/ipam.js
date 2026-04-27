@@ -695,6 +695,7 @@ function _renderSubnets() {
                             <td>
                                 <div style="font-weight:600;">${escapeHtml(item.subnet || '')}</div>
                                 <div class="text-muted" style="font-size:0.85em;">IPv${escapeHtml(String(item.version || ''))} /${escapeHtml(String(item.prefix_length || ''))} · ${escapeHtml(String(item.total_addresses || 0))} addresses</div>
+                                ${(item.vrf_name || (Array.isArray(item.vlan_ids) && item.vlan_ids.length)) ? `<div style="margin-top:0.25rem;">${item.vrf_name ? `<span class="badge" style="background:rgba(99,102,241,0.18);color:#a5b4fc;font-size:0.7em;margin-right:0.3rem;">VRF: ${escapeHtml(item.vrf_name)}</span>` : ''}${(Array.isArray(item.vlan_ids) ? item.vlan_ids : []).map((v) => `<span class="badge" style="background:rgba(34,197,94,0.18);color:#86efac;font-size:0.7em;margin-right:0.3rem;">VLAN ${escapeHtml(v)}</span>`).join('')}</div>` : ''}
                             </td>
                             <td>
                                 <div>${escapeHtml(String(item.available_address_count || 0))} available</div>
@@ -733,8 +734,8 @@ function _renderDuplicates() {
             <div style="padding:0.8rem 0;border-bottom:1px solid rgba(255,255,255,0.08);">
                 <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;">
                     <div>
-                        <div style="font-weight:600;color:var(--danger-color);">${escapeHtml(item.ip_address || '')}</div>
-                        <div class="text-muted" style="font-size:0.9em;">${escapeHtml(String(item.host_count || 0))} inventory entries</div>
+                        <div style="font-weight:600;color:var(--danger-color);">${escapeHtml(item.ip_address || '')}${item.vrf_name ? ` <span class="badge" style="background:rgba(99,102,241,0.18);color:#a5b4fc;font-size:0.7em;">VRF: ${escapeHtml(item.vrf_name)}</span>` : ''}</div>
+                        <div class="text-muted" style="font-size:0.9em;">${escapeHtml(String(item.host_count || 0))} inventory entries${item.vrf_name ? ` · same VRF` : ''}</div>
                     </div>
                     <span class="badge badge-danger">Conflict</span>
                 </div>

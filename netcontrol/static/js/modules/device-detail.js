@@ -62,7 +62,7 @@ async function loadDeviceDetail({ preserveContent, force } = {}) {
 
         // IPAM context (non-blocking)
         if (latestPoll?.ip_address) {
-            renderDeviceIpamContext(latestPoll.ip_address);
+            renderDeviceIpamContext(latestPoll.ip_address, latestPoll.vrf_name || '');
         }
 
         // Title
@@ -701,12 +701,12 @@ window.resolveErrorEvent = resolveErrorEvent;
 // IPAM Context Panel
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function renderDeviceIpamContext(ip) {
+async function renderDeviceIpamContext(ip, vrf) {
     const el = document.getElementById('device-ipam-context');
     if (!el || !ip) return;
     el.innerHTML = '<span class="text-muted" style="font-size:0.82rem;">Loading IPAM…</span>';
     try {
-        const ctx = await api.getIpamAddressContext(ip);
+        const ctx = await api.getIpamAddressContext(ip, vrf);
         const s = ctx.matched_subnet;
         if (!s) {
             el.innerHTML = '<span class="text-muted" style="font-size:0.82rem;">No IPAM subnet match</span>';
@@ -717,11 +717,13 @@ async function renderDeviceIpamContext(ip) {
         const conflictBadge = ctx.is_conflict
             ? `<span class="badge badge-danger" title="IP appears in: ${escapeHtml((ctx.conflict_groups || []).join(', '))}">IP Conflict</span>`
             : '';
+        const vrfBadge = (s.vrf_name || vrf) ? `<span class="badge" style="background:rgba(99,102,241,0.18);color:#a5b4fc;font-size:0.75em;">VRF: ${escapeHtml(s.vrf_name || vrf)}</span>` : '';
         el.innerHTML = `
             <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
                 <span style="font-size:0.82rem;"><strong>Subnet:</strong>
                     <a href="#ipam" onclick="navigateToPage('ipam')" style="font-family:monospace;">${escapeHtml(s.subnet)}</a>
                 </span>
+                ${vrfBadge}
                 ${pct != null ? `<span style="font-size:0.82rem;"><strong>Utilization:</strong>
                     <span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin:0 4px;">
                         <span style="display:block;height:100%;width:${pct}%;background:${barColor};border-radius:4px;"></span>

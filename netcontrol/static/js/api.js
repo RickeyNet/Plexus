@@ -2306,8 +2306,9 @@ export async function updateIpamSyncConfig(data) {
     return apiRequest('/ipam/sync-config', { method: 'PUT', body: data });
 }
 
-export async function getIpamAddressContext(ip) {
-    return apiRequest(`/ipam/address/${encodeURIComponent(ip)}`);
+export async function getIpamAddressContext(ip, vrf) {
+    const qs = vrf ? `?vrf=${encodeURIComponent(vrf)}` : '';
+    return apiRequest(`/ipam/address/${encodeURIComponent(ip)}${qs}`);
 }
 
 export async function createIpamPrefix(data) {
