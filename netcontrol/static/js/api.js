@@ -2326,6 +2326,35 @@ export async function deleteIpamAllocation(id) {
     return apiRequest(`/ipam/allocations/${id}`, { method: 'DELETE' });
 }
 
+export async function runIpamReconciliation(sourceId) {
+    return apiRequest(`/ipam/sources/${sourceId}/reconcile`, { method: 'POST' });
+}
+
+export async function listIpamReconciliationRuns(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.source_id) qs.set('source_id', params.source_id);
+    if (params.limit) qs.set('limit', params.limit);
+    const query = qs.toString();
+    return apiRequest(`/ipam/reconciliation/runs${query ? '?' + query : ''}`);
+}
+
+export async function listIpamReconciliationDiffs(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.source_id) qs.set('source_id', params.source_id);
+    if (params.run_id) qs.set('run_id', params.run_id);
+    if (params.open_only !== undefined) qs.set('open_only', params.open_only);
+    if (params.limit) qs.set('limit', params.limit);
+    const query = qs.toString();
+    return apiRequest(`/ipam/reconciliation/diffs${query ? '?' + query : ''}`);
+}
+
+export async function resolveIpamReconciliationDiff(diffId, resolution, note = '') {
+    return apiRequest(`/ipam/reconciliation/diffs/${diffId}/resolve`, {
+        method: 'POST',
+        body: { resolution, note },
+    });
+}
+
 
 // ─── Geolocation / Floor Plan API ────────────────────────────────────────────
 

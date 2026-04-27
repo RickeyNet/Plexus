@@ -20,6 +20,8 @@ let _sources = [];
 let _providers = [];
 let _syncConfig = { enabled: true, interval_seconds: 1800 };
 let _editingSource = null; // null = creating new, object = editing existing
+let _reconcileDiffs = [];
+let _reconcileRuns = [];
 
 function _ensureIpamLayout() {
     const page = document.getElementById('page-ipam');
@@ -87,6 +89,16 @@ function _ensureIpamLayout() {
                     </div>
                     <div id="ipam-sync-health" style="margin-bottom:0.75rem;"></div>
                     <div id="ipam-sources"></div>
+                </div>
+                <div class="card" style="padding:1rem;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap;">
+                        <div>
+                            <h3 style="margin:0;">Reconciliation</h3>
+                            <div class="text-muted" style="font-size:0.85em;margin-top:0.2rem;">Detects drift between Plexus inventory and external IPAM allocations.</div>
+                        </div>
+                    </div>
+                    <div id="ipam-reconcile-runs" style="margin-bottom:0.75rem;"></div>
+                    <div id="ipam-reconcile-diffs"></div>
                 </div>
                 <div class="card" style="padding:1rem;">
                     <h3 style="margin:0 0 0.75rem;">Duplicate IP Conflicts</h3>
@@ -434,12 +446,136 @@ function _renderSources() {
                 <div style="font-size:0.82em;color:var(--text-muted);">${escapeHtml(String(src.prefix_count || 0))} subnets · ${escapeHtml(String(src.allocation_count || 0))} allocations</div>
                 <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap;">
                     <button class="btn btn-primary" style="font-size:0.82em;padding:0.25rem 0.6rem;" onclick="triggerIpamSourceSync(${Number(src.id)})">Sync Now</button>
+                    <button class="btn btn-secondary" style="font-size:0.82em;padding:0.25rem 0.6rem;" onclick="triggerIpamReconcile(${Number(src.id)})">Reconcile</button>
                     <button class="btn btn-secondary" style="font-size:0.82em;padding:0.25rem 0.6rem;" onclick="openIpamSourceModal(${Number(src.id)})">Edit</button>
                     <button class="btn btn-secondary" style="font-size:0.82em;padding:0.25rem 0.6rem;color:var(--danger-color);" onclick="confirmDeleteIpamSource(${Number(src.id)}, '${escapeHtml(src.name || '')}')">Delete</button>
                 </div>
             </div>
         `;
     }).join('');
+}
+
+function _driftLabel(driftType) {
+    switch (driftType) {
+        case 'missing_in_ipam': return 'Missing in IPAM';
+        case 'missing_in_plexus': return 'Missing in Plexus';
+        case 'hostname_mismatch': return 'Hostname mismatch';
+        case 'status_mismatch': return 'Status mismatch';
+        default: return driftType || '';
+    }
+}
+
+function _driftBadgeClass(driftType) {
+    switch (driftType) {
+        case 'missing_in_ipam': return 'badge-warning';
+        case 'missing_in_plexus': return 'badge-danger';
+        case 'hostname_mismatch': return 'badge-warning';
+        case 'status_mismatch': return 'badge-secondary';
+        default: return 'badge-secondary';
+    }
+}
+
+function _renderReconcileRuns() {
+    const container = document.getElementById('ipam-reconcile-runs');
+    if (!container) return;
+    if (!_reconcileRuns.length) {
+        container.innerHTML = '<div class="text-muted" style="font-size:0.85em;">No reconciliation runs yet. Click "Reconcile" on a source to start.</div>';
+        return;
+    }
+    const sourceById = new Map(_sources.map((s) => [s.id, s]));
+    const recent = _reconcileRuns.slice(0, 5);
+    container.innerHTML = `
+        <div style="font-weight:600;margin-bottom:0.4rem;font-size:0.9em;">Recent Runs</div>
+        <table class="data-table" style="font-size:0.85em;">
+            <thead><tr><th>Source</th><th>Started</th><th>Status</th><th>Drifts</th><th>Resolved</th></tr></thead>
+            <tbody>
+                ${recent.map((run) => {
+                    const src = sourceById.get(run.source_id);
+                    const srcName = src ? src.name : `Source #${run.source_id}`;
+                    const started = run.started_at
+                        ? new Date(run.started_at + (String(run.started_at).endsWith('Z') ? '' : 'Z')).toLocaleString()
+                        : '';
+                    const statusClass = run.status === 'completed'
+                        ? 'badge-success'
+                        : run.status === 'error'
+                            ? 'badge-danger'
+                            : 'badge-secondary';
+                    return `
+                        <tr>
+                            <td>${escapeHtml(srcName)}</td>
+                            <td>${escapeHtml(started)}</td>
+                            <td><span class="badge ${statusClass}">${escapeHtml(run.status)}</span></td>
+                            <td>${escapeHtml(String(run.diff_count || 0))}</td>
+                            <td>${escapeHtml(String(run.resolved_count || 0))}</td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+function _renderReconcileDiffs() {
+    const container = document.getElementById('ipam-reconcile-diffs');
+    if (!container) return;
+    if (!_reconcileDiffs.length) {
+        container.innerHTML = '<div class="text-muted" style="font-size:0.85em;">No open drifts.</div>';
+        return;
+    }
+    const sourceById = new Map(_sources.map((s) => [s.id, s]));
+    container.innerHTML = `
+        <div style="font-weight:600;margin-bottom:0.4rem;font-size:0.9em;">Open Drifts (${_reconcileDiffs.length})</div>
+        <table class="data-table" style="font-size:0.85em;">
+            <thead>
+                <tr>
+                    <th>Address</th>
+                    <th>Drift</th>
+                    <th>Source</th>
+                    <th>Plexus</th>
+                    <th>IPAM</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                ${_reconcileDiffs.map((diff) => {
+                    const src = sourceById.get(diff.source_id);
+                    const srcName = src ? src.name : `Source #${diff.source_id}`;
+                    const plexusHost = diff.plexus_state?.hostname || '';
+                    const ipamHost = diff.ipam_state?.dns_name || '';
+                    const ipamStatus = diff.ipam_state?.status || '';
+                    const pushAvailable = src?.push_enabled && diff.drift_type !== 'missing_in_plexus';
+                    return `
+                        <tr>
+                            <td><code>${escapeHtml(diff.address)}</code></td>
+                            <td><span class="badge ${_driftBadgeClass(diff.drift_type)}">${escapeHtml(_driftLabel(diff.drift_type))}</span></td>
+                            <td>${escapeHtml(srcName)}</td>
+                            <td>${escapeHtml(plexusHost || '—')}</td>
+                            <td>${escapeHtml(ipamHost || '—')}${ipamStatus ? ` <span class="text-muted">(${escapeHtml(ipamStatus)})</span>` : ''}</td>
+                            <td style="white-space:nowrap;">
+                                ${pushAvailable ? `<button class="btn btn-primary" style="font-size:0.78em;padding:0.18rem 0.45rem;" onclick="resolveIpamDiff(${Number(diff.id)}, 'accept_plexus')">Push to IPAM</button>` : ''}
+                                <button class="btn btn-secondary" style="font-size:0.78em;padding:0.18rem 0.45rem;" onclick="resolveIpamDiff(${Number(diff.id)}, 'accept_ipam')">Accept IPAM</button>
+                                <button class="btn btn-secondary" style="font-size:0.78em;padding:0.18rem 0.45rem;" onclick="resolveIpamDiff(${Number(diff.id)}, 'ignored')">Ignore</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+async function _loadReconcileData() {
+    try {
+        const [runsResponse, diffsResponse] = await Promise.all([
+            api.listIpamReconciliationRuns({ limit: 25 }).catch(() => ({ runs: [] })),
+            api.listIpamReconciliationDiffs({ open_only: true, limit: 200 }).catch(() => ({ diffs: [] })),
+        ]);
+        _reconcileRuns = Array.isArray(runsResponse?.runs) ? runsResponse.runs : [];
+        _reconcileDiffs = Array.isArray(diffsResponse?.diffs) ? diffsResponse.diffs : [];
+    } catch (error) {
+        _reconcileRuns = [];
+        _reconcileDiffs = [];
+    }
 }
 
 function _updateAuthTypeVisibility() {
@@ -560,6 +696,8 @@ function _renderAll() {
     _renderDuplicates();
     _renderSyncHealth();
     _renderSources();
+    _renderReconcileRuns();
+    _renderReconcileDiffs();
 }
 
 async function _loadAll() {
@@ -583,6 +721,7 @@ async function _loadAll() {
         _selectedSubnet = '';
         _subnetDetail = null;
     }
+    await _loadReconcileData();
 }
 
 export async function loadIpam({ preserveContent = false } = {}) {
@@ -765,6 +904,38 @@ window.triggerIpamSourceSync = async function (sourceId) {
     }
 };
 
+window.triggerIpamReconcile = async function (sourceId) {
+    try {
+        const result = await api.runIpamReconciliation(sourceId);
+        const summary = result?.summary || {};
+        const count = Number(summary.diff_count || 0);
+        await _loadReconcileData();
+        _renderReconcileRuns();
+        _renderReconcileDiffs();
+        showError(count
+            ? `Reconciliation complete — ${count} drift${count === 1 ? '' : 's'} detected.`
+            : 'Reconciliation complete — no drift detected.');
+    } catch (error) {
+        showError(`Reconciliation failed: ${error.message}`);
+    }
+};
+
+window.resolveIpamDiff = async function (diffId, resolution) {
+    try {
+        await api.resolveIpamReconciliationDiff(diffId, resolution);
+        _reconcileDiffs = _reconcileDiffs.filter((d) => d.id !== diffId);
+        _renderReconcileDiffs();
+        // Refresh runs so resolved_count updates.
+        const runsResponse = await api.listIpamReconciliationRuns({ limit: 25 }).catch(() => null);
+        if (runsResponse?.runs) {
+            _reconcileRuns = runsResponse.runs;
+            _renderReconcileRuns();
+        }
+    } catch (error) {
+        showError(`Failed to resolve drift: ${error.message}`);
+    }
+};
+
 window.confirmDeleteIpamSource = async function (sourceId, sourceName) {
     if (!confirm(`Delete IPAM source "${sourceName}"? This also removes all synced prefixes and allocations.`)) return;
     try {
@@ -935,6 +1106,8 @@ export function destroyIpam() {
     delete window.closeIpamSourceModal;
     delete window.submitIpamSourceForm;
     delete window.triggerIpamSourceSync;
+    delete window.triggerIpamReconcile;
+    delete window.resolveIpamDiff;
     delete window.confirmDeleteIpamSource;
     delete window.openIpamSyncSchedulePanel;
     delete window.closeIpamSyncSchedulePanel;
