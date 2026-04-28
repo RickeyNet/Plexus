@@ -11807,6 +11807,323 @@ async def mark_reconciliation_diff_resolved(
         await db.close()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DHCP – Servers, Scopes, and Leases
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _serialize_dhcp_server(row: dict) -> dict:
+    return {
+        "id": int(row.get("id") or 0),
+        "provider": row.get("provider") or "",
+        "name": row.get("name") or "",
+        "base_url": row.get("base_url") or "",
+        "auth_type": row.get("auth_type") or "",
+        "notes": row.get("notes") or "",
+        "enabled": bool(row.get("enabled")),
+        "verify_tls": bool(row.get("verify_tls", 1)),
+        "last_sync_at": row.get("last_sync_at"),
+        "last_sync_status": row.get("last_sync_status") or "never",
+        "last_sync_message": row.get("last_sync_message") or "",
+        "created_by": row.get("created_by") or "",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "scope_count": int(row.get("scope_count") or 0),
+        "lease_count": int(row.get("lease_count") or 0),
+        "has_auth_config": bool(row.get("auth_config_enc")),
+    }
+
+
+async def list_dhcp_servers(enabled_only: bool = False) -> list[dict]:
+    db = await get_db()
+    try:
+        where = " WHERE s.enabled = 1" if enabled_only else ""
+        cursor = await db.execute(
+            f"""SELECT s.*,
+                       (SELECT COUNT(*) FROM dhcp_scopes p WHERE p.server_id = s.id) AS scope_count,
+                       (SELECT COUNT(*) FROM dhcp_leases l WHERE l.server_id = s.id) AS lease_count
+                FROM dhcp_servers s
+                {where}
+                ORDER BY s.provider ASC, s.name ASC"""
+        )
+        return [_serialize_dhcp_server(dict(r)) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_dhcp_server(server_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT s.*,
+                      (SELECT COUNT(*) FROM dhcp_scopes p WHERE p.server_id = s.id) AS scope_count,
+                      (SELECT COUNT(*) FROM dhcp_leases l WHERE l.server_id = s.id) AS lease_count
+               FROM dhcp_servers s
+               WHERE s.id = ?""",
+            (server_id,),
+        )
+        row = await cursor.fetchone()
+        return _serialize_dhcp_server(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def create_dhcp_server(
+    provider: str,
+    name: str,
+    base_url: str = "",
+    auth_type: str = "none",
+    auth_config: dict | None = None,
+    notes: str = "",
+    enabled: bool = True,
+    verify_tls: bool = True,
+    created_by: str = "",
+) -> dict | None:
+    from routes.crypto import encrypt as _enc
+
+    auth_config_enc = ""
+    if auth_config:
+        auth_config_enc = _enc(json.dumps(auth_config, separators=(",", ":")))
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO dhcp_servers
+               (provider, name, base_url, auth_type, auth_config_enc,
+                notes, enabled, verify_tls, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                provider,
+                name,
+                base_url,
+                auth_type,
+                auth_config_enc,
+                notes,
+                int(bool(enabled)),
+                int(bool(verify_tls)),
+                created_by,
+            ),
+        )
+        await db.commit()
+        return await get_dhcp_server(cursor.lastrowid)
+    finally:
+        await db.close()
+
+
+async def update_dhcp_server(server_id: int, **kwargs) -> dict | None:
+    from routes.crypto import encrypt as _enc
+
+    allowed = {
+        "provider", "name", "base_url", "auth_type", "notes",
+        "enabled", "verify_tls", "last_sync_at", "last_sync_status",
+        "last_sync_message",
+    }
+    sets: list[str] = []
+    vals: list = []
+
+    auth_config = kwargs.pop("auth_config", None)
+    if auth_config is not None:
+        enc = _enc(json.dumps(auth_config, separators=(",", ":")))
+        sets.append("auth_config_enc = ?")
+        vals.append(enc)
+
+    for key, value in kwargs.items():
+        if key not in allowed or value is None:
+            continue
+        if key in ("enabled", "verify_tls"):
+            value = int(bool(value))
+        sets.append(f"{key} = ?")
+        vals.append(value)
+
+    if not sets:
+        return await get_dhcp_server(server_id)
+
+    sets.append("updated_at = datetime('now')")
+    db = await get_db()
+    try:
+        sql, sql_params = _safe_dynamic_update("dhcp_servers", sets, vals, "id = ?", server_id)
+        await db.execute(sql, sql_params)
+        await db.commit()
+        return await get_dhcp_server(server_id)
+    finally:
+        await db.close()
+
+
+async def delete_dhcp_server(server_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM dhcp_servers WHERE id = ?", (server_id,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def get_dhcp_server_auth_config(server_id: int) -> dict:
+    from routes.crypto import decrypt as _dec
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT auth_config_enc FROM dhcp_servers WHERE id = ?",
+            (server_id,),
+        )
+        row = await cursor.fetchone()
+        if not row or not row[0]:
+            return {}
+        try:
+            return json.loads(_dec(row[0]))
+        except Exception:
+            return {}
+    finally:
+        await db.close()
+
+
+async def replace_dhcp_server_snapshot(
+    server_id: int,
+    scopes: list[dict],
+    leases: list[dict],
+    sync_status: str = "success",
+    sync_message: str = "",
+) -> dict:
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM dhcp_scopes WHERE server_id = ?", (server_id,))
+        await db.execute("DELETE FROM dhcp_leases WHERE server_id = ?", (server_id,))
+
+        scope_count = 0
+        for sc in scopes:
+            subnet = (sc.get("subnet") or "").strip()
+            if not subnet:
+                continue
+            await db.execute(
+                """INSERT OR IGNORE INTO dhcp_scopes
+                   (server_id, external_id, subnet, name, range_start, range_end,
+                    total_addresses, used_addresses, free_addresses, state, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    server_id,
+                    str(sc.get("external_id") or ""),
+                    subnet,
+                    sc.get("name") or "",
+                    sc.get("range_start") or "",
+                    sc.get("range_end") or "",
+                    int(sc.get("total_addresses") or 0),
+                    int(sc.get("used_addresses") or 0),
+                    int(sc.get("free_addresses") or 0),
+                    sc.get("state") or "",
+                    json.dumps(sc.get("metadata") or {}, separators=(",", ":")),
+                ),
+            )
+            scope_count += 1
+
+        lease_count = 0
+        for lease in leases:
+            address = (lease.get("address") or "").strip()
+            if not address:
+                continue
+            await db.execute(
+                """INSERT OR IGNORE INTO dhcp_leases
+                   (server_id, scope_subnet, address, mac_address, hostname,
+                    client_id, state, starts_at, ends_at, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    server_id,
+                    lease.get("scope_subnet") or "",
+                    address,
+                    lease.get("mac_address") or "",
+                    lease.get("hostname") or "",
+                    lease.get("client_id") or "",
+                    lease.get("state") or "",
+                    lease.get("starts_at") or None,
+                    lease.get("ends_at") or None,
+                    json.dumps(lease.get("metadata") or {}, separators=(",", ":")),
+                ),
+            )
+            lease_count += 1
+
+        now_iso = datetime.now(UTC).isoformat()
+        await db.execute(
+            """UPDATE dhcp_servers
+               SET last_sync_at = ?, last_sync_status = ?,
+                   last_sync_message = ?, updated_at = ?
+               WHERE id = ?""",
+            (now_iso, sync_status, sync_message, now_iso, server_id),
+        )
+        await db.commit()
+        return {"scopes": scope_count, "leases": lease_count}
+    finally:
+        await db.close()
+
+
+async def set_dhcp_server_sync_status(
+    server_id: int,
+    status: str,
+    message: str = "",
+) -> None:
+    db = await get_db()
+    try:
+        now_iso = datetime.now(UTC).isoformat()
+        await db.execute(
+            """UPDATE dhcp_servers
+               SET last_sync_status = ?, last_sync_message = ?,
+                   last_sync_at = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, message, now_iso, now_iso, server_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def list_dhcp_scopes(server_id: int | None = None) -> list[dict]:
+    db = await get_db()
+    try:
+        if server_id is not None:
+            cursor = await db.execute(
+                """SELECT * FROM dhcp_scopes WHERE server_id = ?
+                   ORDER BY subnet""",
+                (server_id,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM dhcp_scopes ORDER BY server_id, subnet"
+            )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def list_dhcp_leases(
+    server_id: int | None = None,
+    scope_subnet: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if server_id is not None:
+            clauses.append("server_id = ?")
+            params.append(server_id)
+        if scope_subnet:
+            clauses.append("scope_subnet = ?")
+            params.append(scope_subnet)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(int(max(1, min(limit, 5000))))
+        cursor = await db.execute(
+            f"SELECT * FROM dhcp_leases{where} ORDER BY address LIMIT ?",
+            tuple(params),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Bandwidth Billing – Circuits & 95th Percentile Reports
 # ═════════════════════════════════════════════════════════════════════════════

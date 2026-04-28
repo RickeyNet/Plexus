@@ -2356,6 +2356,62 @@ export async function resolveIpamReconciliationDiff(diffId, resolution, note = '
 }
 
 
+// ─── DHCP Scope/Lease Integration API ────────────────────────────────────────
+
+export async function getDhcpProviders() {
+    return apiRequest('/dhcp/providers');
+}
+
+export async function listDhcpServers() {
+    return apiRequest('/dhcp/servers');
+}
+
+export async function createDhcpServer(data) {
+    return apiRequest('/dhcp/servers', { method: 'POST', body: data });
+}
+
+export async function updateDhcpServer(id, data) {
+    return apiRequest(`/dhcp/servers/${id}`, { method: 'PATCH', body: data });
+}
+
+export async function deleteDhcpServer(id) {
+    return apiRequest(`/dhcp/servers/${id}`, { method: 'DELETE' });
+}
+
+export async function syncDhcpServer(id) {
+    return apiRequest(`/dhcp/servers/${id}/sync`, { method: 'POST' });
+}
+
+export async function listDhcpScopes(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.server_id) qs.set('server_id', params.server_id);
+    if (params.only_exhausted) qs.set('only_exhausted', 'true');
+    const query = qs.toString();
+    return apiRequest(`/dhcp/scopes${query ? '?' + query : ''}`);
+}
+
+export async function listDhcpLeases(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.server_id) qs.set('server_id', params.server_id);
+    if (params.scope_subnet) qs.set('scope_subnet', params.scope_subnet);
+    if (params.limit) qs.set('limit', params.limit);
+    const query = qs.toString();
+    return apiRequest(`/dhcp/leases${query ? '?' + query : ''}`);
+}
+
+export async function getDhcpCorrelation(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.server_id) qs.set('server_id', params.server_id);
+    if (params.limit) qs.set('limit', params.limit);
+    const query = qs.toString();
+    return apiRequest(`/dhcp/correlation${query ? '?' + query : ''}`);
+}
+
+export async function getDhcpExhaustion() {
+    return apiRequest('/dhcp/exhaustion');
+}
+
+
 // ─── Geolocation / Floor Plan API ────────────────────────────────────────────
 
 export async function getGeoOverview() {
