@@ -133,6 +133,8 @@ from netcontrol.routes.cloud_visibility import (
 )
 from netcontrol.routes.ipam import init_ipam, router as ipam_router
 from netcontrol.routes.ipam_adapters import IpamAdapterError, collect_ipam_snapshot
+from netcontrol.routes.dhcp import init_dhcp, router as dhcp_router, sync_dhcp_server
+from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot
 from netcontrol.routes.geolocation import router as geolocation_router
 from netcontrol.routes.federation import (
     init_federation,
@@ -869,6 +871,54 @@ async def _ipam_sync_loop() -> None:
                 LOGGER.warning("IPAM scheduled sync: source_id=%s error: %s", source_id, type(exc).__name__)
 
 
+async def _dhcp_sync_loop() -> None:
+    """Periodically pull scope/lease snapshots for all enabled DHCP servers."""
+    while True:
+        cfg = state.DHCP_SYNC_CONFIG
+        interval = max(state.DHCP_SYNC_MIN_INTERVAL, int(cfg.get("interval_seconds", 1800)))
+        await asyncio.sleep(interval)
+        if not cfg.get("enabled"):
+            continue
+        try:
+            servers = await db.list_dhcp_servers(enabled_only=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("DHCP sync loop: failed to list servers: %s", type(exc).__name__)
+            continue
+        for server in servers:
+            server_id = server.get("id")
+            if not server_id:
+                continue
+            try:
+                auth_config = await db.get_dhcp_server_auth_config(server_id)
+                snapshot = await collect_dhcp_snapshot(server, auth_config)
+                summary = snapshot.get("summary") or {}
+                await db.replace_dhcp_server_snapshot(
+                    server_id,
+                    scopes=snapshot.get("scopes") or [],
+                    leases=snapshot.get("leases") or [],
+                    sync_status="success",
+                    sync_message=(
+                        f"Scheduled sync: {int(summary.get('scope_count', 0))} scopes, "
+                        f"{int(summary.get('lease_count', 0))} leases"
+                    ),
+                )
+                LOGGER.info(
+                    "DHCP scheduled sync: server_id=%s provider=%s success",
+                    server_id,
+                    server.get("provider", ""),
+                )
+            except asyncio.CancelledError:
+                raise
+            except DhcpAdapterError as exc:
+                await db.set_dhcp_server_sync_status(server_id, status="error", message=str(exc))
+                LOGGER.warning("DHCP scheduled sync: server_id=%s adapter error: %s", server_id, exc)
+            except Exception as exc:
+                await db.set_dhcp_server_sync_status(server_id, status="error", message="Scheduled sync failed")
+                LOGGER.warning("DHCP scheduled sync: server_id=%s error: %s", server_id, type(exc).__name__)
+
+
 async def _cloud_flow_sync_loop() -> None:
     """Periodically pull cloud flow logs for all enabled accounts."""
     while True:
@@ -973,6 +1023,7 @@ async def lifespan(app: FastAPI):
     cloud_traffic_sync_task = asyncio.create_task(_cloud_traffic_metric_sync_loop())
     federation_task = asyncio.create_task(federation_sync_loop())
     ipam_sync_task = asyncio.create_task(_ipam_sync_loop())
+    dhcp_sync_task = asyncio.create_task(_dhcp_sync_loop())
     try:
         yield
     finally:
@@ -993,6 +1044,7 @@ async def lifespan(app: FastAPI):
         cloud_traffic_sync_task.cancel()
         federation_task.cancel()
         ipam_sync_task.cancel()
+        dhcp_sync_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -1059,6 +1111,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await ipam_sync_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await dhcp_sync_task
         except asyncio.CancelledError:
             pass
 
@@ -1435,6 +1491,7 @@ init_interface_errors(require_auth, require_admin)
 init_billing(require_auth, require_admin)
 init_cloud_visibility(require_admin)
 init_ipam(require_admin)
+init_dhcp(require_admin)
 init_federation(require_admin)
 init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
 init_ansible_inventory(require_auth)
@@ -1576,6 +1633,11 @@ app.include_router(
 # IP Address Management
 app.include_router(
     ipam_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+)
+# DHCP Scope/Lease Integration
+app.include_router(
+    dhcp_router,
     dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
 )
 # Geolocation and Floor Plan Mapping

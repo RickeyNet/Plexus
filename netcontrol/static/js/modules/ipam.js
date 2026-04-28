@@ -22,6 +22,12 @@ let _syncConfig = { enabled: true, interval_seconds: 1800 };
 let _editingSource = null; // null = creating new, object = editing existing
 let _reconcileDiffs = [];
 let _reconcileRuns = [];
+let _dhcpServers = [];
+let _dhcpProviders = [];
+let _dhcpScopes = [];
+let _dhcpExhaustion = { exhausted: [], near_exhaustion: [], threshold_pct: 90 };
+let _dhcpCorrelation = { totals: { known: 0, unknown: 0 }, known: [], unknown: [] };
+let _editingDhcpServer = null;
 
 function _ensureIpamLayout() {
     const page = document.getElementById('page-ipam');
@@ -101,6 +107,18 @@ function _ensureIpamLayout() {
                     <div id="ipam-reconcile-diffs"></div>
                 </div>
                 <div class="card" style="padding:1rem;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap;">
+                        <div>
+                            <h3 style="margin:0;">DHCP Servers</h3>
+                            <div class="text-muted" style="font-size:0.85em;margin-top:0.2rem;">Pull scope utilization and active leases from Kea, Windows DHCP, or Infoblox.</div>
+                        </div>
+                        <button class="btn btn-primary" onclick="openDhcpServerModal(null)">+ Add DHCP Server</button>
+                    </div>
+                    <div id="dhcp-servers" style="margin-bottom:0.75rem;"></div>
+                    <div id="dhcp-exhaustion" style="margin-bottom:0.75rem;"></div>
+                    <div id="dhcp-correlation"></div>
+                </div>
+                <div class="card" style="padding:1rem;">
                     <h3 style="margin:0 0 0.75rem;">Duplicate IP Conflicts</h3>
                     <div id="ipam-duplicates"></div>
                 </div>
@@ -162,6 +180,52 @@ function _ensureIpamLayout() {
                     <div style="display:flex;gap:0.75rem;justify-content:flex-end;margin-top:0.25rem;">
                         <button type="button" class="btn btn-secondary" onclick="closeIpamSourceModal()">Cancel</button>
                         <button type="submit" class="btn btn-primary" id="ipam-form-submit">Save Source</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <div id="dhcp-server-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.6);overflow:auto;padding:2rem 1rem;" onclick="if(event.target===this)closeDhcpServerModal()">
+            <div style="background:var(--bg-card);border-radius:12px;max-width:560px;margin:auto;padding:1.5rem;position:relative;">
+                <h3 id="dhcp-modal-title" style="margin:0 0 1rem;">Add DHCP Server</h3>
+                <form id="dhcp-server-form" onsubmit="submitDhcpServerForm(event)" style="display:grid;gap:0.85rem;">
+                    <label>Provider
+                        <select id="dhcp-form-provider" class="form-select" required>
+                            <option value="">Select provider…</option>
+                        </select>
+                    </label>
+                    <label>Name
+                        <input id="dhcp-form-name" class="form-control" type="text" maxlength="120" required placeholder="e.g. Kea-DC1">
+                    </label>
+                    <label>Base URL
+                        <input id="dhcp-form-url" class="form-control" type="url" required placeholder="https://kea.example.com">
+                    </label>
+                    <label>Auth Type
+                        <select id="dhcp-form-auth-type" class="form-select">
+                            <option value="none">None</option>
+                            <option value="token">API Token</option>
+                            <option value="basic">Basic Auth</option>
+                        </select>
+                    </label>
+                    <label>Token / Password
+                        <input id="dhcp-form-token" class="form-control" type="password" maxlength="512" placeholder="Leave blank to keep existing">
+                    </label>
+                    <label>Username (Basic Auth)
+                        <input id="dhcp-form-username" class="form-control" type="text" maxlength="120">
+                    </label>
+                    <label>Notes
+                        <input id="dhcp-form-notes" class="form-control" type="text" maxlength="512">
+                    </label>
+                    <div style="display:flex;gap:1.25rem;flex-wrap:wrap;">
+                        <label style="display:flex;align-items:center;gap:0.5rem;">
+                            <input id="dhcp-form-enabled" type="checkbox" checked> Enabled
+                        </label>
+                        <label style="display:flex;align-items:center;gap:0.5rem;">
+                            <input id="dhcp-form-tls" type="checkbox" checked> Verify TLS
+                        </label>
+                    </div>
+                    <div style="display:flex;gap:0.75rem;justify-content:flex-end;margin-top:0.25rem;">
+                        <button type="button" class="btn btn-secondary" onclick="closeDhcpServerModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="dhcp-form-submit">Save Server</button>
                     </div>
                 </form>
             </div>
@@ -688,6 +752,119 @@ function _renderDuplicates() {
     }).join('');
 }
 
+function _renderDhcpServers() {
+    const host = document.getElementById('dhcp-servers');
+    if (!host) return;
+    if (!_dhcpServers.length) {
+        host.innerHTML = '<div class="text-muted" style="font-size:0.9em;">No DHCP servers configured. Add one to begin pulling scope utilization and lease data.</div>';
+        return;
+    }
+    host.innerHTML = `
+        <table class="table" style="margin:0;">
+            <thead><tr>
+                <th>Provider</th><th>Name</th><th>Status</th><th>Scopes</th><th>Leases</th><th>Last Sync</th><th></th>
+            </tr></thead>
+            <tbody>
+                ${_dhcpServers.map((s) => {
+                    const status = s.last_sync_status || 'never';
+                    const statusColor = status === 'success' ? 'var(--success-color)' : status === 'error' ? 'var(--danger-color)' : 'var(--text-muted)';
+                    return `
+                        <tr>
+                            <td>${escapeHtml(s.provider || '')}</td>
+                            <td>${escapeHtml(s.name || '')}${s.enabled ? '' : ' <span class="badge badge-warning">disabled</span>'}</td>
+                            <td><span style="color:${statusColor};">${escapeHtml(status)}</span><div class="text-muted" style="font-size:0.8em;">${escapeHtml(s.last_sync_message || '')}</div></td>
+                            <td>${s.scope_count || 0}</td>
+                            <td>${s.lease_count || 0}</td>
+                            <td>${escapeHtml(s.last_sync_at || '—')}</td>
+                            <td style="text-align:right;white-space:nowrap;">
+                                <button class="btn btn-secondary btn-sm" onclick="triggerDhcpSync(${s.id})">Sync</button>
+                                <button class="btn btn-secondary btn-sm" onclick="openDhcpServerModal(${s.id})">Edit</button>
+                                <button class="btn btn-danger btn-sm" onclick="confirmDeleteDhcpServer(${s.id})">Delete</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+function _renderDhcpExhaustion() {
+    const host = document.getElementById('dhcp-exhaustion');
+    if (!host) return;
+    const exhausted = _dhcpExhaustion.exhausted || [];
+    const near = _dhcpExhaustion.near_exhaustion || [];
+    if (!exhausted.length && !near.length) {
+        host.innerHTML = '';
+        return;
+    }
+    const rows = [...exhausted, ...near].map((s) => {
+        const isExhausted = s.exhausted;
+        const color = isExhausted ? 'var(--danger-color)' : 'var(--warning-color)';
+        return `
+            <tr>
+                <td>${escapeHtml(s.subnet)}</td>
+                <td>${escapeHtml(s.name || '')}</td>
+                <td>${s.used_addresses}/${s.total_addresses}</td>
+                <td><span style="color:${color};font-weight:600;">${s.utilization_pct}%</span> ${isExhausted ? '<span class="badge badge-danger">EXHAUSTED</span>' : '<span class="badge badge-warning">near</span>'}</td>
+            </tr>
+        `;
+    }).join('');
+    host.innerHTML = `
+        <div style="font-weight:600;margin-bottom:0.4rem;">Scope Utilization Alerts</div>
+        <table class="table" style="margin:0;">
+            <thead><tr><th>Subnet</th><th>Name</th><th>Used</th><th>Utilization</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+function _renderDhcpCorrelation() {
+    const host = document.getElementById('dhcp-correlation');
+    if (!host) return;
+    const totals = _dhcpCorrelation.totals || { known: 0, unknown: 0 };
+    const unknown = _dhcpCorrelation.unknown || [];
+    const summary = `<div style="font-weight:600;margin-bottom:0.4rem;">Lease Correlation</div>
+        <div class="text-muted" style="font-size:0.88em;margin-bottom:0.5rem;">${totals.known} known / ${totals.unknown} unknown leases against discovered inventory.</div>`;
+    if (!unknown.length) {
+        host.innerHTML = `${summary}<div class="text-muted" style="font-size:0.85em;">All leases match a discovered inventory host.</div>`;
+        return;
+    }
+    const rows = unknown.slice(0, 25).map((lease) => `
+        <tr>
+            <td>${escapeHtml(lease.address)}</td>
+            <td>${escapeHtml(lease.mac_address || '')}</td>
+            <td>${escapeHtml(lease.hostname || '')}</td>
+            <td>${escapeHtml(lease.scope_subnet || '')}</td>
+            <td><span class="badge badge-warning">unknown</span></td>
+        </tr>
+    `).join('');
+    host.innerHTML = `${summary}
+        <table class="table" style="margin:0;">
+            <thead><tr><th>Address</th><th>MAC</th><th>Hostname</th><th>Scope</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+        ${unknown.length > 25 ? `<div class="text-muted" style="font-size:0.8em;margin-top:0.4rem;">…and ${unknown.length - 25} more.</div>` : ''}
+    `;
+}
+
+async function _loadDhcpData() {
+    try {
+        const [serversResp, providersResp, exhaustionResp, correlationResp] = await Promise.all([
+            api.listDhcpServers().catch(() => ({ servers: [] })),
+            api.getDhcpProviders().catch(() => ({ providers: [] })),
+            api.getDhcpExhaustion().catch(() => ({ exhausted: [], near_exhaustion: [], threshold_pct: 90 })),
+            api.getDhcpCorrelation({ limit: 1000 }).catch(() => ({ totals: { known: 0, unknown: 0 }, known: [], unknown: [] })),
+        ]);
+        _dhcpServers = Array.isArray(serversResp?.servers) ? serversResp.servers : [];
+        _dhcpProviders = Array.isArray(providersResp?.providers) ? providersResp.providers : [];
+        _dhcpExhaustion = exhaustionResp || { exhausted: [], near_exhaustion: [], threshold_pct: 90 };
+        _dhcpCorrelation = correlationResp || { totals: { known: 0, unknown: 0 }, known: [], unknown: [] };
+    } catch (error) {
+        console.warn('DHCP data load failed:', error);
+    }
+}
+
 function _renderAll() {
     _renderGroupFilter();
     _renderSummary();
@@ -698,6 +875,9 @@ function _renderAll() {
     _renderSources();
     _renderReconcileRuns();
     _renderReconcileDiffs();
+    _renderDhcpServers();
+    _renderDhcpExhaustion();
+    _renderDhcpCorrelation();
 }
 
 async function _loadAll() {
@@ -722,6 +902,7 @@ async function _loadAll() {
         _subnetDetail = null;
     }
     await _loadReconcileData();
+    await _loadDhcpData();
 }
 
 export async function loadIpam({ preserveContent = false } = {}) {
@@ -1092,6 +1273,116 @@ window.deleteIpamReservationById = async function (reservationId, encodedSubnet)
     }
 };
 
+function _populateDhcpProviderSelect() {
+    const select = document.getElementById('dhcp-form-provider');
+    if (!select) return;
+    select.innerHTML = ['<option value="">Select provider…</option>']
+        .concat(_dhcpProviders.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`))
+        .join('');
+}
+
+window.openDhcpServerModal = function (serverId) {
+    const modal = document.getElementById('dhcp-server-modal');
+    if (!modal) return;
+    _populateDhcpProviderSelect();
+    const title = document.getElementById('dhcp-modal-title');
+    if (serverId === null || serverId === undefined) {
+        _editingDhcpServer = null;
+        if (title) title.textContent = 'Add DHCP Server';
+        document.getElementById('dhcp-form-provider').value = '';
+        document.getElementById('dhcp-form-name').value = '';
+        document.getElementById('dhcp-form-url').value = '';
+        document.getElementById('dhcp-form-auth-type').value = 'none';
+        document.getElementById('dhcp-form-token').value = '';
+        document.getElementById('dhcp-form-username').value = '';
+        document.getElementById('dhcp-form-notes').value = '';
+        document.getElementById('dhcp-form-enabled').checked = true;
+        document.getElementById('dhcp-form-tls').checked = true;
+    } else {
+        const server = _dhcpServers.find((s) => s.id === serverId);
+        if (!server) return;
+        _editingDhcpServer = server;
+        if (title) title.textContent = 'Edit DHCP Server';
+        document.getElementById('dhcp-form-provider').value = server.provider || '';
+        document.getElementById('dhcp-form-name').value = server.name || '';
+        document.getElementById('dhcp-form-url').value = server.base_url || '';
+        document.getElementById('dhcp-form-auth-type').value = server.auth_type || 'none';
+        document.getElementById('dhcp-form-token').value = '';
+        document.getElementById('dhcp-form-username').value = '';
+        document.getElementById('dhcp-form-notes').value = server.notes || '';
+        document.getElementById('dhcp-form-enabled').checked = !!server.enabled;
+        document.getElementById('dhcp-form-tls').checked = !!server.verify_tls;
+    }
+    modal.style.display = 'block';
+};
+
+window.closeDhcpServerModal = function () {
+    const modal = document.getElementById('dhcp-server-modal');
+    if (modal) modal.style.display = 'none';
+    _editingDhcpServer = null;
+};
+
+window.submitDhcpServerForm = async function (event) {
+    event.preventDefault();
+    const provider = document.getElementById('dhcp-form-provider').value;
+    const name = document.getElementById('dhcp-form-name').value.trim();
+    const baseUrl = document.getElementById('dhcp-form-url').value.trim();
+    const authType = document.getElementById('dhcp-form-auth-type').value;
+    const token = document.getElementById('dhcp-form-token').value;
+    const username = document.getElementById('dhcp-form-username').value.trim();
+    const notes = document.getElementById('dhcp-form-notes').value.trim();
+    const enabled = document.getElementById('dhcp-form-enabled').checked;
+    const verifyTls = document.getElementById('dhcp-form-tls').checked;
+    const auth_config = {};
+    if (authType === 'token' && token) auth_config.token = token;
+    if (authType === 'basic') {
+        if (username) auth_config.username = username;
+        if (token) auth_config.password = token;
+    }
+    const payload = {
+        provider, name, base_url: baseUrl, auth_type: authType,
+        notes, enabled, verify_tls: verifyTls,
+    };
+    if (Object.keys(auth_config).length) payload.auth_config = auth_config;
+    try {
+        if (_editingDhcpServer) {
+            await api.updateDhcpServer(_editingDhcpServer.id, payload);
+        } else {
+            await api.createDhcpServer(payload);
+        }
+        window.closeDhcpServerModal();
+        await _loadDhcpData();
+        _renderDhcpServers();
+    } catch (error) {
+        showError(`Failed to save DHCP server: ${error.message}`);
+    }
+};
+
+window.triggerDhcpSync = async function (serverId) {
+    try {
+        await api.syncDhcpServer(serverId);
+        await _loadDhcpData();
+        _renderDhcpServers();
+        _renderDhcpExhaustion();
+        _renderDhcpCorrelation();
+    } catch (error) {
+        showError(`DHCP sync failed: ${error.message}`);
+    }
+};
+
+window.confirmDeleteDhcpServer = async function (serverId) {
+    if (!confirm('Delete this DHCP server and all cached scope/lease data?')) return;
+    try {
+        await api.deleteDhcpServer(serverId);
+        await _loadDhcpData();
+        _renderDhcpServers();
+        _renderDhcpExhaustion();
+        _renderDhcpCorrelation();
+    } catch (error) {
+        showError(`Failed to delete DHCP server: ${error.message}`);
+    }
+};
+
 export function destroyIpam() {
     _selectedSubnet = '';
     _subnetDetail = null;
@@ -1119,4 +1410,15 @@ export function destroyIpam() {
     delete window.submitDefineSubnetForm;
     delete window.submitIpamAllocationForm;
     delete window.deleteIpamAllocationById;
+    _dhcpServers = [];
+    _dhcpProviders = [];
+    _dhcpScopes = [];
+    _dhcpExhaustion = { exhausted: [], near_exhaustion: [], threshold_pct: 90 };
+    _dhcpCorrelation = { totals: { known: 0, unknown: 0 }, known: [], unknown: [] };
+    _editingDhcpServer = null;
+    delete window.openDhcpServerModal;
+    delete window.closeDhcpServerModal;
+    delete window.submitDhcpServerForm;
+    delete window.triggerDhcpSync;
+    delete window.confirmDeleteDhcpServer;
 }

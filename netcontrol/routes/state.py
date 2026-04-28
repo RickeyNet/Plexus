@@ -353,6 +353,28 @@ IPAM_SYNC_MAX_INTERVAL = 86400  # 24 hours
 
 IPAM_SYNC_CONFIG: dict = dict(IPAM_SYNC_DEFAULTS)
 
+DHCP_SYNC_DEFAULTS = {
+    "enabled": True,
+    "interval_seconds": 1800,  # 30 minutes
+}
+
+DHCP_SYNC_MIN_INTERVAL = 300
+DHCP_SYNC_MAX_INTERVAL = 86400
+
+DHCP_SYNC_CONFIG: dict = dict(DHCP_SYNC_DEFAULTS)
+
+
+def _sanitize_dhcp_sync_config(data: dict | None) -> dict:
+    cfg = dict(DHCP_SYNC_DEFAULTS)
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
+        cfg["interval_seconds"] = max(
+            DHCP_SYNC_MIN_INTERVAL,
+            min(DHCP_SYNC_MAX_INTERVAL, cfg["interval_seconds"]),
+        )
+    return cfg
+
 
 def _sanitize_ipam_sync_config(data: dict | None) -> dict:
     cfg = dict(IPAM_SYNC_DEFAULTS)
