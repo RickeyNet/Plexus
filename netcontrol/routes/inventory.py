@@ -75,11 +75,15 @@ class HostCreate(BaseModel):
     hostname: str
     ip_address: str
     device_type: str = "cisco_ios"
+    vrf_name: str = ""
+    vlan_id: str = ""
 
 class HostUpdate(BaseModel):
     hostname: str
     ip_address: str
     device_type: str = "cisco_ios"
+    vrf_name: str | None = None
+    vlan_id: str | None = None
 
 
 class FetchSerialRequest(BaseModel):
@@ -646,7 +650,11 @@ async def list_hosts(group_id: int):
 async def add_host(group_id: int, body: HostCreate):
     _validate_host_ip(body.ip_address)
     try:
-        hid = await db.add_host(group_id, body.hostname, body.ip_address, body.device_type)
+        hid = await db.add_host(
+            group_id, body.hostname, body.ip_address, body.device_type,
+            vrf_name=body.vrf_name or "",
+            vlan_id=str(body.vlan_id or ""),
+        )
     except Exception as exc:
         if "UNIQUE constraint failed" in str(exc) or "duplicate key" in str(exc):
             raise HTTPException(409, "A host with that IP address already exists in this group")
@@ -668,7 +676,11 @@ async def add_host(group_id: int, body: HostCreate):
 async def update_host(host_id: int, body: HostUpdate):
     if body.ip_address:
         _validate_host_ip(body.ip_address)
-    await db.update_host(host_id, body.hostname, body.ip_address, body.device_type)
+    await db.update_host(
+        host_id, body.hostname, body.ip_address, body.device_type,
+        vrf_name=body.vrf_name,
+        vlan_id=body.vlan_id,
+    )
     await push_inventory_host_allocation(
         hostname=body.hostname,
         ip_address=body.ip_address,

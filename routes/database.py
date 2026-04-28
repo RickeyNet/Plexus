@@ -1965,12 +1965,14 @@ async def find_host_by_ip(ip_address: str) -> dict | None:
 
 
 async def add_host(group_id: int, hostname: str, ip_address: str,
-                   device_type: str = "cisco_ios") -> int:
+                   device_type: str = "cisco_ios",
+                   vrf_name: str = "", vlan_id: str = "") -> int:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO hosts (group_id, hostname, ip_address, device_type) VALUES (?,?,?,?)",
-            (group_id, hostname, ip_address, device_type),
+            "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id) "
+            "VALUES (?,?,?,?,?,?)",
+            (group_id, hostname, ip_address, device_type, vrf_name or "", str(vlan_id or "")),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1988,13 +1990,22 @@ async def remove_host(host_id: int):
 
 
 async def update_host(host_id: int, hostname: str, ip_address: str,
-                      device_type: str = "cisco_ios"):
+                      device_type: str = "cisco_ios",
+                      vrf_name: str | None = None, vlan_id: str | None = None):
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE hosts SET hostname=?, ip_address=?, device_type=? WHERE id=?",
-            (hostname, ip_address, device_type, host_id),
-        )
+        if vrf_name is None and vlan_id is None:
+            await db.execute(
+                "UPDATE hosts SET hostname=?, ip_address=?, device_type=? WHERE id=?",
+                (hostname, ip_address, device_type, host_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE hosts SET hostname=?, ip_address=?, device_type=?, vrf_name=?, vlan_id=? "
+                "WHERE id=?",
+                (hostname, ip_address, device_type,
+                 vrf_name or "", str(vlan_id or ""), host_id),
+            )
         await db.commit()
     finally:
         await db.close()
@@ -10705,7 +10716,7 @@ async def get_ipam_overview(
         # ── 1. Inventory hosts ──────────────────────────────────────────────
         if group_id is not None:
             cursor = await db.execute(
-                """SELECT h.ip_address, g.name AS group_name
+                """SELECT h.ip_address, h.vrf_name, h.vlan_id, g.name AS group_name
                    FROM hosts h
                    JOIN inventory_groups g ON h.group_id = g.id
                    WHERE h.group_id = ? AND h.ip_address != '' AND h.ip_address IS NOT NULL""",
@@ -10713,29 +10724,38 @@ async def get_ipam_overview(
             )
         else:
             cursor = await db.execute(
-                """SELECT h.ip_address, g.name AS group_name
+                """SELECT h.ip_address, h.vrf_name, h.vlan_id, g.name AS group_name
                    FROM hosts h
                    JOIN inventory_groups g ON h.group_id = g.id
                    WHERE h.ip_address != '' AND h.ip_address IS NOT NULL"""
             )
         host_rows = rows_to_list(await cursor.fetchall())
 
-        # Build per-subnet aggregation structures
-        subnet_hosts: dict[str, list[dict]] = {}  # subnet → [{ip, group}]
-        ip_groups: dict[str, set[str]] = {}  # ip → {group_names}
+        # Subnets are scoped by (subnet, vrf) so the same RFC1918 range in
+        # different VRFs does not collapse into one row. Empty VRF = "global".
+        subnet_hosts: dict[tuple[str, str], list[dict]] = {}
+        subnet_vlans: dict[tuple[str, str], set[str]] = {}
+        # Conflict key is (vrf, ip): same IP in different inventory groups but
+        # the same VRF is a real conflict; different VRFs are not.
+        ip_groups: dict[tuple[str, str], set[str]] = {}
 
         for row in host_rows:
-            ip = row["ip_address"].strip().split("/")[0]  # normalise "10.0.0.1/24" → "10.0.0.1"
+            ip = row["ip_address"].strip().split("/")[0]
             group = row["group_name"]
+            vrf = (row.get("vrf_name") or "").strip()
+            vlan = (row.get("vlan_id") or "").strip()
             sn = _infer_subnet(ip)
             if sn is None:
                 continue
-            subnet_hosts.setdefault(sn, []).append({"ip": ip, "group": group})
-            ip_groups.setdefault(ip, set()).add(group)
+            key = (sn, vrf)
+            subnet_hosts.setdefault(key, []).append({"ip": ip, "group": group, "vrf": vrf, "vlan": vlan})
+            if vlan:
+                subnet_vlans.setdefault(key, set()).add(vlan)
+            ip_groups.setdefault((vrf, ip), set()).add(group)
 
-        # ── 2. Cloud resources ──────────────────────────────────────────────
-        cloud_subnets: set[str] = set()
-        subnet_cloud_count: dict[str, int] = {}
+        # ── 2. Cloud resources (no VRF concept — keyed with vrf="") ─────────
+        cloud_keys: set[tuple[str, str]] = set()
+        subnet_cloud_count: dict[tuple[str, str], int] = {}
 
         if include_cloud:
             cursor = await db.execute(
@@ -10751,19 +10771,20 @@ async def get_ipam_overview(
                     sn = str(net)
                 except ValueError:
                     continue
-                cloud_subnets.add(sn)
-                subnet_cloud_count[sn] = subnet_cloud_count.get(sn, 0) + 1
+                k = (sn, "")
+                cloud_keys.add(k)
+                subnet_cloud_count[k] = subnet_cloud_count.get(k, 0) + 1
 
-        # ── 3. External IPAM prefixes ───────────────────────────────────────
-        external_subnets: set[str] = set()
-        local_subnets: set[str] = set()  # plexus-native prefixes
-        subnet_ext_prefix_count: dict[str, int] = {}
-        subnet_ext_alloc_count: dict[str, int] = {}
+        # ── 3. External IPAM prefixes (carry their own VRF) ─────────────────
+        external_keys: set[tuple[str, str]] = set()
+        local_keys: set[tuple[str, str]] = set()
+        key_vlans: dict[tuple[str, str], set[str]] = {}
+        subnet_ext_prefix_count: dict[tuple[str, str], int] = {}
+        subnet_ext_alloc_count: dict[tuple[str, str], int] = {}
 
         if include_external:
-            # Fetch all prefixes grouped by source provider to distinguish local vs external
             cursor = await db.execute(
-                """SELECT p.subnet, s.provider
+                """SELECT p.subnet, p.vrf, p.vlan, s.provider
                    FROM ipam_prefixes p
                    JOIN ipam_sources s ON s.id = p.source_id
                    WHERE p.subnet != '' AND p.subnet IS NOT NULL"""
@@ -10771,47 +10792,54 @@ async def get_ipam_overview(
             ext_prefix_rows = rows_to_list(await cursor.fetchall())
             for row in ext_prefix_rows:
                 sn = row["subnet"].strip()
+                vrf = (row.get("vrf") or "").strip()
+                vlan = (row.get("vlan") or "").strip()
+                k = (sn, vrf)
+                if vlan:
+                    key_vlans.setdefault(k, set()).add(vlan)
                 if row["provider"] == "plexus":
-                    local_subnets.add(sn)
+                    local_keys.add(k)
                 else:
-                    external_subnets.add(sn)
-                    subnet_ext_prefix_count[sn] = subnet_ext_prefix_count.get(sn, 0) + 1
+                    external_keys.add(k)
+                    subnet_ext_prefix_count[k] = subnet_ext_prefix_count.get(k, 0) + 1
 
             cursor = await db.execute(
-                """SELECT p.subnet, COUNT(a.id) AS cnt
+                """SELECT p.subnet, p.vrf, COUNT(a.id) AS cnt
                    FROM ipam_prefixes p
                    LEFT JOIN ipam_allocations a
                      ON a.source_id = p.source_id AND a.prefix_subnet = p.subnet
-                   GROUP BY p.subnet"""
+                   GROUP BY p.subnet, p.vrf"""
             )
             alloc_rows = rows_to_list(await cursor.fetchall())
             for row in alloc_rows:
-                sn = row["subnet"]
-                subnet_ext_alloc_count[sn] = (
-                    subnet_ext_alloc_count.get(sn, 0) + int(row.get("cnt") or 0)
+                k = (row["subnet"], (row.get("vrf") or "").strip())
+                subnet_ext_alloc_count[k] = (
+                    subnet_ext_alloc_count.get(k, 0) + int(row.get("cnt") or 0)
                 )
 
-        # ── 4. Merge all subnets ────────────────────────────────────────────
-        all_subnets: set[str] = (
-            set(subnet_hosts.keys()) | cloud_subnets | external_subnets | local_subnets
+        # ── 4. Merge all (subnet, vrf) keys ─────────────────────────────────
+        inventory_keys = set(subnet_hosts.keys())
+        all_keys: set[tuple[str, str]] = (
+            inventory_keys | cloud_keys | external_keys | local_keys
         )
-
-        inventory_subnets = set(subnet_hosts.keys())
-        exact_overlaps = inventory_subnets & cloud_subnets  # subnets in both inventory AND cloud
+        # Exact overlap is now inventory∩cloud per (subnet, vrf); cloud always vrf=""
+        exact_overlaps = {sn for (sn, v) in inventory_keys if (sn, "") in cloud_keys and v == ""}
 
         subnets_out: list[dict] = []
-        for sn in sorted(all_subnets):
-            hosts_in = subnet_hosts.get(sn, [])
+        for k in sorted(all_keys):
+            sn, vrf = k
+            hosts_in = subnet_hosts.get(k, [])
             unique_ips = {h["ip"] for h in hosts_in}
             group_names = sorted({h["group"] for h in hosts_in})
+            vlans = sorted(subnet_vlans.get(k, set()) | key_vlans.get(k, set()))
             src_types: list[str] = []
-            if sn in inventory_subnets:
+            if k in inventory_keys:
                 src_types.append("inventory")
-            if sn in cloud_subnets:
+            if k in cloud_keys:
                 src_types.append("cloud")
-            if sn in local_subnets:
+            if k in local_keys:
                 src_types.append("local")
-            if sn in external_subnets:
+            if k in external_keys:
                 src_types.append("external")
             try:
                 net = ipaddress.ip_network(sn, strict=False)
@@ -10823,10 +10851,12 @@ async def get_ipam_overview(
             utilization_pct = round((used / usable * 100), 1) if usable else 0.0
             subnets_out.append({
                 "subnet": sn,
+                "vrf_name": vrf,
+                "vlan_ids": vlans,
                 "inventory_host_count": len(hosts_in),
-                "cloud_resource_count": subnet_cloud_count.get(sn, 0),
-                "external_prefix_count": subnet_ext_prefix_count.get(sn, 0),
-                "external_allocation_count": subnet_ext_alloc_count.get(sn, 0),
+                "cloud_resource_count": subnet_cloud_count.get(k, 0),
+                "external_prefix_count": subnet_ext_prefix_count.get(k, 0),
+                "external_allocation_count": subnet_ext_alloc_count.get(k, 0),
                 "group_names": group_names,
                 "source_types": src_types,
                 "used_count": used,
@@ -10834,32 +10864,39 @@ async def get_ipam_overview(
                 "utilization_pct": utilization_pct,
             })
 
-        # ── 5. Duplicate IP detection ───────────────────────────────────────
+        # ── 5. Duplicate IP detection (VRF-aware) ───────────────────────────
+        # Same IP in different inventory groups within the same VRF = conflict.
+        # Same IP in different VRFs = NOT a conflict.
         duplicates_out: list[dict] = []
-        for ip, groups in sorted(ip_groups.items()):
+        for (vrf, ip), groups in sorted(ip_groups.items()):
             if len(groups) > 1:
-                # Count total host rows with this IP
                 host_count = sum(
-                    1 for row in host_rows if row["ip_address"].strip().split("/")[0] == ip
+                    1 for row in host_rows
+                    if row["ip_address"].strip().split("/")[0] == ip
+                    and (row.get("vrf_name") or "").strip() == vrf
                 )
                 duplicates_out.append({
                     "ip_address": ip,
+                    "vrf_name": vrf,
                     "host_count": host_count,
                     "groups": sorted(groups),
                 })
 
         # ── 6. Summary ──────────────────────────────────────────────────────
         total_ext_allocs = sum(subnet_ext_alloc_count.values())
+        distinct_vrfs = sorted({vrf for (_, vrf) in all_keys if vrf})
         summary: dict = {
             "inventory_host_count": len(host_rows),
-            "total_subnets": len(all_subnets),
-            "inventory_subnets": len(inventory_subnets),
-            "cloud_subnets": len(cloud_subnets),
-            "local_subnets": len(local_subnets),
-            "external_subnets": len(external_subnets),
+            "total_subnets": len(all_keys),
+            "inventory_subnets": len(inventory_keys),
+            "cloud_subnets": len(cloud_keys),
+            "local_subnets": len(local_keys),
+            "external_subnets": len(external_keys),
             "duplicate_ip_count": len(duplicates_out),
             "exact_source_overlap_count": len(exact_overlaps),
             "external_allocation_count": total_ext_allocs,
+            "vrf_names": distinct_vrfs,
+            "vrf_count": len(distinct_vrfs),
         }
         if group_id is not None:
             summary["group_id"] = group_id
@@ -11275,35 +11312,55 @@ async def replace_ipam_source_snapshot(
             external_id = str(pref.get("external_id") or pref.get("id") or "")
             await db.execute(
                 """INSERT OR IGNORE INTO ipam_prefixes
-                   (source_id, external_id, subnet, description, vrf, metadata_json)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (source_id, external_id, subnet, description, vrf, vlan, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     source_id,
                     external_id,
                     subnet,
                     pref.get("description") or "",
                     pref.get("vrf") or "",
+                    str(pref.get("vlan") or ""),
                     json.dumps(pref.get("metadata") or {}, separators=(",", ":")),
                 ),
             )
             prefix_count += 1
+
+        # Build a (subnet -> {vrf, vlan}) map to inherit context for allocations
+        # whose source data does not carry VRF/VLAN explicitly.
+        prefix_ctx: dict[str, dict[str, str]] = {}
+        for pref in prefixes:
+            sn = (pref.get("subnet") or "").strip()
+            if not sn:
+                continue
+            prefix_ctx.setdefault(sn, {
+                "vrf": str(pref.get("vrf") or ""),
+                "vlan": str(pref.get("vlan") or ""),
+            })
 
         alloc_count = 0
         for alloc in allocations:
             address = (alloc.get("address") or "").strip()
             if not address:
                 continue
+            prefix_subnet = (alloc.get("prefix_subnet") or "").strip()
+            ctx = prefix_ctx.get(prefix_subnet, {})
+            vrf_name = str(alloc.get("vrf") or alloc.get("vrf_name") or ctx.get("vrf") or "")
+            vlan_id = str(alloc.get("vlan") or alloc.get("vlan_id") or ctx.get("vlan") or "")
             await db.execute(
                 """INSERT OR IGNORE INTO ipam_allocations
-                   (source_id, prefix_subnet, address, dns_name, status, description, metadata_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (source_id, prefix_subnet, address, dns_name, status, description,
+                    vrf_name, vlan_id, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     source_id,
-                    alloc.get("prefix_subnet") or "",
+                    prefix_subnet,
                     address,
                     alloc.get("dns_name") or "",
                     alloc.get("status") or "",
                     alloc.get("description") or "",
+                    vrf_name,
+                    vlan_id,
                     json.dumps(alloc.get("metadata") or {}, separators=(",", ":")),
                 ),
             )
