@@ -42,7 +42,7 @@ import ipaddress
 import json
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
@@ -11633,6 +11633,271 @@ async def list_ipam_allocations_for_source(source_id: int) -> list[dict]:
             (source_id,),
         )
         return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IPAM-driven provisioning (Phase H) – next-IP allocation w/ pending state
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _serialize_pending_allocation(row: dict) -> dict:
+    return {
+        "id": int(row.get("id") or 0),
+        "subnet": row.get("subnet") or "",
+        "address": row.get("address") or "",
+        "vrf_name": row.get("vrf_name") or "",
+        "hostname": row.get("hostname") or "",
+        "description": row.get("description") or "",
+        "source_id": (int(row["source_id"]) if row.get("source_id") else None),
+        "external_ref": row.get("external_ref") or "",
+        "state": row.get("state") or "pending",
+        "expires_at": row.get("expires_at"),
+        "created_by": row.get("created_by") or "",
+        "created_at": row.get("created_at"),
+        "committed_at": row.get("committed_at"),
+        "released_at": row.get("released_at"),
+    }
+
+
+async def _occupied_ips_for_subnet(
+    db, subnet: str, vrf_name: str
+) -> set[str]:
+    """Return the set of IPs already taken in this subnet+vrf.
+
+    Combines:
+      - inventory hosts (filtered to subnet, matching vrf if non-empty)
+      - external/local IPAM allocations under this prefix (matching vrf when set)
+      - reservations (start..end ranges)
+      - active pending allocations that have not expired
+    """
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+    except ValueError:
+        return set()
+    occupied: set[str] = set()
+
+    cursor = await db.execute(
+        "SELECT ip_address, vrf_name FROM hosts WHERE ip_address != '' AND ip_address IS NOT NULL"
+    )
+    for row in rows_to_list(await cursor.fetchall()):
+        ip_s = (row["ip_address"] or "").strip().split("/")[0]
+        h_vrf = (row.get("vrf_name") or "").strip()
+        if vrf_name and h_vrf != vrf_name:
+            continue
+        try:
+            if ipaddress.ip_address(ip_s) in net:
+                occupied.add(ip_s)
+        except ValueError:
+            continue
+
+    cursor = await db.execute(
+        "SELECT address, vrf_name FROM ipam_allocations WHERE prefix_subnet = ?",
+        (str(net),),
+    )
+    for row in rows_to_list(await cursor.fetchall()):
+        a_vrf = (row.get("vrf_name") or "").strip()
+        if vrf_name and a_vrf and a_vrf != vrf_name:
+            continue
+        ip_s = (row.get("address") or "").strip()
+        if ip_s:
+            occupied.add(ip_s)
+
+    cursor = await db.execute(
+        "SELECT start_ip, end_ip FROM ipam_reservations WHERE subnet = ?",
+        (str(net),),
+    )
+    for row in rows_to_list(await cursor.fetchall()):
+        try:
+            start = ipaddress.ip_address(row["start_ip"])
+            end = ipaddress.ip_address(row["end_ip"])
+            cur_ip = start
+            while cur_ip <= end:
+                occupied.add(str(cur_ip))
+                cur_ip += 1
+        except ValueError:
+            continue
+
+    cursor = await db.execute(
+        """SELECT address, vrf_name, expires_at FROM ipam_pending_allocations
+           WHERE state = 'pending' AND subnet = ?""",
+        (str(net),),
+    )
+    now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    for row in rows_to_list(await cursor.fetchall()):
+        p_vrf = (row.get("vrf_name") or "").strip()
+        if vrf_name and p_vrf != vrf_name:
+            continue
+        exp = row.get("expires_at") or ""
+        if exp and exp < now_iso:
+            continue
+        ip_s = (row.get("address") or "").strip()
+        if ip_s:
+            occupied.add(ip_s)
+
+    return occupied
+
+
+async def allocate_next_ip(
+    *,
+    subnet: str,
+    vrf_name: str = "",
+    hostname: str = "",
+    description: str = "",
+    source_id: int | None = None,
+    ttl_seconds: int = 900,
+    created_by: str = "",
+) -> dict:
+    """Reserve the first available IP in `subnet` and persist a pending row.
+
+    Raises ValueError on bad subnet or when no addresses are available.
+    Returns a serialized pending-allocation dict including `address` and `id`.
+    """
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+    except ValueError as exc:
+        raise ValueError(f"Invalid subnet: {subnet}") from exc
+
+    vrf_name = (vrf_name or "").strip()
+    ttl = max(60, min(86400, int(ttl_seconds or 900)))
+    expires_at = (datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=ttl)).isoformat()
+
+    db = await get_db()
+    try:
+        occupied = await _occupied_ips_for_subnet(db, str(net), vrf_name)
+
+        chosen: str | None = None
+        if net.prefixlen == 32 or net.prefixlen == 128:
+            candidate_iter = iter([net.network_address])
+        else:
+            candidate_iter = net.hosts()
+        for addr in candidate_iter:
+            s = str(addr)
+            if s not in occupied:
+                chosen = s
+                break
+
+        if chosen is None:
+            raise ValueError(f"No available addresses in {net}")
+
+        cursor = await db.execute(
+            """INSERT INTO ipam_pending_allocations
+                  (subnet, address, vrf_name, hostname, description,
+                   source_id, state, expires_at, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+            (
+                str(net),
+                chosen,
+                vrf_name,
+                hostname or "",
+                description or "",
+                int(source_id) if source_id else None,
+                expires_at,
+                created_by or "",
+            ),
+        )
+        await db.commit()
+        pid = cursor.lastrowid
+        cur2 = await db.execute(
+            "SELECT * FROM ipam_pending_allocations WHERE id = ?", (pid,)
+        )
+        row = await cur2.fetchone()
+        return _serialize_pending_allocation(dict(row)) if row else {
+            "id": pid, "address": chosen, "subnet": str(net), "vrf_name": vrf_name,
+            "state": "pending", "expires_at": expires_at,
+        }
+    finally:
+        await db.close()
+
+
+async def get_pending_allocation(allocation_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT * FROM ipam_pending_allocations WHERE id = ?", (int(allocation_id),)
+        )
+        row = await cur.fetchone()
+        return _serialize_pending_allocation(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def list_pending_allocations(
+    state: str | None = None, include_expired: bool = False, limit: int = 200
+) -> list[dict]:
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if state:
+            clauses.append("state = ?")
+            params.append(state)
+        if state == "pending" and not include_expired:
+            clauses.append("expires_at >= ?")
+            params.append(datetime.now(UTC).replace(tzinfo=None).isoformat())
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(int(limit))
+        cur = await db.execute(
+            f"SELECT * FROM ipam_pending_allocations{where} "
+            f"ORDER BY created_at DESC LIMIT ?",
+            tuple(params),
+        )
+        rows = rows_to_list(await cur.fetchall())
+        return [_serialize_pending_allocation(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def update_pending_allocation_state(
+    allocation_id: int,
+    *,
+    state: str,
+    external_ref: str | None = None,
+    source_id: int | None = None,
+) -> dict | None:
+    """Mark a pending allocation as committed or released."""
+    if state not in ("committed", "released"):
+        raise ValueError("state must be 'committed' or 'released'")
+    ts_col = "committed_at" if state == "committed" else "released_at"
+    db = await get_db()
+    try:
+        sets: list[str] = ["state = ?", f"{ts_col} = ?"]
+        params: list = [state, datetime.now(UTC).replace(tzinfo=None).isoformat()]
+        if external_ref is not None:
+            sets.append("external_ref = ?")
+            params.append(external_ref)
+        if source_id is not None:
+            sets.append("source_id = ?")
+            params.append(int(source_id))
+        params.append(int(allocation_id))
+        await db.execute(
+            f"UPDATE ipam_pending_allocations SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+        cur = await db.execute(
+            "SELECT * FROM ipam_pending_allocations WHERE id = ?", (int(allocation_id),)
+        )
+        row = await cur.fetchone()
+        return _serialize_pending_allocation(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def expire_stale_pending_allocations() -> int:
+    """Mark expired pending rows as released. Returns number of rows updated."""
+    db = await get_db()
+    try:
+        now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
+        cur = await db.execute(
+            """UPDATE ipam_pending_allocations
+               SET state = 'released', released_at = ?
+               WHERE state = 'pending' AND expires_at < ?""",
+            (now_iso, now_iso),
+        )
+        await db.commit()
+        return int(cur.rowcount or 0)
     finally:
         await db.close()
 
