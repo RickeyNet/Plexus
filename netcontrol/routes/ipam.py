@@ -131,37 +131,64 @@ async def ipam_overview_api(
 
 
 @router.get("/api/ipam/address/{ip}")
-async def ipam_address_context_api(ip: str):
-    """Return the best-matching subnet, utilization, and conflict status for a given IP address."""
+async def ipam_address_context_api(ip: str, vrf: str | None = Query(default=None)):
+    """Return the best-matching subnet, utilization, and conflict status for a given IP.
+
+    When `vrf` is provided, prefer subnets in that VRF and only flag a conflict
+    when the duplicate exists in the same VRF — overlapping ranges across
+    different VRFs are not real conflicts.
+    """
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid IP address") from None
 
+    target_vrf = (vrf or "").strip()
+
     overview = await db.get_ipam_overview(include_cloud=False, include_external=True)
     subnets = overview.get("subnets", [])
 
-    # Find the most specific (longest prefix) subnet that contains the address
     best: dict | None = None
     best_prefixlen = -1
+    best_vrf_match = False
     for s in subnets:
         try:
             network = ipaddress.ip_network(s["subnet"], strict=False)
-            if addr in network and network.prefixlen > best_prefixlen:
-                best = s
-                best_prefixlen = network.prefixlen
         except ValueError:
             continue
+        if addr not in network:
+            continue
+        s_vrf = (s.get("vrf_name") or "").strip()
+        vrf_match = bool(target_vrf) and s_vrf == target_vrf
+        # Prefer same-VRF matches; among same VRF-match status, prefer longer prefix.
+        better = (
+            best is None
+            or (vrf_match and not best_vrf_match)
+            or (vrf_match == best_vrf_match and network.prefixlen > best_prefixlen)
+        )
+        if better:
+            best = s
+            best_prefixlen = network.prefixlen
+            best_vrf_match = vrf_match
 
-    # Detect if this IP appears in conflict list
     duplicates = overview.get("duplicate_ips", [])
-    conflict_entry = next((d for d in duplicates if d.get("ip_address") == ip), None)
+    if target_vrf:
+        conflict_entry = next(
+            (d for d in duplicates
+             if d.get("ip_address") == ip
+             and (d.get("vrf_name") or "").strip() == target_vrf),
+            None,
+        )
+    else:
+        conflict_entry = next((d for d in duplicates if d.get("ip_address") == ip), None)
 
     return {
         "ip": ip,
+        "vrf_name": target_vrf,
         "matched_subnet": best,
         "is_conflict": conflict_entry is not None,
         "conflict_groups": conflict_entry.get("groups", []) if conflict_entry else [],
+        "conflict_vrf": (conflict_entry.get("vrf_name") if conflict_entry else None),
     }
 
 
