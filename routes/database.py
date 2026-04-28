@@ -11564,6 +11564,249 @@ async def delete_ipam_allocation(allocation_id: int) -> bool:
         await db.close()
 
 
+async def list_ipam_allocations_for_source(source_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT id, source_id, prefix_subnet, address, dns_name,
+                      status, description, metadata_json, discovered_at
+               FROM ipam_allocations
+               WHERE source_id = ?
+               ORDER BY address""",
+            (source_id,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IPAM Reconciliation – runs and diffs
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _serialize_reconciliation_run(row: dict) -> dict:
+    return {
+        "id": int(row.get("id") or 0),
+        "source_id": int(row.get("source_id") or 0),
+        "started_at": row.get("started_at"),
+        "finished_at": row.get("finished_at"),
+        "status": row.get("status") or "running",
+        "triggered_by": row.get("triggered_by") or "",
+        "diff_count": int(row.get("diff_count") or 0),
+        "resolved_count": int(row.get("resolved_count") or 0),
+        "message": row.get("message") or "",
+    }
+
+
+def _serialize_reconciliation_diff(row: dict) -> dict:
+    plexus_state = row.get("plexus_state_json") or "{}"
+    ipam_state = row.get("ipam_state_json") or "{}"
+    try:
+        plexus_obj = json.loads(plexus_state) if isinstance(plexus_state, str) else plexus_state
+    except Exception:
+        plexus_obj = {}
+    try:
+        ipam_obj = json.loads(ipam_state) if isinstance(ipam_state, str) else ipam_state
+    except Exception:
+        ipam_obj = {}
+    return {
+        "id": int(row.get("id") or 0),
+        "run_id": int(row.get("run_id") or 0),
+        "source_id": int(row.get("source_id") or 0),
+        "address": row.get("address") or "",
+        "drift_type": row.get("drift_type") or "",
+        "plexus_state": plexus_obj,
+        "ipam_state": ipam_obj,
+        "resolution": row.get("resolution") or "",
+        "resolved_by": row.get("resolved_by") or "",
+        "resolved_at": row.get("resolved_at"),
+        "resolution_message": row.get("resolution_message") or "",
+        "created_at": row.get("created_at"),
+    }
+
+
+async def create_reconciliation_run(source_id: int, triggered_by: str = "") -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO ipam_reconciliation_runs (source_id, status, triggered_by)
+               VALUES (?, 'running', ?)""",
+            (source_id, triggered_by),
+        )
+        await db.commit()
+        run_id = cursor.lastrowid
+        if not run_id:
+            return None
+        cur2 = await db.execute(
+            "SELECT * FROM ipam_reconciliation_runs WHERE id = ?", (run_id,)
+        )
+        row = await cur2.fetchone()
+        return _serialize_reconciliation_run(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def finalize_reconciliation_run(
+    run_id: int,
+    *,
+    status: str,
+    diff_count: int,
+    message: str = "",
+) -> None:
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE ipam_reconciliation_runs
+               SET status = ?, diff_count = ?, message = ?,
+                   finished_at = datetime('now')
+               WHERE id = ?""",
+            (status, int(diff_count), message, run_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def insert_reconciliation_diff(
+    *,
+    run_id: int,
+    source_id: int,
+    address: str,
+    drift_type: str,
+    plexus_state: dict | None = None,
+    ipam_state: dict | None = None,
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO ipam_reconciliation_diffs
+               (run_id, source_id, address, drift_type,
+                plexus_state_json, ipam_state_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                run_id,
+                source_id,
+                address,
+                drift_type,
+                json.dumps(plexus_state or {}, separators=(",", ":")),
+                json.dumps(ipam_state or {}, separators=(",", ":")),
+            ),
+        )
+        await db.commit()
+        return int(cursor.lastrowid or 0)
+    finally:
+        await db.close()
+
+
+async def list_reconciliation_runs(
+    source_id: int | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        if source_id is not None:
+            cursor = await db.execute(
+                """SELECT * FROM ipam_reconciliation_runs
+                   WHERE source_id = ?
+                   ORDER BY started_at DESC, id DESC
+                   LIMIT ?""",
+                (source_id, int(max(1, limit))),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT * FROM ipam_reconciliation_runs
+                   ORDER BY started_at DESC, id DESC
+                   LIMIT ?""",
+                (int(max(1, limit)),),
+            )
+        return [_serialize_reconciliation_run(dict(r)) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def list_reconciliation_diffs(
+    *,
+    source_id: int | None = None,
+    run_id: int | None = None,
+    open_only: bool = True,
+    limit: int = 500,
+) -> list[dict]:
+    clauses: list[str] = []
+    params: list = []
+    if source_id is not None:
+        clauses.append("source_id = ?")
+        params.append(source_id)
+    if run_id is not None:
+        clauses.append("run_id = ?")
+        params.append(run_id)
+    if open_only:
+        clauses.append("(resolution IS NULL OR resolution = '')")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(int(max(1, limit)))
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            f"""SELECT * FROM ipam_reconciliation_diffs
+                {where}
+                ORDER BY id DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+        return [_serialize_reconciliation_diff(dict(r)) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_reconciliation_diff(diff_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM ipam_reconciliation_diffs WHERE id = ?", (diff_id,)
+        )
+        row = await cursor.fetchone()
+        return _serialize_reconciliation_diff(dict(row)) if row else None
+    finally:
+        await db.close()
+
+
+async def mark_reconciliation_diff_resolved(
+    diff_id: int,
+    *,
+    resolution: str,
+    resolved_by: str,
+    message: str = "",
+) -> dict | None:
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE ipam_reconciliation_diffs
+               SET resolution = ?, resolved_by = ?, resolution_message = ?,
+                   resolved_at = datetime('now')
+               WHERE id = ? AND (resolution IS NULL OR resolution = '')""",
+            (resolution, resolved_by, message, diff_id),
+        )
+        await db.commit()
+        cursor = await db.execute(
+            "SELECT * FROM ipam_reconciliation_diffs WHERE id = ?", (diff_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        diff = _serialize_reconciliation_diff(dict(row))
+        # Bump resolved counter on parent run
+        await db.execute(
+            """UPDATE ipam_reconciliation_runs
+               SET resolved_count = resolved_count + 1
+               WHERE id = ?""",
+            (diff.get("run_id"),),
+        )
+        await db.commit()
+        return diff
+    finally:
+        await db.close()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Bandwidth Billing – Circuits & 95th Percentile Reports
 # ═════════════════════════════════════════════════════════════════════════════

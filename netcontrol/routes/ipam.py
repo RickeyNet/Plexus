@@ -14,6 +14,11 @@ from netcontrol.routes.ipam_adapters import (
     get_ipam_provider_catalog,
     normalize_ipam_provider,
 )
+from netcontrol.routes.ipam_reconciliation import (
+    VALID_RESOLUTIONS,
+    resolve_diff as reconcile_resolve_diff,
+    run_reconciliation,
+)
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 
 router = APIRouter()
@@ -68,6 +73,11 @@ class IpamAllocationCreate(BaseModel):
     address: str
     hostname: str = ""
     description: str = ""
+
+
+class IpamReconciliationResolve(BaseModel):
+    resolution: str
+    note: str = ""
 
 
 def init_ipam(require_admin):
@@ -512,3 +522,97 @@ async def delete_ipam_allocation_api(allocation_id: int, request: Request):
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IPAM bi-directional reconciliation (Phase E)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/api/ipam/sources/{source_id}/reconcile",
+    dependencies=[Depends(_require_admin_dep)],
+)
+async def reconcile_ipam_source_api(source_id: int, request: Request):
+    """Run a reconciliation pass for an external IPAM source."""
+    session = _get_session(request) or {}
+    user = session.get("user", "")
+    try:
+        summary = await run_reconciliation(source_id, triggered_by=user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except Exception:
+        raise HTTPException(status_code=502, detail="Reconciliation failed") from None
+    await _audit(
+        "ipam",
+        "reconcile_source",
+        user=user,
+        detail=(
+            f"source_id={source_id},run_id={summary.get('run_id')},"
+            f"drifts={summary.get('diff_count')}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "summary": summary}
+
+
+@router.get("/api/ipam/reconciliation/runs")
+async def list_reconciliation_runs_api(
+    source_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    runs = await db.list_reconciliation_runs(source_id=source_id, limit=limit)
+    return {"runs": runs, "count": len(runs)}
+
+
+@router.get("/api/ipam/reconciliation/diffs")
+async def list_reconciliation_diffs_api(
+    source_id: int | None = Query(default=None),
+    run_id: int | None = Query(default=None),
+    open_only: bool = Query(default=True),
+    limit: int = Query(default=500, ge=1, le=2000),
+):
+    diffs = await db.list_reconciliation_diffs(
+        source_id=source_id,
+        run_id=run_id,
+        open_only=open_only,
+        limit=limit,
+    )
+    return {"diffs": diffs, "count": len(diffs)}
+
+
+@router.post(
+    "/api/ipam/reconciliation/diffs/{diff_id}/resolve",
+    dependencies=[Depends(_require_admin_dep)],
+)
+async def resolve_reconciliation_diff_api(
+    diff_id: int,
+    body: IpamReconciliationResolve,
+    request: Request,
+):
+    if body.resolution not in VALID_RESOLUTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported resolution; expected one of {sorted(VALID_RESOLUTIONS)}",
+        )
+    session = _get_session(request) or {}
+    user = session.get("user", "")
+    try:
+        resolved = await reconcile_resolve_diff(
+            diff_id,
+            resolution=body.resolution,
+            resolved_by=user,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    await _audit(
+        "ipam",
+        "reconcile_resolve",
+        user=user,
+        detail=(
+            f"diff_id={diff_id},resolution={body.resolution},"
+            f"address={resolved.get('address')}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "diff": resolved}
