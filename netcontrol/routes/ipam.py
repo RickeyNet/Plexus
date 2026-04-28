@@ -802,3 +802,97 @@ async def list_pending_allocations_api(
         state=state, include_expired=include_expired, limit=limit
     )
     return {"allocations": rows, "count": len(rows)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Historical IP allocation tracking (Phase I) — /api/ipam/history & utilization
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/api/ipam/history/{address}")
+async def get_ip_history_api(
+    address: str,
+    vrf: str = Query(default=""),
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    """Return assignment history for an IP, newest first."""
+    try:
+        ipaddress.ip_address(address)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid IP address") from None
+    rows = await db.get_ip_history(address, vrf_name=vrf, limit=limit)
+    return {"address": address, "vrf": vrf, "history": rows, "count": len(rows)}
+
+
+@router.get("/api/ipam/history/{address}/at")
+async def get_ip_owner_at_api(
+    address: str,
+    when: str = Query(..., description="ISO-8601 timestamp"),
+    vrf: str = Query(default=""),
+):
+    """Who held this IP at a given timestamp?"""
+    try:
+        ipaddress.ip_address(address)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid IP address") from None
+    row = await db.find_ip_owner_at(address, when, vrf_name=vrf)
+    return {"address": address, "vrf": vrf, "when": when, "owner": row}
+
+
+@router.get("/api/ipam/history/host/{hostname}")
+async def get_history_for_hostname_api(
+    hostname: str, limit: int = Query(default=200, ge=1, le=2000)
+):
+    """All IPs ever associated with a hostname."""
+    rows = await db.list_ip_history_for_hostname(hostname, limit=limit)
+    return {"hostname": hostname, "history": rows, "count": len(rows)}
+
+
+@router.get("/api/ipam/utilization")
+async def list_subnet_utilization_api(
+    subnet: str | None = Query(default=None),
+    vrf: str | None = Query(default=None),
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
+):
+    """Time-series subnet utilization snapshots, newest first."""
+    rows = await db.list_subnet_utilization(
+        subnet=subnet, vrf_name=vrf, since=since, until=until, limit=limit
+    )
+    return {"snapshots": rows, "count": len(rows)}
+
+
+@router.post(
+    "/api/ipam/utilization/snapshot",
+    status_code=201,
+    dependencies=[Depends(_require_admin_dep)],
+)
+async def snapshot_utilization_api(
+    request: Request,
+    subnet: str | None = Query(default=None),
+    vrf: str = Query(default=""),
+):
+    """Capture a utilization snapshot. If `subnet` omitted, snapshots every known subnet."""
+    session = _get_session(request) or {}
+    if subnet:
+        try:
+            ipaddress.ip_network(subnet, strict=False)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid subnet CIDR") from None
+        snap = await db.snapshot_subnet_utilization(subnet, vrf_name=vrf)
+        if snap is None:
+            raise HTTPException(status_code=400, detail="Could not snapshot subnet")
+        await _audit(
+            "ipam", "utilization_snapshot", user=session.get("user", ""),
+            detail=f"subnet={subnet},vrf={vrf}",
+            correlation_id=_corr_id(request),
+        )
+        return {"ok": True, "snapshot": snap}
+    written = await db.snapshot_all_subnet_utilization()
+    await _audit(
+        "ipam", "utilization_snapshot_all", user=session.get("user", ""),
+        detail=f"snapshots_written={written}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "snapshots_written": written}
