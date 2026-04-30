@@ -174,6 +174,26 @@ async def _generate_report_rows(report_type: str, params: dict) -> list[dict]:
         return await db.generate_interface_report_data(host_id, group_id, days)
     if report_type == "network_documentation":
         return await db.generate_network_documentation_report_data(group_id)
+    if report_type == "ipam_utilization":
+        return await db.generate_ipam_utilization_report_data(
+            vrf_name=params.get("vrf_name"),
+            threshold_pct=float(params.get("threshold_pct", 0.0)),
+        )
+    if report_type == "ipam_forecast":
+        return await db.generate_ipam_forecast_report_data(
+            vrf_name=params.get("vrf_name"),
+            lookback_days=int(params.get("lookback_days", 30)),
+            target_pct=float(params.get("target_pct", 90.0)),
+            min_points=int(params.get("min_points", 2)),
+        )
+    if report_type == "ipam_history":
+        return await db.generate_ipam_history_report_data(
+            address=params.get("address"),
+            hostname=params.get("hostname"),
+            vrf_name=params.get("vrf_name"),
+            days=int(params.get("days", 90)),
+            limit=int(params.get("limit", 1000)),
+        )
     raise HTTPException(status_code=400, detail=f"Unknown report type: {report_type}")
 
 
@@ -206,6 +226,24 @@ async def _persist_report_artifacts(
             content_text=csv_data,
         )
     )
+
+    if report_type in {"ipam_utilization", "ipam_forecast"}:
+        title = (
+            "Plexus IPAM Subnet Utilization"
+            if report_type == "ipam_utilization"
+            else "Plexus IPAM Exhaustion Forecast"
+        )
+        pdf_bytes = _render_tabular_pdf(title, rows)
+        artifacts.append(
+            await db.create_report_artifact(
+                run_id=run_id,
+                report_id=report_id,
+                artifact_type="pdf",
+                file_name=f"{prefix}.pdf",
+                media_type="application/pdf",
+                content_blob=pdf_bytes,
+            )
+        )
 
     if report_type == "network_documentation":
         group_id = params.get("group_id")
@@ -1066,6 +1104,118 @@ async def export_network_documentation_pdf(
     except Exception as exc:
         LOGGER.error("Network documentation PDF export failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to export network documentation PDF")
+
+
+def _render_tabular_pdf(title: str, rows: list[dict]) -> bytes:
+    """Render a simple tabular PDF for capacity-planning audiences."""
+    if not rows:
+        return _render_text_pdf(title, ["(no data)"])
+    columns = list(rows[0].keys())
+    widths = {c: max(len(c), 4) for c in columns}
+    for r in rows:
+        for c in columns:
+            v = r.get(c)
+            widths[c] = max(widths[c], len(("" if v is None else str(v))))
+    for c in columns:
+        widths[c] = min(widths[c], 24)
+    header = "  ".join(c[: widths[c]].ljust(widths[c]) for c in columns)
+    sep = "  ".join("-" * widths[c] for c in columns)
+    lines = [header, sep]
+    for r in rows:
+        cells = []
+        for c in columns:
+            v = r.get(c)
+            s = "" if v is None else str(v)
+            if len(s) > widths[c]:
+                s = s[: widths[c] - 1] + "…"
+            cells.append(s.ljust(widths[c]))
+        lines.append("  ".join(cells))
+    return _render_text_pdf(title, lines)
+
+
+@router.get("/api/reports/export/ipam_utilization")
+async def export_ipam_utilization_csv(
+    vrf_name: str | None = Query(default=None),
+    threshold_pct: float = Query(default=0.0),
+):
+    rows = await db.generate_ipam_utilization_report_data(
+        vrf_name=vrf_name, threshold_pct=threshold_pct
+    )
+    return _csv_download_response(_rows_to_csv(rows), "ipam_utilization_report.csv")
+
+
+@router.get("/api/reports/export/ipam_utilization.pdf")
+async def export_ipam_utilization_pdf(
+    vrf_name: str | None = Query(default=None),
+    threshold_pct: float = Query(default=0.0),
+):
+    rows = await db.generate_ipam_utilization_report_data(
+        vrf_name=vrf_name, threshold_pct=threshold_pct
+    )
+    pdf_bytes = _render_tabular_pdf("Plexus IPAM Subnet Utilization", rows)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "attachment; filename=ipam_utilization_report.pdf",
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+
+
+@router.get("/api/reports/export/ipam_forecast")
+async def export_ipam_forecast_csv(
+    vrf_name: str | None = Query(default=None),
+    lookback_days: int = Query(default=30),
+    target_pct: float = Query(default=90.0),
+    min_points: int = Query(default=2),
+):
+    rows = await db.generate_ipam_forecast_report_data(
+        vrf_name=vrf_name,
+        lookback_days=lookback_days,
+        target_pct=target_pct,
+        min_points=min_points,
+    )
+    return _csv_download_response(_rows_to_csv(rows), "ipam_forecast_report.csv")
+
+
+@router.get("/api/reports/export/ipam_forecast.pdf")
+async def export_ipam_forecast_pdf(
+    vrf_name: str | None = Query(default=None),
+    lookback_days: int = Query(default=30),
+    target_pct: float = Query(default=90.0),
+    min_points: int = Query(default=2),
+):
+    rows = await db.generate_ipam_forecast_report_data(
+        vrf_name=vrf_name,
+        lookback_days=lookback_days,
+        target_pct=target_pct,
+        min_points=min_points,
+    )
+    pdf_bytes = _render_tabular_pdf("Plexus IPAM Exhaustion Forecast", rows)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "attachment; filename=ipam_forecast_report.pdf",
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+
+
+@router.get("/api/reports/export/ipam_history")
+async def export_ipam_history_csv(
+    address: str | None = Query(default=None),
+    hostname: str | None = Query(default=None),
+    vrf_name: str | None = Query(default=None),
+    days: int = Query(default=90),
+    limit: int = Query(default=1000, ge=1, le=10000),
+):
+    rows = await db.generate_ipam_history_report_data(
+        address=address, hostname=hostname, vrf_name=vrf_name,
+        days=days, limit=limit,
+    )
+    return _csv_download_response(_rows_to_csv(rows), "ipam_history_report.csv")
 
 
 @router.get("/api/reports/runs/{run_id}")

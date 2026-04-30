@@ -7,7 +7,7 @@ import {
     escapeHtml, showError, showSuccess, showToast, formatDate,
     showModal, closeAllModals, showConfirm,
     emptyStateHTML, currentUserData, invalidatePageCache,
-    initThemeControls, initSpaceControls
+    initThemeControls, initSpaceControls, setHiddenFeatures
 } from '../app.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -21,6 +21,7 @@ const adminState = {
     loginRules: null,
     authConfig: null,
     syslogConfig: null,
+    featureVisibility: null,
 };
 
 // Named handler references for proper cleanup
@@ -307,6 +308,8 @@ async function loadAdminSettings(_options = {}) {
         if (!adminState.capabilities) {
             adminState.capabilities = await api.getAdminCapabilities();
         }
+        adminState.featureVisibility = adminState.capabilities?.feature_visibility
+            || { catalog: [], hidden: [] };
         if (currentUserData) {
             currentUserData.role = String(currentUserData.role || 'admin').toLowerCase();
         }
@@ -320,6 +323,8 @@ async function loadAdminSettings(_options = {}) {
         bindStpDiscoveryForm();
         bindStpRootPolicyForm();
         bindMonitoringForm();
+        renderFeatureVisibility();
+        bindFeatureVisibilitySave();
         renderLoginRules();
         renderAuthConfig();
         renderSyslogConfig();
@@ -338,6 +343,53 @@ async function loadAdminSettings(_options = {}) {
             usersContainer.innerHTML = `<div class="error">Failed loading admin settings: ${escapeHtml(error.message)}</div>`;
         }
     }
+}
+
+let _featureVisibilityHandler = null;
+
+function renderFeatureVisibility() {
+    const list = document.getElementById('feature-visibility-list');
+    if (!list) return;
+    const fv = adminState.featureVisibility || { catalog: [], hidden: [] };
+    const hiddenSet = new Set(fv.hidden || []);
+    const catalog = fv.catalog || [];
+    if (!catalog.length) {
+        list.innerHTML = emptyStateHTML('No toggleable features available', 'default');
+        return;
+    }
+    list.innerHTML = catalog.map((entry) => {
+        const isVisible = !hiddenSet.has(entry.key);
+        return `
+            <label style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0;">
+                <input type="checkbox" class="feature-visibility-toggle" data-feature-key="${escapeHtml(entry.key)}" ${isVisible ? 'checked' : ''}>
+                <span>${escapeHtml(entry.label)}</span>
+            </label>
+        `;
+    }).join('');
+}
+
+function bindFeatureVisibilitySave() {
+    const btn = document.getElementById('feature-visibility-save');
+    if (!btn) return;
+    if (_featureVisibilityHandler) btn.removeEventListener('click', _featureVisibilityHandler);
+    _featureVisibilityHandler = async () => {
+        const inputs = document.querySelectorAll('.feature-visibility-toggle');
+        const hidden = [];
+        inputs.forEach((input) => {
+            if (!input.checked) hidden.push(input.getAttribute('data-feature-key'));
+        });
+        try {
+            adminState.featureVisibility = await api.updateFeatureVisibility(hidden);
+            if (adminState.capabilities) {
+                adminState.capabilities.feature_visibility = adminState.featureVisibility;
+            }
+            setHiddenFeatures(adminState.featureVisibility.hidden || []);
+            showSuccess('Feature visibility saved');
+        } catch (error) {
+            showError(`Failed to save feature visibility: ${error.message}`);
+        }
+    };
+    btn.addEventListener('click', _featureVisibilityHandler);
 }
 
 function renderSyslogConfig() {

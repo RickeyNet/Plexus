@@ -1284,6 +1284,18 @@ function templateSettings() {
         </div>
     </div>
     <div class="section">
+        <div class="page-header" style="margin-bottom: 0.5rem;">
+            <h3 style="margin: 0;">Feature Visibility</h3>
+            <button type="button" class="btn btn-primary" id="feature-visibility-save">Save Visibility</button>
+        </div>
+        <p style="color: var(--text-muted); margin: 0 0 0.75rem 0; font-size: 0.85rem;">
+            Hide navigation entries for features your team doesn't use. This only affects what's shown in the sidebar — it does not remove permissions or stop background services.
+        </p>
+        <div id="feature-visibility-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.4rem 1rem;">
+            ${skel(2)}
+        </div>
+    </div>
+    <div class="section">
         <div class="page-header" style="margin-bottom: 1rem;">
             <h3 style="margin: 0;">User Management</h3>
             <button class="btn btn-primary" onclick="showCreateAdminUserModal()">+ New User</button>

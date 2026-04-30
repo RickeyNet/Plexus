@@ -666,6 +666,7 @@ async def login(body: LoginRequest, request: Request):
         "role": user["role"],
         "auth_source": auth_source,
         "feature_access": await _features_fn(user),
+        "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
         "must_change_password": bool(user.get("must_change_password")),
         "csrf_token": csrf_token,
     })
@@ -710,6 +711,7 @@ async def register(body: RegisterRequest, request: Request = None):
         "display_name": display,
         "role": "user",
         "feature_access": await _features_fn(user),
+        "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
         "csrf_token": csrf_token,
     })
     _https = getattr(_app, "APP_HTTPS_ENABLED", _APP_HTTPS_ENABLED)
@@ -749,6 +751,7 @@ async def auth_status(request: Request):
         "display_name": user["display_name"] or user["username"],
         "role": user["role"],
         "feature_access": await _features_fn(user),
+        "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
         "csrf_token": _generate_csrf_token(user["username"]),
         "must_change_password": bool(user.get("must_change_password")),
     }

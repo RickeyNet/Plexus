@@ -14,6 +14,7 @@ export const _groupCache = {};
 export let _snmpProfilesCache = [];
 export let _groupSnmpAssignments = {};
 let currentFeatureAccess = [];
+let currentHiddenFeatures = new Set();
 
 const NAV_FEATURE_MAP = {
     dashboard: 'dashboard',
@@ -852,11 +853,28 @@ function showNoFeatureAccess() {
     }
 }
 
-function applyFeatureVisibility() {
+export function setHiddenFeatures(hiddenList) {
+    currentHiddenFeatures = new Set(Array.isArray(hiddenList) ? hiddenList : []);
+    applyFeatureVisibility();
+}
+
+function isPageHidden(page) {
+    if (page === 'dashboard' || page === 'settings') return false;
+    return currentHiddenFeatures.has(page);
+}
+
+export function applyFeatureVisibility() {
     document.querySelectorAll('.nav-link[data-page]').forEach((link) => {
         const page = link.getAttribute('data-page');
+        if (isPageHidden(page)) {
+            link.style.display = 'none';
+            return;
+        }
         const feature = NAV_FEATURE_MAP[page];
-        if (!feature) return;
+        if (!feature) {
+            link.style.display = '';
+            return;
+        }
         link.style.display = canAccessFeature(feature) ? '' : 'none';
     });
 
@@ -1858,6 +1876,7 @@ function showApp(userData) {
     };
     currentUser = userData.username;
     currentFeatureAccess = Array.isArray(userData.feature_access) ? userData.feature_access : [];
+    currentHiddenFeatures = new Set(Array.isArray(userData.feature_visibility_hidden) ? userData.feature_visibility_hidden : []);
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('app-container').classList.remove('hidden');
     const navUserLabel = document.querySelector('#nav-user .nav-user-label');

@@ -272,6 +272,45 @@ FEATURE_FLAGS = [
     "deployments",
 ]
 
+# ── Feature Visibility ───────────────────────────────────────────────────────
+# Admin-controlled global UI toggles for hiding navigation entries that aren't
+# in use (Fortinet-style). Distinct from access-group FEATURE_FLAGS, which
+# control per-user permissions. Keys here match the nav `data-page` attribute
+# so toggling maps 1:1 to a sidebar entry. Dashboard and Settings are
+# intentionally excluded — they cannot be hidden.
+FEATURE_VISIBILITY_CATALOG = [
+    {"key": "inventory", "label": "Inventory"},
+    {"key": "ipam", "label": "IPAM"},
+    {"key": "playbooks", "label": "Playbooks"},
+    {"key": "jobs", "label": "Jobs"},
+    {"key": "templates", "label": "Templates"},
+    {"key": "credentials", "label": "Credentials"},
+    {"key": "topology", "label": "Topology"},
+    {"key": "cloud-visibility", "label": "Cloud Visibility"},
+    {"key": "monitoring", "label": "Monitoring"},
+    {"key": "configuration", "label": "Configuration"},
+    {"key": "compliance", "label": "Compliance"},
+    {"key": "change-management", "label": "Changes"},
+    {"key": "reports", "label": "Reports"},
+    {"key": "graph-templates", "label": "Graphs"},
+    {"key": "mac-tracking", "label": "MAC Tracking"},
+    {"key": "traffic-analysis", "label": "Traffic Analysis"},
+    {"key": "upgrades", "label": "Upgrades"},
+    {"key": "federation", "label": "Federation"},
+    {"key": "floor-plan", "label": "Floor Plans"},
+]
+
+FEATURE_VISIBILITY_KEYS = {entry["key"] for entry in FEATURE_VISIBILITY_CATALOG}
+
+
+def _sanitize_feature_visibility(hidden: list) -> list[str]:
+    """Filter input to only known visibility keys, preserving catalog order."""
+    if not isinstance(hidden, (list, tuple, set)):
+        return []
+    requested = {str(k) for k in hidden if isinstance(k, str)}
+    valid = requested & FEATURE_VISIBILITY_KEYS
+    return [entry["key"] for entry in FEATURE_VISIBILITY_CATALOG if entry["key"] in valid]
+
 RADIUS_DICTIONARY_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "routes", "radius.dictionary")
 # Normalize so the path resolves correctly from netcontrol/routes/state.py -> project_root/routes/
 RADIUS_DICTIONARY_FILE = os.path.normpath(RADIUS_DICTIONARY_FILE)
@@ -304,6 +343,7 @@ CONFIG_BACKUP_CONFIG = dict(CONFIG_BACKUP_DEFAULTS)
 COMPLIANCE_CHECK_CONFIG = dict(COMPLIANCE_CHECK_DEFAULTS)
 MONITORING_CONFIG = dict(MONITORING_DEFAULTS)
 SYSLOG_CONFIG = dict(SYSLOG_DEFAULTS)
+FEATURE_VISIBILITY_HIDDEN: list[str] = []
 
 CLOUD_FLOW_SYNC_DEFAULTS = {
     "enabled": False,
