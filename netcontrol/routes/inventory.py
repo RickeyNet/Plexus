@@ -578,10 +578,30 @@ async def update_group_snmp_profile_assignment(group_id: int, body: dict):
 
 
 @router.get("/api/inventory")
-async def list_groups(include_hosts: bool = Query(default=False)):
+async def list_groups(request: Request, include_hosts: bool = Query(default=False)):
+    session = _get_session(request)
+    user_id = session.get("user_id") if session else None
+    if user_id is not None:
+        if include_hosts:
+            return await db.get_all_groups_with_hosts_for_user(int(user_id))
+        return await db.get_all_groups_for_user(int(user_id))
     if include_hosts:
         return await db.get_all_groups_with_hosts()
     return await db.get_all_groups()
+
+
+class GroupReorderRequest(BaseModel):
+    ordered_ids: list[int]
+
+
+@router.post("/api/inventory/groups/reorder")
+async def reorder_groups(payload: GroupReorderRequest, request: Request):
+    session = _get_session(request)
+    user_id = session.get("user_id") if session else None
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    await db.set_user_group_order(int(user_id), payload.ordered_ids)
+    return {"ok": True}
 
 
 @router.get("/api/inventory/export/csv")
