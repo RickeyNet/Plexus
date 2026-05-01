@@ -497,6 +497,11 @@ function templateConfiguration() {
     </div>
     <!-- Backup History Tab -->
     <div id="config-tab-history" class="config-tab" style="display:none">
+        <div style="display:flex; justify-content:flex-end; margin-bottom:0.75rem;">
+            <button class="btn btn-sm btn-secondary" onclick="downloadAllBackups()" title="Download every successful backup as a ZIP of .txt files">
+                Download All (.zip)
+            </button>
+        </div>
         <div id="backup-history-list">
             ${skel(2)}
         </div>
