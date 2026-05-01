@@ -791,6 +791,11 @@ async def _load_persisted_security_settings():
     state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG = _sanitize_cloud_traffic_metric_sync_config(cloud_traffic_metric_sync)
     cloud_traffic_metric_sync_status = await db.get_auth_setting("cloud_traffic_metric_sync_status")
     state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS = state._sanitize_cloud_sync_status(cloud_traffic_metric_sync_status)
+    feature_visibility = await db.get_auth_setting("feature_visibility")
+    if isinstance(feature_visibility, dict):
+        state.FEATURE_VISIBILITY_HIDDEN = state._sanitize_feature_visibility(feature_visibility.get("hidden") or [])
+    else:
+        state.FEATURE_VISIBILITY_HIDDEN = []
 
 
 def require_feature(feature_key: str):

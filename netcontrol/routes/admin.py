@@ -248,6 +248,41 @@ async def admin_capabilities():
     return {
         "feature_flags": FEATURE_FLAGS,
         "auth_providers": ["local", "radius", "ldap"],
+        "feature_visibility": {
+            "catalog": state.FEATURE_VISIBILITY_CATALOG,
+            "hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
+        },
+    }
+
+
+class AdminFeatureVisibilityRequest(BaseModel):
+    hidden: list[str] = []
+
+
+@router.get("/api/admin/feature-visibility")
+async def admin_get_feature_visibility():
+    return {
+        "catalog": state.FEATURE_VISIBILITY_CATALOG,
+        "hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
+    }
+
+
+@router.put("/api/admin/feature-visibility")
+async def admin_update_feature_visibility(body: AdminFeatureVisibilityRequest, request: Request):
+    sanitized = state._sanitize_feature_visibility(body.hidden)
+    state.FEATURE_VISIBILITY_HIDDEN = sanitized
+    await db.set_auth_setting("feature_visibility", {"hidden": sanitized})
+    session = _get_session(request)
+    await _audit(
+        "auth",
+        "feature_visibility.update",
+        user=session["user"] if session else "",
+        detail=f"hidden={sanitized}",
+        correlation_id=_corr_id(request),
+    )
+    return {
+        "catalog": state.FEATURE_VISIBILITY_CATALOG,
+        "hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
     }
 
 
