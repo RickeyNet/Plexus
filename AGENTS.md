@@ -9,7 +9,7 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 - **Backend**: FastAPI app in `netcontrol/app.py`, routes split across `netcontrol/routes/`
 - **Database**: SQLite (default) or Postgres (`APP_DB_ENGINE=postgres`), abstracted in `routes/database.py`
 - **Frontend**: Single-page app in `netcontrol/static/` — `index.html`, `js/app.js`, `js/api.js`
-- **Encryption**: Fernet (AES-128-CBC + HMAC-SHA256) via `routes/crypto.py`, key in `routes/netcontrol.key`
+- **Encryption**: Fernet (AES-128-CBC + HMAC-SHA256) via `routes/crypto.py`, key in `netcontrol.key` at the repo root (override via `APP_ENCRYPTION_KEY_FILE`)
 - **Auth**: Session cookies (itsdangerous signed tokens), CSRF protection, PBKDF2-SHA256 passwords
 - **Playbooks**: Python classes in `templates/playbooks/` registered via `@register_playbook` decorator
 - **Migrations**: Versioned files in `routes/migrations/`, run by `routes/migrations/runner.py`

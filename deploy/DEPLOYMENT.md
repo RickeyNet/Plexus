@@ -178,10 +178,22 @@ sudo ufw allow 1514/udp      # Syslog (optional)
 If your workplace has an internal Certificate Authority:
 
 ```bash
-# Replace the self-signed cert with your CA-signed cert
-cp your-cert.pem /opt/plexus/certs/cert.pem
-cp your-key.pem /opt/plexus/certs/key.pem
-chmod 600 /opt/plexus/certs/key.pem
+# Stage your CA-signed cert and key in the working directory
+# (cert.pem must be the full chain)
+cp your-cert.pem ./cert.pem
+cp your-key.pem  ./key.pem
+
+# Copy them into the plexus-certs named volume.
+# Replace 'plexus' in the volume name with your compose project
+# (defaults to the directory name — e.g., /opt/plexus → 'plexus').
+docker run --rm \
+    -v plexus_plexus-certs:/c \
+    -v "$PWD":/src:ro \
+    alpine sh -c '
+        cp /src/cert.pem /c/cert.pem &&
+        cp /src/key.pem  /c/key.pem  &&
+        chmod 600 /c/key.pem
+    '
 
 # Restart nginx to pick up the new cert
 docker compose restart nginx
@@ -232,14 +244,58 @@ docker compose down
 docker compose up -d
 ```
 
-### Database Backup
+### Backups
+
+A backup script is provided at `deploy/backup.sh`. It dumps PostgreSQL **and**
+archives the `plexus-db` state volume, which holds `netcontrol.key` (the Fernet
+key for stored device credentials) and `session.key`. **Losing
+`netcontrol.key` permanently breaks decryption of every stored credential**, so
+do not back up the database alone.
+
+Run on demand:
 
 ```bash
-# Create a backup
-docker exec plexus-postgres pg_dump -U plexus plexus > backup_$(date +%Y%m%d).sql
+bash deploy/backup.sh
+# Override destination or retention:
+BACKUP_DEST=/mnt/nas/plexus RETENTION_DAYS=60 bash deploy/backup.sh
+```
 
-# Restore from backup
-cat backup_20260327.sql | docker exec -i plexus-postgres psql -U plexus plexus
+Schedule nightly via cron:
+
+```bash
+sudo install -m 0644 deploy/plexus.cron /etc/cron.d/plexus
+```
+
+By default this writes `/var/backups/plexus/db-YYYYMMDD-HHMMSS.sql.gz` and
+`state-YYYYMMDD-HHMMSS.tar.gz`, prunes files older than 30 days, and logs to
+`/var/log/plexus-backup.log`. Push these files off-box (rsync, S3, etc.) — a
+local-only backup will not survive a VM loss.
+
+Manual ad-hoc dump (no state volume):
+
+```bash
+docker exec plexus-postgres pg_dump -U plexus plexus > backup_$(date +%Y%m%d).sql
+```
+
+### Restore
+
+```bash
+# 1. Stop the app (leave postgres running)
+docker compose stop plexus
+
+# 2. Restore the database
+gunzip -c /var/backups/plexus/db-YYYYMMDD-HHMMSS.sql.gz \
+    | docker exec -i plexus-postgres psql -U plexus plexus
+
+# 3. Restore the state volume (encryption + session keys).
+#    Replace 'plexus' in the volume name with your compose project name.
+docker run --rm \
+    -v plexus_plexus-db:/dest \
+    -v /var/backups/plexus:/src:ro \
+    alpine sh -c 'cd /dest && tar xzf /src/state-YYYYMMDD-HHMMSS.tar.gz'
+
+# 4. Start the app
+docker compose start plexus
 ```
 
 ### Full Reset (wipes all data)

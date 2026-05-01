@@ -180,12 +180,12 @@ python tools/migrate_sqlite_to_postgres.py --dry-run
 
 # migrate and verify row-count parity
 python tools/migrate_sqlite_to_postgres.py \
-  --sqlite-path routes/netcontrol.db \
+  --sqlite-path netcontrol.db \
   --postgres-url postgresql://plexus:plexus@localhost:5432/plexus
 
 # migrate and verify row counts + per-table checksums
 python tools/migrate_sqlite_to_postgres.py \
-  --sqlite-path routes/netcontrol.db \
+  --sqlite-path netcontrol.db \
   --postgres-url postgresql://plexus:plexus@localhost:5432/plexus \
   --with-checksums
 ```

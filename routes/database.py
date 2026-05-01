@@ -59,10 +59,49 @@ DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 APP_DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
 _VALID_DB_ENGINES = {"sqlite", "postgres"}
 
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DB_PATH = os.getenv(
     "APP_DB_PATH",
-    os.path.join(os.path.dirname(__file__), "netcontrol.db"),
+    os.path.join(_REPO_ROOT, "netcontrol.db"),
 )
+
+
+def _migrate_legacy_sqlite_path() -> None:
+    """Move legacy routes/netcontrol.db (+ WAL/SHM sidecars) to the new default.
+
+    The default SQLite location moved from ``routes/netcontrol.db`` to the repo
+    root. Auto-migrate so existing dev installs do not appear to lose data.
+    Runs only when ``APP_DB_PATH`` is unset (i.e., we own the default) and the
+    legacy file exists.
+
+    A zero-byte file at the new path is treated as a stub (e.g., created by a
+    process that imported the module and called ``aiosqlite.connect`` before
+    ever writing schema) and is overwritten by the migration. Any non-empty
+    file at the new path is left untouched.
+    """
+    if os.getenv("APP_DB_PATH"):
+        return
+    legacy = os.path.join(os.path.dirname(__file__), "netcontrol.db")
+    if not os.path.isfile(legacy):
+        return
+    try:
+        new_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else -1
+    except OSError:
+        return
+    if new_size > 0:
+        return
+    try:
+        os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+        for suffix in ("", "-wal", "-shm"):
+            src = legacy + suffix
+            if os.path.isfile(src):
+                os.replace(src, DB_PATH + suffix)
+        _LOGGER.info("Migrated legacy SQLite database from %s to %s", legacy, DB_PATH)
+    except OSError as exc:
+        _LOGGER.warning("Could not migrate legacy SQLite database (%s); using new default", exc)
+
+
+_migrate_legacy_sqlite_path()
 SQLITE_CONNECT_TIMEOUT = float(os.getenv("APP_SQLITE_CONNECT_TIMEOUT", "30"))
 SQLITE_BUSY_TIMEOUT_MS = int(os.getenv("APP_SQLITE_BUSY_TIMEOUT_MS", "5000"))
 

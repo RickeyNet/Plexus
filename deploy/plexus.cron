@@ -1,0 +1,12 @@
+# Plexus nightly backup — install with:
+#   sudo install -m 0644 deploy/plexus.cron /etc/cron.d/plexus
+#
+# Runs as root so it can talk to the Docker socket and write under
+# /var/backups. Adjust the path if you cloned somewhere other than
+# /opt/plexus, or set BACKUP_DEST to push to a NAS mount.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# m  h  dom mon dow user  command
+  15 2  *   *   *   root  cd /opt/plexus && bash deploy/backup.sh >> /var/log/plexus-backup.log 2>&1

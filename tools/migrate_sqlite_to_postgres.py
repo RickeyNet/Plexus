@@ -3,7 +3,7 @@
 
 Usage:
   python tools/migrate_sqlite_to_postgres.py \
-    --sqlite-path routes/netcontrol.db \
+    --sqlite-path netcontrol.db \
     --postgres-url postgresql://plexus:plexus@localhost:5432/plexus
 
 Dry-run mode validates source access and prints row counts without writing:
@@ -71,7 +71,7 @@ def _safe_column(name: str) -> str:
 
 
 def _default_sqlite_path() -> str:
-    return os.getenv("APP_DB_PATH", os.path.join("routes", "netcontrol.db"))
+    return os.getenv("APP_DB_PATH", "netcontrol.db")
 
 
 def _default_postgres_url() -> str:

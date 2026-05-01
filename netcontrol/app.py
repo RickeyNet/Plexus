@@ -354,8 +354,37 @@ def _extract_api_token(request: Request) -> str:
 # Authentication (DB-backed users)
 # ═════════════════════════════════════════════════════════════════════════════
 
-SECRET_KEY_FILE = os.getenv("APP_SESSION_KEY_FILE", os.path.join(os.path.dirname(__file__), "..", "routes", "session.key"))
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SECRET_KEY_FILE = os.getenv("APP_SESSION_KEY_FILE", os.path.join(_REPO_ROOT, "session.key"))
 SESSION_MAX_AGE = 86400  # 24 hours
+
+
+def _migrate_legacy_session_key() -> None:
+    """Move legacy routes/session.key to the new repo-root default.
+
+    Logging out everyone if the key is missing is acceptable, but if a legacy
+    file exists we move it so existing sessions survive the upgrade. A
+    zero-byte file at the new path is treated as a stub and overwritten.
+    """
+    if os.getenv("APP_SESSION_KEY_FILE"):
+        return
+    legacy = os.path.join(_REPO_ROOT, "routes", "session.key")
+    if not os.path.isfile(legacy):
+        return
+    try:
+        new_size = os.path.getsize(SECRET_KEY_FILE) if os.path.exists(SECRET_KEY_FILE) else -1
+    except OSError:
+        return
+    if new_size > 0:
+        return
+    try:
+        os.makedirs(os.path.dirname(SECRET_KEY_FILE) or ".", exist_ok=True)
+        os.replace(legacy, SECRET_KEY_FILE)
+    except OSError:
+        pass
+
+
+_migrate_legacy_session_key()
 
 
 def _load_or_create_secret_key() -> str:
@@ -505,10 +534,6 @@ async def _ensure_default_admin():
             "Reset admin bootstrap password",
             must_change_password,
         )
-        LOGGER.warning(
-            "Reset bootstrap admin password via PLEXUS_FORCE_ADMIN_PASSWORD_RESET. "
-            "Credentials were printed to stderr.",
-        )
         return
 
     existing_user = await db.get_user_by_username(bootstrap_username)
@@ -524,12 +549,6 @@ async def _ensure_default_admin():
             existing_user["username"],
             password,
             "Promoted existing user to default admin",
-            must_change_password,
-        )
-        LOGGER.warning(
-            "Promoted existing user '%s' to admin and reset password (must_change_password=%s). "
-            "Credentials were printed to stderr.",
-            existing_user["username"],
             must_change_password,
         )
         return
@@ -559,12 +578,6 @@ async def _ensure_default_admin():
         username,
         password,
         "Created default admin account",
-        must_change_password,
-    )
-    LOGGER.warning(
-        "Created default admin account '%s' (must_change_password=%s). "
-        "Credentials were printed to stderr.",
-        username,
         must_change_password,
     )
 
