@@ -12435,6 +12435,302 @@ async def prune_subnet_utilization(retention_days: int = 365) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# IPAM Reporting (Phase J)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def generate_ipam_utilization_report_data(
+    vrf_name: str | None = None,
+    threshold_pct: float = 0.0,
+) -> list[dict]:
+    """Latest utilization snapshot per (subnet, vrf), filtered by threshold.
+
+    Returns one row per known (subnet, vrf), using the most recent snapshot.
+    Falls back to a live snapshot computation for subnets that have never been
+    captured. Sorted by utilization_pct descending so capacity-planning
+    audiences see the most-stressed subnets first.
+    """
+    pairs: set[tuple[str, str]] = set()
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT DISTINCT subnet, vrf FROM ipam_prefixes "
+            "WHERE subnet IS NOT NULL AND subnet != ''"
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            sn = (row.get("subnet") or "").strip()
+            v = (row.get("vrf") or "").strip()
+            if sn and (vrf_name is None or v == vrf_name):
+                pairs.add((sn, v))
+        cur = await db.execute(
+            "SELECT DISTINCT subnet, vrf_name FROM ipam_subnet_utilization"
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            sn = (row.get("subnet") or "").strip()
+            v = (row.get("vrf_name") or "").strip()
+            if sn and (vrf_name is None or v == vrf_name):
+                pairs.add((sn, v))
+        cur = await db.execute(
+            "SELECT ip_address, vrf_name FROM hosts "
+            "WHERE ip_address IS NOT NULL AND ip_address != ''"
+        )
+        for row in rows_to_list(await cur.fetchall()):
+            ip_s = (row.get("ip_address") or "").strip().split("/")[0]
+            v = (row.get("vrf_name") or "").strip()
+            if vrf_name is not None and v != vrf_name:
+                continue
+            sn = _infer_subnet(ip_s)
+            if sn:
+                pairs.add((sn, v))
+    finally:
+        await db.close()
+
+    rows: list[dict] = []
+    for subnet, vrf in pairs:
+        snap = None
+        existing = await list_subnet_utilization(
+            subnet=subnet, vrf_name=vrf, limit=1
+        )
+        if existing:
+            snap = existing[0]
+        else:
+            snap = await snapshot_subnet_utilization(subnet, vrf)
+        if not snap:
+            continue
+        pct = float(snap.get("utilization_pct") or 0.0)
+        if pct < float(threshold_pct):
+            continue
+        rows.append(
+            {
+                "subnet": snap.get("subnet"),
+                "vrf_name": snap.get("vrf_name") or "",
+                "total": int(snap.get("total") or 0),
+                "used": int(snap.get("used") or 0),
+                "reserved": int(snap.get("reserved") or 0),
+                "pending": int(snap.get("pending") or 0),
+                "free": int(snap.get("free") or 0),
+                "utilization_pct": round(pct, 2),
+                "captured_at": snap.get("captured_at"),
+            }
+        )
+    rows.sort(key=lambda r: (-r["utilization_pct"], r["subnet"]))
+    return rows
+
+
+def _linear_forecast(
+    points: list[tuple[float, float]], target_pct: float
+) -> tuple[float | None, float | None]:
+    """Least-squares linear fit over (t, util%) points.
+
+    Returns (slope_per_day, days_to_target). Slope is utilization_pct change
+    per day. days_to_target is days from the most recent point until
+    util reaches `target_pct`; None if non-positive slope or already past.
+    """
+    if len(points) < 2:
+        return (None, None)
+    n = float(len(points))
+    sum_x = sum(p[0] for p in points)
+    sum_y = sum(p[1] for p in points)
+    sum_xy = sum(p[0] * p[1] for p in points)
+    sum_xx = sum(p[0] * p[0] for p in points)
+    denom = n * sum_xx - sum_x * sum_x
+    if denom == 0:
+        return (None, None)
+    slope = (n * sum_xy - sum_x * sum_y) / denom  # pct per second
+    last_t, last_y = points[-1]
+    slope_per_day = slope * 86400.0
+    if slope <= 0 or last_y >= target_pct:
+        return (slope_per_day, None)
+    secs = (target_pct - last_y) / slope
+    return (slope_per_day, secs / 86400.0)
+
+
+async def generate_ipam_forecast_report_data(
+    vrf_name: str | None = None,
+    lookback_days: int = 30,
+    target_pct: float = 90.0,
+    min_points: int = 2,
+) -> list[dict]:
+    """Project subnet exhaustion using a linear fit over recent snapshots.
+
+    Per (subnet, vrf), fit a line through utilization_pct samples in the
+    lookback window and project days-until-target. Subnets with fewer than
+    `min_points` samples are reported with status="insufficient_data" so the
+    report always covers the full inventory.
+    """
+    cutoff = (
+        datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(lookback_days))
+    ).isoformat()
+    db = await get_db()
+    try:
+        clauses = ["captured_at >= ?"]
+        params: list = [cutoff]
+        if vrf_name is not None:
+            clauses.append("vrf_name = ?")
+            params.append(vrf_name)
+        where = " WHERE " + " AND ".join(clauses)
+        cur = await db.execute(
+            f"SELECT subnet, vrf_name, captured_at, total, used, reserved, "
+            f"pending, free, utilization_pct FROM ipam_subnet_utilization{where} "
+            f"ORDER BY subnet, vrf_name, captured_at ASC",
+            tuple(params),
+        )
+        snapshot_rows = rows_to_list(await cur.fetchall())
+    finally:
+        await db.close()
+
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for r in snapshot_rows:
+        key = ((r.get("subnet") or "").strip(), (r.get("vrf_name") or "").strip())
+        grouped.setdefault(key, []).append(r)
+
+    rows: list[dict] = []
+    for (subnet, vrf), samples in grouped.items():
+        if not subnet:
+            continue
+        latest = samples[-1]
+        latest_pct = float(latest.get("utilization_pct") or 0.0)
+        if len(samples) < int(min_points):
+            rows.append(
+                {
+                    "subnet": subnet,
+                    "vrf_name": vrf,
+                    "samples": len(samples),
+                    "current_utilization_pct": round(latest_pct, 2),
+                    "slope_pct_per_day": None,
+                    "days_to_target": None,
+                    "projected_exhaustion_at": None,
+                    "target_pct": float(target_pct),
+                    "status": "insufficient_data",
+                }
+            )
+            continue
+        points: list[tuple[float, float]] = []
+        for s in samples:
+            ts = s.get("captured_at") or ""
+            try:
+                dt = datetime.fromisoformat(str(ts).replace("Z", ""))
+            except ValueError:
+                continue
+            points.append((dt.timestamp(), float(s.get("utilization_pct") or 0.0)))
+        slope, days_to_target = _linear_forecast(points, float(target_pct))
+        projected_at: str | None = None
+        status = "stable"
+        if days_to_target is not None and days_to_target > 0:
+            projected_dt = datetime.now(UTC).replace(tzinfo=None) + timedelta(
+                days=days_to_target
+            )
+            projected_at = projected_dt.isoformat()
+            if days_to_target <= 30:
+                status = "critical"
+            elif days_to_target <= 90:
+                status = "warning"
+            else:
+                status = "ok"
+        elif latest_pct >= float(target_pct):
+            status = "exhausted"
+        rows.append(
+            {
+                "subnet": subnet,
+                "vrf_name": vrf,
+                "samples": len(samples),
+                "current_utilization_pct": round(latest_pct, 2),
+                "slope_pct_per_day": (
+                    round(slope, 4) if slope is not None else None
+                ),
+                "days_to_target": (
+                    round(days_to_target, 1) if days_to_target is not None else None
+                ),
+                "projected_exhaustion_at": projected_at,
+                "target_pct": float(target_pct),
+                "status": status,
+            }
+        )
+    # Sort: critical first, then by days_to_target ascending (None last).
+    status_order = {
+        "exhausted": 0, "critical": 1, "warning": 2, "ok": 3,
+        "stable": 4, "insufficient_data": 5,
+    }
+    rows.sort(
+        key=lambda r: (
+            status_order.get(r["status"], 99),
+            r["days_to_target"] if r["days_to_target"] is not None else 1e9,
+            r["subnet"],
+        )
+    )
+    return rows
+
+
+async def generate_ipam_history_report_data(
+    address: str | None = None,
+    hostname: str | None = None,
+    vrf_name: str | None = None,
+    days: int = 90,
+    limit: int = 1000,
+) -> list[dict]:
+    """Per-IP assignment history rows for forensic/audit reports."""
+    cutoff = (
+        datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(days))
+    ).isoformat()
+    clauses = ["started_at >= ?"]
+    params: list = [cutoff]
+    if address:
+        clauses.append("address = ?")
+        params.append(address)
+    if hostname:
+        clauses.append("hostname = ?")
+        params.append(hostname)
+    if vrf_name is not None:
+        clauses.append("vrf_name = ?")
+        params.append(vrf_name)
+    where = " WHERE " + " AND ".join(clauses)
+    params.append(int(limit))
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            f"SELECT address, vrf_name, hostname, source_type, source_ref, "
+            f"started_at, ended_at, recorded_by, note FROM ipam_ip_history{where} "
+            f"ORDER BY started_at DESC LIMIT ?",
+            tuple(params),
+        )
+        rows = rows_to_list(await cur.fetchall())
+    finally:
+        await db.close()
+    out: list[dict] = []
+    for r in rows:
+        started = r.get("started_at")
+        ended = r.get("ended_at")
+        duration_s: float | None = None
+        if started:
+            try:
+                s = datetime.fromisoformat(str(started).replace("Z", ""))
+                e = (
+                    datetime.fromisoformat(str(ended).replace("Z", ""))
+                    if ended else datetime.now(UTC).replace(tzinfo=None)
+                )
+                duration_s = (e - s).total_seconds()
+            except ValueError:
+                duration_s = None
+        out.append(
+            {
+                "address": r.get("address"),
+                "vrf_name": r.get("vrf_name") or "",
+                "hostname": r.get("hostname") or "",
+                "source_type": r.get("source_type") or "",
+                "source_ref": r.get("source_ref") or "",
+                "started_at": started,
+                "ended_at": ended,
+                "duration_hours": (
+                    round(duration_s / 3600.0, 2) if duration_s is not None else None
+                ),
+                "recorded_by": r.get("recorded_by") or "",
+                "note": r.get("note") or "",
+            }
+        )
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # IPAM Reconciliation – runs and diffs
 # ─────────────────────────────────────────────────────────────────────────────
 

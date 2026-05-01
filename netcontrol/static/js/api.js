@@ -570,6 +570,17 @@ export async function getAdminCapabilities() {
     return apiRequest('/admin/capabilities');
 }
 
+export async function getFeatureVisibility() {
+    return apiRequest('/admin/feature-visibility');
+}
+
+export async function updateFeatureVisibility(hidden) {
+    return apiRequest('/admin/feature-visibility', {
+        method: 'PUT',
+        body: { hidden },
+    });
+}
+
 export async function getAdminUsers() {
     return apiRequest('/admin/users');
 }
