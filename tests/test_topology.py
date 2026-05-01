@@ -847,3 +847,191 @@ async def test_get_host_topology_not_found(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await topology_module.get_host_topology(999)
     assert exc.value.status_code == 404
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# _correlate_fdb_topology — inferred (FDB+ARP) link discovery
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Three hosts:
+#   id=1 sw-a (10.0.0.1, MAC aa:aa:aa:aa:aa:01 on Gi1/0/1)
+#   id=2 sw-b (10.0.0.2, MAC bb:bb:bb:bb:bb:02 on Gi1/0/2)
+#   id=3 sw-c (10.0.0.3) — ifPhysAddress not yet collected; only known via ARP
+#
+# Each test sets up the DB stubs the correlator reads:
+#   db.list_snmp_data_sources(host_id, "interface") -> ifPhysAddress per host
+#   db.get_arp_table_for_host(host_id) -> ARP entries
+#   db.get_mac_table_for_host(host_id) -> FDB entries
+
+import json as _json
+
+
+def _make_hosts():
+    return [
+        {"id": 1, "hostname": "sw-a", "ip_address": "10.0.0.1"},
+        {"id": 2, "hostname": "sw-b", "ip_address": "10.0.0.2"},
+        {"id": 3, "hostname": "sw-c", "ip_address": "10.0.0.3"},
+    ]
+
+
+def _iface_source(idx, name, mac):
+    return {
+        "instance_key": str(idx),
+        "name": name,
+        "instance_label": name,
+        "oids_json": _json.dumps({"mac": mac}),
+    }
+
+
+def _patch_db(monkeypatch, *, sources_by_host, mac_by_host, arp_by_host):
+    async def _list_sources(host_id, ds_type):
+        assert ds_type == "interface"
+        return list(sources_by_host.get(host_id, []))
+
+    async def _get_macs(host_id):
+        return list(mac_by_host.get(host_id, []))
+
+    async def _get_arps(host_id):
+        return list(arp_by_host.get(host_id, []))
+
+    monkeypatch.setattr(topology_module.db, "list_snmp_data_sources", _list_sources)
+    monkeypatch.setattr(topology_module.db, "get_mac_table_for_host", _get_macs)
+    monkeypatch.setattr(topology_module.db, "get_arp_table_for_host", _get_arps)
+
+
+@pytest.mark.asyncio
+async def test_correlate_fdb_single_owner_emits_inferred_edge(monkeypatch):
+    """Port that learns exactly one inventory device's MAC → one inferred edge."""
+    hosts = _make_hosts()
+    _patch_db(
+        monkeypatch,
+        sources_by_host={
+            1: [_iface_source(1, "Gi1/0/1", "aa:aa:aa:aa:aa:01")],
+            2: [_iface_source(2, "Gi1/0/2", "bb:bb:bb:bb:bb:02")],
+            3: [],
+        },
+        mac_by_host={
+            # sw-a's port Gi1/0/24 sees only sw-b's interface MAC
+            1: [{"mac_address": "bb:bb:bb:bb:bb:02", "port_name": "Gi1/0/24"}],
+            2: [],
+            3: [],
+        },
+        arp_by_host={1: [], 2: [], 3: []},
+    )
+
+    out = await topology_module._correlate_fdb_topology(hosts, existing_neighbors_by_host={})
+    assert 1 in out and len(out[1]) == 1
+    edge = out[1][0]
+    assert edge["protocol"] == "inferred-fdb"
+    assert edge["local_interface"] == "Gi1/0/24"
+    assert edge["remote_device_name"] == "sw-b"
+    assert edge["remote_interface"] == "Gi1/0/2"
+
+
+@pytest.mark.asyncio
+async def test_correlate_fdb_multi_owner_port_skipped(monkeypatch):
+    """Trunk/uplink port (sees MACs of multiple inventory devices) → no edge."""
+    hosts = _make_hosts()
+    _patch_db(
+        monkeypatch,
+        sources_by_host={
+            1: [_iface_source(1, "Gi1/0/1", "aa:aa:aa:aa:aa:01")],
+            2: [_iface_source(2, "Gi1/0/2", "bb:bb:bb:bb:bb:02")],
+            3: [_iface_source(3, "Gi1/0/3", "cc:cc:cc:cc:cc:03")],
+        },
+        mac_by_host={
+            1: [
+                {"mac_address": "bb:bb:bb:bb:bb:02", "port_name": "Gi1/0/24"},
+                {"mac_address": "cc:cc:cc:cc:cc:03", "port_name": "Gi1/0/24"},
+            ],
+            2: [], 3: [],
+        },
+        arp_by_host={1: [], 2: [], 3: []},
+    )
+
+    out = await topology_module._correlate_fdb_topology(hosts, existing_neighbors_by_host={})
+    assert out == {}
+
+
+@pytest.mark.asyncio
+async def test_correlate_fdb_self_mac_ignored(monkeypatch):
+    """A device's own interface MAC seen on its own FDB must not produce a self-loop."""
+    hosts = _make_hosts()
+    _patch_db(
+        monkeypatch,
+        sources_by_host={
+            1: [_iface_source(1, "Gi1/0/1", "aa:aa:aa:aa:aa:01")],
+            2: [_iface_source(2, "Gi1/0/2", "bb:bb:bb:bb:bb:02")],
+            3: [],
+        },
+        mac_by_host={
+            # sw-a's FDB shows its own MAC on Gi1/0/1 (typical "self" entry)
+            1: [{"mac_address": "aa:aa:aa:aa:aa:01", "port_name": "Gi1/0/1"}],
+            2: [], 3: [],
+        },
+        arp_by_host={1: [], 2: [], 3: []},
+    )
+
+    out = await topology_module._correlate_fdb_topology(hosts, existing_neighbors_by_host={})
+    assert out == {}
+
+
+@pytest.mark.asyncio
+async def test_correlate_fdb_skips_cdp_lldp_covered_interfaces(monkeypatch):
+    """Don't emit inferred edges where a CDP or LLDP edge already exists."""
+    hosts = _make_hosts()
+    _patch_db(
+        monkeypatch,
+        sources_by_host={
+            1: [_iface_source(1, "Gi1/0/1", "aa:aa:aa:aa:aa:01")],
+            2: [_iface_source(2, "Gi1/0/2", "bb:bb:bb:bb:bb:02")],
+            3: [],
+        },
+        mac_by_host={
+            1: [{"mac_address": "bb:bb:bb:bb:bb:02", "port_name": "Gi1/0/24"}],
+            2: [], 3: [],
+        },
+        arp_by_host={1: [], 2: [], 3: []},
+    )
+
+    existing = {
+        1: [{
+            "local_interface": "Gi1/0/24", "remote_device_name": "sw-b",
+            "remote_interface": "Gi1/0/2", "protocol": "cdp",
+        }],
+    }
+    out = await topology_module._correlate_fdb_topology(hosts, existing_neighbors_by_host=existing)
+    assert out == {}
+
+
+@pytest.mark.asyncio
+async def test_correlate_fdb_arp_fallback_when_iface_mac_missing(monkeypatch):
+    """When ifPhysAddress for sw-c is unknown but ARP shows its IP→MAC, an inferred edge to sw-c is still produced."""
+    hosts = _make_hosts()
+    _patch_db(
+        monkeypatch,
+        sources_by_host={
+            1: [_iface_source(1, "Gi1/0/1", "aa:aa:aa:aa:aa:01")],
+            2: [_iface_source(2, "Gi1/0/2", "bb:bb:bb:bb:bb:02")],
+            3: [],  # no ifPhysAddress collected for sw-c yet
+        },
+        mac_by_host={
+            # sw-a sees an unknown MAC on Gi1/0/30; ARP on sw-a will tell us that
+            # MAC belongs to 10.0.0.3 (== sw-c).
+            1: [{"mac_address": "cc:cc:cc:cc:cc:99", "port_name": "Gi1/0/30"}],
+            2: [], 3: [],
+        },
+        arp_by_host={
+            1: [{"ip_address": "10.0.0.3", "mac_address": "cc:cc:cc:cc:cc:99"}],
+            2: [], 3: [],
+        },
+    )
+
+    out = await topology_module._correlate_fdb_topology(hosts, existing_neighbors_by_host={})
+    assert 1 in out and len(out[1]) == 1
+    edge = out[1][0]
+    assert edge["remote_device_name"] == "sw-c"
+    assert edge["remote_ip"] == "10.0.0.3"
+    assert edge["protocol"] == "inferred-fdb"
+    # interface unknown via ARP-only path
+    assert edge["remote_interface"] == ""
