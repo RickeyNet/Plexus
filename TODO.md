@@ -247,7 +247,7 @@ auditors review every tool with credentials, and medical devices have unique net
 - [ ] **Configuration template compliance diffing with remediation** — beyond golden config match/mismatch, show exactly which lines differ with context; generate remediation commands to bring non-compliant devices into alignment; support one-click "push fix" for non-compliant lines with approval gate and dry-run. *Why: knowing a device is non-compliant is step one. Knowing what to do about it — and being able to do it safely from the same tool — closes the loop and reduces remediation time from hours to minutes.*
 - [ ] **Scheduled config diff reports** — daily or weekly email showing all configuration changes across the network in a unified diff view; group by device, group, or change author; include before/after snippets and link to full diff in Plexus UI. *Why: compliance teams and network managers need a periodic "what changed" summary without logging into the tool. This is the most-requested report in every NMS deployment.*
 - [ ] Enable the ability edit devices in the cli within the topo view to make it similar to something like CML or cisco packet tracer.
-- [ ] 
+- [x] Add feature visibility toggle for hiding un used UI features
 
 ### Next — Workflow Maturity
 
