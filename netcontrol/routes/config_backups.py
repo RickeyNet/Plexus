@@ -5,9 +5,14 @@ from __future__ import annotations
 
 
 import asyncio
+import io
+import re as _re
+import zipfile
+from datetime import datetime, timezone
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
@@ -231,6 +236,119 @@ async def get_config_backup_diff(backup_id: int):
         "diff_lines_added": added,
         "diff_lines_removed": removed,
     }
+
+
+# ── Backup Downloads ─────────────────────────────────────────────────────────
+#
+# Two flavours: a single backup as plain text (for "save the running-config of
+# this device"), and a zip of many backups (filtered by host or policy) for
+# bulk archival / offsite copies.  This replaces the standalone
+# ``config_backup.py`` playbook that used to write timestamped .txt files to
+# ``./backups/``.
+
+
+def _safe_filename(text: str) -> str:
+    """Sanitize a string for use inside a filename (no path separators)."""
+    cleaned = _re.sub(r"[^A-Za-z0-9._-]+", "_", (text or "").strip())
+    return cleaned.strip("._-") or "device"
+
+
+def _backup_filename(backup: dict) -> str:
+    """Render the ``hostname_ip_YYYYMMDD_HHMMSS.txt`` filename for a backup row.
+
+    Mirrors the naming convention the legacy playbook produced so anyone
+    automating around the old format keeps working.
+    """
+    host_part = _safe_filename(backup.get("hostname") or backup.get("ip_address") or "device")
+    ip_part = _safe_filename(backup.get("ip_address") or "")
+    captured_raw = backup.get("captured_at") or ""
+    try:
+        # captured_at is stored without a tz suffix; treat as UTC.
+        dt = datetime.fromisoformat(str(captured_raw).replace("Z", "")).replace(tzinfo=timezone.utc)
+        date_part = dt.strftime("%Y%m%d_%H%M%S")
+    except Exception:  # noqa: BLE001 - fall back to a wall-clock stamp
+        date_part = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    parts = [p for p in (host_part, ip_part, date_part) if p]
+    return "_".join(parts) + ".txt"
+
+
+@router.get("/api/config-backups/download")
+async def download_config_backups_bulk(
+    request: Request,
+    host_id: int | None = Query(default=None),
+    policy_id: int | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
+):
+    """Return a ZIP of one ``.txt`` file per successful backup matching the filter.
+
+    Declared *before* ``/api/config-backups/{backup_id}`` so the literal
+    ``download`` path segment doesn't get parsed as an integer ID.
+    """
+    rows = await db.get_config_backups(host_id=host_id, policy_id=policy_id, limit=limit)
+    # Only successful captures have config_text worth exporting.
+    successful = [r for r in rows if r.get("status") == "success"]
+    if not successful:
+        raise HTTPException(status_code=404, detail="No successful backups match the filter")
+
+    buf = io.BytesIO()
+    used_names: set[str] = set()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # The list endpoint omits config_text for performance — re-fetch each
+        # row's text individually.  500-row cap on the query keeps this bounded.
+        for row in successful:
+            full = await db.get_config_backup(row["id"])
+            if not full or not full.get("config_text"):
+                continue
+            name = _backup_filename(full)
+            # Disambiguate if two backups happen to render the same filename.
+            base, ext = name.rsplit(".", 1)
+            counter = 2
+            while name in used_names:
+                name = f"{base}_{counter}.{ext}"
+                counter += 1
+            used_names.add(name)
+            zf.writestr(name, full["config_text"])
+
+    buf.seek(0)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    fname = f"config_backups_{stamp}.zip"
+
+    session = _get_session(request)
+    await _audit(
+        "config-backups", "download.bulk",
+        user=session["user"] if session else "",
+        detail=f"host_id={host_id} policy_id={policy_id} count={len(used_names)}",
+        correlation_id=_corr_id(request),
+    )
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/api/config-backups/{backup_id}/download")
+async def download_config_backup(backup_id: int, request: Request):
+    """Return a single backup as a plain ``.txt`` attachment."""
+    backup = await db.get_config_backup(backup_id)
+    if not backup:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    if backup.get("status") != "success" or not backup.get("config_text"):
+        raise HTTPException(status_code=400, detail="Backup does not contain a successful config capture")
+
+    fname = _backup_filename(backup)
+    session = _get_session(request)
+    await _audit(
+        "config-backups", "download.single",
+        user=session["user"] if session else "",
+        detail=f"backup_id={backup_id} host_id={backup.get('host_id')}",
+        correlation_id=_corr_id(request),
+    )
+    return Response(
+        content=backup["config_text"],
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.get("/api/config-backups/{backup_id}")

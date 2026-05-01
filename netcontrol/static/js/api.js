@@ -1090,6 +1090,21 @@ export async function getConfigBackupSummary() {
     return cachedGet('/config-backups/summary', () => apiRequest('/config-backups/summary'));
 }
 
+// URL builders for backup downloads.  The endpoints stream the file
+// straight to the browser, so the UI navigates to these URLs (via a
+// hidden anchor click) instead of using fetch + blob.
+export function configBackupDownloadUrl(id) {
+    return `${API_BASE}/config-backups/${id}/download`;
+}
+
+export function configBackupBulkDownloadUrl({ host_id = null, policy_id = null } = {}) {
+    const params = new URLSearchParams();
+    if (host_id != null) params.append('host_id', host_id);
+    if (policy_id != null) params.append('policy_id', policy_id);
+    const qs = params.toString();
+    return `${API_BASE}/config-backups/download${qs ? '?' + qs : ''}`;
+}
+
 // ── Compliance Profiles & Scans ──────────────────────────────────────────────
 
 export async function getComplianceProfiles() {

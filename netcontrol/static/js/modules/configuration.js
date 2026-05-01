@@ -975,6 +975,7 @@ function renderBackupHistory(backups) {
                     <span style="color:${statusColor}; font-size:0.85em;">${b.status}</span>
                     <button class="btn btn-sm btn-secondary" onclick="viewBackupDetail(${b.id})">View</button>
                     ${b.status === 'success' ? `<button class="btn btn-sm btn-secondary" onclick="viewBackupDiff(${b.id})">Diff</button>` : ''}
+                    ${b.status === 'success' ? `<button class="btn btn-sm btn-secondary" onclick="downloadBackup(${b.id})" title="Download running-config as .txt">Download</button>` : ''}
                     <button class="btn btn-sm btn-secondary" onclick="showRestoreBackupModal(${b.id})">Restore</button>
                     <button class="btn btn-sm btn-danger" onclick="confirmDeleteBackup(${b.id})">Delete</button>
                 </div>
@@ -1267,6 +1268,41 @@ async function runBackupPolicyNow(id) {
     }
 }
 window.runBackupPolicyNow = runBackupPolicyNow;
+
+// Trigger a browser download for a single backup or a zip of many.  We
+// build a hidden anchor and click it so the auth cookie travels on the
+// request and the browser handles the Save dialog from Content-Disposition.
+function _triggerDownload(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.style.display = 'none';
+    // Setting download="" lets the browser fall back to the server-supplied
+    // filename in the Content-Disposition header.
+    a.setAttribute('download', '');
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 0);
+}
+
+function downloadBackup(id) {
+    _triggerDownload(api.configBackupDownloadUrl(id));
+}
+window.downloadBackup = downloadBackup;
+
+async function downloadAllBackups() {
+    // The bulk endpoint returns 404 when nothing matches; do a quick guard
+    // against the currently-loaded list so the user gets a friendlier toast
+    // than a generic browser error page.
+    const backups = listViewState.configBackups.backups || [];
+    const hasSuccess = backups.some(b => b.status === 'success');
+    if (!hasSuccess) {
+        showToast('No successful backups to download yet.', 'warning');
+        return;
+    }
+    showToast('Preparing download...', 'success');
+    _triggerDownload(api.configBackupBulkDownloadUrl());
+}
+window.downloadAllBackups = downloadAllBackups;
 
 async function viewBackupDetail(id) {
     try {

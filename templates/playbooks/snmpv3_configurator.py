@@ -1,27 +1,37 @@
 """
 SNMPv3 Configurator — Playbook
 
-Converts the legacy SNMPv3 helper script into a Plexus playbook.
-Uses inventory hosts + selected template commands, supports dry-run,
-and streams progress via LogEvent yields.
+Pushes SNMPv3 configuration onto Cisco IOS switches using a
+user-selected template (groups, users, views, ACLs, etc.).
+
+Special care is taken to pin the SNMP engine ID *before* the push.
+Cisco IOS regenerates the engine ID when certain ``snmp-server``
+lines are added, and because SNMPv3 user keys are localized to that
+engine ID, regeneration silently invalidates every existing user.
+The pin step keeps monitoring working across the change.
+
+Streams progress as ``LogEvent`` yields so the UI can render it live,
+and falls back to simulation mode when Netmiko isn't installed.
 """
 
 import asyncio
-import random
 from collections.abc import AsyncGenerator
 
 from routes.runner import BasePlaybook, LogEvent, register_playbook
 
-try:
-    from netmiko import ConnectHandler
-    from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
-    NETMIKO_AVAILABLE = True
-except ImportError:
-    NETMIKO_AVAILABLE = False
+# Shared helpers — see _common.py for design notes.
+from templates.playbooks._common import (
+    NETMIKO_AVAILABLE,
+    connect_device,
+    pin_snmp_engine_id,
+    simulate_connect,
+)
 
 
 @register_playbook
 class Snmpv3Configurator(BasePlaybook):
+    # Metadata read by the UI.  ``requires_template`` forces the user
+    # to choose an SNMPv3 command template before the run can start.
     filename = "snmpv3_configurator.py"
     display_name = "SNMPv3 Configurator"
     description = "Applies SNMPv3 config to Cisco IOS switches using a template."
@@ -35,8 +45,11 @@ class Snmpv3Configurator(BasePlaybook):
         template_commands: list[str] | None = None,
         dry_run: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
+        # No template means nothing to push — fail fast with a clear error.
         if not template_commands:
-            yield self.log_error("No template selected; this playbook requires SNMPv3 commands.")
+            yield self.log_error(
+                "No template selected; this playbook requires SNMPv3 commands."
+            )
             return
 
         yield self.log_info(f"SNMPv3 Configurator — targeting {len(hosts)} device(s)")
@@ -44,12 +57,14 @@ class Snmpv3Configurator(BasePlaybook):
         for cmd in template_commands:
             yield self.log_info(f"  {cmd}")
 
+        # Loud banner so dry-run vs live can't be confused at a glance.
         if dry_run:
             yield self.log_warn("*** DRY-RUN MODE — commands will not be written ***")
         else:
             yield self.log_warn("*** LIVE MODE — commands WILL be written ***")
 
         for host in hosts:
+            # Accept either inventory shape (``ip_address`` or ``host``).
             ip = host.get("ip_address") or host.get("host")
             hostname = host.get("hostname", ip or "unknown")
             device_type = host.get("device_type", "cisco_ios")
@@ -57,22 +72,16 @@ class Snmpv3Configurator(BasePlaybook):
             yield self.log_sep()
             yield self.log_info(f"Connecting to {hostname} ({ip}) ...", host=hostname)
 
+            # Real or simulated execution path; identical event shape either way.
             if NETMIKO_AVAILABLE:
                 async for event in self._process_real_device(
-                    ip,
-                    hostname,
-                    device_type,
-                    credentials,
-                    template_commands,
-                    dry_run,
+                    ip, hostname, device_type, credentials,
+                    template_commands, dry_run,
                 ):
                     yield event
             else:
                 async for event in self._process_simulated_device(
-                    ip,
-                    hostname,
-                    template_commands,
-                    dry_run,
+                    ip, hostname, template_commands, dry_run,
                 ):
                     yield event
 
@@ -88,35 +97,18 @@ class Snmpv3Configurator(BasePlaybook):
         template_commands: list[str],
         dry_run: bool,
     ) -> AsyncGenerator[LogEvent, None]:
-        device = {
-            "device_type": device_type,
-            "host": ip,
-            "username": credentials.get("username"),
-            "password": credentials.get("password"),
-            "secret": credentials.get("secret") or credentials.get("password"),
-            "timeout": 30,
-            "banner_timeout": 30,
-        }
+        # connect_device builds the device dict, opens the SSH session,
+        # promotes to enable mode, and disconnects on exit.
+        async with connect_device(
+            self, ip, hostname, device_type, credentials
+        ) as (conn, events):
+            for ev in events:
+                yield ev
+            if conn is None:
+                return
 
-        try:
-            conn = await asyncio.to_thread(ConnectHandler, **device)
-        except NetmikoTimeoutException:
-            yield self.log_error(f"TIMEOUT connecting to {ip} — skipping.", host=hostname)
-            return
-        except NetmikoAuthenticationException:
-            yield self.log_error(f"AUTH FAILED for {ip} — skipping.", host=hostname)
-            return
-        except Exception as e:
-            yield self.log_error(f"Connection error for {ip}: {e}", host=hostname)
-            return
-
-        try:
-            if not conn.check_enable_mode():
-                await asyncio.to_thread(conn.enable)
-
-            prompt = conn.find_prompt().replace("#", "").replace(">", "").strip()
-            yield self.log_success(f"Connected to {prompt} ({ip})", host=hostname)
-
+            # Step 1 — show the operator what's already there.  Useful
+            # context when troubleshooting after the run.
             yield self.log_info("Checking existing SNMP configuration ...", host=hostname)
             existing = await asyncio.to_thread(
                 conn.send_command, "show running-config | include snmp-server"
@@ -126,14 +118,13 @@ class Snmpv3Configurator(BasePlaybook):
             else:
                 yield self.log_info("No existing SNMP configuration found.", host=hostname)
 
-            # Pin the SNMP engine ID before applying any SNMP changes.
-            # Cisco IOS regenerates the engine ID when certain
-            # snmp-server lines are added, which invalidates all
-            # SNMPv3 localized auth/priv keys.
+            # Step 2 — pin the SNMP engine ID before any changes.  Skip
+            # for dry-runs since pinning is itself a config write.
             if not dry_run:
-                async for ev in self._pin_snmp_engine_id(conn, hostname):
+                async for ev in pin_snmp_engine_id(self, conn, hostname):
                     yield ev
 
+            # Step 3 — push the template (or just preview it).
             if dry_run:
                 yield self.log_info("[DRY-RUN] Would apply:", host=hostname)
                 for cmd in template_commands:
@@ -143,53 +134,17 @@ class Snmpv3Configurator(BasePlaybook):
                 output = await asyncio.to_thread(conn.send_config_set, template_commands)
                 yield self.log_info(output or "(no output)", host=hostname)
 
+                # Step 4 — verify users were actually created.
                 verify = await asyncio.to_thread(conn.send_command, "show snmp user")
                 yield self.log_info(f"SNMPv3 user verification:\n{verify}", host=hostname)
 
+                # Step 5 — persist running-config so it survives a reload.
                 yield self.log_info("Saving running config to startup ...", host=hostname)
                 await asyncio.to_thread(conn.save_config)
                 yield self.log_success("Config saved.", host=hostname)
 
-            yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
-
-        finally:
-            conn.disconnect()
-
-    async def _pin_snmp_engine_id(self, conn, hostname: str) -> AsyncGenerator[LogEvent, None]:
-        """Read the current SNMP engine ID and pin it with an explicit config.
-
-        Cisco IOS regenerates the engine ID when certain snmp-server
-        commands are added/removed.  This invalidates all SNMPv3 user
-        keys (they are localized to the engine ID).  By setting
-        ``snmp-server engineID local <id>`` before applying SNMP
-        changes, the engine ID is pinned and keys remain valid.
-        """
-        import re
-
-        try:
-            output = await asyncio.to_thread(
-                conn.send_command, "show snmp engineID"
-            )
-            match = re.search(r"[Ll]ocal\s+.*[Ee]ngine\s*ID[:\s]+([0-9A-Fa-f]+)", output)
-            if not match:
-                yield self.log_info(
-                    "Could not detect SNMP engine ID — skipping pin.",
-                    host=hostname,
-                )
-                return
-            engine_id = match.group(1).strip()
-            yield self.log_info(
-                f"Pinning SNMP engine ID ({engine_id}) to prevent SNMPv3 key invalidation.",
-                host=hostname,
-            )
-            await asyncio.to_thread(
-                conn.send_config_set,
-                [f"snmp-server engineID local {engine_id}"],
-            )
-        except Exception as exc:
-            yield self.log_warn(
-                f"Could not pin SNMP engine ID: {exc}",
-                host=hostname,
+            yield self.log_success(
+                f"Finished processing {hostname} ({ip}).", host=hostname
             )
 
     async def _process_simulated_device(
@@ -199,16 +154,18 @@ class Snmpv3Configurator(BasePlaybook):
         template_commands: list[str],
         dry_run: bool,
     ) -> AsyncGenerator[LogEvent, None]:
-        await asyncio.sleep(random.uniform(0.2, 0.6))
+        # Fake connect — random delay + 8% chance of "timeout".
+        async for ev in simulate_connect(self, ip, hostname):
+            yield ev
+            if ev.level == "error":
+                return
 
-        if random.random() < 0.08:
-            yield self.log_error(f"TIMEOUT connecting to {ip} — skipping.", host=hostname)
-            return
-
-        yield self.log_success(f"Connected to {hostname} ({ip})", host=hostname)
-        await asyncio.sleep(random.uniform(0.2, 0.4))
-
-        fake_existing = "snmp-server group SECURE v3 priv\nsnmp-server user netops SECURE v3 auth sha *** priv aes 256 ***"
+        # Pretend there's already an SNMP config so the verify-style
+        # output renders something realistic in the UI.
+        fake_existing = (
+            "snmp-server group SECURE v3 priv\n"
+            "snmp-server user netops SECURE v3 auth sha *** priv aes 256 ***"
+        )
         yield self.log_info(f"Current SNMP config:\n{fake_existing}", host=hostname)
 
         if dry_run:
@@ -217,9 +174,13 @@ class Snmpv3Configurator(BasePlaybook):
                 yield self.log_info(f"  {cmd}", host=hostname)
         else:
             yield self.log_info("Applying SNMPv3 configuration ...", host=hostname)
-            await asyncio.sleep(random.uniform(0.2, 0.4))
             yield self.log_success("Template applied.", host=hostname)
-            yield self.log_info("SNMPv3 user verification:\nuser netops\n  auth sha ******\n  priv aes-256 ******", host=hostname)
+            yield self.log_info(
+                "SNMPv3 user verification:\nuser netops\n  auth sha ******\n  priv aes-256 ******",
+                host=hostname,
+            )
             yield self.log_success("Config saved.", host=hostname)
 
-        yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
+        yield self.log_success(
+            f"Finished processing {hostname} ({ip}).", host=hostname
+        )
