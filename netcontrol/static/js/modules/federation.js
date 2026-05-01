@@ -278,6 +278,20 @@ function _renderPage() {
             <h2>Federation Overview</h2>
             <button class="btn btn-primary" id="federation-add-btn">Add Peer</button>
         </div>
+        <details style="border:1px solid var(--border);background:var(--bg-secondary);border-radius:0.5rem;padding:0.5rem 1rem;margin-bottom:1rem;">
+            <summary style="display:flex;gap:0.6rem;align-items:center;cursor:pointer;font-size:0.9rem;color:var(--text);list-style:none;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:var(--accent);" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                <strong>What is Federation?</strong>
+            </summary>
+            <div style="font-size:0.85rem;line-height:1.45;color:var(--text-muted);padding:0.5rem 0 0.25rem 2.4rem;">
+                <p style="margin:0 0 0.4rem 0;">Federation lets you connect multiple Plexus instances together so this UI can show aggregated device counts, alerts, and health across all of them — useful for MSPs managing multiple customer networks or organizations with regional deployments (e.g. NA, EU, APAC). Each peer remains independent and authoritative for its own data; this view is read-only aggregation over HTTPS using the remote's API token.</p>
+                <p style="margin:0;"><strong style="color:var(--text);">You don't need this if:</strong> you only run a single Plexus instance. In that case, you can hide it from the sidebar via Settings → Feature Visibility.</p>
+            </div>
+        </details>
         <div id="federation-overview"></div>
         <h3 style="margin-top:1.5rem;">Registered Peers</h3>
         <div id="federation-peers-table"></div>

@@ -320,6 +320,7 @@ function toggleUtilizationOverlay() {
 
 function _refreshTopologyEdgeStyles() {
     if (_topologyNetwork && _topologyData) {
+        const tc = _topoThemeColors || _getTopoThemeColors();
         const edgesDS = _topologyNetwork.body.data.edges;
         const updates = _topologyData.edges.map(e => {
             const overlay = _edgeOverlayProps(e);
@@ -336,6 +337,13 @@ function _refreshTopologyEdgeStyles() {
                     enabled: true,
                     color: overlay.shadowColor,
                     size: 6, x: 0, y: 0,
+                },
+                font: {
+                    size: _topoLabelsVisible ? 9 : 0,
+                    color: tc.edgeFont,
+                    strokeWidth: 2,
+                    strokeColor: tc.edgeFontStroke,
+                    align: 'middle',
                 },
                 chosen: {
                     edge: false,
