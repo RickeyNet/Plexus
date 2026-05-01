@@ -3,9 +3,10 @@ Template Configurator — Generic Playbook
 
 Connects to Cisco IOS switches and applies the selected configuration
 template in config mode.  Works with any template stored in Plexus
-(access-port hardening, trunk config, NTP, banners, etc.).
+(access-port hardening, trunk config, NTP, banners, SNMPv3, etc.).
 
-Supports dry-run preview and live mode with automatic config save.
+Supports a dry-run preview and a live mode that automatically saves
+the running config when the push succeeds.
 """
 
 import asyncio
@@ -14,20 +15,19 @@ from collections.abc import AsyncGenerator
 
 from routes.runner import BasePlaybook, LogEvent, register_playbook
 
-try:
-    from netmiko import ConnectHandler
-    from netmiko.exceptions import (
-        NetmikoAuthenticationException,
-        NetmikoTimeoutException,
-    )
-
-    NETMIKO_AVAILABLE = True
-except ImportError:
-    NETMIKO_AVAILABLE = False
+# Shared helpers — see _common.py.  Underscore prefix keeps the module
+# out of the playbook auto-loader.
+from templates.playbooks._common import (
+    NETMIKO_AVAILABLE,
+    connect_device,
+    pin_snmp_engine_id,
+    simulate_connect,
+)
 
 
 @register_playbook
 class TemplateConfigurator(BasePlaybook):
+    # Metadata read by the UI to render the playbook card.
     filename = "template_configurator.py"
     display_name = "Template Configurator"
     description = (
@@ -36,7 +36,7 @@ class TemplateConfigurator(BasePlaybook):
         "playbook applies it in config mode, then saves the running config."
     )
     tags = ["template", "config", "cisco", "general"]
-    requires_template = True
+    requires_template = True  # No template ⇒ no work; UI gates the run.
 
     async def run(
         self,
@@ -45,6 +45,8 @@ class TemplateConfigurator(BasePlaybook):
         template_commands: list[str] | None = None,
         dry_run: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
+        # Hard fail when no template was selected — there is nothing
+        # generic to push without one.
         if not template_commands:
             yield self.log_error(
                 "No template selected — this playbook requires a configuration template."
@@ -61,10 +63,13 @@ class TemplateConfigurator(BasePlaybook):
         else:
             yield self.log_warn("*** LIVE MODE — commands WILL be written ***")
 
+        # Per-host success/failure tally for the closing summary line.
         succeeded = 0
         failed = 0
 
         for host in hosts:
+            # Inventory entries can use either ``ip_address`` or ``host``;
+            # accept either so this playbook plays nicely with both shapes.
             ip = host.get("ip_address") or host.get("host")
             hostname = host.get("hostname", ip or "unknown")
             device_type = host.get("device_type", "cisco_ios")
@@ -72,8 +77,11 @@ class TemplateConfigurator(BasePlaybook):
             yield self.log_sep()
             yield self.log_info(f"Connecting to {hostname} ({ip}) ...", host=hostname)
 
+            # Choose the real or simulated path.  We watch each event's
+            # level: any ``error`` flips this host into the "failed"
+            # bucket for the summary.
+            ok = True
             if NETMIKO_AVAILABLE:
-                ok = True
                 async for event in self._process_real_device(
                     ip, hostname, device_type, credentials,
                     template_commands, dry_run,
@@ -82,7 +90,6 @@ class TemplateConfigurator(BasePlaybook):
                         ok = False
                     yield event
             else:
-                ok = True
                 async for event in self._process_simulated_device(
                     ip, hostname, template_commands, dry_run,
                 ):
@@ -95,6 +102,7 @@ class TemplateConfigurator(BasePlaybook):
             else:
                 failed += 1
 
+        # Final summary — coloured warn if anything failed, success otherwise.
         yield self.log_sep()
         summary = f"Complete: {succeeded} succeeded, {failed} failed out of {len(hosts)} device(s)."
         if failed:
@@ -113,114 +121,60 @@ class TemplateConfigurator(BasePlaybook):
         template_commands: list[str],
         dry_run: bool,
     ) -> AsyncGenerator[LogEvent, None]:
-        device = {
-            "device_type": device_type,
-            "host": ip,
-            "username": credentials.get("username"),
-            "password": credentials.get("password"),
-            "secret": credentials.get("secret") or credentials.get("password"),
-            "timeout": 30,
-            "banner_timeout": 30,
-        }
-
-        try:
-            conn = await asyncio.to_thread(ConnectHandler, **device)
-        except NetmikoTimeoutException:
-            yield self.log_error(f"TIMEOUT connecting to {ip} — skipping.", host=hostname)
-            return
-        except NetmikoAuthenticationException:
-            yield self.log_error(f"AUTH FAILED for {ip} — skipping.", host=hostname)
-            return
-        except Exception as e:
-            yield self.log_error(f"Connection error for {ip}: {e}", host=hostname)
-            return
-
-        try:
-            # Enter enable mode if needed
-            if not conn.check_enable_mode():
-                await asyncio.to_thread(conn.enable)
-
-            prompt = conn.find_prompt().replace("#", "").replace(">", "").strip()
-            yield self.log_success(f"Connected to {prompt} ({ip})", host=hostname)
-
-            # If the template contains snmp-server commands, pin the SNMP
-            # engine ID first.  Cisco IOS regenerates the engine ID when
-            # certain snmp-server lines are added, which invalidates all
-            # SNMPv3 localized keys and breaks monitoring.
-            has_snmp_cmds = any(
-                cmd.strip().lower().startswith("snmp-server")
-                for cmd in template_commands
-            )
-            if has_snmp_cmds and not dry_run:
-                async for ev in self._pin_snmp_engine_id(conn, hostname):
-                    yield ev
-
-            if dry_run:
-                yield self.log_info("[DRY-RUN] Would apply the following commands:", host=hostname)
-                for cmd in template_commands:
-                    yield self.log_info(f"  {cmd}", host=hostname)
-            else:
-                yield self.log_info("Applying template configuration ...", host=hostname)
-                output = await asyncio.to_thread(
-                    conn.send_config_set, template_commands
-                )
-                if output.strip():
-                    yield self.log_info(f"Device output:\n{output}", host=hostname)
-
-                yield self.log_info("Saving running config to startup ...", host=hostname)
-                await asyncio.to_thread(conn.save_config)
-                yield self.log_success("Config saved.", host=hostname)
-
-            yield self.log_success(
-                f"Finished processing {hostname} ({ip}).", host=hostname
-            )
-
-        except Exception as e:
-            yield self.log_error(
-                f"Error configuring {hostname} ({ip}): {e}", host=hostname
-            )
-        finally:
-            conn.disconnect()
-
-    # ── SNMP engine ID preservation ─────────────────────────────────────
-
-    async def _pin_snmp_engine_id(self, conn, hostname: str) -> AsyncGenerator[LogEvent, None]:
-        """Read the current SNMP engine ID and pin it with an explicit config.
-
-        Cisco IOS regenerates the engine ID when certain snmp-server
-        commands are added/removed.  This invalidates all SNMPv3 user
-        keys (they are localized to the engine ID).  By setting
-        ``snmp-server engineID local <id>`` before applying SNMP
-        changes, the engine ID is pinned and keys remain valid.
-        """
-        import re
-
-        try:
-            output = await asyncio.to_thread(
-                conn.send_command, "show snmp engineID"
-            )
-            # Typical output: "Local SNMP engineID: 80000009030050568D9CDFC0"
-            match = re.search(r"[Ll]ocal\s+.*[Ee]ngine\s*ID[:\s]+([0-9A-Fa-f]+)", output)
-            if not match:
-                yield self.log_info(
-                    "Could not detect SNMP engine ID — skipping pin.",
-                    host=hostname,
-                )
+        # connect_device manages the device dict, exception handling,
+        # enable-mode promotion, and clean disconnect on exit.
+        async with connect_device(
+            self, ip, hostname, device_type, credentials
+        ) as (conn, events):
+            for ev in events:
+                yield ev
+            if conn is None:
                 return
-            engine_id = match.group(1).strip()
-            yield self.log_info(
-                f"Pinning SNMP engine ID ({engine_id}) to prevent SNMPv3 key invalidation.",
-                host=hostname,
-            )
-            await asyncio.to_thread(
-                conn.send_config_set,
-                [f"snmp-server engineID local {engine_id}"],
-            )
-        except Exception as exc:
-            yield self.log_warn(
-                f"Could not pin SNMP engine ID: {exc}",
-                host=hostname,
-            )
+
+            try:
+                # If the template touches SNMP, pin the engine ID
+                # *before* the push so SNMPv3 user keys keep working
+                # afterwards.  See pin_snmp_engine_id docstring for why.
+                has_snmp_cmds = any(
+                    cmd.strip().lower().startswith("snmp-server")
+                    for cmd in template_commands
+                )
+                if has_snmp_cmds and not dry_run:
+                    async for ev in pin_snmp_engine_id(self, conn, hostname):
+                        yield ev
+
+                if dry_run:
+                    # Preview only — print exactly what would be sent.
+                    yield self.log_info(
+                        "[DRY-RUN] Would apply the following commands:",
+                        host=hostname,
+                    )
+                    for cmd in template_commands:
+                        yield self.log_info(f"  {cmd}", host=hostname)
+                else:
+                    yield self.log_info("Applying template configuration ...", host=hostname)
+                    # send_config_set drops into config mode, runs each line, exits.
+                    output = await asyncio.to_thread(
+                        conn.send_config_set, template_commands
+                    )
+                    if output.strip():
+                        yield self.log_info(f"Device output:\n{output}", host=hostname)
+
+                    # Persist to startup so changes survive a reload.
+                    yield self.log_info("Saving running config to startup ...", host=hostname)
+                    await asyncio.to_thread(conn.save_config)
+                    yield self.log_success("Config saved.", host=hostname)
+
+                yield self.log_success(
+                    f"Finished processing {hostname} ({ip}).", host=hostname
+                )
+
+            except Exception as e:
+                # Any unexpected failure during the push surfaces here
+                # as an ``error`` event, which flips this host's bucket.
+                yield self.log_error(
+                    f"Error configuring {hostname} ({ip}): {e}", host=hostname
+                )
 
     # ── Simulation mode for dev/testing ───────────────────────────────────
 
@@ -231,23 +185,24 @@ class TemplateConfigurator(BasePlaybook):
         template_commands: list[str],
         dry_run: bool,
     ) -> AsyncGenerator[LogEvent, None]:
-        await asyncio.sleep(random.uniform(0.2, 0.6))
+        # Fake the connect handshake (random delay + 8% fake timeout).
+        async for ev in simulate_connect(self, ip, hostname):
+            yield ev
+            if ev.level == "error":
+                return
 
-        # Simulate occasional connection failures
-        if random.random() < 0.08:
-            yield self.log_error(f"TIMEOUT connecting to {ip} — skipping.", host=hostname)
-            return
-
-        yield self.log_success(f"Connected to {hostname} ({ip})", host=hostname)
         await asyncio.sleep(random.uniform(0.2, 0.4))
 
         if dry_run:
-            yield self.log_info("[DRY-RUN] Would apply the following commands:", host=hostname)
+            yield self.log_info(
+                "[DRY-RUN] Would apply the following commands:", host=hostname
+            )
             for cmd in template_commands:
                 yield self.log_info(f"  {cmd}", host=hostname)
         else:
             yield self.log_info("Applying template configuration ...", host=hostname)
             await asyncio.sleep(random.uniform(0.3, 0.6))
+            # Render a believable IOS config-mode echo so the UI looks real.
             yield self.log_info(
                 "Device output:\n"
                 + "\n".join(f"{hostname}(config)#{cmd}" for cmd in template_commands),
