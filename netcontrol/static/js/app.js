@@ -250,7 +250,7 @@ export function createStreamHandler(el) {
     };
 }
 export const listViewState = {
-    inventory: { items: [], query: '', sort: 'name_asc' },
+    inventory: { items: [], query: '', sort: 'custom' },
     playbooks: { items: [], query: '', sort: 'name_asc' },
     jobs: { items: [], query: '', sort: 'started_desc', status: 'all', dryRun: 'all', dateRange: 'all' },
     templates: { items: [], query: '', sort: 'name_asc' },

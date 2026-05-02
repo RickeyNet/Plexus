@@ -185,11 +185,14 @@ function templateInventory() {
     <div class="list-controls">
         <input id="inventory-search" class="form-input list-control-search" type="search" placeholder="Search groups, hosts, IPs, device types">
         <select id="inventory-sort" class="form-select list-control-select">
+            <option value="custom">Custom (drag to reorder)</option>
             <option value="name_asc">Name: A-Z</option>
             <option value="name_desc">Name: Z-A</option>
             <option value="hosts_desc">Host Count: High-Low</option>
             <option value="hosts_asc">Host Count: Low-High</option>
         </select>
+        <button id="inventory-density-toggle" class="btn btn-secondary btn-sm" onclick="toggleInventoryDensity()" title="Toggle compact mode">Compact</button>
+        <button id="inventory-collapse-all" class="btn btn-secondary btn-sm" onclick="toggleAllInventoryGroups()" title="Collapse or expand all groups">Collapse All</button>
     </div>
     <div id="inventory-groups" class="groups-list">
         ${skel(3)}

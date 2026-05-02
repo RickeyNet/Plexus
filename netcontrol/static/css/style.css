@@ -2363,6 +2363,75 @@ input[type="number"].form-input {
     gap: 1rem;
 }
 
+.group-drag-handle {
+    cursor: grab;
+    user-select: none;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    letter-spacing: -2px;
+}
+.group-drag-handle:hover {
+    color: var(--primary-light);
+}
+.inventory-group-card[draggable="true"] {
+    cursor: default;
+}
+.inventory-group-card.dragging {
+    opacity: 0.5;
+}
+
+/* Collapsed group: hide host list, keep header */
+.inventory-group-card.is-collapsed .hosts-list {
+    display: none;
+}
+.group-collapse-caret {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    width: 0.9rem;
+    display: inline-block;
+    text-align: center;
+    transition: color 0.15s;
+}
+.inventory-group-card:hover .group-collapse-caret {
+    color: var(--primary-light);
+}
+.group-host-count {
+    color: var(--text-muted);
+    font-weight: 400;
+    font-size: 0.85em;
+}
+
+/* Compact mode: tighter padding, smaller fonts */
+.groups-list.compact .inventory-group-card .card-header {
+    padding: 0.5rem 0.75rem;
+}
+.groups-list.compact .inventory-group-card .card-title {
+    font-size: 0.95rem;
+}
+.groups-list.compact .inventory-group-card .card-description {
+    font-size: 0.75rem;
+}
+.groups-list.compact .inventory-group-card .hosts-list {
+    padding: 0.25rem 0.75rem 0.5rem;
+}
+.groups-list.compact .inventory-group-card .host-item {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+}
+.groups-list.compact .inventory-group-card .host-columns-header {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.4rem;
+}
+.groups-list.compact .inventory-group-card .btn-sm {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.7rem;
+}
+.groups-list.compact {
+    gap: 0.5rem;
+}
+
 .groups-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
