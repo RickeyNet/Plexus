@@ -55,6 +55,7 @@ function _getTopoThemeColors() {
         edgeLldp:  { color: v('--topo-edge-lldp', '#00e676'), highlight: v('--topo-edge-lldp-hi', '#69f0ae'), hover: v('--topo-edge-lldp-hi', '#69f0ae'), opacity: 0.8 },
         edgeOspf:  { color: v('--topo-edge-ospf', '#ffab40'), highlight: v('--topo-edge-ospf-hi', '#ffd180'), hover: v('--topo-edge-ospf-hi', '#ffd180'), opacity: 0.8 },
         edgeBgp:   { color: v('--topo-edge-bgp', '#e040fb'), highlight: v('--topo-edge-bgp-hi', '#ea80fc'), hover: v('--topo-edge-bgp-hi', '#ea80fc'), opacity: 0.8 },
+        edgeInferred: { color: v('--topo-edge-inferred', '#9e9e9e'), highlight: v('--topo-edge-inferred-hi', '#bdbdbd'), hover: v('--topo-edge-inferred-hi', '#bdbdbd'), opacity: 0.65 },
         // Path highlighting
         pathGlow:  v('--topo-path-glow', 'rgba(255,255,255,0.6)'),
         dimColor:  { background: v('--topo-dim-bg', 'rgba(40,50,60,0.4)'), border: v('--topo-dim-border', 'rgba(60,70,80,0.4)') },
@@ -105,6 +106,7 @@ function _topoEdgeColor(protocol) {
     if (protocol === 'lldp') return tc.edgeLldp;
     if (protocol === 'ospf') return tc.edgeOspf;
     if (protocol === 'bgp')  return tc.edgeBgp;
+    if (protocol === 'inferred-fdb') return tc.edgeInferred;
     return tc.edgeCdp;
 }
 
@@ -247,13 +249,13 @@ function _edgeOverlayProps(edge) {
         label = `${label ? label + ' ' : ''}[STP:${stp.port_state}${role}]`;
     }
 
-    const baseProtocolShadow = ({ lldp: 'rgba(0,230,118,0.3)', ospf: 'rgba(255,171,64,0.3)', bgp: 'rgba(224,64,251,0.3)' }[edge.protocol] || 'rgba(0,176,255,0.3)');
+    const baseProtocolShadow = ({ lldp: 'rgba(0,230,118,0.3)', ospf: 'rgba(255,171,64,0.3)', bgp: 'rgba(224,64,251,0.3)', 'inferred-fdb': 'rgba(158,158,158,0.25)' }[edge.protocol] || 'rgba(0,176,255,0.3)');
 
     return {
         label,
         color: stpStyle ? stpStyle.color : (utilColor || _topoEdgeColor(edge.protocol)),
         width: stpStyle ? Math.max(utilWidth, stpStyle.width) : utilWidth,
-        dashes: stpStyle ? stpStyle.dashes : (edge.protocol === 'lldp' ? [8, 5] : edge.protocol === 'ospf' ? [12, 4, 4, 4] : edge.protocol === 'bgp' ? [4, 4] : false),
+        dashes: stpStyle ? stpStyle.dashes : (edge.protocol === 'lldp' ? [8, 5] : edge.protocol === 'ospf' ? [12, 4, 4, 4] : edge.protocol === 'bgp' ? [4, 4] : edge.protocol === 'inferred-fdb' ? [2, 4] : false),
         shadowColor: stpStyle ? stpStyle.shadow : (hasUtil ? _utilShadow(utilPct) : baseProtocolShadow),
     };
 }
@@ -1022,7 +1024,7 @@ function showTopologyNodeDetails(node, allEdges) {
             const peerLabel = isSource
                 ? (_topologyData?.nodes?.find(n => n.id === edge.to)?.label || edge.to)
                 : (_topologyData?.nodes?.find(n => n.id === edge.from)?.label || edge.from);
-            const proto = { cdp: 'CDP', lldp: 'LLDP', ospf: 'OSPF', bgp: 'BGP' }[edge.protocol] || edge.protocol?.toUpperCase() || 'L2';
+            const proto = { cdp: 'CDP', lldp: 'LLDP', ospf: 'OSPF', bgp: 'BGP', 'inferred-fdb': 'INFERRED' }[edge.protocol] || edge.protocol?.toUpperCase() || 'L2';
             const util = edge.utilization;
             const utilHtml = util ? `<span style="font-size:0.7rem; padding:0.1rem 0.35rem; border-radius:0.2rem; background:${util.utilization_pct > 75 ? 'rgba(244,67,54,0.2)' : util.utilization_pct > 50 ? 'rgba(255,235,59,0.15)' : 'rgba(76,175,80,0.15)'}; color:${util.utilization_pct > 75 ? '#ef5350' : util.utilization_pct > 50 ? '#fdd835' : '#66bb6a'};">${util.utilization_pct}% (${_formatBps(util.in_bps)} in / ${_formatBps(util.out_bps)} out)</span>` : '';
             const stp = _lookupStpForEdge(edge);
@@ -1928,7 +1930,7 @@ function exportTopologySVG() {
             if (!fromPos || !toPos) return;
             const proto = (e.protocol || 'cdp').toLowerCase();
             const color = tc.edgeColors?.[proto] || '#888';
-            const dash = proto === 'lldp' ? ' stroke-dasharray="8 5"' : proto === 'ospf' ? ' stroke-dasharray="12 4 4 4"' : proto === 'bgp' ? ' stroke-dasharray="4 4"' : '';
+            const dash = proto === 'lldp' ? ' stroke-dasharray="8 5"' : proto === 'ospf' ? ' stroke-dasharray="12 4 4 4"' : proto === 'bgp' ? ' stroke-dasharray="4 4"' : proto === 'inferred-fdb' ? ' stroke-dasharray="2 4"' : '';
             edgeSvg += `<line x1="${fromPos.x + ox}" y1="${fromPos.y + oy}" x2="${toPos.x + ox}" y2="${toPos.y + oy}" stroke="${color}" stroke-width="2"${dash} opacity="0.7"/>`;
             if (e.label) {
                 const mx = (fromPos.x + toPos.x) / 2 + ox;
@@ -2027,7 +2029,7 @@ async function showTopologyChanges() {
             const color = isAdded ? successColor : dangerColor;
             const bg = color + '14';
             const ackClass = c.acknowledged ? ' style="opacity:0.5;"' : '';
-            const proto = { cdp: 'CDP', lldp: 'LLDP', ospf: 'OSPF', bgp: 'BGP' }[c.protocol] || escapeHtml(c.protocol?.toUpperCase() || '');
+            const proto = { cdp: 'CDP', lldp: 'LLDP', ospf: 'OSPF', bgp: 'BGP', 'inferred-fdb': 'INFERRED' }[c.protocol] || escapeHtml(c.protocol?.toUpperCase() || '');
 
             html += `<div class="topology-change-item"${ackClass} style="background:${bg}; border-left:3px solid ${color}; padding:0.5rem 0.75rem; margin-bottom:0.4rem; border-radius:0.25rem;">
                 <div style="display:flex; justify-content:space-between; align-items:baseline;">

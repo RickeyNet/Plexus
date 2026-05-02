@@ -709,6 +709,199 @@ async def _record_stp_events_for_host(
         )
 
 
+# ── Inferred topology (FDB+ARP correlation, no CDP/LLDP) ────────────────────
+
+
+def _normalize_mac(raw: str) -> str:
+    """Lowercase MAC, strip separators. Returns '' if not 12 hex chars."""
+    if not raw:
+        return ""
+    cleaned = re.sub(r"[^0-9a-fA-F]", "", str(raw)).lower()
+    return cleaned if len(cleaned) == 12 else ""
+
+
+async def _build_mac_ownership_map(host_ids: list[int]) -> dict[str, tuple[int, str]]:
+    """For every interface MAC across the given hosts, return mac -> (host_id, if_name).
+
+    Reads from snmp_data_sources (populated by auto_discover_data_sources), where
+    each interface row stores its ifPhysAddress in oids_json.
+    """
+    owners: dict[str, tuple[int, str]] = {}
+    for host_id in host_ids:
+        try:
+            sources = await db.list_snmp_data_sources(host_id, "interface")
+        except Exception:
+            continue
+        for src in sources:
+            raw_oids = src.get("oids_json") or "{}"
+            try:
+                meta = json.loads(raw_oids) if isinstance(raw_oids, str) else raw_oids
+            except Exception:
+                continue
+            mac = _normalize_mac(meta.get("mac", "") if isinstance(meta, dict) else "")
+            if not mac:
+                continue
+            if_name = src.get("name") or src.get("instance_label") or src.get("instance_key", "")
+            owners.setdefault(mac, (host_id, str(if_name)))
+    return owners
+
+
+async def _correlate_fdb_topology(
+    hosts: list[dict],
+    existing_neighbors_by_host: dict[int, list[dict]],
+) -> dict[int, list[dict]]:
+    """Infer device-to-device links from MAC forwarding (FDB) + ARP tables.
+
+    Heuristic: if switch H sees, on local port P, exactly one MAC that is owned
+    by some device D in inventory, that's a direct link H[P] -> D. Ports that
+    learn MACs belonging to multiple inventory devices are uplinks/trunks and
+    are skipped (they would otherwise produce false adjacencies).
+
+    ARP entries are folded into the ownership map so a router IP without a
+    pre-learned ifPhysAddress can still anchor an inferred edge.
+
+    Returns {host_id: [neighbor_dict, ...]} for protocol="inferred-fdb".
+    Skips any (host, local_iface) already covered by an existing CDP/LLDP edge.
+    """
+    host_ids = [h["id"] for h in hosts]
+    host_by_id: dict[int, dict] = {h["id"]: h for h in hosts}
+
+    owners = await _build_mac_ownership_map(host_ids)
+
+    # Augment ownership via ARP: ip -> host_id (if that ip belongs to a known host).
+    ip_to_host: dict[str, int] = {}
+    for h in hosts:
+        ip = (h.get("ip_address") or "").strip()
+        if ip:
+            ip_to_host[ip] = h["id"]
+
+    for host_id in host_ids:
+        try:
+            arps = await db.get_arp_table_for_host(host_id)
+        except Exception:
+            arps = []
+        for entry in arps:
+            ip = (entry.get("ip_address") or "").strip()
+            mac = _normalize_mac(entry.get("mac_address", ""))
+            if not mac or mac in owners:
+                continue
+            target = ip_to_host.get(ip)
+            if target is not None:
+                # ARP says this MAC speaks for an inventory host's IP.
+                # We don't know which interface on that host, so leave it blank.
+                owners[mac] = (target, "")
+
+    inferred_by_host: dict[int, list[dict]] = {}
+
+    for host in hosts:
+        host_id = host["id"]
+        # Build set of (normalized) local interfaces that already have a CDP/LLDP edge.
+        covered_ifaces: set[str] = set()
+        for n in existing_neighbors_by_host.get(host_id, []):
+            proto = (n.get("protocol") or "").lower()
+            if proto in ("cdp", "lldp"):
+                iface = (n.get("local_interface") or "").strip().lower()
+                if iface:
+                    covered_ifaces.add(iface)
+
+        try:
+            mac_rows = await db.get_mac_table_for_host(host_id)
+        except Exception:
+            continue
+
+        # Group MACs by local port_name; record which inventory hosts each port "sees".
+        port_to_owners: dict[str, set[int]] = {}
+        port_to_owner_iface: dict[str, dict[int, str]] = {}
+        for row in mac_rows:
+            port = (row.get("port_name") or "").strip()
+            if not port:
+                continue
+            mac = _normalize_mac(row.get("mac_address", ""))
+            if not mac or mac not in owners:
+                continue
+            owner_host_id, owner_iface = owners[mac]
+            if owner_host_id == host_id:
+                # Self-MAC (the device's own interface MAC); ignore.
+                continue
+            port_to_owners.setdefault(port, set()).add(owner_host_id)
+            port_to_owner_iface.setdefault(port, {})[owner_host_id] = owner_iface
+
+        for port, owner_set in port_to_owners.items():
+            if len(owner_set) != 1:
+                # Trunk/uplink toward an aggregation switch — too ambiguous to draw.
+                continue
+            if port.lower() in covered_ifaces:
+                continue
+            (target_host_id,) = tuple(owner_set)
+            target_host = host_by_id.get(target_host_id)
+            if not target_host:
+                continue
+            target_iface = port_to_owner_iface[port].get(target_host_id, "")
+
+            inferred_by_host.setdefault(host_id, []).append({
+                "source_host_id": host_id,
+                "source_ip": host.get("ip_address", ""),
+                "local_interface": port,
+                "remote_device_name": target_host.get("hostname", "") or target_host.get("ip_address", ""),
+                "remote_ip": target_host.get("ip_address", ""),
+                "remote_interface": target_iface,
+                "protocol": "inferred-fdb",
+                "remote_platform": "inferred from FDB+ARP",
+            })
+
+    return inferred_by_host
+
+
+async def _apply_inferred_topology(
+    walk_results: list[tuple[dict, list[dict] | None, list[dict]]],
+    snmp_cfg: dict,
+) -> tuple[list[tuple[dict, list[dict] | None, list[dict]]], int]:
+    """If snmp_cfg enables inferred topology, refresh FDB/ARP/ifPhysAddress for
+    every successfully walked host, run _correlate_fdb_topology, and merge
+    inferred neighbors into each host's neighbor list.
+
+    Returns (new_walk_results, inferred_count). On any failure, returns the
+    input walk_results unchanged with inferred_count=0 — discovery should never
+    fail because correlation failed.
+    """
+    if not snmp_cfg.get("enable_inferred_topology"):
+        return walk_results, 0
+    try:
+        from netcontrol.routes.mac_tracking import collect_mac_arp_tables
+        from netcontrol.routes.snmp import auto_discover_data_sources
+
+        walked_hosts = [h for h, n, _ in walk_results if n is not None]
+        if not walked_hosts:
+            return walk_results, 0
+
+        refresh_tasks = []
+        for h in walked_hosts:
+            refresh_tasks.append(collect_mac_arp_tables(h["id"], h["ip_address"], snmp_cfg))
+            refresh_tasks.append(auto_discover_data_sources(h["id"], h["ip_address"], snmp_cfg))
+        await asyncio.gather(*refresh_tasks, return_exceptions=True)
+
+        existing_by_host: dict[int, list[dict]] = {
+            h["id"]: (n or []) for h, n, _ in walk_results
+        }
+        inferred_by_host = await _correlate_fdb_topology(walked_hosts, existing_by_host)
+
+        inferred_count = 0
+        new_walk_results: list[tuple[dict, list[dict] | None, list[dict]]] = []
+        for h, n, s in walk_results:
+            if n is None:
+                new_walk_results.append((h, n, s))
+                continue
+            extra = inferred_by_host.get(h["id"], [])
+            if extra:
+                n = list(n) + extra
+                inferred_count += len(extra)
+            new_walk_results.append((h, n, s))
+        return new_walk_results, inferred_count
+    except Exception as exc:
+        LOGGER.warning("topology: inferred correlation failed: %s", exc)
+        return walk_results, 0
+
+
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
@@ -746,6 +939,7 @@ async def _run_topology_discovery_once() -> dict:
                     return host, None, []
 
         walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
+        walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfg)
 
         for host, neighbors, if_stats in walk_results:
             if neighbors is None:
@@ -1363,6 +1557,12 @@ async def discover_topology_stream():
                     neighbor_count = len(neighbors) if neighbors is not None else 0
                     yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
 
+                # Phase 1b: optional inferred topology via FDB+ARP correlation.
+                if snmp_cfg.get("enable_inferred_topology"):
+                    yield f"data: {json.dumps({'type': 'inferred_start', 'group': group_name})}\n\n"
+                    walk_results, _inferred_count = await _apply_inferred_topology(walk_results, snmp_cfg)
+                    yield f"data: {json.dumps({'type': 'inferred_done', 'group': group_name, 'inferred_links': _inferred_count})}\n\n"
+
                 # Phase 2: sequential DB writes
                 yield f"data: {json.dumps({'type': 'db_write_start', 'group': group_name, 'host_count': len(walk_results)})}\n\n"
 
@@ -1461,6 +1661,7 @@ async def discover_topology_for_group(group_id: int):
                     return host, None, []
 
         walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
+        walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfg)
         LOGGER.info("topology: all SNMP walks complete, writing results to DB...")
 
         # Phase 2: sequential DB writes (avoids "database is locked")
@@ -1564,6 +1765,7 @@ async def discover_topology_all():
                         return host, None, []
 
             walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
+            walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfg)
 
             # Phase 2: sequential DB writes (avoids "database is locked")
             for host, neighbors, if_stats in walk_results:
@@ -1681,6 +1883,12 @@ async def discover_topology_for_group_stream(group_id: int):
                 scanned += 1
                 neighbor_count = len(neighbors) if neighbors is not None else 0
                 yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
+
+            # Phase 1b: optional inferred topology via FDB+ARP correlation.
+            if snmp_cfg.get("enable_inferred_topology"):
+                yield f"data: {json.dumps({'type': 'inferred_start'})}\n\n"
+                walk_results, inferred_count = await _apply_inferred_topology(walk_results, snmp_cfg)
+                yield f"data: {json.dumps({'type': 'inferred_done', 'inferred_links': inferred_count})}\n\n"
 
             # Phase 2: sequential DB writes
             yield f"data: {json.dumps({'type': 'db_write_start', 'group': group_name, 'host_count': len(walk_results)})}\n\n"
