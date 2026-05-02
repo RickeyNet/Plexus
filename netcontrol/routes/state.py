@@ -54,6 +54,7 @@ SNMP_DISCOVERY_DEFAULTS = {
     "port": 161,
     "timeout_seconds": 1.2,
     "retries": 0,
+    "enable_inferred_topology": False,
     "v3": {
         "username": "",
         "auth_protocol": "sha",
@@ -771,6 +772,7 @@ def _sanitize_snmp_discovery_config(data: dict | None) -> dict:
         "port": int(SNMP_DISCOVERY_DEFAULTS["port"]),
         "timeout_seconds": float(SNMP_DISCOVERY_DEFAULTS["timeout_seconds"]),
         "retries": int(SNMP_DISCOVERY_DEFAULTS["retries"]),
+        "enable_inferred_topology": bool(SNMP_DISCOVERY_DEFAULTS["enable_inferred_topology"]),
         "v3": dict(SNMP_DISCOVERY_DEFAULTS["v3"]),
     }
     if isinstance(data, dict):
@@ -782,6 +784,7 @@ def _sanitize_snmp_discovery_config(data: dict | None) -> dict:
         cfg["port"] = int(data.get("port", cfg["port"]))
         cfg["timeout_seconds"] = float(data.get("timeout_seconds", cfg["timeout_seconds"]))
         cfg["retries"] = int(data.get("retries", cfg["retries"]))
+        cfg["enable_inferred_topology"] = bool(data.get("enable_inferred_topology", cfg["enable_inferred_topology"]))
         if isinstance(data.get("v3"), dict):
             v3 = data["v3"]
             cfg["v3"]["username"] = str(v3.get("username", cfg["v3"]["username"]))
@@ -863,6 +866,7 @@ def _sanitize_snmp_profile(profile_id: str, data: dict | None) -> dict:
         "port": 161,
         "timeout_seconds": 1.2,
         "retries": 0,
+        "enable_inferred_topology": False,
         "v3": {
             "username": "",
             "auth_protocol": "sha",
@@ -881,6 +885,7 @@ def _sanitize_snmp_profile(profile_id: str, data: dict | None) -> dict:
         cfg["port"] = int(data.get("port", cfg["port"]))
         cfg["timeout_seconds"] = float(data.get("timeout_seconds", cfg["timeout_seconds"]))
         cfg["retries"] = int(data.get("retries", cfg["retries"]))
+        cfg["enable_inferred_topology"] = bool(data.get("enable_inferred_topology", cfg["enable_inferred_topology"]))
         if isinstance(data.get("v3"), dict):
             v3 = data["v3"]
             cfg["v3"]["username"] = str(v3.get("username", cfg["v3"]["username"]))

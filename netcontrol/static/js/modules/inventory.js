@@ -853,6 +853,13 @@ function _snmpProfileFormHtml(cfg = {}) {
             <label class="form-label">Timeout Seconds</label>
             <input type="number" class="form-input" name="timeout_seconds" value="${cfg.timeout_seconds || 1.2}" min="0.2" max="10" step="0.1">
         </div>
+        <label style="display:flex; align-items:flex-start; gap:0.4rem; margin-bottom:0.75rem;">
+            <input type="checkbox" name="enable_inferred_topology" value="1" ${cfg.enable_inferred_topology ? 'checked' : ''} style="margin-top:0.2rem;">
+            <span>
+                Enable inferred topology (FDB+ARP)
+                <span style="display:block; font-size:0.75rem; opacity:0.7;">Adds dashed edges between devices when CDP/LLDP is unavailable. Walks FDB and ARP tables — extra SNMP cost on busy switches.</span>
+            </span>
+        </label>
         <div class="card-description" style="margin-bottom:0.5rem;">SNMPv3 Credentials</div>
         <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
             <div>
@@ -903,6 +910,7 @@ function _collectSnmpProfileForm(formData) {
         port: Number(formData.get('port') || 161),
         timeout_seconds: Number(formData.get('timeout_seconds') || 1.2),
         retries: Number(formData.get('retries') || 0),
+        enable_inferred_topology: formData.get('enable_inferred_topology') === '1',
         v3: {
             username: String(formData.get('v3_username') || '').trim(),
             auth_protocol: String(formData.get('v3_auth_protocol') || 'sha'),
