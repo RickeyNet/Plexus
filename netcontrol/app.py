@@ -141,6 +141,10 @@ from netcontrol.routes.federation import (
     federation_sync_loop,
     router as federation_router,
 )
+from netcontrol.routes.lab import (
+    init_lab,
+    router as lab_router,
+)
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.deployments import (
@@ -1511,6 +1515,7 @@ init_cloud_visibility(require_admin)
 init_ipam(require_admin)
 init_dhcp(require_admin)
 init_federation(require_admin)
+init_lab(require_auth, require_feature)
 init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
 init_ansible_inventory(require_auth)
 metrics_engine_inject_auth(require_auth, require_admin)
@@ -1674,6 +1679,11 @@ app.include_router(
     dependencies=[Depends(require_auth), Depends(require_feature("upgrades"))],
 )
 app.include_router(upgrades_ws_router)  # WebSocket — handles its own auth
+# Digital Twin / Lab Mode
+app.include_router(
+    lab_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1682,10 +1692,40 @@ app.include_router(upgrades_ws_router)  # WebSocket — handles its own auth
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
+FRONTEND_DIST = os.path.join(STATIC_DIR, "frontend", "dist")
+FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
 
 # Mount static files directory
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# React frontend (Phase 1.1+ of FRONTEND_MIGRATION.md). Built from
+# netcontrol/static/frontend via `npm run build`. Mounted at /frontend with
+# SPA-style fallback so client-side routes resolve to index.html.
+if os.path.isdir(FRONTEND_DIST):
+    _frontend_assets = os.path.join(FRONTEND_DIST, "assets")
+    if os.path.isdir(_frontend_assets):
+        app.mount(
+            "/frontend/assets",
+            StaticFiles(directory=_frontend_assets),
+            name="frontend_assets",
+        )
+
+    @app.get("/frontend", include_in_schema=False)
+    @app.get("/frontend/{path:path}", include_in_schema=False)
+    async def serve_react_frontend(path: str = ""):
+        """Serve the React SPA. Returns the requested file when it exists on
+        disk (e.g. favicon, manifest); otherwise falls back to index.html so
+        deep links handled by react-router resolve correctly.
+        """
+        if path:
+            candidate = os.path.normpath(os.path.join(FRONTEND_DIST, path))
+            # Guard against path traversal: candidate must stay inside dist/.
+            if candidate.startswith(FRONTEND_DIST) and os.path.isfile(candidate):
+                return FileResponse(candidate)
+        if os.path.isfile(FRONTEND_INDEX):
+            return FileResponse(FRONTEND_INDEX)
+        raise HTTPException(status_code=404, detail="React frontend not built")
 
 @app.get("/")
 async def serve_frontend():

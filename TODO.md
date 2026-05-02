@@ -151,7 +151,9 @@
 - [ ] Add scheduled report builder (operator + executive reports in PDF/CSV/email).
 - [ ] Version and publish API contracts (OpenAPI, deprecation policy, compatibility tests).
 - [ ] Create a plugin SDK for custom validators and integrations.
-- [ ] Add digital twin/lab mode for safe pre-production change testing.
+- [x] Add digital twin/lab mode for safe pre-production change testing.
+  - [x] Phase A — config-plane simulator: lab environments + cloned-from-host devices, simulate proposed commands against snapshot, diff + risk score, persist run history, promote successful run to a Deployment record. Migration 0029. React UI at `/frontend/lab`. 6-test coverage (`tests/test_lab.py`).
+  - [ ] Phase B — containerlab/CML emulator integration for live virtual devices and packet-level testing.
 
 ---
 
