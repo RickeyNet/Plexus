@@ -25,7 +25,8 @@ function applyInventoryFilters() {
     if (state.sort === 'hosts_desc') filtered.sort((a, b) => (b.host_count || (b.hosts || []).length || 0) - (a.host_count || (a.hosts || []).length || 0));
     else if (state.sort === 'hosts_asc') filtered.sort((a, b) => (a.host_count || (a.hosts || []).length || 0) - (b.host_count || (b.hosts || []).length || 0));
     else if (state.sort === 'name_desc') filtered.sort(byNameDesc);
-    else filtered.sort(byNameAsc);
+    else if (state.sort === 'name_asc') filtered.sort(byNameAsc);
+    // 'custom' (default): preserve server-provided order
     return filtered;
 }
 
@@ -61,6 +62,14 @@ async function loadInventory(options = {}) {
             return;
         }
         renderInventoryGroups(applyInventoryFilters());
+        const densityBtn = document.getElementById('inventory-density-toggle');
+        if (densityBtn) densityBtn.textContent = _getCompactMode() ? 'Comfortable' : 'Compact';
+        const collapseBtn = document.getElementById('inventory-collapse-all');
+        if (collapseBtn) {
+            const cards = document.querySelectorAll('.inventory-group-card');
+            const anyExpanded = Array.from(cards).some(c => !c.classList.contains('is-collapsed'));
+            collapseBtn.textContent = anyExpanded ? 'Collapse All' : 'Expand All';
+        }
         // Load SNMP profile assignments for each group and populate selects
         await _populateSnmpProfileSelects(groups);
     } catch (error) {
@@ -108,18 +117,32 @@ function renderInventoryGroups(groups) {
     // Preserve scroll position across re-renders
     const scrollTop = container.scrollTop;
 
+    const isCustomOrder = (listViewState.inventory.sort || 'custom') === 'custom' && !query;
+    const collapsedSet = _getCollapsedGroups();
+    container.classList.toggle('compact', _getCompactMode());
     container.innerHTML = groups.map((group, i) => {
         const hosts = group.hosts || [];
         // When searching, sort matching hosts to the top
         const sortedHosts = query ? [...hosts].sort((a, b) => (hostMatchesQuery(b) ? 1 : 0) - (hostMatchesQuery(a) ? 1 : 0)) : hosts;
+        const draggable = isCustomOrder ? 'draggable="true"' : '';
+        const handle = isCustomOrder
+            ? `<span class="group-drag-handle" title="Drag to reorder" aria-hidden="true" onclick="event.stopPropagation()">⋮⋮</span>`
+            : '';
+        const isCollapsed = collapsedSet.has(group.id) && !query;
+        const collapsedCls = isCollapsed ? ' is-collapsed' : '';
+        const caret = isCollapsed ? '▶' : '▼';
         return `
-        <div class="card animate-in" style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
+        <div class="card animate-in inventory-group-card${collapsedCls}" data-group-id="${group.id}" ${draggable} style="animation-delay: ${Math.min(i * 0.06, 0.3)}s">
             <div class="card-header">
-                <div>
-                    <div class="card-title">${escapeHtml(group.name)}</div>
-                    <div class="card-description">${escapeHtml(group.description || '')}</div>
+                <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex: 1; cursor: pointer;" onclick="toggleInventoryGroup(${group.id})">
+                    ${handle}
+                    <span class="group-collapse-caret" aria-hidden="true">${caret}</span>
+                    <div style="min-width: 0;">
+                        <div class="card-title">${escapeHtml(group.name)} <span class="group-host-count">(${hosts.length})</span></div>
+                        <div class="card-description">${escapeHtml(group.description || '')}</div>
+                    </div>
                 </div>
-                <div style="display: flex; gap: 0.25rem; align-items: center;">
+                <div style="display: flex; gap: 0.25rem; align-items: center; flex-shrink: 0; white-space: nowrap;">
                     <select class="form-select" style="font-size:0.75rem; padding:0.2rem 0.4rem; height:auto; min-width:120px;"
                             id="snmp-profile-select-${group.id}"
                             onchange="assignSnmpProfile(${group.id}, this.value)"
@@ -186,6 +209,10 @@ function renderInventoryGroups(groups) {
     // Restore scroll position after DOM rebuild
     container.scrollTop = scrollTop;
 
+    if (isCustomOrder) {
+        _wireGroupDragAndDrop(container);
+    }
+
     groups.forEach(group => {
         _groupCache[group.id] = {
             id: group.id,
@@ -194,6 +221,128 @@ function renderInventoryGroups(groups) {
             hosts: group.hosts || [],
         };
     });
+}
+
+const COLLAPSED_KEY = 'plexus.inventory.collapsedGroups';
+const COMPACT_KEY = 'plexus.inventory.compact';
+
+function _getCollapsedGroups() {
+    try {
+        const raw = localStorage.getItem(COLLAPSED_KEY);
+        if (!raw) return new Set();
+        return new Set(JSON.parse(raw).map(Number));
+    } catch (_) {
+        return new Set();
+    }
+}
+
+function _setCollapsedGroups(set) {
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(set))); } catch (_) {}
+}
+
+function _getCompactMode() {
+    try { return localStorage.getItem(COMPACT_KEY) === '1'; } catch (_) { return false; }
+}
+
+function _setCompactMode(on) {
+    try { localStorage.setItem(COMPACT_KEY, on ? '1' : '0'); } catch (_) {}
+}
+
+window.toggleInventoryGroup = function(groupId) {
+    const set = _getCollapsedGroups();
+    const id = Number(groupId);
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    _setCollapsedGroups(set);
+    const card = document.querySelector(`.inventory-group-card[data-group-id="${id}"]`);
+    if (card) {
+        card.classList.toggle('is-collapsed');
+        const caret = card.querySelector('.group-collapse-caret');
+        if (caret) caret.textContent = card.classList.contains('is-collapsed') ? '▶' : '▼';
+    }
+};
+
+window.toggleAllInventoryGroups = function() {
+    const cards = document.querySelectorAll('.inventory-group-card');
+    if (!cards.length) return;
+    // If any card is expanded, collapse all. Otherwise expand all.
+    const anyExpanded = Array.from(cards).some(c => !c.classList.contains('is-collapsed'));
+    const set = _getCollapsedGroups();
+    cards.forEach(card => {
+        const id = Number(card.dataset.groupId);
+        if (anyExpanded) {
+            card.classList.add('is-collapsed');
+            set.add(id);
+        } else {
+            card.classList.remove('is-collapsed');
+            set.delete(id);
+        }
+        const caret = card.querySelector('.group-collapse-caret');
+        if (caret) caret.textContent = anyExpanded ? '▶' : '▼';
+    });
+    _setCollapsedGroups(set);
+    const btn = document.getElementById('inventory-collapse-all');
+    if (btn) btn.textContent = anyExpanded ? 'Expand All' : 'Collapse All';
+};
+
+window.toggleInventoryDensity = function() {
+    const container = document.getElementById('inventory-groups');
+    if (!container) return;
+    const next = !container.classList.contains('compact');
+    container.classList.toggle('compact', next);
+    _setCompactMode(next);
+    const btn = document.getElementById('inventory-density-toggle');
+    if (btn) btn.textContent = next ? 'Comfortable' : 'Compact';
+};
+
+let _draggingGroupCard = null;
+
+function _wireGroupDragAndDrop(container) {
+    const cards = container.querySelectorAll('.inventory-group-card[draggable="true"]');
+    cards.forEach((card) => {
+        card.addEventListener('dragstart', (e) => {
+            _draggingGroupCard = card;
+            card.classList.add('dragging');
+            try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', card.dataset.groupId || ''); } catch (_) {}
+        });
+        card.addEventListener('dragend', () => {
+            card.classList.remove('dragging');
+            container.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            _draggingGroupCard = null;
+        });
+        card.addEventListener('dragover', (e) => {
+            if (!_draggingGroupCard || _draggingGroupCard === card) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const rect = card.getBoundingClientRect();
+            const before = (e.clientY - rect.top) < rect.height / 2;
+            if (before) card.parentNode.insertBefore(_draggingGroupCard, card);
+            else card.parentNode.insertBefore(_draggingGroupCard, card.nextSibling);
+        });
+        card.addEventListener('drop', (e) => { e.preventDefault(); });
+    });
+
+    container.addEventListener('drop', _persistGroupOrder, { once: true });
+    container.addEventListener('dragend', _persistGroupOrder, { once: true });
+}
+
+async function _persistGroupOrder() {
+    const container = document.getElementById('inventory-groups');
+    if (!container) return;
+    const orderedIds = Array.from(container.querySelectorAll('.inventory-group-card'))
+        .map(el => Number(el.dataset.groupId))
+        .filter(n => Number.isFinite(n));
+    if (!orderedIds.length) return;
+    // Reorder our in-memory cache to match so re-renders preserve the order
+    const byId = new Map(listViewState.inventory.items.map(g => [g.id, g]));
+    listViewState.inventory.items = orderedIds.map(id => byId.get(id)).filter(Boolean);
+    _lastInventoryFingerprint = null;
+    try {
+        await api.reorderInventoryGroups(orderedIds);
+        invalidateApiCache('/inventory');
+    } catch (err) {
+        showError('Failed to save group order: ' + err.message);
+    }
 }
 
 async function _populateSnmpProfileSelects(groups) {

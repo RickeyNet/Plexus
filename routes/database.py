@@ -1851,6 +1851,124 @@ async def get_all_groups_with_hosts() -> list[dict]:
     return groups
 
 
+async def get_all_groups_for_user(user_id: int) -> list[dict]:
+    """Like get_all_groups but ordered by the user's saved drag order.
+
+    Groups the user has not explicitly positioned fall to the bottom
+    alphabetically (COALESCE(position, large sentinel)).
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            SELECT g.*, COUNT(h.id) AS host_count, o.position AS _position
+            FROM inventory_groups g
+            LEFT JOIN hosts h ON h.group_id = g.id
+            LEFT JOIN user_inventory_group_order o
+                   ON o.group_id = g.id AND o.user_id = ?
+            GROUP BY g.id, o.position
+            ORDER BY COALESCE(o.position, 2147483647), g.name
+            """,
+            (user_id,),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+    for row in rows:
+        row.pop("_position", None)
+    return rows
+
+
+async def get_all_groups_with_hosts_for_user(user_id: int) -> list[dict]:
+    """Per-user-ordered variant of get_all_groups_with_hosts."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            SELECT
+                g.id AS group_id,
+                g.name AS group_name,
+                g.description AS group_description,
+                o.position AS _position,
+                h.id AS host_id,
+                h.group_id AS host_group_id,
+                h.hostname AS host_hostname,
+                h.ip_address AS host_ip_address,
+                h.device_type AS host_device_type,
+                h.status AS host_status,
+                h.last_seen AS host_last_seen,
+                h.model AS host_model,
+                h.software_version AS host_software_version,
+                h.device_category AS host_device_category,
+                h.serial_number AS host_serial_number
+            FROM inventory_groups g
+            LEFT JOIN hosts h ON h.group_id = g.id
+            LEFT JOIN user_inventory_group_order o
+                   ON o.group_id = g.id AND o.user_id = ?
+            ORDER BY COALESCE(o.position, 2147483647), g.name, h.ip_address
+            """,
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    groups: list[dict] = []
+    by_group_id: dict[int, dict] = {}
+    for row in rows:
+        gid = int(row["group_id"])
+        group = by_group_id.get(gid)
+        if group is None:
+            group = {
+                "id": gid,
+                "name": row["group_name"],
+                "description": row["group_description"] or "",
+                "host_count": 0,
+                "hosts": [],
+            }
+            by_group_id[gid] = group
+            groups.append(group)
+
+        host_id = row["host_id"]
+        if host_id is None:
+            continue
+        group["hosts"].append({
+            "id": host_id,
+            "group_id": row["host_group_id"],
+            "hostname": row["host_hostname"],
+            "ip_address": row["host_ip_address"],
+            "device_type": row["host_device_type"],
+            "status": row["host_status"],
+            "last_seen": row["host_last_seen"],
+            "model": row["host_model"] or "",
+            "software_version": row["host_software_version"] or "",
+            "device_category": row["host_device_category"] or "",
+            "serial_number": row["host_serial_number"] or "",
+        })
+        group["host_count"] += 1
+
+    return groups
+
+
+async def set_user_group_order(user_id: int, ordered_group_ids: list[int]) -> None:
+    """Replace the saved order for a user with the given list of group ids."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM user_inventory_group_order WHERE user_id = ?",
+            (user_id,),
+        )
+        for position, group_id in enumerate(ordered_group_ids):
+            await db.execute(
+                "INSERT INTO user_inventory_group_order (user_id, group_id, position) "
+                "VALUES (?, ?, ?)",
+                (user_id, int(group_id), position),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def get_group(group_id: int) -> dict | None:
     db = await get_db()
     try:

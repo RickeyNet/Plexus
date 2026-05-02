@@ -261,6 +261,13 @@ export async function getGroup(groupId) {
     return cachedGet(`/inventory/${groupId}`, () => apiRequest(`/inventory/${groupId}`));
 }
 
+export async function reorderInventoryGroups(orderedIds) {
+    return apiRequest('/inventory/groups/reorder', {
+        method: 'POST',
+        body: { ordered_ids: orderedIds },
+    });
+}
+
 export async function createGroup(name, description = '') {
     return apiRequest('/inventory', {
         method: 'POST',
