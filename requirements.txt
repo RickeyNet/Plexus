@@ -14,12 +14,12 @@ pyrad==2.5.4
 # not ship. Skip on Windows; the LDAP auth backend in netcontrol/routes/auth.py
 # is wrapped in a try/except and degrades to LDAP_AVAILABLE=False there.
 python-ldap>=3.4,<3.5; sys_platform != "win32"
-pysnmp>=7.1,<7.2
-ansible-runner>=2.4,<2.5
+pysnmp>=7.1.26,<7.2
+ansible-runner>=2.4.3,<2.5
 # Floor pydantic so resolvers can't pick 2.9.x (paired with pydantic-core
 # 2.23.4 which uses a PyO3 that doesn't support Python 3.14). 2.11+ ships
 # pydantic-core ≥2.33 with current PyO3.
-pydantic>=2.11,<3
+pydantic>=2.13.3,<3
 # httpx is used at runtime by netcontrol/routes/ipam_adapters.py, so it
 # belongs in the runtime requirements (was previously dev-only).
-httpx>=0.28,<1
+httpx>=0.28.1,<1
