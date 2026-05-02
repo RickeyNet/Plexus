@@ -1,3 +1,19 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 1: build the React frontend (Phase 1.1+ of FRONTEND_MIGRATION.md)
+# ──────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS frontend-build
+WORKDIR /frontend
+
+# Copy manifests first so the install layer caches across source-only changes.
+COPY netcontrol/static/frontend/package.json netcontrol/static/frontend/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+
+COPY netcontrol/static/frontend/ ./
+RUN npm run build
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 2: runtime image
+# ──────────────────────────────────────────────────────────────────────────────
 FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1
@@ -13,6 +29,11 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+# Pull in the pre-built React bundle from the frontend stage. Source files
+# under netcontrol/static/frontend/ (TS, package.json, etc) are not needed at
+# runtime — only the dist/ directory.
+COPY --from=frontend-build /frontend/dist /app/netcontrol/static/frontend/dist
 
 RUN mkdir -p /app/state
 RUN useradd -m -u 1000 plexus && chown -R plexus:plexus /app

@@ -271,6 +271,7 @@ FEATURE_FLAGS = [
     "upgrades",
     "federation",
     "deployments",
+    "lab",
 ]
 
 # ── Feature Visibility ───────────────────────────────────────────────────────
@@ -299,6 +300,7 @@ FEATURE_VISIBILITY_CATALOG = [
     {"key": "upgrades", "label": "Upgrades"},
     {"key": "federation", "label": "Federation"},
     {"key": "floor-plan", "label": "Floor Plans"},
+    {"key": "lab", "label": "Lab / Digital Twin"},
 ]
 
 FEATURE_VISIBILITY_KEYS = {entry["key"] for entry in FEATURE_VISIBILITY_CATALOG}

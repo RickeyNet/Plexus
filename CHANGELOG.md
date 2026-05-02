@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Add digital twin / lab mode (Phase A): lab environments and cloned-from-host devices for offline config-plane simulation. Apply proposed commands or templates against a snapshot, see unified diff plus risk score, persist run history, and promote successful runs into the Deployments pipeline. Migration 0029 adds `lab_environments`, `lab_devices`, `lab_runs`. New `lab` feature flag and React page at `/frontend/lab`.
+
 ## 0.2.0 — 2026-03-05
 - Add shared semantic version constant and `python templates/run.py --version` CLI output.
 - Wire API metadata version to shared app version.
