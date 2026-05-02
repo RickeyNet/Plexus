@@ -25,7 +25,40 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 LOGGER = logging.getLogger("plexus.crypto")
 
-KEY_FILE = os.getenv("APP_ENCRYPTION_KEY_FILE", os.path.join(os.path.dirname(__file__), "netcontrol.key"))
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+KEY_FILE = os.getenv("APP_ENCRYPTION_KEY_FILE", os.path.join(_REPO_ROOT, "netcontrol.key"))
+
+
+def _migrate_legacy_key_file() -> None:
+    """Move legacy routes/netcontrol.key to the new repo-root default.
+
+    The default location moved from ``routes/netcontrol.key`` to the repo root.
+    Auto-migrate when ``APP_ENCRYPTION_KEY_FILE`` is unset and the legacy file
+    exists. A zero-byte file at the new path is treated as a stub and
+    overwritten; any non-empty file is left untouched. Losing this key
+    permanently breaks decryption of stored credentials, so the move uses
+    ``os.replace`` (atomic) and falls back to no-op on error.
+    """
+    if os.getenv("APP_ENCRYPTION_KEY_FILE"):
+        return
+    legacy = os.path.join(os.path.dirname(__file__), "netcontrol.key")
+    if not os.path.isfile(legacy):
+        return
+    try:
+        new_size = os.path.getsize(KEY_FILE) if os.path.exists(KEY_FILE) else -1
+    except OSError:
+        return
+    if new_size > 0:
+        return
+    try:
+        os.makedirs(os.path.dirname(KEY_FILE) or ".", exist_ok=True)
+        os.replace(legacy, KEY_FILE)
+        LOGGER.info("Migrated legacy encryption key from %s to %s", legacy, KEY_FILE)
+    except OSError as exc:
+        LOGGER.warning("Could not migrate legacy encryption key (%s); using new default", exc)
+
+
+_migrate_legacy_key_file()
 
 # AES-256-GCM nonce size (96 bits per NIST recommendation)
 _NONCE_SIZE = 12
