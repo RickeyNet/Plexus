@@ -147,7 +147,7 @@ function renderPlaybooksList(playbooks) {
                             ${tags.length > 0 ? tags.map(tag => `<span class="status-badge" style="margin-right: 0.5rem;">${escapeHtml(tag)}</span>`).join('') : ''}
                         </div>
                     </div>
-                    <div>
+                    <div style="display: flex; gap: 0.5rem; flex-shrink: 0; white-space: nowrap;">
                         <button class="btn btn-sm btn-secondary" onclick="editPlaybook(${pb.id})">Edit</button>
                         <button class="btn btn-sm btn-danger" onclick="deletePlaybook(${pb.id})">Delete</button>
                     </div>
@@ -951,6 +951,26 @@ window.createCredential = async function(e) {
 // CRUD Forms — Playbooks
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function attachCodeMirror(textareaId, mode) {
+    const textarea = document.getElementById(textareaId);
+    if (!textarea || typeof CodeMirror === 'undefined') return null;
+    const editor = CodeMirror.fromTextArea(textarea, {
+        mode: mode === 'ansible' ? 'yaml' : 'python',
+        theme: 'dracula',
+        lineNumbers: true,
+        indentUnit: 4,
+        tabSize: 4,
+        indentWithTabs: false,
+        matchBrackets: true,
+        autoCloseBrackets: true,
+        lineWrapping: false,
+        viewportMargin: Infinity,
+    });
+    const modal = editor.getWrapperElement().closest('.modal');
+    if (modal) modal.classList.add('has-codemirror');
+    return editor;
+}
+
 window.showCreatePlaybookModal = function() {
     const pythonDefault = `"""
 Your playbook description here.
@@ -1073,7 +1093,7 @@ class MyPlaybook(BasePlaybook):
             </div>
             <div class="form-group">
                 <label class="form-label">Description</label>
-                <input type="text" class="form-input" name="description" placeholder="What this playbook does">
+                <textarea class="form-input" name="description" rows="4" placeholder="What this playbook does" style="resize: vertical; min-height: 6rem;"></textarea>
             </div>
             <div class="form-group">
                 <label class="form-label">Tags (comma-separated)</label>
@@ -1093,10 +1113,18 @@ class MyPlaybook(BasePlaybook):
     // Store defaults for toggling
     window._pbDefaults = { python: pythonDefault, ansible: ansibleDefault };
     window._pbContentModified = false;
-    const contentEl = document.getElementById('create-pb-content');
-    if (contentEl) {
-        contentEl.addEventListener('input', () => { window._pbContentModified = true; }, { once: true });
-    }
+    requestAnimationFrame(() => {
+        const editor = attachCodeMirror('create-pb-content', 'python');
+        if (editor) {
+            window._createPbEditor = editor;
+            editor.on('change', () => { window._pbContentModified = true; });
+            requestAnimationFrame(() => editor.refresh());
+            setTimeout(() => editor.refresh(), 100);
+        } else {
+            const contentEl = document.getElementById('create-pb-content');
+            if (contentEl) contentEl.addEventListener('input', () => { window._pbContentModified = true; }, { once: true });
+        }
+    });
 };
 
 window._toggleCreatePbType = function(type) {
@@ -1104,22 +1132,35 @@ window._toggleCreatePbType = function(type) {
     const extHint = document.getElementById('create-pb-ext-hint');
     const codeLabel = document.getElementById('create-pb-code-label');
     const contentEl = document.getElementById('create-pb-content');
+    const editor = window._createPbEditor;
+
+    const setContent = (text) => {
+        if (editor) {
+            editor.setValue(text);
+            window._pbContentModified = false;
+        } else if (contentEl) {
+            contentEl.value = text;
+        }
+    };
 
     if (type === 'ansible') {
         if (filenameInput) filenameInput.placeholder = 'my_playbook.yml';
         if (extHint) extHint.textContent = 'Must end with .yml or .yaml';
         if (codeLabel) codeLabel.textContent = 'Ansible YAML';
-        if (contentEl && !window._pbContentModified) contentEl.value = window._pbDefaults.ansible;
+        if (editor) editor.setOption('mode', 'yaml');
+        if (!window._pbContentModified) setContent(window._pbDefaults.ansible);
     } else {
         if (filenameInput) filenameInput.placeholder = 'my_playbook.py';
         if (extHint) extHint.textContent = 'Must end with .py';
         if (codeLabel) codeLabel.textContent = 'Python Code';
-        if (contentEl && !window._pbContentModified) contentEl.value = window._pbDefaults.python;
+        if (editor) editor.setOption('mode', 'python');
+        if (!window._pbContentModified) setContent(window._pbDefaults.python);
     }
 };
 
 window.createPlaybook = async function(e) {
     e.preventDefault();
+    if (window._createPbEditor) window._createPbEditor.save();
     const formData = new FormData(e.target);
     const tagsStr = formData.get('tags') || '';
     const tags = tagsStr.split(',').map(t => t.trim()).filter(t => t);
@@ -1197,7 +1238,7 @@ window.editPlaybook = async function(playbookId) {
                 </div>
                 <div class="form-group">
                     <label class="form-label">Description</label>
-                    <input type="text" class="form-input" name="description" value="${escapeHtml(playbook.description || '')}">
+                    <textarea class="form-input" name="description" rows="4" style="resize: vertical; min-height: 6rem;">${escapeHtml(playbook.description || '')}</textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Tags (comma-separated)</label>
@@ -1214,19 +1255,22 @@ window.editPlaybook = async function(playbookId) {
             </form>
         `);
 
-        // Set textarea content after modal DOM is updated
-        // Use multiple attempts to ensure DOM is ready
+        // Set textarea content after modal DOM is updated, then upgrade to CodeMirror
         const setContent = () => {
             const textarea = document.getElementById('playbook-content-textarea');
             if (textarea) {
                 textarea.value = playbookContent;
+                window._editPbEditor = attachCodeMirror('playbook-content-textarea', pbType);
+                if (window._editPbEditor) {
+                    requestAnimationFrame(() => window._editPbEditor.refresh());
+                    setTimeout(() => window._editPbEditor && window._editPbEditor.refresh(), 100);
+                }
             } else {
                 console.warn('Textarea not found, retrying...');
                 setTimeout(setContent, 50);
             }
         };
 
-        // Try immediately, then with delays
         requestAnimationFrame(() => {
             setTimeout(setContent, 10);
         });
@@ -1238,6 +1282,7 @@ window.editPlaybook = async function(playbookId) {
 
 window.updatePlaybook = async function(e, playbookId) {
     e.preventDefault();
+    if (window._editPbEditor) window._editPbEditor.save();
     const formData = new FormData(e.target);
     const tagsStr = formData.get('tags') || '';
     const tags = tagsStr.split(',').map(t => t.trim()).filter(t => t);
