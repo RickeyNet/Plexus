@@ -145,7 +145,11 @@ from netcontrol.routes.lab import (
     init_lab,
     router as lab_router,
 )
-from netcontrol.routes.lab_runtime import router as lab_runtime_router
+from netcontrol.routes.lab_runtime import (
+    lab_runtime_ttl_loop,
+    reconcile_running_labs,
+    router as lab_runtime_router,
+)
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.deployments import (
@@ -1027,6 +1031,18 @@ async def lifespan(app: FastAPI):
     await db.get_or_create_builtin_ipam_source()
     await _cleanup_expired_jobs()
     await rehydrate_scheduled_upgrades()
+    try:
+        recon = await reconcile_running_labs()
+        if recon.get("checked"):
+            LOGGER.info(
+                "lab runtime reconcile: checked=%d running=%d stopped=%d skipped=%d",
+                recon.get("checked", 0),
+                recon.get("still_running", 0),
+                recon.get("marked_stopped", 0),
+                recon.get("skipped", 0),
+            )
+    except Exception as exc:
+        LOGGER.warning("lab runtime reconcile failed: %s", exc)
     await _run_discovery_sync_once()
     state.API_RATE_LIMIT_LOCK = asyncio.Lock()
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
@@ -1047,6 +1063,7 @@ async def lifespan(app: FastAPI):
     federation_task = asyncio.create_task(federation_sync_loop())
     ipam_sync_task = asyncio.create_task(_ipam_sync_loop())
     dhcp_sync_task = asyncio.create_task(_dhcp_sync_loop())
+    lab_runtime_ttl_task = asyncio.create_task(lab_runtime_ttl_loop())
     try:
         yield
     finally:
@@ -1068,6 +1085,7 @@ async def lifespan(app: FastAPI):
         federation_task.cancel()
         ipam_sync_task.cancel()
         dhcp_sync_task.cancel()
+        lab_runtime_ttl_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -1138,6 +1156,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await dhcp_sync_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await lab_runtime_ttl_task
         except asyncio.CancelledError:
             pass
 
