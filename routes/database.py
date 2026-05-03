@@ -180,6 +180,8 @@ _INSERT_ID_TABLES = {
     "lab_devices",
     "lab_runs",
     "lab_runtime_events",
+    "lab_topologies",
+    "lab_topology_links",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
@@ -15346,6 +15348,195 @@ async def list_running_lab_devices() -> list[dict]:
             """SELECT * FROM lab_devices
                WHERE runtime_kind = 'containerlab'
                  AND runtime_status IN ('provisioning','running')"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ── Phase B-2: lab topologies (multi-device) ────────────────────────────────
+
+
+async def create_lab_topology(
+    environment_id: int,
+    name: str,
+    description: str = "",
+    mgmt_subnet: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO lab_topologies
+               (environment_id, name, description, mgmt_subnet)
+               VALUES (?, ?, ?, ?)""",
+            (environment_id, name, description, mgmt_subnet),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def list_lab_topologies(environment_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT t.*,
+                      (SELECT COUNT(*) FROM lab_devices d WHERE d.topology_id = t.id) AS device_count,
+                      (SELECT COUNT(*) FROM lab_topology_links l WHERE l.topology_id = t.id) AS link_count
+               FROM lab_topologies t
+               WHERE t.environment_id = ?
+               ORDER BY t.name""",
+            (environment_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_lab_topology(topology_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM lab_topologies WHERE id = ?", (topology_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def update_lab_topology_status(
+    topology_id: int,
+    *,
+    status: str | None = None,
+    lab_name: str | None = None,
+    workdir: str | None = None,
+    error: str | None = None,
+    started_at: str | None | object = ...,
+) -> bool:
+    fields: list[str] = []
+    values: list = []
+    if status is not None:
+        fields.append("status = ?")
+        values.append(status)
+    if lab_name is not None:
+        fields.append("lab_name = ?")
+        values.append(lab_name)
+    if workdir is not None:
+        fields.append("workdir = ?")
+        values.append(workdir)
+    if error is not None:
+        fields.append("error = ?")
+        values.append(error)
+    if started_at is not ...:
+        fields.append("started_at = ?")
+        values.append(started_at)
+    if not fields:
+        return False
+    fields.append("updated_at = ?")
+    values.append(datetime.now(UTC).isoformat())
+    sql, params = _safe_dynamic_update(
+        "lab_topologies", fields, values, "id = ?", topology_id,
+    )
+    db = await get_db()
+    try:
+        cursor = await db.execute(sql, params)
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def delete_lab_topology(topology_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM lab_topologies WHERE id = ?", (topology_id,),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def set_lab_device_topology(device_id: int, topology_id: int | None) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE lab_devices SET topology_id = ?, updated_at = ? WHERE id = ?",
+            (topology_id, datetime.now(UTC).isoformat(), device_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def list_topology_devices(topology_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM lab_devices
+               WHERE topology_id = ?
+               ORDER BY hostname""",
+            (topology_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def create_lab_topology_link(
+    topology_id: int,
+    a_device_id: int,
+    a_endpoint: str,
+    b_device_id: int,
+    b_endpoint: str,
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO lab_topology_links
+               (topology_id, a_device_id, a_endpoint, b_device_id, b_endpoint)
+               VALUES (?, ?, ?, ?, ?)""",
+            (topology_id, a_device_id, a_endpoint, b_device_id, b_endpoint),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def list_topology_links(topology_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM lab_topology_links WHERE topology_id = ? ORDER BY id",
+            (topology_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def delete_lab_topology_link(link_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM lab_topology_links WHERE id = ?", (link_id,),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def list_running_lab_topologies() -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM lab_topologies
+               WHERE status IN ('provisioning','running')"""
         )
         return rows_to_list(await cursor.fetchall())
     finally:

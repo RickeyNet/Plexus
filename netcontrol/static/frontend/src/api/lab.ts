@@ -352,6 +352,177 @@ export function useRefreshRuntime(deviceId: number) {
   });
 }
 
+// ── Phase B-2: topologies ───────────────────────────────────────────────────
+
+export interface LabTopologySummary {
+  id: number;
+  environment_id: number;
+  name: string;
+  description: string;
+  lab_name: string;
+  status: string;
+  workdir: string;
+  mgmt_subnet: string;
+  error: string;
+  started_at: string | null;
+  created_at: string;
+  updated_at: string;
+  device_count?: number;
+  link_count?: number;
+}
+
+export interface LabTopologyLink {
+  id: number;
+  topology_id: number;
+  a_device_id: number;
+  a_endpoint: string;
+  b_device_id: number;
+  b_endpoint: string;
+}
+
+export interface LabTopology extends LabTopologySummary {
+  devices: LabDevice[];
+  links: LabTopologyLink[];
+}
+
+export interface DeployTopologyResult {
+  status: string;
+  lab_name: string;
+  workdir: string;
+  members: { device_id: number; node_name: string; mgmt_ipv4: string }[];
+}
+
+const TOPO_KEYS = {
+  list: (envId: number) => ['lab', 'environment', envId, 'topologies'] as const,
+  topo: (id: number) => ['lab', 'topology', id] as const,
+};
+
+export function useTopologies(envId: number | null) {
+  return useQuery({
+    queryKey: envId ? TOPO_KEYS.list(envId) : ['lab', 'topologies', 'none'],
+    queryFn: () =>
+      apiRequest<LabTopologySummary[]>(`/lab/environments/${envId}/topologies`),
+    enabled: envId !== null && envId !== undefined,
+  });
+}
+
+export function useTopology(topologyId: number | null) {
+  return useQuery({
+    queryKey: topologyId ? TOPO_KEYS.topo(topologyId) : ['lab', 'topology', 'none'],
+    queryFn: () => apiRequest<LabTopology>(`/lab/topologies/${topologyId}`),
+    enabled: topologyId !== null && topologyId !== undefined,
+  });
+}
+
+export function useCreateTopology(envId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { name: string; description?: string; mgmt_subnet?: string }) =>
+      apiRequest<{ id: number }>(`/lab/environments/${envId}/topologies`, {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.list(envId) }),
+  });
+}
+
+export function useDeleteTopology(envId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (topologyId: number) =>
+      apiRequest<{ ok: true }>(`/lab/topologies/${topologyId}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.list(envId) }),
+  });
+}
+
+export function useAddTopologyMember(topologyId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { device_id: number }) =>
+      apiRequest<{ ok: true }>(`/lab/topologies/${topologyId}/devices`, {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.topo(topologyId) }),
+  });
+}
+
+export function useRemoveTopologyMember(topologyId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (deviceId: number) =>
+      apiRequest<{ ok: true }>(
+        `/lab/topologies/${topologyId}/devices/${deviceId}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.topo(topologyId) }),
+  });
+}
+
+export function useAddTopologyLink(topologyId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      a_device_id: number;
+      a_endpoint: string;
+      b_device_id: number;
+      b_endpoint: string;
+    }) =>
+      apiRequest<{ id: number }>(`/lab/topologies/${topologyId}/links`, {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.topo(topologyId) }),
+  });
+}
+
+export function useRemoveTopologyLink(topologyId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (linkId: number) =>
+      apiRequest<{ ok: true }>(
+        `/lab/topologies/${topologyId}/links/${linkId}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.topo(topologyId) }),
+  });
+}
+
+export function useDeployTopology(topologyId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<DeployTopologyResult>(`/lab/topologies/${topologyId}/deploy`, {
+        method: 'POST',
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.topo(topologyId) }),
+  });
+}
+
+export function useDestroyTopology(topologyId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<{ status: string; workdir_removed?: boolean }>(
+        `/lab/topologies/${topologyId}/destroy`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.topo(topologyId) }),
+  });
+}
+
+export function useRefreshTopology(topologyId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<{ status: string; members?: unknown[] }>(
+        `/lab/topologies/${topologyId}/refresh`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TOPO_KEYS.topo(topologyId) }),
+  });
+}
+
 export function useSimulateLive(deviceId: number) {
   const qc = useQueryClient();
   return useMutation({
