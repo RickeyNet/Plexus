@@ -334,6 +334,24 @@ This section grows as decisions are made during the migration.
   `/static/css/style.css`. New pages MUST use legacy CSS — see
   `FRONTEND_STYLE.md` § Styling.
 
+### 2026-05-02 — Device Detail port + ECharts wrapper
+- **Context:** Phase 1.6 — porting `device-detail.js` (758 lines).
+  This is the first React page that needs charts; legacy uses
+  `PlexusChart` (an ECharts wrapper in `app.js`).
+- **Considered:** (a) skip charts for now and ship tables only,
+  (b) write a thin SVG sparkline component for the metric cards,
+  (c) install `echarts` and mirror `PlexusChart`'s options.
+- **Chose:** (c). New file `src/lib/echart.tsx` exposes
+  `<TimeSeriesChart>` and `<BarChart>` — same theme colors (read from
+  the same CSS variables used by the legacy stylesheet), same option
+  shape as legacy. Drop-in equivalent of `PlexusChart.timeSeries` /
+  `PlexusChart.bar`.
+- **Bundle cost:** gzipped JS jumped from ~85 KB → ~465 KB. ECharts is
+  ~330 KB gz on its own. Acceptable: legacy has the same size and the
+  alternative is rebuilding charts from scratch.
+- **Reversible?** Yes — swap `echart.tsx` for a different chart lib;
+  the call sites are <10. Bundle cost is the only meaningful blocker.
+
 ### Future entries (template)
 ```
 ### YYYY-MM-DD — <decision title>

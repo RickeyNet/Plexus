@@ -1,5 +1,7 @@
 import { Link, Route, Routes } from 'react-router-dom';
 
+import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
+import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
 import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
 import { Home } from '@/pages/Home';
@@ -22,6 +24,9 @@ function TopNav() {
       <strong style={{ marginRight: '1rem', color: 'var(--text)' }}>Plexus</strong>
       <Link to="/" className="btn btn-sm btn-ghost">
         Home
+      </Link>
+      <Link to="/devices" className="btn btn-sm btn-ghost">
+        Devices
       </Link>
       <Link to="/mac-tracking" className="btn btn-sm btn-ghost">
         MAC Tracking
@@ -49,6 +54,8 @@ export function App() {
       <main style={{ padding: '1.5rem' }}>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/devices" element={<DevicePicker />} />
+          <Route path="/devices/:hostId" element={<DeviceDetail />} />
           <Route path="/lab" element={<Lab />} />
           <Route path="/mac-tracking" element={<MacTracking />} />
           <Route path="/traffic-analysis" element={<TrafficAnalysis />} />
