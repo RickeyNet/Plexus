@@ -352,6 +352,76 @@ export function useRefreshRuntime(deviceId: number) {
   });
 }
 
+// ── Phase B-3a: drift-from-twin ─────────────────────────────────────────────
+
+export interface LabDriftRunSummary {
+  id: number;
+  lab_device_id: number;
+  source_host_id: number | null;
+  status: 'in_sync' | 'drifted' | 'missing_source' | 'error' | 'never_checked';
+  diff_added: number;
+  diff_removed: number;
+  twin_bytes: number;
+  prod_bytes: number;
+  actor: string;
+  error: string;
+  checked_at: string;
+}
+
+export interface LabDriftRunDetail extends LabDriftRunSummary {
+  diff_text: string;
+}
+
+const DRIFT_KEYS = {
+  runs: (deviceId: number) => ['lab', 'device', deviceId, 'drift', 'runs'] as const,
+  latest: (deviceId: number) => ['lab', 'device', deviceId, 'drift', 'latest'] as const,
+  run: (id: number) => ['lab', 'drift', 'run', id] as const,
+};
+
+export function useLatestDriftRun(deviceId: number | null) {
+  return useQuery({
+    queryKey: deviceId ? DRIFT_KEYS.latest(deviceId) : ['lab', 'drift', 'latest', 'none'],
+    queryFn: () =>
+      apiRequest<LabDriftRunSummary | { status: 'never_checked' }>(
+        `/lab/devices/${deviceId}/drift/latest`,
+      ),
+    enabled: deviceId !== null && deviceId !== undefined,
+  });
+}
+
+export function useDriftRuns(deviceId: number | null) {
+  return useQuery({
+    queryKey: deviceId ? DRIFT_KEYS.runs(deviceId) : ['lab', 'drift', 'runs', 'none'],
+    queryFn: () =>
+      apiRequest<LabDriftRunSummary[]>(`/lab/devices/${deviceId}/drift/runs`),
+    enabled: deviceId !== null && deviceId !== undefined,
+  });
+}
+
+export function useDriftRun(runId: number | null) {
+  return useQuery({
+    queryKey: runId ? DRIFT_KEYS.run(runId) : ['lab', 'drift', 'run', 'none'],
+    queryFn: () => apiRequest<LabDriftRunDetail>(`/lab/drift/runs/${runId}`),
+    enabled: runId !== null && runId !== undefined,
+  });
+}
+
+export function useRunDriftCheck(deviceId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<{ id: number; status: string; diff_added: number; diff_removed: number }>(
+        `/lab/devices/${deviceId}/drift/check`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: DRIFT_KEYS.latest(deviceId) });
+      qc.invalidateQueries({ queryKey: DRIFT_KEYS.runs(deviceId) });
+    },
+  });
+}
+
+
 // ── Phase B-2: topologies ───────────────────────────────────────────────────
 
 export interface LabTopologySummary {

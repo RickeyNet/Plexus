@@ -182,6 +182,7 @@ _INSERT_ID_TABLES = {
     "lab_runtime_events",
     "lab_topologies",
     "lab_topology_links",
+    "lab_drift_runs",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
@@ -15537,6 +15538,99 @@ async def list_running_lab_topologies() -> list[dict]:
         cursor = await db.execute(
             """SELECT * FROM lab_topologies
                WHERE status IN ('provisioning','running')"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ── Phase B-3a: drift-from-twin ─────────────────────────────────────────────
+
+
+async def create_lab_drift_run(
+    lab_device_id: int,
+    source_host_id: int | None,
+    status: str,
+    diff_text: str = "",
+    diff_added: int = 0,
+    diff_removed: int = 0,
+    twin_bytes: int = 0,
+    prod_bytes: int = 0,
+    actor: str = "",
+    error: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO lab_drift_runs
+               (lab_device_id, source_host_id, status, diff_text,
+                diff_added, diff_removed, twin_bytes, prod_bytes, actor, error)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (lab_device_id, source_host_id, status, diff_text,
+             diff_added, diff_removed, twin_bytes, prod_bytes, actor, error),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def list_lab_drift_runs(lab_device_id: int, limit: int = 50) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT id, lab_device_id, source_host_id, status,
+                      diff_added, diff_removed, twin_bytes, prod_bytes,
+                      actor, error, checked_at
+               FROM lab_drift_runs
+               WHERE lab_device_id = ?
+               ORDER BY id DESC LIMIT ?""",
+            (lab_device_id, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_lab_drift_run(run_id: int) -> dict | None:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM lab_drift_runs WHERE id = ?", (run_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def get_latest_lab_drift_run(lab_device_id: int) -> dict | None:
+    """Return the most recent drift run for a lab device, sans diff_text."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT id, lab_device_id, source_host_id, status,
+                      diff_added, diff_removed, twin_bytes, prod_bytes,
+                      actor, error, checked_at
+               FROM lab_drift_runs
+               WHERE lab_device_id = ?
+               ORDER BY id DESC LIMIT 1""",
+            (lab_device_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def list_drift_eligible_devices() -> list[dict]:
+    """Lab devices with a source host attached — the only ones drift checks
+    can compare. Used by the scheduler to decide what to walk each tick.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT id, environment_id, hostname, source_host_id, running_config
+               FROM lab_devices
+               WHERE source_host_id IS NOT NULL"""
         )
         return rows_to_list(await cursor.fetchall())
     finally:
