@@ -411,3 +411,273 @@ def test_simulate_live_runs_real_push(tmp_path, monkeypatch):
     # The lab device snapshot now reflects the live post-state.
     detail = client.get(f"/api/lab/devices/{dev_id}").json()
     assert "ip domain-name lab.local" in detail["running_config"]
+
+
+# ── Operational hardening ───────────────────────────────────────────────────
+
+
+def test_destroy_removes_workdir(tmp_path, monkeypatch):
+    monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
+    inspect_json = (
+        '{"containers": [{"name": "clab-plx-rtr-w", "ipv4_address": "172.20.20.5/24"}]}'
+    )
+
+    async def _fake_run(args, cwd=None):
+        if args[0] == "version":
+            return 0, "containerlab version 0.50\n", ""
+        if args[0] == "deploy":
+            return 0, "ok", ""
+        if args[0] == "inspect":
+            return 0, inspect_json, ""
+        if args[0] == "destroy":
+            return 0, "destroyed", ""
+        return 1, "", "unknown"
+
+    workroot = tmp_path / "labwd"
+    monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
+    monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(workroot))
+
+    client = _auth_client(tmp_path, monkeypatch)
+    env_id = client.post("/api/lab/environments", json={"name": "wd-env"}).json()["id"]
+    dev_id = client.post(
+        f"/api/lab/environments/{env_id}/devices",
+        json={"hostname": "rtr-w"},
+    ).json()["id"]
+
+    client.post(
+        f"/api/lab/devices/{dev_id}/runtime/deploy",
+        json={"node_kind": "linux", "image": "alpine"},
+    )
+    # Workdir should now exist with a topology file.
+    device_workdir = workroot / f"env-{env_id}" / f"dev-{dev_id}"
+    assert (device_workdir / "topology.clab.yml").is_file()
+
+    resp = client.post(f"/api/lab/devices/{dev_id}/runtime/destroy")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "destroyed"
+    assert body["workdir_removed"] is True
+    assert not device_workdir.exists()
+
+
+def test_reconcile_marks_stale_running_rows(tmp_path, monkeypatch):
+    """If a row says 'running' but containerlab no longer reports it, mark stopped."""
+    monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
+
+    deploy_inspect = '{"containers": [{"name": "clab-foo-rtr-r", "ipv4_address": "172.20.20.7/24"}]}'
+    state = {"phase": "deploy"}
+
+    async def _fake_run(args, cwd=None):
+        if args[0] == "version":
+            return 0, "containerlab version 0.50\n", ""
+        if args[0] == "deploy":
+            return 0, "ok", ""
+        if args[0] == "inspect":
+            # First inspect (during deploy) reports the container; later inspect
+            # (during reconcile) returns nothing as if Docker was wiped.
+            if state["phase"] == "deploy":
+                return 0, deploy_inspect, ""
+            return 0, "{}", ""
+        return 1, "", "unknown"
+
+    monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
+    monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
+
+    client = _auth_client(tmp_path, monkeypatch)
+    env_id = client.post("/api/lab/environments", json={"name": "rec-env"}).json()["id"]
+    dev_id = client.post(
+        f"/api/lab/environments/{env_id}/devices",
+        json={"hostname": "rtr-r"},
+    ).json()["id"]
+    client.post(
+        f"/api/lab/devices/{dev_id}/runtime/deploy",
+        json={"node_kind": "linux", "image": "alpine"},
+    )
+    # Confirm we're running.
+    detail = client.get(f"/api/lab/devices/{dev_id}").json()
+    assert detail["runtime_status"] == "running"
+
+    # Switch the fake inspector into "container is gone" mode and run reconcile.
+    state["phase"] = "reconcile"
+    summary = asyncio.run(lab_runtime.reconcile_running_labs())
+    assert summary["checked"] == 1
+    assert summary["marked_stopped"] == 1
+
+    # The row should now report stopped.
+    detail = client.get(f"/api/lab/devices/{dev_id}").json()
+    assert detail["runtime_status"] == "stopped"
+    assert detail["runtime_mgmt_address"] in ("", None)
+
+
+def test_reconcile_skips_when_containerlab_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: None)
+
+    # Seed a row directly so reconcile has work to do despite no client.
+    db_path = str(tmp_path / "rec_skip.db")
+    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+
+    from datetime import UTC, datetime as _datetime
+
+    async def _setup():
+        await db_module.init_db()
+        env_id = await db_module.create_lab_environment(name="rec-skip", shared=True)
+        dev_id = await db_module.create_lab_device(
+            environment_id=env_id, hostname="ghost", running_config="",
+        )
+        await db_module.update_lab_device_runtime(
+            dev_id,
+            runtime_kind="containerlab",
+            runtime_node_kind="linux",
+            runtime_image="alpine",
+            runtime_status="running",
+            runtime_lab_name="ghost",
+            runtime_node_name="ghost",
+            runtime_started_at=_datetime.now(UTC).isoformat(),
+        )
+        return dev_id
+
+    asyncio.run(_setup())
+    summary = asyncio.run(lab_runtime.reconcile_running_labs())
+    assert summary["skipped"] == 1
+    assert summary["marked_stopped"] == 0
+
+
+def test_reap_idle_runtimes_destroys_old_labs(tmp_path, monkeypatch):
+    """Rows older than the configured TTL should be torn down."""
+    monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
+    inspect_json = (
+        '{"containers": [{"name": "clab-plx-rtr-t", "ipv4_address": "172.20.20.9/24"}]}'
+    )
+
+    destroy_calls: list[list[str]] = []
+
+    async def _fake_run(args, cwd=None):
+        if args[0] == "version":
+            return 0, "containerlab version 0.50\n", ""
+        if args[0] == "deploy":
+            return 0, "ok", ""
+        if args[0] == "inspect":
+            return 0, inspect_json, ""
+        if args[0] == "destroy":
+            destroy_calls.append(list(args))
+            return 0, "destroyed", ""
+        return 1, "", "unknown"
+
+    monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
+    monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
+    # Set TTL to 1 second so anything started before "now" qualifies.
+    monkeypatch.setenv("PLEXUS_LAB_RUNTIME_TTL_SECONDS", "1")
+
+    client = _auth_client(tmp_path, monkeypatch)
+    env_id = client.post("/api/lab/environments", json={"name": "ttl-env"}).json()["id"]
+    dev_id = client.post(
+        f"/api/lab/environments/{env_id}/devices",
+        json={"hostname": "rtr-t"},
+    ).json()["id"]
+    client.post(
+        f"/api/lab/devices/{dev_id}/runtime/deploy",
+        json={"node_kind": "linux", "image": "alpine"},
+    )
+
+    # Force runtime_started_at into the past so the TTL check catches it.
+    async def _backdate():
+        from datetime import UTC, datetime, timedelta
+        await db_module.update_lab_device_runtime(
+            dev_id,
+            runtime_started_at=(datetime.now(UTC) - timedelta(hours=48)).isoformat(),
+        )
+
+    asyncio.run(_backdate())
+
+    summary = asyncio.run(lab_runtime.reap_idle_runtimes())
+    assert summary["reaped"] == 1
+    assert any("destroy" in args for args in destroy_calls)
+
+    detail = client.get(f"/api/lab/devices/{dev_id}").json()
+    assert detail["runtime_status"] == "destroyed"
+
+
+def test_reap_idle_runtimes_disabled_when_ttl_zero(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLEXUS_LAB_RUNTIME_TTL_SECONDS", "0")
+    summary = asyncio.run(lab_runtime.reap_idle_runtimes())
+    assert summary["ttl_seconds"] == 0
+    assert summary["reaped"] == 0
+    assert summary["checked"] == 0
+
+
+# ── Compliance scoring on simulate paths ────────────────────────────────────
+
+
+def _seed_compliance_profile_blocking_snmp_public(group_id: int):
+    """Helper: create a compliance profile that fails when 'snmp-server community public' appears."""
+    import json as _json
+    from routes.crypto import encrypt as _encrypt
+
+    async def _do():
+        rules = [
+            {
+                "name": "no public SNMP community",
+                "type": "must_not_contain",
+                "pattern": "snmp-server community public",
+            },
+        ]
+        prof_id = await db_module.create_compliance_profile(
+            name="block-snmp-public",
+            description="",
+            severity="critical",
+            rules=_json.dumps(rules),
+        )
+        cred_id = await db_module.create_credential(
+            name=f"comp-cred-{group_id}",
+            username="admin",
+            enc_password=_encrypt("password"),
+            enc_secret=_encrypt(""),
+        )
+        await db_module.create_compliance_assignment(
+            profile_id=prof_id,
+            group_id=group_id,
+            credential_id=cred_id,
+        )
+        return prof_id
+
+    return asyncio.run(_do())
+
+
+def test_simulate_offline_includes_compliance_impact(tmp_path, monkeypatch):
+    """Phase A simulate should now surface compliance regressions when the source host has profiles."""
+    client = _auth_client(tmp_path, monkeypatch)
+
+    async def _seed():
+        gid = await db_module.create_group(name="comp-grp")
+        hid = await db_module.add_host(
+            group_id=gid, hostname="prod-rtr-c", ip_address="10.5.5.1",
+        )
+        return gid, hid
+
+    gid, hid = asyncio.run(_seed())
+    _seed_compliance_profile_blocking_snmp_public(gid)
+
+    env_id = client.post("/api/lab/environments", json={"name": "comp-env"}).json()["id"]
+    # Create lab device referencing source host so compliance lookup works.
+    async def _seed_dev():
+        return await db_module.create_lab_device(
+            environment_id=env_id,
+            hostname="twin-c",
+            source_host_id=hid,
+            running_config="hostname twin-c\n",
+        )
+
+    dev_id = asyncio.run(_seed_dev())
+
+    resp = client.post(
+        f"/api/lab/devices/{dev_id}/simulate",
+        json={"proposed_commands": ["snmp-server community public RO"]},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    detail = body.get("risk_detail", {})
+    assert detail.get("compliance_violations_introduced", 0) >= 1
+    assert any(
+        "compliance" in (rf or "").lower()
+        for rf in detail.get("risk_factors", [])
+    )

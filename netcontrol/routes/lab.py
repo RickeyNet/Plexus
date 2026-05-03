@@ -144,6 +144,72 @@ async def _resolve_session_user(request: Request) -> tuple[dict | None, dict | N
     return session, user, role
 
 
+async def _evaluate_compliance_impact(
+    device: dict,
+    pre_config: str,
+    post_config: str,
+) -> tuple[int, list[dict]]:
+    """Score compliance regressions/improvements for a lab change.
+
+    Lab devices don't carry a group_id directly, so we resolve compliance
+    assignments via the source production host when one is set. Returns
+    (new_violation_count, per_profile_impact). Failures are swallowed so a
+    misconfigured profile can't block a simulation.
+    """
+    source_host_id = device.get("source_host_id")
+    if not source_host_id:
+        return 0, []
+    try:
+        from netcontrol.routes.compliance import _evaluate_rule
+
+        host_obj = await db.get_host(int(source_host_id))
+        if not host_obj or not host_obj.get("group_id"):
+            return 0, []
+        assignments = await db.get_compliance_assignments(group_id=host_obj["group_id"])
+        violations = 0
+        impact: list[dict] = []
+        for assignment in assignments:
+            if not assignment.get("enabled"):
+                continue
+            profile = await db.get_compliance_profile(assignment["profile_id"])
+            if not profile:
+                continue
+            rules_json = profile.get("rules") or "[]"
+            rules = json.loads(rules_json) if isinstance(rules_json, str) else rules_json
+            findings_before = [_evaluate_rule(r, pre_config) for r in rules]
+            findings_after = [_evaluate_rule(r, post_config) for r in rules]
+            before_failures = sum(1 for f in findings_before if not f["passed"])
+            after_failures = sum(1 for f in findings_after if not f["passed"])
+            new_violations = max(0, after_failures - before_failures)
+            violations += new_violations
+
+            changed: list[dict] = []
+            for i, rule in enumerate(rules):
+                before = findings_before[i]["passed"]
+                after = findings_after[i]["passed"]
+                if before != after:
+                    changed.append({
+                        "name": rule.get("name", rule.get("pattern", "?")),
+                        "before": "pass" if before else "fail",
+                        "after": "pass" if after else "fail",
+                        "impact": "regression" if before and not after else "improvement",
+                    })
+            if changed:
+                impact.append({
+                    "profile_name": profile["name"],
+                    "profile_id": profile["id"],
+                    "before_failures": before_failures,
+                    "after_failures": after_failures,
+                    "new_violations": new_violations,
+                    "improvements": sum(1 for c in changed if c["impact"] == "improvement"),
+                    "changed_rules": changed,
+                })
+        return violations, impact
+    except Exception as exc:
+        # Don't fail the simulation just because compliance evaluation broke.
+        return 0, []
+
+
 async def _resolve_commands(
     proposed_commands: list[str],
     template_id: int | None,
@@ -418,8 +484,11 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
         pre_config, post_config,
         baseline_label="lab-pre", actual_label="lab-post",
     )
+    compliance_violations, compliance_impact = await _evaluate_compliance_impact(
+        device, pre_config, post_config,
+    )
     risk_score, risk_level = _compute_risk_score(
-        commands, affected_areas, diff_added, diff_removed, 0,
+        commands, affected_areas, diff_added, diff_removed, compliance_violations,
     )
     risk_detail = {
         "change_volume": {
@@ -428,6 +497,8 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
             "diff_lines_removed": diff_removed,
         },
         "affected_areas": affected_areas,
+        "compliance_impact": compliance_impact,
+        "compliance_violations_introduced": compliance_violations,
         "risk_factors": [],
     }
     if affected_areas:
@@ -436,6 +507,10 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
         )
     if diff_removed > 0:
         risk_detail["risk_factors"].append(f"Removes {diff_removed} line(s) from config")
+    if compliance_violations > 0:
+        risk_detail["risk_factors"].append(
+            f"Introduces {compliance_violations} new compliance violation(s)"
+        )
     if len(commands) > 20:
         risk_detail["risk_factors"].append(f"Large change set ({len(commands)} commands)")
 

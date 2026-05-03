@@ -34,7 +34,7 @@ import json
 import os
 import re
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import routes.database as db
@@ -42,6 +42,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from netcontrol.routes.lab import (
+    _evaluate_compliance_impact,
     _resolve_commands,
     _resolve_session_user,
     _user_can_access_env,
@@ -316,6 +317,17 @@ async def deploy_lab_device(
     }
 
 
+async def _remove_workdir(workdir: Path) -> bool:
+    """Best-effort removal of a per-device workdir. Never raises."""
+    try:
+        if workdir.exists():
+            shutil.rmtree(workdir, ignore_errors=True)
+            return True
+    except Exception as exc:
+        LOGGER.warning("workdir cleanup failed for %s: %s", workdir, exc)
+    return False
+
+
 async def destroy_lab_device(device: dict, *, actor: str = "") -> dict:
     """Tear down a previously deployed single-node lab."""
     workdir = _device_workdir(device)
@@ -364,11 +376,14 @@ async def destroy_lab_device(device: dict, *, actor: str = "") -> dict:
         runtime_status="destroyed",
         runtime_mgmt_address="",
         runtime_error="",
+        runtime_workdir="",
     )
+    removed = await _remove_workdir(workdir)
     await db.add_lab_runtime_event(
-        device["id"], action="destroy", status="ok", actor=actor, detail="destroyed",
+        device["id"], action="destroy", status="ok", actor=actor,
+        detail="destroyed; workdir removed" if removed else "destroyed",
     )
-    return {"status": "destroyed"}
+    return {"status": "destroyed", "workdir_removed": removed}
 
 
 async def refresh_lab_device(device: dict, *, actor: str = "") -> dict:
@@ -557,8 +572,11 @@ async def simulate_live_endpoint(
         baseline_label="lab-pre", actual_label="lab-post-live",
     )
     affected_areas = _classify_change_areas(commands)
+    compliance_violations, compliance_impact = await _evaluate_compliance_impact(
+        device, pre_config, post_config,
+    )
     risk_score, risk_level = _compute_risk_score(
-        commands, affected_areas, diff_added, diff_removed, 0,
+        commands, affected_areas, diff_added, diff_removed, compliance_violations,
     )
     risk_detail = {
         "change_volume": {
@@ -567,9 +585,15 @@ async def simulate_live_endpoint(
             "diff_lines_removed": diff_removed,
         },
         "affected_areas": affected_areas,
+        "compliance_impact": compliance_impact,
+        "compliance_violations_introduced": compliance_violations,
         "risk_factors": [],
         "live": True,
     }
+    if compliance_violations > 0:
+        risk_detail["risk_factors"].append(
+            f"Introduces {compliance_violations} new compliance violation(s)"
+        )
 
     # Persist the new running-config back to the twin's snapshot so subsequent
     # Phase A simulations operate against the real post-state.
@@ -611,3 +635,162 @@ async def simulate_live_endpoint(
         "post_config": post_config,
         "push_output": push_output[-2000:],
     }
+
+
+# ── Operational hardening ───────────────────────────────────────────────────
+
+
+# Default idle TTL: 24h. Operators can override or disable (0 = disabled).
+DEFAULT_RUNTIME_TTL_SECONDS = 24 * 60 * 60
+DEFAULT_RUNTIME_TTL_CHECK_INTERVAL = 15 * 60  # check every 15 minutes
+
+
+def _runtime_ttl_seconds() -> int:
+    raw = os.getenv("PLEXUS_LAB_RUNTIME_TTL_SECONDS")
+    if not raw:
+        return DEFAULT_RUNTIME_TTL_SECONDS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_RUNTIME_TTL_SECONDS
+
+
+def _runtime_ttl_interval() -> int:
+    raw = os.getenv("PLEXUS_LAB_RUNTIME_TTL_INTERVAL_SECONDS")
+    if not raw:
+        return DEFAULT_RUNTIME_TTL_CHECK_INTERVAL
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return DEFAULT_RUNTIME_TTL_CHECK_INTERVAL
+
+
+def _parse_iso_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        # Both sqlite "datetime('now')" and our isoformat strings are accepted.
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        ts = datetime.fromisoformat(value)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return ts
+    except ValueError:
+        return None
+
+
+async def reconcile_running_labs() -> dict:
+    """At startup, mark stale 'running' rows accurately against containerlab.
+
+    If containerlab isn't installed we don't touch anything — the status badge
+    will show whatever the DB last saw, and the operator can refresh manually.
+    If it is installed, walk each row in (provisioning, running) and reinspect.
+    Rows whose topology workdir is gone or whose containers no longer exist
+    flip to 'stopped' so the UI doesn't lie.
+    """
+    summary = {"checked": 0, "still_running": 0, "marked_stopped": 0, "skipped": 0}
+    try:
+        rows = await db.list_running_lab_devices()
+    except Exception as exc:
+        LOGGER.warning("reconcile: failed to query running lab devices: %s", exc)
+        return summary
+    if not rows:
+        return summary
+
+    status = await get_runtime_status()
+    if not status["available"]:
+        summary["skipped"] = len(rows)
+        LOGGER.info(
+            "reconcile: containerlab unavailable on host; skipping %d row(s)",
+            len(rows),
+        )
+        return summary
+
+    for row in rows:
+        summary["checked"] += 1
+        workdir = _device_workdir(row)
+        topo = workdir / "topology.clab.yml"
+        if not topo.is_file():
+            await db.update_lab_device_runtime(
+                row["id"], runtime_status="stopped", runtime_mgmt_address="",
+            )
+            await db.add_lab_runtime_event(
+                row["id"], action="reconcile", status="ok", actor="system",
+                detail="topology workdir missing; marked stopped",
+            )
+            summary["marked_stopped"] += 1
+            continue
+        inspect_doc = await _inspect_lab(workdir)
+        node_name = row.get("runtime_node_name") or _slug(row.get("hostname") or "node", "node")
+        mgmt_ipv4 = _extract_mgmt_ipv4(inspect_doc or {}, node_name)
+        if inspect_doc and mgmt_ipv4:
+            await db.update_lab_device_runtime(
+                row["id"], runtime_status="running", runtime_mgmt_address=mgmt_ipv4,
+            )
+            summary["still_running"] += 1
+        else:
+            await db.update_lab_device_runtime(
+                row["id"], runtime_status="stopped", runtime_mgmt_address="",
+            )
+            await db.add_lab_runtime_event(
+                row["id"], action="reconcile", status="ok", actor="system",
+                detail="containerlab no longer reports the node",
+            )
+            summary["marked_stopped"] += 1
+    return summary
+
+
+async def reap_idle_runtimes(now: datetime | None = None) -> dict:
+    """Destroy any running lab whose `runtime_started_at` exceeds the TTL.
+
+    Returns a summary of what was reaped. Errors are recorded as runtime
+    events but never raised — the caller is a background loop.
+    """
+    ttl = _runtime_ttl_seconds()
+    summary = {"checked": 0, "reaped": 0, "errors": 0, "ttl_seconds": ttl}
+    if ttl <= 0:
+        return summary
+    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=ttl)
+    try:
+        rows = await db.list_running_lab_devices()
+    except Exception as exc:
+        LOGGER.warning("ttl reaper: failed to query running labs: %s", exc)
+        return summary
+    for row in rows:
+        summary["checked"] += 1
+        started = _parse_iso_timestamp(row.get("runtime_started_at"))
+        if started is None or started > cutoff:
+            continue
+        try:
+            await destroy_lab_device(dict(row), actor="system-ttl")
+            summary["reaped"] += 1
+        except HTTPException as exc:
+            summary["errors"] += 1
+            await db.add_lab_runtime_event(
+                row["id"], action="ttl-destroy", status="error",
+                actor="system-ttl",
+                detail=str(exc.detail)[:300] if hasattr(exc, "detail") else str(exc),
+            )
+        except Exception as exc:
+            summary["errors"] += 1
+            await db.add_lab_runtime_event(
+                row["id"], action="ttl-destroy", status="error",
+                actor="system-ttl", detail=str(exc)[:300],
+            )
+    return summary
+
+
+async def lab_runtime_ttl_loop() -> None:
+    """Background loop that reaps idle labs at PLEXUS_LAB_RUNTIME_TTL_SECONDS."""
+    while True:
+        interval = _runtime_ttl_interval()
+        await asyncio.sleep(interval)
+        if _runtime_ttl_seconds() <= 0:
+            continue
+        try:
+            await reap_idle_runtimes()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("ttl reaper iteration failed: %s", exc)
