@@ -151,6 +151,10 @@ from netcontrol.routes.lab_runtime import (
     router as lab_runtime_router,
 )
 from netcontrol.routes.lab_topology import router as lab_topology_router
+from netcontrol.routes.lab_drift import (
+    lab_drift_scheduler_loop,
+    router as lab_drift_router,
+)
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.deployments import (
@@ -1065,6 +1069,7 @@ async def lifespan(app: FastAPI):
     ipam_sync_task = asyncio.create_task(_ipam_sync_loop())
     dhcp_sync_task = asyncio.create_task(_dhcp_sync_loop())
     lab_runtime_ttl_task = asyncio.create_task(lab_runtime_ttl_loop())
+    lab_drift_task = asyncio.create_task(lab_drift_scheduler_loop())
     try:
         yield
     finally:
@@ -1087,6 +1092,7 @@ async def lifespan(app: FastAPI):
         ipam_sync_task.cancel()
         dhcp_sync_task.cancel()
         lab_runtime_ttl_task.cancel()
+        lab_drift_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -1161,6 +1167,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await lab_runtime_ttl_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await lab_drift_task
         except asyncio.CancelledError:
             pass
 
@@ -1714,6 +1724,10 @@ app.include_router(
 )
 app.include_router(
     lab_topology_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
+)
+app.include_router(
+    lab_drift_router,
     dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
 )
 
