@@ -179,6 +179,7 @@ _INSERT_ID_TABLES = {
     "lab_environments",
     "lab_devices",
     "lab_runs",
+    "lab_runtime_events",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
@@ -15058,6 +15059,8 @@ async def list_lab_devices(environment_id: int) -> list[dict]:
                       d.device_type, d.model, d.source_host_id, d.notes,
                       d.created_at, d.updated_at,
                       LENGTH(d.running_config) AS config_size,
+                      d.runtime_kind, d.runtime_status, d.runtime_mgmt_address,
+                      d.runtime_node_kind, d.runtime_image,
                       (SELECT COUNT(*) FROM lab_runs r WHERE r.lab_device_id = d.id) AS run_count
                FROM lab_devices d
                WHERE d.environment_id = ?
@@ -15221,5 +15224,129 @@ async def update_lab_run_status(
             )
         await db.commit()
         return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ── Phase B-1: containerlab runtime helpers ──────────────────────────────────
+
+
+async def update_lab_device_runtime(
+    device_id: int,
+    *,
+    runtime_kind: str | None = None,
+    runtime_node_kind: str | None = None,
+    runtime_image: str | None = None,
+    runtime_status: str | None = None,
+    runtime_lab_name: str | None = None,
+    runtime_node_name: str | None = None,
+    runtime_mgmt_address: str | None = None,
+    runtime_credential_id: int | None | object = ...,
+    runtime_error: str | None = None,
+    runtime_workdir: str | None = None,
+    runtime_started_at: str | None | object = ...,
+) -> bool:
+    """Update runtime fields on a lab device. Skips fields left as the default sentinel."""
+    fields: list[str] = []
+    values: list = []
+    if runtime_kind is not None:
+        fields.append("runtime_kind = ?")
+        values.append(runtime_kind)
+    if runtime_node_kind is not None:
+        fields.append("runtime_node_kind = ?")
+        values.append(runtime_node_kind)
+    if runtime_image is not None:
+        fields.append("runtime_image = ?")
+        values.append(runtime_image)
+    if runtime_status is not None:
+        fields.append("runtime_status = ?")
+        values.append(runtime_status)
+    if runtime_lab_name is not None:
+        fields.append("runtime_lab_name = ?")
+        values.append(runtime_lab_name)
+    if runtime_node_name is not None:
+        fields.append("runtime_node_name = ?")
+        values.append(runtime_node_name)
+    if runtime_mgmt_address is not None:
+        fields.append("runtime_mgmt_address = ?")
+        values.append(runtime_mgmt_address)
+    if runtime_credential_id is not ...:
+        fields.append("runtime_credential_id = ?")
+        values.append(runtime_credential_id)
+    if runtime_error is not None:
+        fields.append("runtime_error = ?")
+        values.append(runtime_error)
+    if runtime_workdir is not None:
+        fields.append("runtime_workdir = ?")
+        values.append(runtime_workdir)
+    if runtime_started_at is not ...:
+        fields.append("runtime_started_at = ?")
+        values.append(runtime_started_at)
+    if not fields:
+        return False
+    fields.append("updated_at = ?")
+    values.append(datetime.now(UTC).isoformat())
+    sql, params = _safe_dynamic_update(
+        "lab_devices", fields, values, "id = ?", device_id,
+    )
+    db = await get_db()
+    try:
+        cursor = await db.execute(sql, params)
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def add_lab_runtime_event(
+    lab_device_id: int,
+    action: str,
+    status: str = "ok",
+    actor: str = "",
+    detail: str = "",
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO lab_runtime_events
+               (lab_device_id, action, status, actor, detail)
+               VALUES (?,?,?,?,?)""",
+            (lab_device_id, action, status, actor, detail),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def list_lab_runtime_events(lab_device_id: int, limit: int = 50) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT id, lab_device_id, action, status, actor, detail, created_at
+               FROM lab_runtime_events
+               WHERE lab_device_id = ?
+               ORDER BY id DESC LIMIT ?""",
+            (lab_device_id, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def list_running_lab_devices() -> list[dict]:
+    """Return all lab devices currently in `provisioning` or `running` state.
+
+    Used at startup to reconcile in-memory state with whatever containerlab is
+    actually still running (or to surface stale rows after a crash).
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM lab_devices
+               WHERE runtime_kind = 'containerlab'
+                 AND runtime_status IN ('provisioning','running')"""
+        )
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()

@@ -27,10 +27,65 @@ export interface LabDeviceSummary {
   updated_at: string;
   config_size: number;
   run_count: number;
+  runtime_kind?: string;
+  runtime_status?: string;
+  runtime_mgmt_address?: string;
+  runtime_node_kind?: string;
+  runtime_image?: string;
 }
 
 export interface LabDevice extends LabDeviceSummary {
   running_config: string;
+  runtime_kind?: string;
+  runtime_node_kind?: string;
+  runtime_image?: string;
+  runtime_status?: string;
+  runtime_lab_name?: string;
+  runtime_node_name?: string;
+  runtime_mgmt_address?: string;
+  runtime_credential_id?: number | null;
+  runtime_error?: string;
+  runtime_workdir?: string;
+  runtime_started_at?: string | null;
+}
+
+export interface LabRuntimeStatus {
+  available: boolean;
+  binary: string | null;
+  version: string | null;
+  reason: string;
+  allowed_node_kinds: string[];
+}
+
+export interface LabRuntimeEvent {
+  id: number;
+  lab_device_id: number;
+  action: string;
+  status: string;
+  actor: string;
+  detail: string;
+  created_at: string;
+}
+
+export interface DeployRuntimeResult {
+  status: string;
+  lab_name: string;
+  node_name: string;
+  mgmt_ipv4: string;
+  workdir: string;
+}
+
+export interface SimulateLiveResult {
+  run_id: number;
+  status: string;
+  risk_score: number;
+  risk_level: string;
+  diff_text: string;
+  diff_added: number;
+  diff_removed: number;
+  affected_areas: string[];
+  post_config: string;
+  push_output: string;
 }
 
 export interface LabRunSummary {
@@ -74,6 +129,8 @@ const KEYS = {
   device: (id: number) => ['lab', 'device', id] as const,
   runs: (deviceId: number) => ['lab', 'device', deviceId, 'runs'] as const,
   run: (id: number) => ['lab', 'run', id] as const,
+  runtime: ['lab', 'runtime'] as const,
+  runtimeEvents: (deviceId: number) => ['lab', 'device', deviceId, 'runtime', 'events'] as const,
 };
 
 // ── Environments ────────────────────────────────────────────────────────────
@@ -225,5 +282,88 @@ export function usePromoteRun() {
         `/lab/runs/${runId}/promote`,
         { method: 'POST', body },
       ),
+  });
+}
+
+// ── Runtime (Phase B-1) ─────────────────────────────────────────────────────
+
+export function useRuntimeStatus() {
+  return useQuery({
+    queryKey: KEYS.runtime,
+    queryFn: () => apiRequest<LabRuntimeStatus>('/lab/runtime'),
+    staleTime: 60_000,
+  });
+}
+
+export function useRuntimeEvents(deviceId: number | null) {
+  return useQuery({
+    queryKey: deviceId ? KEYS.runtimeEvents(deviceId) : ['lab', 'runtime-events', 'none'],
+    queryFn: () =>
+      apiRequest<LabRuntimeEvent[]>(`/lab/devices/${deviceId}/runtime/events`),
+    enabled: deviceId !== null && deviceId !== undefined,
+  });
+}
+
+export function useDeployRuntime(deviceId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      node_kind: string;
+      image: string;
+      credential_id?: number | null;
+    }) =>
+      apiRequest<DeployRuntimeResult>(`/lab/devices/${deviceId}/runtime/deploy`, {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.device(deviceId) });
+      qc.invalidateQueries({ queryKey: KEYS.runtimeEvents(deviceId) });
+    },
+  });
+}
+
+export function useDestroyRuntime(deviceId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<{ status: string }>(`/lab/devices/${deviceId}/runtime/destroy`, {
+        method: 'POST',
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.device(deviceId) });
+      qc.invalidateQueries({ queryKey: KEYS.runtimeEvents(deviceId) });
+    },
+  });
+}
+
+export function useRefreshRuntime(deviceId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<{ status: string; mgmt_ipv4?: string }>(
+        `/lab/devices/${deviceId}/runtime/refresh`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.device(deviceId) });
+      qc.invalidateQueries({ queryKey: KEYS.runtimeEvents(deviceId) });
+    },
+  });
+}
+
+export function useSimulateLive(deviceId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { proposed_commands?: string[]; template_id?: number }) =>
+      apiRequest<SimulateLiveResult>(
+        `/lab/devices/${deviceId}/simulate-live`,
+        { method: 'POST', body },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.runs(deviceId) });
+      qc.invalidateQueries({ queryKey: KEYS.device(deviceId) });
+      qc.invalidateQueries({ queryKey: KEYS.runtimeEvents(deviceId) });
+    },
   });
 }

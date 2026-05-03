@@ -43,6 +43,11 @@ def _auth_client(tmp_path, monkeypatch):
     monkeypatch.setenv("PLEXUS_DEV_BOOTSTRAP", "1")
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
+    # Disable rate limiting and clear any leftover counts from a previous test.
+    from netcontrol.routes import state as _state
+    _state.API_RATE_LIMIT["enabled"] = False
+    _state.API_RATE_LIMIT_TRACKER.clear()
+
     from starlette.testclient import TestClient
 
     client = TestClient(app_module.app, raise_server_exceptions=False)
