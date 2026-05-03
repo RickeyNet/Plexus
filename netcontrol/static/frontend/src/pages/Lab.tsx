@@ -43,13 +43,16 @@ import {
   useDestroyRuntime,
   useDestroyTopology,
   useDevice,
+  useDriftRuns,
   useEnvironment,
   useEnvironments,
+  useLatestDriftRun,
   useRefreshRuntime,
   useRefreshTopology,
   useRemoveTopologyLink,
   useRemoveTopologyMember,
   useRun,
+  useRunDriftCheck,
   useRuns,
   useRuntimeEvents,
   useRuntimeStatus,
@@ -76,6 +79,25 @@ function riskBadge(level: string) {
     level === 'medium' ? 'yellow' :
     level === 'low' ? 'green' : 'grey';
   return <Label color={color}>{level || 'unknown'}</Label>;
+}
+
+function driftBadge(status: string | undefined) {
+  switch (status) {
+    case 'in_sync':
+      return <Label color="green">in sync</Label>;
+    case 'drifted':
+      return <Label color="red">drifted</Label>;
+    case 'missing_source':
+      return <Label color="grey">no source</Label>;
+    case 'error':
+      return <Label color="orange">error</Label>;
+    case 'never_checked':
+    case undefined:
+    case '':
+      return <Label color="grey">not yet checked</Label>;
+    default:
+      return <Label color="grey">{status}</Label>;
+  }
 }
 
 function runtimeBadge(status: string | undefined, kind?: string) {
@@ -650,6 +672,10 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
           </Card>
         </StackItem>
       )}
+
+      <StackItem>
+        <DriftCard deviceId={deviceId} />
+      </StackItem>
 
       <StackItem>
         <Card>
@@ -1345,6 +1371,101 @@ function TopologyEditor({
               </Alert>
             )}
           </Form>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+// ── Phase B-3a: drift-from-twin card ───────────────────────────────────────
+
+function DriftCard({ deviceId }: { deviceId: number }) {
+  const latest = useLatestDriftRun(deviceId);
+  const runs = useDriftRuns(deviceId);
+  const check = useRunDriftCheck(deviceId);
+  const device = useDevice(deviceId);
+
+  const sourceHostId = device.data?.source_host_id ?? null;
+  const latestStatus = (latest.data && 'status' in latest.data ? latest.data.status : 'never_checked') as
+    | 'in_sync'
+    | 'drifted'
+    | 'missing_source'
+    | 'error'
+    | 'never_checked';
+
+  return (
+    <Card>
+      <CardTitle>
+        Drift from production · {driftBadge(latestStatus)}
+      </CardTitle>
+      <CardBody>
+        {sourceHostId === null && (
+          <Alert
+            variant="info"
+            title="Twin has no source host"
+            isInline
+          >
+            This lab device wasn't cloned from inventory, so there's no
+            production config to compare against. Drift checks only run when
+            <code>source_host_id</code> is set.
+          </Alert>
+        )}
+
+        {sourceHostId !== null && latest.data && 'diff_added' in latest.data && (
+          <Content component="p">
+            Last checked: <strong>{latest.data.checked_at}</strong> ·{' '}
+            +{latest.data.diff_added}/−{latest.data.diff_removed} lines ·{' '}
+            actor: {latest.data.actor || '—'}
+            {latest.data.error && (
+              <>
+                {' · '}
+                <em>{latest.data.error}</em>
+              </>
+            )}
+          </Content>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
+          <Button
+            variant="primary"
+            isDisabled={check.isPending || sourceHostId === null}
+            onClick={() => check.mutate()}
+          >
+            Run drift check
+          </Button>
+        </div>
+        {check.error && (
+          <Alert variant="danger" title="Drift check failed" isInline>
+            {(check.error as Error).message}
+          </Alert>
+        )}
+
+        {runs.data && runs.data.length > 0 && (
+          <details>
+            <summary>Drift history ({runs.data.length})</summary>
+            <table style={{ width: '100%', marginTop: 8, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                  <th style={{ padding: 4 }}>When</th>
+                  <th style={{ padding: 4 }}>Status</th>
+                  <th style={{ padding: 4 }}>+/−</th>
+                  <th style={{ padding: 4 }}>By</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.data.map((r) => (
+                  <tr key={r.id} style={{ borderBottom: '1px solid #eee' }}>
+                    <td style={{ padding: 4 }}>{r.checked_at}</td>
+                    <td style={{ padding: 4 }}>{driftBadge(r.status)}</td>
+                    <td style={{ padding: 4 }}>
+                      +{r.diff_added}/−{r.diff_removed}
+                    </td>
+                    <td style={{ padding: 4 }}>{r.actor || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
         )}
       </CardBody>
     </Card>
