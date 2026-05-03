@@ -30,22 +30,33 @@ import {
 
 import {
   LabDeviceSummary,
+  useAddTopologyLink,
+  useAddTopologyMember,
   useCreateDevice,
   useCreateEnvironment,
+  useCreateTopology,
   useDeleteDevice,
   useDeleteEnvironment,
+  useDeleteTopology,
   useDeployRuntime,
+  useDeployTopology,
   useDestroyRuntime,
+  useDestroyTopology,
   useDevice,
   useEnvironment,
   useEnvironments,
   useRefreshRuntime,
+  useRefreshTopology,
+  useRemoveTopologyLink,
+  useRemoveTopologyMember,
   useRun,
   useRuns,
   useRuntimeEvents,
   useRuntimeStatus,
   useSimulate,
   useSimulateLive,
+  useTopologies,
+  useTopology,
 } from '@/api/lab';
 
 const PRE_STYLE: React.CSSProperties = {
@@ -417,6 +428,10 @@ function EnvironmentDetail({
           <DevicePanel deviceId={selectedDeviceId} />
         </StackItem>
       )}
+
+      <StackItem>
+        <TopologiesCard envId={envId} devices={devices} />
+      </StackItem>
 
       {createDeviceOpen && (
         <CreateDeviceModal envId={envId} onClose={() => setCreateDeviceOpen(false)} />
@@ -903,6 +918,433 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
               </tbody>
             </table>
           </details>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+// ── Phase B-2: multi-device topologies ─────────────────────────────────────
+
+function TopologiesCard({
+  envId,
+  devices,
+}: {
+  envId: number;
+  devices: LabDeviceSummary[];
+}) {
+  const list = useTopologies(envId);
+  const create = useCreateTopology(envId);
+  const remove = useDeleteTopology(envId);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [mgmt, setMgmt] = useState('');
+  const [openId, setOpenId] = useState<number | null>(null);
+
+  return (
+    <Card>
+      <CardTitle>Topologies (multi-device)</CardTitle>
+      <CardBody>
+        <Form>
+          <Split hasGutter>
+            <SplitItem isFilled>
+              <FormGroup label="New topology name" fieldId="topo-name">
+                <TextInput
+                  id="topo-name"
+                  value={name}
+                  onChange={(_, v) => setName(v)}
+                  placeholder="e.g. dual-core-test"
+                />
+              </FormGroup>
+            </SplitItem>
+            <SplitItem isFilled>
+              <FormGroup label="Description" fieldId="topo-desc">
+                <TextInput
+                  id="topo-desc"
+                  value={description}
+                  onChange={(_, v) => setDescription(v)}
+                />
+              </FormGroup>
+            </SplitItem>
+            <SplitItem>
+              <FormGroup label="Mgmt subnet (optional)" fieldId="topo-mgmt">
+                <TextInput
+                  id="topo-mgmt"
+                  value={mgmt}
+                  onChange={(_, v) => setMgmt(v)}
+                  placeholder="e.g. 172.20.30.0/24"
+                />
+              </FormGroup>
+            </SplitItem>
+            <SplitItem>
+              <Button
+                variant="primary"
+                isDisabled={!name.trim() || create.isPending}
+                style={{ marginTop: 24 }}
+                onClick={async () => {
+                  await create.mutateAsync({
+                    name: name.trim(),
+                    description,
+                    mgmt_subnet: mgmt,
+                  });
+                  setName('');
+                  setDescription('');
+                  setMgmt('');
+                }}
+              >
+                Create
+              </Button>
+            </SplitItem>
+          </Split>
+        </Form>
+
+        {create.error && (
+          <Alert variant="danger" title="Failed" isInline>
+            {(create.error as Error).message}
+          </Alert>
+        )}
+
+        {list.isPending && <Spinner size="md" aria-label="Loading topologies" />}
+        {list.data && list.data.length === 0 && (
+          <EmptyState titleText="No topologies yet" headingLevel="h4">
+            <EmptyStateBody>
+              Create one above, then add member devices and links.
+            </EmptyStateBody>
+          </EmptyState>
+        )}
+        {list.data && list.data.length > 0 && (
+          <table style={{ width: '100%', marginTop: 12, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                <th style={{ padding: 6 }}>Name</th>
+                <th style={{ padding: 6 }}>Devices</th>
+                <th style={{ padding: 6 }}>Links</th>
+                <th style={{ padding: 6 }}>Status</th>
+                <th style={{ padding: 6 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {list.data.map((t) => (
+                <tr
+                  key={t.id}
+                  style={{
+                    cursor: 'pointer',
+                    borderBottom: '1px solid #eee',
+                    background:
+                      openId === t.id
+                        ? 'var(--pf-v6-global--BackgroundColor--200, #f0f0f0)'
+                        : undefined,
+                  }}
+                  onClick={() => setOpenId(openId === t.id ? null : t.id)}
+                >
+                  <td style={{ padding: 6 }}>{t.name}</td>
+                  <td style={{ padding: 6 }}>{t.device_count ?? 0}</td>
+                  <td style={{ padding: 6 }}>{t.link_count ?? 0}</td>
+                  <td style={{ padding: 6 }}>{runtimeBadge(t.status, 'containerlab')}</td>
+                  <td style={{ padding: 6 }} onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      variant="link"
+                      isDanger
+                      isDisabled={t.status === 'running'}
+                      onClick={async () => {
+                        if (!confirm(`Delete topology "${t.name}"?`)) return;
+                        if (openId === t.id) setOpenId(null);
+                        await remove.mutateAsync(t.id);
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {openId !== null && (
+          <div style={{ marginTop: 16 }}>
+            <TopologyEditor topologyId={openId} envDevices={devices} />
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function TopologyEditor({
+  topologyId,
+  envDevices,
+}: {
+  topologyId: number;
+  envDevices: LabDeviceSummary[];
+}) {
+  const topo = useTopology(topologyId);
+  const addMember = useAddTopologyMember(topologyId);
+  const removeMember = useRemoveTopologyMember(topologyId);
+  const addLink = useAddTopologyLink(topologyId);
+  const removeLink = useRemoveTopologyLink(topologyId);
+  const deploy = useDeployTopology(topologyId);
+  const destroy = useDestroyTopology(topologyId);
+  const refresh = useRefreshTopology(topologyId);
+
+  const [memberPick, setMemberPick] = useState('');
+  const [linkA, setLinkA] = useState('');
+  const [linkAEp, setLinkAEp] = useState('eth1');
+  const [linkB, setLinkB] = useState('');
+  const [linkBEp, setLinkBEp] = useState('eth1');
+
+  if (topo.isPending) return <Spinner size="md" aria-label="Loading topology" />;
+  if (topo.error)
+    return (
+      <Alert variant="danger" title="Failed" isInline>
+        {(topo.error as Error).message}
+      </Alert>
+    );
+  if (!topo.data) return null;
+
+  const t = topo.data;
+  const isRunning = t.status === 'running';
+  const memberIds = new Set(t.devices.map((d) => d.id));
+  const candidates = envDevices.filter((d) => !memberIds.has(d.id));
+
+  return (
+    <Card isPlain>
+      <CardTitle>
+        Editing: {t.name} · {runtimeBadge(t.status, 'containerlab')}
+      </CardTitle>
+      <CardBody>
+        {t.error && (
+          <Alert variant="danger" title="Topology error" isInline>
+            {t.error}
+          </Alert>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <Button
+            variant="primary"
+            isDisabled={isRunning || deploy.isPending || t.devices.length === 0}
+            onClick={() => deploy.mutate()}
+          >
+            Deploy topology
+          </Button>
+          <Button
+            variant="secondary"
+            isDisabled={refresh.isPending}
+            onClick={() => refresh.mutate()}
+          >
+            Refresh
+          </Button>
+          <Button
+            variant="danger"
+            isDisabled={destroy.isPending || t.status === 'destroyed' || t.status === ''}
+            onClick={async () => {
+              if (!confirm('Destroy topology?')) return;
+              await destroy.mutateAsync();
+            }}
+          >
+            Destroy topology
+          </Button>
+        </div>
+        {deploy.error && (
+          <Alert variant="danger" title="Deploy failed" isInline>
+            {(deploy.error as Error).message}
+          </Alert>
+        )}
+
+        <Title headingLevel="h4" size="md">
+          Members ({t.devices.length})
+        </Title>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+              <th style={{ padding: 6 }}>Hostname</th>
+              <th style={{ padding: 6 }}>Kind</th>
+              <th style={{ padding: 6 }}>Image</th>
+              <th style={{ padding: 6 }}>Mgmt IP</th>
+              <th style={{ padding: 6 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {t.devices.map((d) => (
+              <tr key={d.id} style={{ borderBottom: '1px solid #eee' }}>
+                <td style={{ padding: 6 }}>{d.hostname}</td>
+                <td style={{ padding: 6 }}>{d.runtime_node_kind || '—'}</td>
+                <td style={{ padding: 6 }}>{d.runtime_image || '—'}</td>
+                <td style={{ padding: 6 }}>{d.runtime_mgmt_address || '—'}</td>
+                <td style={{ padding: 6 }}>
+                  <Button
+                    variant="link"
+                    isDanger
+                    isDisabled={isRunning}
+                    onClick={() => removeMember.mutate(d.id)}
+                  >
+                    Remove
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {!isRunning && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <select
+              value={memberPick}
+              onChange={(e) => setMemberPick(e.target.value)}
+              style={{ padding: '6px 8px', minWidth: 200 }}
+            >
+              <option value="">— select a device to add —</option>
+              {candidates.map((d) => (
+                <option key={d.id} value={String(d.id)}>
+                  {d.hostname} ({d.runtime_node_kind || 'no kind'})
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="secondary"
+              isDisabled={!memberPick || addMember.isPending}
+              onClick={async () => {
+                await addMember.mutateAsync({ device_id: Number(memberPick) });
+                setMemberPick('');
+              }}
+            >
+              Add member
+            </Button>
+            {addMember.error && (
+              <Alert variant="danger" title="Add failed" isInline>
+                {(addMember.error as Error).message}
+              </Alert>
+            )}
+          </div>
+        )}
+
+        <Title headingLevel="h4" size="md">
+          Links ({t.links.length})
+        </Title>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+              <th style={{ padding: 6 }}>A device</th>
+              <th style={{ padding: 6 }}>A endpoint</th>
+              <th style={{ padding: 6 }}>B device</th>
+              <th style={{ padding: 6 }}>B endpoint</th>
+              <th style={{ padding: 6 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {t.links.map((l) => {
+              const a = t.devices.find((d) => d.id === l.a_device_id);
+              const b = t.devices.find((d) => d.id === l.b_device_id);
+              return (
+                <tr key={l.id} style={{ borderBottom: '1px solid #eee' }}>
+                  <td style={{ padding: 6 }}>{a?.hostname ?? `#${l.a_device_id}`}</td>
+                  <td style={{ padding: 6 }}>{l.a_endpoint}</td>
+                  <td style={{ padding: 6 }}>{b?.hostname ?? `#${l.b_device_id}`}</td>
+                  <td style={{ padding: 6 }}>{l.b_endpoint}</td>
+                  <td style={{ padding: 6 }}>
+                    <Button
+                      variant="link"
+                      isDanger
+                      isDisabled={isRunning}
+                      onClick={() => removeLink.mutate(l.id)}
+                    >
+                      Remove
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        {!isRunning && t.devices.length >= 2 && (
+          <Form>
+            <Split hasGutter>
+              <SplitItem>
+                <FormGroup label="A device" fieldId="link-a">
+                  <select
+                    id="link-a"
+                    value={linkA}
+                    onChange={(e) => setLinkA(e.target.value)}
+                    style={{ padding: '6px 8px', minWidth: 160 }}
+                  >
+                    <option value="">—</option>
+                    {t.devices.map((d) => (
+                      <option key={d.id} value={String(d.id)}>
+                        {d.hostname}
+                      </option>
+                    ))}
+                  </select>
+                </FormGroup>
+              </SplitItem>
+              <SplitItem>
+                <FormGroup label="A endpoint" fieldId="link-a-ep">
+                  <TextInput
+                    id="link-a-ep"
+                    value={linkAEp}
+                    onChange={(_, v) => setLinkAEp(v)}
+                  />
+                </FormGroup>
+              </SplitItem>
+              <SplitItem>
+                <FormGroup label="B device" fieldId="link-b">
+                  <select
+                    id="link-b"
+                    value={linkB}
+                    onChange={(e) => setLinkB(e.target.value)}
+                    style={{ padding: '6px 8px', minWidth: 160 }}
+                  >
+                    <option value="">—</option>
+                    {t.devices.map((d) => (
+                      <option key={d.id} value={String(d.id)}>
+                        {d.hostname}
+                      </option>
+                    ))}
+                  </select>
+                </FormGroup>
+              </SplitItem>
+              <SplitItem>
+                <FormGroup label="B endpoint" fieldId="link-b-ep">
+                  <TextInput
+                    id="link-b-ep"
+                    value={linkBEp}
+                    onChange={(_, v) => setLinkBEp(v)}
+                  />
+                </FormGroup>
+              </SplitItem>
+              <SplitItem>
+                <Button
+                  variant="secondary"
+                  isDisabled={
+                    !linkA ||
+                    !linkB ||
+                    linkA === linkB ||
+                    !linkAEp.trim() ||
+                    !linkBEp.trim() ||
+                    addLink.isPending
+                  }
+                  style={{ marginTop: 24 }}
+                  onClick={async () => {
+                    await addLink.mutateAsync({
+                      a_device_id: Number(linkA),
+                      a_endpoint: linkAEp.trim(),
+                      b_device_id: Number(linkB),
+                      b_endpoint: linkBEp.trim(),
+                    });
+                    setLinkAEp('eth1');
+                    setLinkBEp('eth1');
+                  }}
+                >
+                  Add link
+                </Button>
+              </SplitItem>
+            </Split>
+            {addLink.error && (
+              <Alert variant="danger" title="Add link failed" isInline>
+                {(addLink.error as Error).message}
+              </Alert>
+            )}
+          </Form>
         )}
       </CardBody>
     </Card>
