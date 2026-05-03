@@ -150,6 +150,7 @@ from netcontrol.routes.lab_runtime import (
     reconcile_running_labs,
     router as lab_runtime_router,
 )
+from netcontrol.routes.lab_topology import router as lab_topology_router
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.deployments import (
@@ -1709,6 +1710,10 @@ app.include_router(
 )
 app.include_router(
     lab_runtime_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
+)
+app.include_router(
+    lab_topology_router,
     dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
 )
 
