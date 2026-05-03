@@ -34,11 +34,18 @@ import {
   useCreateEnvironment,
   useDeleteDevice,
   useDeleteEnvironment,
+  useDeployRuntime,
+  useDestroyRuntime,
+  useDevice,
   useEnvironment,
   useEnvironments,
+  useRefreshRuntime,
   useRun,
   useRuns,
+  useRuntimeEvents,
+  useRuntimeStatus,
   useSimulate,
+  useSimulateLive,
 } from '@/api/lab';
 
 const PRE_STYLE: React.CSSProperties = {
@@ -58,6 +65,26 @@ function riskBadge(level: string) {
     level === 'medium' ? 'yellow' :
     level === 'low' ? 'green' : 'grey';
   return <Label color={color}>{level || 'unknown'}</Label>;
+}
+
+function runtimeBadge(status: string | undefined, kind?: string) {
+  if (!kind || kind === 'config_only') {
+    return <Label color="grey">offline</Label>;
+  }
+  switch (status) {
+    case 'running':
+      return <Label color="green">running</Label>;
+    case 'provisioning':
+      return <Label color="blue">provisioning</Label>;
+    case 'stopped':
+      return <Label color="grey">stopped</Label>;
+    case 'destroyed':
+      return <Label color="grey">destroyed</Label>;
+    case 'error':
+      return <Label color="red">error</Label>;
+    default:
+      return <Label color="grey">{status || '—'}</Label>;
+  }
 }
 
 export function Lab() {
@@ -327,6 +354,7 @@ function EnvironmentDetail({
                     <th style={{ padding: 6 }}>Hostname</th>
                     <th style={{ padding: 6 }}>IP</th>
                     <th style={{ padding: 6 }}>Type</th>
+                    <th style={{ padding: 6 }}>Runtime</th>
                     <th style={{ padding: 6 }}>Config</th>
                     <th style={{ padding: 6 }}>Runs</th>
                     <th style={{ padding: 6 }}>Source</th>
@@ -349,8 +377,13 @@ function EnvironmentDetail({
                         onClick={() => onSelectDevice(d.id)}
                       >
                         <td style={{ padding: 6 }}>{d.hostname}</td>
-                        <td style={{ padding: 6 }}>{d.ip_address || '—'}</td>
+                        <td style={{ padding: 6 }}>
+                          {d.runtime_mgmt_address || d.ip_address || '—'}
+                        </td>
                         <td style={{ padding: 6 }}>{d.device_type}</td>
+                        <td style={{ padding: 6 }}>
+                          {runtimeBadge(d.runtime_status, d.runtime_kind)}
+                        </td>
                         <td style={{ padding: 6 }}>{d.config_size} B</td>
                         <td style={{ padding: 6 }}>{d.run_count}</td>
                         <td style={{ padding: 6 }}>
@@ -477,13 +510,21 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
 }
 
 function DevicePanel({ deviceId }: { deviceId: number }) {
+  const device = useDevice(deviceId);
   const runs = useRuns(deviceId);
   const [commandsText, setCommandsText] = useState('');
   const [applyToDevice, setApplyToDevice] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
   const simulate = useSimulate(deviceId);
+  const simulateLive = useSimulateLive(deviceId);
   const [openRunId, setOpenRunId] = useState<number | null>(null);
 
-  const lastResult = simulate.data;
+  const isRuntimeRunning = device.data?.runtime_status === 'running';
+  const lastResult = liveMode ? simulateLive.data : simulate.data;
+  const lastError = liveMode
+    ? (simulateLive.error as Error | null)
+    : (simulate.error as Error | null);
+  const isPending = liveMode ? simulateLive.isPending : simulate.isPending;
 
   const commandList = useMemo(
     () =>
@@ -496,6 +537,10 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
 
   return (
     <Stack hasGutter>
+      <StackItem>
+        <RuntimeCard deviceId={deviceId} />
+      </StackItem>
+
       <StackItem>
         <Card>
           <CardTitle>Simulate change against device #{deviceId}</CardTitle>
@@ -510,29 +555,49 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
                   placeholder={'interface GigabitEthernet0/1\n description uplink\n no shutdown'}
                 />
               </FormGroup>
-              <FormGroup fieldId="sim-apply">
+              <FormGroup fieldId="sim-live">
                 <Checkbox
-                  id="sim-apply"
-                  label="Persist resulting config back to lab device snapshot"
-                  isChecked={applyToDevice}
-                  onChange={(_, v) => setApplyToDevice(v)}
+                  id="sim-live"
+                  label="Live mode (push to running containerlab device)"
+                  isChecked={liveMode}
+                  isDisabled={!isRuntimeRunning}
+                  onChange={(_, v) => setLiveMode(v)}
                 />
+                {!isRuntimeRunning && (
+                  <Content component="small">
+                    Deploy a containerlab runtime above to enable live mode.
+                  </Content>
+                )}
               </FormGroup>
+              {!liveMode && (
+                <FormGroup fieldId="sim-apply">
+                  <Checkbox
+                    id="sim-apply"
+                    label="Persist resulting config back to lab device snapshot"
+                    isChecked={applyToDevice}
+                    onChange={(_, v) => setApplyToDevice(v)}
+                  />
+                </FormGroup>
+              )}
               <Button
                 variant="primary"
-                isDisabled={commandList.length === 0 || simulate.isPending}
-                onClick={() =>
-                  simulate.mutate({
-                    proposed_commands: commandList,
-                    apply_to_device: applyToDevice,
-                  })
-                }
+                isDisabled={commandList.length === 0 || isPending}
+                onClick={() => {
+                  if (liveMode) {
+                    simulateLive.mutate({ proposed_commands: commandList });
+                  } else {
+                    simulate.mutate({
+                      proposed_commands: commandList,
+                      apply_to_device: applyToDevice,
+                    });
+                  }
+                }}
               >
-                Run simulation
+                {liveMode ? 'Run live simulation' : 'Run simulation'}
               </Button>
-              {simulate.error && (
+              {lastError && (
                 <Alert variant="danger" title="Simulation failed" isInline>
-                  {(simulate.error as Error).message}
+                  {lastError.message}
                 </Alert>
               )}
             </Form>
@@ -553,8 +618,19 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
                 {lastResult.affected_areas.length > 0 && (
                   <> · areas: {lastResult.affected_areas.join(', ')}</>
                 )}
+                {liveMode && <> · <strong>live</strong></>}
               </Content>
               <pre style={PRE_STYLE}>{lastResult.diff_text || '(no diff)'}</pre>
+              {liveMode && 'push_output' in lastResult && lastResult.push_output && (
+                <>
+                  <Title headingLevel="h4" size="md">
+                    Device push output
+                  </Title>
+                  <pre style={{ ...PRE_STYLE, maxHeight: 200 }}>
+                    {lastResult.push_output}
+                  </pre>
+                </>
+              )}
             </CardBody>
           </Card>
         </StackItem>
@@ -660,5 +736,175 @@ function RunDetailModal({ runId, onClose }: { runId: number; onClose: () => void
         )}
       </ModalBody>
     </Modal>
+  );
+}
+
+// ── Phase B-1: containerlab runtime card ──────────────────────────────────
+
+function RuntimeCard({ deviceId }: { deviceId: number }) {
+  const status = useRuntimeStatus();
+  const device = useDevice(deviceId);
+  const events = useRuntimeEvents(deviceId);
+  const deploy = useDeployRuntime(deviceId);
+  const destroy = useDestroyRuntime(deviceId);
+  const refresh = useRefreshRuntime(deviceId);
+
+  const [nodeKind, setNodeKind] = useState('linux');
+  const [image, setImage] = useState('');
+  const [credentialId, setCredentialId] = useState('');
+
+  const allowedKinds = status.data?.allowed_node_kinds ?? [];
+  const dev = device.data;
+  const runtimeKind = dev?.runtime_kind ?? 'config_only';
+  const runtimeStatus = dev?.runtime_status ?? '';
+  const isRunning = runtimeStatus === 'running';
+  const isProvisioning = runtimeStatus === 'provisioning';
+  const hasRuntime = runtimeKind === 'containerlab' && runtimeStatus !== 'destroyed';
+
+  return (
+    <Card>
+      <CardTitle>
+        Containerlab runtime · {runtimeBadge(runtimeStatus, runtimeKind)}
+      </CardTitle>
+      <CardBody>
+        {status.isPending && <Spinner size="md" aria-label="Checking runtime" />}
+        {status.data && !status.data.available && (
+          <Alert
+            variant="warning"
+            title="containerlab unavailable on the Plexus host"
+            isInline
+          >
+            {status.data.reason || 'See server logs for details.'} Lab devices
+            still work in offline (config-only) mode; live deploy is disabled.
+          </Alert>
+        )}
+
+        {dev && hasRuntime && (
+          <Content component="p">
+            <strong>Node kind:</strong> {dev.runtime_node_kind || '—'} ·{' '}
+            <strong>Image:</strong> {dev.runtime_image || '—'} ·{' '}
+            <strong>Mgmt IP:</strong> {dev.runtime_mgmt_address || '—'}{' '}
+            {dev.runtime_lab_name && (
+              <>
+                · <strong>Lab:</strong> {dev.runtime_lab_name}
+              </>
+            )}
+          </Content>
+        )}
+        {dev?.runtime_error && (
+          <Alert variant="danger" title="Runtime error" isInline>
+            {dev.runtime_error}
+          </Alert>
+        )}
+
+        {!isRunning && !isProvisioning && (
+          <Form>
+            <FormGroup label="Node kind" fieldId="rt-kind">
+              <select
+                id="rt-kind"
+                value={nodeKind}
+                onChange={(e) => setNodeKind(e.target.value)}
+                style={{ padding: '6px 8px', minWidth: 200 }}
+              >
+                {allowedKinds.length === 0 && <option value="linux">linux</option>}
+                {allowedKinds.map((k) => (
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
+                ))}
+              </select>
+            </FormGroup>
+            <FormGroup label="Container image" fieldId="rt-image">
+              <TextInput
+                id="rt-image"
+                value={image}
+                onChange={(_, v) => setImage(v)}
+                placeholder="e.g. frrouting/frr:latest, ceos:4.30.0F, ghcr.io/nokia/srlinux:latest"
+              />
+            </FormGroup>
+            <FormGroup label="SSH credential ID (for live push)" fieldId="rt-cred">
+              <TextInput
+                id="rt-cred"
+                value={credentialId}
+                onChange={(_, v) => setCredentialId(v)}
+                placeholder="optional — required only for live simulate"
+              />
+            </FormGroup>
+            <Button
+              variant="primary"
+              isDisabled={
+                !status.data?.available ||
+                !image.trim() ||
+                deploy.isPending
+              }
+              onClick={() =>
+                deploy.mutate({
+                  node_kind: nodeKind,
+                  image: image.trim(),
+                  credential_id: credentialId ? Number(credentialId) : null,
+                })
+              }
+            >
+              Deploy live
+            </Button>
+            {deploy.error && (
+              <Alert variant="danger" title="Deploy failed" isInline>
+                {(deploy.error as Error).message}
+              </Alert>
+            )}
+          </Form>
+        )}
+
+        {(isRunning || isProvisioning || hasRuntime) && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <Button
+              variant="secondary"
+              isDisabled={refresh.isPending}
+              onClick={() => refresh.mutate()}
+            >
+              Refresh status
+            </Button>
+            <Button
+              variant="danger"
+              isDisabled={destroy.isPending}
+              onClick={async () => {
+                if (!confirm('Destroy the containerlab runtime for this device?')) return;
+                await destroy.mutateAsync();
+              }}
+            >
+              Destroy runtime
+            </Button>
+          </div>
+        )}
+
+        {events.data && events.data.length > 0 && (
+          <details style={{ marginTop: 16 }}>
+            <summary>Runtime event log</summary>
+            <table style={{ width: '100%', marginTop: 8, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                  <th style={{ padding: 4 }}>When</th>
+                  <th style={{ padding: 4 }}>Action</th>
+                  <th style={{ padding: 4 }}>Status</th>
+                  <th style={{ padding: 4 }}>By</th>
+                  <th style={{ padding: 4 }}>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.data.map((e) => (
+                  <tr key={e.id} style={{ borderBottom: '1px solid #eee' }}>
+                    <td style={{ padding: 4 }}>{e.created_at}</td>
+                    <td style={{ padding: 4 }}>{e.action}</td>
+                    <td style={{ padding: 4 }}>{e.status}</td>
+                    <td style={{ padding: 4 }}>{e.actor || '—'}</td>
+                    <td style={{ padding: 4 }}>{e.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        )}
+      </CardBody>
+    </Card>
   );
 }

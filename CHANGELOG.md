@@ -2,6 +2,7 @@
 
 ## Unreleased
 - Add digital twin / lab mode (Phase A): lab environments and cloned-from-host devices for offline config-plane simulation. Apply proposed commands or templates against a snapshot, see unified diff plus risk score, persist run history, and promote successful runs into the Deployments pipeline. Migration 0029 adds `lab_environments`, `lab_devices`, `lab_runs`. New `lab` feature flag and React page at `/frontend/lab`.
+- Add containerlab single-node runtime for lab mode (Phase B-1): a twin can now back its snapshot with a real virtual NOS (Arista cEOS, Nokia SR Linux, FRR, Linux) deployed via the host's containerlab CLI. New endpoints `GET /api/lab/runtime`, `POST /api/lab/devices/{id}/runtime/{deploy,destroy,refresh}`, `GET /api/lab/devices/{id}/runtime/events`, and `POST /api/lab/devices/{id}/simulate-live` (pushes commands via Netmiko, captures the real running-config back). Strict allowlist for node kinds and image references; subprocess invoked with explicit argv. Migration 0030 adds runtime fields to `lab_devices` and a `lab_runtime_events` audit log. React Lab page gains a Runtime card and live-mode simulate toggle.
 
 ## 0.2.0 — 2026-03-05
 - Add shared semantic version constant and `python templates/run.py --version` CLI output.
