@@ -1,31 +1,33 @@
 import { Link, Route, Routes } from 'react-router-dom';
-import { Page, PageSection } from '@patternfly/react-core';
 
 import { Home } from '@/pages/Home';
 import { Lab } from '@/pages/Lab';
+import { MacTracking } from '@/pages/NetworkTools/MacTracking';
+import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
 
 function TopNav() {
-  const linkStyle: React.CSSProperties = {
-    color: 'inherit',
-    textDecoration: 'none',
-    padding: '8px 16px',
-    fontWeight: 500,
-  };
   return (
     <nav
       style={{
         display: 'flex',
-        gap: 8,
-        padding: '12px 24px',
-        borderBottom: '1px solid var(--pf-v6-global--BorderColor--100, #ccc)',
-        background: 'var(--pf-v6-global--BackgroundColor--100, #fff)',
+        alignItems: 'center',
+        gap: '0.25rem',
+        padding: '0.75rem 1.5rem',
+        borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-secondary)',
       }}
     >
-      <strong style={{ marginRight: 16 }}>Plexus</strong>
-      <Link to="/" style={linkStyle}>
+      <strong style={{ marginRight: '1rem', color: 'var(--text)' }}>Plexus</strong>
+      <Link to="/" className="btn btn-sm btn-ghost">
         Home
       </Link>
-      <Link to="/lab" style={linkStyle}>
+      <Link to="/mac-tracking" className="btn btn-sm btn-ghost">
+        MAC Tracking
+      </Link>
+      <Link to="/traffic-analysis" className="btn btn-sm btn-ghost">
+        Traffic Analysis
+      </Link>
+      <Link to="/lab" className="btn btn-sm btn-ghost">
         Lab / Digital Twin
       </Link>
     </nav>
@@ -34,14 +36,18 @@ function TopNav() {
 
 export function App() {
   return (
-    <Page>
+    <div style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh' }}>
       <TopNav />
-      <PageSection>
+      <main style={{ padding: '1.5rem' }}>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/lab" element={<Lab />} />
+          <Route path="/mac-tracking" element={<MacTracking />} />
+          <Route path="/traffic-analysis" element={<TrafficAnalysis />} />
+          {/* Backward compat with the previous /network-tools route. */}
+          <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
-      </PageSection>
-    </Page>
+      </main>
+    </div>
   );
 }

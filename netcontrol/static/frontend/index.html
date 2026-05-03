@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Plexus</title>
+    <!--
+      Reuse the legacy SPA stylesheet so the React app shares a single
+      design source of truth. /static is served directly by FastAPI in
+      prod; the Vite dev server proxies it to the backend.
+    -->
+    <link rel="stylesheet" href="/static/css/style.css" />
   </head>
   <body>
     <div id="root"></div>
