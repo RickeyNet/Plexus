@@ -1,5 +1,7 @@
 import { Link, Route, Routes } from 'react-router-dom';
 
+import { Federation } from '@/pages/Federation/Federation';
+import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
 import { Home } from '@/pages/Home';
 import { Lab } from '@/pages/Lab';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
@@ -30,6 +32,12 @@ function TopNav() {
       <Link to="/lab" className="btn btn-sm btn-ghost">
         Lab / Digital Twin
       </Link>
+      <Link to="/federation" className="btn btn-sm btn-ghost">
+        Federation
+      </Link>
+      <Link to="/floor-plan" className="btn btn-sm btn-ghost">
+        Floor Plan
+      </Link>
     </nav>
   );
 }
@@ -44,6 +52,8 @@ export function App() {
           <Route path="/lab" element={<Lab />} />
           <Route path="/mac-tracking" element={<MacTracking />} />
           <Route path="/traffic-analysis" element={<TrafficAnalysis />} />
+          <Route path="/federation" element={<Federation />} />
+          <Route path="/floor-plan" element={<FloorPlan />} />
           {/* Backward compat with the previous /network-tools route. */}
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
