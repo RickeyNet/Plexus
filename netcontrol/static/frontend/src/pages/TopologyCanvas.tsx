@@ -7,8 +7,7 @@
  * interface names. No drag, no zoom — those come later if anyone asks.
  *
  * Pure SVG keeps the bundle small (no vis-network / reactflow / d3 dep)
- * and avoids ResizeObserver / canvas portability headaches inside
- * PatternFly.
+ * and avoids ResizeObserver / canvas portability headaches.
  */
 
 import { useMemo, useState } from 'react';
@@ -114,9 +113,9 @@ export function TopologyCanvas({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          color: '#6a6e73',
+          color: 'var(--text-muted)',
           fontStyle: 'italic',
-          border: '1px dashed #ccc',
+          border: '1px dashed var(--border)',
           borderRadius: 4,
         }}
       >
@@ -151,8 +150,8 @@ export function TopologyCanvas({
           width: '100%',
           maxWidth: CANVAS_W,
           height: 'auto',
-          background: 'var(--pf-v6-global--BackgroundColor--100, #fff)',
-          border: '1px solid #ccc',
+          background: 'var(--card-bg)',
+          border: '1px solid var(--border)',
           borderRadius: 4,
         }}
         role="img"
@@ -184,10 +183,10 @@ export function TopologyCanvas({
                 x={aLabelX}
                 y={aLabelY}
                 fontSize={11}
-                fill="#151515"
+                fill="var(--text)"
                 textAnchor="middle"
                 dominantBaseline="central"
-                style={{ pointerEvents: 'none', paintOrder: 'stroke', stroke: '#fff', strokeWidth: 3 }}
+                style={{ pointerEvents: 'none', paintOrder: 'stroke', stroke: 'var(--bg)', strokeWidth: 3 }}
               >
                 {link.a_endpoint}
               </text>
@@ -195,10 +194,10 @@ export function TopologyCanvas({
                 x={bLabelX}
                 y={bLabelY}
                 fontSize={11}
-                fill="#151515"
+                fill="var(--text)"
                 textAnchor="middle"
                 dominantBaseline="central"
-                style={{ pointerEvents: 'none', paintOrder: 'stroke', stroke: '#fff', strokeWidth: 3 }}
+                style={{ pointerEvents: 'none', paintOrder: 'stroke', stroke: 'var(--bg)', strokeWidth: 3 }}
               >
                 {link.b_endpoint}
               </text>
@@ -225,7 +224,7 @@ export function TopologyCanvas({
               <circle
                 r={NODE_RADIUS}
                 fill={fill}
-                stroke={isSelected ? '#06c' : isHover ? '#151515' : '#fff'}
+                stroke={isSelected ? 'var(--primary)' : isHover ? 'var(--text)' : 'var(--bg)'}
                 strokeWidth={isSelected ? 4 : 2}
               />
               <text
@@ -240,7 +239,7 @@ export function TopologyCanvas({
               <text
                 y={NODE_RADIUS + 14}
                 fontSize={11}
-                fill="#151515"
+                fill="var(--text)"
                 textAnchor="middle"
                 style={{ pointerEvents: 'none' }}
               >
@@ -257,7 +256,7 @@ export function TopologyCanvas({
             position: 'absolute',
             top: 8,
             left: 8,
-            background: 'rgba(0,98,204,0.85)',
+            background: 'var(--primary)',
             color: '#fff',
             padding: '4px 10px',
             borderRadius: 4,
@@ -281,8 +280,9 @@ export function TopologyCanvas({
               position: 'absolute',
               top: 8,
               right: 8,
-              background: 'rgba(21,21,21,0.85)',
-              color: '#fff',
+              background: 'var(--bg-dark)',
+              color: 'var(--text)',
+              border: '1px solid var(--border)',
               padding: '6px 10px',
               borderRadius: 4,
               fontSize: '0.8em',

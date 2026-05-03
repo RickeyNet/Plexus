@@ -17,10 +17,10 @@ This is a living document. Add to it when a new pattern emerges; correct it when
 | Client state | Zustand | Redux, MobX, Recoil, Context for global state |
 | Routing | React Router v6 | TanStack Router, custom hash routing |
 | Forms | React Hook Form + Zod schemas | Formik, raw `<form>` with useState |
-| Component library | PatternFly v5 | Material UI, Chakra, Ant Design, custom components |
-| Tables | PatternFly Table | TanStack Table standalone, custom |
+| Component library | **None — reuse legacy CSS** (`netcontrol/static/css/style.css`). See "Styling" below. | Material UI, Chakra, Ant Design, PatternFly |
+| Tables | Plain `<table className="data-table">` | PatternFly Table, TanStack Table standalone |
 | Charts | ECharts (existing) | Chart.js, Recharts |
-| Icons | `@patternfly/react-icons` | FontAwesome, Heroicons |
+| Icons | Inline SVG (matches legacy approach) | FontAwesome, Heroicons, icon libraries |
 | Code editor | CodeMirror 6 | Monaco, custom textarea |
 | HTTP client | `fetch` wrapped in TanStack Query | axios |
 | Dates | `date-fns` | Moment.js, day.js |
@@ -74,7 +74,7 @@ netcontrol/static/frontend/src/
 
 - **One component per file.** Filename matches component name in PascalCase.
 - **Co-locate tests.** `Foo.tsx` and `Foo.test.tsx` live side by side.
-- **Co-locate styles.** If a component needs custom CSS, `Foo.tsx` and `Foo.module.css` live side by side. Prefer PatternFly utilities over custom CSS.
+- **Reuse legacy CSS.** Style with classes from `netcontrol/static/css/style.css`. Custom CSS Modules (`Foo.module.css`) only when no legacy class fits and the pattern won't be reused. See "Styling" below.
 - **No deeply nested folders.** Two levels max under `pages/` (e.g., `pages/Inventory/components/`).
 - **Imports use the `@/` alias** (configured in `vite.config.ts` and `tsconfig.json`). Never `../../../` relative imports.
 
@@ -357,40 +357,81 @@ return query.isLoading
 
 ---
 
-## PatternFly Usage
+## Styling
 
-### Always reach for PatternFly first
+The React app **shares a single stylesheet with the legacy SPA**:
+`netcontrol/static/css/style.css`. `frontend/index.html` loads it via
+`<link rel="stylesheet" href="/static/css/style.css">`. Both apps look
+identical because they ARE the same CSS.
 
-Before writing custom UI, search the [PatternFly catalog](https://www.patternfly.org/components/all-components). It almost certainly has what you need.
+**Why no component library?** PatternFly was the original pick (see
+FRONTEND_MIGRATION.md decision log) but the visual divergence from the
+legacy SPA was unacceptable mid-migration. Reusing the existing CSS gives a
+pixel-perfect match for free, keeps the bundle smaller, and means visual
+changes in `style.css` apply to both apps simultaneously.
 
-Most-used components (memorize these):
+### Class-name reference
 
-| Need | PatternFly component |
+Use these classes the same way `netcontrol/static/js/modules/*.js` use them:
+
+| Need | HTML / class |
 |---|---|
-| Page layout | `Page`, `PageSection`, `PageSidebar` |
-| Header above content | `PageGroup` + custom header div, or `Toolbar` |
-| Table | `Table`, `Thead`, `Tr`, `Td` from `@patternfly/react-table` |
-| Form | `Form`, `FormGroup`, `TextInput`, `Select`, `Checkbox` |
-| Buttons | `Button` (variants: `primary`, `secondary`, `danger`, `link`) |
-| Modal | `Modal`, `ModalVariant.small/medium/large` |
-| Toast | `AlertGroup`, `Alert`, `AlertActionCloseButton` |
-| Confirm dialog | `Modal` with action buttons; or wrap in `<ConfirmDialog>` from `@/components` |
-| Loading skeleton | `Skeleton`, or feature-specific empty state |
-| Empty state | `EmptyState`, `EmptyStateBody`, `EmptyStateActions` |
-| Tabs | `Tabs`, `Tab`, `TabTitleText` |
-| Cards | `Card`, `CardHeader`, `CardBody`, `CardFooter` |
-| Tooltip | `Tooltip` |
-| Icon | from `@patternfly/react-icons` |
+| Page header bar | `<div className="page-header"><h2>Title</h2><div>actions</div></div>` |
+| Card / panel | `<div className="glass-card card">…</div>` |
+| Card title | `<div className="card-title">…</div>` (or plain `<h3>` inside) |
+| Primary button | `<button className="btn btn-primary">…</button>` |
+| Secondary button | `<button className="btn btn-secondary">…</button>` |
+| Danger button | `<button className="btn btn-danger">…</button>` |
+| Small button | add `btn-sm` (e.g. `btn btn-sm btn-primary`) |
+| Ghost / link button | `<button className="btn btn-ghost">…</button>` |
+| Text input | `<input className="form-input" type="text" />` |
+| Search input | `<input className="form-input list-control-search" type="search" />` |
+| Select | `<select className="form-select">…</select>` |
+| Tabs | `<div className="tab-controls">` of `<button className="btn btn-sm btn-secondary [active]">` |
+| Modal | `<Modal>` from `@/components/Modal` (uses `.modal-overlay`/`.modal`) |
+| Empty state | `<div className="empty-state"><svg />…</div>` |
+| Skeleton loader | `<div className="skeleton-loader" style={{ height: 200 }} />` |
+| Data table | `<table className="data-table">` (no extra wrapping needed) |
+| Badge | `<span className="badge badge-success/warning/danger/info">…</span>` |
+| Inline code | `<code>…</code>` |
 
-### Don't customize PatternFly visually
+### Rules
 
-- **No CSS overrides on PatternFly classes.** If you need a different look, you're using the wrong component.
-- **Use PatternFly utility classes** (`pf-v5-u-mt-md`, `pf-v5-u-text-align-center`) for spacing/alignment instead of custom CSS.
-- **Custom CSS only when PatternFly has no equivalent.** Use CSS Modules (`Foo.module.css`) — never global CSS.
+- **Never import a component library.** No PatternFly, no MUI, no Chakra. Plain HTML elements with legacy classes.
+- **Match the legacy DOM shape** when porting a page. The legacy module's
+  template (in `netcontrol/static/js/page-templates.js`) is the contract —
+  same IDs, same class names, same structure where practical.
+- **Never override legacy classes** in component-local CSS. If a class needs
+  to change, change `style.css` (it's shared).
+- **Custom CSS is rare.** If you can't avoid it, use CSS Modules
+  (`Foo.module.css`) and use semantic class names. Never declare globals.
+- **Never use PatternFly utility classes** (`pf-v6-u-*`) — they won't be
+  loaded once Lab is migrated.
+- **Inline styles are fine** for one-off layout (`style={{ display: 'flex', gap: 8 }}`).
+  Reach for `style.css` classes first; inline only when the legacy SPA does
+  the same thing.
+
+### Color tokens
+
+The legacy CSS exposes CSS variables for theming. Use them in inline styles
+when you need explicit colors:
+
+| Token | Use |
+|---|---|
+| `var(--bg)` | Page background |
+| `var(--bg-secondary)` | Sidebar / nav background |
+| `var(--card-bg)` | Card background (use `glass-card` class instead when possible) |
+| `var(--text)` | Primary text |
+| `var(--text-light)` | Secondary text |
+| `var(--text-muted)` | Tertiary / labels |
+| `var(--primary)` | Brand color, focus rings |
+| `var(--success)`, `var(--warning)`, `var(--danger)` | Status colors |
+| `var(--border)` | 1px borders |
 
 ### Forms
 
-Always use React Hook Form + Zod schemas. PatternFly form components plug in via `Controller`.
+Use React Hook Form + Zod schemas. Wire them to plain HTML inputs styled
+with the legacy form classes.
 
 ```tsx
 import { useForm, Controller } from 'react-hook-form';

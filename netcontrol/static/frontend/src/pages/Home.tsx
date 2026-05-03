@@ -1,65 +1,46 @@
-import {
-  Alert,
-  Bullseye,
-  Card,
-  CardBody,
-  CardTitle,
-  Content,
-  Spinner,
-  Stack,
-  StackItem,
-  Title,
-} from '@patternfly/react-core';
-
 import { useAuthStatus } from '@/api/auth';
 
 export function Home() {
   const { data, isPending, error } = useAuthStatus();
 
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Title headingLevel="h1" size="2xl">
-          Plexus — React Frontend
-        </Title>
-        <Content component="p">
-          Phase 1.1 skeleton. Vite + React 18 + TypeScript + PatternFly +
-          TanStack Query, served by FastAPI at <code>/frontend/</code>.
-        </Content>
-      </StackItem>
+    <>
+      <div className="page-header">
+        <h2>Plexus — React Frontend</h2>
+      </div>
 
-      <StackItem>
-        <Card>
-          <CardTitle>Backend connectivity</CardTitle>
-          <CardBody>
-            {isPending && (
-              <Bullseye>
-                <Spinner size="lg" aria-label="Checking auth status" />
-              </Bullseye>
-            )}
-            {error && (
-              <Alert variant="danger" title="Auth status request failed" isInline>
-                {error.message}
-              </Alert>
-            )}
-            {data && (
-              <Alert
-                variant={data.authenticated ? 'success' : 'warning'}
-                title={
-                  data.authenticated
-                    ? `Authenticated as ${data.username ?? 'unknown user'}`
-                    : 'Not authenticated'
-                }
-                isInline
-              >
-                <pre style={{ margin: 0, fontSize: '0.85em' }}>
-                  {JSON.stringify(data, null, 2)}
-                </pre>
-              </Alert>
-            )}
-          </CardBody>
-        </Card>
-      </StackItem>
-    </Stack>
+      <div className="glass-card card">
+        <p style={{ marginBottom: '1rem' }}>
+          Phase 1.1 skeleton. Vite + React 18 + TypeScript, served by FastAPI
+          at <code>/frontend/</code>. Visual styling reuses the legacy
+          stylesheet at <code>/static/css/style.css</code>.
+        </p>
+
+        <h3 style={{ marginBottom: '0.5rem' }}>Backend connectivity</h3>
+
+        {isPending && <div className="skeleton-loader" style={{ height: '60px' }} />}
+
+        {error && (
+          <div className="glass-card card" style={{ borderColor: 'var(--danger)' }}>
+            <strong>Auth status request failed:</strong> {error.message}
+          </div>
+        )}
+
+        {data && (
+          <>
+            <p style={{ marginBottom: '0.5rem' }}>
+              <span className={`badge ${data.authenticated ? 'badge-success' : 'badge-warning'}`}>
+                {data.authenticated
+                  ? `Authenticated as ${data.username ?? 'unknown user'}`
+                  : 'Not authenticated'}
+              </span>
+            </p>
+            <pre style={{ margin: 0, fontSize: '0.85em', opacity: 0.85 }}>
+              {JSON.stringify(data, null, 2)}
+            </pre>
+          </>
+        )}
+      </div>
+    </>
   );
 }

@@ -310,6 +310,30 @@ This section grows as decisions are made during the migration.
 - Vite over Next.js: SPA backed by FastAPI, no SSR needed
 - Migration order biased toward small/forms-heavy first, real-time/complex last
 
+### 2026-05-02 — Drop PatternFly, reuse legacy CSS
+- **Context:** Phase 1.1 + 1.3 shipped on PatternFly. The visual divergence
+  from the legacy SPA's "glass-card" dark theme was jarring during the
+  migration soak — old and new pages sit side-by-side and clash.
+- **Considered:** (a) accept the new look, (b) heavy-theme PatternFly to
+  approximate legacy, (c) drop PatternFly entirely and reuse the legacy
+  stylesheet.
+- **Chose:** (c). The React app loads
+  `netcontrol/static/css/style.css` and uses the same class names as the
+  legacy SPA (`glass-card card`, `data-table`, `btn btn-primary`,
+  `form-input`, `page-header`, `empty-state`, `modal-overlay/.modal`, etc).
+- **Why:** pixel-perfect visual match for free, smaller bundle, single
+  design source of truth so legacy redesigns automatically apply to React
+  and vice versa. The plan's "battle-tested components" argument lost to
+  the immediate cost of UI inconsistency in production.
+- **Reversible?** Yes, at the cost of re-converting all React pages back to
+  PatternFly. Per-page conversion is mechanical (~1 hour each). Reverting
+  the convention itself is a one-line change to FRONTEND_STYLE.md.
+- **Status (2026-05-02):** All React pages converted —
+  `Home`, `MacTracking`, `TrafficAnalysis`, `Lab`, `TopologyCanvas`.
+  PatternFly fully removed from `package.json`. The React app loads only
+  `/static/css/style.css`. New pages MUST use legacy CSS — see
+  `FRONTEND_STYLE.md` § Styling.
+
 ### Future entries (template)
 ```
 ### YYYY-MM-DD — <decision title>

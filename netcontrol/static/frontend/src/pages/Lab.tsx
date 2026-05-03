@@ -1,33 +1,6 @@
-import { useMemo, useState } from 'react';
-import {
-  Alert,
-  Bullseye,
-  Button,
-  Card,
-  CardBody,
-  CardTitle,
-  Checkbox,
-  Content,
-  EmptyState,
-  EmptyStateBody,
-  Form,
-  FormGroup,
-  Label,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  ModalVariant,
-  Spinner,
-  Split,
-  SplitItem,
-  Stack,
-  StackItem,
-  TextArea,
-  TextInput,
-  Title,
-} from '@patternfly/react-core';
+import { useMemo, useState, ReactNode } from 'react';
 
+import { Modal } from '@/components/Modal';
 import { TopologyCanvas } from '@/pages/TopologyCanvas';
 import {
   LabDeviceSummary,
@@ -64,62 +37,108 @@ import {
 } from '@/api/lab';
 
 const PRE_STYLE: React.CSSProperties = {
-  background: 'var(--pf-v6-global--BackgroundColor--200, #f5f5f5)',
+  background: 'var(--bg-dark)',
+  border: '1px solid var(--border)',
+  color: 'var(--text)',
   padding: 12,
   maxHeight: 400,
   overflow: 'auto',
   fontSize: '0.8em',
   fontFamily: 'JetBrains Mono, ui-monospace, monospace',
   whiteSpace: 'pre',
+  borderRadius: '0.375rem',
 };
 
+// ── Badge helpers ──────────────────────────────────────────────────────────
+
+function Badge({
+  variant,
+  children,
+}: {
+  variant: 'success' | 'warning' | 'danger' | 'info' | 'secondary' | 'error';
+  children: ReactNode;
+}) {
+  return <span className={`badge badge-${variant}`}>{children}</span>;
+}
+
 function riskBadge(level: string) {
-  const color: 'red' | 'orange' | 'yellow' | 'green' | 'grey' =
-    level === 'critical' ? 'red' :
-    level === 'high' ? 'orange' :
-    level === 'medium' ? 'yellow' :
-    level === 'low' ? 'green' : 'grey';
-  return <Label color={color}>{level || 'unknown'}</Label>;
+  switch (level) {
+    case 'critical':
+      return <Badge variant="danger">{level}</Badge>;
+    case 'high':
+      return <Badge variant="error">{level}</Badge>;
+    case 'medium':
+      return <Badge variant="warning">{level}</Badge>;
+    case 'low':
+      return <Badge variant="success">{level}</Badge>;
+    default:
+      return <Badge variant="secondary">{level || 'unknown'}</Badge>;
+  }
 }
 
 function driftBadge(status: string | undefined) {
   switch (status) {
     case 'in_sync':
-      return <Label color="green">in sync</Label>;
+      return <Badge variant="success">in sync</Badge>;
     case 'drifted':
-      return <Label color="red">drifted</Label>;
+      return <Badge variant="danger">drifted</Badge>;
     case 'missing_source':
-      return <Label color="grey">no source</Label>;
+      return <Badge variant="secondary">no source</Badge>;
     case 'error':
-      return <Label color="orange">error</Label>;
+      return <Badge variant="warning">error</Badge>;
     case 'never_checked':
     case undefined:
     case '':
-      return <Label color="grey">not yet checked</Label>;
+      return <Badge variant="secondary">not yet checked</Badge>;
     default:
-      return <Label color="grey">{status}</Label>;
+      return <Badge variant="secondary">{status}</Badge>;
   }
 }
 
 function runtimeBadge(status: string | undefined, kind?: string) {
   if (!kind || kind === 'config_only') {
-    return <Label color="grey">offline</Label>;
+    return <Badge variant="secondary">offline</Badge>;
   }
   switch (status) {
     case 'running':
-      return <Label color="green">running</Label>;
+      return <Badge variant="success">running</Badge>;
     case 'provisioning':
-      return <Label color="blue">provisioning</Label>;
+      return <Badge variant="info">provisioning</Badge>;
     case 'stopped':
-      return <Label color="grey">stopped</Label>;
+      return <Badge variant="secondary">stopped</Badge>;
     case 'destroyed':
-      return <Label color="grey">destroyed</Label>;
+      return <Badge variant="secondary">destroyed</Badge>;
     case 'error':
-      return <Label color="red">error</Label>;
+      return <Badge variant="danger">error</Badge>;
     default:
-      return <Label color="grey">{status || '—'}</Label>;
+      return <Badge variant="secondary">{status || '—'}</Badge>;
   }
 }
+
+// ── Generic UI helpers ─────────────────────────────────────────────────────
+
+function ErrorBox({ title, message }: { title: string; message: string }) {
+  return (
+    <div className="error">
+      <strong>{title}:</strong> {message}
+    </div>
+  );
+}
+
+function Loading({ label }: { label?: string }) {
+  return <div className="loading">{label ?? 'Loading…'}</div>;
+}
+
+function EmptyBox({ title, body }: { title: string; body: ReactNode }) {
+  return (
+    <div className="empty-state">
+      <p style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{title}</p>
+      <p style={{ fontSize: '0.85em', opacity: 0.7 }}>{body}</p>
+    </div>
+  );
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────
 
 export function Lab() {
   const envs = useEnvironments();
@@ -130,115 +149,104 @@ export function Lab() {
   const activeEnv = useEnvironment(selectedEnvId);
 
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Split hasGutter>
-          <SplitItem isFilled>
-            <Title headingLevel="h1" size="2xl">
-              Lab / Digital Twin
-            </Title>
-            <Content component="p">
-              Safe sandbox for pre-production change testing. Clone a production
-              device, apply proposed commands or templates against the simulated
-              snapshot, review the diff and risk score, then promote a successful
-              change to a real deployment.
-            </Content>
-          </SplitItem>
-          <SplitItem>
-            <Button variant="primary" onClick={() => setCreateEnvOpen(true)}>
-              New environment
-            </Button>
-          </SplitItem>
-        </Split>
-      </StackItem>
+    <>
+      <div className="page-header">
+        <div>
+          <h2>Lab / Digital Twin</h2>
+          <p style={{ color: 'var(--text-light)', marginTop: '0.25rem', maxWidth: 720 }}>
+            Safe sandbox for pre-production change testing. Clone a production
+            device, apply proposed commands or templates against the simulated
+            snapshot, review the diff and risk score, then promote a successful
+            change to a real deployment.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setCreateEnvOpen(true)}
+        >
+          New environment
+        </button>
+      </div>
 
-      <StackItem>
-        <Split hasGutter>
-          <SplitItem style={{ minWidth: 280 }}>
-            <Card>
-              <CardTitle>Environments</CardTitle>
-              <CardBody>
-                {envs.isPending && (
-                  <Bullseye>
-                    <Spinner size="md" aria-label="Loading environments" />
-                  </Bullseye>
-                )}
-                {envs.error && (
-                  <Alert variant="danger" title="Failed to load" isInline>
-                    {(envs.error as Error).message}
-                  </Alert>
-                )}
-                {envs.data && envs.data.length === 0 && (
-                  <EmptyState titleText="No environments yet" headingLevel="h4">
-                    <EmptyStateBody>
-                      Create one to start testing config changes against simulated devices.
-                    </EmptyStateBody>
-                  </EmptyState>
-                )}
-                {envs.data?.map((e) => (
-                  <button
-                    key={e.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedEnvId(e.id);
-                      setSelectedDeviceId(null);
-                    }}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      padding: '8px 12px',
-                      borderRadius: 4,
-                      marginBottom: 4,
-                      border: '1px solid transparent',
-                      background:
-                        selectedEnvId === e.id
-                          ? 'var(--pf-v6-global--BackgroundColor--200, #eee)'
-                          : 'transparent',
-                    }}
-                  >
-                    <strong>{e.name}</strong>
-                    <div style={{ fontSize: '0.85em', opacity: 0.7 }}>
-                      {e.device_count ?? 0} device(s){e.shared ? ' · shared' : ''}
-                    </div>
-                  </button>
-                ))}
-              </CardBody>
-            </Card>
-          </SplitItem>
-
-          <SplitItem isFilled>
-            {selectedEnvId === null ? (
-              <Card>
-                <CardBody>
-                  <EmptyState titleText="Select an environment" headingLevel="h4">
-                    <EmptyStateBody>Pick a lab environment on the left.</EmptyStateBody>
-                  </EmptyState>
-                </CardBody>
-              </Card>
-            ) : (
-              <EnvironmentDetail
-                envId={selectedEnvId}
-                envQuery={activeEnv}
-                selectedDeviceId={selectedDeviceId}
-                onSelectDevice={setSelectedDeviceId}
-                onEnvDeleted={() => {
-                  setSelectedEnvId(null);
-                  setSelectedDeviceId(null);
-                }}
+      <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 280 }}>
+          <div className="glass-card card">
+            <div className="card-title" style={{ marginBottom: '0.75rem' }}>
+              Environments
+            </div>
+            {envs.isPending && <Loading />}
+            {envs.error && (
+              <ErrorBox title="Failed to load" message={(envs.error as Error).message} />
+            )}
+            {envs.data && envs.data.length === 0 && (
+              <EmptyBox
+                title="No environments yet"
+                body="Create one to start testing config changes against simulated devices."
               />
             )}
-          </SplitItem>
-        </Split>
-      </StackItem>
+            {envs.data?.map((e) => (
+              <button
+                key={e.id}
+                type="button"
+                onClick={() => {
+                  setSelectedEnvId(e.id);
+                  setSelectedDeviceId(null);
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  padding: '8px 12px',
+                  borderRadius: 4,
+                  marginBottom: 4,
+                  border: '1px solid transparent',
+                  background:
+                    selectedEnvId === e.id ? 'var(--primary-soft)' : 'transparent',
+                  color: 'var(--text)',
+                }}
+              >
+                <strong>{e.name}</strong>
+                <div style={{ fontSize: '0.85em', opacity: 0.7 }}>
+                  {e.device_count ?? 0} device(s){e.shared ? ' · shared' : ''}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {selectedEnvId === null ? (
+            <div className="glass-card card">
+              <EmptyBox
+                title="Select an environment"
+                body="Pick a lab environment on the left."
+              />
+            </div>
+          ) : (
+            <EnvironmentDetail
+              envId={selectedEnvId}
+              envQuery={activeEnv}
+              selectedDeviceId={selectedDeviceId}
+              onSelectDevice={setSelectedDeviceId}
+              onEnvDeleted={() => {
+                setSelectedEnvId(null);
+                setSelectedDeviceId(null);
+              }}
+            />
+          )}
+        </div>
+      </div>
 
       {createEnvOpen && (
         <CreateEnvironmentModal onClose={() => setCreateEnvOpen(false)} />
       )}
-    </Stack>
+    </>
   );
 }
+
+// ── Create environment modal ───────────────────────────────────────────────
 
 function CreateEnvironmentModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
@@ -247,54 +255,63 @@ function CreateEnvironmentModal({ onClose }: { onClose: () => void }) {
   const create = useCreateEnvironment();
 
   return (
-    <Modal isOpen variant={ModalVariant.small} onClose={onClose}>
-      <ModalHeader title="Create lab environment" />
-      <ModalBody>
-        <Form>
-          <FormGroup label="Name" isRequired fieldId="env-name">
-            <TextInput id="env-name" value={name} onChange={(_, v) => setName(v)} />
-          </FormGroup>
-          <FormGroup label="Description" fieldId="env-description">
-            <TextArea
-              id="env-description"
-              value={description}
-              onChange={(_, v) => setDescription(v)}
-              rows={3}
-            />
-          </FormGroup>
-          <FormGroup fieldId="env-shared">
-            <Checkbox
-              id="env-shared"
-              label="Shared (visible to all operators)"
-              isChecked={shared}
-              onChange={(_, v) => setShared(v)}
-            />
-          </FormGroup>
-          {create.error && (
-            <Alert variant="danger" title="Failed" isInline>
-              {(create.error as Error).message}
-            </Alert>
-          )}
-        </Form>
-      </ModalBody>
-      <ModalFooter>
-        <Button
-          variant="primary"
-          isDisabled={!name.trim() || create.isPending}
+    <Modal isOpen onClose={onClose} title="Create lab environment">
+      <div className="form-group">
+        <label className="form-label" htmlFor="env-name">
+          Name <span style={{ color: 'var(--danger)' }}>*</span>
+        </label>
+        <input
+          id="env-name"
+          className="form-input"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor="env-description">Description</label>
+        <textarea
+          id="env-description"
+          className="form-input"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+        />
+      </div>
+      <div className="form-group">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <input
+            id="env-shared"
+            type="checkbox"
+            checked={shared}
+            onChange={(e) => setShared(e.target.checked)}
+          />
+          Shared (visible to all operators)
+        </label>
+      </div>
+      {create.error && (
+        <ErrorBox title="Failed" message={(create.error as Error).message} />
+      )}
+      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={!name.trim() || create.isPending}
           onClick={async () => {
             await create.mutateAsync({ name: name.trim(), description, shared });
             onClose();
           }}
         >
           Create
-        </Button>
-        <Button variant="link" onClick={onClose}>
+        </button>
+        <button type="button" className="btn btn-ghost" onClick={onClose}>
           Cancel
-        </Button>
-      </ModalFooter>
+        </button>
+      </div>
     </Modal>
   );
 }
+
+// ── Environment detail ─────────────────────────────────────────────────────
 
 interface EnvironmentDetailProps {
   envId: number;
@@ -315,153 +332,126 @@ function EnvironmentDetail({
   const deleteDevice = useDeleteDevice(envId);
   const [createDeviceOpen, setCreateDeviceOpen] = useState(false);
 
-  if (envQuery.isPending) {
+  if (envQuery.isPending) return <Loading label="Loading environment…" />;
+  if (envQuery.error)
     return (
-      <Bullseye>
-        <Spinner size="lg" aria-label="Loading environment" />
-      </Bullseye>
+      <ErrorBox
+        title="Failed to load environment"
+        message={(envQuery.error as Error).message}
+      />
     );
-  }
-  if (envQuery.error) {
-    return (
-      <Alert variant="danger" title="Failed to load environment" isInline>
-        {(envQuery.error as Error).message}
-      </Alert>
-    );
-  }
   if (!envQuery.data) return null;
 
   const env = envQuery.data;
   const devices: LabDeviceSummary[] = env.devices ?? [];
 
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Card>
-          <CardTitle>{env.name}</CardTitle>
-          <CardBody>
-            <Content component="p">
-              {env.description || <em>No description.</em>}
-            </Content>
-            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <Button variant="primary" onClick={() => setCreateDeviceOpen(true)}>
-                Add lab device
-              </Button>
-              <Button
-                variant="danger"
-                onClick={async () => {
-                  if (
-                    !confirm(
-                      `Delete environment "${env.name}"? This removes all devices and runs.`,
-                    )
-                  )
-                    return;
-                  await deleteEnv.mutateAsync(env.id);
-                  onEnvDeleted();
-                }}
-              >
-                Delete environment
-              </Button>
-            </div>
-          </CardBody>
-        </Card>
-      </StackItem>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div className="glass-card card">
+        <div className="card-title">{env.name}</div>
+        <p style={{ color: 'var(--text-light)' }}>
+          {env.description || <em>No description.</em>}
+        </p>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setCreateDeviceOpen(true)}
+          >
+            Add lab device
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={async () => {
+              if (
+                !confirm(
+                  `Delete environment "${env.name}"? This removes all devices and runs.`,
+                )
+              )
+                return;
+              await deleteEnv.mutateAsync(env.id);
+              onEnvDeleted();
+            }}
+          >
+            Delete environment
+          </button>
+        </div>
+      </div>
 
-      <StackItem>
-        <Card>
-          <CardTitle>Devices ({devices.length})</CardTitle>
-          <CardBody>
-            {devices.length === 0 ? (
-              <EmptyState
-                titleText="No devices in this environment"
-                headingLevel="h4"
-              >
-                <EmptyStateBody>
-                  Add a blank device or clone one from inventory to start
-                  simulating changes.
-                </EmptyStateBody>
-              </EmptyState>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                    <th style={{ padding: 6 }}>Hostname</th>
-                    <th style={{ padding: 6 }}>IP</th>
-                    <th style={{ padding: 6 }}>Type</th>
-                    <th style={{ padding: 6 }}>Runtime</th>
-                    <th style={{ padding: 6 }}>Config</th>
-                    <th style={{ padding: 6 }}>Runs</th>
-                    <th style={{ padding: 6 }}>Source</th>
-                    <th style={{ padding: 6 }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {devices.map((d) => {
-                    const selected = selectedDeviceId === d.id;
-                    return (
-                      <tr
-                        key={d.id}
-                        style={{
-                          borderBottom: '1px solid #eee',
-                          background: selected
-                            ? 'var(--pf-v6-global--BackgroundColor--200, #f0f0f0)'
-                            : undefined,
-                          cursor: 'pointer',
+      <div className="glass-card card">
+        <div className="card-title">Devices ({devices.length})</div>
+        {devices.length === 0 ? (
+          <EmptyBox
+            title="No devices in this environment"
+            body="Add a blank device or clone one from inventory to start simulating changes."
+          />
+        ) : (
+          <table className="data-table" style={{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th>Hostname</th>
+                <th>IP</th>
+                <th>Type</th>
+                <th>Runtime</th>
+                <th>Config</th>
+                <th>Runs</th>
+                <th>Source</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {devices.map((d) => {
+                const selected = selectedDeviceId === d.id;
+                return (
+                  <tr
+                    key={d.id}
+                    style={{
+                      cursor: 'pointer',
+                      background: selected ? 'var(--primary-soft)' : undefined,
+                    }}
+                    onClick={() => onSelectDevice(d.id)}
+                  >
+                    <td>{d.hostname}</td>
+                    <td>{d.runtime_mgmt_address || d.ip_address || '—'}</td>
+                    <td>{d.device_type}</td>
+                    <td>{runtimeBadge(d.runtime_status, d.runtime_kind)}</td>
+                    <td>{d.config_size} B</td>
+                    <td>{d.run_count}</td>
+                    <td>{d.source_host_id ? `#${d.source_host_id}` : '—'}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-danger"
+                        onClick={async () => {
+                          if (!confirm(`Delete device "${d.hostname}"?`)) return;
+                          if (selectedDeviceId === d.id) onSelectDevice(null);
+                          await deleteDevice.mutateAsync(d.id);
                         }}
-                        onClick={() => onSelectDevice(d.id)}
                       >
-                        <td style={{ padding: 6 }}>{d.hostname}</td>
-                        <td style={{ padding: 6 }}>
-                          {d.runtime_mgmt_address || d.ip_address || '—'}
-                        </td>
-                        <td style={{ padding: 6 }}>{d.device_type}</td>
-                        <td style={{ padding: 6 }}>
-                          {runtimeBadge(d.runtime_status, d.runtime_kind)}
-                        </td>
-                        <td style={{ padding: 6 }}>{d.config_size} B</td>
-                        <td style={{ padding: 6 }}>{d.run_count}</td>
-                        <td style={{ padding: 6 }}>
-                          {d.source_host_id ? `#${d.source_host_id}` : '—'}
-                        </td>
-                        <td style={{ padding: 6 }} onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            variant="link"
-                            isDanger
-                            onClick={async () => {
-                              if (!confirm(`Delete device "${d.hostname}"?`)) return;
-                              if (selectedDeviceId === d.id) onSelectDevice(null);
-                              await deleteDevice.mutateAsync(d.id);
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </CardBody>
-        </Card>
-      </StackItem>
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
 
-      {selectedDeviceId !== null && (
-        <StackItem>
-          <DevicePanel deviceId={selectedDeviceId} />
-        </StackItem>
-      )}
+      {selectedDeviceId !== null && <DevicePanel deviceId={selectedDeviceId} />}
 
-      <StackItem>
-        <TopologiesCard envId={envId} devices={devices} />
-      </StackItem>
+      <TopologiesCard envId={envId} devices={devices} />
 
       {createDeviceOpen && (
         <CreateDeviceModal envId={envId} onClose={() => setCreateDeviceOpen(false)} />
       )}
-    </Stack>
+    </div>
   );
 }
+
+// ── Create device modal ────────────────────────────────────────────────────
 
 function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => void }) {
   const [hostname, setHostname] = useState('');
@@ -472,42 +462,77 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
   const create = useCreateDevice(envId);
 
   return (
-    <Modal isOpen variant={ModalVariant.medium} onClose={onClose}>
-      <ModalHeader title="Add lab device" />
-      <ModalBody>
-        <Form>
-          <FormGroup label="Hostname" isRequired fieldId="dev-name">
-            <TextInput id="dev-name" value={hostname} onChange={(_, v) => setHostname(v)} />
-          </FormGroup>
-          <FormGroup label="IP address" fieldId="dev-ip">
-            <TextInput id="dev-ip" value={ip} onChange={(_, v) => setIp(v)} />
-          </FormGroup>
-          <FormGroup label="Device type" fieldId="dev-type">
-            <TextInput id="dev-type" value={deviceType} onChange={(_, v) => setDeviceType(v)} />
-          </FormGroup>
-          <FormGroup label="Initial running config (optional)" fieldId="dev-config">
-            <TextArea
-              id="dev-config"
-              value={config}
-              onChange={(_, v) => setConfig(v)}
-              rows={6}
-              placeholder="Paste a known-good config or leave empty."
-            />
-          </FormGroup>
-          <FormGroup label="Or clone from inventory host ID" fieldId="dev-clone">
-            <TextInput
-              id="dev-clone"
-              value={cloneHostId}
-              onChange={(_, v) => setCloneHostId(v)}
-              placeholder="e.g. 42"
-            />
-          </FormGroup>
-        </Form>
-      </ModalBody>
-      <ModalFooter>
-        <Button
-          variant="primary"
-          isDisabled={!hostname.trim() || create.isPending}
+    <Modal isOpen onClose={onClose} title="Add lab device">
+      <div className="form-group">
+        <label className="form-label" htmlFor="dev-name">
+          Hostname <span style={{ color: 'var(--danger)' }}>*</span>
+        </label>
+        <input
+          id="dev-name"
+          className="form-input"
+          value={hostname}
+          onChange={(e) => setHostname(e.target.value)}
+        />
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor="dev-ip">IP address</label>
+        <input
+          id="dev-ip"
+          className="form-input"
+          value={ip}
+          onChange={(e) => setIp(e.target.value)}
+        />
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor="dev-type">Device type</label>
+        <input
+          id="dev-type"
+          className="form-input"
+          value={deviceType}
+          onChange={(e) => setDeviceType(e.target.value)}
+        />
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor="dev-config">
+          Initial running config (optional)
+        </label>
+        <textarea
+          id="dev-config"
+          className="form-input"
+          value={config}
+          onChange={(e) => setConfig(e.target.value)}
+          rows={6}
+          placeholder="Paste a known-good config or leave empty."
+        />
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor="dev-clone">
+          Or clone from inventory host ID
+        </label>
+        <input
+          id="dev-clone"
+          className="form-input"
+          value={cloneHostId}
+          onChange={(e) => setCloneHostId(e.target.value)}
+          placeholder="e.g. 42"
+        />
+      </div>
+      {create.error && (
+        <ErrorBox title="Failed" message={(create.error as Error).message} />
+      )}
+      <div
+        style={{
+          display: 'flex',
+          gap: '0.5rem',
+          justifyContent: 'flex-end',
+          marginTop: '1rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={!hostname.trim() || create.isPending}
           onClick={async () => {
             await create.mutateAsync({
               hostname: hostname.trim(),
@@ -519,10 +544,11 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
           }}
         >
           Create blank
-        </Button>
-        <Button
-          variant="secondary"
-          isDisabled={!cloneHostId || Number.isNaN(Number(cloneHostId))}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={!cloneHostId || Number.isNaN(Number(cloneHostId))}
           onClick={async () => {
             const res = await fetch(`/api/lab/environments/${envId}/clone-host`, {
               method: 'POST',
@@ -538,14 +564,16 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
           }}
         >
           Clone from inventory host ID
-        </Button>
-        <Button variant="link" onClick={onClose}>
+        </button>
+        <button type="button" className="btn btn-ghost" onClick={onClose}>
           Cancel
-        </Button>
-      </ModalFooter>
+        </button>
+      </div>
     </Modal>
   );
 }
+
+// ── Device panel ───────────────────────────────────────────────────────────
 
 function DevicePanel({ deviceId }: { deviceId: number }) {
   const device = useDevice(deviceId);
@@ -574,209 +602,188 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
   );
 
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <RuntimeCard deviceId={deviceId} />
-      </StackItem>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <RuntimeCard deviceId={deviceId} />
 
-      <StackItem>
-        <Card>
-          <CardTitle>Simulate change against device #{deviceId}</CardTitle>
-          <CardBody>
-            <Form>
-              <FormGroup label="Proposed commands (one per line)" fieldId="sim-cmds">
-                <TextArea
-                  id="sim-cmds"
-                  value={commandsText}
-                  onChange={(_, v) => setCommandsText(v)}
-                  rows={6}
-                  placeholder={'interface GigabitEthernet0/1\n description uplink\n no shutdown'}
-                />
-              </FormGroup>
-              <FormGroup fieldId="sim-live">
-                <Checkbox
-                  id="sim-live"
-                  label="Live mode (push to running containerlab device)"
-                  isChecked={liveMode}
-                  isDisabled={!isRuntimeRunning}
-                  onChange={(_, v) => setLiveMode(v)}
-                />
-                {!isRuntimeRunning && (
-                  <Content component="small">
-                    Deploy a containerlab runtime above to enable live mode.
-                  </Content>
-                )}
-              </FormGroup>
-              {!liveMode && (
-                <FormGroup fieldId="sim-apply">
-                  <Checkbox
-                    id="sim-apply"
-                    label="Persist resulting config back to lab device snapshot"
-                    isChecked={applyToDevice}
-                    onChange={(_, v) => setApplyToDevice(v)}
-                  />
-                </FormGroup>
-              )}
-              <Button
-                variant="primary"
-                isDisabled={commandList.length === 0 || isPending}
-                onClick={() => {
-                  if (liveMode) {
-                    simulateLive.mutate({ proposed_commands: commandList });
-                  } else {
-                    simulate.mutate({
-                      proposed_commands: commandList,
-                      apply_to_device: applyToDevice,
-                    });
-                  }
-                }}
-              >
-                {liveMode ? 'Run live simulation' : 'Run simulation'}
-              </Button>
-              {lastError && (
-                <Alert variant="danger" title="Simulation failed" isInline>
-                  {lastError.message}
-                </Alert>
-              )}
-            </Form>
-          </CardBody>
-        </Card>
-      </StackItem>
+      <div className="glass-card card">
+        <div className="card-title">Simulate change against device #{deviceId}</div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="sim-cmds">
+            Proposed commands (one per line)
+          </label>
+          <textarea
+            id="sim-cmds"
+            className="form-input"
+            value={commandsText}
+            onChange={(e) => setCommandsText(e.target.value)}
+            rows={6}
+            placeholder={'interface GigabitEthernet0/1\n description uplink\n no shutdown'}
+          />
+        </div>
+        <div className="form-group">
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <input
+              id="sim-live"
+              type="checkbox"
+              checked={liveMode}
+              disabled={!isRuntimeRunning}
+              onChange={(e) => setLiveMode(e.target.checked)}
+            />
+            Live mode (push to running containerlab device)
+          </label>
+          {!isRuntimeRunning && (
+            <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginTop: 4 }}>
+              Deploy a containerlab runtime above to enable live mode.
+            </div>
+          )}
+        </div>
+        {!liveMode && (
+          <div className="form-group">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input
+                id="sim-apply"
+                type="checkbox"
+                checked={applyToDevice}
+                onChange={(e) => setApplyToDevice(e.target.checked)}
+              />
+              Persist resulting config back to lab device snapshot
+            </label>
+          </div>
+        )}
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={commandList.length === 0 || isPending}
+          onClick={() => {
+            if (liveMode) {
+              simulateLive.mutate({ proposed_commands: commandList });
+            } else {
+              simulate.mutate({
+                proposed_commands: commandList,
+                apply_to_device: applyToDevice,
+              });
+            }
+          }}
+        >
+          {liveMode ? 'Run live simulation' : 'Run simulation'}
+        </button>
+        {lastError && (
+          <div style={{ marginTop: '1rem' }}>
+            <ErrorBox title="Simulation failed" message={lastError.message} />
+          </div>
+        )}
+      </div>
 
       {lastResult && (
-        <StackItem>
-          <Card>
-            <CardTitle>
-              Last result — {riskBadge(lastResult.risk_level)} (score{' '}
-              {lastResult.risk_score})
-            </CardTitle>
-            <CardBody>
-              <Content component="p">
-                +{lastResult.diff_added} / −{lastResult.diff_removed} lines
-                {lastResult.affected_areas.length > 0 && (
-                  <> · areas: {lastResult.affected_areas.join(', ')}</>
-                )}
-                {liveMode && <> · <strong>live</strong></>}
-              </Content>
-              <pre style={PRE_STYLE}>{lastResult.diff_text || '(no diff)'}</pre>
-              {liveMode && 'push_output' in lastResult && lastResult.push_output && (
-                <>
-                  <Title headingLevel="h4" size="md">
-                    Device push output
-                  </Title>
-                  <pre style={{ ...PRE_STYLE, maxHeight: 200 }}>
-                    {lastResult.push_output}
-                  </pre>
-                </>
-              )}
-            </CardBody>
-          </Card>
-        </StackItem>
+        <div className="glass-card card">
+          <div className="card-title">
+            Last result — {riskBadge(lastResult.risk_level)} (score{' '}
+            {lastResult.risk_score})
+          </div>
+          <p>
+            +{lastResult.diff_added} / −{lastResult.diff_removed} lines
+            {lastResult.affected_areas.length > 0 && (
+              <> · areas: {lastResult.affected_areas.join(', ')}</>
+            )}
+            {liveMode && <> · <strong>live</strong></>}
+          </p>
+          <pre style={PRE_STYLE}>{lastResult.diff_text || '(no diff)'}</pre>
+          {liveMode && 'push_output' in lastResult && lastResult.push_output && (
+            <>
+              <h4 style={{ marginTop: '1rem' }}>Device push output</h4>
+              <pre style={{ ...PRE_STYLE, maxHeight: 200 }}>
+                {lastResult.push_output}
+              </pre>
+            </>
+          )}
+        </div>
       )}
 
-      <StackItem>
-        <DriftCard deviceId={deviceId} />
-      </StackItem>
+      <DriftCard deviceId={deviceId} />
 
-      <StackItem>
-        <Card>
-          <CardTitle>Run history</CardTitle>
-          <CardBody>
-            {runs.isPending && <Spinner size="md" aria-label="Loading runs" />}
-            {runs.data && runs.data.length === 0 && (
-              <EmptyState titleText="No runs yet" headingLevel="h4">
-                <EmptyStateBody>
-                  Submit commands above to record a simulation run.
-                </EmptyStateBody>
-              </EmptyState>
-            )}
-            {runs.data && runs.data.length > 0 && (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                    <th style={{ padding: 6 }}>ID</th>
-                    <th style={{ padding: 6 }}>When</th>
-                    <th style={{ padding: 6 }}>By</th>
-                    <th style={{ padding: 6 }}>Risk</th>
-                    <th style={{ padding: 6 }}>+/−</th>
-                    <th style={{ padding: 6 }}>Status</th>
-                    <th style={{ padding: 6 }}>Promoted</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runs.data.map((r) => (
-                    <tr
-                      key={r.id}
-                      onClick={() => setOpenRunId(r.id)}
-                      style={{ cursor: 'pointer', borderBottom: '1px solid #eee' }}
-                    >
-                      <td style={{ padding: 6 }}>{r.id}</td>
-                      <td style={{ padding: 6 }}>{r.created_at}</td>
-                      <td style={{ padding: 6 }}>{r.submitted_by || '—'}</td>
-                      <td style={{ padding: 6 }}>{riskBadge(r.risk_level)}</td>
-                      <td style={{ padding: 6 }}>
-                        +{r.diff_added}/−{r.diff_removed}
-                      </td>
-                      <td style={{ padding: 6 }}>{r.status}</td>
-                      <td style={{ padding: 6 }}>
-                        {r.promoted_deployment_id ? `#${r.promoted_deployment_id}` : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </CardBody>
-        </Card>
-      </StackItem>
+      <div className="glass-card card">
+        <div className="card-title">Run history</div>
+        {runs.isPending && <Loading />}
+        {runs.data && runs.data.length === 0 && (
+          <EmptyBox
+            title="No runs yet"
+            body="Submit commands above to record a simulation run."
+          />
+        )}
+        {runs.data && runs.data.length > 0 && (
+          <table className="data-table" style={{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>When</th>
+                <th>By</th>
+                <th>Risk</th>
+                <th>+/−</th>
+                <th>Status</th>
+                <th>Promoted</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.data.map((r) => (
+                <tr
+                  key={r.id}
+                  onClick={() => setOpenRunId(r.id)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <td>{r.id}</td>
+                  <td>{r.created_at}</td>
+                  <td>{r.submitted_by || '—'}</td>
+                  <td>{riskBadge(r.risk_level)}</td>
+                  <td>+{r.diff_added}/−{r.diff_removed}</td>
+                  <td>{r.status}</td>
+                  <td>
+                    {r.promoted_deployment_id ? `#${r.promoted_deployment_id}` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       {openRunId !== null && (
         <RunDetailModal runId={openRunId} onClose={() => setOpenRunId(null)} />
       )}
-    </Stack>
+    </div>
   );
 }
+
+// ── Run detail modal ───────────────────────────────────────────────────────
 
 function RunDetailModal({ runId, onClose }: { runId: number; onClose: () => void }) {
   const run = useRun(runId);
   return (
-    <Modal isOpen variant={ModalVariant.large} onClose={onClose}>
-      <ModalHeader title={`Lab run #${runId}`} />
-      <ModalBody>
-        {run.isPending && <Spinner size="md" aria-label="Loading run" />}
-        {run.error && (
-          <Alert variant="danger" title="Failed" isInline>
-            {(run.error as Error).message}
-          </Alert>
-        )}
-        {run.data && (
-          <Stack hasGutter>
-            <StackItem>
-              <Content component="p">
-                {riskBadge(run.data.risk_level)} score {run.data.risk_score} · status{' '}
-                <strong>{run.data.status}</strong> · +{run.data.diff_added}/−
-                {run.data.diff_removed} lines
-              </Content>
-            </StackItem>
-            <StackItem>
-              <Title headingLevel="h4" size="md">
-                Diff
-              </Title>
-              <pre style={{ ...PRE_STYLE, maxHeight: 320 }}>
-                {run.data.diff_text || '(no diff)'}
-              </pre>
-            </StackItem>
-            <StackItem>
-              <Title headingLevel="h4" size="md">
-                Commands
-              </Title>
-              <pre style={{ ...PRE_STYLE, maxHeight: 200 }}>
-                {(run.data.commands || []).join('\n') || '(none)'}
-              </pre>
-            </StackItem>
-          </Stack>
-        )}
-      </ModalBody>
+    <Modal isOpen onClose={onClose} title={`Lab run #${runId}`} size="large">
+      {run.isPending && <Loading />}
+      {run.error && (
+        <ErrorBox title="Failed" message={(run.error as Error).message} />
+      )}
+      {run.data && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <p>
+            {riskBadge(run.data.risk_level)} score {run.data.risk_score} · status{' '}
+            <strong>{run.data.status}</strong> · +{run.data.diff_added}/−
+            {run.data.diff_removed} lines
+          </p>
+          <div>
+            <h4 style={{ marginBottom: '0.5rem' }}>Diff</h4>
+            <pre style={{ ...PRE_STYLE, maxHeight: 320 }}>
+              {run.data.diff_text || '(no diff)'}
+            </pre>
+          </div>
+          <div>
+            <h4 style={{ marginBottom: '0.5rem' }}>Commands</h4>
+            <pre style={{ ...PRE_STYLE, maxHeight: 200 }}>
+              {(run.data.commands || []).join('\n') || '(none)'}
+            </pre>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
@@ -804,150 +811,160 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
   const hasRuntime = runtimeKind === 'containerlab' && runtimeStatus !== 'destroyed';
 
   return (
-    <Card>
-      <CardTitle>
+    <div className="glass-card card">
+      <div className="card-title">
         Containerlab runtime · {runtimeBadge(runtimeStatus, runtimeKind)}
-      </CardTitle>
-      <CardBody>
-        {status.isPending && <Spinner size="md" aria-label="Checking runtime" />}
-        {status.data && !status.data.available && (
-          <Alert
-            variant="warning"
-            title="containerlab unavailable on the Plexus host"
-            isInline
-          >
-            {status.data.reason || 'See server logs for details.'} Lab devices
-            still work in offline (config-only) mode; live deploy is disabled.
-          </Alert>
-        )}
+      </div>
 
-        {dev && hasRuntime && (
-          <Content component="p">
-            <strong>Node kind:</strong> {dev.runtime_node_kind || '—'} ·{' '}
-            <strong>Image:</strong> {dev.runtime_image || '—'} ·{' '}
-            <strong>Mgmt IP:</strong> {dev.runtime_mgmt_address || '—'}{' '}
-            {dev.runtime_lab_name && (
-              <>
-                · <strong>Lab:</strong> {dev.runtime_lab_name}
-              </>
-            )}
-          </Content>
-        )}
-        {dev?.runtime_error && (
-          <Alert variant="danger" title="Runtime error" isInline>
-            {dev.runtime_error}
-          </Alert>
-        )}
+      {status.isPending && <Loading label="Checking runtime…" />}
+      {status.data && !status.data.available && (
+        <div style={{
+          background: 'rgba(245, 158, 11, 0.1)',
+          color: 'var(--warning)',
+          border: '1px solid rgba(245, 158, 11, 0.25)',
+          padding: '0.75rem 1rem',
+          borderRadius: '0.375rem',
+          marginBottom: '1rem',
+        }}>
+          <strong>containerlab unavailable on the Plexus host.</strong>{' '}
+          {status.data.reason || 'See server logs for details.'} Lab devices
+          still work in offline (config-only) mode; live deploy is disabled.
+        </div>
+      )}
 
-        {!isRunning && !isProvisioning && (
-          <Form>
-            <FormGroup label="Node kind" fieldId="rt-kind">
-              <select
-                id="rt-kind"
-                value={nodeKind}
-                onChange={(e) => setNodeKind(e.target.value)}
-                style={{ padding: '6px 8px', minWidth: 200 }}
-              >
-                {allowedKinds.length === 0 && <option value="linux">linux</option>}
-                {allowedKinds.map((k) => (
-                  <option key={k} value={k}>
-                    {k}
-                  </option>
-                ))}
-              </select>
-            </FormGroup>
-            <FormGroup label="Container image" fieldId="rt-image">
-              <TextInput
-                id="rt-image"
-                value={image}
-                onChange={(_, v) => setImage(v)}
-                placeholder="e.g. frrouting/frr:latest, ceos:4.30.0F, ghcr.io/nokia/srlinux:latest"
-              />
-            </FormGroup>
-            <FormGroup label="SSH credential ID (for live push)" fieldId="rt-cred">
-              <TextInput
-                id="rt-cred"
-                value={credentialId}
-                onChange={(_, v) => setCredentialId(v)}
-                placeholder="optional — required only for live simulate"
-              />
-            </FormGroup>
-            <Button
-              variant="primary"
-              isDisabled={
-                !status.data?.available ||
-                !image.trim() ||
-                deploy.isPending
-              }
-              onClick={() =>
-                deploy.mutate({
-                  node_kind: nodeKind,
-                  image: image.trim(),
-                  credential_id: credentialId ? Number(credentialId) : null,
-                })
-              }
-            >
-              Deploy live
-            </Button>
-            {deploy.error && (
-              <Alert variant="danger" title="Deploy failed" isInline>
-                {(deploy.error as Error).message}
-              </Alert>
-            )}
-          </Form>
-        )}
+      {dev && hasRuntime && (
+        <p>
+          <strong>Node kind:</strong> {dev.runtime_node_kind || '—'} ·{' '}
+          <strong>Image:</strong> {dev.runtime_image || '—'} ·{' '}
+          <strong>Mgmt IP:</strong> {dev.runtime_mgmt_address || '—'}{' '}
+          {dev.runtime_lab_name && (
+            <>
+              · <strong>Lab:</strong> {dev.runtime_lab_name}
+            </>
+          )}
+        </p>
+      )}
+      {dev?.runtime_error && (
+        <ErrorBox title="Runtime error" message={dev.runtime_error} />
+      )}
 
-        {(isRunning || isProvisioning || hasRuntime) && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <Button
-              variant="secondary"
-              isDisabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
+      {!isRunning && !isProvisioning && (
+        <div style={{ marginTop: '1rem' }}>
+          <div className="form-group">
+            <label className="form-label" htmlFor="rt-kind">Node kind</label>
+            <select
+              id="rt-kind"
+              className="form-select"
+              value={nodeKind}
+              onChange={(e) => setNodeKind(e.target.value)}
+              style={{ minWidth: 200 }}
             >
-              Refresh status
-            </Button>
-            <Button
-              variant="danger"
-              isDisabled={destroy.isPending}
-              onClick={async () => {
-                if (!confirm('Destroy the containerlab runtime for this device?')) return;
-                await destroy.mutateAsync();
-              }}
-            >
-              Destroy runtime
-            </Button>
+              {allowedKinds.length === 0 && <option value="linux">linux</option>}
+              {allowedKinds.map((k) => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
           </div>
-        )}
+          <div className="form-group">
+            <label className="form-label" htmlFor="rt-image">Container image</label>
+            <input
+              id="rt-image"
+              className="form-input"
+              value={image}
+              onChange={(e) => setImage(e.target.value)}
+              placeholder="e.g. frrouting/frr:latest, ceos:4.30.0F, ghcr.io/nokia/srlinux:latest"
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="rt-cred">
+              SSH credential ID (for live push)
+            </label>
+            <input
+              id="rt-cred"
+              className="form-input"
+              value={credentialId}
+              onChange={(e) => setCredentialId(e.target.value)}
+              placeholder="optional — required only for live simulate"
+            />
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={
+              !status.data?.available || !image.trim() || deploy.isPending
+            }
+            onClick={() =>
+              deploy.mutate({
+                node_kind: nodeKind,
+                image: image.trim(),
+                credential_id: credentialId ? Number(credentialId) : null,
+              })
+            }
+          >
+            Deploy live
+          </button>
+          {deploy.error && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <ErrorBox title="Deploy failed" message={(deploy.error as Error).message} />
+            </div>
+          )}
+        </div>
+      )}
 
-        {events.data && events.data.length > 0 && (
-          <details style={{ marginTop: 16 }}>
-            <summary>Runtime event log</summary>
-            <table style={{ width: '100%', marginTop: 8, borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                  <th style={{ padding: 4 }}>When</th>
-                  <th style={{ padding: 4 }}>Action</th>
-                  <th style={{ padding: 4 }}>Status</th>
-                  <th style={{ padding: 4 }}>By</th>
-                  <th style={{ padding: 4 }}>Detail</th>
+      {(isRunning || isProvisioning || hasRuntime) && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={refresh.isPending}
+            onClick={() => refresh.mutate()}
+          >
+            Refresh status
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={destroy.isPending}
+            onClick={async () => {
+              if (!confirm('Destroy the containerlab runtime for this device?')) return;
+              await destroy.mutateAsync();
+            }}
+          >
+            Destroy runtime
+          </button>
+        </div>
+      )}
+
+      {events.data && events.data.length > 0 && (
+        <details style={{ marginTop: 16 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-light)' }}>
+            Runtime event log
+          </summary>
+          <table className="data-table" style={{ width: '100%', marginTop: 8 }}>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Action</th>
+                <th>Status</th>
+                <th>By</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.data.map((e) => (
+                <tr key={e.id}>
+                  <td>{e.created_at}</td>
+                  <td>{e.action}</td>
+                  <td>{e.status}</td>
+                  <td>{e.actor || '—'}</td>
+                  <td>{e.detail}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {events.data.map((e) => (
-                  <tr key={e.id} style={{ borderBottom: '1px solid #eee' }}>
-                    <td style={{ padding: 4 }}>{e.created_at}</td>
-                    <td style={{ padding: 4 }}>{e.action}</td>
-                    <td style={{ padding: 4 }}>{e.status}</td>
-                    <td style={{ padding: 4 }}>{e.actor || '—'}</td>
-                    <td style={{ padding: 4 }}>{e.detail}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
-        )}
-      </CardBody>
-    </Card>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </div>
   );
 }
 
@@ -969,132 +986,122 @@ function TopologiesCard({
   const [openId, setOpenId] = useState<number | null>(null);
 
   return (
-    <Card>
-      <CardTitle>Topologies (multi-device)</CardTitle>
-      <CardBody>
-        <Form>
-          <Split hasGutter>
-            <SplitItem isFilled>
-              <FormGroup label="New topology name" fieldId="topo-name">
-                <TextInput
-                  id="topo-name"
-                  value={name}
-                  onChange={(_, v) => setName(v)}
-                  placeholder="e.g. dual-core-test"
-                />
-              </FormGroup>
-            </SplitItem>
-            <SplitItem isFilled>
-              <FormGroup label="Description" fieldId="topo-desc">
-                <TextInput
-                  id="topo-desc"
-                  value={description}
-                  onChange={(_, v) => setDescription(v)}
-                />
-              </FormGroup>
-            </SplitItem>
-            <SplitItem>
-              <FormGroup label="Mgmt subnet (optional)" fieldId="topo-mgmt">
-                <TextInput
-                  id="topo-mgmt"
-                  value={mgmt}
-                  onChange={(_, v) => setMgmt(v)}
-                  placeholder="e.g. 172.20.30.0/24"
-                />
-              </FormGroup>
-            </SplitItem>
-            <SplitItem>
-              <Button
-                variant="primary"
-                isDisabled={!name.trim() || create.isPending}
-                style={{ marginTop: 24 }}
-                onClick={async () => {
-                  await create.mutateAsync({
-                    name: name.trim(),
-                    description,
-                    mgmt_subnet: mgmt,
-                  });
-                  setName('');
-                  setDescription('');
-                  setMgmt('');
+    <div className="glass-card card">
+      <div className="card-title">Topologies (multi-device)</div>
+
+      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div className="form-group" style={{ flex: 1, minWidth: 180, marginBottom: 0 }}>
+          <label className="form-label" htmlFor="topo-name">New topology name</label>
+          <input
+            id="topo-name"
+            className="form-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. dual-core-test"
+          />
+        </div>
+        <div className="form-group" style={{ flex: 1, minWidth: 180, marginBottom: 0 }}>
+          <label className="form-label" htmlFor="topo-desc">Description</label>
+          <input
+            id="topo-desc"
+            className="form-input"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+        <div className="form-group" style={{ minWidth: 180, marginBottom: 0 }}>
+          <label className="form-label" htmlFor="topo-mgmt">Mgmt subnet (optional)</label>
+          <input
+            id="topo-mgmt"
+            className="form-input"
+            value={mgmt}
+            onChange={(e) => setMgmt(e.target.value)}
+            placeholder="e.g. 172.20.30.0/24"
+          />
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={!name.trim() || create.isPending}
+          onClick={async () => {
+            await create.mutateAsync({
+              name: name.trim(),
+              description,
+              mgmt_subnet: mgmt,
+            });
+            setName('');
+            setDescription('');
+            setMgmt('');
+          }}
+        >
+          Create
+        </button>
+      </div>
+
+      {create.error && (
+        <div style={{ marginTop: '0.75rem' }}>
+          <ErrorBox title="Failed" message={(create.error as Error).message} />
+        </div>
+      )}
+
+      {list.isPending && <Loading />}
+      {list.data && list.data.length === 0 && (
+        <EmptyBox
+          title="No topologies yet"
+          body="Create one above, then add member devices and links."
+        />
+      )}
+      {list.data && list.data.length > 0 && (
+        <table className="data-table" style={{ width: '100%', marginTop: 12 }}>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Devices</th>
+              <th>Links</th>
+              <th>Status</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {list.data.map((t) => (
+              <tr
+                key={t.id}
+                style={{
+                  cursor: 'pointer',
+                  background: openId === t.id ? 'var(--primary-soft)' : undefined,
                 }}
+                onClick={() => setOpenId(openId === t.id ? null : t.id)}
               >
-                Create
-              </Button>
-            </SplitItem>
-          </Split>
-        </Form>
-
-        {create.error && (
-          <Alert variant="danger" title="Failed" isInline>
-            {(create.error as Error).message}
-          </Alert>
-        )}
-
-        {list.isPending && <Spinner size="md" aria-label="Loading topologies" />}
-        {list.data && list.data.length === 0 && (
-          <EmptyState titleText="No topologies yet" headingLevel="h4">
-            <EmptyStateBody>
-              Create one above, then add member devices and links.
-            </EmptyStateBody>
-          </EmptyState>
-        )}
-        {list.data && list.data.length > 0 && (
-          <table style={{ width: '100%', marginTop: 12, borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                <th style={{ padding: 6 }}>Name</th>
-                <th style={{ padding: 6 }}>Devices</th>
-                <th style={{ padding: 6 }}>Links</th>
-                <th style={{ padding: 6 }}>Status</th>
-                <th style={{ padding: 6 }} />
+                <td>{t.name}</td>
+                <td>{t.device_count ?? 0}</td>
+                <td>{t.link_count ?? 0}</td>
+                <td>{runtimeBadge(t.status, 'containerlab')}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-danger"
+                    disabled={t.status === 'running'}
+                    onClick={async () => {
+                      if (!confirm(`Delete topology "${t.name}"?`)) return;
+                      if (openId === t.id) setOpenId(null);
+                      await remove.mutateAsync(t.id);
+                    }}
+                  >
+                    Delete
+                  </button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {list.data.map((t) => (
-                <tr
-                  key={t.id}
-                  style={{
-                    cursor: 'pointer',
-                    borderBottom: '1px solid #eee',
-                    background:
-                      openId === t.id
-                        ? 'var(--pf-v6-global--BackgroundColor--200, #f0f0f0)'
-                        : undefined,
-                  }}
-                  onClick={() => setOpenId(openId === t.id ? null : t.id)}
-                >
-                  <td style={{ padding: 6 }}>{t.name}</td>
-                  <td style={{ padding: 6 }}>{t.device_count ?? 0}</td>
-                  <td style={{ padding: 6 }}>{t.link_count ?? 0}</td>
-                  <td style={{ padding: 6 }}>{runtimeBadge(t.status, 'containerlab')}</td>
-                  <td style={{ padding: 6 }} onClick={(e) => e.stopPropagation()}>
-                    <Button
-                      variant="link"
-                      isDanger
-                      isDisabled={t.status === 'running'}
-                      onClick={async () => {
-                        if (!confirm(`Delete topology "${t.name}"?`)) return;
-                        if (openId === t.id) setOpenId(null);
-                        await remove.mutateAsync(t.id);
-                      }}
-                    >
-                      Delete
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+            ))}
+          </tbody>
+        </table>
+      )}
 
-        {openId !== null && (
-          <div style={{ marginTop: 16 }}>
-            <TopologyEditor topologyId={openId} envDevices={devices} />
-          </div>
-        )}
-      </CardBody>
-    </Card>
+      {openId !== null && (
+        <div style={{ marginTop: 16 }}>
+          <TopologyEditor topologyId={openId} envDevices={devices} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1126,13 +1133,9 @@ function TopologyEditor({
   const [proposalA, setProposalA] = useState('eth1');
   const [proposalB, setProposalB] = useState('eth1');
 
-  if (topo.isPending) return <Spinner size="md" aria-label="Loading topology" />;
+  if (topo.isPending) return <Loading label="Loading topology…" />;
   if (topo.error)
-    return (
-      <Alert variant="danger" title="Failed" isInline>
-        {(topo.error as Error).message}
-      </Alert>
-    );
+    return <ErrorBox title="Failed" message={(topo.error as Error).message} />;
   if (!topo.data) return null;
 
   const t = topo.data;
@@ -1141,363 +1144,351 @@ function TopologyEditor({
   const candidates = envDevices.filter((d) => !memberIds.has(d.id));
 
   return (
-    <Card isPlain>
-      <CardTitle>
+    <div className="card" style={{ background: 'transparent', border: '1px solid var(--border)' }}>
+      <div className="card-title">
         Editing: {t.name} · {runtimeBadge(t.status, 'containerlab')}
-      </CardTitle>
-      <CardBody>
-        {t.error && (
-          <Alert variant="danger" title="Topology error" isInline>
-            {t.error}
-          </Alert>
-        )}
+      </div>
+      {t.error && <ErrorBox title="Topology error" message={t.error} />}
 
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <Button
-            variant="primary"
-            isDisabled={isRunning || deploy.isPending || t.devices.length === 0}
-            onClick={() => deploy.mutate()}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={isRunning || deploy.isPending || t.devices.length === 0}
+          onClick={() => deploy.mutate()}
+        >
+          Deploy topology
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={refresh.isPending}
+          onClick={() => refresh.mutate()}
+        >
+          Refresh
+        </button>
+        <button
+          type="button"
+          className="btn btn-danger"
+          disabled={destroy.isPending || t.status === 'destroyed' || t.status === ''}
+          onClick={async () => {
+            if (!confirm('Destroy topology?')) return;
+            await destroy.mutateAsync();
+          }}
+        >
+          Destroy topology
+        </button>
+      </div>
+      {deploy.error && (
+        <ErrorBox title="Deploy failed" message={(deploy.error as Error).message} />
+      )}
+
+      <div style={{ display: 'flex', gap: 4, margin: '8px 0' }}>
+        <button
+          type="button"
+          className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setViewMode('list')}
+        >
+          List
+        </button>
+        <button
+          type="button"
+          className={`btn btn-sm ${viewMode === 'canvas' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setViewMode('canvas')}
+        >
+          Canvas
+        </button>
+      </div>
+
+      {viewMode === 'canvas' && (
+        <div style={{ marginBottom: 16 }}>
+          <TopologyCanvas
+            devices={t.devices}
+            links={t.links}
+            onProposeLink={
+              isRunning
+                ? undefined
+                : (proposed) => {
+                    setPendingProposal(proposed);
+                    setProposalA('eth1');
+                    setProposalB('eth1');
+                  }
+            }
+          />
+          {pendingProposal && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: 12,
+                border: '1px solid var(--primary)',
+                borderRadius: 4,
+                background: 'var(--primary-soft)',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <p>
+                    New link:{' '}
+                    <strong>
+                      {t.devices.find((d) => d.id === pendingProposal.a_device_id)?.hostname}
+                    </strong>{' '}
+                    ↔{' '}
+                    <strong>
+                      {t.devices.find((d) => d.id === pendingProposal.b_device_id)?.hostname}
+                    </strong>
+                  </p>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" htmlFor="prop-a-ep">A endpoint</label>
+                  <input
+                    id="prop-a-ep"
+                    className="form-input"
+                    value={proposalA}
+                    onChange={(e) => setProposalA(e.target.value)}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" htmlFor="prop-b-ep">B endpoint</label>
+                  <input
+                    id="prop-b-ep"
+                    className="form-input"
+                    value={proposalB}
+                    onChange={(e) => setProposalB(e.target.value)}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!proposalA.trim() || !proposalB.trim() || addLink.isPending}
+                    onClick={async () => {
+                      await addLink.mutateAsync({
+                        a_device_id: pendingProposal.a_device_id,
+                        a_endpoint: proposalA.trim(),
+                        b_device_id: pendingProposal.b_device_id,
+                        b_endpoint: proposalB.trim(),
+                      });
+                      setPendingProposal(null);
+                    }}
+                  >
+                    Create link
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setPendingProposal(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+              {addLink.error && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <ErrorBox
+                    title="Add link failed"
+                    message={(addLink.error as Error).message}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>
+        Members ({t.devices.length})
+      </h4>
+      <table className="data-table" style={{ width: '100%', marginBottom: 12 }}>
+        <thead>
+          <tr>
+            <th>Hostname</th>
+            <th>Kind</th>
+            <th>Image</th>
+            <th>Mgmt IP</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {t.devices.map((d) => (
+            <tr key={d.id}>
+              <td>{d.hostname}</td>
+              <td>{d.runtime_node_kind || '—'}</td>
+              <td>{d.runtime_image || '—'}</td>
+              <td>{d.runtime_mgmt_address || '—'}</td>
+              <td>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  disabled={isRunning}
+                  onClick={() => removeMember.mutate(d.id)}
+                >
+                  Remove
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {!isRunning && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <select
+            className="form-select"
+            value={memberPick}
+            onChange={(e) => setMemberPick(e.target.value)}
+            style={{ minWidth: 200 }}
           >
-            Deploy topology
-          </Button>
-          <Button
-            variant="secondary"
-            isDisabled={refresh.isPending}
-            onClick={() => refresh.mutate()}
-          >
-            Refresh
-          </Button>
-          <Button
-            variant="danger"
-            isDisabled={destroy.isPending || t.status === 'destroyed' || t.status === ''}
+            <option value="">— select a device to add —</option>
+            {candidates.map((d) => (
+              <option key={d.id} value={String(d.id)}>
+                {d.hostname} ({d.runtime_node_kind || 'no kind'})
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={!memberPick || addMember.isPending}
             onClick={async () => {
-              if (!confirm('Destroy topology?')) return;
-              await destroy.mutateAsync();
+              await addMember.mutateAsync({ device_id: Number(memberPick) });
+              setMemberPick('');
             }}
           >
-            Destroy topology
-          </Button>
+            Add member
+          </button>
+          {addMember.error && (
+            <div style={{ alignSelf: 'center' }}>
+              <ErrorBox title="Add failed" message={(addMember.error as Error).message} />
+            </div>
+          )}
         </div>
-        {deploy.error && (
-          <Alert variant="danger" title="Deploy failed" isInline>
-            {(deploy.error as Error).message}
-          </Alert>
-        )}
+      )}
 
-        <div style={{ display: 'flex', gap: 4, margin: '8px 0' }}>
-          <Button
-            variant={viewMode === 'list' ? 'primary' : 'tertiary'}
-            onClick={() => setViewMode('list')}
-            size="sm"
-          >
-            List
-          </Button>
-          <Button
-            variant={viewMode === 'canvas' ? 'primary' : 'tertiary'}
-            onClick={() => setViewMode('canvas')}
-            size="sm"
-          >
-            Canvas
-          </Button>
-        </div>
-
-        {viewMode === 'canvas' && (
-          <div style={{ marginBottom: 16 }}>
-            <TopologyCanvas
-              devices={t.devices}
-              links={t.links}
-              onProposeLink={
-                isRunning
-                  ? undefined
-                  : (proposed) => {
-                      setPendingProposal(proposed);
-                      setProposalA('eth1');
-                      setProposalB('eth1');
-                    }
-              }
-            />
-            {pendingProposal && (
-              <div
-                style={{
-                  marginTop: 8,
-                  padding: 12,
-                  border: '1px solid #06c',
-                  borderRadius: 4,
-                  background: 'rgba(0,98,204,0.05)',
-                }}
-              >
-                <Form>
-                  <Split hasGutter>
-                    <SplitItem isFilled>
-                      <Content component="p">
-                        New link:{' '}
-                        <strong>
-                          {
-                            t.devices.find((d) => d.id === pendingProposal.a_device_id)?.hostname
-                          }
-                        </strong>{' '}
-                        ↔{' '}
-                        <strong>
-                          {
-                            t.devices.find((d) => d.id === pendingProposal.b_device_id)?.hostname
-                          }
-                        </strong>
-                      </Content>
-                    </SplitItem>
-                    <SplitItem>
-                      <FormGroup label="A endpoint" fieldId="prop-a-ep">
-                        <TextInput
-                          id="prop-a-ep"
-                          value={proposalA}
-                          onChange={(_, v) => setProposalA(v)}
-                        />
-                      </FormGroup>
-                    </SplitItem>
-                    <SplitItem>
-                      <FormGroup label="B endpoint" fieldId="prop-b-ep">
-                        <TextInput
-                          id="prop-b-ep"
-                          value={proposalB}
-                          onChange={(_, v) => setProposalB(v)}
-                        />
-                      </FormGroup>
-                    </SplitItem>
-                    <SplitItem>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 24 }}>
-                        <Button
-                          variant="primary"
-                          isDisabled={
-                            !proposalA.trim() || !proposalB.trim() || addLink.isPending
-                          }
-                          onClick={async () => {
-                            await addLink.mutateAsync({
-                              a_device_id: pendingProposal.a_device_id,
-                              a_endpoint: proposalA.trim(),
-                              b_device_id: pendingProposal.b_device_id,
-                              b_endpoint: proposalB.trim(),
-                            });
-                            setPendingProposal(null);
-                          }}
-                        >
-                          Create link
-                        </Button>
-                        <Button
-                          variant="link"
-                          onClick={() => setPendingProposal(null)}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </SplitItem>
-                  </Split>
-                  {addLink.error && (
-                    <Alert variant="danger" title="Add link failed" isInline>
-                      {(addLink.error as Error).message}
-                    </Alert>
-                  )}
-                </Form>
-              </div>
-            )}
-          </div>
-        )}
-
-        <Title headingLevel="h4" size="md">
-          Members ({t.devices.length})
-        </Title>
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-              <th style={{ padding: 6 }}>Hostname</th>
-              <th style={{ padding: 6 }}>Kind</th>
-              <th style={{ padding: 6 }}>Image</th>
-              <th style={{ padding: 6 }}>Mgmt IP</th>
-              <th style={{ padding: 6 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {t.devices.map((d) => (
-              <tr key={d.id} style={{ borderBottom: '1px solid #eee' }}>
-                <td style={{ padding: 6 }}>{d.hostname}</td>
-                <td style={{ padding: 6 }}>{d.runtime_node_kind || '—'}</td>
-                <td style={{ padding: 6 }}>{d.runtime_image || '—'}</td>
-                <td style={{ padding: 6 }}>{d.runtime_mgmt_address || '—'}</td>
-                <td style={{ padding: 6 }}>
-                  <Button
-                    variant="link"
-                    isDanger
-                    isDisabled={isRunning}
-                    onClick={() => removeMember.mutate(d.id)}
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>
+        Links ({t.links.length})
+      </h4>
+      <table className="data-table" style={{ width: '100%', marginBottom: 12 }}>
+        <thead>
+          <tr>
+            <th>A device</th>
+            <th>A endpoint</th>
+            <th>B device</th>
+            <th>B endpoint</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {t.links.map((l) => {
+            const a = t.devices.find((d) => d.id === l.a_device_id);
+            const b = t.devices.find((d) => d.id === l.b_device_id);
+            return (
+              <tr key={l.id}>
+                <td>{a?.hostname ?? `#${l.a_device_id}`}</td>
+                <td>{l.a_endpoint}</td>
+                <td>{b?.hostname ?? `#${l.b_device_id}`}</td>
+                <td>{l.b_endpoint}</td>
+                <td>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-danger"
+                    disabled={isRunning}
+                    onClick={() => removeLink.mutate(l.id)}
                   >
                     Remove
-                  </Button>
+                  </button>
                 </td>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            );
+          })}
+        </tbody>
+      </table>
 
-        {!isRunning && (
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+      {!isRunning && t.devices.length >= 2 && (
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="link-a">A device</label>
             <select
-              value={memberPick}
-              onChange={(e) => setMemberPick(e.target.value)}
-              style={{ padding: '6px 8px', minWidth: 200 }}
+              id="link-a"
+              className="form-select"
+              value={linkA}
+              onChange={(e) => setLinkA(e.target.value)}
+              style={{ minWidth: 160 }}
             >
-              <option value="">— select a device to add —</option>
-              {candidates.map((d) => (
+              <option value="">—</option>
+              {t.devices.map((d) => (
                 <option key={d.id} value={String(d.id)}>
-                  {d.hostname} ({d.runtime_node_kind || 'no kind'})
+                  {d.hostname}
                 </option>
               ))}
             </select>
-            <Button
-              variant="secondary"
-              isDisabled={!memberPick || addMember.isPending}
-              onClick={async () => {
-                await addMember.mutateAsync({ device_id: Number(memberPick) });
-                setMemberPick('');
-              }}
-            >
-              Add member
-            </Button>
-            {addMember.error && (
-              <Alert variant="danger" title="Add failed" isInline>
-                {(addMember.error as Error).message}
-              </Alert>
-            )}
           </div>
-        )}
-
-        <Title headingLevel="h4" size="md">
-          Links ({t.links.length})
-        </Title>
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-              <th style={{ padding: 6 }}>A device</th>
-              <th style={{ padding: 6 }}>A endpoint</th>
-              <th style={{ padding: 6 }}>B device</th>
-              <th style={{ padding: 6 }}>B endpoint</th>
-              <th style={{ padding: 6 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {t.links.map((l) => {
-              const a = t.devices.find((d) => d.id === l.a_device_id);
-              const b = t.devices.find((d) => d.id === l.b_device_id);
-              return (
-                <tr key={l.id} style={{ borderBottom: '1px solid #eee' }}>
-                  <td style={{ padding: 6 }}>{a?.hostname ?? `#${l.a_device_id}`}</td>
-                  <td style={{ padding: 6 }}>{l.a_endpoint}</td>
-                  <td style={{ padding: 6 }}>{b?.hostname ?? `#${l.b_device_id}`}</td>
-                  <td style={{ padding: 6 }}>{l.b_endpoint}</td>
-                  <td style={{ padding: 6 }}>
-                    <Button
-                      variant="link"
-                      isDanger
-                      isDisabled={isRunning}
-                      onClick={() => removeLink.mutate(l.id)}
-                    >
-                      Remove
-                    </Button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
-        {!isRunning && t.devices.length >= 2 && (
-          <Form>
-            <Split hasGutter>
-              <SplitItem>
-                <FormGroup label="A device" fieldId="link-a">
-                  <select
-                    id="link-a"
-                    value={linkA}
-                    onChange={(e) => setLinkA(e.target.value)}
-                    style={{ padding: '6px 8px', minWidth: 160 }}
-                  >
-                    <option value="">—</option>
-                    {t.devices.map((d) => (
-                      <option key={d.id} value={String(d.id)}>
-                        {d.hostname}
-                      </option>
-                    ))}
-                  </select>
-                </FormGroup>
-              </SplitItem>
-              <SplitItem>
-                <FormGroup label="A endpoint" fieldId="link-a-ep">
-                  <TextInput
-                    id="link-a-ep"
-                    value={linkAEp}
-                    onChange={(_, v) => setLinkAEp(v)}
-                  />
-                </FormGroup>
-              </SplitItem>
-              <SplitItem>
-                <FormGroup label="B device" fieldId="link-b">
-                  <select
-                    id="link-b"
-                    value={linkB}
-                    onChange={(e) => setLinkB(e.target.value)}
-                    style={{ padding: '6px 8px', minWidth: 160 }}
-                  >
-                    <option value="">—</option>
-                    {t.devices.map((d) => (
-                      <option key={d.id} value={String(d.id)}>
-                        {d.hostname}
-                      </option>
-                    ))}
-                  </select>
-                </FormGroup>
-              </SplitItem>
-              <SplitItem>
-                <FormGroup label="B endpoint" fieldId="link-b-ep">
-                  <TextInput
-                    id="link-b-ep"
-                    value={linkBEp}
-                    onChange={(_, v) => setLinkBEp(v)}
-                  />
-                </FormGroup>
-              </SplitItem>
-              <SplitItem>
-                <Button
-                  variant="secondary"
-                  isDisabled={
-                    !linkA ||
-                    !linkB ||
-                    linkA === linkB ||
-                    !linkAEp.trim() ||
-                    !linkBEp.trim() ||
-                    addLink.isPending
-                  }
-                  style={{ marginTop: 24 }}
-                  onClick={async () => {
-                    await addLink.mutateAsync({
-                      a_device_id: Number(linkA),
-                      a_endpoint: linkAEp.trim(),
-                      b_device_id: Number(linkB),
-                      b_endpoint: linkBEp.trim(),
-                    });
-                    setLinkAEp('eth1');
-                    setLinkBEp('eth1');
-                  }}
-                >
-                  Add link
-                </Button>
-              </SplitItem>
-            </Split>
-            {addLink.error && (
-              <Alert variant="danger" title="Add link failed" isInline>
-                {(addLink.error as Error).message}
-              </Alert>
-            )}
-          </Form>
-        )}
-      </CardBody>
-    </Card>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="link-a-ep">A endpoint</label>
+            <input
+              id="link-a-ep"
+              className="form-input"
+              value={linkAEp}
+              onChange={(e) => setLinkAEp(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="link-b">B device</label>
+            <select
+              id="link-b"
+              className="form-select"
+              value={linkB}
+              onChange={(e) => setLinkB(e.target.value)}
+              style={{ minWidth: 160 }}
+            >
+              <option value="">—</option>
+              {t.devices.map((d) => (
+                <option key={d.id} value={String(d.id)}>
+                  {d.hostname}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="link-b-ep">B endpoint</label>
+            <input
+              id="link-b-ep"
+              className="form-input"
+              value={linkBEp}
+              onChange={(e) => setLinkBEp(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={
+              !linkA ||
+              !linkB ||
+              linkA === linkB ||
+              !linkAEp.trim() ||
+              !linkBEp.trim() ||
+              addLink.isPending
+            }
+            onClick={async () => {
+              await addLink.mutateAsync({
+                a_device_id: Number(linkA),
+                a_endpoint: linkAEp.trim(),
+                b_device_id: Number(linkB),
+                b_endpoint: linkBEp.trim(),
+              });
+              setLinkAEp('eth1');
+              setLinkBEp('eth1');
+            }}
+          >
+            Add link
+          </button>
+        </div>
+      )}
+      {addLink.error && (
+        <div style={{ marginTop: '0.75rem' }}>
+          <ErrorBox title="Add link failed" message={(addLink.error as Error).message} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1510,7 +1501,9 @@ function DriftCard({ deviceId }: { deviceId: number }) {
   const device = useDevice(deviceId);
 
   const sourceHostId = device.data?.source_host_id ?? null;
-  const latestStatus = (latest.data && 'status' in latest.data ? latest.data.status : 'never_checked') as
+  const latestStatus = (latest.data && 'status' in latest.data
+    ? latest.data.status
+    : 'never_checked') as
     | 'in_sync'
     | 'drifted'
     | 'missing_source'
@@ -1518,80 +1511,81 @@ function DriftCard({ deviceId }: { deviceId: number }) {
     | 'never_checked';
 
   return (
-    <Card>
-      <CardTitle>
+    <div className="glass-card card">
+      <div className="card-title">
         Drift from production · {driftBadge(latestStatus)}
-      </CardTitle>
-      <CardBody>
-        {sourceHostId === null && (
-          <Alert
-            variant="info"
-            title="Twin has no source host"
-            isInline
-          >
-            This lab device wasn't cloned from inventory, so there's no
-            production config to compare against. Drift checks only run when
-            <code>source_host_id</code> is set.
-          </Alert>
-        )}
+      </div>
 
-        {sourceHostId !== null && latest.data && 'diff_added' in latest.data && (
-          <Content component="p">
-            Last checked: <strong>{latest.data.checked_at}</strong> ·{' '}
-            +{latest.data.diff_added}/−{latest.data.diff_removed} lines ·{' '}
-            actor: {latest.data.actor || '—'}
-            {latest.data.error && (
-              <>
-                {' · '}
-                <em>{latest.data.error}</em>
-              </>
-            )}
-          </Content>
-        )}
-
-        <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
-          <Button
-            variant="primary"
-            isDisabled={check.isPending || sourceHostId === null}
-            onClick={() => check.mutate()}
-          >
-            Run drift check
-          </Button>
+      {sourceHostId === null && (
+        <div style={{
+          background: 'var(--primary-soft)',
+          color: 'var(--primary-light)',
+          border: '1px solid var(--primary-soft-strong)',
+          padding: '0.75rem 1rem',
+          borderRadius: '0.375rem',
+          marginBottom: '1rem',
+        }}>
+          <strong>Twin has no source host.</strong> This lab device wasn't
+          cloned from inventory, so there's no production config to compare
+          against. Drift checks only run when <code>source_host_id</code> is set.
         </div>
-        {check.error && (
-          <Alert variant="danger" title="Drift check failed" isInline>
-            {(check.error as Error).message}
-          </Alert>
-        )}
+      )}
 
-        {runs.data && runs.data.length > 0 && (
-          <details>
-            <summary>Drift history ({runs.data.length})</summary>
-            <table style={{ width: '100%', marginTop: 8, borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                  <th style={{ padding: 4 }}>When</th>
-                  <th style={{ padding: 4 }}>Status</th>
-                  <th style={{ padding: 4 }}>+/−</th>
-                  <th style={{ padding: 4 }}>By</th>
+      {sourceHostId !== null && latest.data && 'diff_added' in latest.data && (
+        <p>
+          Last checked: <strong>{latest.data.checked_at}</strong> · +
+          {latest.data.diff_added}/−{latest.data.diff_removed} lines · actor:{' '}
+          {latest.data.actor || '—'}
+          {latest.data.error && (
+            <>
+              {' · '}
+              <em>{latest.data.error}</em>
+            </>
+          )}
+        </p>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={check.isPending || sourceHostId === null}
+          onClick={() => check.mutate()}
+        >
+          Run drift check
+        </button>
+      </div>
+      {check.error && (
+        <ErrorBox title="Drift check failed" message={(check.error as Error).message} />
+      )}
+
+      {runs.data && runs.data.length > 0 && (
+        <details>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-light)' }}>
+            Drift history ({runs.data.length})
+          </summary>
+          <table className="data-table" style={{ width: '100%', marginTop: 8 }}>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Status</th>
+                <th>+/−</th>
+                <th>By</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.data.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.checked_at}</td>
+                  <td>{driftBadge(r.status)}</td>
+                  <td>+{r.diff_added}/−{r.diff_removed}</td>
+                  <td>{r.actor || '—'}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {runs.data.map((r) => (
-                  <tr key={r.id} style={{ borderBottom: '1px solid #eee' }}>
-                    <td style={{ padding: 4 }}>{r.checked_at}</td>
-                    <td style={{ padding: 4 }}>{driftBadge(r.status)}</td>
-                    <td style={{ padding: 4 }}>
-                      +{r.diff_added}/−{r.diff_removed}
-                    </td>
-                    <td style={{ padding: 4 }}>{r.actor || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
-        )}
-      </CardBody>
-    </Card>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </div>
   );
 }
