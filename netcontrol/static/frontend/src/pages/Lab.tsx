@@ -28,6 +28,7 @@ import {
   Title,
 } from '@patternfly/react-core';
 
+import { TopologyCanvas } from '@/pages/TopologyCanvas';
 import {
   LabDeviceSummary,
   useAddTopologyLink,
@@ -1118,6 +1119,12 @@ function TopologyEditor({
   const [linkAEp, setLinkAEp] = useState('eth1');
   const [linkB, setLinkB] = useState('');
   const [linkBEp, setLinkBEp] = useState('eth1');
+  const [viewMode, setViewMode] = useState<'list' | 'canvas'>('list');
+  const [pendingProposal, setPendingProposal] = useState<
+    { a_device_id: number; b_device_id: number } | null
+  >(null);
+  const [proposalA, setProposalA] = useState('eth1');
+  const [proposalB, setProposalB] = useState('eth1');
 
   if (topo.isPending) return <Spinner size="md" aria-label="Loading topology" />;
   if (topo.error)
@@ -1175,6 +1182,123 @@ function TopologyEditor({
           <Alert variant="danger" title="Deploy failed" isInline>
             {(deploy.error as Error).message}
           </Alert>
+        )}
+
+        <div style={{ display: 'flex', gap: 4, margin: '8px 0' }}>
+          <Button
+            variant={viewMode === 'list' ? 'primary' : 'tertiary'}
+            onClick={() => setViewMode('list')}
+            size="sm"
+          >
+            List
+          </Button>
+          <Button
+            variant={viewMode === 'canvas' ? 'primary' : 'tertiary'}
+            onClick={() => setViewMode('canvas')}
+            size="sm"
+          >
+            Canvas
+          </Button>
+        </div>
+
+        {viewMode === 'canvas' && (
+          <div style={{ marginBottom: 16 }}>
+            <TopologyCanvas
+              devices={t.devices}
+              links={t.links}
+              onProposeLink={
+                isRunning
+                  ? undefined
+                  : (proposed) => {
+                      setPendingProposal(proposed);
+                      setProposalA('eth1');
+                      setProposalB('eth1');
+                    }
+              }
+            />
+            {pendingProposal && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: 12,
+                  border: '1px solid #06c',
+                  borderRadius: 4,
+                  background: 'rgba(0,98,204,0.05)',
+                }}
+              >
+                <Form>
+                  <Split hasGutter>
+                    <SplitItem isFilled>
+                      <Content component="p">
+                        New link:{' '}
+                        <strong>
+                          {
+                            t.devices.find((d) => d.id === pendingProposal.a_device_id)?.hostname
+                          }
+                        </strong>{' '}
+                        ↔{' '}
+                        <strong>
+                          {
+                            t.devices.find((d) => d.id === pendingProposal.b_device_id)?.hostname
+                          }
+                        </strong>
+                      </Content>
+                    </SplitItem>
+                    <SplitItem>
+                      <FormGroup label="A endpoint" fieldId="prop-a-ep">
+                        <TextInput
+                          id="prop-a-ep"
+                          value={proposalA}
+                          onChange={(_, v) => setProposalA(v)}
+                        />
+                      </FormGroup>
+                    </SplitItem>
+                    <SplitItem>
+                      <FormGroup label="B endpoint" fieldId="prop-b-ep">
+                        <TextInput
+                          id="prop-b-ep"
+                          value={proposalB}
+                          onChange={(_, v) => setProposalB(v)}
+                        />
+                      </FormGroup>
+                    </SplitItem>
+                    <SplitItem>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 24 }}>
+                        <Button
+                          variant="primary"
+                          isDisabled={
+                            !proposalA.trim() || !proposalB.trim() || addLink.isPending
+                          }
+                          onClick={async () => {
+                            await addLink.mutateAsync({
+                              a_device_id: pendingProposal.a_device_id,
+                              a_endpoint: proposalA.trim(),
+                              b_device_id: pendingProposal.b_device_id,
+                              b_endpoint: proposalB.trim(),
+                            });
+                            setPendingProposal(null);
+                          }}
+                        >
+                          Create link
+                        </Button>
+                        <Button
+                          variant="link"
+                          onClick={() => setPendingProposal(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </SplitItem>
+                  </Split>
+                  {addLink.error && (
+                    <Alert variant="danger" title="Add link failed" isInline>
+                      {(addLink.error as Error).message}
+                    </Alert>
+                  )}
+                </Form>
+              </div>
+            )}
+          </div>
         )}
 
         <Title headingLevel="h4" size="md">
