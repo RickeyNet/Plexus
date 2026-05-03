@@ -153,7 +153,9 @@
 - [ ] Create a plugin SDK for custom validators and integrations.
 - [x] Add digital twin/lab mode for safe pre-production change testing.
   - [x] Phase A — config-plane simulator: lab environments + cloned-from-host devices, simulate proposed commands against snapshot, diff + risk score, persist run history, promote successful run to a Deployment record. Migration 0029. React UI at `/frontend/lab`. 6-test coverage (`tests/test_lab.py`).
-  - [ ] Phase B — containerlab/CML emulator integration for live virtual devices and packet-level testing.
+  - [x] Phase B-1 — containerlab single-node runtime: per-twin Docker-backed virtual device (Arista cEOS, Nokia SR Linux, FRR, Linux, etc.), `/api/lab/runtime` availability probe, deploy/destroy/refresh endpoints, live-mode `simulate-live` that pushes commands via Netmiko and captures the real running-config back into the twin's snapshot. Append-only `lab_runtime_events` audit log. Migration 0030. Strict allowlist for node kinds and image regex; subprocess invoked with explicit argv (no shell). React UI gains a Runtime card with deploy form, status badge, refresh/destroy buttons, runtime event log, and a live-mode toggle on the simulate form. 14-test coverage (`tests/test_lab_runtime.py`).
+  - [ ] Phase B-2 — multi-device topology: link N twins into a single containerlab deployment with a topology editor (vis-network) and YAML generator.
+  - [ ] Phase B-3 — traffic generation and drift-from-twin checks: optional traffic-gen sidecar, scheduled comparison of real device config against the twin to flag unintended divergence.
 
 ---
 

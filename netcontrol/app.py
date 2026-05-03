@@ -145,6 +145,7 @@ from netcontrol.routes.lab import (
     init_lab,
     router as lab_router,
 )
+from netcontrol.routes.lab_runtime import router as lab_runtime_router
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.deployments import (
@@ -1682,6 +1683,10 @@ app.include_router(upgrades_ws_router)  # WebSocket — handles its own auth
 # Digital Twin / Lab Mode
 app.include_router(
     lab_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
+)
+app.include_router(
+    lab_runtime_router,
     dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
 )
 
