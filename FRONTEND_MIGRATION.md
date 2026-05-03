@@ -334,6 +334,32 @@ This section grows as decisions are made during the migration.
   `/static/css/style.css`. New pages MUST use legacy CSS — see
   `FRONTEND_STYLE.md` § Styling.
 
+### 2026-05-03 — Compliance bug found in legacy api.js
+- **Found:** While porting `compliance.js` to React, noticed that
+  every mutation in legacy `api.js` for compliance and a few other
+  modules uses Windows-style backslashes in the URL string literal:
+  `'\compliance\profiles'` instead of `'/compliance/profiles'`. In
+  JavaScript, an unrecognized escape like `\c` becomes the literal
+  character (the backslash is dropped), so `'\compliance\profiles'`
+  evaluates to `'compliancerofiles'`. The reads use forward
+  slashes and work; the writes hit the wrong path.
+- **Affected legacy functions (all in `js/api.js`):**
+  createComplianceProfile, updateComplianceProfile,
+  deleteComplianceProfile, createComplianceAssignment,
+  updateComplianceAssignment, deleteComplianceAssignment,
+  runComplianceScan, runComplianceScanBulk,
+  remediateComplianceFinding, scanComplianceAssignmentNow,
+  loadBuiltinComplianceProfiles. Likely others — sweep needed.
+- **Implication:** The legacy compliance UI's "Create Profile",
+  "Edit", "Assign", "Run Scan", "Fix" buttons have been broken on
+  any deploy that picked up the bad slashes. Worth a `git log -p` on
+  `api.js` to see when the corruption landed and what else got hit
+  in the same commit.
+- **React port behavior:** Uses correct forward-slash paths
+  throughout. Will not reproduce the bug.
+- **Action:** Not fixed here (out of scope for the React port).
+  Filed mentally for a follow-up sweep of `api.js`.
+
 ### 2026-05-02 — Device Detail port + ECharts wrapper
 - **Context:** Phase 1.6 — porting `device-detail.js` (758 lines).
   This is the first React page that needs charts; legacy uses

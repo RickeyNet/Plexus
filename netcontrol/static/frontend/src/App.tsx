@@ -1,5 +1,6 @@
 import { Link, Route, Routes } from 'react-router-dom';
 
+import { Compliance } from '@/pages/Compliance/Compliance';
 import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
 import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
@@ -43,6 +44,9 @@ function TopNav() {
       <Link to="/floor-plan" className="btn btn-sm btn-ghost">
         Floor Plan
       </Link>
+      <Link to="/compliance" className="btn btn-sm btn-ghost">
+        Compliance
+      </Link>
     </nav>
   );
 }
@@ -61,6 +65,7 @@ export function App() {
           <Route path="/traffic-analysis" element={<TrafficAnalysis />} />
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
+          <Route path="/compliance" element={<Compliance />} />
           {/* Backward compat with the previous /network-tools route. */}
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
