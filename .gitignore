@@ -232,11 +232,6 @@ job_output/
 executions/
 *.output
 
-# Frontend build (if you add one later, uncomment)
-# netcontrol/static/
-# dist/
-# build/
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Network Device Backups (if stored locally)
 # ═══════════════════════════════════════════════════════════════════════════════
