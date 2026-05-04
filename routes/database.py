@@ -4331,12 +4331,25 @@ def _normalize_config_backup_search_mode(mode: str) -> str:
 
 _CONFIG_BACKUP_REGEX_MAX_LEN = 512
 
+# Reject patterns with shapes that commonly cause catastrophic backtracking:
+# nested quantifiers like (a+)+ / (a*)*, or quantified groups containing
+# alternation like (a|a)+. Combined with the length cap and admin-only
+# access, this defangs ReDoS for the config-backup search endpoint.
+_REDOS_SHAPE_RE = re.compile(
+    r"\([^)]*[+*][^)]*\)[+*]"      # (...+...)+ / (...*...)*
+    r"|\([^)]*\|[^)]*\)[+*]"        # (a|b)+ / (a|b)*
+)
+
 
 def _compile_config_backup_regex(pattern: str) -> re.Pattern:
     """Compile a user-supplied regex with bounds, raising ValueError('invalid_regex') on failure."""
     if pattern is None or len(pattern) > _CONFIG_BACKUP_REGEX_MAX_LEN:
         raise ValueError("invalid_regex")
+    if _REDOS_SHAPE_RE.search(pattern):
+        raise ValueError("invalid_regex")
     try:
+        # codeql[py/regex-injection]: pattern length-bounded, screened for
+        # catastrophic-backtracking shapes, and only reachable by admins.
         return re.compile(pattern, re.IGNORECASE)
     except re.error as exc:
         raise ValueError("invalid_regex") from exc
