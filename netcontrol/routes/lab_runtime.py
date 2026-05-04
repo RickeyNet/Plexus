@@ -148,12 +148,13 @@ async def get_runtime_status() -> dict:
         }
     try:
         rc, stdout, stderr = await _run_containerlab(["version"])
-    except Exception as exc:  # subprocess startup failure
+    except Exception:  # subprocess startup failure
+        LOGGER.exception("failed to invoke containerlab")
         return {
             "available": False,
             "binary": binary,
             "version": None,
-            "reason": f"failed to invoke containerlab: {exc}",
+            "reason": "failed to invoke containerlab (see server logs)",
             "allowed_node_kinds": sorted(ALLOWED_NODE_KINDS),
         }
     version_line = ""

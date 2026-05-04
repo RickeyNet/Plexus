@@ -14,8 +14,12 @@ from routes.crypto import decrypt
 # Matches {{secret.variable_name}} — name allows alphanumeric, underscore, hyphen
 _SECRET_RE = re.compile(r"\{\{\s*secret\.([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}")
 
-# Matches any {{secret.*}} reference (used for validation / detection)
-_SECRET_ANY_RE = re.compile(r"\{\{\s*secret\.[^}]*\}\}")
+# Matches any {{secret.*}} reference (used for validation / detection).
+# Bounded quantifiers prevent regex DoS on attacker-controlled input.
+_SECRET_ANY_RE = re.compile(r"\{\{ {0,8}secret\.[^}\s]{1,128} {0,8}\}\}")
+
+# Inputs longer than this are not scanned (defense in depth against ReDoS).
+_MAX_SCAN_LEN = 1_000_000
 
 
 class SecretResolutionError(Exception):
@@ -28,6 +32,8 @@ class SecretResolutionError(Exception):
 
 def has_secret_references(text: str) -> bool:
     """Return True if *text* contains any {{secret.*}} placeholders."""
+    if not text or len(text) > _MAX_SCAN_LEN:
+        return False
     return bool(_SECRET_ANY_RE.search(text))
 
 
