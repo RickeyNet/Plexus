@@ -23,6 +23,20 @@ function TopNav() {
       }}
     >
       <strong style={{ marginRight: '1rem', color: 'var(--text)' }}>Plexus</strong>
+      <span
+        style={{
+          fontSize: '0.7rem',
+          padding: '0.15rem 0.4rem',
+          background: 'var(--primary-dark)',
+          color: 'var(--text)',
+          borderRadius: '0.25rem',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+          marginRight: '1rem',
+        }}
+      >
+        Preview
+      </span>
       <Link to="/" className="btn btn-sm btn-ghost">
         Home
       </Link>
@@ -47,6 +61,14 @@ function TopNav() {
       <Link to="/compliance" className="btn btn-sm btn-ghost">
         Compliance
       </Link>
+      <a
+        href="/"
+        className="btn btn-sm btn-ghost"
+        style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}
+        title="Return to the classic UI"
+      >
+        ← Classic UI
+      </a>
     </nav>
   );
 }
