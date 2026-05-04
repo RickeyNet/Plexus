@@ -47,20 +47,12 @@ const pageCacheMeta = {};
 
 // ── Space Depth Experience Controls ──────────────────────────────────────────
 const SPACE_INTENSITY_KEY = 'plexus_space_intensity';
-const SPACE_PARALLAX_KEY = 'plexus_space_parallax';
 const SPACE_INTENSITY_MAP = Object.freeze({ off: 0, low: 0.45, medium: 0.8, high: 1.0 });
 const DEFAULT_SPACE_INTENSITY = 'medium';
 
 const _spaceFxState = {
     intensity: DEFAULT_SPACE_INTENSITY,
-    parallax: true,
     baseIntensity: 1,
-    targetX: 0,
-    targetY: 0,
-    currentX: 0,
-    currentY: 0,
-    rafId: null,
-    initialized: false,
 };
 
 function normalizeSpaceIntensity(value) {
@@ -80,134 +72,28 @@ function getSpaceIntensityScalar() {
     return userScalar * (_spaceFxState.baseIntensity || 1);
 }
 
-function _resetSpaceParallax() {
-    _spaceFxState.targetX = 0;
-    _spaceFxState.targetY = 0;
-    _spaceFxState.currentX = 0;
-    _spaceFxState.currentY = 0;
-    document.documentElement.style.setProperty('--space-parallax-x', '0px');
-    document.documentElement.style.setProperty('--space-parallax-y', '0px');
-}
-
-function updateSpaceFxForMotionPreference() {
-    const canAnimateParallax = _spaceFxState.parallax && !isReducedMotion() && getSpaceIntensityScalar() > 0;
-    document.body.classList.toggle('space-parallax-disabled', !canAnimateParallax);
-    if (!canAnimateParallax) _resetSpaceParallax();
-}
-
-function applySpaceSettings(intensity, parallaxEnabled) {
+function applySpaceSettings(intensity) {
     const normalizedIntensity = normalizeSpaceIntensity(intensity);
-    const normalizedParallax = Boolean(parallaxEnabled);
-
     _spaceFxState.intensity = normalizedIntensity;
-    _spaceFxState.parallax = normalizedParallax;
-
     localStorage.setItem(SPACE_INTENSITY_KEY, normalizedIntensity);
-    localStorage.setItem(SPACE_PARALLAX_KEY, normalizedParallax ? '1' : '0');
 
     const userScalar = SPACE_INTENSITY_MAP[normalizedIntensity] ?? SPACE_INTENSITY_MAP[DEFAULT_SPACE_INTENSITY];
     document.documentElement.style.setProperty('--space-intensity-user', String(userScalar));
 
     const intensitySelect = document.getElementById('space-intensity-settings');
     if (intensitySelect) intensitySelect.value = normalizedIntensity;
-
-    const parallaxToggle = document.getElementById('space-parallax-settings');
-    if (parallaxToggle) parallaxToggle.checked = normalizedParallax;
-
-    updateSpaceFxForMotionPreference();
-}
-
-function initSpaceParallax() {
-    if (_spaceFxState.initialized) return;
-    _spaceFxState.initialized = true;
-
-    const MAX_SHIFT = 18;
-
-    window.addEventListener('mousemove', (e) => {
-        if (!_spaceFxState.parallax || isReducedMotion()) return;
-        const w = window.innerWidth || 1;
-        const h = window.innerHeight || 1;
-        const nx = (e.clientX / w) * 2 - 1;
-        const ny = (e.clientY / h) * 2 - 1;
-        _spaceFxState.targetX = nx * MAX_SHIFT;
-        _spaceFxState.targetY = ny * MAX_SHIFT;
-        ensureParallaxRunning();
-    }, { passive: true });
-
-    window.addEventListener('mouseleave', () => {
-        _spaceFxState.targetX = 0;
-        _spaceFxState.targetY = 0;
-        ensureParallaxRunning();
-    }, { passive: true });
-
-    const SETTLE_THRESHOLD = 0.05;
-
-    const tick = () => {
-        const canAnimateParallax = _spaceFxState.parallax && !isReducedMotion() && getSpaceIntensityScalar() > 0;
-        if (canAnimateParallax) {
-            _spaceFxState.currentX += (_spaceFxState.targetX - _spaceFxState.currentX) * 0.07;
-            _spaceFxState.currentY += (_spaceFxState.targetY - _spaceFxState.currentY) * 0.07;
-            document.documentElement.style.setProperty('--space-parallax-x', `${_spaceFxState.currentX.toFixed(3)}px`);
-            document.documentElement.style.setProperty('--space-parallax-y', `${_spaceFxState.currentY.toFixed(3)}px`);
-
-            // Stop looping once values have settled to save CPU
-            const dx = Math.abs(_spaceFxState.targetX - _spaceFxState.currentX);
-            const dy = Math.abs(_spaceFxState.targetY - _spaceFxState.currentY);
-            if (dx < SETTLE_THRESHOLD && dy < SETTLE_THRESHOLD) {
-                _spaceFxState.currentX = _spaceFxState.targetX;
-                _spaceFxState.currentY = _spaceFxState.targetY;
-                _spaceFxState.rafId = null;
-                return;
-            }
-        } else {
-            _resetSpaceParallax();
-            _spaceFxState.rafId = null;
-            return;
-        }
-        _spaceFxState.rafId = requestAnimationFrame(tick);
-    };
-
-    // Helper to kick the loop if it's not already running
-    function ensureParallaxRunning() {
-        if (!_spaceFxState.rafId && !document.hidden) {
-            _spaceFxState.rafId = requestAnimationFrame(tick);
-        }
-    }
-
-    // Pause the RAF loop when the tab is hidden to save CPU
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-            if (_spaceFxState.rafId) {
-                cancelAnimationFrame(_spaceFxState.rafId);
-                _spaceFxState.rafId = null;
-            }
-        }
-        // When visible again, the next mousemove will restart the loop via ensureParallaxRunning
-    });
 }
 
 export function initSpaceControls() {
     refreshSpaceBaseIntensity();
     const savedIntensity = localStorage.getItem(SPACE_INTENSITY_KEY) || DEFAULT_SPACE_INTENSITY;
-    const savedParallax = localStorage.getItem(SPACE_PARALLAX_KEY);
-    const parallaxEnabled = savedParallax === null ? true : savedParallax === '1';
-
-    applySpaceSettings(savedIntensity, parallaxEnabled);
-    initSpaceParallax();
+    applySpaceSettings(savedIntensity);
 
     const intensitySelect = document.getElementById('space-intensity-settings');
     if (intensitySelect && intensitySelect.dataset.bound !== '1') {
         intensitySelect.dataset.bound = '1';
         intensitySelect.addEventListener('change', (e) => {
-            applySpaceSettings(e.target.value, _spaceFxState.parallax);
-        });
-    }
-
-    const parallaxToggle = document.getElementById('space-parallax-settings');
-    if (parallaxToggle && parallaxToggle.dataset.bound !== '1') {
-        parallaxToggle.dataset.bound = '1';
-        parallaxToggle.addEventListener('change', (e) => {
-            applySpaceSettings(_spaceFxState.intensity, e.target.checked);
+            applySpaceSettings(e.target.value);
         });
     }
 }
@@ -294,7 +180,6 @@ function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', chosen);
     localStorage.setItem(THEME_KEY, chosen);
     refreshSpaceBaseIntensity();
-    updateSpaceFxForMotionPreference();
     ['theme-select', 'theme-select-settings'].forEach((id) => {
         const select = document.getElementById(id);
         if (select) select.value = chosen;
@@ -338,7 +223,6 @@ function applyPerformanceMode(enabled) {
         toggle.classList.toggle('active', enabled);
         toggle.title = enabled ? 'Performance Mode ON — click to disable' : 'Performance Mode — reduce animations and blur';
     }
-    updateSpaceFxForMotionPreference();
 }
 
 function togglePerformanceMode(e) {
@@ -2242,21 +2126,16 @@ function initSpaceStarfield({ canvasId, hostId, baseCount = 90, linkDistance = 0
         }
 
         const moving = !isReducedMotion();
-        const px = _spaceFxState.currentX;
-        const py = _spaceFxState.currentY;
         const maxStars = Math.max(4, Math.floor(stars.length * intensity));
 
         for (let i = 0; i < maxStars; i++) {
             const s = stars[i];
             s.twinkle += moving ? 0.02 : 0;
             const twinkleAlpha = 0.75 + Math.sin(s.twinkle) * 0.25;
-            const parallaxFactor = s.near ? 0.9 : 0.35;
-            const sx = s.x + px * parallaxFactor;
-            const sy = s.y + py * parallaxFactor;
             const rgb = s.near ? nearRGB : farRGB;
 
             ctx.beginPath();
-            ctx.arc(sx, sy, s.size * (s.near ? 1 : 0.85), 0, Math.PI * 2);
+            ctx.arc(s.x, s.y, s.size * (s.near ? 1 : 0.85), 0, Math.PI * 2);
             ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${Math.max(0.02, s.alpha * twinkleAlpha * intensity)})`;
             ctx.fill();
 
@@ -2281,8 +2160,8 @@ function initSpaceStarfield({ canvasId, hostId, baseCount = 90, linkDistance = 0
                     const alpha = (1 - dist / linkDistance) * 0.08 * intensity;
                     if (alpha <= 0.002) continue;
                     ctx.beginPath();
-                    ctx.moveTo(a.x + px * 0.7, a.y + py * 0.7);
-                    ctx.lineTo(b.x + px * 0.7, b.y + py * 0.7);
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
                     ctx.strokeStyle = `rgba(${nearRGB[0]}, ${nearRGB[1]}, ${nearRGB[2]}, ${alpha})`;
                     ctx.lineWidth = 0.55;
                     ctx.stroke();

@@ -1,5 +1,10 @@
-import { Link, Route, Routes } from 'react-router-dom';
+import { useState } from 'react';
+import { Route, Routes, useLocation } from 'react-router-dom';
 
+import { useAuthStatus } from '@/api/auth';
+import { AnimatedBackground } from '@/components/AnimatedBackground';
+import { Sidebar } from '@/components/Sidebar';
+import { UserMenu } from '@/components/UserMenu';
 import { Compliance } from '@/pages/Compliance/Compliance';
 import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
 import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
@@ -10,74 +15,69 @@ import { Lab } from '@/pages/Lab';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
 
-function TopNav() {
+const BREADCRUMBS: Record<string, string> = {
+  '/': 'Dashboard',
+  '/devices': 'Devices',
+  '/lab': 'Lab / Digital Twin',
+  '/mac-tracking': 'MAC Tracking',
+  '/traffic-analysis': 'Traffic Analysis',
+  '/federation': 'Federation',
+  '/floor-plan': 'Floor Plans',
+  '/compliance': 'Compliance',
+};
+
+function Breadcrumb() {
+  const { pathname } = useLocation();
+  let label = BREADCRUMBS[pathname];
+  if (!label && pathname.startsWith('/devices/')) label = 'Device Detail';
+  if (!label) label = 'Plexus';
   return (
-    <nav
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.25rem',
-        padding: '0.75rem 1.5rem',
-        borderBottom: '1px solid var(--border)',
-        background: 'var(--bg-secondary)',
-      }}
-    >
-      <strong style={{ marginRight: '1rem', color: 'var(--text)' }}>Plexus</strong>
-      <span
-        style={{
-          fontSize: '0.7rem',
-          padding: '0.15rem 0.4rem',
-          background: 'var(--primary-dark)',
-          color: 'var(--text)',
-          borderRadius: '0.25rem',
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
-          marginRight: '1rem',
-        }}
-      >
-        Preview
-      </span>
-      <Link to="/" className="btn btn-sm btn-ghost">
-        Home
-      </Link>
-      <Link to="/devices" className="btn btn-sm btn-ghost">
-        Devices
-      </Link>
-      <Link to="/mac-tracking" className="btn btn-sm btn-ghost">
-        MAC Tracking
-      </Link>
-      <Link to="/traffic-analysis" className="btn btn-sm btn-ghost">
-        Traffic Analysis
-      </Link>
-      <Link to="/lab" className="btn btn-sm btn-ghost">
-        Lab / Digital Twin
-      </Link>
-      <Link to="/federation" className="btn btn-sm btn-ghost">
-        Federation
-      </Link>
-      <Link to="/floor-plan" className="btn btn-sm btn-ghost">
-        Floor Plan
-      </Link>
-      <Link to="/compliance" className="btn btn-sm btn-ghost">
-        Compliance
-      </Link>
-      <a
-        href="/"
-        className="btn btn-sm btn-ghost"
-        style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}
-        title="Return to the classic UI"
-      >
-        ← Classic UI
-      </a>
-    </nav>
+    <div className="breadcrumb-bar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+        <polyline points="9 22 9 12 15 12 15 22" />
+      </svg>
+      <span>{label}</span>
+    </div>
   );
 }
 
 export function App() {
+  const { data: auth } = useAuthStatus();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  const username = auth?.display_name ?? auth?.username ?? 'admin';
+
   return (
-    <div style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh' }}>
-      <TopNav />
-      <main style={{ padding: '1.5rem' }}>
+    <div className="app-container">
+      <AnimatedBackground />
+
+      <button
+        className="hamburger-btn"
+        aria-label="Toggle navigation"
+        onClick={() => setMobileOpen((v) => !v)}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
+      <div
+        className={`sidebar-backdrop${mobileOpen ? ' visible' : ''}`}
+        onClick={() => setMobileOpen(false)}
+      />
+
+      <Sidebar
+        username={username}
+        mobileOpen={mobileOpen}
+        onMobileClose={() => setMobileOpen(false)}
+        onOpenUserMenu={() => setUserMenuOpen(true)}
+      />
+
+      <main className="main-content" aria-live="polite">
+        <Breadcrumb />
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/devices" element={<DevicePicker />} />
@@ -88,10 +88,11 @@ export function App() {
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/compliance" element={<Compliance />} />
-          {/* Backward compat with the previous /network-tools route. */}
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
       </main>
+
+      <UserMenu isOpen={userMenuOpen} onClose={() => setUserMenuOpen(false)} />
     </div>
   );
 }

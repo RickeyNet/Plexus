@@ -1284,12 +1284,6 @@ function templateSettings() {
                 <option value="high">High</option>
             </select>
         </div>
-        <div style="margin-top: 0.75rem; max-width: 320px;">
-            <label style="display:flex; align-items:center; gap:0.5rem; color:var(--text);">
-                <input type="checkbox" id="space-parallax-settings" checked>
-                Enable background parallax motion
-            </label>
-        </div>
     </div>
     <div class="section">
         <div class="page-header" style="margin-bottom: 0.5rem;">
