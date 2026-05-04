@@ -5,8 +5,8 @@ FROM node:20-alpine AS frontend-build
 WORKDIR /frontend
 
 # Copy manifests first so the install layer caches across source-only changes.
-COPY netcontrol/static/frontend/package.json netcontrol/static/frontend/package-lock.json* ./
-RUN npm install --no-audit --no-fund
+COPY netcontrol/static/frontend/package.json netcontrol/static/frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 COPY netcontrol/static/frontend/ ./
 RUN npm run build
