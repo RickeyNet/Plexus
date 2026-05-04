@@ -145,20 +145,37 @@ function renderMonitoringAlerts(alerts) {
         return;
     }
 
-    // Bulk acknowledge button for unacknowledged alerts
+    // Bulk acknowledge toolbar for unacknowledged alerts
     const unackedIds = filtered.filter(a => !a.acknowledged).map(a => a.id);
-    const bulkBtn = unackedIds.length > 1
-        ? `<div style="margin-bottom:0.5rem;"><button class="btn btn-sm btn-secondary" onclick="bulkAcknowledgeAlerts([${unackedIds.join(',')}])">Acknowledge All (${unackedIds.length})</button></div>`
+    // Drop selections that are no longer in the filtered/unacked set
+    const visibleUnackedSet = new Set(unackedIds);
+    listViewState.monitoring.selectedAlertIds =
+        (listViewState.monitoring.selectedAlertIds || []).filter(id => visibleUnackedSet.has(id));
+    const selectedCount = listViewState.monitoring.selectedAlertIds.length;
+    const allSelected = unackedIds.length > 0 && selectedCount === unackedIds.length;
+    const bulkBar = unackedIds.length > 0
+        ? `<div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.5rem; flex-wrap:wrap;">
+                <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.9em; cursor:pointer;">
+                    <input type="checkbox" id="mon-alert-select-all" ${allSelected ? 'checked' : ''} onchange="toggleSelectAllAlerts(this.checked)">
+                    Select all (${unackedIds.length})
+                </label>
+                <button class="btn btn-sm btn-primary" onclick="bulkAcknowledgeSelected()" ${selectedCount === 0 ? 'disabled' : ''}>Acknowledge Selected (${selectedCount})</button>
+                <button class="btn btn-sm btn-secondary" onclick="bulkAcknowledgeAlerts([${unackedIds.join(',')}])">Acknowledge All (${unackedIds.length})</button>
+            </div>`
         : '';
+    const selectedSet = new Set(listViewState.monitoring.selectedAlertIds);
 
-    container.innerHTML = bulkBtn + filtered.map(a => {
+    container.innerHTML = bulkBar + filtered.map(a => {
         const sevColors = { critical: 'danger', warning: 'warning', info: 'primary' };
         const sevColor = sevColors[a.severity] || 'text-muted';
         const created = a.created_at ? new Date(a.created_at + 'Z').toLocaleString() : '-';
         const lastSeen = a.last_seen_at ? new Date(a.last_seen_at + 'Z').toLocaleString() : created;
+        const checkbox = a.acknowledged
+            ? ''
+            : `<input type="checkbox" class="mon-alert-checkbox" data-alert-id="${a.id}" ${selectedSet.has(a.id) ? 'checked' : ''} onchange="toggleAlertSelection(${a.id}, this.checked)" style="margin-right:0.5rem;">`;
         const ackBadge = a.acknowledged
             ? `<span style="color:var(--success); font-size:0.8em;">Acknowledged${a.acknowledged_by ? ` by ${escapeHtml(a.acknowledged_by)}` : ''}</span>`
-            : `<button class="btn btn-sm btn-secondary" onclick="acknowledgeMonitoringAlert(${a.id})">Acknowledge</button>`;
+            : `<button class="btn btn-sm btn-secondary mon-ack-btn" data-alert-id="${a.id}" onclick="acknowledgeMonitoringAlert(${a.id}, this)">Acknowledge</button>`;
 
         // Dedup badge
         const occurrences = (a.occurrence_count || 1);
@@ -173,8 +190,8 @@ function renderMonitoringAlerts(alerts) {
 
         return `<div class="card" style="margin-bottom:0.5rem; padding:0.75rem 1rem; border-left:3px solid var(--${sevColor});">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.4rem;">
-                <div>
-                    <span class="badge" style="background:var(--${sevColor}); color:white; font-size:0.75em; padding:2px 8px; border-radius:3px; text-transform:uppercase;">${escapeHtml(a.severity)}</span>
+                <div style="display:flex; align-items:center;">
+                    ${checkbox}<span class="badge" style="background:var(--${sevColor}); color:white; font-size:0.75em; padding:2px 8px; border-radius:3px; text-transform:uppercase;">${escapeHtml(a.severity)}</span>
                     ${escalationBadge}${dedupBadge}
                     <strong style="margin-left:0.4rem;">${escapeHtml(a.hostname || '')}</strong>
                     <span style="color:var(--text-muted); font-size:0.85em; margin-left:0.4rem;">${escapeHtml(a.metric || '')}</span>
@@ -191,10 +208,40 @@ function renderMonitoringAlerts(alerts) {
     }).join('');
 }
 
+// Debounced refetch: rapid acks coalesce into a single reload to avoid
+// hammering /summary, /polls, /alerts on every click.
+const reloadMonitoringDebounced = debounce(() => loadMonitoring(), 300);
+
+window.toggleAlertSelection = function(alertId, checked) {
+    const sel = listViewState.monitoring.selectedAlertIds || [];
+    if (checked && !sel.includes(alertId)) sel.push(alertId);
+    else if (!checked) {
+        const i = sel.indexOf(alertId);
+        if (i >= 0) sel.splice(i, 1);
+    }
+    listViewState.monitoring.selectedAlertIds = sel;
+    renderMonitoringAlerts(listViewState.monitoring.alerts || []);
+};
+
+window.toggleSelectAllAlerts = function(checked) {
+    const alerts = listViewState.monitoring.alerts || [];
+    listViewState.monitoring.selectedAlertIds = checked
+        ? alerts.filter(a => !a.acknowledged).map(a => a.id)
+        : [];
+    renderMonitoringAlerts(alerts);
+};
+
+window.bulkAcknowledgeSelected = async function() {
+    const ids = listViewState.monitoring.selectedAlertIds || [];
+    if (!ids.length) return;
+    return window.bulkAcknowledgeAlerts(ids);
+};
+
 window.bulkAcknowledgeAlerts = async function(alertIds) {
     try {
         const result = await api.bulkAcknowledgeAlerts(alertIds);
         showSuccess(`${result.acknowledged} alert(s) acknowledged`);
+        listViewState.monitoring.selectedAlertIds = [];
         loadMonitoring();
     } catch (e) {
         showError(e.message);
@@ -258,13 +305,19 @@ async function loadMonitoringRouteChurn() {
     }
 }
 
-window.acknowledgeMonitoringAlert = async function(alertId) {
+window.acknowledgeMonitoringAlert = async function(alertId, btn) {
+    if (btn) {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.textContent = 'Acknowledging…';
+    }
     try {
         await api.acknowledgeMonitoringAlert(alertId);
         showSuccess('Alert acknowledged');
-        loadMonitoring();
+        reloadMonitoringDebounced();
     } catch (e) {
         showError(e.message);
+        if (btn) { btn.disabled = false; btn.textContent = 'Acknowledge'; }
     }
 };
 

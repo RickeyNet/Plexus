@@ -278,7 +278,7 @@ export const listViewState = {
     riskAnalysis: { items: [], query: '', levelFilter: '' },
     deployments: { items: [], query: '', statusFilter: '' },
     changeManagement: { tab: 'risk' },
-    monitoring: { polls: [], alerts: [], query: '', tab: 'devices' },
+    monitoring: { polls: [], alerts: [], query: '', tab: 'devices', selectedAlertIds: [] },
     sla: { summary: null, hosts: [], query: '', tab: 'hosts' },
     deviceDetail: { hostId: null, tab: 'overview' },
     customDashboards: { items: [], currentId: null, editMode: false },
