@@ -289,15 +289,6 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         priv_proto_key = str(v3.get("priv_protocol", "aes128")).lower()
         auth_proto = auth_map.get(auth_proto_key, usmHMACSHAAuthProtocol)
         priv_proto = priv_map.get(priv_proto_key, usmAesCfb128Protocol)
-        # Capture lengths into neutral-named locals so the log call never
-        # references credential variables, satisfying CodeQL py/clear-text-logging.
-        auth_key_len = len(auth_password)
-        priv_key_len = len(priv_password)
-        LOGGER.debug(
-            "SNMPv3 GET %s: user=%r auth=%s priv=%s auth_key_len=%d priv_key_len=%d",
-            ip_address, username, auth_proto_key, priv_proto_key,
-            auth_key_len, priv_key_len,
-        )
         if priv_password:
             auth_data = UsmUserData(
                 username,
