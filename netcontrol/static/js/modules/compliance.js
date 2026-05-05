@@ -18,6 +18,8 @@ let _complianceCurrentTab = 'profiles';
 
 // Temporary store for remediation commands, keyed by index — avoids quoting issues in onclick attrs
 let _findingsRemediationMap = {};
+let _findingsNameMap = {};
+let _findingsResultId = null;
 
 export async function loadCompliance(options = {}) {
     const { preserveContent = false } = options;
@@ -649,14 +651,16 @@ async function showComplianceFindings(resultId) {
     const credOptions = (creds || []).map((c, i) => `<option value="${c.id}" ${i === 0 ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
 
     _findingsRemediationMap = {};
+    _findingsNameMap = {};
+    _findingsResultId = resultId;
     const rows = findings.map((f, idx) => {
         const color = f.passed ? 'success' : 'danger';
         const hasFix = !f.passed && f.remediation && f.remediation.length > 0;
         if (hasFix) _findingsRemediationMap[idx] = f.remediation;
-        const escapedName = escapeHtml(f.name).replace(/'/g, "\\'");
+        _findingsNameMap[idx] = f.name || '';
         const fixBtn = hasFix
-            ? `<button class="btn btn-sm btn-primary" onclick="remediateComplianceRule(${resultId}, '${escapedName}')">Fix</button>
-               <button class="btn btn-sm btn-secondary" style="margin-left:0.25rem;" onclick="previewComplianceRemediation('${escapedName}', ${idx})">Preview</button>`
+            ? `<button class="btn btn-sm btn-primary" onclick="remediateComplianceRuleByIdx(${idx})">Fix</button>
+               <button class="btn btn-sm btn-secondary" style="margin-left:0.25rem;" onclick="previewComplianceRemediationByIdx(${idx})">Preview</button>`
             : (!f.passed ? '<span style="font-size:0.8em; color:var(--text-muted);">Manual fix required</span>' : '');
         return `<tr>
             <td style="color:var(--${color})">${f.passed ? 'PASS' : 'FAIL'}</td>
@@ -710,6 +714,12 @@ function previewComplianceRemediation(ruleName, idx) {
 }
 window.previewComplianceRemediation = previewComplianceRemediation;
 
+function previewComplianceRemediationByIdx(idx) {
+    const ruleName = _findingsNameMap[idx] || '';
+    previewComplianceRemediation(ruleName, idx);
+}
+window.previewComplianceRemediationByIdx = previewComplianceRemediationByIdx;
+
 async function remediateComplianceRule(resultId, ruleName) {
     const credSelect = document.getElementById('remediation-cred-select');
     const credId = credSelect ? parseInt(credSelect.value) : NaN;
@@ -745,6 +755,13 @@ async function remediateComplianceRule(resultId, ruleName) {
     }
 }
 window.remediateComplianceRule = remediateComplianceRule;
+
+function remediateComplianceRuleByIdx(idx) {
+    const ruleName = _findingsNameMap[idx] || '';
+    if (_findingsResultId == null) return;
+    return remediateComplianceRule(_findingsResultId, ruleName);
+}
+window.remediateComplianceRuleByIdx = remediateComplianceRuleByIdx;
 
 async function remediateAllFailedRules(resultId) {
     const credSelect = document.getElementById('remediation-cred-select');

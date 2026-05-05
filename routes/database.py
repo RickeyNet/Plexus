@@ -4329,6 +4329,19 @@ def _normalize_config_backup_search_mode(mode: str) -> str:
     return normalized
 
 
+_CONFIG_BACKUP_REGEX_MAX_LEN = 512
+
+
+def _compile_config_backup_regex(pattern: str) -> re.Pattern:
+    """Compile a user-supplied regex with bounds, raising ValueError('invalid_regex') on failure."""
+    if pattern is None or len(pattern) > _CONFIG_BACKUP_REGEX_MAX_LEN:
+        raise ValueError("invalid_regex")
+    try:
+        return re.compile(pattern, re.IGNORECASE)
+    except re.error as exc:
+        raise ValueError("invalid_regex") from exc
+
+
 def _build_sqlite_fts_query(search_query: str) -> str:
     tokens = [tok for tok in re.findall(r"[A-Za-z0-9_.:/-]+", search_query or "") if tok]
     if not tokens:
@@ -4355,7 +4368,10 @@ def _extract_config_backup_match_context(
     if mode == "regex":
         regex = compiled_regex
         if regex is None:
-            regex = re.compile(search_query, re.IGNORECASE)
+            try:
+                regex = _compile_config_backup_regex(search_query)
+            except ValueError:
+                return None
         for idx, line in enumerate(lines):
             if regex.search(line):
                 match_idx = idx
@@ -4543,10 +4559,7 @@ async def search_config_backups(
 
     compiled_regex = None
     if requested_mode == "regex":
-        try:
-            compiled_regex = re.compile(query, re.IGNORECASE)
-        except re.error as exc:
-            raise ValueError("invalid_regex") from exc
+        compiled_regex = _compile_config_backup_regex(query)
 
     base_select = """
         SELECT b.id, b.policy_id, b.host_id, b.capture_method, b.status,
