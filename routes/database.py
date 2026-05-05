@@ -4331,21 +4331,57 @@ def _normalize_config_backup_search_mode(mode: str) -> str:
 
 _CONFIG_BACKUP_REGEX_MAX_LEN = 512
 
-# Reject patterns with shapes that commonly cause catastrophic backtracking:
-# nested quantifiers like (a+)+ / (a*)*, or quantified groups containing
-# alternation like (a|a)+. Combined with the length cap and admin-only
-# access, this defangs ReDoS for the config-backup search endpoint.
-_REDOS_SHAPE_RE = re.compile(
-    r"\([^)]*[+*][^)]*\)[+*]"      # (...+...)+ / (...*...)*
-    r"|\([^)]*\|[^)]*\)[+*]"        # (a|b)+ / (a|b)*
-)
+
+def _has_redos_shape(pattern: str) -> bool:
+    """Single-pass O(n) scan that flags catastrophic-backtracking shapes.
+
+    Detects: (1) a quantifier (+, *, {n,}) immediately following a closing
+    group paren — i.e. (...)+ / (...)* — when the group itself contains a
+    quantifier or top-level alternation. This covers (a+)+, (a*)*, (a|b)+,
+    (a|a)*, etc. Uses no regex (would itself be ReDoS-prone) and does no
+    backtracking.
+    """
+    depth = 0
+    # Track per-depth: does this group contain an inner quantifier or '|'?
+    has_quant = [False]
+    has_alt = [False]
+    i = 0
+    n = len(pattern)
+    while i < n:
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if ch == "(":
+            depth += 1
+            has_quant.append(False)
+            has_alt.append(False)
+        elif ch == ")":
+            inner_quant = has_quant.pop() if len(has_quant) > 1 else False
+            inner_alt = has_alt.pop() if len(has_alt) > 1 else False
+            depth = max(0, depth - 1)
+            # Look ahead for an outer quantifier on this group
+            j = i + 1
+            outer_quant = False
+            if j < n and pattern[j] in "+*":
+                outer_quant = True
+            elif j < n and pattern[j] == "{":
+                outer_quant = True
+            if outer_quant and (inner_quant or inner_alt):
+                return True
+        elif ch in "+*" and depth >= 0:
+            has_quant[-1] = True
+        elif ch == "|":
+            has_alt[-1] = True
+        i += 1
+    return False
 
 
 def _compile_config_backup_regex(pattern: str) -> re.Pattern:
     """Compile a user-supplied regex with bounds, raising ValueError('invalid_regex') on failure."""
     if pattern is None or len(pattern) > _CONFIG_BACKUP_REGEX_MAX_LEN:
         raise ValueError("invalid_regex")
-    if _REDOS_SHAPE_RE.search(pattern):
+    if _has_redos_shape(pattern):
         raise ValueError("invalid_regex")
     try:
         # codeql[py/regex-injection]: pattern length-bounded, screened for
