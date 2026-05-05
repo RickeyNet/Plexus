@@ -1123,27 +1123,47 @@ function updateBreadcrumb(page) {
         p = PAGE_PARENTS[p] || null;
     }
 
-    // Always start with Home → Dashboard
-    let html = '<a class="breadcrumb-home" onclick="navigateToPage(\'dashboard\')">Home</a>';
+    // Build DOM nodes (not innerHTML strings) so labels/page ids can't inject markup
+    trail.replaceChildren();
+
+    const home = document.createElement('a');
+    home.className = 'breadcrumb-home';
+    home.textContent = 'Home';
+    home.addEventListener('click', () => navigateToPage('dashboard'));
+    trail.appendChild(home);
+
+    const sep = () => {
+        const s = document.createElement('span');
+        s.className = 'breadcrumb-sep';
+        s.textContent = '/';
+        return s;
+    };
 
     if (chain.length === 0) {
-        // We're on the dashboard itself
-        html += '<span class="breadcrumb-sep">/</span>';
-        html += '<span class="breadcrumb-current">Dashboard</span>';
+        trail.appendChild(sep());
+        const cur = document.createElement('span');
+        cur.className = 'breadcrumb-current';
+        cur.textContent = 'Dashboard';
+        trail.appendChild(cur);
     } else {
-        // Render intermediate pages as clickable links, last one as current
         for (let i = 0; i < chain.length; i++) {
-            html += '<span class="breadcrumb-sep">/</span>';
-            const label = PAGE_LABELS[chain[i]] || chain[i];
+            trail.appendChild(sep());
+            const id = chain[i];
+            const label = PAGE_LABELS[id] || id;
             if (i < chain.length - 1) {
-                html += `<a class="breadcrumb-link" onclick="navigateToPage('${chain[i]}')">${label}</a>`;
+                const link = document.createElement('a');
+                link.className = 'breadcrumb-link';
+                link.textContent = label;
+                link.addEventListener('click', () => navigateToPage(id));
+                trail.appendChild(link);
             } else {
-                html += `<span class="breadcrumb-current">${label}</span>`;
+                const cur = document.createElement('span');
+                cur.className = 'breadcrumb-current';
+                cur.textContent = label;
+                trail.appendChild(cur);
             }
         }
     }
-
-    trail.innerHTML = html;
 }
 
 // ── Module cache for lazy-loaded page modules ──
