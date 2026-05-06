@@ -14,6 +14,7 @@ import { Home } from '@/pages/Home';
 import { Lab } from '@/pages/Lab';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
+import { Settings } from '@/pages/Settings/Settings';
 
 const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
@@ -24,6 +25,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/federation': 'Federation',
   '/floor-plan': 'Floor Plans',
   '/compliance': 'Compliance',
+  '/settings': 'Settings',
 };
 
 function Breadcrumb() {
@@ -88,6 +90,7 @@ export function App() {
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/compliance" element={<Compliance />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
       </main>

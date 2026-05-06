@@ -258,7 +258,7 @@ const NAV: TopItem[] = [
   },
   { label: 'Devices', icon: ic.inventory, to: '/devices' },
   { label: 'Lab / Digital Twin', icon: ic.lab, to: '/lab' },
-  { label: 'Settings', icon: ic.settings, href: '/#settings' },
+  { label: 'Settings', icon: ic.settings, to: '/settings' },
 ];
 
 function NavItem({ item, child }: { item: RouteItem | LegacyItem; child?: boolean }) {
