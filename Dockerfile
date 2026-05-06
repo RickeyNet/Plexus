@@ -42,6 +42,6 @@ USER plexus
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD \
-  python -c "import ssl, urllib.request; urllib.request.urlopen('https://127.0.0.1:8080/api/health', context=ssl._create_unverified_context(), timeout=4)"
+  python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)"
 
 CMD ["python", "templates/run.py", "--host", "0.0.0.0", "--port", "8080"]
