@@ -254,3 +254,4 @@ floor_plans/
 # ═══════════════════════════════════════════════════════════════════════════════
 plexus-airgap-bundle/
 plexus-airgap.tar.gz
+plexus-airgap.tar.gz.part-*

@@ -4,7 +4,7 @@ Complete instructions for deploying Plexus on a VM with Docker, PostgreSQL, and 
 
 ## Requirements
 
-- VM with Ubuntu 22.04 LTS (or RHEL/Rocky 9)
+- VM with Ubuntu 26.04 LTS (or RHEL/Rocky 9)
 - 2 CPU, 4 GB RAM, 40 GB disk
 - Static IP on your management network
 - DNS record (optional but recommended): e.g. `plexus.corp.local`
