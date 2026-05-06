@@ -850,7 +850,11 @@ async def require_admin(request: Request):
     session = await require_auth(request)
     if session and session.get("auth_mode") == "token":
         return session
-    user = await db.get_user_by_username(session["user"])
+    # Look up by user_id, not username. A user can rename themselves while
+    # editing their own account; their existing session keeps the old name,
+    # so a username-based lookup would silently strip their admin rights
+    # for the rest of the session.
+    user = await db.get_user_by_id(session["user_id"])
     if not user or user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return session
