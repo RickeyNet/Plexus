@@ -248,3 +248,9 @@ software_images/
 floor_plans/
 *.cfg.backup
 *.config
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Air-gapped deployment bundle (built artifacts — not committed)
+# ═══════════════════════════════════════════════════════════════════════════════
+plexus-airgap-bundle/
+plexus-airgap.tar.gz
