@@ -344,7 +344,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
     timestamp       TEXT    NOT NULL DEFAULT (datetime('now')),
     category        TEXT    NOT NULL,
     action          TEXT    NOT NULL,
-    user            TEXT    NOT NULL DEFAULT '',
+    "user"          TEXT    NOT NULL DEFAULT '',
     detail          TEXT    DEFAULT '',
     correlation_id  TEXT    DEFAULT ''
 );
@@ -3015,7 +3015,7 @@ async def add_audit_event(
     conn = await get_db()
     try:
         cursor = await conn.execute(
-            """INSERT INTO audit_events (category, action, user, detail, correlation_id)
+            """INSERT INTO audit_events (category, action, "user", detail, correlation_id)
                VALUES (?, ?, ?, ?, ?)""",
             (category, action, user, detail, correlation_id),
         )
