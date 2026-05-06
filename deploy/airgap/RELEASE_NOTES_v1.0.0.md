@@ -23,6 +23,11 @@ Two supported paths:
 ### Online (`docker compose`)
 For VMs with internet access:
 ```bash
+# Install Docker Engine + compose plugin from Docker's official apt repo first
+# (Ubuntu's docker.io package does NOT include the compose plugin) — see
+# deploy/DEPLOYMENT.md "Step 1: Install Docker" for the exact commands.
+
+sudo mkdir -p /opt/plexus && sudo chown $USER:$USER /opt/plexus
 git clone <repo-url> /opt/plexus && cd /opt/plexus
 bash deploy/setup.sh         # generates .env + self-signed cert
 docker compose up -d

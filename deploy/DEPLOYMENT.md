@@ -11,21 +11,66 @@ Complete instructions for deploying Plexus on a VM with Docker, PostgreSQL, and 
 
 ## Step 1: Install Docker
 
+Plexus uses `docker compose` (v2, plugin form). Ubuntu's `docker.io` package
+does **not** ship the compose plugin, and `docker-compose-plugin` is not in
+Ubuntu's default repos — you must use Docker's official apt repository.
+
 ```bash
-# Ubuntu
+# Ubuntu — Docker's official repo
 sudo apt update
-sudo apt install -y docker.io docker-compose-plugin
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable docker && sudo systemctl start docker
 sudo usermod -aG docker $USER
 # Log out and back in for the group change to take effect
 ```
 
 ```bash
-# RHEL / Rocky
-sudo dnf install -y docker-ce docker-compose-plugin
+# RHEL / Rocky — Docker's official repo
+sudo dnf -y install dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable docker && sudo systemctl start docker
 sudo usermod -aG docker $USER
 ```
+
+Verify both pieces are present:
+
+```bash
+docker --version
+docker compose version
+```
+
+### Activate the `docker` group membership
+
+`usermod -aG docker $USER` only takes effect in **new** login sessions, so your
+current shell can't talk to the Docker socket yet. Pick one:
+
+```bash
+# Option A (cleanest) — log out and SSH back in
+exit
+
+# Option B — start a new shell with the group applied, no logout needed
+newgrp docker
+```
+
+Verify it worked — `docker` should appear in the output of `groups`, and a
+plain `docker ps` should run without `sudo`:
+
+```bash
+groups
+docker ps
+```
+
+If `docker ps` still fails with "permission denied while trying to connect to
+the docker API," you're still in the old session — log out fully and back in.
 
 ## Step 2: Clone the Repository
 

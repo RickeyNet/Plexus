@@ -91,9 +91,11 @@ if command -v docker &> /dev/null; then
         exit 1
     fi
 else
-    echo "  ERROR: Docker not found. Install Docker first:"
-    echo "    Ubuntu:  sudo apt install -y docker.io docker-compose-plugin"
-    echo "    RHEL:    sudo dnf install -y docker-ce docker-compose-plugin"
+    echo "  ERROR: Docker not found. Install Docker Engine + Compose plugin"
+    echo "  from Docker's official repository (Ubuntu's docker.io package does"
+    echo "  NOT include the compose plugin):"
+    echo "    https://docs.docker.com/engine/install/"
+    echo "  See deploy/DEPLOYMENT.md 'Step 1: Install Docker' for the full snippet."
     exit 1
 fi
 
