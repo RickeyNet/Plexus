@@ -251,56 +251,47 @@ AUTH_CONFIG_DEFAULTS = {
     },
 }
 
-FEATURE_FLAGS = [
-    "dashboard",
-    "inventory",
-    "playbooks",
-    "jobs",
-    "templates",
-    "credentials",
-    "topology",
-    "config-drift",
-    "config-backups",
-    "compliance",
-    "risk-analysis",
-    "monitoring",
-    "reports",
-    "graph-templates",
-    "mac-tracking",
-    "traffic-analysis",
-    "upgrades",
-    "federation",
-    "deployments",
-    "lab",
+# ── Feature Catalog ──────────────────────────────────────────────────────────
+# Single source of truth for feature keys. `gateable` entries are eligible for
+# per-user access-group permissions (FEATURE_FLAGS); `visible_in_nav` entries
+# may be hidden globally by admins (FEATURE_VISIBILITY_CATALOG). Keys match the
+# frontend nav `data-page` attribute. Dashboard is gateable but cannot be
+# hidden globally; pure frontend nav aliases (configuration, change-management,
+# floor-plan) are hideable but have no dedicated backend route to gate.
+_FEATURE_CATALOG = [
+    {"key": "dashboard", "label": "Dashboard", "gateable": True, "visible_in_nav": False},
+    {"key": "inventory", "label": "Inventory", "gateable": True, "visible_in_nav": True},
+    {"key": "ipam", "label": "IPAM", "gateable": True, "visible_in_nav": True},
+    {"key": "playbooks", "label": "Playbooks", "gateable": True, "visible_in_nav": True},
+    {"key": "jobs", "label": "Jobs", "gateable": True, "visible_in_nav": True},
+    {"key": "templates", "label": "Templates", "gateable": True, "visible_in_nav": True},
+    {"key": "credentials", "label": "Credentials", "gateable": True, "visible_in_nav": True},
+    {"key": "topology", "label": "Topology", "gateable": True, "visible_in_nav": True},
+    {"key": "cloud-visibility", "label": "Cloud Visibility", "gateable": True, "visible_in_nav": True},
+    {"key": "monitoring", "label": "Monitoring", "gateable": True, "visible_in_nav": True},
+    {"key": "configuration", "label": "Configuration", "gateable": False, "visible_in_nav": True},
+    {"key": "config-drift", "label": "Config Drift", "gateable": True, "visible_in_nav": True},
+    {"key": "config-backups", "label": "Config Backups", "gateable": True, "visible_in_nav": True},
+    {"key": "compliance", "label": "Compliance", "gateable": True, "visible_in_nav": True},
+    {"key": "change-management", "label": "Changes", "gateable": False, "visible_in_nav": True},
+    {"key": "risk-analysis", "label": "Risk Analysis", "gateable": True, "visible_in_nav": True},
+    {"key": "reports", "label": "Reports", "gateable": True, "visible_in_nav": True},
+    {"key": "graph-templates", "label": "Graphs", "gateable": True, "visible_in_nav": True},
+    {"key": "mac-tracking", "label": "MAC Tracking", "gateable": True, "visible_in_nav": True},
+    {"key": "traffic-analysis", "label": "Traffic Analysis", "gateable": True, "visible_in_nav": True},
+    {"key": "upgrades", "label": "Upgrades", "gateable": True, "visible_in_nav": True},
+    {"key": "deployments", "label": "Deployments", "gateable": True, "visible_in_nav": True},
+    {"key": "federation", "label": "Federation", "gateable": True, "visible_in_nav": True},
+    {"key": "floor-plan", "label": "Floor Plans", "gateable": False, "visible_in_nav": True},
+    {"key": "lab", "label": "Lab / Digital Twin", "gateable": True, "visible_in_nav": True},
 ]
 
-# ── Feature Visibility ───────────────────────────────────────────────────────
-# Admin-controlled global UI toggles for hiding navigation entries that aren't
-# in use (Fortinet-style). Distinct from access-group FEATURE_FLAGS, which
-# control per-user permissions. Keys here match the nav `data-page` attribute
-# so toggling maps 1:1 to a sidebar entry. Dashboard and Settings are
-# intentionally excluded — they cannot be hidden.
+FEATURE_FLAGS = [e["key"] for e in _FEATURE_CATALOG if e["gateable"]]
+
 FEATURE_VISIBILITY_CATALOG = [
-    {"key": "inventory", "label": "Inventory"},
-    {"key": "ipam", "label": "IPAM"},
-    {"key": "playbooks", "label": "Playbooks"},
-    {"key": "jobs", "label": "Jobs"},
-    {"key": "templates", "label": "Templates"},
-    {"key": "credentials", "label": "Credentials"},
-    {"key": "topology", "label": "Topology"},
-    {"key": "cloud-visibility", "label": "Cloud Visibility"},
-    {"key": "monitoring", "label": "Monitoring"},
-    {"key": "configuration", "label": "Configuration"},
-    {"key": "compliance", "label": "Compliance"},
-    {"key": "change-management", "label": "Changes"},
-    {"key": "reports", "label": "Reports"},
-    {"key": "graph-templates", "label": "Graphs"},
-    {"key": "mac-tracking", "label": "MAC Tracking"},
-    {"key": "traffic-analysis", "label": "Traffic Analysis"},
-    {"key": "upgrades", "label": "Upgrades"},
-    {"key": "federation", "label": "Federation"},
-    {"key": "floor-plan", "label": "Floor Plans"},
-    {"key": "lab", "label": "Lab / Digital Twin"},
+    {"key": e["key"], "label": e["label"]}
+    for e in _FEATURE_CATALOG
+    if e["visible_in_nav"]
 ]
 
 FEATURE_VISIBILITY_KEYS = {entry["key"] for entry in FEATURE_VISIBILITY_CATALOG}
