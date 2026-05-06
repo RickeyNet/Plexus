@@ -137,17 +137,24 @@ async def _applied_versions(db) -> set[int]:
 
 
 async def _bootstrap_baseline(db, *, engine: str) -> None:
-    """For existing databases that predate the migration framework.
+    """Record migrations 1–32 as already applied on any DB that has the v1.0.0
+    SCHEMA already in place.
 
-    If the ``schema_migrations`` table is empty but other tables already
-    exist (i.e. the database was created by the old inline init_db code),
-    record migration 0001 as already applied so it doesn't re-run.
+    Two scenarios this handles:
+      * **Fresh deploy**: ``init_db`` just ran and SCHEMA contains every table
+        that migrations 0003–0032 originally added (folded in for v1.0.0). No
+        migration needs to actually run; we simply mark them applied.
+      * **Pre-framework upgrade**: a database that predates this framework
+        (created by the old inline ``init_db``). The old ALTER TABLE work has
+        already happened so 0001 is also a no-op.
+
+    In both cases, the discriminator is "does the ``users`` table exist?"
+    Future schema work happens at version 33+.
     """
     applied = await _applied_versions(db)
     if applied:
         return  # framework already in use
 
-    # Check whether the database has pre-existing tables
     if engine == "postgres":
         cursor = await db.execute(
             "SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1"
@@ -158,12 +165,14 @@ async def _bootstrap_baseline(db, *, engine: str) -> None:
         )
     row = await cursor.fetchone()
     if row is None:
-        return  # fresh database — nothing to bootstrap
+        return  # truly empty DB; SCHEMA hasn't been applied yet
 
-    # The database predates the framework: mark 0001 as applied since the
-    # old inline ALTER TABLE code already ran.
-    _LOGGER.info("schema: bootstrapping migration framework on existing database")
-    await _record_migration(db, 1, "Baseline: consolidate pre-framework inline migrations", engine=engine)
+    _LOGGER.info("schema: marking v1.0.0 baseline migrations 1–32 as applied")
+    for mig in _discover_migrations():
+        if mig["version"] <= 32:
+            await _record_migration(
+                db, mig["version"], mig["description"], engine=engine
+            )
 
 
 async def _record_migration(db, version: int, description: str, *, engine: str) -> None:
