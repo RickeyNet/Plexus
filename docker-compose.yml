@@ -1,10 +1,20 @@
 version: "3.9"
 
+# Cap each container's log history at 250 MB (50 MB × 5 files) so logs
+# do not silently fill /var/lib/docker over time. Tune by editing the
+# anchor below.
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   plexus:
     build: .
     container_name: plexus-app
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -38,6 +48,7 @@ services:
     image: postgres:16-alpine
     container_name: plexus-postgres
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-plexus}
       POSTGRES_USER: ${POSTGRES_USER:-plexus}
@@ -55,6 +66,7 @@ services:
     image: nginx:alpine
     container_name: plexus-nginx
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "443:443"
       - "80:80"

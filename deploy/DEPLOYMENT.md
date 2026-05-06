@@ -248,6 +248,69 @@ This eliminates the browser certificate warning for your team.
 
 ## Day-to-Day Operations
 
+### Status & Monitoring
+
+The compose stack runs detached (`docker compose up -d`) with
+`restart: unless-stopped` on every container, so the app auto-starts on
+VM boot and auto-recovers from crashes. **Do not** sit on a foreground
+`docker compose logs -f` session — check status on demand instead.
+
+```bash
+# Quick health snapshot — service status, ports, uptime
+docker compose ps
+
+# Live logs (Ctrl-C to detach; the container keeps running)
+docker compose logs -f plexus
+
+# Recent activity without tailing
+docker compose logs --tail 50 plexus
+
+# Just errors and warnings
+docker compose logs plexus | grep -iE 'error|warning|exception'
+
+# Container resource usage (CPU, memory, network, disk I/O)
+docker stats --no-stream
+```
+
+For external monitoring (Nagios, Grafana, Prometheus blackbox, etc.),
+hit the app's health endpoint:
+
+```bash
+curl -k https://<vm-ip>/api/health
+# Returns 200 {"status": "ok"} when the app is up and the DB is reachable.
+```
+
+The primary status surface for operators is **the app's own dashboard**
+at `https://<vm-ip>/`. The CLI commands above are for the VM operator
+verifying the platform itself is healthy.
+
+**Verify auto-restart works** after the initial deploy — reboot the VM
+and confirm the stack comes back without intervention:
+
+```bash
+sudo reboot
+# Wait 60 seconds, SSH back in:
+docker compose ps   # All three containers should show "Up", postgres + plexus "(healthy)"
+```
+
+### Log Rotation
+
+Docker's default JSON log driver keeps logs forever, which over months
+will fill `/var/lib/docker`. The bundled `docker-compose.yml` caps each
+container's logs at 250 MB total (50 MB per file × 5 files). If you
+want different limits, edit the `logging:` block under each service:
+
+```yaml
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"   # Per file
+        max-file: "5"     # How many rotated files to keep
+```
+
+Apply changes with `docker compose up -d` (no `--build` needed —
+logging config is metadata, not part of the image).
+
 ### Update to Latest Code
 
 ```bash
@@ -258,15 +321,12 @@ docker compose up -d --build
 
 ### View Logs
 
+See **Status & Monitoring** above. Quick reference:
+
 ```bash
-# All services
-docker compose logs -f
-
-# App only
-docker compose logs -f plexus
-
-# Last 100 lines
-docker compose logs --tail 100 plexus
+docker compose logs -f plexus           # follow app logs
+docker compose logs --tail 100 plexus   # last 100 lines, then exit
+docker compose logs -f                  # all services together
 ```
 
 ### Restart Services
