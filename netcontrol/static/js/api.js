@@ -536,6 +536,10 @@ export async function getCredentials() {
     return cachedGet('/credentials', () => apiRequest('/credentials'));
 }
 
+export async function getServiceCredentials() {
+    return cachedGet('/credentials/service', () => apiRequest('/credentials/service'));
+}
+
 export async function getCredential(credentialId) {
     return apiRequest(`/credentials/${credentialId}`);
 }

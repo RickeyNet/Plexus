@@ -74,6 +74,7 @@ async def require_credential_access(
     *,
     session: dict | None = None,
     submitter_username: str | None = None,
+    allow_service: bool = False,
 ) -> dict:
     """Fetch a credential and enforce that the caller is allowed to use it.
 
@@ -81,14 +82,20 @@ async def require_credential_access(
     `submitter_username` (background worker / scheduler running a task that
     was originally queued by a user).  At least one must be provided.
 
-    Rules:
-      - Credentials are strictly per-owner: the credential's ``owner_id``
-        must match the caller's user id. Admin role does NOT grant access
-        to another user's credential.
-      - API-token callers (server-level auth via APP_API_TOKEN) bypass the
-        owner check and can use any credential.
-      - Unowned credentials (``owner_id`` is NULL) are usable only by
-        API-token callers, never by interactive users.
+    Rules for **user credentials** (is_service=0):
+      - Strictly per-owner: ``owner_id`` must match the caller's user id.
+      - Admin role does NOT grant access to another user's credential.
+      - API-token callers bypass the owner check.
+      - Unowned (``owner_id`` is NULL) creds are usable only by API tokens.
+
+    Rules for **service credentials** (is_service=1):
+      - Reserved for Plexus-internal background work (monitoring, scheduled
+        discovery). Callers must opt in by passing ``allow_service=True``;
+        this prevents user-driven endpoints (job launch, etc.) from picking
+        up a service cred via misconfiguration.
+      - When opted in, admins, API-token callers, and admin submitters may
+        use them. Non-admin users cannot use a service cred even with the
+        opt-in flag.
 
     Raises HTTPException(400/401/403/404) on any failure so callers that
     already propagate HTTPException don't need extra handling.
@@ -100,12 +107,31 @@ async def require_credential_access(
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
 
+    is_service_cred = bool(cred.get("is_service"))
+
+    if is_service_cred and not allow_service:
+        # Service creds are only available to call sites that explicitly
+        # opt in; this protects user-facing flows from accidentally pulling
+        # a Plexus-internal cred just because it was configured as a default.
+        raise HTTPException(
+            status_code=403,
+            detail="This credential is reserved for Plexus internal use",
+        )
+
     if session is not None:
         if session.get("auth_mode") == "token":
             return cred
         user_id = session.get("user_id")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Not authenticated")
+        if is_service_cred:
+            user = await db.get_user_by_id(int(user_id))
+            if user and user.get("role") == "admin":
+                return cred
+            raise HTTPException(
+                status_code=403,
+                detail="Service credentials require admin access",
+            )
         if cred.get("owner_id") == int(user_id):
             return cred
         raise HTTPException(status_code=403, detail="You can only use your own credentials")
@@ -115,6 +141,13 @@ async def require_credential_access(
         if not user:
             # Submitter no longer exists (deleted account). Fail closed.
             raise HTTPException(status_code=403, detail="Submitter account is no longer valid")
+        if is_service_cred:
+            if user.get("role") == "admin":
+                return cred
+            raise HTTPException(
+                status_code=403,
+                detail="Service credentials require admin submitter",
+            )
         if cred.get("owner_id") == int(user["id"]):
             return cred
         raise HTTPException(status_code=403, detail="Credential is not owned by the task submitter")

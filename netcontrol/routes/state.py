@@ -225,6 +225,10 @@ API_RATE_LIMIT = {
 AUTH_CONFIG_DEFAULTS = {
     "provider": "local",
     "default_credential_id": None,
+    # service_credential_id is the Plexus service-account credential used by
+    # background work (monitoring polls, scheduled SNMP discovery). Distinct
+    # from default_credential_id, which is the per-user job-launch default.
+    "service_credential_id": None,
     "job_retention_days": 30,
     "radius": {
         "enabled": False,
@@ -471,6 +475,9 @@ def _sanitize_auth_config(data: dict | None) -> dict:
         if "default_credential_id" in data:
             val = data.get("default_credential_id")
             cfg["default_credential_id"] = int(val) if val is not None else None
+        if "service_credential_id" in data:
+            val = data.get("service_credential_id")
+            cfg["service_credential_id"] = int(val) if val is not None else None
         radius = data.get("radius")
         if isinstance(radius, dict):
             cfg["radius"].update({

@@ -228,9 +228,12 @@ function bindAuthConfigForm() {
                 return;
             }
             const credVal = document.getElementById('default-credential-id').value;
+            const svcCredEl = document.getElementById('service-credential-id');
+            const svcCredVal = svcCredEl ? svcCredEl.value : '';
             const payload = {
                 provider: document.getElementById('auth-provider').value,
                 default_credential_id: credVal ? Number(credVal) : null,
+                service_credential_id: svcCredVal ? Number(svcCredVal) : null,
                 job_retention_days: retentionDays,
                 radius: {
                     enabled: document.getElementById('radius-enabled').checked,
@@ -328,6 +331,18 @@ async function renderAuthConfig() {
             credSelect.value = cfg.default_credential_id || '';
         } catch (_) {
             credSelect.value = cfg.default_credential_id || '';
+        }
+    }
+    // Populate service credential dropdown (admin-only; non-admins get an empty list)
+    const svcCredSelect = document.getElementById('service-credential-id');
+    if (svcCredSelect) {
+        try {
+            const svcCreds = await api.getServiceCredentials();
+            svcCredSelect.innerHTML = '<option value="">-- None --</option>' +
+                svcCreds.map(c => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.username)})</option>`).join('');
+            svcCredSelect.value = cfg.service_credential_id || '';
+        } catch (_) {
+            svcCredSelect.value = cfg.service_credential_id || '';
         }
     }
 }

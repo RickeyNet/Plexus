@@ -590,9 +590,14 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     # Pre-load user-defined alert rules for this cycle
     alert_rules_cache = await db.get_alert_rules(enabled_only=True)
 
-    # Resolve app-wide default credential for SSH polling
-    default_cred_id = state.AUTH_CONFIG.get("default_credential_id")
-    default_cred = await db.get_credential_raw(default_cred_id) if default_cred_id else None
+    # Resolve the credential used for SSH polling. Prefer the dedicated
+    # service credential (Plexus internal account); fall back to the legacy
+    # default_credential_id for deployments that haven't migrated yet.
+    cred_id = (
+        state.AUTH_CONFIG.get("service_credential_id")
+        or state.AUTH_CONFIG.get("default_credential_id")
+    )
+    default_cred = await db.get_credential_raw(cred_id) if cred_id else None
 
     for group in groups:
         snmp_cfg = _resolve_snmp_discovery_config(group["id"])
@@ -881,8 +886,13 @@ async def monitoring_poll_now_stream(request: Request):
         groups = await db.get_all_groups()
         # Count total hosts across all groups
         all_hosts: list[tuple[dict, dict, dict | None]] = []  # (host, snmp_cfg, cred)
-        default_cred_id = state.AUTH_CONFIG.get("default_credential_id")
-        default_cred = await db.get_credential_raw(default_cred_id) if default_cred_id else None
+        # Prefer the service credential; fall back to the legacy default
+        # for deployments that haven't migrated yet.
+        cred_id = (
+            state.AUTH_CONFIG.get("service_credential_id")
+            or state.AUTH_CONFIG.get("default_credential_id")
+        )
+        default_cred = await db.get_credential_raw(cred_id) if cred_id else None
         alert_rules_cache = await db.get_alert_rules(enabled_only=True)
 
         for group in groups:

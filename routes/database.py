@@ -299,6 +299,7 @@ CREATE TABLE IF NOT EXISTS credentials (
     password    TEXT    NOT NULL,
     secret      TEXT    NOT NULL DEFAULT '',
     owner_id    INTEGER REFERENCES users(id),
+    is_service  INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -3550,15 +3551,43 @@ async def delete_secret_variable(var_id: int) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def get_all_credentials(owner_id: int | None = None) -> list[dict]:
-    """Return credentials with passwords masked. Filter by owner if provided."""
+    """Return user credentials with passwords masked, excluding service creds.
+
+    Service credentials (is_service=1) are administered separately via
+    get_service_credentials() and are never returned by this function so
+    they don't pollute the per-user credential picker.
+    """
     db = await get_db()
     try:
         if owner_id is not None:
             cursor = await db.execute(
-                "SELECT id, name, username, owner_id, created_at FROM credentials WHERE owner_id = ? ORDER BY name",
+                "SELECT id, name, username, owner_id, is_service, created_at "
+                "FROM credentials WHERE owner_id = ? AND is_service = 0 "
+                "ORDER BY name",
                 (owner_id,))
         else:
-            cursor = await db.execute("SELECT id, name, username, owner_id, created_at FROM credentials ORDER BY name")
+            cursor = await db.execute(
+                "SELECT id, name, username, owner_id, is_service, created_at "
+                "FROM credentials WHERE is_service = 0 ORDER BY name"
+            )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_service_credentials() -> list[dict]:
+    """Return service credentials with passwords masked.
+
+    Service credentials are admin-administered and used by background work
+    (monitoring polls, scheduled discovery) where there is no interactive
+    user. owner_id is typically NULL but not enforced at the DB level.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, name, username, owner_id, is_service, created_at "
+            "FROM credentials WHERE is_service = 1 ORDER BY name"
+        )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -3591,12 +3620,17 @@ async def get_credential_raw(cred_id: int) -> dict | None:
 
 
 async def create_credential(name: str, username: str, enc_password: str,
-                            enc_secret: str = "", owner_id: int | None = None) -> int:
+                            enc_secret: str = "", owner_id: int | None = None,
+                            is_service: bool = False) -> int:
+    """Insert a credential. Service credentials always have owner_id NULL."""
+    if is_service:
+        owner_id = None
     db = await get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO credentials (name, username, password, secret, owner_id) VALUES (?,?,?,?,?)",
-            (name, username, enc_password, enc_secret, owner_id),
+            "INSERT INTO credentials (name, username, password, secret, owner_id, is_service) "
+            "VALUES (?,?,?,?,?,?)",
+            (name, username, enc_password, enc_secret, owner_id, 1 if is_service else 0),
         )
         await db.commit()
         return cursor.lastrowid
