@@ -82,9 +82,13 @@ async def require_credential_access(
     was originally queued by a user).  At least one must be provided.
 
     Rules:
-      - Admins and API-token callers may use any credential.
-      - Otherwise the credential's ``owner_id`` must match the caller's user id.
-      - Unowned credentials (``owner_id`` is NULL) are admin-only.
+      - Credentials are strictly per-owner: the credential's ``owner_id``
+        must match the caller's user id. Admin role does NOT grant access
+        to another user's credential.
+      - API-token callers (server-level auth via APP_API_TOKEN) bypass the
+        owner check and can use any credential.
+      - Unowned credentials (``owner_id`` is NULL) are usable only by
+        API-token callers, never by interactive users.
 
     Raises HTTPException(400/401/403/404) on any failure so callers that
     already propagate HTTPException don't need extra handling.
@@ -96,16 +100,12 @@ async def require_credential_access(
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
 
-    # Admins and API tokens bypass the owner check.
     if session is not None:
         if session.get("auth_mode") == "token":
             return cred
         user_id = session.get("user_id")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Not authenticated")
-        user = await db.get_user_by_id(int(user_id))
-        if user and user.get("role") == "admin":
-            return cred
         if cred.get("owner_id") == int(user_id):
             return cred
         raise HTTPException(status_code=403, detail="You can only use your own credentials")
@@ -115,8 +115,6 @@ async def require_credential_access(
         if not user:
             # Submitter no longer exists (deleted account). Fail closed.
             raise HTTPException(status_code=403, detail="Submitter account is no longer valid")
-        if user.get("role") == "admin":
-            return cred
         if cred.get("owner_id") == int(user["id"]):
             return cred
         raise HTTPException(status_code=403, detail="Credential is not owned by the task submitter")
