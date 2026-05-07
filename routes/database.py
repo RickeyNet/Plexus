@@ -2183,13 +2183,14 @@ def _convert_sqlite_datetime_modifiers_to_postgres(query: str) -> str:
         base = _pg_base(m.group(1))
         sign, n, unit = m.group(2), m.group(3), m.group(4)
         op = "+" if sign == "+" else "-"
-        return f"({base} {op} (${n} || ' {unit}')::interval)::text"
+        # Cast $N to text — caller may pass an int, but `||` requires text.
+        return f"({base} {op} (${n}::text || ' {unit}')::interval)::text"
     query = _DT_RE_SIGN_PARAM_UNIT.sub(_sign_param_unit, query)
 
     def _param_unit(m: re.Match) -> str:
         base = _pg_base(m.group(1))
         n, unit = m.group(2), m.group(3)
-        return f"({base} + (${n} || ' {unit}')::interval)::text"
+        return f"({base} + (${n}::text || ' {unit}')::interval)::text"
     query = _DT_RE_PARAM_UNIT.sub(_param_unit, query)
 
     def _literal(m: re.Match) -> str:
@@ -2201,7 +2202,7 @@ def _convert_sqlite_datetime_modifiers_to_postgres(query: str) -> str:
     def _param_only(m: re.Match) -> str:
         base = _pg_base(m.group(1))
         n = m.group(2)
-        return f"({base} + (${n})::interval)::text"
+        return f"({base} + (${n}::text)::interval)::text"
     query = _DT_RE_PARAM_ONLY.sub(_param_only, query)
 
     return query
