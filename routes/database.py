@@ -7167,7 +7167,7 @@ async def get_alerts_for_escalation(escalate_after_minutes: int) -> list[dict]:
                  AND a.severity != 'critical'
                  AND a.created_at < datetime('now', '-' || ? || ' minutes')
                ORDER BY a.created_at ASC""",
-            (escalate_after_minutes,),
+            (str(int(escalate_after_minutes)),),
         )
         return rows_to_list(await cursor.fetchall())
     finally:
