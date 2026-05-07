@@ -69,6 +69,7 @@ class AdminUserUpdateRequest(BaseModel):
     username: str | None = None
     display_name: str | None = None
     role: str | None = None
+    session_never_expires: bool | None = None
 
 
 class AdminUserPasswordResetRequest(BaseModel):
@@ -96,6 +97,7 @@ class AdminLoginRulesRequest(BaseModel):
     lockout_time: int
     rate_limit_window: int
     rate_limit_max: int
+    session_idle_timeout: int = 1800
 
 
 class RadiusConfigRequest(BaseModel):
@@ -178,6 +180,7 @@ async def _admin_user_payload(user: dict) -> dict:
         "created_at": user.get("created_at"),
         "group_ids": group_ids,
         "feature_access": features,
+        "session_never_expires": bool(user.get("session_never_expires")),
     }
 
 
@@ -348,6 +351,7 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
             username=username,
             display_name=body.display_name,
             role=role,
+            session_never_expires=body.session_never_expires,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

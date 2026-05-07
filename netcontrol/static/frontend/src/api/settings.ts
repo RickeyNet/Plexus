@@ -28,6 +28,7 @@ export interface AdminUser {
   created_at?: string;
   group_ids: number[];
   feature_access: string[];
+  session_never_expires?: boolean;
 }
 
 export interface AccessGroup {
@@ -43,6 +44,8 @@ export interface LoginRules {
   lockout_time: number;
   rate_limit_window: number;
   rate_limit_max: number;
+  // 0 disables idle-timeout enforcement globally; otherwise capped at 86400 (24h).
+  session_idle_timeout: number;
 }
 
 export interface RadiusConfig {
@@ -217,6 +220,7 @@ export interface AdminUserUpdatePayload {
   username?: string;
   display_name?: string;
   role?: 'admin' | 'user';
+  session_never_expires?: boolean;
 }
 
 export function useUpdateAdminUser() {
