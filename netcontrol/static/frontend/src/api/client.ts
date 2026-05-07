@@ -32,6 +32,10 @@ export class ApiError extends Error {
   }
 }
 
+// Tripped on the first 401 so concurrent page queries don't each trigger a
+// separate reload when the server-side session has idle-expired.
+let sessionExpiryHandled = false;
+
 export interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'headers'> {
   body?: unknown;
   headers?: Record<string, string>;
@@ -85,6 +89,16 @@ export async function apiRequest<T = unknown>(
       (parsed && typeof parsed === 'object' && 'detail' in parsed
         ? String((parsed as { detail: unknown }).detail)
         : null) ?? res.statusText;
+    if (
+      res.status === 401 &&
+      endpoint !== '/auth/login' &&
+      endpoint !== '/auth/status'
+    ) {
+      if (!sessionExpiryHandled) {
+        sessionExpiryHandled = true;
+        window.location.assign('/');
+      }
+    }
     throw new ApiError(res.status, parsed, `${res.status} ${detail}`);
   }
 
