@@ -16,6 +16,7 @@ import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
 import { Lab } from '@/pages/Lab';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
+import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 import { Settings } from '@/pages/Settings/Settings';
 
 const BREADCRUMBS: Record<string, string> = {
@@ -28,6 +29,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/federation': 'Federation',
   '/floor-plan': 'Floor Plans',
   '/compliance': 'Compliance',
+  '/risk-analysis': 'Risk Analysis',
   '/settings': 'Settings',
 };
 
@@ -96,6 +98,7 @@ export function App() {
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/compliance" element={<Compliance />} />
+          <Route path="/risk-analysis" element={<RiskAnalysis />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>

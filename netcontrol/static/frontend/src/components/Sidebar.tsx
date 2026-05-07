@@ -255,7 +255,7 @@ const NAV: TopItem[] = [
       { label: 'Monitoring', icon: ic.monitoring, href: '/#monitoring', feature: 'monitoring' },
       { label: 'Configuration', icon: ic.config, href: '/#configuration', feature: 'config-drift', visKey: 'configuration' },
       { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: 'compliance' },
-      { label: 'Changes', icon: ic.changes, href: '/#change-management', feature: 'risk-analysis', visKey: 'change-management' },
+      { label: 'Risk Analysis', icon: ic.changes, to: '/risk-analysis', feature: 'risk-analysis', visKey: 'change-management' },
       { label: 'Reports', icon: ic.reports, href: '/#reports', feature: 'reports' },
       { label: 'Graphs', icon: ic.graphs, href: '/#graph-templates', feature: 'graph-templates' },
       { label: 'MAC Tracking', icon: ic.mac, to: '/mac-tracking', feature: 'mac-tracking' },
