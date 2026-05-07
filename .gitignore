@@ -213,8 +213,10 @@ logs/
 *.log
 *.log.*
 
-# Temp helper scripts
-_*.py
+# (Removed `_*.py` rule — Python convention uses leading underscore for
+#  private modules like _common.py, which this rule was silently excluding.
+#  Use a more specific name like _scratch_*.py or _tmp_*.py for actual
+#  throwaway helpers.)
 
 # Backup files
 *.bak
