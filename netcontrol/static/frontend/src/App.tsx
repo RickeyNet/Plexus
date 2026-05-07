@@ -6,7 +6,9 @@ import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { Sidebar } from '@/components/Sidebar';
 import { UserMenu } from '@/components/UserMenu';
 import { Compliance } from '@/pages/Compliance/Compliance';
+import { CustomDashboards } from '@/pages/Dashboard/CustomDashboards';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
+import { DashboardViewer } from '@/pages/Dashboard/DashboardViewer';
 import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
 import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
@@ -18,6 +20,7 @@ import { Settings } from '@/pages/Settings/Settings';
 
 const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
+  '/dashboards': 'Dashboards',
   '/devices': 'Devices',
   '/lab': 'Lab / Digital Twin',
   '/mac-tracking': 'MAC Tracking',
@@ -32,6 +35,7 @@ function Breadcrumb() {
   const { pathname } = useLocation();
   let label = BREADCRUMBS[pathname];
   if (!label && pathname.startsWith('/devices/')) label = 'Device Detail';
+  if (!label && pathname.startsWith('/dashboards/')) label = 'Dashboard';
   if (!label) label = 'Plexus';
   return (
     <div className="breadcrumb-bar">
@@ -82,6 +86,8 @@ export function App() {
         <Breadcrumb />
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/dashboards" element={<CustomDashboards />} />
+          <Route path="/dashboards/:id" element={<DashboardViewer />} />
           <Route path="/devices" element={<DevicePicker />} />
           <Route path="/devices/:hostId" element={<DeviceDetail />} />
           <Route path="/lab" element={<Lab />} />

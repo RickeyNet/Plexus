@@ -114,6 +114,130 @@ export function TimeSeriesChart({
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
 
+interface GaugeChartProps {
+  value: number;
+  title?: string;
+  min?: number;
+  max?: number;
+  height?: number;
+}
+
+export function GaugeChart({ value, title, min = 0, max = 100, height = DEFAULT_HEIGHT }: GaugeChartProps) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
+
+    chart.setOption({
+      animation: false,
+      series: [
+        {
+          type: 'gauge',
+          min,
+          max,
+          progress: { show: true, width: 14 },
+          axisLine: { lineStyle: { width: 14, color: [[1, SPLIT_COLOR]] } },
+          pointer: { show: false },
+          axisTick: { show: false },
+          splitLine: { show: false },
+          axisLabel: { show: false },
+          detail: {
+            valueAnimation: false,
+            formatter: '{value}',
+            fontSize: 22,
+            color: TEXT_COLOR,
+            offsetCenter: [0, '10%'],
+          },
+          title: {
+            show: !!title,
+            offsetCenter: [0, '70%'],
+            color: AXIS_COLOR,
+            fontSize: 12,
+          },
+          data: [{ value: Math.round(value * 10) / 10, name: title ?? '' }],
+        },
+      ],
+    });
+
+    const onResize = () => chart.resize();
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      chart.dispose();
+    };
+  }, [value, title, min, max]);
+
+  return <div ref={ref} style={{ width: '100%', height }} />;
+}
+
+interface HeatmapChartProps {
+  xLabels: string[];
+  yLabels: string[];
+  data: [number, number, number][];
+  height?: number;
+}
+
+export function HeatmapChart({ xLabels, yLabels, data, height = DEFAULT_HEIGHT }: HeatmapChartProps) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
+
+    const values = data.map((d) => d[2]);
+    const dataMin = values.length ? Math.min(...values) : 0;
+    const dataMax = values.length ? Math.max(...values) : 1;
+
+    chart.setOption({
+      animation: false,
+      tooltip: { position: 'top' },
+      grid: { left: 60, right: 16, top: 24, bottom: 60, containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: xLabels,
+        splitArea: { show: true },
+        axisLabel: { color: AXIS_COLOR, rotate: 45 },
+        axisLine: { lineStyle: { color: SPLIT_COLOR } },
+      },
+      yAxis: {
+        type: 'category',
+        data: yLabels,
+        splitArea: { show: true },
+        axisLabel: { color: AXIS_COLOR },
+        axisLine: { lineStyle: { color: SPLIT_COLOR } },
+      },
+      visualMap: {
+        min: dataMin,
+        max: dataMax,
+        calculable: true,
+        orient: 'horizontal',
+        left: 'center',
+        bottom: 0,
+        textStyle: { color: AXIS_COLOR },
+        inRange: { color: ['#1e3a8a', '#3b82f6', '#fbbf24', '#ef4444'] },
+      },
+      series: [
+        {
+          name: 'value',
+          type: 'heatmap',
+          data,
+          label: { show: false },
+        },
+      ],
+    });
+
+    const onResize = () => chart.resize();
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      chart.dispose();
+    };
+  }, [xLabels, yLabels, data]);
+
+  return <div ref={ref} style={{ width: '100%', height }} />;
+}
+
 interface BarChartProps {
   categories: string[];
   values: number[];
