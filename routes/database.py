@@ -263,6 +263,10 @@ CREATE TABLE IF NOT EXISTS hosts (
     last_seen   TEXT,
     model       TEXT    DEFAULT '',
     software_version TEXT DEFAULT '',
+    device_category TEXT NOT NULL DEFAULT '',
+    serial_number TEXT NOT NULL DEFAULT '',
+    vrf_name    TEXT    NOT NULL DEFAULT '',
+    vlan_id     TEXT    NOT NULL DEFAULT '',
     UNIQUE(group_id, ip_address)
 );
 
@@ -1255,7 +1259,8 @@ CREATE TABLE IF NOT EXISTS upgrade_campaigns (
     options         TEXT    NOT NULL DEFAULT '{}',
     created_by      TEXT    NOT NULL DEFAULT '',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    scheduled_at    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS upgrade_devices (
@@ -1310,6 +1315,667 @@ CREATE INDEX IF NOT EXISTS idx_topology_links_target
     ON topology_links (target_host_id);
 CREATE INDEX IF NOT EXISTS idx_access_group_features_group
     ON access_group_features (group_id);
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- v1.0.0 baseline tables originally added by migrations 0008-0032.
+-- Folded into SCHEMA so a fresh deploy creates them all in one shot. The
+-- migration runner records 1-32 as applied on first boot, and new schema
+-- work starts at migration 0033+.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- 0008: interface error tracking
+CREATE TABLE IF NOT EXISTS interface_error_stats (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id             INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    if_index            INTEGER NOT NULL,
+    if_name             TEXT    NOT NULL DEFAULT '',
+    in_errors           INTEGER DEFAULT 0,
+    out_errors          INTEGER DEFAULT 0,
+    in_discards         INTEGER DEFAULT 0,
+    out_discards        INTEGER DEFAULT 0,
+    prev_in_errors      INTEGER DEFAULT 0,
+    prev_out_errors     INTEGER DEFAULT 0,
+    prev_in_discards    INTEGER DEFAULT 0,
+    prev_out_discards   INTEGER DEFAULT 0,
+    polled_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+    prev_polled_at      TEXT    DEFAULT NULL,
+    UNIQUE(host_id, if_index)
+);
+CREATE INDEX IF NOT EXISTS idx_interface_error_stats_host
+    ON interface_error_stats (host_id, if_index);
+
+CREATE TABLE IF NOT EXISTS interface_error_events (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id             INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    if_index            INTEGER NOT NULL,
+    if_name             TEXT    NOT NULL DEFAULT '',
+    event_type          TEXT    NOT NULL DEFAULT 'spike',
+    metric_name         TEXT    NOT NULL DEFAULT '',
+    severity            TEXT    NOT NULL DEFAULT 'warning',
+    current_rate        REAL    DEFAULT 0,
+    baseline_rate       REAL    DEFAULT 0,
+    spike_factor        REAL    DEFAULT 0,
+    root_cause_hint     TEXT    NOT NULL DEFAULT '',
+    root_cause_category TEXT    NOT NULL DEFAULT 'unknown',
+    correlation_details TEXT    NOT NULL DEFAULT '{}',
+    acknowledged        INTEGER NOT NULL DEFAULT 0,
+    acknowledged_by     TEXT    DEFAULT NULL,
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    resolved_at         TEXT    DEFAULT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_interface_error_events_host
+    ON interface_error_events (host_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_interface_error_events_unresolved
+    ON interface_error_events (resolved_at, severity);
+
+-- 0009: bandwidth billing
+CREATE TABLE IF NOT EXISTS billing_circuits (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL DEFAULT '',
+    description     TEXT    NOT NULL DEFAULT '',
+    customer        TEXT    NOT NULL DEFAULT '',
+    host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    if_index        INTEGER NOT NULL,
+    if_name         TEXT    NOT NULL DEFAULT '',
+    commit_rate_bps REAL    NOT NULL DEFAULT 0,
+    burst_limit_bps REAL    NOT NULL DEFAULT 0,
+    billing_day     INTEGER NOT NULL DEFAULT 1,
+    billing_cycle   TEXT    NOT NULL DEFAULT 'monthly',
+    cost_per_mbps   REAL    NOT NULL DEFAULT 0,
+    currency        TEXT    NOT NULL DEFAULT 'USD',
+    overage_enabled INTEGER NOT NULL DEFAULT 1,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_billing_circuits_host
+    ON billing_circuits (host_id, if_index);
+CREATE INDEX IF NOT EXISTS idx_billing_circuits_customer
+    ON billing_circuits (customer);
+
+CREATE TABLE IF NOT EXISTS billing_periods (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    circuit_id      INTEGER NOT NULL REFERENCES billing_circuits(id) ON DELETE CASCADE,
+    period_start    TEXT    NOT NULL,
+    period_end      TEXT    NOT NULL,
+    total_samples   INTEGER NOT NULL DEFAULT 0,
+    p95_in_bps      REAL    NOT NULL DEFAULT 0,
+    p95_out_bps     REAL    NOT NULL DEFAULT 0,
+    p95_billing_bps REAL    NOT NULL DEFAULT 0,
+    max_in_bps      REAL    NOT NULL DEFAULT 0,
+    max_out_bps     REAL    NOT NULL DEFAULT 0,
+    avg_in_bps      REAL    NOT NULL DEFAULT 0,
+    avg_out_bps     REAL    NOT NULL DEFAULT 0,
+    commit_rate_bps REAL    NOT NULL DEFAULT 0,
+    overage_bps     REAL    NOT NULL DEFAULT 0,
+    overage_cost    REAL    NOT NULL DEFAULT 0,
+    total_cost      REAL    NOT NULL DEFAULT 0,
+    status          TEXT    NOT NULL DEFAULT 'generated',
+    generated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_billing_periods_circuit
+    ON billing_periods (circuit_id, period_start);
+
+-- 0011: cloud visibility
+CREATE TABLE IF NOT EXISTS cloud_accounts (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider            TEXT    NOT NULL,
+    name                TEXT    NOT NULL,
+    account_identifier  TEXT    NOT NULL DEFAULT '',
+    region_scope        TEXT    NOT NULL DEFAULT '',
+    auth_type           TEXT    NOT NULL DEFAULT 'manual',
+    auth_config_json    TEXT    NOT NULL DEFAULT '{}',
+    notes               TEXT    NOT NULL DEFAULT '',
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    last_sync_at        TEXT,
+    last_sync_status    TEXT    NOT NULL DEFAULT 'never',
+    last_sync_message   TEXT    NOT NULL DEFAULT '',
+    created_by          TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_accounts_provider_enabled
+    ON cloud_accounts (provider, enabled);
+
+CREATE TABLE IF NOT EXISTS cloud_resources (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id      INTEGER NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE,
+    provider        TEXT    NOT NULL,
+    resource_uid    TEXT    NOT NULL,
+    resource_type   TEXT    NOT NULL,
+    name            TEXT    NOT NULL DEFAULT '',
+    region          TEXT    NOT NULL DEFAULT '',
+    cidr            TEXT    NOT NULL DEFAULT '',
+    status          TEXT    NOT NULL DEFAULT '',
+    metadata_json   TEXT    NOT NULL DEFAULT '{}',
+    discovered_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(account_id, resource_uid)
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_resources_account_type
+    ON cloud_resources (account_id, resource_type);
+
+CREATE TABLE IF NOT EXISTS cloud_connections (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id          INTEGER NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE,
+    provider            TEXT    NOT NULL,
+    source_resource_uid TEXT    NOT NULL,
+    target_resource_uid TEXT    NOT NULL,
+    connection_type     TEXT    NOT NULL DEFAULT 'peering',
+    state               TEXT    NOT NULL DEFAULT '',
+    metadata_json       TEXT    NOT NULL DEFAULT '{}',
+    discovered_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(account_id, source_resource_uid, target_resource_uid, connection_type)
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_connections_account
+    ON cloud_connections (account_id, source_resource_uid, target_resource_uid);
+
+CREATE TABLE IF NOT EXISTS cloud_hybrid_links (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id          INTEGER NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE,
+    provider            TEXT    NOT NULL,
+    host_id             INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    host_label          TEXT    NOT NULL DEFAULT '',
+    cloud_resource_uid  TEXT    NOT NULL,
+    connection_type     TEXT    NOT NULL DEFAULT 'vpn',
+    state               TEXT    NOT NULL DEFAULT '',
+    metadata_json       TEXT    NOT NULL DEFAULT '{}',
+    discovered_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_hybrid_links_unique
+    ON cloud_hybrid_links (account_id, host_id, cloud_resource_uid, connection_type);
+CREATE INDEX IF NOT EXISTS idx_cloud_hybrid_links_account
+    ON cloud_hybrid_links (account_id, host_id, cloud_resource_uid);
+
+-- 0012: cloud flow sync cursors
+CREATE TABLE IF NOT EXISTS cloud_flow_sync_cursors (
+    account_id      INTEGER PRIMARY KEY REFERENCES cloud_accounts(id) ON DELETE CASCADE,
+    last_pull_end   TEXT    NOT NULL DEFAULT '',
+    extra_json      TEXT    NOT NULL DEFAULT '{}',
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 0014: federation
+CREATE TABLE IF NOT EXISTS federation_peers (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT    NOT NULL,
+    url                 TEXT    NOT NULL,
+    api_token_enc       TEXT    NOT NULL DEFAULT '',
+    description         TEXT    NOT NULL DEFAULT '',
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    last_sync_at        TEXT,
+    last_sync_status    TEXT    NOT NULL DEFAULT 'never',
+    last_sync_message   TEXT    NOT NULL DEFAULT '',
+    created_by          TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT
+);
+
+CREATE TABLE IF NOT EXISTS federation_snapshots (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_id     INTEGER NOT NULL REFERENCES federation_peers(id) ON DELETE CASCADE,
+    category    TEXT    NOT NULL,
+    data_json   TEXT    NOT NULL DEFAULT '{}',
+    captured_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 0015: cloud traffic metrics
+CREATE TABLE IF NOT EXISTS cloud_traffic_metrics (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id          INTEGER NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE,
+    provider            TEXT    NOT NULL,
+    metric_name         TEXT    NOT NULL,
+    metric_namespace    TEXT    NOT NULL DEFAULT '',
+    resource_uid        TEXT    NOT NULL DEFAULT '',
+    direction           TEXT    NOT NULL DEFAULT '',
+    statistic           TEXT    NOT NULL DEFAULT '',
+    unit                TEXT    NOT NULL DEFAULT '',
+    metric_value        REAL    NOT NULL DEFAULT 0,
+    interval_start      TEXT    NOT NULL,
+    interval_end        TEXT    NOT NULL,
+    metadata_json       TEXT    NOT NULL DEFAULT '{}',
+    source              TEXT    NOT NULL DEFAULT 'api',
+    ingested_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_traffic_metrics_lookup
+    ON cloud_traffic_metrics (account_id, provider, metric_name, interval_end);
+CREATE INDEX IF NOT EXISTS idx_cloud_traffic_metrics_resource
+    ON cloud_traffic_metrics (resource_uid, interval_end);
+
+-- 0016: cloud traffic metric sync cursors
+CREATE TABLE IF NOT EXISTS cloud_traffic_metric_sync_cursors (
+    account_id      INTEGER PRIMARY KEY REFERENCES cloud_accounts(id) ON DELETE CASCADE,
+    last_pull_end   TEXT    NOT NULL DEFAULT '',
+    extra_json      TEXT    NOT NULL DEFAULT '{}',
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 0017: cloud policy rules
+CREATE TABLE IF NOT EXISTS cloud_policy_rules (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id              INTEGER NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE,
+    provider                TEXT    NOT NULL,
+    resource_uid            TEXT    NOT NULL,
+    rule_uid                TEXT    NOT NULL,
+    rule_name               TEXT    NOT NULL DEFAULT '',
+    direction               TEXT    NOT NULL DEFAULT '',
+    action                  TEXT    NOT NULL DEFAULT '',
+    protocol                TEXT    NOT NULL DEFAULT '',
+    source_selector         TEXT    NOT NULL DEFAULT '',
+    destination_selector    TEXT    NOT NULL DEFAULT '',
+    port_expression         TEXT    NOT NULL DEFAULT '',
+    priority                INTEGER,
+    metadata_json           TEXT    NOT NULL DEFAULT '{}',
+    discovered_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(account_id, rule_uid)
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_policy_rules_account_resource
+    ON cloud_policy_rules (account_id, resource_uid);
+CREATE INDEX IF NOT EXISTS idx_cloud_policy_rules_provider_action
+    ON cloud_policy_rules (provider, action, direction);
+
+-- 0018 + 0019: ipam sources/prefixes/allocations/reservations (with push_enabled from 0019)
+CREATE TABLE IF NOT EXISTS ipam_sources (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider            TEXT    NOT NULL,
+    name                TEXT    NOT NULL,
+    base_url            TEXT    NOT NULL DEFAULT '',
+    auth_type           TEXT    NOT NULL DEFAULT 'token',
+    auth_config_enc     TEXT    NOT NULL DEFAULT '',
+    sync_scope          TEXT    NOT NULL DEFAULT '',
+    notes               TEXT    NOT NULL DEFAULT '',
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    verify_tls          INTEGER NOT NULL DEFAULT 1,
+    push_enabled        INTEGER NOT NULL DEFAULT 0,
+    last_sync_at        TEXT,
+    last_sync_status    TEXT    NOT NULL DEFAULT 'never',
+    last_sync_message   TEXT    NOT NULL DEFAULT '',
+    created_by          TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_sources_provider_enabled
+    ON ipam_sources (provider, enabled);
+
+CREATE TABLE IF NOT EXISTS ipam_prefixes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id       INTEGER NOT NULL REFERENCES ipam_sources(id) ON DELETE CASCADE,
+    external_id     TEXT    NOT NULL,
+    subnet          TEXT    NOT NULL,
+    description     TEXT    NOT NULL DEFAULT '',
+    status          TEXT    NOT NULL DEFAULT '',
+    vrf             TEXT    NOT NULL DEFAULT '',
+    tenant          TEXT    NOT NULL DEFAULT '',
+    site            TEXT    NOT NULL DEFAULT '',
+    vlan            TEXT    NOT NULL DEFAULT '',
+    metadata_json   TEXT    NOT NULL DEFAULT '{}',
+    discovered_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source_id, external_id, subnet)
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_prefixes_source_subnet
+    ON ipam_prefixes (source_id, subnet);
+
+-- 0018 + 0025: ipam_allocations (with vrf_name/vlan_id columns inlined from 0025)
+CREATE TABLE IF NOT EXISTS ipam_allocations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id       INTEGER NOT NULL REFERENCES ipam_sources(id) ON DELETE CASCADE,
+    prefix_subnet   TEXT    NOT NULL DEFAULT '',
+    address         TEXT    NOT NULL,
+    dns_name        TEXT    NOT NULL DEFAULT '',
+    status          TEXT    NOT NULL DEFAULT '',
+    description     TEXT    NOT NULL DEFAULT '',
+    metadata_json   TEXT    NOT NULL DEFAULT '{}',
+    discovered_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    vrf_name        TEXT    NOT NULL DEFAULT '',
+    vlan_id         TEXT    NOT NULL DEFAULT '',
+    UNIQUE(source_id, address)
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_allocations_source_prefix
+    ON ipam_allocations (source_id, prefix_subnet, address);
+
+CREATE TABLE IF NOT EXISTS ipam_reservations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    subnet      TEXT    NOT NULL,
+    start_ip    TEXT    NOT NULL,
+    end_ip      TEXT    NOT NULL,
+    reason      TEXT    NOT NULL DEFAULT '',
+    created_by  TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_reservations_subnet
+    ON ipam_reservations (subnet, start_ip, end_ip);
+
+-- 0020: geolocation
+CREATE TABLE IF NOT EXISTS geo_sites (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    description TEXT    NOT NULL DEFAULT '',
+    address     TEXT    NOT NULL DEFAULT '',
+    lat         REAL    DEFAULT NULL,
+    lng         REAL    DEFAULT NULL,
+    created_by  TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS geo_floors (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id         INTEGER NOT NULL REFERENCES geo_sites(id) ON DELETE CASCADE,
+    name            TEXT    NOT NULL,
+    floor_number    INTEGER NOT NULL DEFAULT 0,
+    image_filename  TEXT    DEFAULT NULL,
+    image_width     INTEGER NOT NULL DEFAULT 1200,
+    image_height    INTEGER NOT NULL DEFAULT 800,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(site_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_geo_floors_site
+    ON geo_floors (site_id);
+
+CREATE TABLE IF NOT EXISTS geo_placements (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    floor_id    INTEGER NOT NULL REFERENCES geo_floors(id) ON DELETE CASCADE,
+    host_id     INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    x_pct       REAL    NOT NULL DEFAULT 0.5,
+    y_pct       REAL    NOT NULL DEFAULT 0.5,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(floor_id, host_id)
+);
+CREATE INDEX IF NOT EXISTS idx_geo_placements_floor
+    ON geo_placements (floor_id);
+CREATE INDEX IF NOT EXISTS idx_geo_placements_host
+    ON geo_placements (host_id);
+
+-- 0023: ipam reconciliation
+CREATE TABLE IF NOT EXISTS ipam_reconciliation_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id       INTEGER NOT NULL REFERENCES ipam_sources(id) ON DELETE CASCADE,
+    started_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    finished_at     TEXT,
+    status          TEXT    NOT NULL DEFAULT 'running',
+    triggered_by    TEXT    NOT NULL DEFAULT '',
+    diff_count      INTEGER NOT NULL DEFAULT 0,
+    resolved_count  INTEGER NOT NULL DEFAULT 0,
+    message         TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_reconciliation_runs_source
+    ON ipam_reconciliation_runs (source_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS ipam_reconciliation_diffs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id              INTEGER NOT NULL REFERENCES ipam_reconciliation_runs(id) ON DELETE CASCADE,
+    source_id           INTEGER NOT NULL REFERENCES ipam_sources(id) ON DELETE CASCADE,
+    address             TEXT    NOT NULL,
+    drift_type          TEXT    NOT NULL,
+    plexus_state_json   TEXT    NOT NULL DEFAULT '{}',
+    ipam_state_json     TEXT    NOT NULL DEFAULT '{}',
+    resolution          TEXT    NOT NULL DEFAULT '',
+    resolved_by         TEXT    NOT NULL DEFAULT '',
+    resolved_at         TEXT,
+    resolution_message  TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_reconciliation_diffs_open
+    ON ipam_reconciliation_diffs (source_id, resolution, address);
+CREATE INDEX IF NOT EXISTS idx_ipam_reconciliation_diffs_run
+    ON ipam_reconciliation_diffs (run_id);
+
+-- 0024: dhcp
+CREATE TABLE IF NOT EXISTS dhcp_servers (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider            TEXT    NOT NULL,
+    name                TEXT    NOT NULL,
+    base_url            TEXT    NOT NULL DEFAULT '',
+    auth_type           TEXT    NOT NULL DEFAULT 'token',
+    auth_config_enc     TEXT    NOT NULL DEFAULT '',
+    notes               TEXT    NOT NULL DEFAULT '',
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    verify_tls          INTEGER NOT NULL DEFAULT 1,
+    last_sync_at        TEXT,
+    last_sync_status    TEXT    NOT NULL DEFAULT 'never',
+    last_sync_message   TEXT    NOT NULL DEFAULT '',
+    created_by          TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT
+);
+
+CREATE TABLE IF NOT EXISTS dhcp_scopes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id       INTEGER NOT NULL REFERENCES dhcp_servers(id) ON DELETE CASCADE,
+    external_id     TEXT    NOT NULL DEFAULT '',
+    subnet          TEXT    NOT NULL,
+    name            TEXT    NOT NULL DEFAULT '',
+    range_start     TEXT    NOT NULL DEFAULT '',
+    range_end       TEXT    NOT NULL DEFAULT '',
+    total_addresses INTEGER NOT NULL DEFAULT 0,
+    used_addresses  INTEGER NOT NULL DEFAULT 0,
+    free_addresses  INTEGER NOT NULL DEFAULT 0,
+    state           TEXT    NOT NULL DEFAULT '',
+    metadata_json   TEXT    NOT NULL DEFAULT '{}',
+    discovered_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(server_id, subnet, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dhcp_scopes_server_subnet
+    ON dhcp_scopes (server_id, subnet);
+
+CREATE TABLE IF NOT EXISTS dhcp_leases (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id       INTEGER NOT NULL REFERENCES dhcp_servers(id) ON DELETE CASCADE,
+    scope_subnet    TEXT    NOT NULL DEFAULT '',
+    address         TEXT    NOT NULL,
+    mac_address     TEXT    NOT NULL DEFAULT '',
+    hostname        TEXT    NOT NULL DEFAULT '',
+    client_id       TEXT    NOT NULL DEFAULT '',
+    state           TEXT    NOT NULL DEFAULT '',
+    starts_at       TEXT,
+    ends_at         TEXT,
+    metadata_json   TEXT    NOT NULL DEFAULT '{}',
+    discovered_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(server_id, address)
+);
+CREATE INDEX IF NOT EXISTS idx_dhcp_leases_server_address
+    ON dhcp_leases (server_id, address);
+CREATE INDEX IF NOT EXISTS idx_dhcp_leases_mac
+    ON dhcp_leases (mac_address);
+
+-- 0025: vlan/vrf scoping. Column adds inlined into hosts/ipam_allocations above, just indexes here.
+CREATE INDEX IF NOT EXISTS idx_hosts_vrf_ip
+    ON hosts (vrf_name, ip_address);
+CREATE INDEX IF NOT EXISTS idx_ipam_allocations_vrf_addr
+    ON ipam_allocations (vrf_name, address);
+
+-- 0026: ipam pending allocations
+CREATE TABLE IF NOT EXISTS ipam_pending_allocations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    subnet          TEXT    NOT NULL,
+    address         TEXT    NOT NULL,
+    vrf_name        TEXT    NOT NULL DEFAULT '',
+    hostname        TEXT    NOT NULL DEFAULT '',
+    description     TEXT    NOT NULL DEFAULT '',
+    source_id       INTEGER,
+    external_ref    TEXT    NOT NULL DEFAULT '',
+    state           TEXT    NOT NULL DEFAULT 'pending',
+    expires_at      TEXT    NOT NULL,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    committed_at    TEXT,
+    released_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_pending_subnet_state
+    ON ipam_pending_allocations (subnet, state);
+CREATE INDEX IF NOT EXISTS idx_ipam_pending_vrf_address
+    ON ipam_pending_allocations (vrf_name, address, state);
+
+-- 0027: ipam history + utilization
+CREATE TABLE IF NOT EXISTS ipam_ip_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    address     TEXT    NOT NULL,
+    vrf_name    TEXT    NOT NULL DEFAULT '',
+    hostname    TEXT    NOT NULL DEFAULT '',
+    source_type TEXT    NOT NULL DEFAULT '',
+    source_ref  TEXT    NOT NULL DEFAULT '',
+    started_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    ended_at    TEXT,
+    recorded_by TEXT    NOT NULL DEFAULT '',
+    note        TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_history_address
+    ON ipam_ip_history (address, vrf_name, started_at);
+-- Note: the partial-index `WHERE ended_at IS NULL` from migration 0027 is
+-- supported in both SQLite (3.8+) and Postgres, so it's safe in shared SCHEMA.
+CREATE INDEX IF NOT EXISTS idx_ipam_history_open
+    ON ipam_ip_history (address, vrf_name) WHERE ended_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS ipam_subnet_utilization (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    subnet          TEXT    NOT NULL,
+    vrf_name        TEXT    NOT NULL DEFAULT '',
+    total           INTEGER NOT NULL DEFAULT 0,
+    used            INTEGER NOT NULL DEFAULT 0,
+    reserved        INTEGER NOT NULL DEFAULT 0,
+    pending         INTEGER NOT NULL DEFAULT 0,
+    free            INTEGER NOT NULL DEFAULT 0,
+    utilization_pct REAL    NOT NULL DEFAULT 0,
+    captured_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ipam_util_subnet_time
+    ON ipam_subnet_utilization (subnet, vrf_name, captured_at);
+
+-- 0028: per-user inventory group ordering
+CREATE TABLE IF NOT EXISTS user_inventory_group_order (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    group_id    INTEGER NOT NULL REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL,
+    PRIMARY KEY (user_id, group_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_inv_group_order_user
+    ON user_inventory_group_order (user_id, position);
+
+-- 0029 + 0030 + 0031: lab environments, devices (with runtime_* and topology_id columns inlined), runs
+CREATE TABLE IF NOT EXISTS lab_environments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    description TEXT    NOT NULL DEFAULT '',
+    owner_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    shared      INTEGER NOT NULL DEFAULT 0,
+    active      INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 0031: lab_topologies first so lab_devices.topology_id FK target exists
+CREATE TABLE IF NOT EXISTS lab_topologies (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    environment_id  INTEGER NOT NULL REFERENCES lab_environments(id) ON DELETE CASCADE,
+    name            TEXT    NOT NULL,
+    description     TEXT    NOT NULL DEFAULT '',
+    lab_name        TEXT    NOT NULL DEFAULT '',
+    status          TEXT    NOT NULL DEFAULT '',
+    workdir         TEXT    NOT NULL DEFAULT '',
+    mgmt_subnet     TEXT    NOT NULL DEFAULT '',
+    error           TEXT    NOT NULL DEFAULT '',
+    started_at      TEXT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(environment_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS lab_devices (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    environment_id          INTEGER NOT NULL REFERENCES lab_environments(id) ON DELETE CASCADE,
+    hostname                TEXT    NOT NULL,
+    ip_address              TEXT    NOT NULL DEFAULT '',
+    device_type             TEXT    NOT NULL DEFAULT 'cisco_ios',
+    model                   TEXT    NOT NULL DEFAULT '',
+    source_host_id          INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    running_config          TEXT    NOT NULL DEFAULT '',
+    notes                   TEXT    NOT NULL DEFAULT '',
+    runtime_kind            TEXT    NOT NULL DEFAULT 'config_only',
+    runtime_node_kind       TEXT    NOT NULL DEFAULT '',
+    runtime_image           TEXT    NOT NULL DEFAULT '',
+    runtime_status          TEXT    NOT NULL DEFAULT '',
+    runtime_lab_name        TEXT    NOT NULL DEFAULT '',
+    runtime_node_name       TEXT    NOT NULL DEFAULT '',
+    runtime_mgmt_address    TEXT    NOT NULL DEFAULT '',
+    runtime_credential_id   INTEGER,
+    runtime_error           TEXT    NOT NULL DEFAULT '',
+    runtime_workdir         TEXT    NOT NULL DEFAULT '',
+    runtime_started_at      TEXT,
+    topology_id             INTEGER REFERENCES lab_topologies(id) ON DELETE SET NULL,
+    created_at              TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lab_devices_env
+    ON lab_devices (environment_id);
+CREATE INDEX IF NOT EXISTS idx_lab_devices_topology
+    ON lab_devices (topology_id);
+
+CREATE TABLE IF NOT EXISTS lab_runs (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    lab_device_id           INTEGER NOT NULL REFERENCES lab_devices(id) ON DELETE CASCADE,
+    submitted_by            TEXT    NOT NULL DEFAULT '',
+    commands                TEXT    NOT NULL DEFAULT '',
+    pre_config              TEXT    NOT NULL DEFAULT '',
+    post_config             TEXT    NOT NULL DEFAULT '',
+    diff_text               TEXT    NOT NULL DEFAULT '',
+    diff_added              INTEGER NOT NULL DEFAULT 0,
+    diff_removed            INTEGER NOT NULL DEFAULT 0,
+    risk_score              REAL    NOT NULL DEFAULT 0,
+    risk_level              TEXT    NOT NULL DEFAULT '',
+    risk_detail             TEXT    NOT NULL DEFAULT '',
+    status                  TEXT    NOT NULL DEFAULT 'simulated',
+    promoted_deployment_id  INTEGER,
+    created_at              TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lab_runs_device
+    ON lab_runs (lab_device_id, created_at);
+
+-- 0030: lab runtime events
+CREATE TABLE IF NOT EXISTS lab_runtime_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    lab_device_id   INTEGER NOT NULL REFERENCES lab_devices(id) ON DELETE CASCADE,
+    action          TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'ok',
+    actor           TEXT    NOT NULL DEFAULT '',
+    detail          TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lab_runtime_events_device
+    ON lab_runtime_events (lab_device_id, created_at);
+
+-- 0031: lab topology links
+CREATE TABLE IF NOT EXISTS lab_topology_links (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    topology_id     INTEGER NOT NULL REFERENCES lab_topologies(id) ON DELETE CASCADE,
+    a_device_id     INTEGER NOT NULL REFERENCES lab_devices(id) ON DELETE CASCADE,
+    a_endpoint      TEXT    NOT NULL,
+    b_device_id     INTEGER NOT NULL REFERENCES lab_devices(id) ON DELETE CASCADE,
+    b_endpoint      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lab_topology_links_topo
+    ON lab_topology_links (topology_id);
+
+-- 0032: lab drift runs
+CREATE TABLE IF NOT EXISTS lab_drift_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    lab_device_id   INTEGER NOT NULL REFERENCES lab_devices(id) ON DELETE CASCADE,
+    source_host_id  INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    status          TEXT    NOT NULL DEFAULT 'in_sync',
+    diff_text       TEXT    NOT NULL DEFAULT '',
+    diff_added      INTEGER NOT NULL DEFAULT 0,
+    diff_removed    INTEGER NOT NULL DEFAULT 0,
+    twin_bytes      INTEGER NOT NULL DEFAULT 0,
+    prod_bytes      INTEGER NOT NULL DEFAULT 0,
+    actor           TEXT    NOT NULL DEFAULT '',
+    error           TEXT    NOT NULL DEFAULT '',
+    checked_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lab_drift_runs_device
+    ON lab_drift_runs (lab_device_id, checked_at);
 """
 
 
@@ -1322,6 +1988,42 @@ def _convert_sqlite_schema_to_postgres(sqlite_schema: str) -> str:
 
 
 POSTGRES_SCHEMA = _convert_sqlite_schema_to_postgres(SCHEMA)
+
+
+# ── Engine-specific extras for full-text search on config_backups ────────────
+# The runtime FTS query in `search_config_backups` already branches on engine
+# (postgres uses to_tsvector @@ plainto_tsquery; sqlite uses an FTS5 virtual
+# table). These DDL blocks are applied alongside SCHEMA on init.
+
+POSTGRES_FTS_EXTRAS = """
+CREATE INDEX IF NOT EXISTS idx_config_backups_search_tsv
+    ON config_backups USING GIN (to_tsvector('simple', COALESCE(config_text, '')));
+"""
+
+SQLITE_FTS_EXTRAS = """
+CREATE VIRTUAL TABLE IF NOT EXISTS config_backups_fts
+USING fts5(config_text, content='config_backups', content_rowid='id');
+
+CREATE TRIGGER IF NOT EXISTS config_backups_ai
+AFTER INSERT ON config_backups BEGIN
+    INSERT INTO config_backups_fts(rowid, config_text)
+    VALUES (new.id, COALESCE(new.config_text, ''));
+END;
+
+CREATE TRIGGER IF NOT EXISTS config_backups_ad
+AFTER DELETE ON config_backups BEGIN
+    INSERT INTO config_backups_fts(config_backups_fts, rowid, config_text)
+    VALUES ('delete', old.id, COALESCE(old.config_text, ''));
+END;
+
+CREATE TRIGGER IF NOT EXISTS config_backups_au
+AFTER UPDATE ON config_backups BEGIN
+    INSERT INTO config_backups_fts(config_backups_fts, rowid, config_text)
+    VALUES ('delete', old.id, COALESCE(old.config_text, ''));
+    INSERT INTO config_backups_fts(rowid, config_text)
+    VALUES (new.id, COALESCE(new.config_text, ''));
+END;
+"""
 
 
 _CREATE_TABLE_RE = re.compile(
@@ -1411,6 +2113,19 @@ def _convert_qmark_to_dollar_params(query: str) -> str:
     return converted
 
 
+def _convert_sqlite_ddl_to_postgres(query: str) -> str:
+    """Apply SQLite→Postgres DDL transforms so migrations written in SQLite
+    syntax run unchanged on postgres. Mirrors the conversions in
+    ``_convert_sqlite_schema_to_postgres`` but is applied per-query inside
+    ``_PostgresConnectionCompat.execute`` for DDL statements.
+    """
+    converted = query
+    converted = converted.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    converted = converted.replace("DEFAULT (datetime('now'))", "DEFAULT NOW()")
+    converted = converted.replace(" BLOB", " BYTEA")
+    return converted
+
+
 def _parse_rowcount(status: str) -> int:
     try:
         return int(status.rsplit(" ", 1)[-1])
@@ -1455,6 +2170,13 @@ class _PostgresConnectionCompat:
         params = tuple(params or ())
         query_stripped = query.strip()
         query_upper = query_stripped.upper()
+
+        # Migrations are written in SQLite-flavored DDL. Transparently convert
+        # CREATE/ALTER statements so each migration runs on postgres without
+        # needing a hand-written postgres branch.
+        if query_upper.startswith("CREATE") or query_upper.startswith("ALTER"):
+            query = _convert_sqlite_ddl_to_postgres(query)
+
         converted = _convert_qmark_to_dollar_params(query)
 
         if query_upper.startswith("SELECT") or query_upper.startswith("WITH"):
@@ -1528,6 +2250,8 @@ async def _init_postgres(db) -> None:
         await db.execute(rewritten)
     for alter in deferred_alters:
         await db.execute(alter)
+    for stmt in _split_sql_statements(POSTGRES_FTS_EXTRAS):
+        await db.execute(stmt)
     await db.commit()
 
 
@@ -1541,6 +2265,7 @@ async def init_db():
             await _init_postgres(db)
         else:
             await db.executescript(SCHEMA)
+            await db.executescript(SQLITE_FTS_EXTRAS)
             await db.commit()
 
         await run_migrations(db, engine=DB_ENGINE)
