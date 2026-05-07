@@ -36,8 +36,11 @@ APP_RELOAD=false
 # Set this to your server's hostname/URL
 APP_CORS_ORIGINS=https://$(hostname -f 2>/dev/null || echo "plexus.local")
 
-# API token for service-to-service access
-APP_REQUIRE_API_TOKEN=true
+# API token for service-to-service access. Disabled by default because
+# the bundled deploy serves browser sessions (cookie-authenticated). Flip
+# to true and add X-API-Token: ${API_TOKEN} to every request if you want
+# to gate the API behind a static token for automation use.
+APP_REQUIRE_API_TOKEN=false
 APP_API_TOKEN=${API_TOKEN}
 
 # Disable public registration
