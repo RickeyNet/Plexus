@@ -2774,12 +2774,6 @@ input[type="number"].form-input {
     gap: 0.25rem;
 }
 
-.host-col-actions {
-    display: flex;
-    gap: 0.25rem;
-    justify-content: flex-end;
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════════
    Confirm Dialog
    ═══════════════════════════════════════════════════════════════════════════════ */
