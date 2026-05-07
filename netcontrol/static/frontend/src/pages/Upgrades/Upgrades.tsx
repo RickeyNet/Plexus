@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { BackupsTab } from './BackupsTab';
+import { ImagesTab } from './ImagesTab';
 
 type Tab = 'campaigns' | 'images' | 'backups';
 
@@ -34,7 +35,7 @@ export function Upgrades() {
 
       <div className="card" style={{ padding: '1rem' }}>
         {tab === 'campaigns' && <CampaignsPlaceholder />}
-        {tab === 'images' && <ImagesPlaceholder />}
+        {tab === 'images' && <ImagesTab />}
         {tab === 'backups' && <BackupsTab />}
       </div>
     </div>
@@ -50,12 +51,3 @@ function CampaignsPlaceholder() {
   );
 }
 
-function ImagesPlaceholder() {
-  return (
-    <div className="empty-state" style={{ padding: '2rem' }}>
-      The image library is still on the legacy page.{' '}
-      <a href="/#upgrades">Open the legacy Upgrades page</a> to manage firmware
-      images.
-    </div>
-  );
-}

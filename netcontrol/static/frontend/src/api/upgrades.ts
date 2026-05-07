@@ -35,3 +35,84 @@ export function useDeleteUpgradeBackup() {
 export function upgradeBackupDownloadUrl(filename: string): string {
   return `/api/upgrades/backups/${encodeURIComponent(filename)}`;
 }
+
+export interface UpgradeImage {
+  id: number;
+  filename: string;
+  original_name?: string | null;
+  file_size: number;
+  md5_hash: string;
+  model_pattern: string;
+  version: string;
+  platform: string;
+  notes: string;
+  uploaded_by?: string | null;
+  created_at?: string | null;
+}
+
+export interface UpgradeImageUpdate {
+  model_pattern?: string;
+  version?: string;
+  platform?: string;
+  notes?: string;
+}
+
+export interface UploadImageResult {
+  id: number;
+  filename: string;
+  file_size: number;
+  md5_hash: string;
+  version: string;
+  model_pattern: string;
+}
+
+export function useUpgradeImages() {
+  return useQuery({
+    queryKey: ['upgrade-images'],
+    queryFn: () => apiRequest<UpgradeImage[]>('/upgrades/images'),
+  });
+}
+
+export function useUploadUpgradeImage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return apiRequest<UploadImageResult>('/upgrades/images', {
+        method: 'POST',
+        body: fd,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['upgrade-images'] });
+    },
+  });
+}
+
+export function useUpdateUpgradeImage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: UpgradeImageUpdate }) =>
+      apiRequest<{ ok: boolean }>(`/upgrades/images/${id}`, {
+        method: 'PATCH',
+        body,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['upgrade-images'] });
+    },
+  });
+}
+
+export function useDeleteUpgradeImage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiRequest<{ ok: boolean }>(`/upgrades/images/${id}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['upgrade-images'] });
+    },
+  });
+}
