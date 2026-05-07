@@ -2690,7 +2690,7 @@ input[type="number"].form-input {
 .host-columns-header,
 .host-columns-row {
     display: grid;
-    grid-template-columns: 28px 1.5fr 1fr 0.8fr 1fr 1fr 1fr 172px;
+    grid-template-columns: 28px 1.5fr 1fr 0.8fr 1fr 1fr 1fr;
     align-items: center;
     gap: 0.5rem;
     padding: 0.35rem 0.6rem;

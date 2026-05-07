@@ -295,10 +295,10 @@ export async function addHost(groupId, hostname, ipAddress, deviceType = 'cisco_
     });
 }
 
-export async function updateHost(hostId, hostname, ipAddress, deviceType = 'cisco_ios') {
+export async function updateHost(hostId, hostname, ipAddress, deviceType = 'cisco_ios', extra = {}) {
     return apiRequest(`/hosts/${hostId}`, {
         method: 'PUT',
-        body: { hostname, ip_address: ipAddress, device_type: deviceType },
+        body: { hostname, ip_address: ipAddress, device_type: deviceType, ...extra },
     });
 }
 
