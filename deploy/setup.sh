@@ -26,7 +26,10 @@ if [ ! -f .env ]; then
 # ── Plexus Configuration ──────────────────────────────────────────────
 APP_HOST=0.0.0.0
 APP_PORT=8080
-APP_HTTPS=true
+# nginx terminates TLS at port 443 in the bundled compose stack, so the
+# app speaks plain HTTP inside the docker network. Set APP_HTTPS=true
+# only if you are running the app without the nginx reverse proxy.
+APP_HTTPS=false
 APP_HSTS=true
 APP_RELOAD=false
 
