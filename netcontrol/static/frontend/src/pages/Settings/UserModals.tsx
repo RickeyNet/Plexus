@@ -241,6 +241,7 @@ export function EditUserModal({
     user.role === 'admin' ? 'admin' : 'user',
   );
   const [groupIds, setGroupIds] = useState<number[]>(user.group_ids);
+  const [neverExpires, setNeverExpires] = useState<boolean>(!!user.session_never_expires);
   const [error, setError] = useState<string | null>(null);
 
   const submitDisabled =
@@ -280,6 +281,20 @@ export function EditUserModal({
         <label className="form-label">Access Groups</label>
         <GroupCheckboxes groups={groups} selected={groupIds} onChange={setGroupIds} />
       </div>
+      <div className="form-group">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <input
+            type="checkbox"
+            checked={neverExpires}
+            onChange={(e) => setNeverExpires(e.target.checked)}
+          />
+          <span>Session never expires</span>
+        </label>
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+          Bypasses the global idle timeout. Use only for read-only kiosk
+          accounts (smart boards, NOC walls).
+        </div>
+      </div>
       {error && <div className="error">{error}</div>}
       <ModalActions
         onClose={onClose}
@@ -294,6 +309,7 @@ export function EditUserModal({
                 username: username.trim(),
                 display_name: displayName.trim(),
                 role,
+                session_never_expires: neverExpires,
               },
             },
             {

@@ -22,7 +22,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -608,18 +608,55 @@ async def verify_user(username: str, password: str) -> dict | None:
 
 
 def create_session_token(username: str, user_id: int) -> str:
-    return _serializer.dumps({"user": username, "user_id": user_id})
+    # `originally_issued_at` is the absolute-cap anchor; `last_activity` is
+    # bumped on every authenticated request to support idle-timeout. Both
+    # are unix timestamps. The serializer also embeds its own issue time
+    # (used by max_age=) but we need our own field that survives refreshes.
+    now = int(time.time())
+    return _serializer.dumps({
+        "user": username,
+        "user_id": user_id,
+        "originally_issued_at": now,
+        "last_activity": now,
+    })
+
+
+def _refresh_session_token(data: dict) -> str:
+    """Re-issue a session token with `last_activity` bumped to now, preserving
+    `originally_issued_at` so the absolute lifetime cap continues to apply."""
+    return _serializer.dumps({
+        "user": data["user"],
+        "user_id": data["user_id"],
+        "originally_issued_at": data.get("originally_issued_at", int(time.time())),
+        "last_activity": int(time.time()),
+    })
 
 
 def verify_session_token(token: str) -> dict | None:
-    """Returns {"user": username, "user_id": id} or None."""
+    """Returns the decoded payload or None. Validates the signature only;
+    idle timeout and absolute lifetime are enforced in require_auth where we
+    have the user record (and so can honor session_never_expires).
+
+    Tokens minted before originally_issued_at was added still get the
+    serializer's max_age check enforced as a hard fallback so they expire
+    on the same 24h schedule as legacy behavior.
+    """
     try:
-        data = _serializer.loads(token, max_age=SESSION_MAX_AGE)
-        if "user" in data and "user_id" in data:
-            return data
+        data = _serializer.loads(token)
+    except BadSignature:
         return None
-    except (BadSignature, SignatureExpired):
+    if "user" not in data or "user_id" not in data:
         return None
+    # Legacy token without our absolute-cap anchor — fall back to the
+    # serializer's own timestamp so old sessions can't outlive 24h.
+    if "originally_issued_at" not in data:
+        try:
+            _serializer.loads(token, max_age=SESSION_MAX_AGE)
+        except SignatureExpired:
+            return None
+        except BadSignature:
+            return None
+    return data
 
 
 # Initialize shared module with session verifier
@@ -639,8 +676,14 @@ PASSWORD_CHANGE_ALLOWED_PATHS = {
 _CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
-async def require_auth(request: Request):
-    """Dependency that checks for a valid session cookie. Returns session dict."""
+async def require_auth(request: Request, response: Response = None):
+    """Dependency that checks for a valid session cookie. Returns session dict.
+
+    Enforces the configurable idle timeout (state.LOGIN_RULES.session_idle_timeout)
+    and refreshes the cookie's `last_activity` on every authenticated request.
+    Users with users.session_never_expires=1 bypass both the idle check and
+    the absolute lifetime — intended for kiosk/display accounts.
+    """
     path = request.url.path
     if path.startswith("/static/"):
         return None
@@ -661,14 +704,44 @@ async def require_auth(request: Request):
     if not session:
         raise HTTPException(status_code=401, detail="Session expired")
 
-    # Enforce first-login password reset: block privileged operations
-    if path not in PASSWORD_CHANGE_ALLOWED_PATHS:
-        user = await db.get_user_by_id(session["user_id"])
-        if user and user.get("must_change_password"):
-            raise HTTPException(
-                status_code=403,
-                detail="Password change required before accessing this resource",
-            )
+    user = await db.get_user_by_id(session["user_id"])
+    if user and user.get("must_change_password") and path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+        raise HTTPException(
+            status_code=403,
+            detail="Password change required before accessing this resource",
+        )
+
+    never_expires = bool((user or {}).get("session_never_expires"))
+
+    # Absolute lifetime cap (24h) — skipped for kiosk/display accounts.
+    if not never_expires:
+        originally_issued = int(session.get("originally_issued_at") or 0)
+        if originally_issued > 0 and int(time.time()) - originally_issued > SESSION_MAX_AGE:
+            if response is not None:
+                response.delete_cookie("session", samesite="strict")
+            raise HTTPException(status_code=401, detail="Session expired")
+
+    # Idle-timeout enforcement + cookie refresh. Skip for kiosk accounts and
+    # for endpoints that don't pass a Response (rare — most routes do).
+    if not never_expires and response is not None:
+        idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
+        last_activity = int(session.get("last_activity") or 0)
+        if idle_timeout > 0 and last_activity > 0:
+            elapsed = int(time.time()) - last_activity
+            if elapsed > idle_timeout:
+                response.delete_cookie("session", samesite="strict")
+                raise HTTPException(status_code=401, detail="Session idle timeout exceeded")
+        # Bump activity by re-issuing the cookie. Re-using the same attributes
+        # the login flow uses keeps the cookie behavior consistent.
+        refreshed = _refresh_session_token(session)
+        response.set_cookie(
+            key="session",
+            value=refreshed,
+            httponly=True,
+            samesite="strict",
+            max_age=SESSION_MAX_AGE,
+            secure=APP_HTTPS_ENABLED,
+        )
 
     return session
 

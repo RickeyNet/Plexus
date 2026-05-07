@@ -199,6 +199,11 @@ DEFAULT_LOGIN_RULES = {
     "lockout_time": 900,
     "rate_limit_window": 60,
     "rate_limit_max": 10,
+    # Idle session timeout in seconds. Sessions are bumped to "active" on each
+    # authenticated request; if no requests arrive within this window the next
+    # request is rejected with 401. Users with `session_never_expires` bypass
+    # this entirely. Set to 0 to disable idle-timeout enforcement globally.
+    "session_idle_timeout": 1800,
 }
 
 # Global API rate-limit defaults — applied to all authenticated API endpoints
@@ -435,6 +440,8 @@ def _sanitize_login_rules(data: dict | None) -> dict:
         "lockout_time": max(1, int(merged.get("lockout_time", DEFAULT_LOGIN_RULES["lockout_time"]))),
         "rate_limit_window": max(1, int(merged.get("rate_limit_window", DEFAULT_LOGIN_RULES["rate_limit_window"]))),
         "rate_limit_max": max(1, int(merged.get("rate_limit_max", DEFAULT_LOGIN_RULES["rate_limit_max"]))),
+        # 0 = disabled. Cap at 24h so the absolute session lifetime always wins.
+        "session_idle_timeout": max(0, min(86400, int(merged.get("session_idle_timeout", DEFAULT_LOGIN_RULES["session_idle_timeout"])))),
     }
 
 
