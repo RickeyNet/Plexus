@@ -163,6 +163,8 @@ function renderInventoryGroups(groups) {
                     </div>
                     <div style="display: flex; align-items: center; gap: 0.25rem;">
                         <span id="bulk-actions-${group.id}" style="display:none; gap:0.25rem;">
+                            <button class="btn btn-sm btn-secondary" data-bulk-single="${group.id}" onclick="bulkEditHost(${group.id})">Edit</button>
+                            <button class="btn btn-sm btn-secondary" data-bulk-single="${group.id}" onclick="bulkFetchSerial(${group.id})">Serial</button>
                             <button class="btn btn-sm btn-secondary" onclick="bulkMoveHosts(${group.id})">Move</button>
                             <button class="btn btn-sm btn-danger" onclick="bulkDeleteHosts(${group.id})">Delete</button>
                         </span>
@@ -178,7 +180,6 @@ function renderInventoryGroups(groups) {
                         <span class="host-col-model">Model</span>
                         <span class="host-col-serial">Serial Number</span>
                         <span class="host-col-sw">Software Version</span>
-                        <span class="host-col-actions"></span>
                     </div>` +
                     sortedHosts.map(host => {
                         // Store host data for the edit modal
@@ -193,11 +194,6 @@ function renderInventoryGroups(groups) {
                             <span class="host-col-model">${escapeHtml(host.model || '\u2014')}</span>
                             <span class="host-col-serial" id="serial-cell-${host.id}">${escapeHtml(host.serial_number || '\u2014')}</span>
                             <span class="host-col-sw">${escapeHtml(host.software_version || '\u2014')}</span>
-                            <span class="host-col-actions">
-                                <button class="btn btn-sm btn-secondary" onclick="showFetchSerialModal(${host.id})">Serial</button>
-                                <button class="btn btn-sm btn-secondary" onclick="showEditHostModal(${host.id})">Edit</button>
-                                <button class="btn btn-sm btn-danger" onclick="deleteHost(${group.id}, ${host.id})">Delete</button>
-                            </span>
                         </div>
                     `;}).join('') :
                     '<div class="empty-state" style="padding: 1rem;">No hosts</div>'
@@ -1246,7 +1242,8 @@ window.showEditHostModal = function(hostId) {
     const hostname = host.hostname;
     const ipAddress = host.ip_address;
     const deviceType = host.device_type || 'cisco_ios';
-    const groupId = host.groupId;
+    const currentGroupId = host.groupId;
+    const groups = listViewState.inventory.items || [];
 
     const form = document.createElement('form');
     form.innerHTML = `
@@ -1266,6 +1263,12 @@ window.showEditHostModal = function(hostId) {
                 <option value="cisco_asa">Cisco ASA</option>
             </select>
         </div>
+        <div class="form-group">
+            <label class="form-label">Group</label>
+            <select class="form-select" name="group_id">
+                ${groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('')}
+            </select>
+        </div>
         <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
             <button type="button" class="btn btn-secondary" onclick="closeAllModals()">Cancel</button>
             <button type="submit" class="btn btn-primary">Save</button>
@@ -1275,12 +1278,21 @@ window.showEditHostModal = function(hostId) {
     form.querySelector('[name="hostname"]').value = hostname;
     form.querySelector('[name="ip_address"]').value = ipAddress;
     form.querySelector('[name="device_type"]').value = deviceType;
+    form.querySelector('[name="group_id"]').value = String(currentGroupId);
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const formData = new FormData(form);
+        const newGroupId = Number(formData.get('group_id'));
         try {
-            await api.updateHost(hostId, formData.get('hostname'), formData.get('ip_address'), formData.get('device_type'));
+            await api.updateHost(
+                hostId,
+                formData.get('hostname'),
+                formData.get('ip_address'),
+                formData.get('device_type'),
+                { group_id: newGroupId },
+            );
+            invalidateApiCache('/inventory');
             closeAllModals();
             await loadInventory();
             showSuccess('Host updated successfully');
@@ -1347,12 +1359,30 @@ window.onHostSelectChange = function(groupId) {
     const selected = getSelectedHostIds(groupId);
     const bar = document.getElementById(`bulk-actions-${groupId}`);
     if (bar) bar.style.display = selected.length ? 'flex' : 'none';
+    // Edit / Serial only make sense for one host at a time. Hide them when
+    // 0 or 2+ are selected so the toolbar reads cleanly.
+    const singleOnly = selected.length === 1;
+    document.querySelectorAll(`[data-bulk-single="${groupId}"]`).forEach(btn => {
+        btn.style.display = singleOnly ? '' : 'none';
+    });
     const selectAll = document.querySelector(`[data-select-all="${groupId}"]`);
     if (selectAll) {
         const total = document.querySelectorAll(`.host-select[data-group-id="${groupId}"]`).length;
         selectAll.checked = selected.length === total && total > 0;
         selectAll.indeterminate = selected.length > 0 && selected.length < total;
     }
+};
+
+window.bulkEditHost = function(groupId) {
+    const ids = getSelectedHostIds(groupId);
+    if (ids.length !== 1) return;
+    showEditHostModal(ids[0]);
+};
+
+window.bulkFetchSerial = function(groupId) {
+    const ids = getSelectedHostIds(groupId);
+    if (ids.length !== 1) return;
+    showFetchSerialModal(ids[0]);
 };
 
 window.toggleSelectAllHosts = function(groupId, checked) {
