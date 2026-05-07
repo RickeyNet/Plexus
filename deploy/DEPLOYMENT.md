@@ -9,6 +9,26 @@ Complete instructions for deploying Plexus on a VM with Docker, PostgreSQL, and 
 - Static IP on your management network
 - DNS record (optional but recommended): e.g. `plexus.corp.local`
 
+## Quick Start (Ubuntu, one command)
+
+For a fresh Ubuntu box, the bootstrap script does everything in Steps 1–7
+below in a single run — installs Docker, clones the repo, generates certs,
+starts the stack, and opens firewall ports:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RickeyNet/Plexus/main/deploy/bootstrap.sh | sudo bash  # one-shot install
+```
+
+Or after cloning manually:
+```bash
+sudo bash deploy/bootstrap.sh  # idempotent — safe to re-run
+```
+
+The script is idempotent: re-running it pulls the latest code and rebuilds.
+Skip to **Step 4: Edit .env** afterward if you want to change CORS origins
+or other settings. The detailed manual steps below remain authoritative for
+RHEL/Rocky and for understanding what the bootstrap automates.
+
 ## Step 1: Install Docker
 
 Plexus uses `docker compose` (v2, plugin form). Ubuntu's `docker.io` package
