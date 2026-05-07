@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Cap each container's log history at 250 MB (50 MB × 5 files) so logs
 # do not silently fill /var/lib/docker over time. Tune by editing the
 # anchor below.
