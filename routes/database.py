@@ -8143,9 +8143,12 @@ async def get_vendor_oid_for_host(device_type: str) -> dict | None:
     """Lookup OIDs by matching device_type substring (case-insensitive)."""
     db = await get_db()
     try:
+        # COLLATE NOCASE is sqlite-only; postgres has no built-in case-folding
+        # collation by that name. Lowercasing both sides works on every engine
+        # without needing CITEXT or per-engine branches.
         cursor = await db.execute(
             """SELECT * FROM vendor_oid_registry
-               WHERE ? LIKE '%' || device_type || '%' COLLATE NOCASE
+               WHERE LOWER(?) LIKE '%' || LOWER(device_type) || '%'
                ORDER BY LENGTH(device_type) DESC LIMIT 1""",
             (device_type,),
         )
