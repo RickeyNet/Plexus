@@ -15,58 +15,62 @@ Plexus uses `docker compose` (v2, plugin form). Ubuntu's `docker.io` package
 does **not** ship the compose plugin, and `docker-compose-plugin` is not in
 Ubuntu's default repos — you must use Docker's official apt repository.
 
+#### Ubuntu — Docker's official repo
 ```bash
-# Ubuntu — Docker's official repo
-sudo apt update
-sudo apt install -y ca-certificates curl
-sudo install -m 0755 -d /etc/apt/keyrings
+sudo apt update  # refresh apt package index
+sudo apt install -y ca-certificates curl  # prereqs for HTTPS apt repos
+sudo install -m 0755 -d /etc/apt/keyrings  # create keyring dir for third-party signing keys
+# Download Docker's GPG signing key
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
-  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo chmod a+r /etc/apt/keyrings/docker.asc  # make key world-readable so apt can verify packages
+# Register Docker's apt repo for your Ubuntu release codename and CPU arch
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-sudo apt update
+sudo apt update  # refresh index with Docker repo added
+# Install engine, CLI, containerd runtime, buildx, and compose v2 plugin
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo systemctl enable docker && sudo systemctl start docker
-sudo usermod -aG docker $USER
+sudo systemctl enable docker && sudo systemctl start docker  # enable on boot and start now
+sudo usermod -aG docker $USER  # add user to docker group so docker runs without sudo
 # Log out and back in for the group change to take effect
 ```
 
+
+###### RHEL / Rocky — Docker's official repo
 ```bash
-# RHEL / Rocky — Docker's official repo
-sudo dnf -y install dnf-plugins-core
-sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+sudo dnf -y install dnf-plugins-core  # install repo management plugin
+sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo  # register Docker's official RHEL repo
+# Install engine, CLI, containerd runtime, buildx, and compose v2 plugin
 sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo systemctl enable docker && sudo systemctl start docker
-sudo usermod -aG docker $USER
+sudo systemctl enable docker && sudo systemctl start docker  # enable on boot and start now
+sudo usermod -aG docker $USER  # add user to docker group so docker runs without sudo
 ```
 
 Verify both pieces are present:
 
 ```bash
-docker --version
-docker compose version
+docker --version  # confirm Docker engine is installed
+docker compose version  # confirm compose v2 plugin is installed
 ```
 
 ### Activate the `docker` group membership
-
-`usermod -aG docker $USER` only takes effect in **new** login sessions, so your
-current shell can't talk to the Docker socket yet. Pick one:
-
 ```bash
+sudo usermod -aG docker $USER  # only takes effect in **new** login sessions, so your
+# current shell can't talk to the Docker socket yet. Pick one:
+```
 # Option A (cleanest) — log out and SSH back in
-exit
+
+exit  # close current shell so next login picks up group change
 
 # Option B — start a new shell with the group applied, no logout needed
-newgrp docker
+newgrp docker  # spawn a subshell with the docker group already active
 ```
 
 Verify it worked — `docker` should appear in the output of `groups`, and a
 plain `docker ps` should run without `sudo`:
 
 ```bash
-groups
-docker ps
+groups  # list groups your shell currently has — should include 'docker'
+docker ps  # list running containers — succeeds without sudo if group is active
 ```
 
 If `docker ps` still fails with "permission denied while trying to connect to
@@ -74,15 +78,27 @@ the docker API," you're still in the old session — log out fully and back in.
 
 ## Step 2: Clone the Repository
 
+Install git first if it isn't already on the box:
+
 ```bash
-sudo mkdir -p /opt/plexus && cd /opt/plexus
-git clone <your-repo-url> .
+sudo apt install -y git  # Ubuntu / Debian
+# sudo dnf install -y git  # RHEL / Rocky
+git --version  # confirm install
+```
+
+Then clone the repo:
+
+```bash
+sudo mkdir -p /opt/plexus  # create install directory (root-owned by default)
+sudo chown -R $USER:$USER /opt/plexus  # give your user ownership so git can write here
+cd /opt/plexus  # enter install directory
+git clone https://github.com/RickeyNet/Plexus .  # clone repo contents into current directory (note trailing dot)
 ```
 
 ## Step 3: Run the Setup Script
 
 ```bash
-bash deploy/setup.sh
+bash deploy/setup.sh  # run setup helper: generates .env, creates self-signed cert, verifies Docker
 ```
 
 This automatically:
@@ -93,7 +109,7 @@ This automatically:
 ## Step 4: Edit .env
 
 ```bash
-nano .env
+nano .env  # open the generated env file for editing
 ```
 
 The only value you **must** change:
@@ -130,7 +146,7 @@ All other values (DB password, API token) were auto-generated by the setup scrip
 ## Step 5: Start Everything
 
 ```bash
-docker compose up -d
+docker compose up -d  # build images if needed and start all containers detached
 ```
 
 This starts 3 containers and mounts persistent state into Docker volumes (`/app/state` and `/app/certs`):
@@ -153,24 +169,19 @@ Additional UDP ports exposed on the app container:
 ## Step 6: Verify
 
 ```bash
-# Check all 3 containers are running and healthy
-docker compose ps
-
-# Check app health endpoint
-curl -k https://localhost/api/health
-
-# Watch live logs
-docker compose logs -f plexus
+docker compose ps  # check all 3 containers are running and healthy
+curl -k https://localhost/api/health  # hit health endpoint (-k allows the self-signed cert)
+docker compose logs -f plexus  # tail live app logs (Ctrl-C to detach; container keeps running)
 ```
 
 ## Step 7: Open Firewall
 
 ```bash
-sudo ufw allow 443/tcp       # HTTPS - user access
-sudo ufw allow 80/tcp        # HTTP redirect to HTTPS
-sudo ufw allow 2055/udp      # NetFlow from network devices
-sudo ufw allow 162/udp       # SNMP traps (optional)
-sudo ufw allow 1514/udp      # Syslog (optional)
+sudo ufw allow 443/tcp  # HTTPS - user access
+sudo ufw allow 80/tcp  # HTTP redirect to HTTPS
+sudo ufw allow 2055/udp  # NetFlow from network devices
+sudo ufw allow 162/udp  # SNMP traps (optional)
+sudo ufw allow 1514/udp  # Syslog (optional)
 ```
 
 ## Step 8: First Login and Configuration
@@ -288,9 +299,9 @@ verifying the platform itself is healthy.
 and confirm the stack comes back without intervention:
 
 ```bash
-sudo reboot
+sudo reboot  # restart the VM to verify the stack auto-starts on boot
 # Wait 60 seconds, SSH back in:
-docker compose ps   # All three containers should show "Up", postgres + plexus "(healthy)"
+docker compose ps  # All three containers should show "Up", postgres + plexus "(healthy)"
 ```
 
 ### Log Rotation
@@ -314,9 +325,9 @@ logging config is metadata, not part of the image).
 ### Update to Latest Code
 
 ```bash
-cd /opt/plexus
-git pull
-docker compose up -d --build
+cd /opt/plexus  # enter install directory
+git pull  # fetch and merge the latest commits from the remote
+docker compose up -d --build  # rebuild images with new code and restart containers
 ```
 
 ### View Logs
@@ -324,9 +335,9 @@ docker compose up -d --build
 See **Status & Monitoring** above. Quick reference:
 
 ```bash
-docker compose logs -f plexus           # follow app logs
-docker compose logs --tail 100 plexus   # last 100 lines, then exit
-docker compose logs -f                  # all services together
+docker compose logs -f plexus  # follow app logs
+docker compose logs --tail 100 plexus  # last 100 lines, then exit
+docker compose logs -f  # all services together
 ```
 
 ### Restart Services
@@ -360,15 +371,15 @@ do not back up the database alone.
 Run on demand:
 
 ```bash
-bash deploy/backup.sh
+bash deploy/backup.sh  # dump postgres + archive state volume to default location
 # Override destination or retention:
-BACKUP_DEST=/mnt/nas/plexus RETENTION_DAYS=60 bash deploy/backup.sh
+BACKUP_DEST=/mnt/nas/plexus RETENTION_DAYS=60 bash deploy/backup.sh  # write to NAS, keep 60 days instead of 30
 ```
 
 Schedule nightly via cron:
 
 ```bash
-sudo install -m 0644 deploy/plexus.cron /etc/cron.d/plexus
+sudo install -m 0644 deploy/plexus.cron /etc/cron.d/plexus  # install nightly backup as a system cron job
 ```
 
 By default this writes `/var/backups/plexus/db-YYYYMMDD-HHMMSS.sql.gz` and
@@ -379,7 +390,7 @@ local-only backup will not survive a VM loss.
 Manual ad-hoc dump (no state volume):
 
 ```bash
-docker exec plexus-postgres pg_dump -U plexus plexus > backup_$(date +%Y%m%d).sql
+docker exec plexus-postgres pg_dump -U plexus plexus > backup_$(date +%Y%m%d).sql  # quick SQL-only dump (no state volume — incomplete on its own)
 ```
 
 ### Restore
@@ -406,8 +417,8 @@ docker compose start plexus
 ### Full Reset (wipes all data)
 
 ```bash
-docker compose down -v
-docker compose up -d
+docker compose down -v  # stop containers and DELETE all volumes (data loss!)
+docker compose up -d  # rebuild fresh stack from scratch
 ```
 
 ## Troubleshooting
