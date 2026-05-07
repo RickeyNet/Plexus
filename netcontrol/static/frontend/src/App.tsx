@@ -6,6 +6,7 @@ import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { Sidebar } from '@/components/Sidebar';
 import { UserMenu } from '@/components/UserMenu';
 import { Compliance } from '@/pages/Compliance/Compliance';
+import { Configuration } from '@/pages/Configuration/Configuration';
 import { CustomDashboards } from '@/pages/Dashboard/CustomDashboards';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { DashboardViewer } from '@/pages/Dashboard/DashboardViewer';
@@ -31,6 +32,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/federation': 'Federation',
   '/floor-plan': 'Floor Plans',
   '/compliance': 'Compliance',
+  '/configuration': 'Configuration',
   '/risk-analysis': 'Risk Analysis',
   '/deployments': 'Deployments',
   '/upgrades': 'Upgrades',
@@ -102,6 +104,7 @@ export function App() {
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/compliance" element={<Compliance />} />
+          <Route path="/configuration" element={<Configuration />} />
           <Route path="/risk-analysis" element={<RiskAnalysis />} />
           <Route path="/deployments" element={<Deployments />} />
           <Route path="/upgrades" element={<Upgrades />} />
