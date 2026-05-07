@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 
+import { useAuthStatus } from '@/api/auth';
 import { usePerformanceMode } from '@/lib/usePerformanceMode';
 
 // Navigation mirrors the legacy SPA sidebar (netcontrol/static/index.html). Each
@@ -14,12 +15,20 @@ interface RouteItem {
   label: string;
   icon: Icon;
   to: string;
+  // Per-user gateable feature key (FEATURE_FLAGS). Omit for items always
+  // visible to authenticated users (e.g., Settings).
+  feature?: string;
+  // Global visibility key (FEATURE_VISIBILITY_CATALOG) — what admins can hide
+  // via Settings → Features. Defaults to `feature` if not set.
+  visKey?: string;
 }
 
 interface LegacyItem {
   label: string;
   icon: Icon;
   href: string;
+  feature?: string;
+  visKey?: string;
 }
 
 interface NavGroup {
@@ -229,35 +238,35 @@ const ic = {
 };
 
 const NAV: TopItem[] = [
-  { label: 'Dashboard', icon: ic.dashboard, to: '/' },
-  { label: 'Inventory', icon: ic.inventory, href: '/#inventory' },
-  { label: 'Playbooks', icon: ic.playbooks, href: '/#playbooks' },
-  { label: 'Jobs', icon: ic.jobs, href: '/#jobs' },
-  { label: 'Templates', icon: ic.templates, href: '/#templates' },
-  { label: 'Credentials', icon: ic.credentials, href: '/#credentials' },
+  { label: 'Dashboard', icon: ic.dashboard, to: '/', feature: 'dashboard' },
+  { label: 'Inventory', icon: ic.inventory, href: '/#inventory', feature: 'inventory' },
+  { label: 'Playbooks', icon: ic.playbooks, href: '/#playbooks', feature: 'playbooks' },
+  { label: 'Jobs', icon: ic.jobs, href: '/#jobs', feature: 'jobs' },
+  { label: 'Templates', icon: ic.templates, href: '/#templates', feature: 'templates' },
+  { label: 'Credentials', icon: ic.credentials, href: '/#credentials', feature: 'credentials' },
   {
     id: 'network',
     label: 'Network',
     icon: ic.network,
     children: [
-      { label: 'Topology', icon: ic.topology, href: '/#topology' },
-      { label: 'IPAM', icon: ic.ipam, href: '/#ipam' },
-      { label: 'Cloud Visibility', icon: ic.cloud, href: '/#cloud-visibility' },
-      { label: 'Monitoring', icon: ic.monitoring, href: '/#monitoring' },
-      { label: 'Configuration', icon: ic.config, href: '/#configuration' },
-      { label: 'Compliance', icon: ic.compliance, to: '/compliance' },
-      { label: 'Changes', icon: ic.changes, href: '/#change-management' },
-      { label: 'Reports', icon: ic.reports, href: '/#reports' },
-      { label: 'Graphs', icon: ic.graphs, href: '/#graph-templates' },
-      { label: 'MAC Tracking', icon: ic.mac, to: '/mac-tracking' },
-      { label: 'Traffic Analysis', icon: ic.traffic, to: '/traffic-analysis' },
-      { label: 'Upgrades', icon: ic.upgrades, href: '/#upgrades' },
-      { label: 'Federation', icon: ic.federation, to: '/federation' },
-      { label: 'Floor Plans', icon: ic.floorPlan, to: '/floor-plan' },
+      { label: 'Topology', icon: ic.topology, href: '/#topology', feature: 'topology' },
+      { label: 'IPAM', icon: ic.ipam, href: '/#ipam', feature: 'ipam' },
+      { label: 'Cloud Visibility', icon: ic.cloud, href: '/#cloud-visibility', feature: 'cloud-visibility' },
+      { label: 'Monitoring', icon: ic.monitoring, href: '/#monitoring', feature: 'monitoring' },
+      { label: 'Configuration', icon: ic.config, href: '/#configuration', feature: 'config-drift', visKey: 'configuration' },
+      { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: 'compliance' },
+      { label: 'Changes', icon: ic.changes, href: '/#change-management', feature: 'risk-analysis', visKey: 'change-management' },
+      { label: 'Reports', icon: ic.reports, href: '/#reports', feature: 'reports' },
+      { label: 'Graphs', icon: ic.graphs, href: '/#graph-templates', feature: 'graph-templates' },
+      { label: 'MAC Tracking', icon: ic.mac, to: '/mac-tracking', feature: 'mac-tracking' },
+      { label: 'Traffic Analysis', icon: ic.traffic, to: '/traffic-analysis', feature: 'traffic-analysis' },
+      { label: 'Upgrades', icon: ic.upgrades, href: '/#upgrades', feature: 'upgrades' },
+      { label: 'Federation', icon: ic.federation, to: '/federation', feature: 'federation' },
+      { label: 'Floor Plans', icon: ic.floorPlan, to: '/floor-plan', feature: 'floor-plan' },
     ],
   },
-  { label: 'Devices', icon: ic.inventory, to: '/devices' },
-  { label: 'Lab / Digital Twin', icon: ic.lab, to: '/lab' },
+  { label: 'Devices', icon: ic.inventory, to: '/devices', feature: 'inventory' },
+  { label: 'Lab / Digital Twin', icon: ic.lab, to: '/lab', feature: 'lab' },
   { label: 'Settings', icon: ic.settings, to: '/settings' },
 ];
 
@@ -321,6 +330,29 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
   const [collapsed, setCollapsed] = useState(false);
   const { pathname } = useLocation();
   const { enabled: perfEnabled, toggle: togglePerf } = usePerformanceMode();
+  const { data: auth } = useAuthStatus();
+
+  const visibleNav = useMemo(() => {
+    const isAdmin = auth?.role === 'admin';
+    const access = new Set(auth?.feature_access ?? []);
+    const hidden = new Set(auth?.feature_visibility_hidden ?? []);
+
+    const isItemVisible = (i: RouteItem | LegacyItem): boolean => {
+      const visKey = i.visKey ?? i.feature;
+      if (visKey && hidden.has(visKey)) return false;
+      if (!i.feature) return true; // always-visible (Settings, etc.)
+      if (isAdmin) return true;
+      return access.has(i.feature);
+    };
+
+    return NAV.flatMap((item): TopItem[] => {
+      if (!isGroup(item)) {
+        return isItemVisible(item) ? [item] : [];
+      }
+      const children = item.children.filter(isItemVisible);
+      return children.length ? [{ ...item, children }] : [];
+    });
+  }, [auth?.role, auth?.feature_access, auth?.feature_visibility_hidden]);
 
   const navClass = [
     'sidebar',
@@ -351,7 +383,7 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
         </button>
       </div>
       <div className="nav-links">
-        {NAV.map((item) =>
+        {visibleNav.map((item) =>
           isGroup(item) ? (
             <NavGroupItem key={item.id} group={item} currentPath={pathname} />
           ) : (

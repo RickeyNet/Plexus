@@ -841,6 +841,38 @@ def require_feature(feature_key: str):
         return session
     return _dependency
 
+
+_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def require_feature_method(feature_key: str):
+    """Like require_feature but requires `<feature_key>.write` for mutating
+    HTTP methods (POST/PUT/PATCH/DELETE). Use this on routers where you
+    want to grant some users read-only access while still gating writes.
+
+    Admins and API tokens bypass both checks. The base feature_key is
+    always required even on writes, so granting only `<feature>.write`
+    without the base read key denies access.
+    """
+    async def _dependency(request: Request):
+        session = await require_auth(request)
+        if session and session.get("auth_mode") == "token":
+            return session
+        user = await db.get_user_by_id(session["user_id"])
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        if user.get("role") == "admin":
+            return session
+        features = set(await _get_user_features(user))
+        if feature_key not in features:
+            raise HTTPException(status_code=403, detail=f"Access denied for feature '{feature_key}'")
+        if request.method.upper() not in _READ_METHODS:
+            write_key = f"{feature_key}.write"
+            if write_key not in features:
+                raise HTTPException(status_code=403, detail=f"Read-only access for '{feature_key}'; '{write_key}' required to modify")
+        return session
+    return _dependency
+
 async def require_admin(request: Request):
     """Dependency that checks for admin access. Returns session dict.
 
@@ -1581,7 +1613,7 @@ app.include_router(
 # Topology + admin
 app.include_router(
     topology_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("topology"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("topology"))],
 )
 app.include_router(
     topology_admin_router,
@@ -1621,7 +1653,7 @@ app.include_router(deployments_ws_router)  # WebSocket — handles its own auth
 # Monitoring + SLA + admin
 app.include_router(
     monitoring_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
 app.include_router(
     monitoring_admin_router,
@@ -1689,22 +1721,22 @@ app.include_router(
 # Cloud Visibility (AWS/Azure/GCP hybrid foundation)
 app.include_router(
     cloud_visibility_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("cloud-visibility"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("cloud-visibility"))],
 )
 # IP Address Management
 app.include_router(
     ipam_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("ipam"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("ipam"))],
 )
 # DHCP Scope/Lease Integration
 app.include_router(
     dhcp_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+    dependencies=[Depends(require_auth), Depends(require_feature("ipam"))],
 )
 # Geolocation and Floor Plan Mapping
 app.include_router(
     geolocation_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+    dependencies=[Depends(require_auth), Depends(require_feature("floor-plan"))],
 )
 # Multi-Instance Federation
 app.include_router(

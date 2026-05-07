@@ -10,6 +10,16 @@ import {
 const featureLabel = (feature: string): string =>
   feature.charAt(0).toUpperCase() + feature.slice(1);
 
+// Split the flat features list into base keys + their `.write` companions.
+// Base keys ending in `.write` are paired with their parent for the two-column
+// View/Modify display; bases without a `.write` companion still render but
+// have a disabled "modify" cell.
+function buildFeatureRows(features: string[]): Array<{ base: string; hasWrite: boolean }> {
+  const writeKeys = new Set(features.filter((f) => f.endsWith('.write')));
+  const bases = features.filter((f) => !f.endsWith('.write'));
+  return bases.map((base) => ({ base, hasWrite: writeKeys.has(`${base}.write`) }));
+}
+
 interface CreateProps {
   mode: 'create';
   features: string[];
@@ -66,31 +76,59 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
       </div>
       <div className="form-group">
         <label className="form-label">Feature Access</label>
+        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
+          View grants read-only access. Modify also allows POST/PUT/DELETE.
+        </div>
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-            gap: '0.4rem',
+            gridTemplateColumns: '1fr auto auto',
+            columnGap: '0.75rem',
+            rowGap: '0.3rem',
+            alignItems: 'center',
           }}
         >
-          {props.features.map((feature) => (
-            <label
-              key={feature}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-            >
+          <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>Feature</div>
+          <div style={{ fontWeight: 600, fontSize: '0.85rem', textAlign: 'center' }}>View</div>
+          <div style={{ fontWeight: 600, fontSize: '0.85rem', textAlign: 'center' }}>Modify</div>
+          {buildFeatureRows(props.features).flatMap(({ base, hasWrite }) => {
+            const writeKey = `${base}.write`;
+            const baseChecked = featureSet.has(base);
+            const writeChecked = featureSet.has(writeKey);
+            return [
+              <span key={`${base}-label`}>{featureLabel(base)}</span>,
               <input
+                key={`${base}-view`}
                 type="checkbox"
-                checked={featureSet.has(feature)}
+                checked={baseChecked}
+                style={{ justifySelf: 'center' }}
                 onChange={(e) => {
                   const next = new Set(featureSet);
-                  if (e.target.checked) next.add(feature);
-                  else next.delete(feature);
+                  if (e.target.checked) {
+                    next.add(base);
+                  } else {
+                    next.delete(base);
+                    next.delete(writeKey);
+                  }
                   setFeatureKeys(Array.from(next));
                 }}
-              />
-              <span>{featureLabel(feature)}</span>
-            </label>
-          ))}
+              />,
+              <input
+                key={`${base}-write`}
+                type="checkbox"
+                checked={writeChecked}
+                disabled={!hasWrite || !baseChecked}
+                title={!hasWrite ? 'No modify actions for this feature' : ''}
+                style={{ justifySelf: 'center' }}
+                onChange={(e) => {
+                  const next = new Set(featureSet);
+                  if (e.target.checked) next.add(writeKey);
+                  else next.delete(writeKey);
+                  setFeatureKeys(Array.from(next));
+                }}
+              />,
+            ];
+          })}
         </div>
       </div>
       {error && <div className="error">{error}</div>}
