@@ -103,9 +103,9 @@ change on first login).
 ## Common follow-ups
 
 ### Use your own TLS cert
-The self-signed cert lives in the `plexus_plexus-certs` Docker volume. To
-swap in a CA-signed cert, see the "Using Your Own TLS Certificate" section
-in `deploy/DEPLOYMENT.md`.
+The self-signed cert lives at `/opt/plexus/certs/{cert,key}.pem` (bind-mounted
+into the nginx container). To swap in a CA-signed cert, see the "Using Your
+Own TLS Certificate" section in `deploy/DEPLOYMENT.md`.
 
 ### Edit configuration
 ```bash

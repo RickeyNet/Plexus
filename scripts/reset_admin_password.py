@@ -72,6 +72,10 @@ async def _run(username: str, password: str | None) -> int:
 
     print("[ok]", action)
     print("[ok] username:", username)
+    # codeql[py/clear-text-logging-sensitive-data]: break-glass CLI run by an
+    # operator on the host. The whole point is to display the new password so
+    # the operator can use it for first login. Output goes to the operator's
+    # terminal, not to a log file.
     print("[ok] password:", password)
     print("[ok] must_change_password: false")
     print("[info] admins_before:", len(admins))
