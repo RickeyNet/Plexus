@@ -574,9 +574,6 @@ async def _config_drift_check_loop() -> None:
 
 # ── Routes: Baselines ────────────────────────────────────────────────────────
 
-def _drift_deps():
-    return [Depends(_require_auth), Depends(_require_feature("config-drift"))]
-
 
 @router.get("/api/config-drift/baselines")
 async def list_config_baselines(host_id: int | None = Query(default=None)):
