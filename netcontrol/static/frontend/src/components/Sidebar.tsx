@@ -261,7 +261,7 @@ const NAV: TopItem[] = [
       { label: 'Graphs', icon: ic.graphs, href: '/#graph-templates', feature: 'graph-templates' },
       { label: 'MAC Tracking', icon: ic.mac, to: '/mac-tracking', feature: 'mac-tracking' },
       { label: 'Traffic Analysis', icon: ic.traffic, to: '/traffic-analysis', feature: 'traffic-analysis' },
-      { label: 'Upgrades', icon: ic.upgrades, href: '/#upgrades', feature: 'upgrades' },
+      { label: 'Upgrades', icon: ic.upgrades, to: '/upgrades', feature: 'upgrades' },
       { label: 'Federation', icon: ic.federation, to: '/federation', feature: 'federation' },
       { label: 'Floor Plans', icon: ic.floorPlan, to: '/floor-plan', feature: 'floor-plan' },
     ],
