@@ -4,11 +4,10 @@ A Python-first network automation control center inspired by Ansible Tower / AWX
 Manage device inventories, run automation playbooks, store config templates, and
 stream live job output — all through a REST API with WebSocket support.
 
-**Scope (current):** FortiGate YAML → FTD JSON conversion and import; FastAPI backend with playbook runner and WebSocket streaming.
+**Scope (current):** FastAPI backend with playbook runner, WebSocket streaming, SNMP discovery, IPAM, topology, compliance, and digital-twin lab mode.
 
 ## Guides
 
-- FortiGate → FTD v2 workflow (CLI + API examples): `V2_WORKFLOW_GUIDE.md`
 - Operator runbook (recovery playbook + verification checklists): `OPERATOR_RUNBOOK.md`
 - Performance and scale notes: `PERFORMANCE_LIMITS.md`
 - Data handling and retention: `DATA_RETENTION.md`
@@ -193,26 +192,12 @@ python tools/migrate_sqlite_to_postgres.py \
 ## Versioning and Release
 
 - Plexus follows Semantic Versioning (`MAJOR.MINOR.PATCH`).
-- Current version is `0.2.0`.
+- Current version is `1.0.0`.
 - Check runtime version with:
 ```bash
 python templates/run.py --version
 ```
 - See release notes in `CHANGELOG.md`.
-
-## FTD API Timeout and Retry Controls
-
-Importer and cleanup tooling support configurable API resilience controls:
-
-- `--api-timeout`
-- `--api-retries`
-- `--api-retry-backoff`
-
-The same defaults can be set via environment variables:
-
-- `FTD_API_TIMEOUT` (default `30`)
-- `FTD_API_RETRIES` (default `3`)
-- `FTD_API_RETRY_BACKOFF` (default `1.0`)
 
 Interactive API docs: `http://localhost:8080/docs`
 

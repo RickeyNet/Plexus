@@ -17,6 +17,11 @@ it to the VM, and run one installer script.
 - `sudo` access
 - A way to receive ~1 GB of files (USB, SCP from a jump host, hypervisor shared folder, etc.)
 
+> **First time installing on a fresh VM?** Do the network/RDP/AD prep in
+> [VM_SETUP.md](VM_SETUP.md) first — static IP, hostname, SSH, time sync,
+> XFCE+xrdp for RDP, and AD domain join. The `desktop-debs/` directory in
+> this bundle has all the `.deb`s those steps need.
+
 ## Step 1 — Build the bundle (online machine)
 
 From the repo root:
@@ -35,13 +40,18 @@ plexus-airgap-bundle/
 │   ├── postgres.tar        # postgres:16-alpine
 │   └── nginx.tar           # nginx:alpine
 ├── debs/
-│   └── docker-*.deb        # Docker Engine + compose plugin for Ubuntu noble/amd64
+│   └── docker-*.deb        # Docker Engine + compose plugin (resolute/amd64)
+├── desktop-debs/
+│   └── *.deb               # XFCE + xrdp + AD-join (realmd/sssd/adcli) +
+│                           # chrony + openssh-server + ufw + firefox.
+│                           # Used by VM_SETUP.md, NOT installed automatically.
 ├── repo/
 │   ├── docker-compose.yml
 │   ├── .env.example
 │   └── deploy/             # nginx.conf, setup.sh, backup.sh, plexus.cron
-├── install.sh              # one-shot VM installer
-└── README.md               # this file
+├── install.sh              # one-shot Plexus installer (Docker + compose stack)
+├── VM_SETUP.md             # network, RDP, AD-join walkthrough — do this first
+└── README.md               # this file (Plexus install)
 ```
 
 ### Overrides

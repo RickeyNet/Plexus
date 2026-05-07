@@ -31,23 +31,23 @@ echo "  Ubuntu:    $UBUNTU_CODENAME (apt suite name for Docker repo)"
 echo "═══════════════════════════════════════════════════"
 
 rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"/{images,debs,repo,repo/deploy}
+mkdir -p "$OUT_DIR"/{images,debs,desktop-debs,repo,repo/deploy}
 
 # ── 1. Build the Plexus image for linux/amd64 ────────────────────────
 echo ""
-echo "[1/5] Building Plexus image ($PLEXUS_IMAGE_TAG) for $PLATFORM..."
+echo "[1/6] Building Plexus image ($PLEXUS_IMAGE_TAG) for $PLATFORM..."
 # --load requires a single-platform build with the docker driver.
 docker buildx build --platform "$PLATFORM" --load -t "$PLEXUS_IMAGE_TAG" .
 
 # ── 2. Pull supporting images for the target platform ────────────────
 echo ""
-echo "[2/5] Pulling $POSTGRES_IMAGE and $NGINX_IMAGE for $PLATFORM..."
+echo "[2/6] Pulling $POSTGRES_IMAGE and $NGINX_IMAGE for $PLATFORM..."
 docker pull --platform "$PLATFORM" "$POSTGRES_IMAGE"
 docker pull --platform "$PLATFORM" "$NGINX_IMAGE"
 
 # ── 3. Save all images as tar files ──────────────────────────────────
 echo ""
-echo "[3/5] Saving images to tar files..."
+echo "[3/6] Saving images to tar files..."
 docker save -o "$OUT_DIR/images/plexus.tar"   "$PLEXUS_IMAGE_TAG"
 docker save -o "$OUT_DIR/images/postgres.tar" "$POSTGRES_IMAGE"
 docker save -o "$OUT_DIR/images/nginx.tar"    "$NGINX_IMAGE"
@@ -57,7 +57,7 @@ ls -lh "$OUT_DIR/images/"
 # We download to a scratch dir using a throwaway Ubuntu container so the
 # host's apt state isn't mutated. Bind-mount the output dir for results.
 echo ""
-echo "[4/5] Downloading Docker Engine .deb packages (Ubuntu $UBUNTU_CODENAME, amd64)..."
+echo "[4/6] Downloading Docker Engine .deb packages (Ubuntu $UBUNTU_CODENAME, amd64)..."
 # Run apt download inside an Ubuntu image whose codename matches the target VM,
 # so transitive Ubuntu-archive deps (libc6, libseccomp2, etc.) are the right
 # versions for resolute. Default base = ubuntu:$UBUNTU_CODENAME.
@@ -87,17 +87,45 @@ docker run --rm --platform "$PLATFORM" \
         ls -lh /out
     '
 
-# ── 5. Stage repo files needed at runtime ────────────────────────────
+# ── 5. Download desktop (XFCE) + xrdp + AD-join .deb packages ────────
+# Operator-driven: the air-gap installer does NOT auto-install these. They sit
+# in desktop-debs/ for the operator to run `apt install` against per VM_SETUP.md.
 echo ""
-echo "[5/5] Staging repo files..."
+echo "[5/6] Downloading desktop (XFCE) + xrdp + AD-join .deb packages..."
+docker run --rm --platform "$PLATFORM" \
+    -v "$OUT_DIR/desktop-debs":/out \
+    "$APT_BASE_IMAGE" bash -c '
+        set -euo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        cd /out
+        apt-get install -y --download-only \
+            xfce4 xfce4-goodies \
+            xrdp xorgxrdp \
+            firefox \
+            dbus-x11 \
+            openssh-server \
+            chrony \
+            realmd sssd sssd-tools adcli \
+            oddjob oddjob-mkhomedir \
+            packagekit samba-common-bin krb5-user \
+            ufw
+        cp /var/cache/apt/archives/*.deb /out/
+        echo "Downloaded $(ls /out | wc -l) desktop/AD .debs"
+    '
+
+# ── 6. Stage repo files needed at runtime ────────────────────────────
+echo ""
+echo "[6/6] Staging repo files..."
 cp docker-compose.yml      "$OUT_DIR/repo/"
 cp .env.example            "$OUT_DIR/repo/"
 cp deploy/nginx.conf       "$OUT_DIR/repo/deploy/"
 cp deploy/setup.sh         "$OUT_DIR/repo/deploy/"
 cp deploy/backup.sh        "$OUT_DIR/repo/deploy/"
 cp deploy/plexus.cron      "$OUT_DIR/repo/deploy/"
-cp deploy/airgap/install.sh "$OUT_DIR/install.sh"
-cp deploy/airgap/README.md  "$OUT_DIR/README.md"
+cp deploy/airgap/install.sh   "$OUT_DIR/install.sh"
+cp deploy/airgap/README.md    "$OUT_DIR/README.md"
+cp deploy/airgap/VM_SETUP.md  "$OUT_DIR/VM_SETUP.md"
 chmod +x "$OUT_DIR/install.sh" "$OUT_DIR/repo/deploy/setup.sh" "$OUT_DIR/repo/deploy/backup.sh"
 
 # ── Tar everything up ────────────────────────────────────────────────
