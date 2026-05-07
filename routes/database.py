@@ -218,6 +218,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name TEXT   DEFAULT '',
     role        TEXT    NOT NULL DEFAULT 'user',
     must_change_password INTEGER NOT NULL DEFAULT 0,
+    session_never_expires INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -2420,7 +2421,7 @@ async def get_user_by_id(user_id: int) -> dict | None:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, username, display_name, role, must_change_password, created_at FROM users WHERE id = ?",
+            "SELECT id, username, display_name, role, must_change_password, session_never_expires, created_at FROM users WHERE id = ?",
             (user_id,),
         )
         return row_to_dict(await cursor.fetchone())
@@ -2475,7 +2476,7 @@ async def update_user_profile(user_id: int, display_name: str = None):
         await db.close()
 
 
-async def update_user_admin(user_id: int, username: str = None, display_name: str = None, role: str = None):
+async def update_user_admin(user_id: int, username: str = None, display_name: str = None, role: str = None, session_never_expires: bool | None = None):
     db = await get_db()
     try:
         fields = []
@@ -2489,6 +2490,9 @@ async def update_user_admin(user_id: int, username: str = None, display_name: st
         if role is not None:
             fields.append("role = ?")
             values.append(role)
+        if session_never_expires is not None:
+            fields.append("session_never_expires = ?")
+            values.append(int(bool(session_never_expires)))
         if not fields:
             return
         sql, params = _safe_dynamic_update("users", fields, values, "id = ?", user_id)

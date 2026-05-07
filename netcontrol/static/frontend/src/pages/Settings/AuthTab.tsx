@@ -106,6 +106,7 @@ function LoginRulesForm() {
         {numField('Lockout time (s)', 'lockout_time', 0)}
         {numField('Rate window (s)', 'rate_limit_window', 1)}
         {numField('Rate limit max', 'rate_limit_max', 1)}
+        {numField('Idle timeout (s, 0 = off)', 'session_idle_timeout', 0)}
       </div>
       <div style={{ marginTop: '0.5rem' }}>
         <button
