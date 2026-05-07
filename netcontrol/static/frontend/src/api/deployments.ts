@@ -126,6 +126,39 @@ export interface DeploymentCorrelation {
   time_window: { start?: string | null; end?: string | null };
 }
 
+export interface AlertCorrelationDeployment {
+  id: number;
+  name?: string | null;
+  status?: string | null;
+  started_at?: string | null;
+}
+
+export interface AlertCorrelationDrift {
+  host_id?: number;
+  hostname?: string | null;
+  detected_at?: string | null;
+  diff_lines_added?: number;
+  diff_lines_removed?: number;
+}
+
+export interface MonitoringAlertSummary {
+  id: number;
+  host_id?: number;
+  hostname?: string | null;
+  metric?: string;
+  alert_type?: string;
+  severity?: string;
+  message?: string | null;
+  value?: number | null;
+  created_at?: string | null;
+}
+
+export interface AlertCorrelation {
+  alert: MonitoringAlertSummary;
+  related_deployments: AlertCorrelationDeployment[];
+  related_drift_events: AlertCorrelationDrift[];
+}
+
 // ── Queries ────────────────────────────────────────────────────────────────
 
 export function useDeploymentSummary() {
@@ -155,6 +188,14 @@ export function useDeploymentCorrelation(id: number | null) {
     queryKey: ['deployment-correlation', id],
     queryFn: () => apiRequest(`/deployments/${id}/correlation`),
     enabled: id != null,
+  });
+}
+
+export function useAlertCorrelation(alertId: number | null) {
+  return useQuery<AlertCorrelation>({
+    queryKey: ['alert-correlation', alertId],
+    queryFn: () => apiRequest(`/monitoring/alerts/${alertId}/correlation`),
+    enabled: alertId != null,
   });
 }
 
