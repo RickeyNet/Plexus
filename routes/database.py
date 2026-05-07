@@ -375,10 +375,13 @@ CREATE TABLE IF NOT EXISTS interface_stats (
     if_index            INTEGER NOT NULL,
     if_name             TEXT    NOT NULL DEFAULT '',
     if_speed_mbps       INTEGER DEFAULT 0,
-    in_octets           INTEGER DEFAULT 0,
-    out_octets          INTEGER DEFAULT 0,
-    prev_in_octets      INTEGER DEFAULT 0,
-    prev_out_octets     INTEGER DEFAULT 0,
+    -- Counter64 columns: real switches push tens of billions of bytes, which
+    -- overflow signed int32 (~2.1B). BIGINT in postgres / INTEGER affinity
+    -- in sqlite (which is variable-width) keeps both engines happy.
+    in_octets           BIGINT  DEFAULT 0,
+    out_octets          BIGINT  DEFAULT 0,
+    prev_in_octets      BIGINT  DEFAULT 0,
+    prev_out_octets     BIGINT  DEFAULT 0,
     polled_at           TEXT    NOT NULL DEFAULT (datetime('now')),
     prev_polled_at      TEXT    DEFAULT NULL,
     UNIQUE(host_id, if_index)
@@ -790,8 +793,8 @@ CREATE TABLE IF NOT EXISTS interface_ts (
     if_index        INTEGER NOT NULL,
     if_name         TEXT    NOT NULL DEFAULT '',
     if_speed_mbps   INTEGER DEFAULT 0,
-    in_octets       INTEGER DEFAULT 0,
-    out_octets      INTEGER DEFAULT 0,
+    in_octets       BIGINT  DEFAULT 0,
+    out_octets      BIGINT  DEFAULT 0,
     in_rate_bps     REAL    DEFAULT NULL,
     out_rate_bps    REAL    DEFAULT NULL,
     utilization_pct REAL    DEFAULT NULL,
