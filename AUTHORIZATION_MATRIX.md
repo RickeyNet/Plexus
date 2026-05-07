@@ -40,7 +40,6 @@ All API endpoints and their required authentication/authorization levels.
 | CRUD | `/api/reporting/*` | reporting |
 | CRUD | `/api/cdef/*` | cdef |
 | CRUD | `/api/mac-tracking/*` | mac_tracking |
-| GET | `/api/secret-variables`, `/api/secret-variables/names` | (list/names for template autocomplete) |
 | CRUD | `/api/flow-collector/*` | flow_collector |
 | CRUD | `/api/baseline-alerting/*` | baseline_alerting |
 
@@ -68,7 +67,7 @@ All API endpoints and their required authentication/authorization levels.
 | Paths | Router |
 |-------|--------|
 | `/api/admin/*` | admin |
-| POST/PUT/DELETE | `/api/secret-variables/*` | (admin enforced in handlers) |
+| `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both) |
 | `/api/inventory/admin/*` | inventory_admin |
 | `/api/topology/admin/*` | topology_admin |
 | `/api/compliance/admin/*` | compliance_admin |

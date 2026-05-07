@@ -81,14 +81,35 @@ class SecretVariableUpdate(BaseModel):
 
 
 @router.get("/api/secret-variables")
-async def list_secret_variables():
-    """Return all secret variable metadata (names, descriptions — never values)."""
+async def list_secret_variables(request: Request):
+    """Return all secret variable metadata (names, descriptions — never values).
+
+    Admin-only: even though values are never returned, leaking the set of
+    variable names exposes which integrations and external services are
+    wired up, which is information a regular user shouldn't need.
+    """
+    await _require_admin_session(request)
     return await db.get_all_secret_variables()
 
 
+# Registered before /{var_id} so the literal `names` segment matches first;
+# otherwise FastAPI tries the int-typed {var_id} route first, fails Pydantic
+# validation on the string, and returns 422.
+@router.get("/api/secret-variables/names")
+async def list_secret_variable_names(request: Request):
+    """Return just the names — for template editor autocomplete.
+
+    Admin-only for the same reason as list_secret_variables.
+    """
+    await _require_admin_session(request)
+    variables = await db.get_all_secret_variables()
+    return [{"name": v["name"], "description": v.get("description", "")} for v in variables]
+
+
 @router.get("/api/secret-variables/{var_id}")
-async def get_secret_variable(var_id: int):
+async def get_secret_variable(var_id: int, request: Request):
     """Return metadata for a single secret variable (never the value)."""
+    await _require_admin_session(request)
     sv = await db.get_secret_variable(var_id)
     if not sv:
         raise HTTPException(404, "Secret variable not found")
@@ -174,10 +195,3 @@ async def delete_secret_variable(var_id: int, request: Request):
     )
     LOGGER.info("Secret variable deleted: '%s' by %s", sv["name"], session["user"])
     return {"ok": True}
-
-
-@router.get("/api/secret-variables/names")
-async def list_secret_variable_names():
-    """Return just the names — for template editor autocomplete."""
-    variables = await db.get_all_secret_variables()
-    return [{"name": v["name"], "description": v.get("description", "")} for v in variables]
