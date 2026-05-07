@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { BackupsTab } from './BackupsTab';
+import { CampaignsTab } from './CampaignsTab';
 import { ImagesTab } from './ImagesTab';
 
 type Tab = 'campaigns' | 'images' | 'backups';
@@ -34,20 +35,10 @@ export function Upgrades() {
       </div>
 
       <div className="card" style={{ padding: '1rem' }}>
-        {tab === 'campaigns' && <CampaignsPlaceholder />}
+        {tab === 'campaigns' && <CampaignsTab />}
         {tab === 'images' && <ImagesTab />}
         {tab === 'backups' && <BackupsTab />}
       </div>
     </div>
   );
 }
-
-function CampaignsPlaceholder() {
-  return (
-    <div className="empty-state" style={{ padding: '2rem' }}>
-      Upgrade campaigns are still on the legacy page.{' '}
-      <a href="/#upgrades">Open the legacy Upgrades page</a> to manage them.
-    </div>
-  );
-}
-

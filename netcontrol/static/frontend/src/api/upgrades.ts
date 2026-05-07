@@ -116,3 +116,199 @@ export function useDeleteUpgradeImage() {
     },
   });
 }
+
+// ── Campaigns ──────────────────────────────────────────────────────────────
+
+export type UpgradePhase =
+  | 'prestage'
+  | 'transfer'
+  | 'activate'
+  | 'verify'
+  | 'verify_prestage';
+
+export interface UpgradeCampaignSummary {
+  id: number;
+  name: string;
+  description: string;
+  status: string;
+  device_count: number;
+  devices_completed: number;
+  devices_failed: number;
+  is_actively_running: boolean;
+  created_at?: string | null;
+  created_by?: string | null;
+  scheduled_at?: string | null;
+}
+
+export interface UpgradeDevice {
+  id: number;
+  campaign_id: number;
+  host_id: number | null;
+  ip_address: string;
+  hostname?: string | null;
+  model?: string | null;
+  current_version?: string | null;
+  target_image?: string | null;
+  phase?: string | null;
+  prestage_status?: string | null;
+  transfer_status?: string | null;
+  activate_status?: string | null;
+  verify_status?: string | null;
+  error_message?: string | null;
+}
+
+export interface UpgradeCampaign extends UpgradeCampaignSummary {
+  image_map: Record<string, string> | string;
+  options: Record<string, unknown> | string;
+  devices: UpgradeDevice[];
+}
+
+export interface UpgradeCampaignOptions {
+  skip_backup?: boolean;
+  skip_md5?: boolean;
+  skip_health_check?: boolean;
+  verify_upgrade?: boolean;
+  parallel?: number;
+  retries?: number;
+}
+
+export interface UpgradeCampaignInput {
+  name: string;
+  description: string;
+  image_map: Record<string, string>;
+  credential_id: number;
+  host_ids: number[];
+  ad_hoc_ips: string[];
+  options: UpgradeCampaignOptions;
+}
+
+export interface ExecutePhasePayload {
+  phase: UpgradePhase;
+  device_ids?: number[];
+  scheduled_at?: string | null;
+}
+
+export function useUpgradeCampaigns() {
+  return useQuery({
+    queryKey: ['upgrade-campaigns'],
+    queryFn: () => apiRequest<UpgradeCampaignSummary[]>('/upgrades/campaigns'),
+  });
+}
+
+export function useUpgradeCampaign(id: number | null) {
+  return useQuery({
+    queryKey: ['upgrade-campaign', id],
+    queryFn: () => apiRequest<UpgradeCampaign>(`/upgrades/campaigns/${id}`),
+    enabled: id !== null,
+  });
+}
+
+export function useCreateUpgradeCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: UpgradeCampaignInput) =>
+      apiRequest<{ id: number; devices_added: number }>('/upgrades/campaigns', {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
+    },
+  });
+}
+
+export function useUpdateUpgradeCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: UpgradeCampaignInput }) =>
+      apiRequest<{ ok: boolean; total_devices: number; devices_added: number }>(
+        `/upgrades/campaigns/${id}`,
+        { method: 'PATCH', body },
+      ),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
+      qc.invalidateQueries({ queryKey: ['upgrade-campaign', vars.id] });
+    },
+  });
+}
+
+export function useDeleteUpgradeCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiRequest<{ ok: boolean }>(`/upgrades/campaigns/${id}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
+    },
+  });
+}
+
+export function useExecuteUpgradePhase() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      campaignId,
+      payload,
+    }: {
+      campaignId: number;
+      payload: ExecutePhasePayload;
+    }) =>
+      apiRequest<{
+        ok: boolean;
+        phase: string;
+        device_count: number;
+        scheduled: boolean;
+        scheduled_at: string | null;
+      }>(`/upgrades/campaigns/${campaignId}/execute`, {
+        method: 'POST',
+        body: payload,
+      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
+      qc.invalidateQueries({
+        queryKey: ['upgrade-campaign', vars.campaignId],
+      });
+    },
+  });
+}
+
+export function useCancelUpgradeCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (campaignId: number) =>
+      apiRequest<{ ok: boolean }>(
+        `/upgrades/campaigns/${campaignId}/cancel`,
+        { method: 'POST' },
+      ),
+    onSuccess: (_data, campaignId) => {
+      qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
+      qc.invalidateQueries({ queryKey: ['upgrade-campaign', campaignId] });
+    },
+  });
+}
+
+export interface UpgradeEvent {
+  id: number;
+  campaign_id: number;
+  device_id: number | null;
+  level: string;
+  message: string;
+  host?: string;
+  timestamp: string;
+}
+
+export function useUpgradeDeviceEvents(
+  campaignId: number | null,
+  deviceId: number | null,
+) {
+  return useQuery({
+    queryKey: ['upgrade-events', campaignId, deviceId],
+    queryFn: () =>
+      apiRequest<UpgradeEvent[]>(
+        `/upgrades/campaigns/${campaignId}/events?device_id=${deviceId}`,
+      ),
+    enabled: campaignId !== null && deviceId !== null,
+  });
+}

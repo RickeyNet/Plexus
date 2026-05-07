@@ -11,3 +11,34 @@ export function formatBackupTimestamp(iso: string | null | undefined): string {
   // module's display by stripping the T and trimming sub-second precision.
   return iso.replace('T', ' ').slice(0, 19);
 }
+
+export type UpgradePhase =
+  | 'prestage'
+  | 'transfer'
+  | 'activate'
+  | 'verify'
+  | 'verify_prestage';
+
+export function phaseLabel(phase: UpgradePhase | string): string {
+  const labels: Record<string, string> = {
+    prestage: 'Prestage',
+    transfer: 'Transfer',
+    activate: 'Activate',
+    verify: 'Verify Upgrade',
+    verify_prestage: 'Re-Verify Prestage',
+  };
+  return (
+    labels[phase] ||
+    phase.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
+
+export function campaignStatusBadgeClass(
+  status: string | null | undefined,
+  isRunning: boolean,
+): string {
+  if (status?.includes('failed')) return 'badge-error';
+  if (isRunning) return 'badge-info';
+  if (status?.includes('complete')) return 'badge-success';
+  return 'badge-secondary';
+}
