@@ -2110,7 +2110,124 @@ def _convert_qmark_to_dollar_params(query: str) -> str:
         out.append(ch)
     converted = "".join(out)
     converted = converted.replace("datetime('now')", "NOW()")
+    converted = _convert_sqlite_datetime_modifiers_to_postgres(converted)
+    converted = _convert_sqlite_insert_or_ignore_to_postgres(converted)
     return converted
+
+
+# Match `datetime(<expr>, <modifier>)` — the SQLite two-argument form. We rewrite
+# these into postgres `(<expr>::timestamptz <op> <interval>)` because postgres
+# has no equivalent function. Patterns we handle (post-`?`→`$N` substitution):
+#
+#   datetime('now', '-7 days')                     -- literal interval
+#   datetime('now', $1)                            -- whole modifier as param
+#   datetime('now', '-' || $1 || ' days')          -- "N days ago", parameterized
+#   datetime('now', $1 || ' hours')                -- modifier prefix as param
+#   datetime(col, '+' || other_col || ' seconds')  -- column-relative offset
+#
+# Anything outside these shapes will fall through unchanged and surface as a
+# postgres syntax error — flagging unhandled patterns is preferable to silently
+# producing wrong SQL.
+_SQLITE_DT_BASE = r"(?:'now'|[\w.]+)"   # 'now' or an unquoted column reference
+_SQLITE_DT_LITERAL_MOD = r"'([+-]?\d+\s+\w+)'"          # '-7 days'
+_SQLITE_DT_PARAM_ONLY = r"\$(\d+)"                       # $1 (whole modifier)
+_SQLITE_DT_SIGN_PARAM_UNIT = r"'([+-])'\s*\|\|\s*\$(\d+)\s*\|\|\s*'\s+(\w+)'"  # '-' || $1 || ' days'
+_SQLITE_DT_PARAM_UNIT = r"\$(\d+)\s*\|\|\s*'\s+(\w+)'"   # $1 || ' hours'  (sign embedded in value)
+_SQLITE_DT_COL_UNIT = r"'([+-])'\s*\|\|\s*([\w.]+)\s*\|\|\s*'\s+(\w+)'"        # '+' || col || ' seconds'
+
+_DT_RE_LITERAL = re.compile(
+    rf"datetime\(\s*({_SQLITE_DT_BASE})\s*,\s*{_SQLITE_DT_LITERAL_MOD}\s*\)",
+    re.IGNORECASE,
+)
+_DT_RE_PARAM_ONLY = re.compile(
+    rf"datetime\(\s*({_SQLITE_DT_BASE})\s*,\s*{_SQLITE_DT_PARAM_ONLY}\s*\)",
+    re.IGNORECASE,
+)
+_DT_RE_SIGN_PARAM_UNIT = re.compile(
+    rf"datetime\(\s*({_SQLITE_DT_BASE})\s*,\s*{_SQLITE_DT_SIGN_PARAM_UNIT}\s*\)",
+    re.IGNORECASE,
+)
+_DT_RE_PARAM_UNIT = re.compile(
+    rf"datetime\(\s*({_SQLITE_DT_BASE})\s*,\s*{_SQLITE_DT_PARAM_UNIT}\s*\)",
+    re.IGNORECASE,
+)
+_DT_RE_COL_UNIT = re.compile(
+    rf"datetime\(\s*({_SQLITE_DT_BASE})\s*,\s*{_SQLITE_DT_COL_UNIT}\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _pg_base(expr: str) -> str:
+    """Translate the first arg of datetime() into a postgres timestamp expr."""
+    if expr == "'now'":
+        return "NOW()"
+    # A column reference. Schema stores datetimes as TEXT (ISO-8601), so cast
+    # to timestamptz to allow interval math.
+    return f"{expr}::timestamptz"
+
+
+def _convert_sqlite_datetime_modifiers_to_postgres(query: str) -> str:
+    # Schema stores all datetime columns as TEXT (ISO-8601). When the
+    # comparison side is text, we have to cast our timestamptz result back
+    # to text — otherwise postgres rejects `text </>= timestamptz`. Using
+    # `::text` on a postgres timestamptz produces a sortable ISO-8601 string
+    # that lexically orders correctly against other postgres-written rows.
+    def _col_unit(m: re.Match) -> str:
+        base = _pg_base(m.group(1))
+        sign, col, unit = m.group(2), m.group(3), m.group(4)
+        op = "+" if sign == "+" else "-"
+        return f"({base} {op} ({col} || ' {unit}')::interval)::text"
+    query = _DT_RE_COL_UNIT.sub(_col_unit, query)
+
+    def _sign_param_unit(m: re.Match) -> str:
+        base = _pg_base(m.group(1))
+        sign, n, unit = m.group(2), m.group(3), m.group(4)
+        op = "+" if sign == "+" else "-"
+        return f"({base} {op} (${n} || ' {unit}')::interval)::text"
+    query = _DT_RE_SIGN_PARAM_UNIT.sub(_sign_param_unit, query)
+
+    def _param_unit(m: re.Match) -> str:
+        base = _pg_base(m.group(1))
+        n, unit = m.group(2), m.group(3)
+        return f"({base} + (${n} || ' {unit}')::interval)::text"
+    query = _DT_RE_PARAM_UNIT.sub(_param_unit, query)
+
+    def _literal(m: re.Match) -> str:
+        base = _pg_base(m.group(1))
+        modifier = m.group(2).strip()
+        return f"({base} + INTERVAL '{modifier}')::text"
+    query = _DT_RE_LITERAL.sub(_literal, query)
+
+    def _param_only(m: re.Match) -> str:
+        base = _pg_base(m.group(1))
+        n = m.group(2)
+        return f"({base} + (${n})::interval)::text"
+    query = _DT_RE_PARAM_ONLY.sub(_param_only, query)
+
+    return query
+
+
+# Match top-level `INSERT OR IGNORE INTO <table> (...) VALUES (...)` and rewrite
+# to postgres `INSERT INTO ... ON CONFLICT DO NOTHING`. We don't need to know
+# the conflict columns — `DO NOTHING` without a target tells postgres to skip
+# any conflict on any unique constraint, which matches SQLite's IGNORE
+# semantics for the way the codebase uses it.
+_INSERT_OR_IGNORE_RE = re.compile(r"\bINSERT\s+OR\s+IGNORE\b", re.IGNORECASE)
+
+
+def _convert_sqlite_insert_or_ignore_to_postgres(query: str) -> str:
+    if not _INSERT_OR_IGNORE_RE.search(query):
+        return query
+    rewritten = _INSERT_OR_IGNORE_RE.sub("INSERT", query)
+    # Append ON CONFLICT DO NOTHING just before the trailing semicolon (if any)
+    # or before any RETURNING clause we appended elsewhere.
+    if " RETURNING " in rewritten.upper():
+        idx = rewritten.upper().rindex(" RETURNING ")
+        rewritten = rewritten[:idx] + " ON CONFLICT DO NOTHING" + rewritten[idx:]
+    else:
+        stripped = rewritten.rstrip().rstrip(";")
+        rewritten = stripped + " ON CONFLICT DO NOTHING"
+    return rewritten
 
 
 def _convert_sqlite_ddl_to_postgres(query: str) -> str:
