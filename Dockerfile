@@ -35,7 +35,7 @@ COPY . .
 # runtime — only the dist/ directory.
 COPY --from=frontend-build /frontend/dist /app/netcontrol/static/frontend/dist
 
-RUN mkdir -p /app/state
+RUN mkdir -p /app/state /app/certs
 RUN useradd -m -u 1000 plexus && chown -R plexus:plexus /app
 USER plexus
 
