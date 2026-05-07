@@ -23,3 +23,6 @@ pydantic>=2.13.3,<3
 # httpx is used at runtime by netcontrol/routes/ipam_adapters.py, so it
 # belongs in the runtime requirements (was previously dev-only).
 httpx>=0.28.1,<1
+# asyncpg powers the postgres backend (APP_DB_ENGINE=postgres). The default
+# docker-compose deploy sets this, so asyncpg must be present in the image.
+asyncpg>=0.30,<1
