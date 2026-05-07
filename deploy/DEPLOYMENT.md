@@ -431,6 +431,42 @@ docker compose down -v  # stop containers and DELETE all volumes (data loss!)
 docker compose up -d  # rebuild fresh stack from scratch
 ```
 
+### Complete Uninstall (Ubuntu — wipes Docker, Plexus, and all data)
+
+Use this when you want to test `deploy/bootstrap.sh` against a clean
+Ubuntu box, or fully remove Plexus and Docker from a host. **Destructive
+— removes containers, volumes, Docker engine, and the cloned repo.**
+
+```bash
+# 1. Stop and remove all Plexus containers + volumes
+cd /opt/plexus 2>/dev/null && sudo docker compose down -v --remove-orphans || true
+
+# 2. Wipe any remaining Docker state (containers, images, volumes, networks)
+sudo docker system prune -a --volumes -f || true
+
+# 3. Stop Docker and uninstall packages
+sudo systemctl stop docker.socket docker.service || true
+sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo apt-get autoremove -y --purge
+
+# 4. Remove Docker's data dir, apt repo, and GPG key
+sudo rm -rf /var/lib/docker /var/lib/containerd /etc/docker
+sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.asc
+
+# 5. Remove the cloned repo
+sudo rm -rf /opt/plexus
+
+# 6. Drop user from docker group (group itself stays — harmless)
+sudo gpasswd -d "$USER" docker 2>/dev/null || true
+
+# 7. Verify clean
+command -v docker && echo "DOCKER STILL PRESENT" || echo "Docker removed."
+ls /opt/plexus 2>/dev/null && echo "REPO STILL PRESENT" || echo "Repo removed."
+```
+
+After this, the box is back to a stock Ubuntu state. Re-run
+`deploy/bootstrap.sh` (or the manual Steps 1–7) to deploy fresh.
+
 ## Troubleshooting
 
 ### App won't start
