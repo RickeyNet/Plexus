@@ -3060,6 +3060,10 @@ async def add_host(group_id: int, hostname: str, ip_address: str,
         )
         await db.commit()
         new_id = cursor.lastrowid
+    except Exception as e:
+        if _is_unique_violation(e):
+            raise ValueError(f"Host {ip_address} already exists in group {group_id}")
+        raise
     finally:
         await db.close()
     if ip_address:

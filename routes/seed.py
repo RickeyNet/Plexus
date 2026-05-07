@@ -96,9 +96,13 @@ async def seed():
             try:
                 await add_host(gid, hostname, ip)
                 seeded_hosts += 1
+            except ValueError:
+                # add_host raises ValueError on (group_id, ip) unique violation.
+                continue
             except Exception as e:
-                # Same idempotency guard for host inserts.
-                if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
+                # Backwards compat: the postgres adapter may surface raw
+                # UniqueViolationError if anything bypasses add_host's wrap.
+                if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e) or "duplicate key" in str(e).lower():
                     continue
                 raise
         print(f"  + Group '{group_name}' with {seeded_hosts} hosts")

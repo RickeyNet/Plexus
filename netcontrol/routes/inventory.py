@@ -84,6 +84,9 @@ class HostUpdate(BaseModel):
     device_type: str = "cisco_ios"
     vrf_name: str | None = None
     vlan_id: str | None = None
+    # Optional — when present, the host is moved to the new group as part
+    # of the update so renaming and re-grouping happen in one round-trip.
+    group_id: int | None = None
 
 
 class FetchSerialRequest(BaseModel):
@@ -296,7 +299,14 @@ async def _sync_group_hosts(
         category = discovered.get("device_category", "")
         if existing is None:
             _validate_host_ip(discovered["ip_address"])
-            new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
+            try:
+                new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
+            except ValueError:
+                # Race or duplicate within the same payload — another caller
+                # (or a prior loop iteration with a near-identical IP) already
+                # inserted the row. Treat as an update on the next pass instead
+                # of crashing the whole onboard.
+                continue
             await db.update_host_status(new_id, discovered["status"])
             await push_inventory_host_allocation(
                 hostname=discovered["hostname"],
@@ -675,10 +685,8 @@ async def add_host(group_id: int, body: HostCreate):
             vrf_name=body.vrf_name or "",
             vlan_id=str(body.vlan_id or ""),
         )
-    except Exception as exc:
-        if "UNIQUE constraint failed" in str(exc) or "duplicate key" in str(exc):
-            raise HTTPException(409, "A host with that IP address already exists in this group")
-        raise
+    except ValueError:
+        raise HTTPException(409, "A host with that IP address already exists in this group")
     # Auto-apply graph templates to manually added host
     try:
         await db.apply_graph_templates_to_host(hid)
@@ -701,6 +709,17 @@ async def update_host(host_id: int, body: HostUpdate):
         vrf_name=body.vrf_name,
         vlan_id=body.vlan_id,
     )
+    # Optional re-group as part of the same edit. The (group_id, ip_address)
+    # unique key means moving to a group that already has this IP will fail
+    # with an asyncpg/sqlite UniqueViolationError — surface as a clean 409.
+    if body.group_id is not None:
+        try:
+            await db.move_hosts([host_id], int(body.group_id))
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "unique" in msg or "duplicate key" in msg:
+                raise HTTPException(409, "Target group already has a host with this IP address")
+            raise
     await push_inventory_host_allocation(
         hostname=body.hostname,
         ip_address=body.ip_address,
