@@ -152,43 +152,72 @@ async def seed():
          "^"),
     ]
 
+    def _is_unique_violation(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return (
+            "unique constraint" in msg
+            or "duplicate key value" in msg
+        )
+
     for name, desc, content in templates:
-        await create_template(name, content, desc)
-        print(f"  + Template '{name}'")
+        try:
+            await create_template(name, content, desc)
+            print(f"  + Template '{name}'")
+        except Exception as e:
+            if _is_unique_violation(e):
+                print(f"  ~ Template '{name}' already exists, skipping")
+            else:
+                raise
 
     # ── Compliance Profiles (Preloaded Security Standards) ─────────────
     from routes.builtin_compliance_profiles import BUILTIN_PROFILES
 
     for name, description, severity, rules in BUILTIN_PROFILES:
         import json
-        await create_compliance_profile(
-            name=name,
-            description=description,
-            rules=json.dumps(rules),
-            severity=severity,
-            created_by="system",
-        )
-        print(f"  + Compliance Profile '{name}' ({len(rules)} rules, {severity})")
+        try:
+            await create_compliance_profile(
+                name=name,
+                description=description,
+                rules=json.dumps(rules),
+                severity=severity,
+                created_by="system",
+            )
+            print(f"  + Compliance Profile '{name}' ({len(rules)} rules, {severity})")
+        except Exception as e:
+            if _is_unique_violation(e):
+                print(f"  ~ Compliance Profile '{name}' already exists, skipping")
+            else:
+                raise
 
     # ── Credentials ──────────────────────────────────────────────────────
     seed_password = secrets.token_urlsafe(12)
-    await create_credential(
-        "Default SSH",
-        "netadmin",
-        encrypt(seed_password),
-        encrypt(seed_password),
-    )
-    # Emit to stderr via raw fd write so the credential is visible during
-    # seed but never passes through Python's logging or print machinery
-    # (which static analysers flag as CWE-532).
-    import os as _os
-    _msg = (
-        f"  + Credential 'Default SSH'\n"
-        f"    Username: netadmin\n"
-        f"    Password: {seed_password}\n"
-        f"    Change or remove this credential after initial setup.\n"
-    )
-    _os.write(2, _msg.encode())  # fd 2 = stderr
+    credential_created = False
+    try:
+        await create_credential(
+            "Default SSH",
+            "netadmin",
+            encrypt(seed_password),
+            encrypt(seed_password),
+        )
+        credential_created = True
+    except Exception as e:
+        if _is_unique_violation(e):
+            print("  ~ Credential 'Default SSH' already exists, skipping")
+        else:
+            raise
+
+    if credential_created:
+        # Emit to stderr via raw fd write so the credential is visible during
+        # seed but never passes through Python's logging or print machinery
+        # (which static analysers flag as CWE-532).
+        import os as _os
+        _msg = (
+            f"  + Credential 'Default SSH'\n"
+            f"    Username: netadmin\n"
+            f"    Password: {seed_password}\n"
+            f"    Change or remove this credential after initial setup.\n"
+        )
+        _os.write(2, _msg.encode())  # fd 2 = stderr
 
     print("[seed] Done.")
 
