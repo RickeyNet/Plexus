@@ -259,34 +259,36 @@ AUTH_CONFIG_DEFAULTS = {
 # hidden globally; pure frontend nav aliases (configuration, change-management,
 # floor-plan) are hideable but have no dedicated backend route to gate.
 _FEATURE_CATALOG = [
-    {"key": "dashboard", "label": "Dashboard", "gateable": True, "visible_in_nav": False},
-    {"key": "inventory", "label": "Inventory", "gateable": True, "visible_in_nav": True},
-    {"key": "ipam", "label": "IPAM", "gateable": True, "visible_in_nav": True},
-    {"key": "playbooks", "label": "Playbooks", "gateable": True, "visible_in_nav": True},
-    {"key": "jobs", "label": "Jobs", "gateable": True, "visible_in_nav": True},
-    {"key": "templates", "label": "Templates", "gateable": True, "visible_in_nav": True},
-    {"key": "credentials", "label": "Credentials", "gateable": True, "visible_in_nav": True},
-    {"key": "topology", "label": "Topology", "gateable": True, "visible_in_nav": True},
-    {"key": "cloud-visibility", "label": "Cloud Visibility", "gateable": True, "visible_in_nav": True},
-    {"key": "monitoring", "label": "Monitoring", "gateable": True, "visible_in_nav": True},
-    {"key": "configuration", "label": "Configuration", "gateable": False, "visible_in_nav": True},
-    {"key": "config-drift", "label": "Config Drift", "gateable": True, "visible_in_nav": True},
-    {"key": "config-backups", "label": "Config Backups", "gateable": True, "visible_in_nav": True},
-    {"key": "compliance", "label": "Compliance", "gateable": True, "visible_in_nav": True},
-    {"key": "change-management", "label": "Changes", "gateable": False, "visible_in_nav": True},
-    {"key": "risk-analysis", "label": "Risk Analysis", "gateable": True, "visible_in_nav": True},
-    {"key": "reports", "label": "Reports", "gateable": True, "visible_in_nav": True},
-    {"key": "graph-templates", "label": "Graphs", "gateable": True, "visible_in_nav": True},
-    {"key": "mac-tracking", "label": "MAC Tracking", "gateable": True, "visible_in_nav": True},
-    {"key": "traffic-analysis", "label": "Traffic Analysis", "gateable": True, "visible_in_nav": True},
-    {"key": "upgrades", "label": "Upgrades", "gateable": True, "visible_in_nav": True},
-    {"key": "deployments", "label": "Deployments", "gateable": True, "visible_in_nav": True},
-    {"key": "federation", "label": "Federation", "gateable": True, "visible_in_nav": True},
-    {"key": "floor-plan", "label": "Floor Plans", "gateable": False, "visible_in_nav": True},
-    {"key": "lab", "label": "Lab / Digital Twin", "gateable": True, "visible_in_nav": True},
+    {"key": "dashboard", "label": "Dashboard", "gateable": True, "writable": False, "visible_in_nav": False},
+    {"key": "inventory", "label": "Inventory", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "ipam", "label": "IPAM", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "playbooks", "label": "Playbooks", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "jobs", "label": "Jobs", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "templates", "label": "Templates", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "credentials", "label": "Credentials", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "topology", "label": "Topology", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "cloud-visibility", "label": "Cloud Visibility", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "monitoring", "label": "Monitoring", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "configuration", "label": "Configuration", "gateable": False, "writable": False, "visible_in_nav": True},
+    {"key": "config-drift", "label": "Config Drift", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "config-backups", "label": "Config Backups", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "compliance", "label": "Compliance", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "change-management", "label": "Changes", "gateable": False, "writable": False, "visible_in_nav": True},
+    {"key": "risk-analysis", "label": "Risk Analysis", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "reports", "label": "Reports", "gateable": True, "writable": False, "visible_in_nav": True},
+    {"key": "graph-templates", "label": "Graphs", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "mac-tracking", "label": "MAC Tracking", "gateable": True, "writable": False, "visible_in_nav": True},
+    {"key": "traffic-analysis", "label": "Traffic Analysis", "gateable": True, "writable": False, "visible_in_nav": True},
+    {"key": "upgrades", "label": "Upgrades", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "deployments", "label": "Deployments", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "federation", "label": "Federation", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "floor-plan", "label": "Floor Plans", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "lab", "label": "Lab / Digital Twin", "gateable": True, "writable": True, "visible_in_nav": True},
 ]
 
-FEATURE_FLAGS = [e["key"] for e in _FEATURE_CATALOG if e["gateable"]]
+FEATURE_FLAGS = [e["key"] for e in _FEATURE_CATALOG if e["gateable"]] + [
+    f"{e['key']}.write" for e in _FEATURE_CATALOG if e["gateable"] and e["writable"]
+]
 
 FEATURE_VISIBILITY_CATALOG = [
     {"key": e["key"], "label": e["label"]}

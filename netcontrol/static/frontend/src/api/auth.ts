@@ -8,6 +8,8 @@ export interface AuthStatus {
   display_name?: string;
   role?: string;
   csrf_token?: string;
+  feature_access?: string[];
+  feature_visibility_hidden?: string[];
 }
 
 export function useAuthStatus() {
