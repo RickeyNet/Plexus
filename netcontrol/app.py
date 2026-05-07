@@ -1689,12 +1689,12 @@ app.include_router(
 # Cloud Visibility (AWS/Azure/GCP hybrid foundation)
 app.include_router(
     cloud_visibility_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("topology"))],
+    dependencies=[Depends(require_auth), Depends(require_feature("cloud-visibility"))],
 )
 # IP Address Management
 app.include_router(
     ipam_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+    dependencies=[Depends(require_auth), Depends(require_feature("ipam"))],
 )
 # DHCP Scope/Lease Integration
 app.include_router(
