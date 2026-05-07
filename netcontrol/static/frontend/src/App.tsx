@@ -9,6 +9,7 @@ import { Compliance } from '@/pages/Compliance/Compliance';
 import { CustomDashboards } from '@/pages/Dashboard/CustomDashboards';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { DashboardViewer } from '@/pages/Dashboard/DashboardViewer';
+import { Deployments } from '@/pages/Deployments/Deployments';
 import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
 import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
@@ -30,6 +31,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/floor-plan': 'Floor Plans',
   '/compliance': 'Compliance',
   '/risk-analysis': 'Risk Analysis',
+  '/deployments': 'Deployments',
   '/settings': 'Settings',
 };
 
@@ -99,6 +101,7 @@ export function App() {
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/compliance" element={<Compliance />} />
           <Route path="/risk-analysis" element={<RiskAnalysis />} />
+          <Route path="/deployments" element={<Deployments />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
