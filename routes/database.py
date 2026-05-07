@@ -1324,6 +1324,70 @@ def _convert_sqlite_schema_to_postgres(sqlite_schema: str) -> str:
 POSTGRES_SCHEMA = _convert_sqlite_schema_to_postgres(SCHEMA)
 
 
+_CREATE_TABLE_RE = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\"\w]+)\s*\(",
+    re.IGNORECASE,
+)
+# Matches an inline column-level REFERENCES clause:
+#   REFERENCES <table>(<col>) [ON DELETE <action>] [ON UPDATE <action>]
+# Postgres validates the referenced table exists at CREATE TABLE time, so
+# forward references break schema init. We strip these from CREATE TABLE
+# statements and re-add them via ALTER TABLE after all tables exist.
+_INLINE_FK_RE = re.compile(
+    r"\s+REFERENCES\s+([\"\w]+)\s*\(\s*([\"\w]+)\s*\)"
+    r"(?:\s+ON\s+DELETE\s+(CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT|NO\s+ACTION))?"
+    r"(?:\s+ON\s+UPDATE\s+(CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT|NO\s+ACTION))?",
+    re.IGNORECASE,
+)
+
+
+def _extract_postgres_fks(stmt: str) -> tuple[str, list[str]]:
+    """For a CREATE TABLE statement, strip inline FK references and return
+    (rewritten_statement, list_of_alter_table_statements).
+
+    Only column-level inline `REFERENCES tbl(col) [ON DELETE ...]` clauses are
+    handled — table-level FOREIGN KEY (...) constraints are passed through.
+    Returns (stmt, []) for non-CREATE-TABLE statements.
+    """
+    m = _CREATE_TABLE_RE.search(stmt)
+    if not m:
+        return stmt, []
+    table = m.group(1)
+    alters: list[str] = []
+
+    def _replace(fk_match: re.Match) -> str:
+        ref_table = fk_match.group(1)
+        ref_col = fk_match.group(2)
+        on_delete = fk_match.group(3)
+        on_update = fk_match.group(4)
+        # Find the column name this REFERENCES clause is attached to: walk
+        # backwards from the match start to the previous comma or `(`, then
+        # take the first identifier on that line.
+        prefix = stmt[: fk_match.start()]
+        line_start = max(prefix.rfind(","), prefix.rfind("("))
+        col_line = stmt[line_start + 1 : fk_match.start()].strip()
+        col_name = col_line.split()[0] if col_line else ""
+        if not col_name:
+            return ""  # malformed; just drop the FK clause
+        on_delete_clause = f" ON DELETE {on_delete}" if on_delete else ""
+        on_update_clause = f" ON UPDATE {on_update}" if on_update else ""
+        # Wrapped in a DO block so re-running init_db on an already-initialized
+        # database doesn't fail with "constraint already exists" — Postgres
+        # doesn't support `ADD CONSTRAINT IF NOT EXISTS` for FKs.
+        alters.append(
+            "DO $$ BEGIN "
+            f"ALTER TABLE {table} ADD CONSTRAINT "
+            f"fk_{table}_{col_name}_{ref_table} "
+            f"FOREIGN KEY ({col_name}) REFERENCES {ref_table}({ref_col})"
+            f"{on_delete_clause}{on_update_clause}; "
+            "EXCEPTION WHEN duplicate_object THEN NULL; END $$"
+        )
+        return ""
+
+    rewritten = _INLINE_FK_RE.sub(_replace, stmt)
+    return rewritten, alters
+
+
 def _split_sql_statements(schema: str) -> list[str]:
     return [stmt.strip() for stmt in schema.split(";") if stmt.strip()]
 
@@ -1453,8 +1517,17 @@ async def get_db():
 
 
 async def _init_postgres(db) -> None:
+    # Two-pass: strip inline FK REFERENCES from CREATE TABLE statements,
+    # run all DDL, then re-add the FKs via ALTER TABLE. This makes schema
+    # init order-independent so forward references (e.g. monitoring_alerts
+    # referencing alert_rules before alert_rules is created) don't fail.
+    deferred_alters: list[str] = []
     for stmt in _split_sql_statements(POSTGRES_SCHEMA):
-        await db.execute(stmt)
+        rewritten, alters = _extract_postgres_fks(stmt)
+        deferred_alters.extend(alters)
+        await db.execute(rewritten)
+    for alter in deferred_alters:
+        await db.execute(alter)
     await db.commit()
 
 
