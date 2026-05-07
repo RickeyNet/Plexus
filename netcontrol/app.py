@@ -1432,6 +1432,11 @@ async def api_rate_limit_middleware(request: Request, call_next):
     Read requests (GET) and write requests (POST/PUT/DELETE) have separate
     thresholds.  Public paths (login, register, health) are exempt — the
     login endpoint already has its own brute-force protection.
+
+    Authenticated requests (valid session cookie or valid API token) are
+    exempt: the limiter's job is to throttle anonymous flooders, and a
+    legitimate logged-in user with several tabs open or a stale-session
+    refresh storm shouldn't be able to self-DoS into a 429 loop.
     """
     cfg = state.API_RATE_LIMIT
     if (
@@ -1439,6 +1444,15 @@ async def api_rate_limit_middleware(request: Request, call_next):
         and request.url.path.startswith("/api/")
         and request.url.path not in PUBLIC_PATHS
     ):
+        # Skip counting for authenticated requests — see docstring.
+        api_token = _extract_api_token(request)
+        is_authenticated = bool(
+            (APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN))
+            or (request.cookies.get("session") and verify_session_token(request.cookies["session"]))
+        )
+        if is_authenticated:
+            return await call_next(request)
+
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
         window = max(1, int(cfg.get("window", 60)))

@@ -193,6 +193,11 @@ async function _doApiRequest(url, config, endpoint, isMutation) {
         if (response.status === 401 && endpoint !== '/auth/login' && endpoint !== '/auth/status') {
             if (!_sessionExpiryHandled) {
                 _sessionExpiryHandled = true;
+                // Cancel every other in-flight request so the browser doesn't
+                // sit waiting for a wave of dashboard/inventory/topology calls
+                // (which will all 401 and rate-limit themselves) before
+                // navigating to the login screen.
+                abortPendingRequests();
                 window.location.assign('/');
             }
             throw new Error(data.detail || 'Session expired');
