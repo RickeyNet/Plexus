@@ -14,31 +14,21 @@ from netcontrol.routes.shared import _audit, _corr_id, _get_session
 router = APIRouter()
 
 
-async def _is_admin(session: dict | None) -> bool:
-    """Check whether the session user has the admin role."""
+def _can_modify(cred: dict, session: dict | None) -> bool:
+    """Return True if the session user may modify/delete *cred*.
+
+    Credentials are strictly per-owner: only the user who created a
+    credential may view, modify, delete, or use it. The admin role does
+    not grant access to other users' credentials. API-token callers
+    (server-level auth) bypass the check by design.
+    """
     if not session:
         return False
     if session.get("auth_mode") == "token":
-        return True  # API-token callers are treated as admin
-    user = await db.get_user_by_id(session["user_id"])
-    return bool(user and user.get("role") == "admin")
-
-
-def _can_modify(cred: dict, session: dict | None, is_admin: bool) -> bool:
-    """Return True if the session user may modify/delete *cred*.
-
-    Rules:
-      - Admins can modify any credential.
-      - Owners can modify their own credentials.
-      - Unowned credentials (owner_id is NULL) require admin.
-    """
-    if is_admin:
         return True
-    if not session:
-        return False
     owner = cred.get("owner_id")
     if owner is None:
-        return False  # unowned → admin-only
+        return False
     return owner == session["user_id"]
 
 
@@ -61,8 +51,9 @@ async def list_credentials(request: Request):
     session = _get_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
-    # Admins see every credential; regular users see only their own
-    if await _is_admin(session):
+    # Credentials are strictly per-owner: every user (including admins)
+    # sees only the credentials they created. API-token callers see all.
+    if session.get("auth_mode") == "token":
         return await db.get_all_credentials(owner_id=None)
     return await db.get_all_credentials(owner_id=session["user_id"])
 
@@ -91,7 +82,7 @@ async def delete_credential(cred_id: int, request: Request):
     cred = await db.get_credential_raw(cred_id)
     if not cred:
         raise HTTPException(404, "Credential not found")
-    if not _can_modify(cred, session, await _is_admin(session)):
+    if not _can_modify(cred, session):
         raise HTTPException(403, "You can only delete your own credentials")
     await db.delete_credential(cred_id)
     await _audit("config", "credential.delete", user=session["user"], detail=f"deleted credential {cred_id}", correlation_id=_corr_id(request))
@@ -106,7 +97,7 @@ async def update_credential(cred_id: int, body: CredentialUpdate, request: Reque
     cred = await db.get_credential_raw(cred_id)
     if not cred:
         raise HTTPException(404, "Credential not found")
-    if not _can_modify(cred, session, await _is_admin(session)):
+    if not _can_modify(cred, session):
         raise HTTPException(403, "You can only edit your own credentials")
     updates = {}
     if body.name is not None:
