@@ -240,10 +240,10 @@ const ic = {
 const NAV: TopItem[] = [
   { label: 'Dashboard', icon: ic.dashboard, to: '/', feature: 'dashboard' },
   { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
-  { label: 'Playbooks', icon: ic.playbooks, href: '/#playbooks', feature: 'playbooks' },
-  { label: 'Jobs', icon: ic.jobs, href: '/#jobs', feature: 'jobs' },
-  { label: 'Templates', icon: ic.templates, href: '/#templates', feature: 'templates' },
-  { label: 'Credentials', icon: ic.credentials, href: '/#credentials', feature: 'credentials' },
+  { label: 'Playbooks', icon: ic.playbooks, to: '/playbooks', feature: 'playbooks' },
+  { label: 'Jobs', icon: ic.jobs, to: '/jobs', feature: 'jobs' },
+  { label: 'Templates', icon: ic.templates, to: '/templates', feature: 'templates' },
+  { label: 'Credentials', icon: ic.credentials, to: '/credentials', feature: 'credentials' },
   {
     id: 'network',
     label: 'Network',
