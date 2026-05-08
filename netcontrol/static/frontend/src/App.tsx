@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
@@ -107,12 +107,16 @@ export function App() {
     return () => setSessionExpiredHandler(null);
   }, [qc]);
 
-  // Reset the 401 latch each time we transition into an authenticated state
-  // so a future expiry can re-trigger the handler. Doing this in an effect
-  // (rather than during render) avoids StrictMode double-fires and keeps
-  // render pure.
+  // Reset the 401 latch only on the unauthenticated→authenticated transition
+  // (i.e. fresh login). Resetting on every authenticated render causes a
+  // re-render storm when a feature-gated endpoint legitimately returns 401
+  // for reasons other than session expiry — the latch resets, the next poll
+  // re-trips it, and we churn forever.
+  const wasAuthedRef = useRef(false);
   useEffect(() => {
-    if (auth?.authenticated) resetSessionExpiryFlag();
+    const isAuthed = !!auth?.authenticated;
+    if (isAuthed && !wasAuthedRef.current) resetSessionExpiryFlag();
+    wasAuthedRef.current = isAuthed;
   }, [auth?.authenticated]);
 
   // While the initial auth check is in flight, render nothing — the bundled

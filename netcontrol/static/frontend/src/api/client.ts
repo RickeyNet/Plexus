@@ -36,6 +36,36 @@ export class ApiError extends Error {
 // separate reload when the server-side session has idle-expired.
 let sessionExpiryHandled = false;
 
+// In-flight verification promise — when several queries 401 simultaneously
+// we only probe /auth/status once and let the rest await the same answer.
+let sessionVerifyInFlight: Promise<boolean> | null = null;
+
+// Probe /api/auth/status to confirm the session is actually dead before
+// firing the session-expired handler. Returns true if the session is
+// genuinely unauthenticated. Per-endpoint 401s (e.g. a feature-gated route
+// that returns 401 for reasons other than session expiry) won't trip the
+// global handler when this returns false.
+async function isSessionExpired(): Promise<boolean> {
+  if (sessionVerifyInFlight) return sessionVerifyInFlight;
+  sessionVerifyInFlight = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/status`, {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) return true;
+      const body = (await res.json()) as { authenticated?: boolean };
+      return !body?.authenticated;
+    } catch {
+      // Network error — be conservative and don't force-logout the user.
+      return false;
+    } finally {
+      sessionVerifyInFlight = null;
+    }
+  })();
+  return sessionVerifyInFlight;
+}
+
 // Set by App at boot — invalidates auth status so the React gate flips to the
 // login screen. Falls back to a hard reload if no handler is registered yet.
 let onSessionExpired: (() => void) | null = null;
@@ -104,11 +134,19 @@ export async function apiRequest<T = unknown>(
       endpoint !== '/auth/login' &&
       endpoint !== '/auth/status'
     ) {
+      // Verify the session is actually dead before forcing the user out.
+      // Some endpoints return 401 for reasons orthogonal to session validity
+      // (e.g. feature gating that re-checks the user record). Probing
+      // /auth/status lets us tell genuine session expiry apart from those
+      // and avoids a render-thrash loop when one endpoint is misbehaving.
       if (!sessionExpiryHandled) {
-        sessionExpiryHandled = true;
-        setCsrfToken(null);
-        if (onSessionExpired) onSessionExpired();
-        else window.location.assign('/');
+        const expired = await isSessionExpired();
+        if (expired && !sessionExpiryHandled) {
+          sessionExpiryHandled = true;
+          setCsrfToken(null);
+          if (onSessionExpired) onSessionExpired();
+          else window.location.assign('/');
+        }
       }
     }
     throw new ApiError(res.status, parsed, `${res.status} ${detail}`);
