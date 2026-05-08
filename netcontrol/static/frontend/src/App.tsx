@@ -119,12 +119,7 @@ export function App() {
   }
 
   if (!auth?.authenticated) {
-    return (
-      <>
-        <AnimatedBackground />
-        <Login />
-      </>
-    );
+    return <Login />;
   }
 
   // Reset the 401 latch each time we land on an authenticated render so a
