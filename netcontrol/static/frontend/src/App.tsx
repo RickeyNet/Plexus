@@ -15,11 +15,13 @@ import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
 import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
 import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
+import { GraphTemplates } from '@/pages/GraphTemplates/GraphTemplates';
 import { Inventory } from '@/pages/Inventory/Inventory';
 import { Ipam } from '@/pages/Ipam/Ipam';
 import { Lab } from '@/pages/Lab';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
+import { Reports } from '@/pages/Reports/Reports';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 import { Settings } from '@/pages/Settings/Settings';
 import { Upgrades } from '@/pages/Upgrades/Upgrades';
@@ -40,6 +42,8 @@ const BREADCRUMBS: Record<string, string> = {
   '/risk-analysis': 'Risk Analysis',
   '/deployments': 'Deployments',
   '/upgrades': 'Upgrades',
+  '/reports': 'Reports',
+  '/graph-templates': 'Graph Templates',
   '/settings': 'Settings',
 };
 
@@ -114,6 +118,8 @@ export function App() {
           <Route path="/risk-analysis" element={<RiskAnalysis />} />
           <Route path="/deployments" element={<Deployments />} />
           <Route path="/upgrades" element={<Upgrades />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/graph-templates" element={<GraphTemplates />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
