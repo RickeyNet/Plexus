@@ -4,6 +4,7 @@ import { useAdminCapabilities } from '@/api/settings';
 import { ApiError } from '@/api/client';
 
 import { AccessGroupsTab } from './AccessGroupsTab';
+import { AppearanceTab } from './AppearanceTab';
 import { AuthTab } from './AuthTab';
 import { DiscoveryTab } from './DiscoveryTab';
 import { FeaturesTab } from './FeaturesTab';
@@ -12,6 +13,7 @@ import { MonitoringTab } from './MonitoringTab';
 import { UsersTab } from './UsersTab';
 
 type Tab =
+  | 'appearance'
   | 'users'
   | 'access-groups'
   | 'auth'
@@ -21,6 +23,7 @@ type Tab =
   | 'features';
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'appearance', label: 'Appearance' },
   { id: 'users', label: 'Users' },
   { id: 'access-groups', label: 'Access Groups' },
   { id: 'auth', label: 'Authentication' },
@@ -102,6 +105,7 @@ export function Settings() {
           ))}
         </div>
         <div style={{ padding: '0.75rem' }}>
+          {tab === 'appearance' && <AppearanceTab />}
           {tab === 'users' && <UsersTab />}
           {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
           {tab === 'auth' && <AuthTab capabilities={caps} />}
