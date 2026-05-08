@@ -12,7 +12,7 @@ export function DevicePicker() {
   const { data, isLoading, isError, error } = useMonitoringPolls(200);
   const [filter, setFilter] = useState('');
 
-  const polls = data?.polls || [];
+  const polls = useMemo(() => data?.polls || [], [data]);
   const filtered = useMemo(() => {
     if (!filter.trim()) return polls;
     const q = filter.toLowerCase();
