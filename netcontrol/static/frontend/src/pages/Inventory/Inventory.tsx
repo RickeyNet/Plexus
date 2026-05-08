@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { PageHelp } from '@/components/PageHelp';
+
 import {
   type InventoryGroupFull,
   type InventoryHost,
@@ -234,6 +236,12 @@ export function Inventory() {
           </button>
         </div>
       </div>
+
+      <PageHelp
+        pageKey="inventory"
+        title="Manage Your Devices"
+        text="Add, edit, and organize network devices into groups. Devices added here are used across monitoring, backups, compliance, and automation features."
+      />
 
       <div
         className="card"

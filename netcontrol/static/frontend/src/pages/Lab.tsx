@@ -1,6 +1,7 @@
 import { useMemo, useState, ReactNode } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { PageHelp } from '@/components/PageHelp';
 import { TopologyCanvas } from '@/pages/TopologyCanvas';
 import {
   LabDeviceSummary,
@@ -152,15 +153,7 @@ export function Lab() {
   return (
     <>
       <div className="page-header">
-        <div>
-          <h2>Lab / Digital Twin</h2>
-          <p style={{ color: 'var(--text-light)', marginTop: '0.25rem', maxWidth: 720 }}>
-            Safe sandbox for pre-production change testing. Clone a production
-            device, apply proposed commands or templates against the simulated
-            snapshot, review the diff and risk score, then promote a successful
-            change to a real deployment.
-          </p>
-        </div>
+        <h2 style={{ margin: 0 }}>Lab / Digital Twin</h2>
         <button
           type="button"
           className="btn btn-primary"
@@ -169,6 +162,12 @@ export function Lab() {
           New environment
         </button>
       </div>
+
+      <PageHelp
+        pageKey="lab"
+        title="Pre-Production Change Sandbox"
+        text="Clone a production device, apply proposed commands or templates against the simulated snapshot, review the diff and risk score, then promote a successful change to a real deployment."
+      />
 
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
         <div style={{ minWidth: 280 }}>

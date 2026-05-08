@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useAdminCapabilities } from '@/api/settings';
 import { useAuthStatus } from '@/api/auth';
 import { ApiError } from '@/api/client';
+import { PageHelp } from '@/components/PageHelp';
 
 import { AccessGroupsTab } from './AccessGroupsTab';
 import { AppearanceTab } from './AppearanceTab';
@@ -22,6 +23,41 @@ type Tab =
   | 'discovery'
   | 'monitoring'
   | 'features';
+
+const TAB_HELP: Record<Tab, { title: string; text: string }> = {
+  appearance: {
+    title: 'Theme & UI Preferences',
+    text: 'Per-user choices: theme, density, animations, and other visual options. These are local to your browser profile.',
+  },
+  users: {
+    title: 'User Accounts',
+    text: 'Add, disable, and reset passwords for local users. For SSO/RADIUS-backed accounts, see the Authentication tab — those map to external identities, not entries here.',
+  },
+  'access-groups': {
+    title: 'Role-Based Access Groups',
+    text: 'Define which features and inventory groups each role can see. Users get access by membership in one or more groups.',
+  },
+  auth: {
+    title: 'Authentication Sources',
+    text: 'Configure SAML SSO, LDAP, RADIUS, and local password policy. The active source(s) determine how users log in and which groups they map to.',
+  },
+  logging: {
+    title: 'Application & Audit Logging',
+    text: 'Application log level, audit log retention, and where to ship logs (file, syslog, etc.). Enable detailed logging when troubleshooting; turn it back down afterwards.',
+  },
+  discovery: {
+    title: 'Network Discovery Defaults',
+    text: 'Default credentials and discovery scope used when adding new devices via the Inventory page. These apply to manual and scheduled discovery alike.',
+  },
+  monitoring: {
+    title: 'Monitoring Settings',
+    text: 'Polling intervals, alert thresholds, retention windows, and which metrics get collected by default. Per-device overrides are possible from the device detail page.',
+  },
+  features: {
+    title: 'Feature Visibility',
+    text: 'Hide or show features for the entire instance. Use this to declutter the UI for operators who only need a subset of Plexus, or to stage rollouts.',
+  },
+};
 
 const ADMIN_TABS: { id: Tab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
@@ -147,6 +183,12 @@ export function Settings() {
         <h2 style={{ margin: 0 }}>Settings</h2>
       </div>
 
+      <PageHelp
+        pageKey="settings"
+        title="Application Settings"
+        text="Configure polling intervals, feature toggles, default credentials, and other application-wide settings. Admin access required."
+      />
+
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div
           style={{
@@ -169,6 +211,7 @@ export function Settings() {
           ))}
         </div>
         <div style={{ padding: '0.75rem' }}>
+          <PageHelp pageKey={`settings.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
           {tab === 'appearance' && <AppearanceTab />}
           {tab === 'users' && <UsersTab />}
           {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
