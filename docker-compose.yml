@@ -32,6 +32,7 @@ services:
     volumes:
       - plexus-db:/app/state
       - ./certs:/app/certs:ro
+      - ./software_images:/app/software_images
     depends_on:
       postgres:
         condition: service_healthy
