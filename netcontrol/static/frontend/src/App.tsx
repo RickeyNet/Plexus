@@ -34,7 +34,6 @@ import { Reports } from '@/pages/Reports/Reports';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 import { Settings } from '@/pages/Settings/Settings';
 import { Topology } from '@/pages/Topology/Topology';
-import { Upgrades } from '@/pages/Upgrades/Upgrades';
 
 const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
@@ -52,13 +51,13 @@ const BREADCRUMBS: Record<string, string> = {
   '/change-management': 'Changes',
   '/risk-analysis': 'Risk Analysis',
   '/deployments': 'Deployments',
-  '/upgrades': 'Upgrades',
+  '/upgrades': 'Delegator · Upgrades',
   '/reports': 'Reports',
   '/graph-templates': 'Graph Templates',
-  '/jobs': 'Jobs',
-  '/playbooks': 'Playbooks',
-  '/templates': 'Templates',
-  '/credentials': 'Credentials',
+  '/assignments': 'Delegator · Assignments',
+  '/tasks': 'Delegator · Tasks',
+  '/instructions': 'Delegator · Instructions',
+  '/credentials': 'Delegator · Credentials',
   '/monitoring': 'Monitoring',
   '/monitoring/alerts': 'Monitoring · Alerts',
   '/monitoring/routes': 'Monitoring · Route Churn',
@@ -198,13 +197,19 @@ export function App() {
           <Route path="/change-management" element={<ChangeManagement />} />
           <Route path="/risk-analysis" element={<RiskAnalysis />} />
           <Route path="/deployments" element={<Deployments />} />
-          <Route path="/upgrades" element={<Upgrades />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/graph-templates" element={<GraphTemplates />} />
+          {/* Delegator: one page renders all five tabs. The legacy paths
+              (/jobs, /playbooks, /templates) point at Jobs too so old deep
+              links keep working — Jobs.tsx maps them to the right tab. */}
+          <Route path="/assignments" element={<Jobs />} />
+          <Route path="/tasks" element={<Jobs />} />
+          <Route path="/instructions" element={<Jobs />} />
+          <Route path="/upgrades" element={<Jobs />} />
+          <Route path="/credentials" element={<Jobs />} />
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/playbooks" element={<Jobs />} />
           <Route path="/templates" element={<Jobs />} />
-          <Route path="/credentials" element={<Jobs />} />
           <Route path="/monitoring" element={<Monitoring />} />
           <Route path="/monitoring/alerts" element={<Monitoring />} />
           <Route path="/monitoring/routes" element={<Monitoring />} />
