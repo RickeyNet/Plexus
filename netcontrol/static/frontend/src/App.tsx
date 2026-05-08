@@ -16,6 +16,7 @@ import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
 import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
 import { GraphTemplates } from '@/pages/GraphTemplates/GraphTemplates';
+import { CloudVisibility } from '@/pages/CloudVisibility/CloudVisibility';
 import { Inventory } from '@/pages/Inventory/Inventory';
 import { Ipam } from '@/pages/Ipam/Ipam';
 import { Jobs } from '@/pages/Jobs/Jobs';
@@ -58,6 +59,11 @@ const BREADCRUMBS: Record<string, string> = {
   '/monitoring/sla': 'Monitoring · SLA',
   '/monitoring/availability': 'Monitoring · Availability',
   '/monitoring/capacity': 'Monitoring · Capacity',
+  '/cloud-visibility': 'Cloud Visibility',
+  '/cloud-visibility/topology': 'Cloud · Topology',
+  '/cloud-visibility/flow': 'Cloud · Flow Logs',
+  '/cloud-visibility/traffic': 'Cloud · Traffic Metrics',
+  '/cloud-visibility/policy': 'Cloud · Policy',
   '/settings': 'Settings',
 };
 
@@ -146,6 +152,11 @@ export function App() {
           <Route path="/monitoring/sla" element={<Monitoring />} />
           <Route path="/monitoring/availability" element={<Monitoring />} />
           <Route path="/monitoring/capacity" element={<Monitoring />} />
+          <Route path="/cloud-visibility" element={<CloudVisibility />} />
+          <Route path="/cloud-visibility/topology" element={<CloudVisibility />} />
+          <Route path="/cloud-visibility/flow" element={<CloudVisibility />} />
+          <Route path="/cloud-visibility/traffic" element={<CloudVisibility />} />
+          <Route path="/cloud-visibility/policy" element={<CloudVisibility />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
