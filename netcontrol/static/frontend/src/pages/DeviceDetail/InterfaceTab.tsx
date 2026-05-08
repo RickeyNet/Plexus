@@ -37,34 +37,10 @@ interface Props {
 
 export function InterfaceTab({ ifData, latestPoll }: Props) {
   const merged = useMemo(() => mergeInterfaces(ifData, latestPoll), [ifData, latestPoll]);
-  const tsInterfaces = ifData?.data || ifData?.interfaces || [];
-
-  if (!merged.length && !tsInterfaces.length) {
-    return (
-      <p className="text-muted">
-        No interface data available. Ensure SNMP is configured and at least one poll has
-        completed.
-      </p>
-    );
-  }
-
-  const physicals: MergedInterface[] = [];
-  const vlans: MergedInterface[] = [];
-  const portChannels: MergedInterface[] = [];
-  const tunnels: MergedInterface[] = [];
-  const other: MergedInterface[] = [];
-
-  merged.forEach((i) => {
-    if (isVlan(i.name)) vlans.push(i);
-    else if (isPortChannel(i.name)) portChannels.push(i);
-    else if (isTunnel(i.name)) tunnels.push(i);
-    else if (isLoopback(i.name) || isMgmt(i.name)) other.push(i);
-    else physicals.push(i);
-  });
-
-  const upCount = merged.filter((i) => i.status === 'up').length;
-  const downCount = merged.filter((i) => i.status === 'down').length;
-  const adminDownCount = merged.filter((i) => i.status === 'admin_down').length;
+  const tsInterfaces = useMemo(
+    () => ifData?.data || ifData?.interfaces || [],
+    [ifData],
+  );
 
   // Summary bar chart of top 20 interfaces by utilization
   const summaryData = useMemo(() => {
@@ -102,6 +78,33 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
       return { name, data: sorted };
     });
   }, [tsInterfaces]);
+
+  if (!merged.length && !tsInterfaces.length) {
+    return (
+      <p className="text-muted">
+        No interface data available. Ensure SNMP is configured and at least one poll has
+        completed.
+      </p>
+    );
+  }
+
+  const physicals: MergedInterface[] = [];
+  const vlans: MergedInterface[] = [];
+  const portChannels: MergedInterface[] = [];
+  const tunnels: MergedInterface[] = [];
+  const other: MergedInterface[] = [];
+
+  merged.forEach((i) => {
+    if (isVlan(i.name)) vlans.push(i);
+    else if (isPortChannel(i.name)) portChannels.push(i);
+    else if (isTunnel(i.name)) tunnels.push(i);
+    else if (isLoopback(i.name) || isMgmt(i.name)) other.push(i);
+    else physicals.push(i);
+  });
+
+  const upCount = merged.filter((i) => i.status === 'up').length;
+  const downCount = merged.filter((i) => i.status === 'down').length;
+  const adminDownCount = merged.filter((i) => i.status === 'admin_down').length;
 
   return (
     <div>
