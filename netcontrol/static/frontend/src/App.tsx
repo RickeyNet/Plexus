@@ -20,6 +20,7 @@ import { Inventory } from '@/pages/Inventory/Inventory';
 import { Ipam } from '@/pages/Ipam/Ipam';
 import { Jobs } from '@/pages/Jobs/Jobs';
 import { Lab } from '@/pages/Lab';
+import { Monitoring } from '@/pages/Monitoring/Monitoring';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
 import { Reports } from '@/pages/Reports/Reports';
@@ -49,6 +50,14 @@ const BREADCRUMBS: Record<string, string> = {
   '/playbooks': 'Playbooks',
   '/templates': 'Templates',
   '/credentials': 'Credentials',
+  '/monitoring': 'Monitoring',
+  '/monitoring/alerts': 'Monitoring · Alerts',
+  '/monitoring/routes': 'Monitoring · Route Churn',
+  '/monitoring/rules': 'Monitoring · Alert Rules',
+  '/monitoring/suppressions': 'Monitoring · Suppressions',
+  '/monitoring/sla': 'Monitoring · SLA',
+  '/monitoring/availability': 'Monitoring · Availability',
+  '/monitoring/capacity': 'Monitoring · Capacity',
   '/settings': 'Settings',
 };
 
@@ -129,6 +138,14 @@ export function App() {
           <Route path="/playbooks" element={<Jobs />} />
           <Route path="/templates" element={<Jobs />} />
           <Route path="/credentials" element={<Jobs />} />
+          <Route path="/monitoring" element={<Monitoring />} />
+          <Route path="/monitoring/alerts" element={<Monitoring />} />
+          <Route path="/monitoring/routes" element={<Monitoring />} />
+          <Route path="/monitoring/rules" element={<Monitoring />} />
+          <Route path="/monitoring/suppressions" element={<Monitoring />} />
+          <Route path="/monitoring/sla" element={<Monitoring />} />
+          <Route path="/monitoring/availability" element={<Monitoring />} />
+          <Route path="/monitoring/capacity" element={<Monitoring />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
