@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
 import { useAuthStatus } from '@/api/auth';
 import { resetSessionExpiryFlag, setSessionExpiredHandler } from '@/api/client';
@@ -203,6 +203,7 @@ export function App() {
           <Route path="/topology" element={<Topology />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
 
