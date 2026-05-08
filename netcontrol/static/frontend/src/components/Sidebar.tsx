@@ -250,7 +250,7 @@ const NAV: TopItem[] = [
     icon: ic.network,
     children: [
       { label: 'Topology', icon: ic.topology, href: '/#topology', feature: 'topology' },
-      { label: 'IPAM', icon: ic.ipam, href: '/#ipam', feature: 'ipam' },
+      { label: 'IPAM', icon: ic.ipam, to: '/ipam', feature: 'ipam' },
       { label: 'Cloud Visibility', icon: ic.cloud, href: '/#cloud-visibility', feature: 'cloud-visibility' },
       { label: 'Monitoring', icon: ic.monitoring, href: '/#monitoring', feature: 'monitoring' },
       { label: 'Configuration', icon: ic.config, to: '/configuration', feature: 'config-drift', visKey: 'configuration' },
