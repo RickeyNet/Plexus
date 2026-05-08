@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
 
@@ -56,5 +56,204 @@ export function useDashboard() {
   return useQuery<DashboardResponse>({
     queryKey: ['dashboard'],
     queryFn: () => apiRequest('/dashboard'),
+  });
+}
+
+// ── Custom dashboards ──────────────────────────────────────────────────────
+
+export interface DashboardVariable {
+  name: string;
+  type: 'group' | 'host';
+  default?: string;
+}
+
+export interface DashboardPanel {
+  id: number;
+  dashboard_id: number;
+  title: string;
+  chart_type: string;
+  metric_query_json: string;
+  options_json?: string;
+  grid_x: number;
+  grid_y: number;
+  grid_w: number;
+  grid_h: number;
+}
+
+export interface CustomDashboard {
+  id: number;
+  name: string;
+  description?: string;
+  owner?: string;
+  variables_json?: string;
+  layout_json?: string;
+  created_at?: string;
+  updated_at?: string;
+  panels?: DashboardPanel[];
+}
+
+interface DashboardsListResponse {
+  dashboards: CustomDashboard[];
+}
+
+export function useCustomDashboards() {
+  return useQuery<CustomDashboard[]>({
+    queryKey: ['custom-dashboards'],
+    queryFn: async () => {
+      const data = await apiRequest<DashboardsListResponse | CustomDashboard[]>('/dashboards');
+      return Array.isArray(data) ? data : (data?.dashboards ?? []);
+    },
+  });
+}
+
+export function useCustomDashboard(id: number | null) {
+  return useQuery<CustomDashboard>({
+    queryKey: ['custom-dashboard', id],
+    queryFn: () => apiRequest(`/dashboards/${id}`),
+    enabled: id != null,
+  });
+}
+
+export interface DashboardCreatePayload {
+  name: string;
+  description?: string;
+  variables_json?: string;
+  layout_json?: string;
+}
+
+export function useCreateCustomDashboard() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: DashboardCreatePayload) =>
+      apiRequest<CustomDashboard>('/dashboards', { method: 'POST', body: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-dashboards'] }),
+  });
+}
+
+export function useDeleteCustomDashboard() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => apiRequest(`/dashboards/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-dashboards'] }),
+  });
+}
+
+export interface PanelPayload {
+  title: string;
+  chart_type: string;
+  metric_query_json: string;
+  grid_x?: number;
+  grid_y?: number;
+  grid_w: number;
+  grid_h: number;
+  options_json?: string;
+}
+
+export function useCreatePanel(dashboardId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: PanelPayload) =>
+      apiRequest<DashboardPanel>(`/dashboards/${dashboardId}/panels`, {
+        method: 'POST',
+        body: data,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-dashboard', dashboardId] }),
+  });
+}
+
+export function useUpdatePanel(dashboardId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ panelId, data }: { panelId: number; data: Partial<PanelPayload> }) =>
+      apiRequest<DashboardPanel>(`/dashboards/${dashboardId}/panels/${panelId}`, {
+        method: 'PUT',
+        body: data,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-dashboard', dashboardId] }),
+  });
+}
+
+export function useDeletePanel(dashboardId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (panelId: number) =>
+      apiRequest(`/dashboards/${dashboardId}/panels/${panelId}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-dashboard', dashboardId] }),
+  });
+}
+
+// ── Metrics ────────────────────────────────────────────────────────────────
+
+export interface MetricSample {
+  hostname?: string;
+  host_id?: number;
+  sampled_at?: string;
+  period_start?: string;
+  val_avg?: number | null;
+  value?: number | null;
+}
+
+export interface MetricsQueryResponse {
+  metric: string;
+  step: string;
+  range: string;
+  count: number;
+  data: MetricSample[];
+}
+
+export interface MetricsQueryArgs {
+  metric: string;
+  host?: string;
+  range?: string;
+  step?: string;
+  group?: number | null;
+  enabled?: boolean;
+}
+
+export function useMetricsQuery({
+  metric,
+  host = '*',
+  range = '6h',
+  step = 'auto',
+  group = null,
+  enabled = true,
+}: MetricsQueryArgs) {
+  return useQuery<MetricsQueryResponse>({
+    queryKey: ['metrics-query', metric, host, range, step, group],
+    queryFn: () => {
+      const params = new URLSearchParams({ metric, host, range, step });
+      if (group != null) params.set('group', String(group));
+      return apiRequest(`/metrics/query?${params.toString()}`);
+    },
+    enabled,
+  });
+}
+
+// ── Inventory groups (with optional hosts) ────────────────────────────────
+
+export interface InventoryHostBrief {
+  id: number;
+  hostname: string;
+  ip_address?: string;
+}
+
+export interface InventoryGroupWithHosts {
+  id: number;
+  name: string;
+  hosts?: InventoryHostBrief[];
+}
+
+interface InventoryListResponse {
+  groups?: InventoryGroupWithHosts[];
+}
+
+export function useInventoryGroupsForDashboard(includeHosts: boolean) {
+  return useQuery<InventoryGroupWithHosts[]>({
+    queryKey: ['dashboard-inventory-groups', includeHosts],
+    queryFn: async () => {
+      const path = includeHosts ? '/inventory?include_hosts=true' : '/inventory';
+      const res = await apiRequest<InventoryListResponse | InventoryGroupWithHosts[]>(path);
+      return Array.isArray(res) ? res : (res?.groups ?? []);
+    },
   });
 }
