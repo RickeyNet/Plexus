@@ -18,6 +18,9 @@ interface RouteItem {
   // Per-user gateable feature key (FEATURE_FLAGS). Omit for items always
   // visible to authenticated users (e.g., Settings).
   feature?: string;
+  // Optional second feature flag — entry is visible if user has either.
+  // Used for grouped pages like Changes (risk-analysis | deployments).
+  altFeature?: string;
   // Global visibility key (FEATURE_VISIBILITY_CATALOG) — what admins can hide
   // via Settings → Features. Defaults to `feature` if not set.
   visKey?: string;
@@ -28,6 +31,7 @@ interface LegacyItem {
   icon: Icon;
   href: string;
   feature?: string;
+  altFeature?: string;
   visKey?: string;
 }
 
@@ -255,8 +259,7 @@ const NAV: TopItem[] = [
       { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: 'monitoring' },
       { label: 'Configuration', icon: ic.config, to: '/configuration', feature: 'config-drift', visKey: 'configuration' },
       { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: 'compliance' },
-      { label: 'Risk Analysis', icon: ic.changes, to: '/risk-analysis', feature: 'risk-analysis', visKey: 'change-management' },
-      { label: 'Deployments', icon: ic.changes, to: '/deployments', feature: 'deployments', visKey: 'change-management' },
+      { label: 'Changes', icon: ic.changes, to: '/change-management', feature: 'risk-analysis', altFeature: 'deployments', visKey: 'change-management' },
       { label: 'Reports', icon: ic.reports, to: '/reports', feature: 'reports' },
       { label: 'Graphs', icon: ic.graphs, to: '/graph-templates', feature: 'graph-templates' },
       { label: 'MAC Tracking', icon: ic.mac, to: '/mac-tracking', feature: 'mac-tracking' },
@@ -343,7 +346,9 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
       if (visKey && hidden.has(visKey)) return false;
       if (!i.feature) return true; // always-visible (Settings, etc.)
       if (isAdmin) return true;
-      return access.has(i.feature);
+      if (access.has(i.feature)) return true;
+      if (i.altFeature && access.has(i.altFeature)) return true;
+      return false;
     };
 
     return NAV.flatMap((item): TopItem[] => {

@@ -16,6 +16,7 @@ import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
 import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
 import { GraphTemplates } from '@/pages/GraphTemplates/GraphTemplates';
+import { ChangeManagement } from '@/pages/ChangeManagement/ChangeManagement';
 import { CloudVisibility } from '@/pages/CloudVisibility/CloudVisibility';
 import { Inventory } from '@/pages/Inventory/Inventory';
 import { Ipam } from '@/pages/Ipam/Ipam';
@@ -43,6 +44,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/ipam': 'IPAM',
   '/compliance': 'Compliance',
   '/configuration': 'Configuration',
+  '/change-management': 'Changes',
   '/risk-analysis': 'Risk Analysis',
   '/deployments': 'Deployments',
   '/upgrades': 'Upgrades',
@@ -137,6 +139,7 @@ export function App() {
           <Route path="/ipam" element={<Ipam />} />
           <Route path="/compliance" element={<Compliance />} />
           <Route path="/configuration" element={<Configuration />} />
+          <Route path="/change-management" element={<ChangeManagement />} />
           <Route path="/risk-analysis" element={<RiskAnalysis />} />
           <Route path="/deployments" element={<Deployments />} />
           <Route path="/upgrades" element={<Upgrades />} />
