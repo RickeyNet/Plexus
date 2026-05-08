@@ -1,10 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Route, Routes, useLocation } from 'react-router-dom';
 
 import { useAuthStatus } from '@/api/auth';
+import { resetSessionExpiryFlag, setSessionExpiredHandler } from '@/api/client';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
+import { ChangePasswordModal } from '@/components/ChangePasswordModal';
 import { Sidebar } from '@/components/Sidebar';
 import { UserMenu } from '@/components/UserMenu';
+import { Login } from '@/pages/Login/Login';
 import { Compliance } from '@/pages/Compliance/Compliance';
 import { Configuration } from '@/pages/Configuration/Configuration';
 import { CustomDashboards } from '@/pages/Dashboard/CustomDashboards';
@@ -89,11 +93,46 @@ function Breadcrumb() {
 }
 
 export function App() {
-  const { data: auth } = useAuthStatus();
+  const qc = useQueryClient();
+  const { data: auth, isLoading } = useAuthStatus();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
-  const username = auth?.display_name ?? auth?.username ?? 'admin';
+  // Wire the api-client 401 handler so any expired session bumps the user
+  // back to the login screen without a hard navigation away from /frontend/.
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      qc.invalidateQueries({ queryKey: ['auth', 'status'] });
+    });
+    return () => setSessionExpiredHandler(null);
+  }, [qc]);
+
+  // While the initial auth check is in flight, render nothing — the bundled
+  // styles already paint the space-depth background, and a flash-of-login is
+  // worse than a blank moment for an authenticated reload.
+  if (isLoading) {
+    return (
+      <div className="app-container">
+        <AnimatedBackground />
+      </div>
+    );
+  }
+
+  if (!auth?.authenticated) {
+    return (
+      <>
+        <AnimatedBackground />
+        <Login />
+      </>
+    );
+  }
+
+  // Reset the 401 latch each time we land on an authenticated render so a
+  // future expiry can re-trigger the handler.
+  resetSessionExpiryFlag();
+
+  const username = auth.display_name ?? auth.username ?? 'admin';
+  const mustChangePassword = !!auth.must_change_password;
 
   return (
     <div className="app-container">
@@ -169,6 +208,12 @@ export function App() {
       </main>
 
       <UserMenu isOpen={userMenuOpen} onClose={() => setUserMenuOpen(false)} />
+      <ChangePasswordModal
+        isOpen={mustChangePassword}
+        forced
+        onClose={() => {}}
+        onSuccess={() => qc.invalidateQueries({ queryKey: ['auth', 'status'] })}
+      />
     </div>
   );
 }
