@@ -199,7 +199,7 @@ export interface CloudPullResult {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-function qs(params: Record<string, unknown>): string {
+function qs(params: object): string {
   const cleaned: Record<string, string> = {};
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null || v === '') continue;

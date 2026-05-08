@@ -249,7 +249,7 @@ const NAV: TopItem[] = [
     label: 'Network',
     icon: ic.network,
     children: [
-      { label: 'Topology', icon: ic.topology, href: '/#topology', feature: 'topology' },
+      { label: 'Topology', icon: ic.topology, to: '/topology', feature: 'topology' },
       { label: 'IPAM', icon: ic.ipam, to: '/ipam', feature: 'ipam' },
       { label: 'Cloud Visibility', icon: ic.cloud, to: '/cloud-visibility', feature: 'cloud-visibility' },
       { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: 'monitoring' },

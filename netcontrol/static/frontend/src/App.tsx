@@ -27,6 +27,7 @@ import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
 import { Reports } from '@/pages/Reports/Reports';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 import { Settings } from '@/pages/Settings/Settings';
+import { Topology } from '@/pages/Topology/Topology';
 import { Upgrades } from '@/pages/Upgrades/Upgrades';
 
 const BREADCRUMBS: Record<string, string> = {
@@ -64,6 +65,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/cloud-visibility/flow': 'Cloud · Flow Logs',
   '/cloud-visibility/traffic': 'Cloud · Traffic Metrics',
   '/cloud-visibility/policy': 'Cloud · Policy',
+  '/topology': 'Topology',
   '/settings': 'Settings',
 };
 
@@ -157,6 +159,7 @@ export function App() {
           <Route path="/cloud-visibility/flow" element={<CloudVisibility />} />
           <Route path="/cloud-visibility/traffic" element={<CloudVisibility />} />
           <Route path="/cloud-visibility/policy" element={<CloudVisibility />} />
+          <Route path="/topology" element={<Topology />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
