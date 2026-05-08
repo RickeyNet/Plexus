@@ -6,11 +6,11 @@ import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { Sidebar } from '@/components/Sidebar';
 import { UserMenu } from '@/components/UserMenu';
 import { Compliance } from '@/pages/Compliance/Compliance';
+import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
 import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
 import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
-import { Home } from '@/pages/Home';
 import { Lab } from '@/pages/Lab';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
@@ -81,7 +81,7 @@ export function App() {
       <main className="main-content" aria-live="polite">
         <Breadcrumb />
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<Dashboard />} />
           <Route path="/devices" element={<DevicePicker />} />
           <Route path="/devices/:hostId" element={<DeviceDetail />} />
           <Route path="/lab" element={<Lab />} />
