@@ -16,6 +16,7 @@ import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
 import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
 import { Inventory } from '@/pages/Inventory/Inventory';
+import { Ipam } from '@/pages/Ipam/Ipam';
 import { Lab } from '@/pages/Lab';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
@@ -33,6 +34,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/federation': 'Federation',
   '/floor-plan': 'Floor Plans',
   '/inventory': 'Inventory',
+  '/ipam': 'IPAM',
   '/compliance': 'Compliance',
   '/configuration': 'Configuration',
   '/risk-analysis': 'Risk Analysis',
@@ -106,6 +108,7 @@ export function App() {
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/inventory" element={<Inventory />} />
+          <Route path="/ipam" element={<Ipam />} />
           <Route path="/compliance" element={<Compliance />} />
           <Route path="/configuration" element={<Configuration />} />
           <Route path="/risk-analysis" element={<RiskAnalysis />} />
