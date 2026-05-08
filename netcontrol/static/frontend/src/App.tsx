@@ -19,6 +19,7 @@ import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 import { Settings } from '@/pages/Settings/Settings';
+import { Upgrades } from '@/pages/Upgrades/Upgrades';
 
 const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
@@ -32,6 +33,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/compliance': 'Compliance',
   '/risk-analysis': 'Risk Analysis',
   '/deployments': 'Deployments',
+  '/upgrades': 'Upgrades',
   '/settings': 'Settings',
 };
 
@@ -102,6 +104,7 @@ export function App() {
           <Route path="/compliance" element={<Compliance />} />
           <Route path="/risk-analysis" element={<RiskAnalysis />} />
           <Route path="/deployments" element={<Deployments />} />
+          <Route path="/upgrades" element={<Upgrades />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
