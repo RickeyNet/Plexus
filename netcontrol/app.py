@@ -1898,11 +1898,24 @@ if os.path.isdir(FRONTEND_DIST):
 
 @app.get("/")
 async def serve_frontend():
-    """Serve the frontend index.html or redirect to API docs."""
+    """Serve the React UI by default. Falls back to the legacy SPA if the
+    React bundle is not built, and finally to /docs if no frontend is
+    deployed."""
+    if os.path.isfile(FRONTEND_INDEX):
+        return RedirectResponse(url="/frontend/")
     if os.path.isfile(INDEX_FILE):
         return FileResponse(INDEX_FILE)
-    # If no frontend, redirect to API docs
     return RedirectResponse(url="/docs")
+
+
+@app.get("/legacy", include_in_schema=False)
+@app.get("/legacy/", include_in_schema=False)
+async def serve_legacy_frontend():
+    """Optional access path to the classic SPA after cutover to React.
+    Sidebar's "Classic UI" link points here."""
+    if os.path.isfile(INDEX_FILE):
+        return FileResponse(INDEX_FILE)
+    raise HTTPException(status_code=404, detail="Legacy frontend not available")
 
 @app.get("/favicon.ico")
 async def favicon():

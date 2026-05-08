@@ -36,6 +36,16 @@ export class ApiError extends Error {
 // separate reload when the server-side session has idle-expired.
 let sessionExpiryHandled = false;
 
+// Set by App at boot — invalidates auth status so the React gate flips to the
+// login screen. Falls back to a hard reload if no handler is registered yet.
+let onSessionExpired: (() => void) | null = null;
+export function setSessionExpiredHandler(fn: (() => void) | null): void {
+  onSessionExpired = fn;
+}
+export function resetSessionExpiryFlag(): void {
+  sessionExpiryHandled = false;
+}
+
 export interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'headers'> {
   body?: unknown;
   headers?: Record<string, string>;
@@ -96,7 +106,9 @@ export async function apiRequest<T = unknown>(
     ) {
       if (!sessionExpiryHandled) {
         sessionExpiryHandled = true;
-        window.location.assign('/');
+        setCsrfToken(null);
+        if (onSessionExpired) onSessionExpired();
+        else window.location.assign('/');
       }
     }
     throw new ApiError(res.status, parsed, `${res.status} ${detail}`);

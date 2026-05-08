@@ -422,9 +422,9 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
           <span className="nav-label nav-user-label">{username}</span>
         </a>
         <a
-          href="/"
+          href="/legacy/"
           className="nav-link"
-          title="Return to the classic UI"
+          title="Open the classic UI"
           style={{ color: 'var(--text-muted)' }}
         >
           {ic.classic}
