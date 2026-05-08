@@ -1,6 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useLogin, useRegister } from '@/api/auth';
+import { ApiError } from '@/api/client';
+import { initStarfield } from '@/lib/spaceStarfield';
+
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    const body = err.body as { detail?: unknown } | undefined;
+    if (body && typeof body.detail === 'string') return body.detail;
+  }
+  return (err as Error)?.message || fallback;
+}
 
 interface Props {
   // Whether self-registration is allowed (server-side flag). Off in most
@@ -17,6 +27,9 @@ export function Login({ allowRegister = true }: Props) {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  const screenRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
   const login = useLogin();
   const register = useRegister();
 
@@ -24,13 +37,25 @@ export function Login({ allowRegister = true }: Props) {
     setError(null);
   }, [mode]);
 
+  // Mirrors the legacy `#login-particles` starfield. Mounts a few hundred
+  // drifting points over the .login-screen container.
+  useEffect(() => {
+    if (!screenRef.current || !canvasRef.current) return;
+    return initStarfield({
+      canvas: canvasRef.current,
+      host: screenRef.current,
+      baseCount: 110,
+      linkDistance: 0,
+    });
+  }, []);
+
   async function onLogin(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     try {
       await login.mutateAsync({ username, password });
     } catch (err) {
-      setError((err as Error).message || 'Invalid username or password');
+      setError(errorMessage(err, 'Invalid username or password'));
     }
   }
 
@@ -48,20 +73,21 @@ export function Login({ allowRegister = true }: Props) {
         display_name: displayName || undefined,
       });
     } catch (err) {
-      setError((err as Error).message || 'Registration failed');
+      setError(errorMessage(err, 'Registration failed'));
     }
   }
 
   const pending = login.isPending || register.isPending;
 
   return (
-    <div className="login-screen">
+    <div className="login-screen" ref={screenRef}>
       <div className="space-depth space-depth-login" aria-hidden="true">
         <div className="space-nebula nebula-a"></div>
         <div className="space-nebula nebula-b"></div>
         <div className="space-nebula nebula-c"></div>
         <div className="space-vignette"></div>
       </div>
+      <canvas ref={canvasRef} className="login-particles" aria-hidden="true" />
       <div className="login-card">
         <div className="login-orb" aria-hidden="true" />
         <h1 className="login-title">Plexus</h1>
