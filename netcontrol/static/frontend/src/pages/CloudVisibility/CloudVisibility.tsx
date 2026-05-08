@@ -59,7 +59,7 @@ export function CloudVisibility() {
     : accountList;
 
   return (
-    <div>
+    <div className="page">
       <div className="page-header">
         <h2>Cloud Visibility</h2>
       </div>

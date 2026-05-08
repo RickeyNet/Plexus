@@ -36,7 +36,7 @@ export function Jobs() {
   }
 
   return (
-    <div>
+    <div className="page">
       <div className="page-header">
         <h2>Automation</h2>
       </div>
