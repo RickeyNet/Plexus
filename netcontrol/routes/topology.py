@@ -1206,11 +1206,15 @@ async def get_topology(group_id: int | None = Query(default=None)):
         }
         if ext_ips:
             _db = await db.get_db()
-            placeholders = ",".join("?" * len(ext_ips))
-            rows = await _db.execute_fetchall(
-                f"SELECT * FROM hosts WHERE ip_address IN ({placeholders})",
-                list(ext_ips),
-            )
+            try:
+                placeholders = ",".join("?" * len(ext_ips))
+                cursor = await _db.execute(
+                    f"SELECT * FROM hosts WHERE ip_address IN ({placeholders})",
+                    list(ext_ips),
+                )
+                rows = await cursor.fetchall()
+            finally:
+                await _db.close()
             for row in rows:
                 h = dict(row)
                 if h["id"] not in existing_ids:
