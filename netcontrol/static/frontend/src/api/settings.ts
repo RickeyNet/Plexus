@@ -81,6 +81,7 @@ export interface LdapConfig {
 export interface AuthConfig {
   provider: 'local' | 'radius' | 'ldap' | string;
   default_credential_id: number | null;
+  service_credential_id: number | null;
   job_retention_days: number;
   radius: RadiusConfig;
   ldap: LdapConfig;
@@ -514,5 +515,58 @@ export function useCredentialsList() {
   return useQuery<CredentialSummary[]>({
     queryKey: ['credentials', 'list'],
     queryFn: () => apiRequest('/credentials'),
+  });
+}
+
+// ── Service credentials (admin-only) ───────────────────────────────────────
+
+export interface ServiceCredentialPayload {
+  name: string;
+  username: string;
+  password: string;
+  secret?: string;
+}
+
+export interface ServiceCredentialUpdatePayload {
+  name?: string;
+  username?: string;
+  password?: string;
+  secret?: string;
+}
+
+export function useServiceCredentialsList() {
+  return useQuery<CredentialSummary[]>({
+    queryKey: ['credentials', 'service'],
+    queryFn: () => apiRequest('/credentials/service'),
+  });
+}
+
+export function useCreateServiceCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: ServiceCredentialPayload) =>
+      apiRequest<{ id: number }>('/credentials/service', {
+        method: 'POST',
+        body: data,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['credentials', 'service'] }),
+  });
+}
+
+export function useUpdateServiceCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: ServiceCredentialUpdatePayload }) =>
+      apiRequest(`/credentials/service/${id}`, { method: 'PUT', body: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['credentials', 'service'] }),
+  });
+}
+
+export function useDeleteServiceCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiRequest(`/credentials/service/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['credentials', 'service'] }),
   });
 }
