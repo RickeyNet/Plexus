@@ -239,7 +239,7 @@ const ic = {
 
 const NAV: TopItem[] = [
   { label: 'Dashboard', icon: ic.dashboard, to: '/', feature: 'dashboard' },
-  { label: 'Inventory', icon: ic.inventory, href: '/#inventory', feature: 'inventory' },
+  { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
   { label: 'Playbooks', icon: ic.playbooks, href: '/#playbooks', feature: 'playbooks' },
   { label: 'Jobs', icon: ic.jobs, href: '/#jobs', feature: 'jobs' },
   { label: 'Templates', icon: ic.templates, href: '/#templates', feature: 'templates' },
