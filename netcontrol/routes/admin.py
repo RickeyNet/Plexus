@@ -133,6 +133,7 @@ class LdapConfigRequest(BaseModel):
 class AuthConfigRequest(BaseModel):
     provider: str = "local"
     default_credential_id: int | None = None
+    service_credential_id: int | None = None
     job_retention_days: int = Field(default=30, ge=30)
     radius: RadiusConfigRequest = RadiusConfigRequest()
     ldap: LdapConfigRequest = LdapConfigRequest()

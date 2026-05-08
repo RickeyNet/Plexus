@@ -1355,7 +1355,14 @@ function templateSettings() {
                 <select id="default-credential-id" class="form-select">
                     <option value="">-- None --</option>
                 </select>
-                <small style="color: var(--text-muted);">Used by monitoring polls, background tasks, and jobs when no credential is explicitly selected.</small>
+                <small style="color: var(--text-muted);">Per-user fallback for jobs launched without selecting a credential. Each user only sees their own.</small>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="service-credential-id">Service Credential</label>
+                <select id="service-credential-id" class="form-select">
+                    <option value="">-- None --</option>
+                </select>
+                <small style="color: var(--text-muted);">Used by Plexus internals (monitoring polls, scheduled discovery). Manage entries from the React Settings → Auth tab.</small>
             </div>
             <div class="form-group">
                 <label class="form-label" for="job-retention-days">Job History Retention (days)</label>
