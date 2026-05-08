@@ -14,6 +14,7 @@ import {
   useSyslogEvents,
 } from '@/api/deviceDetail';
 
+import { AlertCorrelationModal } from './AlertCorrelationModal';
 import { ErrorTrendingTab } from './ErrorTrendingTab';
 import { InterfaceTab } from './InterfaceTab';
 import { formatUptime } from './format';
@@ -404,35 +405,55 @@ interface MonitoringAlert {
 }
 
 function AlertsTab({ alerts, loading }: { alerts: MonitoringAlert[]; loading: boolean }) {
+  const [correlateId, setCorrelateId] = useState<number | null>(null);
+
   if (loading) return <p className="text-muted">Loading alerts…</p>;
   if (!alerts.length) return <p className="text-muted">No alerts for this device</p>;
   const sevClass = (s: string) =>
     s === 'critical' ? 'danger' : s === 'warning' ? 'warning' : 'info';
   return (
-    <table className="chart-table">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Severity</th>
-          <th>Metric</th>
-          <th>Message</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {alerts.map((a) => (
-          <tr key={a.id}>
-            <td>{new Date(a.created_at).toLocaleString()}</td>
-            <td>
-              <span className={`badge badge-${sevClass(a.severity)}`}>{a.severity}</span>
-            </td>
-            <td>{a.metric || ''}</td>
-            <td>{a.message || ''}</td>
-            <td>{a.acknowledged ? 'Ack' : 'Open'}</td>
+    <>
+      <table className="chart-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Severity</th>
+            <th>Metric</th>
+            <th>Message</th>
+            <th>Status</th>
+            <th></th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {alerts.map((a) => (
+            <tr key={a.id}>
+              <td>{new Date(a.created_at).toLocaleString()}</td>
+              <td>
+                <span className={`badge badge-${sevClass(a.severity)}`}>{a.severity}</span>
+              </td>
+              <td>{a.metric || ''}</td>
+              <td>{a.message || ''}</td>
+              <td>{a.acknowledged ? 'Ack' : 'Open'}</td>
+              <td>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => setCorrelateId(a.id)}
+                  title="View correlated deployments and config drift"
+                >
+                  Correlate
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <AlertCorrelationModal
+        isOpen={correlateId != null}
+        onClose={() => setCorrelateId(null)}
+        alertId={correlateId}
+      />
+    </>
   );
 }
 
