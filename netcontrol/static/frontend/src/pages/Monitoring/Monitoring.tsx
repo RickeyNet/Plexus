@@ -44,7 +44,7 @@ export function Monitoring() {
   }
 
   return (
-    <div className="page">
+    <div>
       <div className="page-header">
         <h2>Monitoring</h2>
       </div>
