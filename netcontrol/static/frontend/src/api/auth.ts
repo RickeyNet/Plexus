@@ -37,6 +37,10 @@ export function useAuthStatus() {
       setCsrfToken(status.csrf_token ?? null);
       return status;
     },
+    // The global default disables refetchOnWindowFocus, but auth state is the
+    // one place we want it: if a user logs out (or in) in another tab, this
+    // tab notices on the next focus instead of waiting for a 401.
+    refetchOnWindowFocus: true,
   });
 }
 
