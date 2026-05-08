@@ -76,6 +76,11 @@ export function Ipam() {
     qc.invalidateQueries({ queryKey: ['ipam-overview'] });
     qc.invalidateQueries({ queryKey: ['ipam-subnet-detail'] });
     qc.invalidateQueries({ queryKey: ['ipam-sources'] });
+    qc.invalidateQueries({ queryKey: ['reconcileRuns'] });
+    qc.invalidateQueries({ queryKey: ['reconcileDiffs'] });
+    qc.invalidateQueries({ queryKey: ['dhcpServers'] });
+    qc.invalidateQueries({ queryKey: ['dhcpExhaustion'] });
+    qc.invalidateQueries({ queryKey: ['dhcpCorrelation'] });
   };
 
   const summaryCards = [

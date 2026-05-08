@@ -1,4 +1,4 @@
-import { CSSProperties, useEffect, useRef, useState } from 'react';
+import { CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   FloorPlacement,
@@ -36,7 +36,7 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
   // Cache-bust the image URL when the floor changes so a fresh upload is
   // visible without forcing the browser to disregard cache for unrelated
   // requests.
-  const [cacheKey] = useState(() => Date.now());
+  const cacheKey = useMemo(() => Date.now(), [floor.id, floor.image_filename]);
   const upsert = useUpsertFloorPlacement();
   const [draggedHostId, setDraggedHostId] = useState<number | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);

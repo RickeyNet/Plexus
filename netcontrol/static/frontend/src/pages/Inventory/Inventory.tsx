@@ -61,8 +61,8 @@ export function Inventory() {
 
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<InventorySort>('custom');
-  const [compact, setCompact] = useState<boolean>(loadCompactMode());
-  const [collapsed, setCollapsed] = useState<Set<number>>(loadCollapsedSet());
+  const [compact, setCompact] = useState<boolean>(() => loadCompactMode());
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => loadCollapsedSet());
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
   const [selectedHosts, setSelectedHosts] = useState<Map<number, Set<number>>>(
     new Map(),

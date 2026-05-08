@@ -191,30 +191,42 @@ export function Login({ allowRegister = true }: Props) {
             {mode === 'login' ? (
               <>
                 <span style={{ color: 'var(--text-muted)' }}>Don't have an account?</span>
-                <a
-                  href="#"
-                  style={{ color: 'var(--primary-light)', marginLeft: '0.25rem' }}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setMode('register');
+                <button
+                  type="button"
+                  className="btn-link"
+                  style={{
+                    color: 'var(--primary-light)',
+                    marginLeft: '0.25rem',
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
                   }}
+                  onClick={() => setMode('register')}
                 >
                   Register
-                </a>
+                </button>
               </>
             ) : (
               <>
                 <span style={{ color: 'var(--text-muted)' }}>Already have an account?</span>
-                <a
-                  href="#"
-                  style={{ color: 'var(--primary-light)', marginLeft: '0.25rem' }}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setMode('login');
+                <button
+                  type="button"
+                  className="btn-link"
+                  style={{
+                    color: 'var(--primary-light)',
+                    marginLeft: '0.25rem',
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
                   }}
+                  onClick={() => setMode('login')}
                 >
                   Sign In
-                </a>
+                </button>
               </>
             )}
           </div>

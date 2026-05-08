@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
   type StpState,
@@ -6,7 +6,7 @@ import {
   type TopologyNode,
   useUpdateHostCategory,
 } from '@/api/topology';
-import { abbreviateInterface, formatBps } from './helpers';
+import { abbreviateInterface, formatBps, stpPortKey } from './helpers';
 
 interface Props {
   node: TopologyNode;
@@ -31,6 +31,11 @@ export function NodeDetails({ node, edges, allNodes, stpStateByPort, onClose, on
   const [category, setCategory] = useState(node.device_category ?? '');
   const [error, setError] = useState<string | null>(null);
   const updateCategory = useUpdateHostCategory();
+
+  useEffect(() => {
+    setCategory(node.device_category ?? '');
+    setError(null);
+  }, [node.id, node.device_category]);
 
   const connectedEdges = edges.filter((e) => e.from === node.id || e.to === node.id);
 
@@ -105,7 +110,7 @@ export function NodeDetails({ node, edges, allNodes, stpStateByPort, onClose, on
               const peerLabel = peer?.label ?? String(peerId);
               const proto = PROTO_LABEL[edge.protocol ?? ''] ?? (edge.protocol ?? 'L2').toUpperCase();
               const util = edge.utilization;
-              const stpKey = `${edge.from_host_id ?? edge.from}|${(edge.source_interface ?? '').toLowerCase()}`;
+              const stpKey = stpPortKey(edge.from_host_id ?? edge.from, edge.source_interface);
               const stp = stpStateByPort.get(stpKey);
               return (
                 <div key={String(edge.id)} style={{ fontSize: '0.78rem', padding: '0.4rem 0.55rem', background: 'var(--bg-secondary)', borderRadius: '0.3rem' }}>

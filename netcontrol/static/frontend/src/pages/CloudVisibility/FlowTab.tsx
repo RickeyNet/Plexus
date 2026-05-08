@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   useCloudFlowSummary,
@@ -45,9 +45,18 @@ export function FlowTab({ filter }: Props) {
   const tList = talkers.data?.talkers ?? [];
   const tlList = timeline.data?.timeline ?? [];
 
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+  }, []);
+
   function flash(msg: string) {
     setActionMsg(msg);
-    setTimeout(() => setActionMsg(null), 6000);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => {
+      flashTimerRef.current = null;
+      setActionMsg(null);
+    }, 6000);
   }
 
   return (

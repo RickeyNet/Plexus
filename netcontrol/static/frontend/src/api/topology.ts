@@ -367,6 +367,7 @@ export function openUtilizationStream(
   let stopped = false;
 
   function open() {
+    if (stopped) return;
     try {
       es = new EventSource(
         `/api/topology/utilization/stream?interval=${intervalSec}`,

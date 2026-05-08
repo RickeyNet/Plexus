@@ -107,6 +107,14 @@ export function App() {
     return () => setSessionExpiredHandler(null);
   }, [qc]);
 
+  // Reset the 401 latch each time we transition into an authenticated state
+  // so a future expiry can re-trigger the handler. Doing this in an effect
+  // (rather than during render) avoids StrictMode double-fires and keeps
+  // render pure.
+  useEffect(() => {
+    if (auth?.authenticated) resetSessionExpiryFlag();
+  }, [auth?.authenticated]);
+
   // While the initial auth check is in flight, render nothing — the bundled
   // styles already paint the space-depth background, and a flash-of-login is
   // worse than a blank moment for an authenticated reload.
@@ -121,10 +129,6 @@ export function App() {
   if (!auth?.authenticated) {
     return <Login />;
   }
-
-  // Reset the 401 latch each time we land on an authenticated render so a
-  // future expiry can re-trigger the handler.
-  resetSessionExpiryFlag();
 
   const username = auth.display_name ?? auth.username ?? 'admin';
   const mustChangePassword = !!auth.must_change_password;

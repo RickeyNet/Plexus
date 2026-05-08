@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   type CloudAccount,
@@ -33,9 +33,18 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
   const flowPull = useTriggerCloudFlowPull();
   const trafficPull = useTriggerCloudTrafficPull();
 
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+  }, []);
+
   function showMsg(kind: 'success' | 'error', text: string) {
     setActionMsg({ kind, text });
-    setTimeout(() => setActionMsg(null), 6000);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => {
+      flashTimerRef.current = null;
+      setActionMsg(null);
+    }, 6000);
   }
 
   async function runValidate(a: CloudAccount) {
@@ -281,7 +290,7 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
     return '';
   });
   const [notes, setNotes] = useState(account?.notes ?? '');
-  const [enabled, setEnabled] = useState(account?.enabled === 0 ? false : true);
+  const [enabled, setEnabled] = useState(account ? Boolean(account.enabled) : true);
   const [error, setError] = useState<string | null>(null);
 
   const hint = authHintContent(provider);

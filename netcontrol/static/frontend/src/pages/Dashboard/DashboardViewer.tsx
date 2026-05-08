@@ -26,7 +26,8 @@ function parseVariables(json: string | undefined): DashboardVariable[] {
 
 export function DashboardViewer() {
   const { id } = useParams<{ id: string }>();
-  const dashboardId = id ? Number(id) : null;
+  const dashboardId =
+    id != null && Number.isFinite(Number(id)) ? Number(id) : null;
   const navigate = useNavigate();
 
   const dashQuery = useCustomDashboard(dashboardId);

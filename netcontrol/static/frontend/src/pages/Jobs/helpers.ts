@@ -40,8 +40,23 @@ export function parseDeps(raw?: string | null): number[] {
   }
 }
 
+function parseStampMs(s: string | null | undefined): number {
+  if (!s) return 0;
+  const normalized = /Z$|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s}Z`;
+  const t = Date.parse(normalized);
+  return Number.isFinite(t) ? t : 0;
+}
+
 export function jobSortKey(j: Job): string {
+  // Kept for compatibility; new code should use jobSortValue.
   return j.started_at || j.queued_at || '';
+}
+
+export function compareJobsDesc(a: Job, b: Job): number {
+  const av = parseStampMs(a.started_at || a.queued_at);
+  const bv = parseStampMs(b.started_at || b.queued_at);
+  if (bv !== av) return bv - av;
+  return (b.id ?? 0) - (a.id ?? 0);
 }
 
 export function parseTags(tags: unknown): string[] {
@@ -59,8 +74,9 @@ export function parseTags(tags: unknown): string[] {
 
 export function withinDateRange(dateStr: string, range: 'all' | 'today' | '7d' | '30d'): boolean {
   if (range === 'all') return true;
-  const d = new Date(dateStr);
-  const diffDays = (Date.now() - d.getTime()) / (1000 * 60 * 60 * 24);
+  const ms = parseStampMs(dateStr);
+  if (!ms) return false;
+  const diffDays = (Date.now() - ms) / (1000 * 60 * 60 * 24);
   if (range === 'today') return diffDays < 1;
   if (range === '7d') return diffDays <= 7;
   if (range === '30d') return diffDays <= 30;
