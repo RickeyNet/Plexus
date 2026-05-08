@@ -181,10 +181,22 @@ async function apiRequest(endpoint, options = {}) {
     return promise;
 }
 
+// Set to true after the first 401 so we only reload once even when many
+// page modules fire concurrent requests against an idle-expired session.
+let _sessionExpiryHandled = false;
+
 async function _doApiRequest(url, config, endpoint, isMutation) {
     try {
         const response = await fetch(url, config);
         const data = await response.json();
+
+        if (response.status === 401 && endpoint !== '/auth/login' && endpoint !== '/auth/status') {
+            if (!_sessionExpiryHandled) {
+                _sessionExpiryHandled = true;
+                window.location.assign('/');
+            }
+            throw new Error(data.detail || 'Session expired');
+        }
 
         if (!response.ok) {
             throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
