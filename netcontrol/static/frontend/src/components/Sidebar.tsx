@@ -252,7 +252,7 @@ const NAV: TopItem[] = [
       { label: 'Topology', icon: ic.topology, href: '/#topology', feature: 'topology' },
       { label: 'IPAM', icon: ic.ipam, to: '/ipam', feature: 'ipam' },
       { label: 'Cloud Visibility', icon: ic.cloud, href: '/#cloud-visibility', feature: 'cloud-visibility' },
-      { label: 'Monitoring', icon: ic.monitoring, href: '/#monitoring', feature: 'monitoring' },
+      { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: 'monitoring' },
       { label: 'Configuration', icon: ic.config, to: '/configuration', feature: 'config-drift', visKey: 'configuration' },
       { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: 'compliance' },
       { label: 'Risk Analysis', icon: ic.changes, to: '/risk-analysis', feature: 'risk-analysis', visKey: 'change-management' },
