@@ -48,15 +48,62 @@ function featureLabel(feature) {
 }
 
 function renderFeatureCheckboxes(selected = []) {
+    // Pair each base feature key with its `<feature>.write` companion so the
+    // matrix renders as a tidy two-column View/Modify grid instead of a
+    // free-flowing list where ".write" labels overlap their neighbors.
     const features = adminState.capabilities?.feature_flags || [];
+    const writeKeys = new Set(features.filter((f) => f.endsWith('.write')));
+    const bases = features.filter((f) => !f.endsWith('.write'));
     const selectedSet = new Set(selected || []);
-    return features.map((feature) => `
-        <label style="display:flex; align-items:center; gap:0.35rem;">
-            <input type="checkbox" name="feature_keys" value="${feature}" ${selectedSet.has(feature) ? 'checked' : ''}>
-            <span>${featureLabel(feature)}</span>
-        </label>
-    `).join('');
+
+    const rows = bases.map((base) => {
+        const writeKey = `${base}.write`;
+        const hasWrite = writeKeys.has(writeKey);
+        const baseChecked = selectedSet.has(base) ? 'checked' : '';
+        const writeChecked = selectedSet.has(writeKey) ? 'checked' : '';
+        const writeDisabled = !hasWrite || !selectedSet.has(base) ? 'disabled' : '';
+        const writeTitle = !hasWrite ? 'No modify actions for this feature' : '';
+        return `
+            <span>${escapeHtml(featureLabel(base))}</span>
+            <input type="checkbox" name="feature_keys" value="${escapeHtml(base)}" ${baseChecked}
+                   data-feature-base="${escapeHtml(base)}"
+                   onchange="onFeatureViewToggle(this, '${escapeHtml(writeKey)}')"
+                   style="justify-self:center;">
+            <input type="checkbox" name="feature_keys" value="${escapeHtml(writeKey)}" ${writeChecked} ${writeDisabled}
+                   data-feature-write="${escapeHtml(base)}"
+                   ${writeTitle ? `title="${writeTitle}"` : ''}
+                   style="justify-self:center;">
+        `;
+    }).join('');
+
+    return `
+        <div style="font-size:0.82rem; color:var(--text-muted); margin-bottom:0.4rem;">
+            View grants read-only access. Modify also allows POST/PUT/DELETE.
+        </div>
+        <div style="display:grid; grid-template-columns: 1fr auto auto; column-gap:0.75rem; row-gap:0.3rem; align-items:center;">
+            <div style="font-weight:600; font-size:0.85rem;">Feature</div>
+            <div style="font-weight:600; font-size:0.85rem; text-align:center;">View</div>
+            <div style="font-weight:600; font-size:0.85rem; text-align:center;">Modify</div>
+            ${rows}
+        </div>
+    `;
 }
+
+window.onFeatureViewToggle = function(viewCheckbox, writeKey) {
+    // Pair behavior: enable/disable the matching Modify checkbox alongside
+    // the View one, and clear Modify if View is unchecked (write without
+    // view is meaningless).
+    const writeBox = viewCheckbox
+        .closest('form')
+        .querySelector(`input[value="${writeKey}"]`);
+    if (!writeBox) return; // .write companion may not exist for this feature
+    if (viewCheckbox.checked) {
+        writeBox.disabled = false;
+    } else {
+        writeBox.checked = false;
+        writeBox.disabled = true;
+    }
+};
 
 function renderGroupCheckboxes(selected = [], name = 'group_ids') {
     const selectedSet = new Set((selected || []).map((v) => Number(v)));
