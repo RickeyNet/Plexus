@@ -13,7 +13,7 @@ import sys
 import time
 
 import routes.database as db
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -734,7 +734,7 @@ async def logout():
 
 
 @router.get("/api/auth/status")
-async def auth_status(request: Request):
+async def auth_status(request: Request, response: Response):
     _app = _app_module()
     _features_fn = getattr(_app, "_get_user_features", _get_user_features)
 
@@ -744,6 +744,18 @@ async def auth_status(request: Request):
     user = await db.get_user_by_id(session["user_id"])
     if not user:
         return {"authenticated": False}
+
+    # Mirror the idle-timeout enforcement done by require_auth so that a stale
+    # cookie can't make the SPA think it's still logged in. Kiosk accounts
+    # (session_never_expires) bypass the check just like require_auth does.
+    if not bool(user.get("session_never_expires")):
+        idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
+        last_activity = int(session.get("last_activity") or 0)
+        if idle_timeout > 0 and last_activity > 0:
+            if int(time.time()) - last_activity > idle_timeout:
+                response.delete_cookie("session", samesite="strict")
+                return {"authenticated": False}
+
     return {
         "authenticated": True,
         "username": user["username"],
