@@ -18,6 +18,7 @@ import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
 import { GraphTemplates } from '@/pages/GraphTemplates/GraphTemplates';
 import { Inventory } from '@/pages/Inventory/Inventory';
 import { Ipam } from '@/pages/Ipam/Ipam';
+import { Jobs } from '@/pages/Jobs/Jobs';
 import { Lab } from '@/pages/Lab';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
@@ -44,6 +45,10 @@ const BREADCRUMBS: Record<string, string> = {
   '/upgrades': 'Upgrades',
   '/reports': 'Reports',
   '/graph-templates': 'Graph Templates',
+  '/jobs': 'Jobs',
+  '/playbooks': 'Playbooks',
+  '/templates': 'Templates',
+  '/credentials': 'Credentials',
   '/settings': 'Settings',
 };
 
@@ -120,6 +125,10 @@ export function App() {
           <Route path="/upgrades" element={<Upgrades />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/graph-templates" element={<GraphTemplates />} />
+          <Route path="/jobs" element={<Jobs />} />
+          <Route path="/playbooks" element={<Jobs />} />
+          <Route path="/templates" element={<Jobs />} />
+          <Route path="/credentials" element={<Jobs />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/network-tools" element={<MacTracking />} />
         </Routes>
