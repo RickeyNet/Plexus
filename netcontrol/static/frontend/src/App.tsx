@@ -7,6 +7,7 @@ import { resetSessionExpiryFlag, setSessionExpiredHandler } from '@/api/client';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
 import { Sidebar } from '@/components/Sidebar';
+import { TimeRangeBar } from '@/components/TimeRangeBar';
 import { UserMenu } from '@/components/UserMenu';
 import { Login } from '@/pages/Login/Login';
 import { Compliance } from '@/pages/Compliance/Compliance';
@@ -92,6 +93,18 @@ function Breadcrumb() {
   );
 }
 
+// Mirrors the legacy app.js METRIC_PAGES list — pages where the global
+// time range is meaningful (Dashboard, Monitoring, Device Detail).
+function MetricTimeRangeBar() {
+  const { pathname } = useLocation();
+  const show =
+    pathname === '/' ||
+    pathname.startsWith('/monitoring') ||
+    pathname.startsWith('/devices/');
+  if (!show) return null;
+  return <TimeRangeBar />;
+}
+
 export function App() {
   const qc = useQueryClient();
   const { data: auth, isLoading } = useAuthStatus();
@@ -166,6 +179,7 @@ export function App() {
 
       <main className="main-content" aria-live="polite">
         <Breadcrumb />
+        <MetricTimeRangeBar />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/dashboards" element={<CustomDashboards />} />

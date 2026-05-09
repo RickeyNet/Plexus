@@ -118,13 +118,13 @@ export function CloudVisibility() {
         </div>
       </div>
 
-      <div className="tab-bar" role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+      <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
         {TABS.map((t) => (
           <button
             key={t.key}
             role="tab"
             aria-selected={tab === t.key}
-            className={`tab-btn${tab === t.key ? ' active' : ''}`}
+            className={`btn btn-sm btn-secondary mon-tab-btn${tab === t.key ? ' active' : ''}`}
             onClick={() => selectTab(t.key)}
           >
             {t.label}
