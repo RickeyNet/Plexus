@@ -17,9 +17,16 @@ import {
   useUpdateAssignment,
 } from '@/api/compliance';
 
+import { parseBackendDate } from '@/pages/Dashboard/helpers';
+
 import { AssignProfileModal, EditProfileModal, NewProfileModal } from './ProfileModals';
 import { FindingsModal } from './FindingsModal';
 import { RunScanModal } from './RunScanModal';
+
+function formatBackendStamp(iso: string | null | undefined, fallback = '-'): string {
+  const d = parseBackendDate(iso);
+  return d ? d.toLocaleString() : fallback;
+}
 
 type Tab = 'profiles' | 'assignments' | 'results' | 'status';
 
@@ -191,7 +198,7 @@ function SummaryStrip({ summary }: { summary?: { total_profiles?: number; active
     { label: 'Non-compliant', value: String(summary?.hosts_non_compliant ?? '-') },
     {
       label: 'Last scan',
-      value: summary?.last_scan_at ? new Date(summary.last_scan_at + 'Z').toLocaleString() : 'Never',
+      value: formatBackendStamp(summary?.last_scan_at, 'Never'),
     },
   ];
   return (
@@ -381,9 +388,7 @@ function AssignmentsTab({
   return (
     <>
       {filtered.map((a) => {
-        const lastScan = a.last_scan_at
-          ? new Date(a.last_scan_at + 'Z').toLocaleString()
-          : 'Never';
+        const lastScan = formatBackendStamp(a.last_scan_at, 'Never');
         return (
           <div
             key={a.id}
@@ -528,7 +533,7 @@ function ResultsTab({
             : r.status === 'error'
               ? 'danger'
               : 'warning';
-        const scanned = r.scanned_at ? new Date(r.scanned_at + 'Z').toLocaleString() : '-';
+        const scanned = formatBackendStamp(r.scanned_at);
         return (
           <div
             key={r.id}
@@ -620,7 +625,7 @@ function StatusTab({
             : s.status === 'error'
               ? 'danger'
               : 'warning';
-        const scanned = s.scanned_at ? new Date(s.scanned_at + 'Z').toLocaleString() : '-';
+        const scanned = formatBackendStamp(s.scanned_at);
         return (
           <div
             key={i}

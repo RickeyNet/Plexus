@@ -1,6 +1,11 @@
 import { ReactNode, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
+// Module-level stack so multiple open Modals cooperate: only the topmost
+// (most recently opened) handles Escape. Without this, every Modal listens
+// on document and a single Escape keypress closes all of them.
+const escapeStack: Array<() => void> = [];
+
 /**
  * Portal-based modal that renders into document.body and uses the legacy
  * SPA's ``.modal-overlay`` / ``.modal`` styles so the React app matches the
@@ -22,11 +27,21 @@ export interface ModalProps {
 export function Modal({ isOpen, onClose, title, children, size = 'default' }: ModalProps) {
   useEffect(() => {
     if (!isOpen) return;
+    escapeStack.push(onClose);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Escape') return;
+      const top = escapeStack[escapeStack.length - 1];
+      if (top === onClose) {
+        e.stopPropagation();
+        onClose();
+      }
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      const idx = escapeStack.lastIndexOf(onClose);
+      if (idx >= 0) escapeStack.splice(idx, 1);
+    };
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;

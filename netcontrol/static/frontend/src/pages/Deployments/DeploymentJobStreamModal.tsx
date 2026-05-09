@@ -81,6 +81,13 @@ export function DeploymentJobStreamModal({
 
     return () => {
       wsRef.current = null;
+      // Detach handlers before close so any in-flight buffered messages or
+      // the synthetic onclose don't fire setState on an unmounted/replaced
+      // effect run.
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
       try {
         ws.close();
       } catch {

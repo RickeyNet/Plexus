@@ -6,6 +6,7 @@ import {
   LabDeviceSummary,
   useAddTopologyLink,
   useAddTopologyMember,
+  useCloneHost,
   useCreateDevice,
   useCreateEnvironment,
   useCreateTopology,
@@ -460,6 +461,7 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
   const [config, setConfig] = useState('');
   const [cloneHostId, setCloneHostId] = useState('');
   const create = useCreateDevice(envId);
+  const clone = useCloneHost(envId);
 
   return (
     <Modal isOpen onClose={onClose} title="Add lab device">
@@ -548,19 +550,14 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
         <button
           type="button"
           className="btn btn-secondary"
-          disabled={!cloneHostId || Number.isNaN(Number(cloneHostId))}
+          disabled={!cloneHostId || Number.isNaN(Number(cloneHostId)) || clone.isPending}
           onClick={async () => {
-            const res = await fetch(`/api/lab/environments/${envId}/clone-host`, {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ host_id: Number(cloneHostId) }),
-            });
-            if (!res.ok) {
-              alert(`Clone failed: ${res.status}`);
-              return;
+            try {
+              await clone.mutateAsync({ host_id: Number(cloneHostId) });
+              onClose();
+            } catch (err) {
+              alert(`Clone failed: ${(err as Error).message}`);
             }
-            onClose();
           }}
         >
           Clone from inventory host ID

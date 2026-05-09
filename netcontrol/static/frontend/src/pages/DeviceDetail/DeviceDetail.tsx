@@ -34,7 +34,8 @@ const RANGES = ['1h', '6h', '24h', '7d', '30d'];
 export function DeviceDetail() {
   const { hostId: hostIdParam } = useParams<{ hostId: string }>();
   const navigate = useNavigate();
-  const hostId = hostIdParam ? parseInt(hostIdParam, 10) : null;
+  const parsedHostId = hostIdParam ? parseInt(hostIdParam, 10) : NaN;
+  const hostId = Number.isFinite(parsedHostId) ? parsedHostId : null;
   const [tab, setTab] = useState<TabId>('overview');
   const [range, setRange] = useState('24h');
 

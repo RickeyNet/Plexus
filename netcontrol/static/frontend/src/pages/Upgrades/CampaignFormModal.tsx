@@ -161,7 +161,10 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
       ]);
       setHydrated(true);
     }
-  }, [hydrated, isEdit, existing, images, imagesQ.isPending]);
+    // `images` intentionally omitted: hydration must run once per open and a
+    // background images refetch should not overwrite user-edited rows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, isEdit, existing, imagesQ.isPending]);
 
   const setRow = (i: number, patch: Partial<ImageMapRow>) => {
     setImageMapRows((rows) =>

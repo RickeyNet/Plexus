@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import {
@@ -36,9 +36,13 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
   const credList = credentials.data || [];
   const groupList = groups.data || [];
 
-  // Auto-select defaults once data loads
-  if (profileId == null && profileList.length > 0) setProfileId(profileList[0].id);
-  if (groupId == null && groupList.length > 0) setGroupId(groupList[0].id);
+  // Auto-select defaults once data loads.
+  useEffect(() => {
+    if (profileId == null && profileList.length > 0) setProfileId(profileList[0].id);
+  }, [profileId, profileList]);
+  useEffect(() => {
+    if (groupId == null && groupList.length > 0) setGroupId(groupList[0].id);
+  }, [groupId, groupList]);
 
   const selectedGroup = groupList.find((g) => g.id === groupId);
   const selectedGroupHostCount = (selectedGroup?.hosts || []).length;
