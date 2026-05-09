@@ -1,5 +1,6 @@
 import { useDashboard } from '@/api/dashboard';
 
+import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
 import { HealthSection } from './HealthSection';
 import { StatRings } from './StatRings';
@@ -44,6 +45,11 @@ export function Dashboard() {
   return (
     <>
       <h2>Dashboard</h2>
+      <PageHelp
+        pageKey="dashboard"
+        title="Your Network at a Glance"
+        text="View device status, recent alerts, backup summaries, and quick stats. Scroll down to manage custom dashboards with your own metric panels."
+      />
       <StatRings
         hosts={stats.total_hosts ?? 0}
         playbooks={stats.total_playbooks ?? 0}

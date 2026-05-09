@@ -19,6 +19,7 @@ import {
   type TopologyNode,
   type UtilizationStreamEdge,
 } from '@/api/topology';
+import { PageHelp } from '@/components/PageHelp';
 import { AddToInventoryModal } from './AddToInventoryModal';
 import { ChangesModal } from './ChangesModal';
 import { DiscoveryProgressModal } from './DiscoveryProgressModal';
@@ -873,6 +874,12 @@ export function Topology() {
 
   return (
     <div style={{ position: 'relative' }}>
+      <PageHelp
+        pageKey="topology"
+        title="Interactive Network Map"
+        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data."
+      />
+
       {actionMsg && (
         <div className="card" style={{ padding: '0.5rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--success)' }}>
           {actionMsg}
