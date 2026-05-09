@@ -43,7 +43,7 @@ export function useCapacityPlanning(params: CapacityPlanningParams) {
   if (params.projectionDays != null) qs.set('projection_days', String(params.projectionDays));
   if (params.threshold != null) qs.set('threshold', String(params.threshold));
   return useQuery<CapacityPlanningResult>({
-    queryKey: ['capacity-planning', params.metric, params.range, params.group ?? '', params.projectionDays ?? 30, params.threshold ?? null],
+    queryKey: ['reports-capacity-planning', params.metric, params.range, params.group ?? '', params.projectionDays ?? 30, params.threshold ?? null],
     queryFn: () => apiRequest(`/metrics/capacity-planning?${qs}`),
   });
 }
@@ -88,7 +88,7 @@ export function useAvailabilitySummary(groupId: string | null, days: number) {
   const qs = new URLSearchParams({ days: String(days) });
   if (groupId) qs.set('group_id', groupId);
   return useQuery<AvailabilitySummary>({
-    queryKey: ['availability-summary', groupId ?? '', days],
+    queryKey: ['reports-availability-summary', groupId ?? '', days],
     queryFn: () => apiRequest(`/availability/summary?${qs}`),
   });
 }
@@ -97,7 +97,7 @@ export function useAvailabilityOutages(groupId: string | null, days: number, lim
   const qs = new URLSearchParams({ days: String(days), limit: String(limit) });
   if (groupId) qs.set('group_id', groupId);
   return useQuery<{ outages: AvailabilityOutage[] } | AvailabilityOutage[]>({
-    queryKey: ['availability-outages', groupId ?? '', days, limit],
+    queryKey: ['reports-availability-outages', groupId ?? '', days, limit],
     queryFn: () => apiRequest(`/availability/outages?${qs}`),
   });
 }
@@ -105,7 +105,7 @@ export function useAvailabilityOutages(groupId: string | null, days: number, lim
 export function useAvailabilityTransitions(limit = 200) {
   const qs = new URLSearchParams({ entity_type: 'host', limit: String(limit) });
   return useQuery<{ transitions: AvailabilityTransition[] } | AvailabilityTransition[]>({
-    queryKey: ['availability-transitions', limit],
+    queryKey: ['reports-availability-transitions', limit],
     queryFn: () => apiRequest(`/availability/transitions?${qs}`),
   });
 }

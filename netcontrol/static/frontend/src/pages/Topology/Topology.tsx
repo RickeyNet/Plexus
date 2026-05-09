@@ -94,6 +94,18 @@ export function Topology() {
   const utilCleanupRef = useRef<(() => void) | null>(null);
   const nodeMetaRef = useRef<Map<number | string, NodeMeta>>(new Map());
   const edgeMetaRef = useRef<Map<number | string, EdgeMeta>>(new Map());
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Live utilization keyed by edge id, kept off the react-query cache so we
+  // don't mutate cached data structures.
+  const utilByEdgeRef = useRef<Map<number | string, UtilizationStreamEdge['utilization']>>(new Map());
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      if (searchBlurTimerRef.current) clearTimeout(searchBlurTimerRef.current);
+    };
+  }, []);
 
   const groupId = groupFilter ? parseInt(groupFilter, 10) : null;
   const topologyQuery = useTopology(groupId);
@@ -242,7 +254,11 @@ export function Topology() {
 
   function flash(msg: string) {
     setActionMsg(msg);
-    setTimeout(() => setActionMsg(null), 4000);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => {
+      flashTimerRef.current = null;
+      setActionMsg(null);
+    }, 4000);
   }
 
   function buildNodeMeta(d: typeof data): Map<number | string, NodeMeta> {
@@ -342,7 +358,7 @@ export function Topology() {
 
   function edgeOverlayProps(edge: TopologyEdge) {
     const tc = themeRef.current ?? getTopoThemeColors();
-    const util = edge.utilization;
+    const util = utilByEdgeRef.current.get(edge.id) ?? edge.utilization;
     const hasUtil = utilOverlay && util && util.utilization_pct != null;
     const utilPct = hasUtil && util ? util.utilization_pct : 0;
     const utilWidth = hasUtil && util ? (util.width ?? (2 + (utilPct / 100) * 6)) : 2;
@@ -612,7 +628,8 @@ export function Topology() {
     }
     for (const edge of data.edges) {
       const key = `${edge.from_host_id ?? edge.from}-${edge.to_host_id ?? edge.to}-${edge.source_interface ?? ''}`;
-      if (utilMap[key]) edge.utilization = utilMap[key];
+      const incoming = utilMap[key];
+      if (incoming) utilByEdgeRef.current.set(edge.id, incoming);
     }
     refreshEdgeStyles();
   }
@@ -719,10 +736,10 @@ export function Topology() {
     for (let i = 0; i < path.length - 1; i++) {
       const a = path[i];
       const b = path[i + 1];
-      const edge = data.edges.find(
+      const matches = data.edges.filter(
         (e) => (e.from === a && e.to === b) || (e.from === b && e.to === a),
       );
-      if (edge) pathEdgeIds.add(edge.id);
+      for (const edge of matches) pathEdgeIds.add(edge.id);
     }
     const tc = themeRef.current ?? getTopoThemeColors();
     originalColorsRef.current = { nodes: [], edges: [] };
@@ -886,8 +903,20 @@ export function Topology() {
             style={{ minWidth: 200 }}
             value={search}
             onChange={(e) => { setSearch(e.target.value); setSearchResultsVisible(true); setSearchHighlightIdx(-1); }}
-            onFocus={() => setSearchResultsVisible(true)}
-            onBlur={() => setTimeout(() => setSearchResultsVisible(false), 200)}
+            onFocus={() => {
+              if (searchBlurTimerRef.current) {
+                clearTimeout(searchBlurTimerRef.current);
+                searchBlurTimerRef.current = null;
+              }
+              setSearchResultsVisible(true);
+            }}
+            onBlur={() => {
+              if (searchBlurTimerRef.current) clearTimeout(searchBlurTimerRef.current);
+              searchBlurTimerRef.current = setTimeout(() => {
+                searchBlurTimerRef.current = null;
+                setSearchResultsVisible(false);
+              }, 200);
+            }}
             onKeyDown={handleSearchKey}
           />
           {searchResultsVisible && search && (
@@ -1003,12 +1032,16 @@ export function Topology() {
               if (!data) return;
               const target = data.nodes.find((n) => n.id === hostId);
               if (!target) return;
-              target.device_category = newCategory;
-              const iconUrl = nodeIconUrl(target);
+              const updatedNode = { ...target, device_category: newCategory };
+              qc.setQueryData(['topology', groupId ?? null], {
+                ...data,
+                nodes: data.nodes.map((n) => (n.id === hostId ? updatedNode : n)),
+              });
+              const iconUrl = nodeIconUrl(updatedNode);
               const nodesDS = nodesDSRef.current;
               nodesDS?.update({
                 id: hostId,
-                shape: iconUrl ? 'circularImage' : nodeShape(target.device_type),
+                shape: iconUrl ? 'circularImage' : nodeShape(updatedNode.device_type),
                 image: iconUrl,
               } as never);
               flash(`Role updated to ${newCategory || '(auto)'}`);
