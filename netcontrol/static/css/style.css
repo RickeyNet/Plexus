@@ -1640,6 +1640,13 @@ body {
     animation: page-fade-in 0.12s ease-out;
 }
 
+/* React app (mounted at #root) doesn't use the legacy .active toggle —
+   show every .page inside it unconditionally. Scoped to #root so the
+   vanilla-JS SPA's show/hide behavior is preserved elsewhere. */
+#root .page {
+    display: block;
+}
+
 @keyframes page-fade-in {
     from { opacity: 0; }
     to   { opacity: 1; }
