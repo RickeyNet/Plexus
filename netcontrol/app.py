@@ -115,7 +115,8 @@ from netcontrol.routes.cdef_engine import router as cdef_router
 from netcontrol.routes.mac_tracking import router as mac_tracking_router
 from netcontrol.routes.flow_collector import (
     FLOW_COLLECTOR_CONFIG,
-    flow_aggregation_loop,
+    _cancel_aggregation_task as _cancel_flow_aggregation_task,
+    _ensure_aggregation_task as _ensure_flow_aggregation_task,
     router as flow_collector_router,
     start_flow_collector,
     stop_flow_collector,
@@ -858,6 +859,44 @@ async def _job_retention_cleanup_loop() -> None:
             await asyncio.sleep(JOB_RETENTION_CLEANUP_INTERVAL_SECONDS)
 
 
+def _flow_collector_seed_from_env() -> dict | None:
+    """Build a flow_collector config dict from legacy APP_* env vars.
+
+    Called only on the very first boot when no persisted row exists yet, so
+    operators upgrading from Phase C don't have to re-enter their settings
+    in the UI. After this initial seed the DB row is the source of truth.
+    """
+    seeded: dict[str, object] = {}
+    enabled_raw = os.getenv("APP_NETFLOW_ENABLED", "").strip().lower()
+    if enabled_raw:
+        seeded["enabled"] = enabled_raw in ("1", "true", "yes", "on")
+    netflow_port_raw = os.getenv("APP_NETFLOW_PORT", "").strip()
+    if netflow_port_raw:
+        try:
+            seeded["netflow_port"] = int(netflow_port_raw)
+        except ValueError:
+            pass
+    sflow_port_raw = os.getenv("APP_SFLOW_PORT", "").strip()
+    if sflow_port_raw:
+        try:
+            seeded["sflow_port"] = int(sflow_port_raw)
+        except ValueError:
+            pass
+    retention_raw = os.getenv("APP_FLOW_RETENTION_HOURS", "").strip()
+    if retention_raw:
+        try:
+            seeded["retention_hours"] = int(retention_raw)
+        except ValueError:
+            pass
+    agg_raw = os.getenv("APP_FLOW_AGGREGATION_INTERVAL_SECONDS", "").strip()
+    if agg_raw:
+        try:
+            seeded["aggregation_interval_seconds"] = int(agg_raw)
+        except ValueError:
+            pass
+    return seeded or None
+
+
 async def _load_persisted_security_settings():
     login_rules = await db.get_auth_setting("login_rules")
     auth_config = await db.get_auth_setting("auth_config")
@@ -902,6 +941,17 @@ async def _load_persisted_security_settings():
         state.FEATURE_VISIBILITY_HIDDEN = state._sanitize_feature_visibility(feature_visibility.get("hidden") or [])
     else:
         state.FEATURE_VISIBILITY_HIDDEN = []
+    flow_collector = await db.get_auth_setting("flow_collector")
+    if flow_collector is None:
+        # First boot: seed the persisted row from the legacy APP_* env vars
+        # so existing deployments keep working without touching Settings UI.
+        flow_collector = _flow_collector_seed_from_env()
+        if flow_collector:
+            await db.set_auth_setting("flow_collector", flow_collector)
+    state.FLOW_COLLECTOR_CONFIG = state._sanitize_flow_collector_config(flow_collector)
+    # Mirror persisted config into the collector module so it sees the same
+    # values without a separate refresh dance.
+    FLOW_COLLECTOR_CONFIG.update(state.FLOW_COLLECTOR_CONFIG)
 
 
 def require_feature(feature_key: str):
@@ -1198,39 +1248,19 @@ async def lifespan(app: FastAPI):
     lab_drift_task = asyncio.create_task(lab_drift_scheduler_loop())
 
     flow_collector_started = False
-    flow_aggregation_task: asyncio.Task | None = None
-    if os.getenv("APP_NETFLOW_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on"):
-        try:
-            netflow_port = int(os.getenv("APP_NETFLOW_PORT", "2055"))
-        except ValueError:
-            netflow_port = 2055
-            LOGGER.warning("APP_NETFLOW_PORT not an integer; using default 2055")
-        FLOW_COLLECTOR_CONFIG["netflow_port"] = netflow_port
-        sflow_port: int | None = None
-        sflow_port_raw = os.getenv("APP_SFLOW_PORT", "6343").strip()
-        if sflow_port_raw and sflow_port_raw != "0":
-            try:
-                sflow_port = int(sflow_port_raw)
-                FLOW_COLLECTOR_CONFIG["sflow_port"] = sflow_port
-            except ValueError:
-                LOGGER.warning("APP_SFLOW_PORT not an integer; sFlow listener disabled")
-                sflow_port = None
-        try:
-            retention_hours = int(os.getenv("APP_FLOW_RETENTION_HOURS", "48"))
-            FLOW_COLLECTOR_CONFIG["retention_hours"] = max(1, retention_hours)
-        except ValueError:
-            LOGGER.warning("APP_FLOW_RETENTION_HOURS not an integer; using default 48")
-        try:
-            agg_interval = int(os.getenv("APP_FLOW_AGGREGATION_INTERVAL_SECONDS", "3600"))
-            FLOW_COLLECTOR_CONFIG["aggregation_interval_seconds"] = max(60, agg_interval)
-        except ValueError:
-            pass
+    # Persisted flow_collector config (loaded above) drives lifecycle now.
+    # Env vars only matter on the very first boot, where _load_persisted_
+    # security_settings() seeded them into the auth_settings row.
+    if FLOW_COLLECTOR_CONFIG.get("enabled"):
+        netflow_port = int(FLOW_COLLECTOR_CONFIG.get("netflow_port", 2055))
+        raw_sflow = int(FLOW_COLLECTOR_CONFIG.get("sflow_port", 6343))
+        sflow_port: int | None = raw_sflow if raw_sflow else None
         try:
             flow_collector_started = await start_flow_collector(netflow_port, sflow_port=sflow_port)
         except Exception as exc:
             LOGGER.warning("flow_collector: startup failed: %s", type(exc).__name__)
         if flow_collector_started:
-            flow_aggregation_task = asyncio.create_task(flow_aggregation_loop())
+            _ensure_flow_aggregation_task()
 
     try:
         yield
@@ -1255,8 +1285,6 @@ async def lifespan(app: FastAPI):
         dhcp_sync_task.cancel()
         lab_runtime_ttl_task.cancel()
         lab_drift_task.cancel()
-        if flow_aggregation_task is not None:
-            flow_aggregation_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -1337,11 +1365,7 @@ async def lifespan(app: FastAPI):
             await lab_drift_task
         except asyncio.CancelledError:
             pass
-        if flow_aggregation_task is not None:
-            try:
-                await flow_aggregation_task
-            except asyncio.CancelledError:
-                pass
+        await _cancel_flow_aggregation_task()
         if flow_collector_started:
             try:
                 await stop_flow_collector()

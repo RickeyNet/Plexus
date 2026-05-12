@@ -118,6 +118,18 @@ export interface MonitoringPollResult {
   errors?: number;
 }
 
+export interface FlowCollectorConfig {
+  enabled: boolean;
+  netflow_port: number;
+  // 0 disables the sFlow listener.
+  sflow_port: number;
+  retention_hours: number;
+  summary_retention_days: number;
+  aggregation_interval_seconds: number;
+  netflow_running?: boolean;
+  sflow_running?: boolean;
+}
+
 export interface TopologyDiscoveryConfig {
   enabled: boolean;
   interval_seconds: number;
@@ -499,6 +511,27 @@ export function useRunMonitoringPoll() {
       apiRequest<MonitoringPollResult>('/admin/monitoring/run-now', {
         method: 'POST',
       }),
+  });
+}
+
+// ── NetFlow / sFlow collector ──────────────────────────────────────────────
+
+export function useFlowCollectorConfig() {
+  return useQuery<FlowCollectorConfig>({
+    queryKey: ['admin', 'flows', 'config'],
+    queryFn: () => apiRequest('/admin/flows/config'),
+  });
+}
+
+export function useUpdateFlowCollectorConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: FlowCollectorConfig) =>
+      apiRequest<FlowCollectorConfig>('/admin/flows/config', {
+        method: 'PUT',
+        body: data,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'flows', 'config'] }),
   });
 }
 
