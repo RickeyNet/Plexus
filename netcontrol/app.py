@@ -1206,6 +1206,15 @@ async def lifespan(app: FastAPI):
             netflow_port = 2055
             LOGGER.warning("APP_NETFLOW_PORT not an integer; using default 2055")
         FLOW_COLLECTOR_CONFIG["netflow_port"] = netflow_port
+        sflow_port: int | None = None
+        sflow_port_raw = os.getenv("APP_SFLOW_PORT", "6343").strip()
+        if sflow_port_raw and sflow_port_raw != "0":
+            try:
+                sflow_port = int(sflow_port_raw)
+                FLOW_COLLECTOR_CONFIG["sflow_port"] = sflow_port
+            except ValueError:
+                LOGGER.warning("APP_SFLOW_PORT not an integer; sFlow listener disabled")
+                sflow_port = None
         try:
             retention_hours = int(os.getenv("APP_FLOW_RETENTION_HOURS", "48"))
             FLOW_COLLECTOR_CONFIG["retention_hours"] = max(1, retention_hours)
@@ -1217,7 +1226,7 @@ async def lifespan(app: FastAPI):
         except ValueError:
             pass
         try:
-            flow_collector_started = await start_flow_collector(netflow_port)
+            flow_collector_started = await start_flow_collector(netflow_port, sflow_port=sflow_port)
         except Exception as exc:
             LOGGER.warning("flow_collector: startup failed: %s", type(exc).__name__)
         if flow_collector_started:

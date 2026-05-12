@@ -46,6 +46,8 @@ FLOW_AGGREGATION_MIN_INTERVAL = 60
 
 _flow_transport = None
 _flow_protocol = None
+_sflow_transport = None
+_sflow_protocol = None
 
 # Resolves exporter source IP -> hosts.id without per-packet DB lookups.
 # Populated at collector start and refreshed via refresh_exporter_cache()
@@ -244,33 +246,324 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# sFlow v5 Parser (RFC 3176 / sflow.org spec)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Last seen sampling_rate per (exporter_ip, source_id). Surfaced to the
+# flow_exporters table so the UI can show "this device is sampling 1:1024".
+_sflow_sampling_rates: dict[tuple[str, int], int] = {}
+
+# sFlow sample formats (low 20 bits of sample_type; enterprise=0)
+_SF_FLOW_SAMPLE = 1
+_SF_COUNTER_SAMPLE = 2
+_SF_EXPANDED_FLOW_SAMPLE = 3
+_SF_EXPANDED_COUNTER_SAMPLE = 4
+
+# Flow record formats inside a flow_sample (low 20 bits of data_format; enterprise=0)
+_SF_FLOW_RAW_PACKET_HEADER = 1
+
+# Header protocols (sflow_record_raw_packet_header.protocol values)
+_SF_HEADER_ETHERNET_ISO88023 = 1
+
+
+def _decode_raw_packet_header(header: bytes) -> dict:
+    """Decode the sampled raw Ethernet/IPv4 header inside a flow_sample.
+
+    Returns the network-layer fields we want to put into flow_records:
+    src_ip / dst_ip / src_port / dst_port / protocol / bytes / packets.
+    Best-effort: returns {} if the packet isn't Ethernet+IPv4 or is truncated.
+    """
+    if len(header) < 14:
+        return {}
+
+    ethertype = int.from_bytes(header[12:14], "big")
+    ip_offset = 14
+
+    # Strip 802.1Q VLAN tag (or QinQ) if present so we can reach the IP header.
+    while ethertype == 0x8100 and len(header) >= ip_offset + 4:
+        ethertype = int.from_bytes(header[ip_offset + 2:ip_offset + 4], "big")
+        ip_offset += 4
+
+    if ethertype != 0x0800:  # not IPv4 — bail (IPv6/ARP/MPLS not in flow_records schema)
+        return {}
+    if len(header) < ip_offset + 20:
+        return {}
+
+    ip_hdr = header[ip_offset:ip_offset + 20]
+    version_ihl = ip_hdr[0]
+    if (version_ihl >> 4) != 4:
+        return {}
+    ihl = (version_ihl & 0x0F) * 4
+    if ihl < 20 or len(header) < ip_offset + ihl:
+        return {}
+
+    total_length = int.from_bytes(ip_hdr[2:4], "big")
+    protocol = ip_hdr[9]
+    src_ip = socket.inet_ntoa(ip_hdr[12:16])
+    dst_ip = socket.inet_ntoa(ip_hdr[16:20])
+
+    src_port = 0
+    dst_port = 0
+    if protocol in (6, 17):  # TCP / UDP
+        l4_offset = ip_offset + ihl
+        if len(header) >= l4_offset + 4:
+            src_port = int.from_bytes(header[l4_offset:l4_offset + 2], "big")
+            dst_port = int.from_bytes(header[l4_offset + 2:l4_offset + 4], "big")
+
+    return {
+        "src_ip": src_ip,
+        "dst_ip": dst_ip,
+        "src_port": src_port,
+        "dst_port": dst_port,
+        "protocol": protocol,
+        "ip_total_length": total_length,
+    }
+
+
+def parse_sflow(data: bytes, addr: tuple) -> list[dict]:
+    """Parse an sFlow v5 datagram into flow records.
+
+    sFlow v5 datagram header (XDR, big-endian):
+        u32 version (=5)
+        u32 agent_address_type (1=IPv4, 2=IPv6)
+        agent_address (4 or 16 bytes)
+        u32 sub_agent_id
+        u32 sequence_number
+        u32 uptime_ms
+        u32 num_samples
+
+    Each sample:
+        u32 sample_type   (enterprise<<20 | format; enterprise=0 standard)
+        u32 sample_length
+        bytes sample_data (length = sample_length)
+    """
+    if len(data) < 28:
+        return []
+
+    try:
+        version = struct.unpack("!I", data[:4])[0]
+    except struct.error:
+        return []
+    if version != 5:
+        return []
+
+    exporter_ip = addr[0]
+    records: list[dict] = []
+
+    offset = 4
+    try:
+        addr_type = struct.unpack("!I", data[offset:offset + 4])[0]
+        offset += 4
+        if addr_type == 1:  # IPv4
+            offset += 4
+        elif addr_type == 2:  # IPv6
+            offset += 16
+        else:
+            return []
+
+        if offset + 16 > len(data):
+            return []
+        # sub_agent_id, sequence, uptime, num_samples
+        _sub_agent, _seq, _uptime, num_samples = struct.unpack("!IIII", data[offset:offset + 16])
+        offset += 16
+    except struct.error:
+        return []
+
+    now_iso = datetime.now(UTC).isoformat()
+
+    for _ in range(num_samples):
+        if offset + 8 > len(data):
+            break
+        sample_type, sample_length = struct.unpack("!II", data[offset:offset + 8])
+        offset += 8
+        sample_end = offset + sample_length
+        if sample_length <= 0 or sample_end > len(data):
+            break
+
+        sample = data[offset:sample_end]
+        offset = sample_end
+
+        enterprise = sample_type >> 20
+        fmt = sample_type & 0x000FFFFF
+        if enterprise != 0:
+            continue  # vendor-private; skip
+
+        if fmt == _SF_FLOW_SAMPLE:
+            decoded = _parse_sflow_flow_sample(sample, exporter_ip, expanded=False)
+            for rec in decoded:
+                rec.setdefault("start_time", now_iso)
+                rec.setdefault("end_time", now_iso)
+                records.append(rec)
+        elif fmt == _SF_EXPANDED_FLOW_SAMPLE:
+            decoded = _parse_sflow_flow_sample(sample, exporter_ip, expanded=True)
+            for rec in decoded:
+                rec.setdefault("start_time", now_iso)
+                rec.setdefault("end_time", now_iso)
+                records.append(rec)
+        elif fmt in (_SF_COUNTER_SAMPLE, _SF_EXPANDED_COUNTER_SAMPLE):
+            # Counter samples don't produce flow records, but we don't fail on them.
+            # Sampling rate is captured from flow_samples; interface counters could
+            # be wired into the SNMP poller path later.
+            continue
+        # other formats: ignore silently
+
+    return records
+
+
+def _parse_sflow_flow_sample(sample: bytes, exporter_ip: str, expanded: bool) -> list[dict]:
+    """Decode the body of a flow_sample or expanded_flow_sample.
+
+    flow_sample (format 1):
+        u32 sequence_number
+        u32 source_id               (type<<24 | index)   — 4 bytes
+        u32 sampling_rate
+        u32 sample_pool
+        u32 drops
+        u32 input
+        u32 output
+        u32 flow_records_count
+        flow_record[] flow_records
+
+    expanded_flow_sample (format 3): source_id, input, output are each two u32s.
+    """
+    try:
+        if expanded:
+            if len(sample) < 44:
+                return []
+            (
+                _seq, _src_type, _src_index, sampling_rate, _pool, _drops,
+                _in_fmt, _in_val, _out_fmt, _out_val, records_count,
+            ) = struct.unpack("!IIIIIIIIIII", sample[:44])
+            cursor = 44
+        else:
+            if len(sample) < 32:
+                return []
+            (
+                _seq, _source_id, sampling_rate, _pool, _drops,
+                _input, _output, records_count,
+            ) = struct.unpack("!IIIIIIII", sample[:32])
+            cursor = 32
+    except struct.error:
+        return []
+
+    if sampling_rate > 0:
+        _sflow_sampling_rates[(exporter_ip, _src_index if expanded else (_source_id & 0x00FFFFFF))] = sampling_rate
+
+    out: list[dict] = []
+    rate = sampling_rate if sampling_rate > 0 else 1
+
+    for _ in range(records_count):
+        if cursor + 8 > len(sample):
+            break
+        try:
+            data_format, flow_data_length = struct.unpack("!II", sample[cursor:cursor + 8])
+        except struct.error:
+            break
+        cursor += 8
+        body_end = cursor + flow_data_length
+        if flow_data_length <= 0 or body_end > len(sample):
+            break
+
+        body = sample[cursor:body_end]
+        cursor = body_end
+
+        enterprise = data_format >> 20
+        fmt = data_format & 0x000FFFFF
+        if enterprise != 0 or fmt != _SF_FLOW_RAW_PACKET_HEADER:
+            continue
+        if len(body) < 16:
+            continue
+
+        try:
+            protocol_kind, frame_length, _stripped, header_length = struct.unpack(
+                "!IIII", body[:16]
+            )
+        except struct.error:
+            continue
+        if protocol_kind != _SF_HEADER_ETHERNET_ISO88023:
+            continue
+        header_bytes = body[16:16 + header_length]
+
+        decoded = _decode_raw_packet_header(header_bytes)
+        if not decoded:
+            continue
+
+        # Each sampled packet represents `rate` packets on the wire.
+        # frame_length is the original Ethernet frame size, used to estimate bytes.
+        bytes_estimate = frame_length * rate
+        packets_estimate = rate
+
+        out.append({
+            "exporter_ip": exporter_ip,
+            "flow_type": "sflow_v5",
+            "src_ip": decoded["src_ip"],
+            "dst_ip": decoded["dst_ip"],
+            "src_port": decoded["src_port"],
+            "dst_port": decoded["dst_port"],
+            "protocol": decoded["protocol"],
+            "bytes": bytes_estimate,
+            "packets": packets_estimate,
+            "src_as": 0,
+            "dst_as": 0,
+            "input_if": 0,
+            "output_if": 0,
+            "tos": 0,
+            "tcp_flags": 0,
+            # start_time / end_time filled in by parse_sflow()
+        })
+
+    return out
+
+
+def _latest_sflow_sampling_rate(exporter_ip: str) -> int:
+    """Return the most recently observed sampling rate for an exporter, or 0."""
+    best = 0
+    for (ip, _src), rate in _sflow_sampling_rates.items():
+        if ip == exporter_ip and rate > best:
+            best = rate
+    return best
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # UDP Flow Receiver Protocol
 # ═════════════════════════════════════════════════════════════════════════════
 
 class _FlowCollectorProtocol(asyncio.DatagramProtocol):
-    """UDP listener that receives NetFlow/IPFIX/sFlow packets."""
+    """UDP listener that receives NetFlow/IPFIX/sFlow packets.
 
-    def __init__(self):
+    The collector binds two sockets (NetFlow on 2055, sFlow on 6343) and
+    each protocol instance is told which format to expect via `mode`:
+    `mode="netflow"` parses v5/v9/IPFIX off the version byte; `mode="sflow"`
+    routes everything through parse_sflow(). Both modes share the same
+    buffer/flush path so flow_records end up in one table.
+    """
+
+    def __init__(self, mode: str = "netflow"):
+        self.mode = mode
         self._buffer: list[tuple] = []
         self._flush_task: asyncio.Task | None = None
 
     def connection_made(self, transport):
         self.transport = transport
         self._flush_task = asyncio.create_task(self._periodic_flush())
-        LOGGER.info("flow_collector: UDP listener started")
+        LOGGER.info("flow_collector: UDP listener started (mode=%s)", self.mode)
 
     def datagram_received(self, data: bytes, addr: tuple):
         if len(data) < 4:
             return
 
-        version = struct.unpack("!H", data[:2])[0]
-
-        if version == 5:
-            records = parse_netflow_v5(data, addr)
-        elif version in (9, 10):
-            records = parse_netflow_v9(data, addr)
+        if self.mode == "sflow":
+            records = parse_sflow(data, addr)
+            sampling_rate = _latest_sflow_sampling_rate(addr[0])
         else:
-            return  # Unknown format
+            version = struct.unpack("!H", data[:2])[0]
+            if version == 5:
+                records = parse_netflow_v5(data, addr)
+            elif version in (9, 10):
+                records = parse_netflow_v9(data, addr)
+            else:
+                return  # Unknown format
+            sampling_rate = 0
 
         if not records:
             return
@@ -292,7 +585,7 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
         # Per-exporter telemetry: count this packet (not per-record) so the
         # number matches what the device actually sent over the wire.
         asyncio.create_task(_record_exporter_packet(
-            exporter_ip, flow_type, host_id, last_record_at
+            exporter_ip, flow_type, host_id, last_record_at, sampling_rate
         ))
 
         if len(self._buffer) >= FLOW_COLLECTOR_CONFIG.get("batch_size", 100):
@@ -371,6 +664,7 @@ async def _record_exporter_packet(
     flow_type: str,
     host_id: int | None,
     last_record_at: str | None,
+    sampling_rate: int = 0,
 ) -> None:
     """Persist per-exporter packet telemetry. Best-effort: never raises."""
     try:
@@ -379,7 +673,7 @@ async def _record_exporter_packet(
             flow_type=flow_type,
             host_id=host_id,
             packets_delta=1,
-            sampling_rate=0,
+            sampling_rate=sampling_rate,
             last_record_at=last_record_at,
         )
     except Exception as exc:
@@ -392,40 +686,77 @@ async def _record_exporter_packet(
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def start_flow_collector(port: int = 2055) -> bool:
-    """Start the UDP flow collector on the specified port."""
-    global _flow_transport, _flow_protocol
+async def start_flow_collector(port: int = 2055, sflow_port: int | None = None) -> bool:
+    """Start the UDP flow collector.
+
+    Always opens the NetFlow/IPFIX listener on ``port``. If ``sflow_port``
+    is provided and non-zero, also opens a second listener for sFlow v5 on
+    that port. The sFlow socket failing to bind is logged but doesn't
+    abort startup — NetFlow still works on its own.
+    """
+    global _flow_transport, _flow_protocol, _sflow_transport, _sflow_protocol
     if _flow_transport is not None:
         return False  # Already running
 
     try:
         loop = asyncio.get_event_loop()
         _flow_transport, _flow_protocol = await loop.create_datagram_endpoint(
-            lambda: _FlowCollectorProtocol(),
+            lambda: _FlowCollectorProtocol(mode="netflow"),
             local_addr=("0.0.0.0", port),
         )
         FLOW_COLLECTOR_CONFIG["enabled"] = True
+        FLOW_COLLECTOR_CONFIG["netflow_port"] = port
         await refresh_exporter_cache()
-        LOGGER.info("flow_collector: started on UDP port %d", port)
-        return True
+        LOGGER.info("flow_collector: NetFlow listener started on UDP port %d", port)
     except Exception as exc:
-        LOGGER.error("flow_collector: failed to start on port %d: %s", port, str(exc))
+        LOGGER.error("flow_collector: failed to start NetFlow listener on port %d: %s", port, str(exc))
         return False
+
+    if sflow_port:
+        try:
+            _sflow_transport, _sflow_protocol = await loop.create_datagram_endpoint(
+                lambda: _FlowCollectorProtocol(mode="sflow"),
+                local_addr=("0.0.0.0", sflow_port),
+            )
+            FLOW_COLLECTOR_CONFIG["sflow_port"] = sflow_port
+            LOGGER.info("flow_collector: sFlow listener started on UDP port %d", sflow_port)
+        except Exception as exc:
+            LOGGER.warning(
+                "flow_collector: sFlow listener on port %d failed (continuing without it): %s",
+                sflow_port, str(exc),
+            )
+            _sflow_transport = None
+            _sflow_protocol = None
+
+    return True
 
 
 async def stop_flow_collector() -> bool:
-    """Stop the UDP flow collector."""
-    global _flow_transport, _flow_protocol
-    if _flow_transport is None:
+    """Stop the UDP flow collector (both NetFlow and sFlow sockets)."""
+    global _flow_transport, _flow_protocol, _sflow_transport, _sflow_protocol
+    if _flow_transport is None and _sflow_transport is None:
         return False
-    try:
-        if _flow_protocol:
-            await _flow_protocol._flush_buffer()
-        _flow_transport.close()
-    except Exception:
-        pass
-    _flow_transport = None
-    _flow_protocol = None
+
+    if _sflow_transport is not None:
+        try:
+            if _sflow_protocol:
+                await _sflow_protocol._flush_buffer()
+            _sflow_transport.close()
+        except Exception:
+            pass
+        _sflow_transport = None
+        _sflow_protocol = None
+
+    if _flow_transport is not None:
+        try:
+            if _flow_protocol:
+                await _flow_protocol._flush_buffer()
+            _flow_transport.close()
+        except Exception:
+            pass
+        _flow_transport = None
+        _flow_protocol = None
+
     FLOW_COLLECTOR_CONFIG["enabled"] = False
     LOGGER.info("flow_collector: stopped")
     return True
@@ -542,7 +873,9 @@ async def api_flow_status():
     return {
         "enabled": FLOW_COLLECTOR_CONFIG.get("enabled", False),
         "netflow_port": FLOW_COLLECTOR_CONFIG.get("netflow_port", 2055),
+        "sflow_port": FLOW_COLLECTOR_CONFIG.get("sflow_port", 6343),
         "running": _flow_transport is not None,
+        "sflow_running": _sflow_transport is not None,
     }
 
 
@@ -554,11 +887,19 @@ async def api_flow_exporters():
 
 
 @router.post("/api/admin/flows/start")
-async def api_start_collector(port: int = Query(2055, ge=1, le=65535)):
-    ok = await start_flow_collector(port)
+async def api_start_collector(
+    port: int = Query(2055, ge=1, le=65535),
+    sflow_port: int | None = Query(None, ge=1, le=65535),
+):
+    ok = await start_flow_collector(port, sflow_port=sflow_port)
     if not ok:
         raise HTTPException(400, "Collector already running or port unavailable")
-    return {"started": True, "port": port}
+    return {
+        "started": True,
+        "port": port,
+        "sflow_port": sflow_port,
+        "sflow_running": _sflow_transport is not None,
+    }
 
 
 @router.post("/api/admin/flows/stop")
