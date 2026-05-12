@@ -1,4 +1,4 @@
-"""Tests for Phase B-1 — containerlab runtime driver and live API."""
+"""Tests for Phase B-1 - containerlab runtime driver and live API."""
 
 from __future__ import annotations
 

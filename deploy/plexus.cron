@@ -1,4 +1,4 @@
-# Plexus nightly backup — install with:
+# Plexus nightly backup - install with:
 #   sudo install -m 0644 deploy/plexus.cron /etc/cron.d/plexus
 #
 # Runs as root so it can talk to the Docker socket and write under

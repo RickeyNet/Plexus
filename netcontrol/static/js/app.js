@@ -187,7 +187,7 @@ function applyTheme(theme) {
     // Defer chart/topology retheme to next frame so CSS theme applies first
     requestAnimationFrame(() => {
         PlexusChart.rethemeAll();
-        // Refresh topology vis-network colors for the new theme (lazy — only if module already loaded)
+        // Refresh topology vis-network colors for the new theme (lazy - only if module already loaded)
         if (_moduleCache['topology']) {
             const topo = _moduleCache['topology'];
             if (topo._topologyNetwork && topo._topologyData && topo._topoNodesDS && topo._topoEdgesDS) {
@@ -221,7 +221,7 @@ function applyPerformanceMode(enabled) {
     const toggle = document.getElementById('perf-mode-toggle');
     if (toggle) {
         toggle.classList.toggle('active', enabled);
-        toggle.title = enabled ? 'Performance Mode ON — click to disable' : 'Performance Mode — reduce animations and blur';
+        toggle.title = enabled ? 'Performance Mode ON - click to disable' : 'Performance Mode - reduce animations and blur';
     }
 }
 
@@ -318,7 +318,7 @@ function refreshCurrentMetricView() {
 window.refreshCurrentMetricView = refreshCurrentMetricView;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PlexusChart — ECharts Abstraction Layer
+// PlexusChart - ECharts Abstraction Layer
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const PlexusChart = {
@@ -855,7 +855,7 @@ export function navigateToPage(page, { updateHash = true } = {}) {
         return;
     }
 
-    // Update active nav link — targeted swap instead of iterating all links
+    // Update active nav link - targeted swap instead of iterating all links
     const prevNavLink = document.querySelector('.nav-link.active[data-page]');
     if (prevNavLink) {
         prevNavLink.classList.remove('active');
@@ -875,7 +875,7 @@ export function navigateToPage(page, { updateHash = true } = {}) {
     // Fast path: dismiss the shared modal overlay (most common case)
     const overlay = document.getElementById('modal-overlay');
     if (overlay) overlay.classList.remove('active');
-    // Catch any additional overlay-based modals (rare — ensureModalDOM creates extras)
+    // Catch any additional overlay-based modals (rare - ensureModalDOM creates extras)
     document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
 
     // Hide current page (targeted instead of sweeping all .page elements)
@@ -1048,7 +1048,7 @@ const PAGE_HELP = {
     },
 };
 
-// Cache help-dismissed state in memory — only read localStorage once
+// Cache help-dismissed state in memory - only read localStorage once
 let _helpDismissedCache = null;
 function _getHelpDismissed() {
     if (!_helpDismissedCache) {
@@ -1317,7 +1317,7 @@ async function loadPageData(page, options = {}) {
         }
         markPageCacheFresh(page);
     } catch (error) {
-        if (error.name === 'AbortError') return; // navigated away — silently cancel
+        if (error.name === 'AbortError') return; // navigated away - silently cancel
         console.error(`Error loading ${page}:`, error);
         showError(`Failed to load ${page}: ${error.message}`);
     }
@@ -1501,7 +1501,7 @@ export function copyableHtmlBlock(innerHtml, rawText, options = {}) {
 
 /**
  * Wire up all copyable blocks in the DOM (copy buttons + Ctrl+A scoping).
- * Safe to call multiple times — skips already-bound elements.
+ * Safe to call multiple times - skips already-bound elements.
  */
 export function initCopyableBlocks() {
     document.querySelectorAll('.copyable-copy-btn:not([data-copy-bound])').forEach(btn => {
@@ -2237,7 +2237,7 @@ function initSpaceStarfield({ canvasId, hostId, baseCount = 90, linkDistance = 0
     window.addEventListener('resize', resize);
     const themeObserver = new MutationObserver(() => {
         updatePalette();
-        syncRunningState(); // Re-check visibility — theme CSS may show/hide the host
+        syncRunningState(); // Re-check visibility - theme CSS may show/hide the host
     });
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 

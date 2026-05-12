@@ -77,7 +77,7 @@ export function AvailabilityTab() {
       {subTab === 'hosts' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {(s.hosts ?? []).length === 0 ? (
-            <div className="empty-state">No availability data — run polls to begin tracking.</div>
+            <div className="empty-state">No availability data - run polls to begin tracking.</div>
           ) : (
             (s.hosts ?? []).map((h) => {
               const uptimeColor = (h.uptime_pct ?? 100) >= 99.9 ? 'success' : (h.uptime_pct ?? 100) >= 99 ? 'warning' : 'danger';
@@ -120,7 +120,7 @@ export function AvailabilityTab() {
                   </span>
                 </div>
                 <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>
-                  {formatTimestamp(o.started_at)} — {o.ended_at ? formatTimestamp(o.ended_at) : <span style={{ color: 'var(--danger)' }}>Ongoing</span>}
+                  {formatTimestamp(o.started_at)} - {o.ended_at ? formatTimestamp(o.ended_at) : <span style={{ color: 'var(--danger)' }}>Ongoing</span>}
                 </div>
               </div>
             ))

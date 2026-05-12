@@ -112,7 +112,7 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
 
     if not pattern:
         result["passed"] = True
-        result["detail"] = "Empty pattern — auto-pass"
+        result["detail"] = "Empty pattern - auto-pass"
         return result
 
     if rule_type == "must_contain":
@@ -423,7 +423,7 @@ async def create_compliance_assignment(body: ComplianceAssignmentCreate, request
     cred = await db.get_credential_raw(body.credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    # Prevent duplicate (profile_id, group_id) — DB has UNIQUE constraint but give a clean error
+    # Prevent duplicate (profile_id, group_id) - DB has UNIQUE constraint but give a clean error
     existing = await db.get_compliance_assignments(profile_id=body.profile_id, group_id=body.group_id)
     if existing:
         raise HTTPException(status_code=409, detail="This profile is already assigned to that group")
@@ -781,7 +781,7 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
 
     remediation_cmds = target_rule.get("remediation")
     if not remediation_cmds:
-        raise HTTPException(400, f"Rule '{body.rule_name}' has no remediation commands defined — this issue requires manual intervention")
+        raise HTTPException(400, f"Rule '{body.rule_name}' has no remediation commands defined - this issue requires manual intervention")
 
     # Verify the rule actually failed in this scan
     findings = []
@@ -797,7 +797,7 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
             break
 
     if rule_finding and rule_finding.get("passed"):
-        raise HTTPException(400, f"Rule '{body.rule_name}' already passes — no remediation needed")
+        raise HTTPException(400, f"Rule '{body.rule_name}' already passes - no remediation needed")
 
     # Load credential
     cred = await db.get_credential_raw(body.credential_id)
@@ -839,7 +839,7 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
         )
         LOGGER.error("Remediation timed out for host %s rule %s",
                      host["ip_address"], body.rule_name)
-        raise HTTPException(500, f"Remediation timed out after {_SCAN_TIMEOUT_SECONDS}s — the device may not have responded")
+        raise HTTPException(500, f"Remediation timed out after {_SCAN_TIMEOUT_SECONDS}s - the device may not have responded")
     except Exception as exc:
         await _audit(
             "compliance", "remediate.failed",
@@ -849,7 +849,7 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
         )
         LOGGER.error("Remediation failed for host %s rule %s: %s",
                      host["ip_address"], body.rule_name, exc)
-        raise HTTPException(500, "Remediation failed — see server logs for details")
+        raise HTTPException(500, "Remediation failed - see server logs for details")
 
     await _audit(
         "compliance", "remediate.applied",
@@ -892,7 +892,7 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
         "rescan_passed": rescan["passed_rules"],
         "rescan_total": rescan["total_rules"],
         "message": f"Remediation applied to {host['hostname']}. "
-                   f"{'Rule now PASSES.' if rule_now_passes else 'Rule still failing — review output.'} "
+                   f"{'Rule now PASSES.' if rule_now_passes else 'Rule still failing - review output.'} "
                    f"New score: {rescan['passed_rules']}/{rescan['total_rules']}",
     }
 

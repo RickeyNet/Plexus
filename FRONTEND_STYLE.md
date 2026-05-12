@@ -5,7 +5,7 @@ writing or porting any frontend code.** It is referenced from every AI
 migration prompt and is the single source of truth for "how do we do
 things in this app."
 
-This is a *living* document — as the migration progresses, conventions
+This is a *living* document - as the migration progresses, conventions
 that prove themselves get codified here. Conventions that prove wrong
 get replaced. Always update this file when you change a pattern, and
 mention the change in the FRONTEND_MIGRATION.md decision log.
@@ -27,7 +27,7 @@ mention the change in the FRONTEND_MIGRATION.md decision log.
 | Routing | react-router-dom v7, mounted under `basename="/frontend"` |
 | Server state | TanStack Query v5 |
 | Charts | ECharts (wrapped in `src/lib/echart.tsx`) |
-| Styling | Legacy stylesheet `netcontrol/static/css/style.css` — no PatternFly, no Tailwind, no CSS-in-JS framework |
+| Styling | Legacy stylesheet `netcontrol/static/css/style.css` - no PatternFly, no Tailwind, no CSS-in-JS framework |
 | Modals | `<Modal>` in `src/components/Modal.tsx` (portal + Escape-to-close) |
 | Forms | Plain `useState` + native HTML `<input>/<select>/<textarea>` |
 | Confirm dialogs | Native `confirm()` |
@@ -35,7 +35,7 @@ mention the change in the FRONTEND_MIGRATION.md decision log.
 ### Installed but currently unused
 
 `zustand`, `react-hook-form`, `zod` are in `package.json` but **no file
-imports them.** Don't reach for them on a whim — if you need one,
+imports them.** Don't reach for them on a whim - if you need one,
 discuss it first and add a decision-log entry. The migration has so far
 not needed cross-page client state or schema validation; if you find
 yourself needing them, that's a real signal.
@@ -48,7 +48,7 @@ yourself needing them, that's a real signal.
 netcontrol/static/frontend/src/
 ├── App.tsx              # Top-level routes + sidebar/header chrome
 ├── main.tsx             # Root render, QueryClient, Router
-├── api/                 # One file per backend domain — TanStack Query hooks live here
+├── api/                 # One file per backend domain - TanStack Query hooks live here
 │   ├── client.ts        # Fetch wrapper + CSRF + ApiError
 │   ├── auth.ts
 │   ├── deployments.ts
@@ -72,7 +72,7 @@ netcontrol/static/frontend/src/
   `DeploymentRow`, `SummaryStrip`). Once a sub-component is reused, hoist
   it to its own file.
 - **Pure helpers go in `helpers.ts`** at the page level. Don't co-locate
-  them in component files — it makes them invisible to neighboring
+  them in component files - it makes them invisible to neighboring
   components.
 - **No `index.ts` barrel files.** Import from the concrete file. Barrel
   files break tree-shaking and add noise.
@@ -106,7 +106,7 @@ import { Deployments } from '@/pages/Deployments/Deployments';
 
 ---
 
-## Server state — TanStack Query
+## Server state - TanStack Query
 
 **All server data goes through hooks in `src/api/`. Never call `fetch()`
 or `apiRequest()` directly from a component.**
@@ -117,7 +117,7 @@ or `apiRequest()` directly from a component.**
   `useThingDetail(id)` or `useThing(id)` for single resource.
 - Query key: an array starting with the resource name. Use
   `['deployments']`, `['deployment', id]`, `['deployment-summary']`. Keep
-  the names short and stable — query keys are how cache invalidation
+  the names short and stable - query keys are how cache invalidation
   finds entries.
 - Pass `null`/`undefined` IDs explicitly and gate with `enabled: id != null`.
 - Don't add `refetchInterval` unless the legacy module had a polling
@@ -138,7 +138,7 @@ export function useDeployment(id: number | null) {
 - Name: `useCreateThing`, `useUpdateThing`, `useDeleteThing`,
   `useExecuteThing`, etc. Verb first.
 - Always invalidate the affected query keys in `onSuccess`.
-- Surface errors to the component — don't swallow. The component decides
+- Surface errors to the component - don't swallow. The component decides
   whether to show `alert()`, a toast, or inline error UI.
 
 ```ts
@@ -169,10 +169,10 @@ exactly this reason. Identical query keys → shared cache → fewer requests.
 
 - TypeScript strict mode is on. **Don't disable it per-file.**
 - No `any` except at well-documented seams (`unknown` is almost always
-  better — force the consumer to narrow).
+  better - force the consumer to narrow).
 - Define API response shapes as `interface` next to their hook in
   `src/api/<module>.ts`. Export them so pages can re-use them.
-- Backend fields can be missing — model that with `field?:` and `| null`
+- Backend fields can be missing - model that with `field?:` and `| null`
   where the API returns null. Be honest about absence; don't pretend.
 - Status / enum-like fields: prefer string union types
   (`type DeploymentStatus = 'planning' | 'completed' | ...`) over enums.
@@ -185,14 +185,14 @@ exactly this reason. Identical query keys → shared cache → fewer requests.
 
 `src/api/client.ts` exposes:
 
-- `apiRequest<T>(endpoint, options)` — relative path under `/api`. Adds
+- `apiRequest<T>(endpoint, options)` - relative path under `/api`. Adds
   `Accept: application/json`, JSON-encodes object bodies, attaches CSRF
   on mutations, throws `ApiError` on non-2xx.
-- `setCsrfToken` / `getCsrfToken` — managed by `useAuthStatus`. You
+- `setCsrfToken` / `getCsrfToken` - managed by `useAuthStatus`. You
   shouldn't need to touch these.
 
 **Don't bypass `apiRequest`.** It handles 401-redirect, CSRF, JSON
-parsing, error wrapping. The one acceptable exception is WebSockets —
+parsing, error wrapping. The one acceptable exception is WebSockets -
 see below.
 
 ---
@@ -211,7 +211,7 @@ pattern:
 - Always return a cleanup function that closes the socket.
 - Parse `event.data` defensively (try/catch around `JSON.parse`).
 - On terminal messages, invalidate the relevant TanStack Query keys so
-  the rest of the UI refreshes — don't manually re-fetch.
+  the rest of the UI refreshes - don't manually re-fetch.
 
 ---
 
@@ -314,7 +314,7 @@ return <Table data={query.data} />;
   rule isn't expressible in HTML.
 
 If you build a complex multi-step form, that's the moment to discuss
-adding `react-hook-form` — but not before.
+adding `react-hook-form` - but not before.
 
 ---
 
@@ -323,9 +323,9 @@ adding `react-hook-form` — but not before.
 - Routes live in `App.tsx`'s `<Routes>` block. Add the page import at the
   top, the route in the block, and a label entry to `BREADCRUMBS`.
 - Sidebar entries live in `components/Sidebar.tsx`. Each nav item has:
-  - `to` — the route path
-  - `feature` — backend feature key for per-user gating
-  - `visKey` — admin-side visibility key (groups multiple entries
+  - `to` - the route path
+  - `feature` - backend feature key for per-user gating
+  - `visKey` - admin-side visibility key (groups multiple entries
     together when both halves of a legacy module are split)
 - Use `useNavigate()` for programmatic navigation. Don't `window.location.assign`
   unless you specifically need a full page reload (e.g. session expiry).
@@ -339,7 +339,7 @@ adding `react-hook-form` — but not before.
 - For mutations, the legacy convention is `alert((e as Error).message)`
   in the `onError` callback. Match it; don't invent a toast system
   per-page.
-- Don't add try/catch around `apiRequest` calls in components — let the
+- Don't add try/catch around `apiRequest` calls in components - let the
   query/mutation surface the error so React Query can track loading
   state correctly.
 - Don't show server-internal error messages verbatim. The backend
@@ -351,7 +351,7 @@ adding `react-hook-form` — but not before.
 ## Comments
 
 Default to no comments. Identifiers should explain *what*. Comments are
-for the *why* when it isn't obvious — a backend quirk, a workaround for
+for the *why* when it isn't obvious - a backend quirk, a workaround for
 a specific bug, a non-obvious invariant. See `client.ts` (CSRF, 401
 handling) and `useAuthStatus` (CSRF caching) for the bar.
 
@@ -420,7 +420,7 @@ Override with `PLEXUS_BACKEND_URL=...`.
 Things to actively avoid. If you see these in a PR, push back:
 
 - Direct `fetch()` calls in components.
-- `useEffect` to fetch data — that's what TanStack Query is for.
+- `useEffect` to fetch data - that's what TanStack Query is for.
 - New global state stores. We don't have one yet, and we shouldn't add
   one without a real cross-page need.
 - New CSS files. Reuse legacy classes; inline-style for one-offs.
@@ -429,7 +429,7 @@ Things to actively avoid. If you see these in a PR, push back:
 - `export default`. Named exports only.
 - Comments narrating what the next line of code does.
 - New dependencies without a decision-log entry.
-- Re-implementing a hook that already exists in another `api/` module —
+- Re-implementing a hook that already exists in another `api/` module -
   share the cache instead.
 - `dangerouslySetInnerHTML`.
 - Direct DOM manipulation (`document.getElementById`, `.innerHTML =`).
@@ -453,7 +453,7 @@ Things to actively avoid. If you see these in a PR, push back:
 
 Append a one-liner each time you change a rule here.
 
-- 2026-05-07 — Replaced the original aspirational draft with a
+- 2026-05-07 - Replaced the original aspirational draft with a
   retrofit grounded in 8 already-migrated modules (network-tools through
   deployments). Removed PatternFly / Zustand / react-hook-form / zod /
   date-fns prescriptions that didn't match the shipped code; added the

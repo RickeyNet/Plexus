@@ -13,6 +13,7 @@ import { FeaturesTab } from './FeaturesTab';
 import { LoggingTab } from './LoggingTab';
 import { MonitoringTab } from './MonitoringTab';
 import { NetFlowTab } from './NetFlowTab';
+import { SiemTab } from './SiemTab';
 import { UsersTab } from './UsersTab';
 
 type Tab =
@@ -21,6 +22,7 @@ type Tab =
   | 'access-groups'
   | 'auth'
   | 'logging'
+  | 'siem'
   | 'discovery'
   | 'monitoring'
   | 'netflow'
@@ -33,7 +35,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   users: {
     title: 'User Accounts',
-    text: 'Add, disable, and reset passwords for local users. For SSO/RADIUS-backed accounts, see the Authentication tab — those map to external identities, not entries here.',
+    text: 'Add, disable, and reset passwords for local users. For SSO/RADIUS-backed accounts, see the Authentication tab - those map to external identities, not entries here.',
   },
   'access-groups': {
     title: 'Role-Based Access Groups',
@@ -47,6 +49,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Application & Audit Logging',
     text: 'Application log level, audit log retention, and where to ship logs (file, syslog, etc.). Enable detailed logging when troubleshooting; turn it back down afterwards.',
   },
+  siem: {
+    title: 'SIEM Audit-Event Forwarding',
+    text: 'Send every audit event to one or more SIEMs (Splunk, Sentinel, QRadar, ArcSight, Elastic). Each sink defines its own protocol (UDP / TCP / TLS / HTTPS), payload format (CEF or ECS JSON), and severity floor. Audit events still land in the local tamper-evident chain regardless - forwarding is best-effort with bounded retry.',
+  },
   discovery: {
     title: 'Network Discovery Defaults',
     text: 'Default credentials and discovery scope used when adding new devices via the Inventory page. These apply to manual and scheduled discovery alike.',
@@ -57,7 +63,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   netflow: {
     title: 'NetFlow / sFlow Collector',
-    text: 'Toggle the UDP collector for NetFlow v5/v9, IPFIX, and sFlow v5; change listen ports and how long raw flows and hourly summaries are retained. Changes apply immediately — no restart needed.',
+    text: 'Toggle the UDP collector for NetFlow v5/v9, IPFIX, and sFlow v5; change listen ports and how long raw flows and hourly summaries are retained. Changes apply immediately - no restart needed.',
   },
   features: {
     title: 'Feature Visibility',
@@ -71,6 +77,7 @@ const ADMIN_TABS: { id: Tab; label: string }[] = [
   { id: 'access-groups', label: 'Access Groups' },
   { id: 'auth', label: 'Authentication' },
   { id: 'logging', label: 'Logging' },
+  { id: 'siem', label: 'SIEM' },
   { id: 'discovery', label: 'Discovery' },
   { id: 'monitoring', label: 'Monitoring' },
   { id: 'netflow', label: 'NetFlow' },
@@ -224,6 +231,7 @@ export function Settings() {
           {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
           {tab === 'auth' && <AuthTab capabilities={caps} />}
           {tab === 'logging' && <LoggingTab />}
+          {tab === 'siem' && <SiemTab />}
           {tab === 'discovery' && <DiscoveryTab />}
           {tab === 'monitoring' && <MonitoringTab />}
           {tab === 'netflow' && <NetFlowTab />}

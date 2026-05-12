@@ -146,7 +146,7 @@ async def ipam_address_context_api(ip: str, vrf: str | None = Query(default=None
     """Return the best-matching subnet, utilization, and conflict status for a given IP.
 
     When `vrf` is provided, prefer subnets in that VRF and only flag a conflict
-    when the duplicate exists in the same VRF — overlapping ranges across
+    when the duplicate exists in the same VRF - overlapping ranges across
     different VRFs are not real conflicts.
     """
     try:
@@ -657,7 +657,7 @@ async def resolve_reconciliation_diff_api(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# IPAM-driven provisioning (Phase H) — /api/ipam/allocate
+# IPAM-driven provisioning (Phase H) - /api/ipam/allocate
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -672,7 +672,7 @@ async def allocate_ip_api(body: IpamAllocateRequest, request: Request):
     Creates a pending allocation row that participates in subsequent
     next-IP selection so concurrent calls don't collide. Optionally pushes
     the allocation to enabled external IPAM sources for cross-system visibility
-    (push failures do not fail the reservation — call /release to undo).
+    (push failures do not fail the reservation - call /release to undo).
     """
     try:
         ipaddress.ip_network(body.subnet, strict=False)
@@ -805,7 +805,7 @@ async def list_pending_allocations_api(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Historical IP allocation tracking (Phase I) — /api/ipam/history & utilization
+# Historical IP allocation tracking (Phase I) - /api/ipam/history & utilization
 # ─────────────────────────────────────────────────────────────────────────────
 
 

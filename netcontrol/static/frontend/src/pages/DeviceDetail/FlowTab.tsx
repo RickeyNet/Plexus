@@ -124,7 +124,7 @@ function ExporterStatus({ hostId }: { hostId: number }) {
                 <strong>{r.packets_received.toLocaleString()}</strong> packets
               </span>
               <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                Sampling: {r.sampling_rate ? `1:${r.sampling_rate}` : '—'}
+                Sampling: {r.sampling_rate ? `1:${r.sampling_rate}` : '-'}
               </span>
               <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                 Last record: {formatTimestamp(r.last_record_at ?? r.last_seen)}
@@ -276,7 +276,7 @@ function ApplicationsView({ hostId, hours }: { hostId: number; hours: number }) 
           <tbody>
             {rows.map((r, i) => (
               <tr key={`${r.port}-${r.protocol}-${i}`}>
-                <td>{r.service_name || '—'}</td>
+                <td>{r.service_name || '-'}</td>
                 <td style={{ textAlign: 'right' }}>{r.port}</td>
                 <td>{r.protocol_name || String(r.protocol)}</td>
                 <td style={{ textAlign: 'right' }}>{formatBytes(r.total_bytes)}</td>
@@ -365,7 +365,7 @@ function TimelineView({ hostId, hours }: { hostId: number; hours: number }) {
         <TimeSeriesChart series={series} area yAxisName="bps" height={300} />
         <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.25rem' }}>
           Bucket size: {bucketMinutes} min. Bytes are normalised to bps assuming a full bucket
-          — the last bucket may underestimate if it hasn't closed yet.
+          - the last bucket may underestimate if it hasn't closed yet.
         </div>
       </div>
     </div>
@@ -403,7 +403,7 @@ function formatBytes(bytes: number | null | undefined): string {
 }
 
 function formatTimestamp(value: string | null | undefined): string {
-  if (!value) return '—';
+  if (!value) return '-';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString();

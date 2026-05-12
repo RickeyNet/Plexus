@@ -12,7 +12,7 @@ export function BackupDetailModal({ backupId, onClose }: Props) {
   const query = useConfigBackupDetail(backupId);
   const data = query.data;
   const title = data
-    ? `Backup Detail — ${data.hostname || data.ip_address || ''}`
+    ? `Backup Detail - ${data.hostname || data.ip_address || ''}`
     : 'Backup Detail';
 
   return (

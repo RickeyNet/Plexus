@@ -1,5 +1,5 @@
 """
-SNMPv3 Configurator — Playbook
+SNMPv3 Configurator - Playbook
 
 Pushes SNMPv3 configuration onto Cisco IOS switches using a
 user-selected template (groups, users, views, ACLs, etc.).
@@ -19,7 +19,7 @@ from collections.abc import AsyncGenerator
 
 from routes.runner import BasePlaybook, LogEvent, register_playbook
 
-# Shared helpers — see _common.py for design notes.
+# Shared helpers - see _common.py for design notes.
 from templates.playbooks._common import (
     NETMIKO_AVAILABLE,
     connect_device,
@@ -45,23 +45,23 @@ class Snmpv3Configurator(BasePlaybook):
         template_commands: list[str] | None = None,
         dry_run: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
-        # No template means nothing to push — fail fast with a clear error.
+        # No template means nothing to push - fail fast with a clear error.
         if not template_commands:
             yield self.log_error(
                 "No template selected; this playbook requires SNMPv3 commands."
             )
             return
 
-        yield self.log_info(f"SNMPv3 Configurator — targeting {len(hosts)} device(s)")
+        yield self.log_info(f"SNMPv3 Configurator - targeting {len(hosts)} device(s)")
         yield self.log_info(f"Template commands ({len(template_commands)}):")
         for cmd in template_commands:
             yield self.log_info(f"  {cmd}")
 
         # Loud banner so dry-run vs live can't be confused at a glance.
         if dry_run:
-            yield self.log_warn("*** DRY-RUN MODE — commands will not be written ***")
+            yield self.log_warn("*** DRY-RUN MODE - commands will not be written ***")
         else:
-            yield self.log_warn("*** LIVE MODE — commands WILL be written ***")
+            yield self.log_warn("*** LIVE MODE - commands WILL be written ***")
 
         for host in hosts:
             # Accept either inventory shape (``ip_address`` or ``host``).
@@ -107,7 +107,7 @@ class Snmpv3Configurator(BasePlaybook):
             if conn is None:
                 return
 
-            # Step 1 — show the operator what's already there.  Useful
+            # Step 1 - show the operator what's already there.  Useful
             # context when troubleshooting after the run.
             yield self.log_info("Checking existing SNMP configuration ...", host=hostname)
             existing = await asyncio.to_thread(
@@ -118,13 +118,13 @@ class Snmpv3Configurator(BasePlaybook):
             else:
                 yield self.log_info("No existing SNMP configuration found.", host=hostname)
 
-            # Step 2 — pin the SNMP engine ID before any changes.  Skip
+            # Step 2 - pin the SNMP engine ID before any changes.  Skip
             # for dry-runs since pinning is itself a config write.
             if not dry_run:
                 async for ev in pin_snmp_engine_id(self, conn, hostname):
                     yield ev
 
-            # Step 3 — push the template (or just preview it).
+            # Step 3 - push the template (or just preview it).
             if dry_run:
                 yield self.log_info("[DRY-RUN] Would apply:", host=hostname)
                 for cmd in template_commands:
@@ -134,11 +134,11 @@ class Snmpv3Configurator(BasePlaybook):
                 output = await asyncio.to_thread(conn.send_config_set, template_commands)
                 yield self.log_info(output or "(no output)", host=hostname)
 
-                # Step 4 — verify users were actually created.
+                # Step 4 - verify users were actually created.
                 verify = await asyncio.to_thread(conn.send_command, "show snmp user")
                 yield self.log_info(f"SNMPv3 user verification:\n{verify}", host=hostname)
 
-                # Step 5 — persist running-config so it survives a reload.
+                # Step 5 - persist running-config so it survives a reload.
                 yield self.log_info("Saving running config to startup ...", host=hostname)
                 await asyncio.to_thread(conn.save_config)
                 yield self.log_success("Config saved.", host=hostname)
@@ -154,7 +154,7 @@ class Snmpv3Configurator(BasePlaybook):
         template_commands: list[str],
         dry_run: bool,
     ) -> AsyncGenerator[LogEvent, None]:
-        # Fake connect — random delay + 8% chance of "timeout".
+        # Fake connect - random delay + 8% chance of "timeout".
         async for ev in simulate_connect(self, ip, hostname):
             yield ev
             if ev.level == "error":

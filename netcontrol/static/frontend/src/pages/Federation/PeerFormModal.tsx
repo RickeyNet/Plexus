@@ -40,7 +40,7 @@ export function PeerFormModal({ existing, onClose, onSaved }: PeerFormModalProps
     if (token) {
       body.api_token = token;
     } else if (!isEdit) {
-      // New peer with no token — explicitly send empty so the backend stores
+      // New peer with no token - explicitly send empty so the backend stores
       // a no-token entry rather than rejecting an undefined field.
       body.api_token = '';
     }

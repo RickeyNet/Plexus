@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-plexus_ansible_inventory.py — Ansible dynamic inventory script for Plexus.
+plexus_ansible_inventory.py - Ansible dynamic inventory script for Plexus.
 
 Usage:
   # List all hosts and groups:
@@ -15,9 +15,9 @@ Usage:
 Environment variables:
   PLEXUS_URL        Base URL of the Plexus server (default: http://localhost:8000)
   PLEXUS_API_TOKEN  API token for authentication (required)
-  PLEXUS_GROUP      Optional — filter inventory to a single Plexus group
-  PLEXUS_DEVICE_TYPE     Optional — filter by device_type (e.g. cisco_ios)
-  PLEXUS_DEVICE_CATEGORY Optional — filter by device_category (e.g. router, switch)
+  PLEXUS_GROUP      Optional - filter inventory to a single Plexus group
+  PLEXUS_DEVICE_TYPE     Optional - filter by device_type (e.g. cisco_ios)
+  PLEXUS_DEVICE_CATEGORY Optional - filter by device_category (e.g. router, switch)
   PLEXUS_VERIFY_SSL      Set to "false" to disable TLS verification (default: true)
 """
 

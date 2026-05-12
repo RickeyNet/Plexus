@@ -143,7 +143,7 @@ function StatusLine({ status }: { status: JobStatus }) {
       text = 'Connecting…';
       break;
     case 'streaming':
-      text = 'Connected — streaming output…';
+      text = 'Connected - streaming output…';
       break;
     case 'complete':
       text = status.status === 'completed' ? 'Completed' : 'Failed';

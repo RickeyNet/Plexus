@@ -82,13 +82,13 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         });
         if (res.status === 'compliant') {
           alert(
-            `Scan complete — Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`,
+            `Scan complete - Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`,
           );
         } else if (res.status === 'error') {
-          alert('Scan completed with errors — check findings for details');
+          alert('Scan completed with errors - check findings for details');
         } else {
           alert(
-            `Scan complete — ${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`,
+            `Scan complete - ${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`,
           );
         }
         onClose();
@@ -110,7 +110,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         return;
       }
     }
-    // scope === 'all' — empty hostIds tells the backend "scan everything"
+    // scope === 'all' - empty hostIds tells the backend "scan everything"
 
     try {
       const res = await runBulk.mutateAsync({
@@ -127,7 +127,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
           `Scan complete: ${res.hosts_scanned} host(s) scanned, ${res.errors} error(s)`,
         );
       } else {
-        alert(`Scan complete: ${res.hosts_scanned} host(s) scanned — all compliant!`);
+        alert(`Scan complete: ${res.hosts_scanned} host(s) scanned - all compliant!`);
       }
       onClose();
     } catch (e) {
@@ -185,7 +185,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
             <option value="">Select a host…</option>
             {allHosts.map((h) => (
               <option key={h.id} value={h.id}>
-                {h.hostname} ({h.ip_address}) — {h.group_name}
+                {h.hostname} ({h.ip_address}) - {h.group_name}
               </option>
             ))}
           </select>

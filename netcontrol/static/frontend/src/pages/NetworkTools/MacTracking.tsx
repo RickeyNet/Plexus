@@ -128,7 +128,7 @@ export function MacTracking() {
       <Modal
         isOpen={historyMac !== null}
         onClose={() => setHistoryMac(null)}
-        title={historyMac ? `MAC History — ${historyMac}` : 'MAC History'}
+        title={historyMac ? `MAC History - ${historyMac}` : 'MAC History'}
       >
         <MacHistoryBody macAddress={historyMac} />
       </Modal>
@@ -162,12 +162,12 @@ function ResultsTable({
         {rows.map((r, idx) => (
           <tr key={`${r.mac_address}-${idx}`}>
             <td>
-              <code style={{ fontSize: '0.85em' }}>{r.mac_address || '—'}</code>
+              <code style={{ fontSize: '0.85em' }}>{r.mac_address || '-'}</code>
             </td>
-            <td>{r.ip_address || '—'}</td>
+            <td>{r.ip_address || '-'}</td>
             <td>{r.hostname || `host-${r.host_id}`}</td>
-            <td>{r.port_name || '—'}</td>
-            <td>{r.vlan ?? '—'}</td>
+            <td>{r.port_name || '-'}</td>
+            <td>{r.vlan ?? '-'}</td>
             <td>
               <span className="badge badge-sm">{r.entry_type || 'dynamic'}</span>
             </td>
@@ -215,9 +215,9 @@ function MacHistoryBody({ macAddress }: { macAddress: string | null }) {
             <tr key={`${h.seen_at}-${idx}`}>
               <td style={{ fontSize: '0.85em' }}>{formatTimestamp(h.seen_at)}</td>
               <td>{h.hostname || `host-${h.host_id}`}</td>
-              <td>{h.port_name || '—'}</td>
-              <td>{h.vlan ?? '—'}</td>
-              <td>{h.ip_address || '—'}</td>
+              <td>{h.port_name || '-'}</td>
+              <td>{h.vlan ?? '-'}</td>
+              <td>{h.ip_address || '-'}</td>
             </tr>
           ))}
         </tbody>

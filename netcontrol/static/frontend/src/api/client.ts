@@ -36,7 +36,7 @@ export class ApiError extends Error {
 // separate reload when the server-side session has idle-expired.
 let sessionExpiryHandled = false;
 
-// In-flight verification promise — when several queries 401 simultaneously
+// In-flight verification promise - when several queries 401 simultaneously
 // we only probe /auth/status once and let the rest await the same answer.
 let sessionVerifyInFlight: Promise<boolean> | null = null;
 
@@ -57,7 +57,7 @@ async function isSessionExpired(): Promise<boolean> {
       const body = (await res.json()) as { authenticated?: boolean };
       return !body?.authenticated;
     } catch {
-      // Network error — be conservative and don't force-logout the user.
+      // Network error - be conservative and don't force-logout the user.
       return false;
     } finally {
       sessionVerifyInFlight = null;
@@ -66,7 +66,7 @@ async function isSessionExpired(): Promise<boolean> {
   return sessionVerifyInFlight;
 }
 
-// Set by App at boot — invalidates auth status so the React gate flips to the
+// Set by App at boot - invalidates auth status so the React gate flips to the
 // login screen. Falls back to a hard reload if no handler is registered yet.
 let onSessionExpired: (() => void) | null = null;
 export function setSessionExpiredHandler(fn: (() => void) | null): void {

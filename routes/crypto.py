@@ -1,8 +1,8 @@
 """
-crypto.py — AES-256-GCM encryption for stored credentials.
+crypto.py - AES-256-GCM encryption for stored credentials.
 
 On first run, generates a 32-byte key file at ./netcontrol.key.
-Keep this file safe — losing it means stored credentials are unrecoverable.
+Keep this file safe - losing it means stored credentials are unrecoverable.
 
 Uses AES-256-GCM which provides:
   - 256-bit key (vs Fernet's 128-bit)
@@ -72,7 +72,7 @@ def _load_or_create_key() -> bytes:
 
     Accepts both legacy 44-byte Fernet keys (for backward compat during
     decryption) and new 44-byte base64-encoded 32-byte keys.  On first
-    run after upgrade, the old Fernet key is preserved — legacy values
+    run after upgrade, the old Fernet key is preserved - legacy values
     are decrypted with it and re-encrypted with AES-256-GCM on next write.
 
     New installations generate a 32-byte key directly.
@@ -120,7 +120,7 @@ def _load_or_create_key() -> bytes:
             os.close(fd)
         os.replace(tmp_path, KEY_FILE)  # atomic on POSIX
     except FileExistsError:
-        # Another process beat us — read their key instead
+        # Another process beat us - read their key instead
         try:
             os.remove(tmp_path)
         except OSError:
@@ -184,20 +184,20 @@ def decrypt(ciphertext: str) -> str:
         raw = base64.urlsafe_b64decode(ciphertext.encode())
     except Exception:
         raise RuntimeError(
-            "Failed to decrypt credential — ciphertext is not valid base64."
+            "Failed to decrypt credential - ciphertext is not valid base64."
         )
 
     # New AES-256-GCM format: prefix 0x02 + 12-byte nonce + ciphertext+tag
     if raw[:1] == _V2_PREFIX:
         if len(raw) < 1 + _NONCE_SIZE + 16:  # prefix + nonce + min GCM tag
-            raise RuntimeError("Failed to decrypt credential — ciphertext is too short.")
+            raise RuntimeError("Failed to decrypt credential - ciphertext is too short.")
         nonce = raw[1:1 + _NONCE_SIZE]
         ct = raw[1 + _NONCE_SIZE:]
         try:
             return _aesgcm.decrypt(nonce, ct, None).decode()
         except Exception:
             raise RuntimeError(
-                "Failed to decrypt credential — the encryption key may have changed. "
+                "Failed to decrypt credential - the encryption key may have changed. "
                 "Re-enter the credential or restore the original netcontrol.key file."
             )
 
@@ -209,6 +209,6 @@ def decrypt(ciphertext: str) -> str:
             pass
 
     raise RuntimeError(
-        "Failed to decrypt credential — the encryption key may have changed. "
+        "Failed to decrypt credential - the encryption key may have changed. "
         "Re-enter the credential or restore the original netcontrol.key file."
     )

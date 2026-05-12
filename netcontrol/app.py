@@ -1,5 +1,5 @@
 """
-app.py — Plexus FastAPI Application
+app.py - Plexus FastAPI Application
 
 REST API for inventory, playbooks, templates, credentials, and jobs.
 WebSocket endpoint for real-time job output streaming.
@@ -121,6 +121,7 @@ from netcontrol.routes.flow_collector import (
     start_flow_collector,
     stop_flow_collector,
 )
+from netcontrol.routes import siem_forwarder
 from netcontrol.routes.baseline_alerting import router as baseline_alerting_router
 from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.interface_errors import (
@@ -325,20 +326,20 @@ from netcontrol.routes.topology import (
 # ── CSRF token helpers ───────────────────────────────────────────────────────
 
 _csrf_serializer: URLSafeTimedSerializer | None = None  # initialised after secret key load
-CSRF_TOKEN_MAX_AGE = 86400  # 24 hours — aligned with session lifetime
+CSRF_TOKEN_MAX_AGE = 86400  # 24 hours - aligned with session lifetime
 
 
 def _generate_csrf_token(session_user: str) -> str:
     """Create a signed, time-limited CSRF token bound to the session user."""
     if _csrf_serializer is None:
-        raise RuntimeError("CSRF serializer not initialised — check SECRET_KEY configuration")
+        raise RuntimeError("CSRF serializer not initialised - check SECRET_KEY configuration")
     return _csrf_serializer.dumps({"csrf_user": session_user})
 
 
 def _validate_csrf_token(token: str, session_user: str) -> bool:
     """Return True when the token is valid, not expired, and bound to the user."""
     if _csrf_serializer is None:
-        raise RuntimeError("CSRF serializer not initialised — check SECRET_KEY configuration")
+        raise RuntimeError("CSRF serializer not initialised - check SECRET_KEY configuration")
     try:
         data = _csrf_serializer.loads(token, max_age=CSRF_TOKEN_MAX_AGE)
         return data.get("csrf_user") == session_user
@@ -368,7 +369,7 @@ def _extract_api_token(request: Request) -> str:
     return ""
 
 
-# Playbook filename sanitizers and write_playbook_file — extracted to playbooks.py (re-imported above)
+# Playbook filename sanitizers and write_playbook_file - extracted to playbooks.py (re-imported above)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -479,7 +480,7 @@ def _emit_bootstrap_admin_credentials(
 
 def _is_dev_bootstrap_mode() -> bool:
     env = os.getenv("APP_ENV", "").strip().lower()
-    # "test" intentionally excluded — avoid deterministic admin password
+    # "test" intentionally excluded - avoid deterministic admin password
     # in CI/test environments unless explicitly opted in via
     # PLEXUS_DEV_BOOTSTRAP=1.
     if env in {"dev", "development", "local"}:
@@ -654,7 +655,7 @@ def verify_session_token(token: str) -> dict | None:
         return None
     if "user" not in data or "user_id" not in data:
         return None
-    # Legacy token without our absolute-cap anchor — fall back to the
+    # Legacy token without our absolute-cap anchor - fall back to the
     # serializer's own timestamp so old sessions can't outlive 24h.
     if "originally_issued_at" not in data:
         try:
@@ -689,7 +690,7 @@ async def require_auth(request: Request, response: Response = None):
     Enforces the configurable idle timeout (state.LOGIN_RULES.session_idle_timeout)
     and refreshes the cookie's `last_activity` on every authenticated request.
     Users with users.session_never_expires=1 bypass both the idle check and
-    the absolute lifetime — intended for kiosk/display accounts.
+    the absolute lifetime - intended for kiosk/display accounts.
     """
     path = request.url.path
     if path.startswith("/static/"):
@@ -720,7 +721,7 @@ async def require_auth(request: Request, response: Response = None):
 
     never_expires = bool((user or {}).get("session_never_expires"))
 
-    # Absolute lifetime cap (24h) — skipped for kiosk/display accounts.
+    # Absolute lifetime cap (24h) - skipped for kiosk/display accounts.
     if not never_expires:
         originally_issued = int(session.get("originally_issued_at") or 0)
         if originally_issued > 0 and int(time.time()) - originally_issued > SESSION_MAX_AGE:
@@ -729,7 +730,7 @@ async def require_auth(request: Request, response: Response = None):
             raise HTTPException(status_code=401, detail="Session expired")
 
     # Idle-timeout enforcement + cookie refresh. Skip for kiosk accounts and
-    # for endpoints that don't pass a Response (rare — most routes do).
+    # for endpoints that don't pass a Response (rare - most routes do).
     if not never_expires and response is not None:
         idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
         last_activity = int(session.get("last_activity") or 0)
@@ -928,6 +929,12 @@ async def _load_persisted_security_settings():
     state.SYSLOG_CONFIG = _sanitize_syslog_config(syslog_config)
     if not configure_syslog_logging(state.SYSLOG_CONFIG):
         LOGGER.warning("syslog: persisted outbound logging configuration could not be applied")
+    siem_sinks_raw = await db.get_auth_setting("siem_sinks")
+    # auth_settings stores dicts; the SIEM list is wrapped as {"sinks": [...]}.
+    if isinstance(siem_sinks_raw, dict):
+        state.SIEM_SINKS = siem_forwarder.sanitize_sinks(siem_sinks_raw.get("sinks"))
+    else:
+        state.SIEM_SINKS = []
     cloud_flow_sync = await db.get_auth_setting("cloud_flow_sync")
     state.CLOUD_FLOW_SYNC_CONFIG = _sanitize_cloud_flow_sync_config(cloud_flow_sync)
     cloud_flow_sync_status = await db.get_auth_setting("cloud_flow_sync_status")
@@ -958,7 +965,7 @@ def require_feature(feature_key: str):
     async def _dependency(request: Request, response: Response = None):
         session = await require_auth(request, response)
         # API tokens (APP_API_TOKEN env var) are server-level secrets with
-        # full admin access by design — they bypass per-user feature checks.
+        # full admin access by design - they bypass per-user feature checks.
         if session and session.get("auth_mode") == "token":
             return session
         user = await db.get_user_by_id(session["user_id"])
@@ -1247,6 +1254,15 @@ async def lifespan(app: FastAPI):
     lab_runtime_ttl_task = asyncio.create_task(lab_runtime_ttl_loop())
     lab_drift_task = asyncio.create_task(lab_drift_scheduler_loop())
 
+    # SIEM forwarder: start the per-sink dispatcher tasks and register the
+    # hook that fans audit events out to them. Done before the rest of the
+    # background loops so any auth events emitted by them get forwarded.
+    try:
+        await siem_forwarder.start_dispatcher(state.SIEM_SINKS)
+        db.set_audit_event_hook(siem_forwarder.enqueue_event)
+    except Exception as exc:
+        LOGGER.warning("siem_forwarder: startup failed: %s", type(exc).__name__)
+
     flow_collector_started = False
     # Persisted flow_collector config (loaded above) drives lifecycle now.
     # Env vars only matter on the very first boot, where _load_persisted_
@@ -1371,6 +1387,11 @@ async def lifespan(app: FastAPI):
                 await stop_flow_collector()
             except Exception as exc:
                 LOGGER.warning("flow_collector: shutdown failed: %s", type(exc).__name__)
+        try:
+            db.set_audit_event_hook(None)
+            await siem_forwarder.stop_dispatcher()
+        except Exception as exc:
+            LOGGER.warning("siem_forwarder: shutdown failed: %s", type(exc).__name__)
 
 
 async def _rate_limit_cleanup_loop() -> None:
@@ -1447,9 +1468,9 @@ init_admin(
     cleanup_expired_jobs_fn=_cleanup_expired_jobs,
 )
 
-# Auth routes — no global auth dependency (login/register are public)
+# Auth routes - no global auth dependency (login/register are public)
 app.include_router(auth_router)
-# Admin routes — global require_admin dependency
+# Admin routes - global require_admin dependency
 app.include_router(
     admin_router,
     dependencies=[Depends(require_admin)],
@@ -1462,7 +1483,7 @@ app.include_router(
     credentials_router,
     dependencies=[Depends(require_auth), Depends(require_feature("credentials"))],
 )
-# Secret Variables — encrypted key-value store for template substitution
+# Secret Variables - encrypted key-value store for template substitution
 # List/names endpoints need auth only (template editor autocomplete);
 # create/update/delete enforce admin inside the route handlers.
 init_secret_variables(require_auth, require_admin)
@@ -1519,7 +1540,7 @@ async def api_rate_limit_middleware(request: Request, call_next):
     """Enforce per-IP sliding-window rate limits on API endpoints.
 
     Read requests (GET) and write requests (POST/PUT/DELETE) have separate
-    thresholds.  Public paths (login, register, health) are exempt — the
+    thresholds.  Public paths (login, register, health) are exempt - the
     login endpoint already has its own brute-force protection.
 
     Authenticated requests (valid session cookie or valid API token) are
@@ -1533,7 +1554,7 @@ async def api_rate_limit_middleware(request: Request, call_next):
         and request.url.path.startswith("/api/")
         and request.url.path not in PUBLIC_PATHS
     ):
-        # Skip counting for authenticated requests — see docstring.
+        # Skip counting for authenticated requests - see docstring.
         api_token = _extract_api_token(request)
         is_authenticated = bool(
             (APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN))
@@ -1771,7 +1792,7 @@ app.include_router(
     jobs_router,
     dependencies=[Depends(require_auth), Depends(require_feature("jobs"))],
 )
-app.include_router(jobs_ws_router)  # WebSocket — handles its own auth
+app.include_router(jobs_ws_router)  # WebSocket - handles its own auth
 # Inventory + admin
 app.include_router(
     inventory_router,
@@ -1800,7 +1821,7 @@ app.include_router(
     config_drift_router,
     dependencies=[Depends(require_auth), Depends(require_feature("config-drift"))],
 )
-app.include_router(config_drift_ws_router)  # WebSocket — handles its own auth
+app.include_router(config_drift_ws_router)  # WebSocket - handles its own auth
 # Config Backups + admin
 app.include_router(
     config_backups_router,
@@ -1825,7 +1846,7 @@ app.include_router(
     deployments_router,
     dependencies=[Depends(require_auth), Depends(require_feature("deployments"))],
 )
-app.include_router(deployments_ws_router)  # WebSocket — handles its own auth
+app.include_router(deployments_ws_router)  # WebSocket - handles its own auth
 # Monitoring + SLA + admin
 app.include_router(
     monitoring_router,
@@ -1924,7 +1945,7 @@ app.include_router(
     upgrades_router,
     dependencies=[Depends(require_auth), Depends(require_feature("upgrades"))],
 )
-app.include_router(upgrades_ws_router)  # WebSocket — handles its own auth
+app.include_router(upgrades_ws_router)  # WebSocket - handles its own auth
 # Digital Twin / Lab Mode
 app.include_router(
     lab_router,

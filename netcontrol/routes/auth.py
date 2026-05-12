@@ -60,7 +60,7 @@ _hash_password_fn = None
 _verify_user_fn = None
 _create_session_token_fn = None
 
-# Session / cookie constants — injected from app.py
+# Session / cookie constants - injected from app.py
 _SESSION_MAX_AGE = 86400
 _APP_HTTPS_ENABLED = False
 
@@ -122,7 +122,7 @@ ATTRIBUTE\tNAS-Identifier\t32\tstring
 def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) -> tuple[bool, str]:
     """Perform a blocking RADIUS PAP authentication request."""
     if not PYRAD_AVAILABLE:
-        LOGGER.warning("radius: pyrad library is not installed — cannot authenticate")
+        LOGGER.warning("radius: pyrad library is not installed - cannot authenticate")
         return False, "error"
     assert RadiusClient is not None and RadiusDictionary is not None and radius_packet is not None
     server = radius_cfg.get("server", "")
@@ -256,7 +256,7 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, tls_level)
             conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
             if tls_verify == "allow":
-                LOGGER.warning("ldap: TLS certificate verification is permissive (allow) — use 'demand' in production")
+                LOGGER.warning("ldap: TLS certificate verification is permissive (allow) - use 'demand' in production")
 
         user_dn = None
         user_attrs: dict = {}
@@ -269,7 +269,7 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             try:
                 conn.simple_bind_s(bind_dn, bind_password)
             except python_ldap.INVALID_CREDENTIALS:
-                LOGGER.warning("ldap: service account bind failed — check bind_dn / bind_password")
+                LOGGER.warning("ldap: service account bind failed - check bind_dn / bind_password")
                 return False, "error", {}
 
             search_filter = user_search_filter.replace("{username}", _escape_filter_chars(username))
@@ -314,7 +314,7 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
                 conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, python_ldap.OPT_X_TLS_ALLOW)
                 conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
         else:
-            # No service account and no template — try direct bind with UPN
+            # No service account and no template - try direct bind with UPN
             user_dn = f"{username}@{base_dn}" if base_dn else username
 
         if not user_dn:
@@ -570,7 +570,7 @@ async def _get_user_features(user: dict) -> list[str]:
         return list(FEATURE_FLAGS)
     effective = await db.get_user_effective_features(int(user["id"]))
     if effective is None:
-        # No group_memberships rows at all — legacy/unassigned user.
+        # No group_memberships rows at all - legacy/unassigned user.
         # Default to empty (least-privilege).  Admins should assign groups.
         return []
     return [f for f in FEATURE_FLAGS if f in set(effective)]

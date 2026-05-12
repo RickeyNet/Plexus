@@ -1,20 +1,20 @@
 # Plexus v1.0.0
 
-First public release of Plexus — a Python-first network automation control center inspired by SolarWinds and Ansible Tower/AWX. Designed to simplify network management and actually work. Manage device inventories, run automation playbooks, store config templates, and stream live job output through a REST API with WebSocket support.
+First public release of Plexus - a Python-first network automation control center inspired by SolarWinds and Ansible Tower/AWX. Designed to simplify network management and actually work. Manage device inventories, run automation playbooks, store config templates, and stream live job output through a REST API with WebSocket support.
 
 This release is the result of a long internal development cycle (see `CHANGELOG.md` for the development history); the 1.0 milestone marks it as ready for production deployment.
 
 ## What Plexus does
 
-- **Inventory & device discovery** — group devices by role/site, discover hosts via SNMP, track serial numbers and metadata.
-- **Automation playbooks** — Python `BasePlaybook` subclasses run as async generators with real-time WebSocket-streamed log events.
-- **Config management** — scheduled config backups, drift detection with revertable history, search across historical backups.
-- **Compliance scans** — on-demand and scheduled compliance checks against your devices.
-- **IPAM & DHCP** — VLAN/VRF-aware subnet scoping, bi-directional reconciliation with external IPAM systems, DHCP integration with Kea / Windows DHCP / Infoblox.
-- **Topology** — L2/L3 topology built from CDP/LLDP with FDB+ARP fallback, STP multi-VLAN visualization with anomaly detection.
-- **Digital twin / lab mode** — clone production devices into isolated containerlab-backed labs (Arista cEOS, Nokia SR Linux, FRR, Linux), apply changes with risk scoring, run multi-device topologies end-to-end, detect drift between twins and live production.
-- **Device upgrades** — schedule and orchestrate device firmware/software upgrades with state that survives Plexus restarts.
-- **Auth** — local users, LDAPS / Active Directory, and RADIUS providers with group-based admin mapping.
+- **Inventory & device discovery** - group devices by role/site, discover hosts via SNMP, track serial numbers and metadata.
+- **Automation playbooks** - Python `BasePlaybook` subclasses run as async generators with real-time WebSocket-streamed log events.
+- **Config management** - scheduled config backups, drift detection with revertable history, search across historical backups.
+- **Compliance scans** - on-demand and scheduled compliance checks against your devices.
+- **IPAM & DHCP** - VLAN/VRF-aware subnet scoping, bi-directional reconciliation with external IPAM systems, DHCP integration with Kea / Windows DHCP / Infoblox.
+- **Topology** - L2/L3 topology built from CDP/LLDP with FDB+ARP fallback, STP multi-VLAN visualization with anomaly detection.
+- **Digital twin / lab mode** - clone production devices into isolated containerlab-backed labs (Arista cEOS, Nokia SR Linux, FRR, Linux), apply changes with risk scoring, run multi-device topologies end-to-end, detect drift between twins and live production.
+- **Device upgrades** - schedule and orchestrate device firmware/software upgrades with state that survives Plexus restarts.
+- **Auth** - local users, LDAPS / Active Directory, and RADIUS providers with group-based admin mapping.
 
 ## Deployment
 
@@ -24,7 +24,7 @@ Two supported paths:
 For VMs with internet access:
 ```bash
 # Install Docker Engine + compose plugin from Docker's official apt repo first
-# (Ubuntu's docker.io package does NOT include the compose plugin) — see
+# (Ubuntu's docker.io package does NOT include the compose plugin) - see
 # deploy/DEPLOYMENT.md "Step 1: Install Docker" for the exact commands.
 
 sudo mkdir -p /opt/plexus && sudo chown $USER:$USER /opt/plexus
@@ -54,7 +54,7 @@ Plexus supports both SQLite (default, simplest) and PostgreSQL (recommended for 
 - Ubuntu 22.04 / 24.04 / 26.04 (or RHEL/Rocky 9) for the host VM
 - 2 vCPU, 4 GB RAM, 40 GB disk minimum
 - Docker 24+ with the `compose` plugin
-- Python 3.14 inside the container (handled by the image — no host Python needed when using Docker)
+- Python 3.14 inside the container (handled by the image - no host Python needed when using Docker)
 
 ## First login
 

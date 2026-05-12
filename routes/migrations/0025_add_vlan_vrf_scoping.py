@@ -2,8 +2,8 @@
 Migration 0025: VLAN/VRF-aware subnet scoping (IPAM Phase G).
 
 Adds:
-  - hosts.vrf_name (text, default '') — VRF context for inventory hosts
-  - hosts.vlan_id  (text, default '') — VLAN ID for inventory hosts (text to allow non-numeric tags)
+  - hosts.vrf_name (text, default '') - VRF context for inventory hosts
+  - hosts.vlan_id  (text, default '') - VLAN ID for inventory hosts (text to allow non-numeric tags)
   - ipam_allocations.vrf_name (text, default '')
   - ipam_allocations.vlan_id  (text, default '')
 

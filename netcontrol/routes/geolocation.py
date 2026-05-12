@@ -1,4 +1,4 @@
-"""geolocation.py — Site, floor plan, and device placement API routes."""
+"""geolocation.py - Site, floor plan, and device placement API routes."""
 
 from __future__ import annotations
 
@@ -223,7 +223,7 @@ async def upload_floor_image_api(
 
     content_type = (file.content_type or "").split(";")[0].strip()
     if content_type not in _ALLOWED_CONTENT_TYPES:
-        raise HTTPException(400, "Unsupported image type — use JPEG, PNG, GIF, WebP, or SVG")
+        raise HTTPException(400, "Unsupported image type - use JPEG, PNG, GIF, WebP, or SVG")
 
     # Derive a safe extension from content type
     _ext_map = {

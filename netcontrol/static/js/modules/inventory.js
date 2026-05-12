@@ -1,5 +1,5 @@
 /**
- * Inventory Module — Inventory groups, hosts, SNMP profiles, and discovery
+ * Inventory Module - Inventory groups, hosts, SNMP profiles, and discovery
  * Lazy-loaded when user navigates to #inventory
  */
 import * as api from '../api.js';
@@ -729,7 +729,7 @@ window.runGlobalDiscovery = async function(e) {
 
         showModal('Discovered Devices', `
             <div class="card-description" style="margin-bottom:0.75rem;">
-                Scanned ${finalResult.scanned_hosts || 0} host(s) — found ${finalResult.discovered_count || 0} reachable device(s).
+                Scanned ${finalResult.scanned_hosts || 0} host(s) - found ${finalResult.discovered_count || 0} reachable device(s).
                 Will onboard into <strong>${groupName}</strong>.
             </div>
             <div style="max-height: 340px; overflow:auto; border:1px solid var(--border); border-radius:0.5rem; padding:0.5rem;">
@@ -753,7 +753,7 @@ window.runGlobalDiscovery = async function(e) {
             </div>
         `);
     } catch (error) {
-        if (error.name === 'AbortError') return; // navigated away — silently cancel
+        if (error.name === 'AbortError') return; // navigated away - silently cancel
         closeAllModals();
         showError(`Discovery scan failed: ${error.message}`);
     } finally {
@@ -1002,7 +1002,7 @@ function _snmpProfileFormHtml(cfg = {}) {
             <input type="checkbox" name="enable_inferred_topology" value="1" ${cfg.enable_inferred_topology ? 'checked' : ''} style="margin-top:0.2rem;">
             <span>
                 Enable inferred topology (FDB+ARP)
-                <span style="display:block; font-size:0.75rem; opacity:0.7;">Adds dashed edges between devices when CDP/LLDP is unavailable. Walks FDB and ARP tables — extra SNMP cost on busy switches.</span>
+                <span style="display:block; font-size:0.75rem; opacity:0.7;">Adds dashed edges between devices when CDP/LLDP is unavailable. Walks FDB and ARP tables - extra SNMP cost on busy switches.</span>
             </span>
         </label>
         <div class="card-description" style="margin-bottom:0.5rem;">SNMPv3 Credentials</div>
@@ -1131,7 +1131,7 @@ window.deleteSnmpProfile = async function(profileId) {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CRUD Forms — Inventory Groups & Hosts
+// CRUD Forms - Inventory Groups & Hosts
 // ═══════════════════════════════════════════════════════════════════════════════
 
 window.showCreateGroupModal = function() {
@@ -1323,7 +1323,7 @@ window.addHost = async function(e, groupId) {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CRUD Forms — Delete & Bulk Operations (Inventory)
+// CRUD Forms - Delete & Bulk Operations (Inventory)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 window.deleteGroup = async function(groupId) {

@@ -126,7 +126,7 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
             value={groupId}
             onChange={(e) => setGroupId(e.target.value)}
           >
-            <option value="">— Select —</option>
+            <option value="">- Select -</option>
             {(groups.data || []).map((g) => (
               <option key={g.id} value={g.id}>
                 {g.name}
@@ -141,7 +141,7 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
             value={credentialId}
             onChange={(e) => setCredentialId(e.target.value)}
           >
-            <option value="">— Select —</option>
+            <option value="">- Select -</option>
             {(credentials.data || []).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -170,7 +170,7 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
             value={templateId}
             onChange={(e) => setTemplateId(e.target.value)}
           >
-            <option value="">— None (manual commands) —</option>
+            <option value="">- None (manual commands) -</option>
             {(templates.data || []).map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
@@ -185,10 +185,10 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
             value={riskAnalysisId}
             onChange={(e) => setRiskAnalysisId(e.target.value)}
           >
-            <option value="">— None —</option>
+            <option value="">- None -</option>
             {approvedAnalyses.map((r) => (
               <option key={r.id} value={r.id}>
-                #{r.id} {r.risk_level} — {r.hostname || r.group_name || ''}
+                #{r.id} {r.risk_level} - {r.hostname || r.group_name || ''}
               </option>
             ))}
           </select>

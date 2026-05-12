@@ -100,7 +100,7 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
         "mem_total_oid": "1.3.6.1.2.1.25.2.3.1.5",
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
-    # Universal fallback — HOST-RESOURCES-MIB works on most Linux/SNMP agents
+    # Universal fallback - HOST-RESOURCES-MIB works on most Linux/SNMP agents
     "_fallback": {
         "vendor": "Generic", "device_type": "",
         "cpu_oid": "1.3.6.1.2.1.25.3.3.1.2",             # hrProcessorLoad
@@ -429,7 +429,7 @@ def _classify_root_cause(
         drift_count = len(config_changes)
         return ("config_change",
                 f"{drift_count} config change(s) detected within 30 min. "
-                "Error spike correlates with configuration drift — review recent changes.")
+                "Error spike correlates with configuration drift - review recent changes.")
 
     # Priority 2: Topology change (link flap, STP change)
     if topology_changes:
@@ -453,22 +453,22 @@ def _classify_root_cause(
     error_hints = {
         "if_in_errors": (
             "physical_layer",
-            "Input errors (CRC, frame, runts) with no config change — "
+            "Input errors (CRC, frame, runts) with no config change - "
             "suspect physical layer: check cable, SFP/optic, or duplex mismatch."
         ),
         "if_out_errors": (
             "congestion",
-            "Output errors with no config change — "
+            "Output errors with no config change - "
             "suspect interface congestion or speed/duplex mismatch."
         ),
         "if_in_discards": (
             "congestion",
-            "Input discards increasing — "
+            "Input discards increasing - "
             "possible input queue overflow due to high traffic or slow CPU."
         ),
         "if_out_discards": (
             "congestion",
-            "Output discards increasing — "
+            "Output discards increasing - "
             "suspect output queue congestion; check QoS policy and interface speed."
         ),
     }
@@ -687,7 +687,7 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
                          self.event_type, source_ip, exc)
 
     def _handle_trap(self, data: bytes, source_ip: str):
-        # Basic SNMPv2c trap parsing — extract OID and value from the PDU.
+        # Basic SNMPv2c trap parsing - extract OID and value from the PDU.
         # Full ASN.1 parsing would need pysnmp; this extracts the readable parts.
         raw_hex = data.hex()
         message = f"SNMP trap from {source_ip} ({len(data)} bytes)"
@@ -835,7 +835,7 @@ async def metrics_query(
     step: str = Query(default="auto", description="Resolution: raw, hourly, daily, or auto"),
     group: int | None = Query(default=None, description="Filter by inventory group ID"),
 ):
-    """Structured metrics query — no PromQL needed.
+    """Structured metrics query - no PromQL needed.
     Returns time-series data for the requested metric across hosts."""
 
     # Parse host filter
@@ -844,7 +844,7 @@ async def metrics_query(
         try:
             host_ids = [int(h.strip()) for h in host.split(",") if h.strip()]
         except ValueError:
-            raise HTTPException(400, "Invalid host parameter — use IDs or *")
+            raise HTTPException(400, "Invalid host parameter - use IDs or *")
 
     # If group is specified and host is *, resolve host IDs from group
     if group and host == "*":
@@ -863,7 +863,7 @@ async def metrics_query(
     }
     delta = range_map.get(range)
     if not delta:
-        raise HTTPException(400, f"Invalid range — use one of: {', '.join(range_map.keys())}")
+        raise HTTPException(400, f"Invalid range - use one of: {', '.join(range_map.keys())}")
 
     start_time = (now - delta).strftime("%Y-%m-%d %H:%M:%S")
     end_time = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -929,7 +929,7 @@ async def capacity_planning(
     }
     delta = range_map.get(range)
     if not delta:
-        raise HTTPException(400, f"Invalid range — use one of: {', '.join(range_map.keys())}")
+        raise HTTPException(400, f"Invalid range - use one of: {', '.join(range_map.keys())}")
 
     start_time = (now - delta).strftime("%Y-%m-%d %H:%M:%S")
     end_time = now.strftime("%Y-%m-%d %H:%M:%S")

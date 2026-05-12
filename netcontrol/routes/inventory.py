@@ -102,7 +102,7 @@ class HostUpdate(BaseModel):
     device_type: str = "cisco_ios"
     vrf_name: str | None = None
     vlan_id: str | None = None
-    # Optional — when present, the host is moved to the new group as part
+    # Optional - when present, the host is moved to the new group as part
     # of the update so renaming and re-grouping happen in one round-trip.
     group_id: int | None = None
 
@@ -143,7 +143,7 @@ def _expand_scan_targets(cidrs: list[str], max_hosts: int) -> list[str]:
         # Reject absurdly large subnets early to avoid CPU spin
         if network.num_addresses > max(max_hosts * 10, 65536):
             raise ValueError(
-                f"CIDR {cidr} contains {network.num_addresses:,} addresses — "
+                f"CIDR {cidr} contains {network.num_addresses:,} addresses - "
                 f"maximum allowed is {max(max_hosts * 10, 65536):,}"
             )
         for host in network.hosts():
@@ -210,7 +210,7 @@ async def _probe_discovery_target(
         lower_banner = banner_sample.lower()
         if "cisco" in lower_banner:
             inferred_vendor = "cisco"
-            # Distinguish IOS-XE from classic IOS — Catalyst 9xxx, 3850,
+            # Distinguish IOS-XE from classic IOS - Catalyst 9xxx, 3850,
             # 3650, ISR 1000/4000, ASR 1000, etc. all run IOS-XE.
             # SSH banners rarely include OS detail, so also match on
             # sysDescr variants: "IOS XE", "IOS-XE", "(CAT9K_IOSXE)".
@@ -320,7 +320,7 @@ async def _sync_group_hosts(
             try:
                 new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
             except ValueError:
-                # Race or duplicate within the same payload — another caller
+                # Race or duplicate within the same payload - another caller
                 # (or a prior loop iteration with a near-identical IP) already
                 # inserted the row. Treat as an update on the next pass instead
                 # of crashing the whole onboard.
@@ -366,7 +366,7 @@ async def _sync_group_hosts(
                 source_hint="discovery-update",
             )
             updated += 1
-        # Don't blank out model/version with empty values — only update
+        # Don't blank out model/version with empty values - only update
         # when discovery actually returned data (e.g. via SNMP sysDescr).
         if model or sw_version or category:
             effective_model = model or existing.get("model", "")
@@ -465,7 +465,7 @@ async def _discovery_sync_loop() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Admin routes (admin_router — registered with require_admin dependency)
+# Admin routes (admin_router - registered with require_admin dependency)
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -571,7 +571,7 @@ async def admin_delete_snmp_profile(profile_id: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Inventory-feature routes (router — registered with require_auth + require_feature("inventory"))
+# Inventory-feature routes (router - registered with require_auth + require_feature("inventory"))
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -735,7 +735,7 @@ async def update_host(host_id: int, body: HostUpdate):
     )
     # Optional re-group as part of the same edit. The (group_id, ip_address)
     # unique key means moving to a group that already has this IP will fail
-    # with an asyncpg/sqlite UniqueViolationError — surface as a clean 409.
+    # with an asyncpg/sqlite UniqueViolationError - surface as a clean 409.
     if body.group_id is not None:
         try:
             await db.move_hosts([host_id], int(body.group_id))
@@ -1020,7 +1020,7 @@ async def test_group_snmp_profile(group_id: int, body: dict):
         result = await _snmp_get(target_ip, timeout, snmp_config)
     except Exception as exc:
         LOGGER.warning("SNMP test failed for %s: %s", target_ip, exc)
-        return {"success": False, "target_ip": target_ip, "error": "SNMP query failed — check credentials and connectivity."}
+        return {"success": False, "target_ip": target_ip, "error": "SNMP query failed - check credentials and connectivity."}
     if result is None:
         return {"success": False, "target_ip": target_ip, "error": "SNMP query failed -- no response or bad credentials"}
     return {"success": True, "target_ip": target_ip, "result": result}

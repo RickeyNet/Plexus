@@ -5,7 +5,7 @@ import { Modal } from './Modal';
 
 interface Props {
   isOpen: boolean;
-  // When forced (must_change_password), the modal cannot be dismissed —
+  // When forced (must_change_password), the modal cannot be dismissed -
   // onClose is ignored until the change succeeds.
   forced?: boolean;
   onClose: () => void;

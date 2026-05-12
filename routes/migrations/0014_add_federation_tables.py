@@ -1,8 +1,8 @@
-"""Migration 0014 — Add multi-instance federation tables.
+"""Migration 0014 - Add multi-instance federation tables.
 
 Creates:
-  federation_peers     — registry of remote Plexus instances
-  federation_snapshots — cached aggregate data pulled from peers
+  federation_peers     - registry of remote Plexus instances
+  federation_snapshots - cached aggregate data pulled from peers
 """
 
 from __future__ import annotations

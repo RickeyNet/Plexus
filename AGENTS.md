@@ -1,4 +1,4 @@
-# Plexus — Agent Context
+# Plexus - Agent Context
 
 ## Project Overview
 Plexus is a network automation platform built with FastAPI (Python) + vanilla JS SPA.
@@ -8,7 +8,7 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 ## Architecture
 - **Backend**: FastAPI app in `netcontrol/app.py`, routes split across `netcontrol/routes/`
 - **Database**: SQLite (default) or Postgres (`APP_DB_ENGINE=postgres`), abstracted in `routes/database.py`
-- **Frontend**: Single-page app in `netcontrol/static/` — `index.html`, `js/app.js`, `js/api.js`
+- **Frontend**: Single-page app in `netcontrol/static/` - `index.html`, `js/app.js`, `js/api.js`
 - **Encryption**: Fernet (AES-128-CBC + HMAC-SHA256) via `routes/crypto.py`, key in `netcontrol.key` at the repo root (override via `APP_ENCRYPTION_KEY_FILE`)
 - **Auth**: Session cookies (itsdangerous signed tokens), CSRF protection, PBKDF2-SHA256 passwords
 - **Playbooks**: Python classes in `templates/playbooks/` registered via `@register_playbook` decorator
@@ -22,7 +22,7 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 - Secret values are redacted from job logs via `redact_values()` in `routes/secret_resolver.py`
 
 ## Security Rules
-- Never put `str(exc)` in HTTP error responses — use generic messages, log details server-side
+- Never put `str(exc)` in HTTP error responses - use generic messages, log details server-side
 - Always use `escapeHtml()` for user/API data in innerHTML contexts
 - Path operations must use `os.path.basename()` + `os.path.realpath()` confinement checks
 - Credential mutations require owner-or-admin check via `_can_modify()`
@@ -31,11 +31,11 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 
 ## Development
 - Windows dev machine, Linux deployment target
-- No bash available — use `cmd` or PowerShell for shell commands
+- No bash available - use `cmd` or PowerShell for shell commands
 - Tests: `pytest` with `pytest-asyncio`, coverage gate at 30%
 - Linting: `ruff`, type checking: `mypy`, security: `bandit` + `pip-audit`
 - CI: GitHub Actions with CodeQL scanning
 
 ## File Size Warning
-- `netcontrol/static/js/app.js` is ~13,000 lines — use offset/limit when reading
-- `routes/database.py` is ~8,700 lines — same approach
+- `netcontrol/static/js/app.js` is ~13,000 lines - use offset/limit when reading
+- `routes/database.py` is ~8,700 lines - same approach

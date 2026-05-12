@@ -92,7 +92,7 @@ function Breadcrumb() {
   );
 }
 
-// Mirrors the legacy app.js METRIC_PAGES list — pages where the global
+// Mirrors the legacy app.js METRIC_PAGES list - pages where the global
 // time range is meaningful (Dashboard, Monitoring, Device Detail).
 function MetricTimeRangeBar() {
   const { pathname } = useLocation();
@@ -122,7 +122,7 @@ export function App() {
   // Reset the 401 latch only on the unauthenticated→authenticated transition
   // (i.e. fresh login). Resetting on every authenticated render causes a
   // re-render storm when a feature-gated endpoint legitimately returns 401
-  // for reasons other than session expiry — the latch resets, the next poll
+  // for reasons other than session expiry - the latch resets, the next poll
   // re-trips it, and we churn forever.
   const wasAuthedRef = useRef(false);
   useEffect(() => {
@@ -131,7 +131,7 @@ export function App() {
     wasAuthedRef.current = isAuthed;
   }, [auth?.authenticated]);
 
-  // While the initial auth check is in flight, render nothing — the bundled
+  // While the initial auth check is in flight, render nothing - the bundled
   // styles already paint the space-depth background, and a flash-of-login is
   // worse than a blank moment for an authenticated reload.
   if (isLoading) {
@@ -201,7 +201,7 @@ export function App() {
           <Route path="/graph-templates" element={<GraphTemplates />} />
           {/* Delegator: one page renders all five tabs. The legacy paths
               (/jobs, /playbooks, /templates) point at Jobs too so old deep
-              links keep working — Jobs.tsx maps them to the right tab. */}
+              links keep working - Jobs.tsx maps them to the right tab. */}
           <Route path="/assignments" element={<Jobs />} />
           <Route path="/tasks" element={<Jobs />} />
           <Route path="/instructions" element={<Jobs />} />

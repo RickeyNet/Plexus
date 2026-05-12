@@ -54,7 +54,7 @@ export function CapacityTab() {
       {data.error && <div style={{ color: 'var(--danger)' }}>Error: {(data.error as Error).message}</div>}
 
       {data.data && points.length === 0 ? (
-        <div className="empty-state">No capacity data — run polls to collect metrics.</div>
+        <div className="empty-state">No capacity data - run polls to collect metrics.</div>
       ) : data.data && (
         <>
           <div className="card" style={{ padding: '1rem', marginBottom: '0.75rem' }}>

@@ -1,5 +1,5 @@
 """
-secret_resolver.py — Resolve {{secret.NAME}} placeholders in template commands.
+secret_resolver.py - Resolve {{secret.NAME}} placeholders in template commands.
 
 Fetches encrypted values from the secret_variables table, decrypts them,
 and substitutes into command strings at job execution time.  Plaintext
@@ -11,7 +11,7 @@ import re
 import routes.database as db
 from routes.crypto import decrypt
 
-# Matches {{secret.variable_name}} — name allows alphanumeric, underscore, hyphen
+# Matches {{secret.variable_name}} - name allows alphanumeric, underscore, hyphen
 _SECRET_RE = re.compile(r"\{\{\s*secret\.([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}")
 
 # Matches any {{secret.*}} reference (used for validation / detection).
@@ -70,7 +70,7 @@ async def resolve_secrets(
     SecretResolutionError
         If any referenced secret variable does not exist in the store.
     """
-    # Fast path — nothing to resolve
+    # Fast path - nothing to resolve
     names = extract_secret_names(template_commands)
     if not names:
         return list(template_commands)

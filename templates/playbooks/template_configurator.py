@@ -1,5 +1,5 @@
 """
-Template Configurator — Generic Playbook
+Template Configurator - Generic Playbook
 
 Connects to Cisco IOS switches and applies the selected configuration
 template in config mode.  Works with any template stored in Plexus
@@ -15,7 +15,7 @@ from collections.abc import AsyncGenerator
 
 from routes.runner import BasePlaybook, LogEvent, register_playbook
 
-# Shared helpers — see _common.py.  Underscore prefix keeps the module
+# Shared helpers - see _common.py.  Underscore prefix keeps the module
 # out of the playbook auto-loader.
 from templates.playbooks._common import (
     NETMIKO_AVAILABLE,
@@ -45,23 +45,23 @@ class TemplateConfigurator(BasePlaybook):
         template_commands: list[str] | None = None,
         dry_run: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
-        # Hard fail when no template was selected — there is nothing
+        # Hard fail when no template was selected - there is nothing
         # generic to push without one.
         if not template_commands:
             yield self.log_error(
-                "No template selected — this playbook requires a configuration template."
+                "No template selected - this playbook requires a configuration template."
             )
             return
 
         yield self.log_info(
-            f"Template Configurator — targeting {len(hosts)} device(s)"
+            f"Template Configurator - targeting {len(hosts)} device(s)"
         )
         yield self.log_info(f"Template has {len(template_commands)} command(s).")
 
         if dry_run:
-            yield self.log_warn("*** DRY-RUN MODE — commands will NOT be written ***")
+            yield self.log_warn("*** DRY-RUN MODE - commands will NOT be written ***")
         else:
-            yield self.log_warn("*** LIVE MODE — commands WILL be written ***")
+            yield self.log_warn("*** LIVE MODE - commands WILL be written ***")
 
         # Per-host success/failure tally for the closing summary line.
         succeeded = 0
@@ -102,7 +102,7 @@ class TemplateConfigurator(BasePlaybook):
             else:
                 failed += 1
 
-        # Final summary — coloured warn if anything failed, success otherwise.
+        # Final summary - coloured warn if anything failed, success otherwise.
         yield self.log_sep()
         summary = f"Complete: {succeeded} succeeded, {failed} failed out of {len(hosts)} device(s)."
         if failed:
@@ -144,7 +144,7 @@ class TemplateConfigurator(BasePlaybook):
                         yield ev
 
                 if dry_run:
-                    # Preview only — print exactly what would be sent.
+                    # Preview only - print exactly what would be sent.
                     yield self.log_info(
                         "[DRY-RUN] Would apply the following commands:",
                         host=hostname,

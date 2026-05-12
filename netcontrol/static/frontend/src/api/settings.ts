@@ -379,6 +379,100 @@ export function useTestSyslog() {
   });
 }
 
+// ── SIEM audit-event forwarding ────────────────────────────────────────────
+
+export interface SiemSink {
+  id: string;
+  name: string;
+  enabled: boolean;
+  protocol: 'udp' | 'tcp' | 'tls' | 'https' | string;
+  format: 'cef' | 'json' | string;
+  host: string;
+  port: number;
+  url: string;
+  bearer_token: string;
+  tls_verify: boolean;
+  tls_ca_pem: string;
+  tls_client_cert_pem: string;
+  tls_client_key_pem: string;
+  severity_floor: string;
+  queue_size: number;
+  max_retries: number;
+  backoff_base: number;
+  backoff_cap: number;
+}
+
+export interface SiemSinkStats {
+  id: string;
+  name: string;
+  enabled: boolean;
+  protocol: string;
+  queue_depth: number;
+  queue_size: number;
+  delivered: number;
+  delivery_failures: number;
+  dropped_queue_full: number;
+  dropped_below_severity: number;
+  last_error: string;
+  last_delivery_at: string;
+  last_failure_at: string;
+}
+
+export interface SiemSinksResponse {
+  sinks: SiemSink[];
+  stats: SiemSinkStats[];
+}
+
+export function useSiemSinks() {
+  return useQuery<SiemSinksResponse>({
+    queryKey: ['admin', 'siem-sinks'],
+    queryFn: () => apiRequest('/admin/siem-sinks'),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useCreateSiemSink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<SiemSink>) =>
+      apiRequest<SiemSink>('/admin/siem-sinks', { method: 'POST', body: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'siem-sinks'] }),
+  });
+}
+
+export function useUpdateSiemSink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<SiemSink> }) =>
+      apiRequest<SiemSink>(`/admin/siem-sinks/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: data,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'siem-sinks'] }),
+  });
+}
+
+export function useDeleteSiemSink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiRequest<{ ok: boolean }>(`/admin/siem-sinks/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'siem-sinks'] }),
+  });
+}
+
+export function useTestSiemSink() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiRequest<{ ok: boolean; error: string }>(
+        `/admin/siem-sinks/${encodeURIComponent(id)}/test`,
+        { method: 'POST' },
+      ),
+  });
+}
+
 // ── Feature visibility ─────────────────────────────────────────────────────
 
 export function useUpdateFeatureVisibility() {

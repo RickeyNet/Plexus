@@ -1,5 +1,5 @@
 /**
- * Topology API hooks — graph data, positions, discovery, STP, changes, util.
+ * Topology API hooks - graph data, positions, discovery, STP, changes, util.
  *
  * Mirrors the legacy api.js topology helpers on top of apiRequest.
  */

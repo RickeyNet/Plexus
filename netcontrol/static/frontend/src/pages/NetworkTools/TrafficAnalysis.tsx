@@ -68,7 +68,7 @@ export function TrafficAnalysis() {
 
   const status = useFlowStatus();
 
-  // Single host list for the filter dropdown — flatten groups → hosts.
+  // Single host list for the filter dropdown - flatten groups → hosts.
   const groups = useInventoryGroupsFull(true);
   const hostOptions = useMemo(() => {
     const list: { id: number; label: string }[] = [];
@@ -272,7 +272,7 @@ function ApplicationsView({ hours, hostId }: { hours: number; hostId: number | n
         <tbody>
           {rows.map((r, i) => (
             <tr key={`${r.port}-${r.protocol}-${i}`}>
-              <td>{r.service_name || '—'}</td>
+              <td>{r.service_name || '-'}</td>
               <td style={{ textAlign: 'right' }}>{r.port}</td>
               <td>{r.protocol_name || String(r.protocol)}</td>
               <td style={{ textAlign: 'right' }}>{formatBytes(r.total_bytes)}</td>
@@ -337,7 +337,7 @@ function TimelineView({ hours, hostId }: { hours: number; hostId: number | null 
 
   // The chart wants bytes-per-second so the y-axis bps formatter renders right.
   // We don't know the exact bucket width from the response, but it's
-  // deterministic — match the same logic the hook uses.
+  // deterministic - match the same logic the hook uses.
   const bucketMinutes = hours <= 1 ? 1 : hours <= 6 ? 5 : 15;
   const bucketSeconds = bucketMinutes * 60;
 
@@ -360,7 +360,7 @@ function TimelineView({ hours, hostId }: { hours: number; hostId: number | null 
       <TimeSeriesChart series={series} area yAxisName="bps" height={320} />
       <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.25rem' }}>
         Bucket size: {bucketMinutes} min. Bytes are normalised to bps assuming a full bucket
-        — the last bucket may underestimate if it hasn't closed yet.
+        - the last bucket may underestimate if it hasn't closed yet.
       </div>
     </div>
   );
@@ -434,7 +434,7 @@ function ExportersView() {
               <td>{r.flow_type}</td>
               <td style={{ textAlign: 'right' }}>{r.packets_received.toLocaleString()}</td>
               <td style={{ textAlign: 'right' }}>
-                {r.sampling_rate ? `1:${r.sampling_rate}` : '—'}
+                {r.sampling_rate ? `1:${r.sampling_rate}` : '-'}
               </td>
               <td>{formatTimestamp(r.first_seen)}</td>
               <td>{formatTimestamp(r.last_seen)}</td>

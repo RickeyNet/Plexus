@@ -1,5 +1,5 @@
 /**
- * Inventory API — groups, hosts, SNMP profiles, discovery.
+ * Inventory API - groups, hosts, SNMP profiles, discovery.
  *
  * Mirrors the legacy api.js inventory functions on top of the React-app
  * apiRequest wrapper. Reuses the lightweight `useInventoryGroups` /

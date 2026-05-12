@@ -63,7 +63,7 @@ function safeSet(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
   } catch {
-    /* ignore — storage may be unavailable */
+    /* ignore - storage may be unavailable */
   }
 }
 

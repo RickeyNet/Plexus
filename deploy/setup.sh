@@ -57,7 +57,7 @@ EOF
     echo "  Created .env with random API token and DB password."
     echo "  Edit .env to set APP_CORS_ORIGINS to your actual hostname."
 else
-    echo "[1/3] .env already exists — skipping."
+    echo "[1/3] .env already exists - skipping."
 fi
 
 # ── 2. Generate self-signed TLS certificate ───────────────────────────
@@ -82,7 +82,7 @@ if [ ! -f "${CERT_DIR}/cert.pem" ] || [ ! -f "${CERT_DIR}/key.pem" ]; then
     echo ""
     echo "  To use your own CA-signed cert, replace these files."
 else
-    echo "[2/3] TLS certificates already exist — skipping."
+    echo "[2/3] TLS certificates already exist - skipping."
 fi
 
 # ── 3. Verify Docker is available ─────────────────────────────────────

@@ -29,7 +29,7 @@ from netcontrol.routes.config_drift import _analyze_drift_for_host
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
-ws_router = APIRouter()  # WebSocket routes — registered without HTTP auth dependency
+ws_router = APIRouter()  # WebSocket routes - registered without HTTP auth dependency
 LOGGER = configure_logging("plexus.deployments")
 
 VERIFICATION_METRICS = ["cpu_percent", "memory_percent", "packet_loss_pct", "response_time_ms"]
@@ -135,7 +135,7 @@ def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]
             section_emitted = False
             continue
 
-        # Context line — track section headers for proper config hierarchy
+        # Context line - track section headers for proper config hierarchy
         if line.startswith(" "):
             ctx = line[1:]  # strip the leading diff space
             if ctx and not ctx[0].isspace():
@@ -144,7 +144,7 @@ def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]
             continue
 
         if line.startswith("-"):
-            # Missing from device — re-add the baseline line
+            # Missing from device - re-add the baseline line
             cmd = line[1:]  # strip the leading '-'
             stripped = cmd.strip()
             if not stripped or stripped.startswith("!") or stripped == "end":
@@ -159,7 +159,7 @@ def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]
                 _ensure_section(cmd)
             commands.append(cmd.rstrip())
         elif line.startswith("+"):
-            # Present on device but not in baseline — negate it
+            # Present on device but not in baseline - negate it
             cmd = line[1:]  # strip the leading '+'
             stripped = cmd.strip()
             if not stripped or stripped.startswith("!") or stripped == "end":
@@ -170,7 +170,7 @@ def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]
             # Add 'no' prefix to remove the line, preserving indentation
             indent = cmd[: len(cmd) - len(cmd.lstrip())]
             if stripped.startswith("no "):
-                # "no ..." line was added — removing it means re-adding without "no"
+                # "no ..." line was added - removing it means re-adding without "no"
                 commands.append(indent + stripped[3:])
             else:
                 commands.append(indent + "no " + stripped)
@@ -319,7 +319,7 @@ async def _run_post_deployment_verification(
                 ) or "no metrics available"
                 icon = "OK" if not any_concern else "CONCERN"
                 await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health for {hostname}: {icon} — {detail_str}\n")
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health for {hostname}: {icon} - {detail_str}\n")
             except Exception as exc:
                 await db.update_deployment_checkpoint(mh_cp_id, "failed",
                     json.dumps({"error": str(exc)}))
@@ -406,7 +406,7 @@ async def _run_deployment_job(
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pre-check FAILED for {hostname}: {exc}\n")
                 await db.update_deployment_status(deployment_id, "failed")
                 await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Deployment aborted — pre-check failure.\n")
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Deployment aborted - pre-check failure.\n")
                 await _finish_deploy_job(job_id, "failed")
                 return
 
@@ -596,7 +596,7 @@ async def _run_rollback_job(
                     remaining = va + vr
                     if remaining == 0:
                         await _broadcast_deploy_line(job_id,
-                            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {hostname}: rollback verified — config matches pre-deployment state.\n")
+                            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {hostname}: rollback verified - config matches pre-deployment state.\n")
                         await db.update_deployment_checkpoint(cp_id, "passed",
                             json.dumps({"reverted_lines": len(revert_commands), "verified": True}))
                     else:

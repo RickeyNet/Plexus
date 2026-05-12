@@ -1,5 +1,5 @@
 /**
- * Device Detail Module — Device detail page with metrics, interfaces, alerts, compliance, syslog
+ * Device Detail Module - Device detail page with metrics, interfaces, alerts, compliance, syslog
  * Lazy-loaded when user navigates to #device-detail
  */
 import * as api from '../api.js';
@@ -415,7 +415,7 @@ function renderInterfaceDetailCharts(ifData, latestPoll) {
 
         container.innerHTML = html;
 
-        // Defer chart creation to next frame — let the browser complete layout
+        // Defer chart creation to next frame - let the browser complete layout
         // from the innerHTML assignment before ECharts queries element dimensions
         requestAnimationFrame(() => {
             ifNames.forEach(name => {
@@ -592,7 +592,7 @@ async function renderDeviceErrorTrendingTab(hostId) {
                 withErrors.forEach(iface => {
                     const chartId = `err-chart-${String(iface.if_index).replace(/[^a-zA-Z0-9]/g, '_')}`;
                     html += `<div class="card" style="margin-bottom:0;">
-                        <div class="card-title" style="font-size:0.85rem; padding:0.5rem 0.75rem;">${escapeHtml(iface.if_name || 'idx-' + iface.if_index)} — Errors</div>
+                        <div class="card-title" style="font-size:0.85rem; padding:0.5rem 0.75rem;">${escapeHtml(iface.if_name || 'idx-' + iface.if_index)} - Errors</div>
                         <div id="${chartId}" class="chart-container" style="height:180px;"></div>
                     </div>`;
                 });

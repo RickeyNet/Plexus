@@ -1,5 +1,5 @@
 """
-ansible_inventory.py — Ansible dynamic inventory provider for Plexus.
+ansible_inventory.py - Ansible dynamic inventory provider for Plexus.
 
 Exposes Plexus device inventory in Ansible dynamic inventory JSON format
 via HTTP endpoints. Supports group mapping, host variables, and filtering

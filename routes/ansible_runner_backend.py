@@ -1,5 +1,5 @@
 """
-ansible_runner_backend.py — Ansible execution backend for Plexus.
+ansible_runner_backend.py - Ansible execution backend for Plexus.
 
 Translates Plexus inventory/credentials into ansible-runner format,
 executes YAML playbooks, and streams events back as LogEvent objects
@@ -141,7 +141,7 @@ def _translate_event(event: dict) -> LogEvent | None:
         err_msg = result.get("msg", "") or result.get("stderr", "") or str(result)
         return LogEvent(
             level="error",
-            message=f"FAILED: {task_label} — {err_msg}",
+            message=f"FAILED: {task_label} - {err_msg}",
             host=host,
         )
 
@@ -166,7 +166,7 @@ def _translate_event(event: dict) -> LogEvent | None:
         err_msg = data.get("res", {}).get("msg", "")
         return LogEvent(
             level="error",
-            message=f"FAILED (item={item}): {task_label} — {err_msg}",
+            message=f"FAILED (item={item}): {task_label} - {err_msg}",
             host=host,
         )
 

@@ -1,10 +1,10 @@
 """
-lab_drift.py — Phase B-3a: drift-from-twin checks.
+lab_drift.py - Phase B-3a: drift-from-twin checks.
 
 The unique closed-loop value of a digital twin is that operators validate
 changes against a known-good baseline before pushing to production. That
 guarantee silently breaks when the production device's running config
-drifts away from the snapshot the twin holds — emergency CLI changes,
+drifts away from the snapshot the twin holds - emergency CLI changes,
 vendor support tweaks, another team's automation. This module compares
 each twin's snapshot to the latest production config snapshot of the host
 it was cloned from, on demand and on a configurable schedule.
@@ -16,12 +16,12 @@ That keeps drift checking cheap (no SSH per tick), respects the existing
 backup cadence, and avoids hammering devices that already get polled.
 
 Status values written to lab_drift_runs:
-  - in_sync         — twin matches production snapshot byte-for-byte
+  - in_sync         - twin matches production snapshot byte-for-byte
                       (after volatile-line normalization)
-  - drifted         — diff is non-empty
-  - missing_source  — lab device has no source_host_id, or no production
+  - drifted         - diff is non-empty
+  - missing_source  - lab device has no source_host_id, or no production
                       snapshot exists yet for that host
-  - error           — diff/eval blew up; never raised, only persisted
+  - error           - diff/eval blew up; never raised, only persisted
 """
 from __future__ import annotations
 

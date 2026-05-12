@@ -108,9 +108,9 @@ export function NetFlowTab() {
                   'NetFlow configuration saved' +
                   (saved.enabled
                     ? saved.netflow_running
-                      ? ' — collector running.'
-                      : ' — collector failed to start (check logs).'
-                    : ' — collector stopped.'),
+                      ? ' - collector running.'
+                      : ' - collector failed to start (check logs).'
+                    : ' - collector stopped.'),
               });
             },
             onError: (err) =>
@@ -165,7 +165,7 @@ export function NetFlowTab() {
         </div>
 
         <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.5rem' }}>
-          Saving here applies the change immediately — port/toggle edits rebind the UDP
+          Saving here applies the change immediately - port/toggle edits rebind the UDP
           listeners on the fly, so no restart is required.
         </div>
 

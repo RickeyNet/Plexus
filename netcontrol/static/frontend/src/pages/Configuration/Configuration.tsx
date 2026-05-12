@@ -30,7 +30,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   search: {
     title: 'Search Across All Configs',
-    text: 'Full-text search the latest configs of every device — find which switches use a deprecated SNMP community, who still has Telnet enabled, etc.',
+    text: 'Full-text search the latest configs of every device - find which switches use a deprecated SNMP community, who still has Telnet enabled, etc.',
   },
 };
 

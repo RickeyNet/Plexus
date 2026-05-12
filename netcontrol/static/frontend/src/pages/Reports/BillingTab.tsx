@@ -94,11 +94,11 @@ export function BillingTab() {
               {circuits.map((c) => (
                 <tr key={c.id}>
                   <td>{c.name}</td>
-                  <td>{c.customer || '—'}</td>
-                  <td>{c.hostname || '—'}</td>
-                  <td>{c.if_name || (c.if_index != null ? `idx:${c.if_index}` : '—')}</td>
+                  <td>{c.customer || '-'}</td>
+                  <td>{c.hostname || '-'}</td>
+                  <td>{c.if_name || (c.if_index != null ? `idx:${c.if_index}` : '-')}</td>
                   <td>{formatBps(c.commit_rate_bps)}</td>
-                  <td>{(c.cost_per_mbps ?? 0) > 0 ? `$${(c.cost_per_mbps ?? 0).toFixed(2)}` : '—'}</td>
+                  <td>{(c.cost_per_mbps ?? 0) > 0 ? `$${(c.cost_per_mbps ?? 0).toFixed(2)}` : '-'}</td>
                   <td>{c.billing_cycle}</td>
                   <td>{c.enabled
                     ? <span style={{ color: 'var(--success)' }}>Enabled</span>
@@ -139,15 +139,15 @@ export function BillingTab() {
                 return (
                   <tr key={p.id}>
                     <td>{(p.period_start ?? '').slice(0, 10)} – {(p.period_end ?? '').slice(0, 10)}</td>
-                    <td>{p.customer || '—'}</td>
-                    <td>{p.circuit_name || '—'}</td>
-                    <td>{p.hostname || '—'}</td>
+                    <td>{p.customer || '-'}</td>
+                    <td>{p.circuit_name || '-'}</td>
+                    <td>{p.hostname || '-'}</td>
                     <td>{formatBps(p.p95_in_bps)}</td>
                     <td>{formatBps(p.p95_out_bps)}</td>
                     <td><strong>{formatBps(p.p95_billing_bps)}</strong></td>
                     <td>{formatBps(p.commit_rate_bps)}</td>
-                    <td>{isOverage ? <span style={{ color: 'var(--danger)' }}>{formatBps(p.overage_bps)}</span> : '—'}</td>
-                    <td>{(p.overage_cost ?? 0) > 0 ? <span style={{ color: 'var(--danger)' }}>${p.overage_cost?.toLocaleString()}</span> : '—'}</td>
+                    <td>{isOverage ? <span style={{ color: 'var(--danger)' }}>{formatBps(p.overage_bps)}</span> : '-'}</td>
+                    <td>{(p.overage_cost ?? 0) > 0 ? <span style={{ color: 'var(--danger)' }}>${p.overage_cost?.toLocaleString()}</span> : '-'}</td>
                     <td><span className={`badge ${isOverage ? 'badge-danger' : 'badge-success'}`}>{p.status}</span></td>
                     <td><button className="btn btn-sm btn-secondary" onClick={() => setPeriodId(p.id)}>View</button></td>
                   </tr>

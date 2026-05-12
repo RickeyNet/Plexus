@@ -1,11 +1,11 @@
 """
-lab_topology.py — Phase B-2: multi-device lab topologies.
+lab_topology.py - Phase B-2: multi-device lab topologies.
 
 Phase B-1 deployed each twin as its own single-node containerlab lab.
 Phase B-2 lets operators link N twins into one topology so routing/STP/LACP
 behaviors can be tested end-to-end against real NOS images.
 
-The driver reuses Phase B-1's containerlab plumbing — same allowlists,
+The driver reuses Phase B-1's containerlab plumbing - same allowlists,
 same workdir layout, same `lab_runtime._run_containerlab` helper. The difference is
 that one `containerlab deploy` covers all member devices and emits the
 linked endpoints into the topology YAML's `links:` section.
@@ -43,7 +43,7 @@ from netcontrol.telemetry import configure_logging
 router = APIRouter()
 LOGGER = configure_logging("plexus.lab_topology")
 
-# Loose endpoint-name regex — allows interface names like eth1,
+# Loose endpoint-name regex - allows interface names like eth1,
 # GigabitEthernet0/0/1, and Ethernet1/2 while rejecting shell metacharacters.
 _ENDPOINT_RE = __import__("re").compile(r"^[a-zA-Z][a-zA-Z0-9._/-]{0,47}$")
 

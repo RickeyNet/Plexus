@@ -26,7 +26,7 @@ from netcontrol.telemetry import configure_logging, increment_metric, redact_val
 LOGGER = configure_logging("plexus.config_drift")
 
 router = APIRouter()
-ws_router = APIRouter()  # WebSocket routes — registered without HTTP auth dependency
+ws_router = APIRouter()  # WebSocket routes - registered without HTTP auth dependency
 
 # ── Late-binding auth dependencies ────────────────────────────────────────────
 

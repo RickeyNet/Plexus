@@ -155,7 +155,7 @@ export function DevicesTab() {
               {progress.log.map((l, i) => (
                 <div key={i}>
                   <span style={{ color: l.ok ? 'var(--success)' : 'var(--danger)' }}>{l.ok ? '✓' : '✗'}</span>{' '}
-                  {l.hostname}{l.detail ? ` — ${l.detail}` : ''}
+                  {l.hostname}{l.detail ? ` - ${l.detail}` : ''}
                 </div>
               ))}
             </div>
@@ -166,7 +166,7 @@ export function DevicesTab() {
       {polls.isPending && <div className="text-muted">Loading…</div>}
       {polls.error && <div style={{ color: 'var(--danger)' }}>Error: {(polls.error as Error).message}</div>}
       {polls.data && filtered.length === 0 && (
-        <div className="empty-state">No monitoring data — click Poll Now to begin.</div>
+        <div className="empty-state">No monitoring data - click Poll Now to begin.</div>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -291,7 +291,7 @@ function HostDetailModal({ poll, onClose }: { poll: MonitoringPoll; onClose: () 
   } catch { /* ignore */ }
 
   return (
-    <Modal isOpen onClose={onClose} title={`${poll.hostname ?? 'Device'} — Monitoring Detail`} size="large">
+    <Modal isOpen onClose={onClose} title={`${poll.hostname ?? 'Device'} - Monitoring Detail`} size="large">
       <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <div><strong>CPU:</strong> {poll.cpu_percent != null ? `${poll.cpu_percent}%` : 'N/A'}</div>
         <div><strong>Memory:</strong> {poll.memory_percent != null ? `${poll.memory_percent}%` : 'N/A'}{poll.memory_used_mb != null ? ` (${poll.memory_used_mb}/${poll.memory_total_mb} MB)` : ''}</div>
@@ -359,7 +359,7 @@ function HostDetailModal({ poll, onClose }: { poll: MonitoringPoll; onClose: () 
 function HostHistoryModal({ hostId, hostname, onClose }: { hostId: number; hostname: string; onClose: () => void }) {
   const history = useMonitoringPollHistory(hostId, 50);
   return (
-    <Modal isOpen onClose={onClose} title={`${hostname} — Poll History`} size="large">
+    <Modal isOpen onClose={onClose} title={`${hostname} - Poll History`} size="large">
       {history.isPending && <div className="text-muted">Loading…</div>}
       {history.error && <div style={{ color: 'var(--danger)' }}>Error: {(history.error as Error).message}</div>}
       {history.data && (history.data.length === 0 ? (

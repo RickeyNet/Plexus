@@ -50,7 +50,7 @@ function CorrelationBody({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <div style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
-        Time window: {windowStart} — {windowEnd}
+        Time window: {windowStart} - {windowEnd}
         <span style={{ marginLeft: '1rem' }}>Events: {events.length}</span>
       </div>
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.8em' }}>
@@ -117,7 +117,7 @@ function buildTimeline(data: DeploymentCorrelation): TimelineEvent[] {
       type: 'deployment',
       icon: cp.status === 'passed' ? '✓' : cp.status === 'failed' ? '✗' : '○',
       title: `${cp.phase}: ${cp.check_type}`,
-      detail: `${cp.hostname || ''} — ${cp.status}`,
+      detail: `${cp.hostname || ''} - ${cp.status}`,
       color:
         cp.status === 'passed'
           ? 'var(--success)'
@@ -133,7 +133,7 @@ function buildTimeline(data: DeploymentCorrelation): TimelineEvent[] {
       type: 'drift',
       icon: '⚠',
       title: 'Config Drift Detected',
-      detail: `${drift.hostname || `Host #${drift.host_id}`} — +${drift.diff_lines_added || 0}/-${
+      detail: `${drift.hostname || `Host #${drift.host_id}`} - +${drift.diff_lines_added || 0}/-${
         drift.diff_lines_removed || 0
       } lines`,
       color: 'var(--warning)',
@@ -146,7 +146,7 @@ function buildTimeline(data: DeploymentCorrelation): TimelineEvent[] {
       type: 'alert',
       icon: '●',
       title: `Alert: ${alert.metric || alert.alert_type || 'unknown'}`,
-      detail: `${alert.hostname || ''} — ${alert.message || ''}`.trim(),
+      detail: `${alert.hostname || ''} - ${alert.message || ''}`.trim(),
       color: alert.severity === 'critical' ? 'var(--danger)' : 'var(--warning)',
     });
   }

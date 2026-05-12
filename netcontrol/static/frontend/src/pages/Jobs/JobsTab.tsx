@@ -146,11 +146,11 @@ function QueuePanel({ data }: { data: ReturnType<typeof useJobQueue>['data'] }) 
             <span
               key={j.id}
               className={`status-badge`}
-              title={`${j.playbook_name ?? ''} — ${priorityLabel(j.priority)}`}
+              title={`${j.playbook_name ?? ''} - ${priorityLabel(j.priority)}`}
               style={{ background: isRunning ? 'var(--success)' : 'var(--bg-secondary)', color: isRunning ? '#fff' : 'inherit' }}
             >
               {(j.playbook_name ?? 'Job').substring(0, 20)}
-              {!isRunning && ` — ${priorityLabel(j.priority)}`}
+              {!isRunning && ` - ${priorityLabel(j.priority)}`}
             </span>
           );
         })}

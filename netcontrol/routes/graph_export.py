@@ -215,7 +215,7 @@ async def get_graph_embed(
 
     option = _build_echart_option(template, items, metric_data, range, theme)
 
-    # Strict whitelist for theme — only known values are allowed (CWE-79).
+    # Strict whitelist for theme - only known values are allowed (CWE-79).
     echarts_theme_safe = "dark" if theme == "dark" else ""
     bg_safe = "#1a1a2e" if theme == "dark" else "#ffffff"
 

@@ -23,7 +23,7 @@ export function EditImageModal({ image, onClose }: Props) {
       setError(null);
       update.reset();
     }
-    // `update` is stable across renders only by identity-spec — depend on
+    // `update` is stable across renders only by identity-spec - depend on
     // image alone so we don't reset the form on every parent re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image]);

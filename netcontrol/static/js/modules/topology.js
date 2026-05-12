@@ -1,5 +1,5 @@
 /**
- * Topology Module — Network graph visualization
+ * Topology Module - Network graph visualization
  * Lazy-loaded when user navigates to #topology
  */
 import * as api from '../api.js';
@@ -64,7 +64,7 @@ function _getTopoThemeColors() {
     return _topoThemeColors;
 }
 
-// Icon path map — device_category → SVG file
+// Icon path map - device_category → SVG file
 const _TOPO_ICON_MAP = {
     router:   '/static/img/topo/router.svg',
     switch:   '/static/img/topo/switch.svg',
@@ -83,7 +83,7 @@ function _topoNodeIcon(node) {
     // Fallback: infer from device_type
     if (node.device_type === 'fortinet') return _TOPO_ICON_MAP.firewall;
     if (!node.in_inventory) return _TOPO_ICON_MAP.unknown;
-    return null; // no icon — will use shape fallback
+    return null; // no icon - will use shape fallback
 }
 
 function _topoNodeShape(deviceType) {
@@ -709,7 +709,7 @@ function _buildVisNode(n, savedPos) {
         font: { color: (_topoThemeColors || _getTopoThemeColors()).nodeFont, size: 12, face: 'Inter, sans-serif', strokeWidth: 3, strokeColor: (_topoThemeColors || _getTopoThemeColors()).nodeFontStroke },
         _raw: n,
     };
-    // Apply saved position — pin the node so physics won't move it
+    // Apply saved position - pin the node so physics won't move it
     const key = String(n.id);
     if (savedPos[key]) {
         node.x = savedPos[key].x;
@@ -942,7 +942,7 @@ function renderTopologyGraph(data) {
             _topologyNetwork.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
         });
     } else if (allPinned || isCircular) {
-        // All nodes positioned — just fit to view
+        // All nodes positioned - just fit to view
         setTimeout(() => _topologyNetwork.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } }), 50);
     }
 }
@@ -964,7 +964,7 @@ async function resetTopologyPositions() {
     try {
         await api.deleteTopologyPositions();
         _topoSavedPositions = {};
-        showToast('Node positions reset — physics re-enabled', 'success');
+        showToast('Node positions reset - physics re-enabled', 'success');
         // Unpin all nodes and re-enable physics in-place instead of rebuilding
         if (_topologyNetwork && _topoNodesDS) {
             const updates = _topoNodesDS.getIds().map(id => ({
@@ -1343,7 +1343,7 @@ async function discoverTopology() {
         invalidatePageCache('topology');
         await loadTopology({ preserveContent: true });
     } catch (error) {
-        if (error.name === 'AbortError') return; // navigated away — silently cancel
+        if (error.name === 'AbortError') return; // navigated away - silently cancel
         const spinnerEl = document.getElementById('disco-spinner');
         if (spinnerEl) spinnerEl.style.display = 'none';
         appendFeed(`Error: ${error.message}`, 'var(--danger-color, #ef4444)');
@@ -1485,7 +1485,7 @@ function _handlePathClick(nodeId, nodesDS, edgesDS, data) {
     if (!_topoPathSource) {
         _topoPathSource = nodeId;
         const label = nodesDS.get(nodeId)?.label || nodeId;
-        document.getElementById('topology-path-status').textContent = `Source: ${label}  —  click a destination node...`;
+        document.getElementById('topology-path-status').textContent = `Source: ${label}  -  click a destination node...`;
         // Highlight source
         nodesDS.update({ id: nodeId, borderWidth: 4 });
         return;
@@ -1801,7 +1801,7 @@ function exportTopologyPNG() {
         ctx.fillStyle = '#333';
         ctx.font = `bold ${20 * scale}px Inter, sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText(`Network Topology — ${groupName}`, out.width / 2, 28 * scale);
+        ctx.fillText(`Network Topology - ${groupName}`, out.width / 2, 28 * scale);
         ctx.font = `${13 * scale}px Inter, sans-serif`;
         ctx.fillStyle = '#888';
         ctx.fillText(dateStr, out.width / 2, 48 * scale);
@@ -1816,7 +1816,7 @@ function exportTopologyPNG() {
         const hiCtx = hiRes.getContext('2d');
         hiCtx.scale(scale, scale);
 
-        // vis.js draws relative to the current view — translate so the
+        // vis.js draws relative to the current view - translate so the
         // full network bounding box is captured at 3× resolution.
         const bb = _topologyNetwork.getBoundingBox
             ? (() => {
@@ -1957,7 +1957,7 @@ function exportTopologySVG() {
         const groupFilter = document.getElementById('topology-group-filter');
         const groupName = groupFilter?.selectedOptions?.[0]?.textContent || 'All Groups';
         const dateStr = new Date().toLocaleDateString();
-        const titleSvg = `<text x="${width / 2}" y="24" text-anchor="middle" font-size="16" font-weight="bold" fill="#ccc" font-family="Inter, sans-serif">Network Topology — ${_svgEscape(groupName)} — ${dateStr}</text>`;
+        const titleSvg = `<text x="${width / 2}" y="24" text-anchor="middle" font-size="16" font-weight="bold" fill="#ccc" font-family="Inter, sans-serif">Network Topology - ${_svgEscape(groupName)} - ${dateStr}</text>`;
 
         const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height + 40}" viewBox="0 0 ${width} ${height + 40}">

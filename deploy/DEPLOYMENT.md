@@ -5,7 +5,7 @@ Reference ruleset for a Plexus host running the Docker stack
 6343/udp, SNMP traps 162/udp, syslog 1514/udp). Substitute the placeholder
 variables at the top for your environment, then run the block as `root`.
 
-> **Important — Docker + UFW interaction**
+> **Important - Docker + UFW interaction**
 > Docker bypasses UFW's `INPUT` chain by writing its own `iptables` rules
 > in the `DOCKER-USER` chain. Plain `ufw allow` rules will appear to work
 > against host services but **will not filter traffic to published
@@ -15,7 +15,7 @@ variables at the top for your environment, then run the block as `root`.
 > be the only externally reachable container. The rules below assume the
 > stack is unchanged from `docker-compose.yml` and that you also add the
 > `DOCKER-USER` rules in the **"Hardening Docker-published ports"**
-> section at the bottom — that is what actually enforces source-IP
+> section at the bottom - that is what actually enforces source-IP
 > restrictions on 2055/6343/162/1514/8080.
 
 ## 1. Define your networks
@@ -31,7 +31,7 @@ SYSLOG_SOURCES="10.20.0.0/16"    # Devices sending syslog
 SNMP_TRAP_SOURCES="10.20.0.0/16" # Devices sending SNMP traps
 DNS_SERVER="10.0.0.53"           # Internal DNS used by Plexus
 NTP_SERVER="10.0.0.123"          # Internal NTP used by Plexus
-# Federation peers (optional — leave empty if unused)
+# Federation peers (optional - leave empty if unused)
 FEDERATION_PEERS=""              # e.g. "10.30.0.10 10.30.0.11"
 ```
 
@@ -44,7 +44,7 @@ sudo ufw default allow outgoing      # outbound is broadly permitted; tighten fu
 sudo ufw logging medium
 ```
 
-## 3. Inbound — management plane (TCP)
+## 3. Inbound - management plane (TCP)
 
 ```bash
 # SSH from operators only
@@ -63,7 +63,7 @@ sudo ufw allow from "$USER_NET"  to any port 80 proto tcp comment 'HTTP redirect
 # sudo ufw allow from "$ADMIN_NET" to any port 8080 proto tcp comment 'Plexus app direct (no nginx)'
 ```
 
-## 4. Inbound — telemetry plane (UDP)
+## 4. Inbound - telemetry plane (UDP)
 
 ```bash
 # NetFlow v5 / v9 / IPFIX
@@ -75,12 +75,12 @@ sudo ufw allow from "$SFLOW_EXPORTERS"   to any port 6343 proto udp comment 'sFl
 # SNMP traps
 sudo ufw allow from "$SNMP_TRAP_SOURCES" to any port 162  proto udp comment 'SNMP traps'
 
-# Syslog (Plexus listens on 1514/udp — UFW lets you also publish 514 if you
+# Syslog (Plexus listens on 1514/udp - UFW lets you also publish 514 if you
 # add an iptables NAT redirect; keep 1514 by default).
 sudo ufw allow from "$SYSLOG_SOURCES"    to any port 1514 proto udp comment 'Syslog'
 ```
 
-## 5. Inbound — federation (optional)
+## 5. Inbound - federation (optional)
 
 ```bash
 # If you have peer Plexus instances pulling/pushing federation data,
@@ -91,7 +91,7 @@ for peer in $FEDERATION_PEERS; do
 done
 ```
 
-## 6. Inbound — ICMP
+## 6. Inbound - ICMP
 
 ```bash
 # Allow echo-request from admin + monitored device subnets so availability
@@ -101,7 +101,7 @@ sudo ufw allow proto icmp from "$ADMIN_NET"  comment 'ICMP from admin'
 sudo ufw allow proto icmp from "$DEVICE_NET" comment 'ICMP from devices'
 ```
 
-## 7. Outbound — to managed devices
+## 7. Outbound - to managed devices
 
 UFW's default `allow outgoing` already permits this; the rules below
 are for environments that switch outgoing to `deny` for hardening.
@@ -114,7 +114,7 @@ are for environments that switch outgoing to `deny` for hardening.
 # sudo ufw allow out to "$DEVICE_NET" port 22  proto tcp comment 'SSH to devices'
 # sudo ufw allow out to "$DEVICE_NET" port 830 proto tcp comment 'NETCONF to devices'
 
-# Telnet — only if your fleet still requires it
+# Telnet - only if your fleet still requires it
 # sudo ufw allow out to "$DEVICE_NET" port 23  proto tcp comment 'Telnet to devices'
 
 # REST APIs on devices (Cisco DNAC, Meraki, Arista eAPI, FortiGate, etc.)
@@ -135,7 +135,7 @@ are for environments that switch outgoing to `deny` for hardening.
 # DHCP visibility (IPAM): if Plexus queries DHCP servers via API, allow that.
 # DHCP discovery (67/68) is rarely needed since IPAM uses vendor APIs.
 
-# Postgres — only relevant if DB runs OUTSIDE the compose network
+# Postgres - only relevant if DB runs OUTSIDE the compose network
 # sudo ufw allow out to <DB_HOST_IP>/32 port 5432 proto tcp comment 'Postgres'
 ```
 
@@ -155,7 +155,7 @@ source-IP restrictions are actually enforced for the published
 container ports (2055, 6343, 162, 1514, 80, 443, 8080):
 
 ```bash
-# Run as root. These rules are NOT persisted by UFW — install
+# Run as root. These rules are NOT persisted by UFW - install
 # `iptables-persistent` (Ubuntu) and run `netfilter-persistent save` to
 # survive reboots, or wire them into a systemd unit.
 
@@ -176,7 +176,7 @@ sudo iptables -I DOCKER-USER -p tcp --dport 443  -s "$USER_NET"  -j RETURN
 sudo iptables -I DOCKER-USER -p tcp --dport 80   -s "$ADMIN_NET" -j RETURN
 sudo iptables -I DOCKER-USER -p tcp --dport 80   -s "$USER_NET"  -j RETURN
 
-# Direct app port 8080 — keep blocked from outside; comment if needed.
+# Direct app port 8080 - keep blocked from outside; comment if needed.
 sudo iptables -I DOCKER-USER -p tcp --dport 8080 -s "$ADMIN_NET" -j RETURN
 
 # Drop everything else destined for the published container ports
@@ -194,7 +194,7 @@ sudo netfilter-persistent save
 
 Verify with `sudo iptables -L DOCKER-USER -n -v --line-numbers`.
 
-## 10. Optional — disable Plexus features by closing ports
+## 10. Optional - disable Plexus features by closing ports
 
 If you do not use a given collector, simply omit its `ufw allow` and
 `DOCKER-USER` rules and remove the port mapping from
@@ -216,7 +216,7 @@ Complete instructions for deploying Plexus on a VM with Docker, PostgreSQL, and 
 ## Quick Start (Ubuntu, one command)
 
 For a fresh Ubuntu box, the bootstrap script does everything in Steps 1–7
-below in a single run — installs Docker, clones the repo, generates certs,
+below in a single run - installs Docker, clones the repo, generates certs,
 starts the stack, and opens firewall ports:
 
 ```bash
@@ -225,7 +225,7 @@ curl -fsSL https://raw.githubusercontent.com/RickeyNet/Plexus/main/deploy/bootst
 
 Or after cloning manually:
 ```bash
-sudo bash deploy/bootstrap.sh  # idempotent — safe to re-run
+sudo bash deploy/bootstrap.sh  # idempotent - safe to re-run
 ```
 
 The script is idempotent: re-running it pulls the latest code and rebuilds.
@@ -237,9 +237,9 @@ RHEL/Rocky and for understanding what the bootstrap automates.
 
 Plexus uses `docker compose` (v2, plugin form). Ubuntu's `docker.io` package
 does **not** ship the compose plugin, and `docker-compose-plugin` is not in
-Ubuntu's default repos — you must use Docker's official apt repository.
+Ubuntu's default repos - you must use Docker's official apt repository.
 
-#### Ubuntu — Docker's official repo
+#### Ubuntu - Docker's official repo
 ```bash
 sudo apt update  # refresh apt package index
 sudo apt install -y ca-certificates curl  # prereqs for HTTPS apt repos
@@ -259,7 +259,7 @@ sudo usermod -aG docker $USER  # add user to docker group so docker runs without
 ```
 
 
-###### RHEL / Rocky — Docker's official repo
+###### RHEL / Rocky - Docker's official repo
 ```bash
 sudo dnf -y install dnf-plugins-core  # install repo management plugin
 sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo  # register Docker's official RHEL repo
@@ -281,24 +281,24 @@ docker compose version  # confirm compose v2 plugin is installed
 sudo usermod -aG docker $USER  # only takes effect in **new** login sessions, so your
 # current shell can't talk to the Docker socket yet. Pick one:
 ```
-# Option A (cleanest) — log out and SSH back in
+# Option A (cleanest) - log out and SSH back in
 
 exit  # close current shell so next login picks up group change
 
-# Option B — start a new shell with the group applied, no logout needed
+# Option B - start a new shell with the group applied, no logout needed
 newgrp docker  # spawn a subshell with the docker group already active
 ```
 
-Verify it worked — `docker` should appear in the output of `groups`, and a
+Verify it worked - `docker` should appear in the output of `groups`, and a
 plain `docker ps` should run without `sudo`:
 
 ```bash
-groups  # list groups your shell currently has — should include 'docker'
-docker ps  # list running containers — succeeds without sudo if group is active
+groups  # list groups your shell currently has - should include 'docker'
+docker ps  # list running containers - succeeds without sudo if group is active
 ```
 
 If `docker ps` still fails with "permission denied while trying to connect to
-the docker API," you're still in the old session — log out fully and back in.
+the docker API," you're still in the old session - log out fully and back in.
 
 ## Step 2: Clone the Repository
 
@@ -467,7 +467,7 @@ docker compose restart nginx       # reload nginx with the new cert
 ```
 
 The compose file bind-mounts `./certs` into both the app and nginx
-containers, so updating the files on disk is all that's needed —
+containers, so updating the files on disk is all that's needed -
 no volume copy step required. This eliminates the browser certificate
 warning for your team.
 
@@ -478,10 +478,10 @@ warning for your team.
 The compose stack runs detached (`docker compose up -d`) with
 `restart: unless-stopped` on every container, so the app auto-starts on
 VM boot and auto-recovers from crashes. **Do not** sit on a foreground
-`docker compose logs -f` session — check status on demand instead.
+`docker compose logs -f` session - check status on demand instead.
 
 ```bash
-# Quick health snapshot — service status, ports, uptime
+# Quick health snapshot - service status, ports, uptime
 docker compose ps
 
 # Live logs (Ctrl-C to detach; the container keeps running)
@@ -509,7 +509,7 @@ The primary status surface for operators is **the app's own dashboard**
 at `https://<vm-ip>/`. The CLI commands above are for the VM operator
 verifying the platform itself is healthy.
 
-**Verify auto-restart works** after the initial deploy — reboot the VM
+**Verify auto-restart works** after the initial deploy - reboot the VM
 and confirm the stack comes back without intervention:
 
 ```bash
@@ -533,7 +533,7 @@ want different limits, edit the `logging:` block under each service:
         max-file: "5"     # How many rotated files to keep
 ```
 
-Apply changes with `docker compose up -d` (no `--build` needed —
+Apply changes with `docker compose up -d` (no `--build` needed -
 logging config is metadata, not part of the image).
 
 ### Update to Latest Code
@@ -598,13 +598,13 @@ sudo install -m 0644 deploy/plexus.cron /etc/cron.d/plexus  # install nightly ba
 
 By default this writes `/var/backups/plexus/db-YYYYMMDD-HHMMSS.sql.gz` and
 `state-YYYYMMDD-HHMMSS.tar.gz`, prunes files older than 30 days, and logs to
-`/var/log/plexus-backup.log`. Push these files off-box (rsync, S3, etc.) — a
+`/var/log/plexus-backup.log`. Push these files off-box (rsync, S3, etc.) - a
 local-only backup will not survive a VM loss.
 
 Manual ad-hoc dump (no state volume):
 
 ```bash
-docker exec plexus-postgres pg_dump -U plexus plexus > backup_$(date +%Y%m%d).sql  # quick SQL-only dump (no state volume — incomplete on its own)
+docker exec plexus-postgres pg_dump -U plexus plexus > backup_$(date +%Y%m%d).sql  # quick SQL-only dump (no state volume - incomplete on its own)
 ```
 
 ### Restore
@@ -635,11 +635,11 @@ docker compose down -v  # stop containers and DELETE all volumes (data loss!)
 docker compose up -d  # rebuild fresh stack from scratch
 ```
 
-### Complete Uninstall (Ubuntu — wipes Docker, Plexus, and all data)
+### Complete Uninstall (Ubuntu - wipes Docker, Plexus, and all data)
 
 Use this when you want to test `deploy/bootstrap.sh` against a clean
 Ubuntu box, or fully remove Plexus and Docker from a host. **Destructive
-— removes containers, volumes, Docker engine, and the cloned repo.**
+- removes containers, volumes, Docker engine, and the cloned repo.**
 
 ```bash
 # 1. Stop and remove all Plexus containers + volumes
@@ -660,7 +660,7 @@ sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.asc
 # 5. Remove the cloned repo
 sudo rm -rf /opt/plexus
 
-# 6. Drop user from docker group (group itself stays — harmless)
+# 6. Drop user from docker group (group itself stays - harmless)
 sudo gpasswd -d "$USER" docker 2>/dev/null || true
 
 # 7. Verify clean

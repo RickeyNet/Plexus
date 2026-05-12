@@ -310,7 +310,7 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
               }}
             >
               Adds dashed edges between devices when CDP/LLDP is unavailable.
-              Walks FDB and ARP tables — extra SNMP cost on busy switches.
+              Walks FDB and ARP tables - extra SNMP cost on busy switches.
             </span>
           </span>
         </label>

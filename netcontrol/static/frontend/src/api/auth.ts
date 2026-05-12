@@ -31,7 +31,7 @@ export function useAuthStatus() {
     queryKey: ['auth', 'status'],
     queryFn: async () => {
       const status = await apiRequest<AuthStatus>('/auth/status');
-      // The backend returns a fresh CSRF token alongside the auth status —
+      // The backend returns a fresh CSRF token alongside the auth status -
       // mirror what the legacy SPA does and cache it for mutations. When
       // logged out the field is absent, so we clear the cache.
       setCsrfToken(status.csrf_token ?? null);
@@ -109,7 +109,7 @@ export function useChangePassword() {
       }),
     onSuccess: () => {
       // After a forced first-login change, must_change_password flips to
-      // false on the server — refresh status so the gate re-evaluates.
+      // false on the server - refresh status so the gate re-evaluates.
       qc.invalidateQueries({ queryKey: ['auth', 'status'] });
     },
   });

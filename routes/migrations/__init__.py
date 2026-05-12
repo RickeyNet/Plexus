@@ -16,9 +16,9 @@ Add new migrations as ``routes/migrations/NNNN_short_description.py``
 where ``NNNN`` is a zero-padded, monotonically increasing version number.
 Each file must expose:
 
-    VERSION: int          — unique version number matching the filename prefix
-    DESCRIPTION: str      — human-readable summary
-    async def up(db):     — apply the migration (receives an open db connection)
+    VERSION: int          - unique version number matching the filename prefix
+    DESCRIPTION: str      - human-readable summary
+    async def up(db):     - apply the migration (receives an open db connection)
 """
 
 from routes.migrations.runner import run_migrations

@@ -184,7 +184,7 @@ def _weathermap_color(utilization_pct: float) -> str:
     """Map utilization % to a hex color: green → yellow → orange → red."""
     pct = max(0, min(100, utilization_pct))
     if pct < 1:
-        return "#808080"    # grey — idle / no traffic
+        return "#808080"    # grey - idle / no traffic
     if pct < 25:
         return "#00cc00"    # green
     if pct < 50:
@@ -197,7 +197,7 @@ def _weathermap_color(utilization_pct: float) -> str:
         return "#ff8000"    # orange
     if pct < 90:
         return "#ff4000"    # red-orange
-    return "#ff0000"        # red — near saturation
+    return "#ff0000"        # red - near saturation
 
 
 def _weathermap_width(utilization_pct: float) -> int:
@@ -828,7 +828,7 @@ async def _correlate_fdb_topology(
 
         for port, owner_set in port_to_owners.items():
             if len(owner_set) != 1:
-                # Trunk/uplink toward an aggregation switch — too ambiguous to draw.
+                # Trunk/uplink toward an aggregation switch - too ambiguous to draw.
                 continue
             if port.lower() in covered_ifaces:
                 continue
@@ -861,7 +861,7 @@ async def _apply_inferred_topology(
     inferred neighbors into each host's neighbor list.
 
     Returns (new_walk_results, inferred_count). On any failure, returns the
-    input walk_results unchanged with inferred_count=0 — discovery should never
+    input walk_results unchanged with inferred_count=0 - discovery should never
     fail because correlation failed.
     """
     if not snmp_cfg.get("enable_inferred_topology"):
@@ -1070,7 +1070,7 @@ async def _stp_discovery_loop() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Admin routes (admin_router — registered with require_admin dependency)
+# Admin routes (admin_router - registered with require_admin dependency)
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -1170,7 +1170,7 @@ async def admin_delete_topology_stp_root_policy(policy_id: int):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Topology-feature routes (router — registered with require_auth + require_feature("topology"))
+# Topology-feature routes (router - registered with require_auth + require_feature("topology"))
 # ══════════════════════════════════════════════════════════════════════════════
 
 

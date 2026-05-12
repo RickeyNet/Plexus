@@ -55,7 +55,7 @@ export function SuppressionsTab() {
                   <button className="btn btn-sm btn-danger" onClick={() => handleDelete(s)}>Delete</button>
                 </div>
                 <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>
-                  {formatTimestamp(s.starts_at)} — {formatTimestamp(s.ends_at)}
+                  {formatTimestamp(s.starts_at)} - {formatTimestamp(s.ends_at)}
                   {s.reason && ` · Reason: ${s.reason}`}
                   {s.created_by && ` · By ${s.created_by}`}
                 </div>

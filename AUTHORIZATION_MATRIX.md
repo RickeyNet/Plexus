@@ -95,7 +95,7 @@ are exempt (not susceptible to CSRF).
 | Operation | Own credential | Unowned (NULL owner) | Other user's credential |
 |-----------|---------------|---------------------|------------------------|
 | List | ✅ | ❌ (admin only) | ❌ (admin only) |
-| Create | ✅ (auto-owned) | — | — |
+| Create | ✅ (auto-owned) | - | - |
 | Update | ✅ | ❌ (admin only) | ❌ |
 | Delete | ✅ | ❌ (admin only) | ❌ |
 

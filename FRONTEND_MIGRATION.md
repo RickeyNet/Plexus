@@ -4,10 +4,10 @@ Migrate Plexus's vanilla JS SPA (~33K lines across 18 modules) to a modern React
 
 ## Goals
 
-1. **Maintainability for a solo developer** — code that one person + AI can keep healthy long-term.
-2. **Enterprise reliability** — fewer bug classes (XSS, stale-state, type errors), real test coverage, predictable upgrades.
-3. **Future-proofing** — alignment with the React + PatternFly stack used by AWX (the canonical Ansible-style automation platform).
-4. **Zero regression during migration** — the app must keep shipping features and stay deployable at every step.
+1. **Maintainability for a solo developer** - code that one person + AI can keep healthy long-term.
+2. **Enterprise reliability** - fewer bug classes (XSS, stale-state, type errors), real test coverage, predictable upgrades.
+3. **Future-proofing** - alignment with the React + PatternFly stack used by AWX (the canonical Ansible-style automation platform).
+4. **Zero regression during migration** - the app must keep shipping features and stay deployable at every step.
 
 ## Non-Goals
 
@@ -26,7 +26,7 @@ Migrate Plexus's vanilla JS SPA (~33K lines across 18 modules) to a modern React
 | Build tool | **Vite** | Fast dev server, simple config, correct choice for SPA-backed-by-API |
 | Server state | **TanStack Query (React Query)** | Replaces the manual `_groupCache` / fingerprint pattern in [app.js](netcontrol/static/js/app.js). Single biggest framework win. |
 | Client state | **Zustand** | ~2KB, minimal API. Avoid Redux/MobX. |
-| Component library | **PatternFly** | Red Hat's open-source design system used by AWX. Tables, wizards, job log viewers, forms, topology — all built and battle-tested. |
+| Component library | **PatternFly** | Red Hat's open-source design system used by AWX. Tables, wizards, job log viewers, forms, topology - all built and battle-tested. |
 | Charts | **ECharts** (existing) | Already in use, no need to change. |
 | Topology graph | **vis-network** (existing) | Already in use; React wrapper available. |
 | Code editor | **CodeMirror** (existing) | Already in use. |
@@ -38,16 +38,16 @@ Migrate Plexus's vanilla JS SPA (~33K lines across 18 modules) to a modern React
 
 ### Rejected alternatives (decision log)
 
-- **Vue 3** — initially considered, but the developer has shipped React before. Use the framework you can review.
-- **Next.js / Remix** — SSR adds complexity. Plexus is an SPA backed by FastAPI; no SSR benefit.
-- **Redux** — Zustand covers global state at 1% of the boilerplate.
-- **Tailwind CSS** — conflicts with PatternFly's design system; pick one.
-- **Svelte** — smaller ecosystem; fewer pre-built components for ops/network UIs.
-- **htmx + server-rendered partials** — Plexus has too much real-time client state (job streams, live topology, monitoring polls) to fit htmx's CRUD-page model.
+- **Vue 3** - initially considered, but the developer has shipped React before. Use the framework you can review.
+- **Next.js / Remix** - SSR adds complexity. Plexus is an SPA backed by FastAPI; no SSR benefit.
+- **Redux** - Zustand covers global state at 1% of the boilerplate.
+- **Tailwind CSS** - conflicts with PatternFly's design system; pick one.
+- **Svelte** - smaller ecosystem; fewer pre-built components for ops/network UIs.
+- **htmx + server-rendered partials** - Plexus has too much real-time client state (job streams, live topology, monitoring polls) to fit htmx's CRUD-page model.
 
 ---
 
-## Phase 0 — Foundations (Weeks 1-3)
+## Phase 0 - Foundations (Weeks 1-3)
 
 **No frontend code is rewritten in this phase.** The goal is to make the rewrite verifiable.
 
@@ -94,7 +94,7 @@ Each test: ~50-150 lines of Playwright. Total effort: ~1 week.
 
 ### 0.4 Type-check the Python backend
 
-You're a Python dev — get the same compile-time-safety on the side of the codebase you wrote.
+You're a Python dev - get the same compile-time-safety on the side of the codebase you wrote.
 
 **Tasks:**
 - [ ] Add `mypy.ini` or `pyproject.toml` `[tool.mypy]` block, start with `--strict` on one module
@@ -122,7 +122,7 @@ This document is referenced in every AI prompt during migration.
 
 ---
 
-## Phase 1 — Pilot (Weeks 4-8)
+## Phase 1 - Pilot (Weeks 4-8)
 
 Migrate **one** small, low-risk module to validate the entire pipeline end-to-end.
 
@@ -131,15 +131,15 @@ Migrate **one** small, low-risk module to validate the entire pipeline end-to-en
 Why this one:
 - Small enough to migrate in a single PR
 - Mostly forms + API calls (low UI complexity)
-- Self-contained — no shared state with other modules
-- Low-stakes — a bug here doesn't break inventory or job execution
+- Self-contained - no shared state with other modules
+- Low-stakes - a bug here doesn't break inventory or job execution
 
 ### 1.1 Set up the React app
 
 **Directory structure (new):**
 ```
 netcontrol/static/
-├── frontend/              # NEW — Vite + React app
+├── frontend/              # NEW - Vite + React app
 │   ├── src/
 │   │   ├── pages/
 │   │   │   └── NetworkTools/
@@ -153,8 +153,8 @@ netcontrol/static/
 │   ├── tsconfig.json
 │   ├── vite.config.ts
 │   └── eslint.config.js
-├── js/                    # EXISTING — vanilla modules, untouched
-├── index.html             # EXISTING — main SPA shell
+├── js/                    # EXISTING - vanilla modules, untouched
+├── index.html             # EXISTING - main SPA shell
 └── ...
 ```
 
@@ -172,7 +172,7 @@ Two patterns to choose between:
 - **Option A (simpler):** the legacy `index.html` redirects `#network-tools` to `/frontend/network-tools` which loads the React SPA shell with just that page.
 - **Option B (more work, cleaner end state):** mount React on a `<div id="react-root">` inside the existing index.html, render only when `#network-tools` is the active hash, leave everything else untouched.
 
-**Recommend Option B** — keeps the migration boundaries clean and lets you migrate one page at a time without touching routing globally until the end.
+**Recommend Option B** - keeps the migration boundaries clean and lets you migrate one page at a time without touching routing globally until the end.
 
 ### 1.3 Port Network Tools to React
 
@@ -180,10 +180,10 @@ Two patterns to choose between:
 1. Write/extend Playwright tests for the page's user flows against the *current* vanilla version
 2. Confirm they pass
 3. AI writes the React port, following `FRONTEND_STYLE.md`
-4. Run Playwright against the React version — must pass identically
+4. Run Playwright against the React version - must pass identically
 5. Run unit tests (Vitest)
 6. Manual smoke test in dev
-7. Code review (you read every line — required)
+7. Code review (you read every line - required)
 8. Merge behind a feature flag (`?frontend=react` query param or env var)
 9. **Soak in production for 2 weeks**, gather any bug reports
 10. Remove the feature flag, delete the vanilla module file
@@ -202,7 +202,7 @@ If any of these fails, **stop and fix the foundation before migrating more.**
 
 ---
 
-## Phase 2 — Routine Migration (Months 3-9)
+## Phase 2 - Routine Migration (Months 3-9)
 
 One module per 2-3 weeks, in order of *least* risk first. Each follows the 11-step process above.
 
@@ -257,7 +257,7 @@ asking first.
 
 ---
 
-## Phase 3 — Cleanup (Months 9-12)
+## Phase 3 - Cleanup (Months 9-12)
 
 After the last module migrates:
 
@@ -304,16 +304,16 @@ By end of Phase 3:
 
 This section grows as decisions are made during the migration.
 
-### 2026-05-01 — Initial plan
+### 2026-05-01 - Initial plan
 - React over Vue: developer has prior React experience (budgeting app)
 - PatternFly chosen over Material UI / Chakra: AWX precedent, ops/automation UI fit
 - Vite over Next.js: SPA backed by FastAPI, no SSR needed
 - Migration order biased toward small/forms-heavy first, real-time/complex last
 
-### 2026-05-02 — Drop PatternFly, reuse legacy CSS
+### 2026-05-02 - Drop PatternFly, reuse legacy CSS
 - **Context:** Phase 1.1 + 1.3 shipped on PatternFly. The visual divergence
   from the legacy SPA's "glass-card" dark theme was jarring during the
-  migration soak — old and new pages sit side-by-side and clash.
+  migration soak - old and new pages sit side-by-side and clash.
 - **Considered:** (a) accept the new look, (b) heavy-theme PatternFly to
   approximate legacy, (c) drop PatternFly entirely and reuse the legacy
   stylesheet.
@@ -328,13 +328,13 @@ This section grows as decisions are made during the migration.
 - **Reversible?** Yes, at the cost of re-converting all React pages back to
   PatternFly. Per-page conversion is mechanical (~1 hour each). Reverting
   the convention itself is a one-line change to FRONTEND_STYLE.md.
-- **Status (2026-05-02):** All React pages converted —
+- **Status (2026-05-02):** All React pages converted -
   `Home`, `MacTracking`, `TrafficAnalysis`, `Lab`, `TopologyCanvas`.
   PatternFly fully removed from `package.json`. The React app loads only
-  `/static/css/style.css`. New pages MUST use legacy CSS — see
+  `/static/css/style.css`. New pages MUST use legacy CSS - see
   `FRONTEND_STYLE.md` § Styling.
 
-### 2026-05-03 — Compliance bug found in legacy api.js
+### 2026-05-03 - Compliance bug found in legacy api.js
 - **Found:** While porting `compliance.js` to React, noticed that
   every mutation in legacy `api.js` for compliance and a few other
   modules uses Windows-style backslashes in the URL string literal:
@@ -349,7 +349,7 @@ This section grows as decisions are made during the migration.
   updateComplianceAssignment, deleteComplianceAssignment,
   runComplianceScan, runComplianceScanBulk,
   remediateComplianceFinding, scanComplianceAssignmentNow,
-  loadBuiltinComplianceProfiles. Likely others — sweep needed.
+  loadBuiltinComplianceProfiles. Likely others - sweep needed.
 - **Implication:** The legacy compliance UI's "Create Profile",
   "Edit", "Assign", "Run Scan", "Fix" buttons have been broken on
   any deploy that picked up the bad slashes. Worth a `git log -p` on
@@ -360,27 +360,27 @@ This section grows as decisions are made during the migration.
 - **Action:** Not fixed here (out of scope for the React port).
   Filed mentally for a follow-up sweep of `api.js`.
 
-### 2026-05-02 — Device Detail port + ECharts wrapper
-- **Context:** Phase 1.6 — porting `device-detail.js` (758 lines).
+### 2026-05-02 - Device Detail port + ECharts wrapper
+- **Context:** Phase 1.6 - porting `device-detail.js` (758 lines).
   This is the first React page that needs charts; legacy uses
   `PlexusChart` (an ECharts wrapper in `app.js`).
 - **Considered:** (a) skip charts for now and ship tables only,
   (b) write a thin SVG sparkline component for the metric cards,
   (c) install `echarts` and mirror `PlexusChart`'s options.
 - **Chose:** (c). New file `src/lib/echart.tsx` exposes
-  `<TimeSeriesChart>` and `<BarChart>` — same theme colors (read from
+  `<TimeSeriesChart>` and `<BarChart>` - same theme colors (read from
   the same CSS variables used by the legacy stylesheet), same option
   shape as legacy. Drop-in equivalent of `PlexusChart.timeSeries` /
   `PlexusChart.bar`.
 - **Bundle cost:** gzipped JS jumped from ~85 KB → ~465 KB. ECharts is
   ~330 KB gz on its own. Acceptable: legacy has the same size and the
   alternative is rebuilding charts from scratch.
-- **Reversible?** Yes — swap `echart.tsx` for a different chart lib;
+- **Reversible?** Yes - swap `echart.tsx` for a different chart lib;
   the call sites are <10. Bundle cost is the only meaningful blocker.
 
 ### Future entries (template)
 ```
-### YYYY-MM-DD — <decision title>
+### YYYY-MM-DD - <decision title>
 - Context: <what prompted the decision>
 - Considered: <options>
 - Chose: <choice>
@@ -390,15 +390,15 @@ This section grows as decisions are made during the migration.
 
 ---
 
-## Appendix A — What stays in vanilla JS forever
+## Appendix A - What stays in vanilla JS forever
 
 Some files don't need migration:
 - `js/echarts.min.js` (vendor, 45 lines wrapper)
 - `js/vis-network.min.js` (vendor, 34 lines wrapper)
 - `vendor/codemirror/*` (vendor)
-- `js/websocket.js` (136 lines) — may be replaced by a TanStack Query subscription pattern, evaluate during jobs migration
+- `js/websocket.js` (136 lines) - may be replaced by a TanStack Query subscription pattern, evaluate during jobs migration
 
-## Appendix B — Files to delete in Phase 3
+## Appendix B - Files to delete in Phase 3
 
 Tracked here so nothing gets forgotten:
 - `js/app.js` (the shared-utilities blob)
@@ -408,7 +408,7 @@ Tracked here so nothing gets forgotten:
 - `js/virtual-list.js` (PatternFly tables have built-in virtualization)
 - Top-level `index.html` shell once React mounts at root
 
-## Appendix C — References
+## Appendix C - References
 
 - AWX UI repo: github.com/ansible/ansible-ui (reference for React + PatternFly in an automation platform)
 - PatternFly catalog: patternfly.org

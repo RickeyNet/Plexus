@@ -1,4 +1,4 @@
-# Plexus — Deployment Notes
+# Plexus - Deployment Notes
 
 Operational notes for running Plexus in production. This document covers
 the host-level configuration that doesn't fit cleanly in the README's
@@ -24,7 +24,7 @@ Both UDP listeners bind to `0.0.0.0`. If you change `APP_NETFLOW_PORT` /
 
 Allow the HTTP UI and the two flow collector ports from your management
 network. Tighten the source range to whatever subnet your switches and
-routers live in — opening UDP 2055 / 6343 to the whole internet is
+routers live in - opening UDP 2055 / 6343 to the whole internet is
 pointless (and a small DoS amplifier).
 
 ```bash
@@ -42,7 +42,7 @@ sudo ufw status numbered
 ```
 
 If the collector is disabled (the default), you can leave the two UDP
-rules out — but adding them now and toggling the collector on later is
+rules out - but adding them now and toggling the collector on later is
 fine; idle UDP rules cost nothing.
 
 ### Docker (DOCKER-USER chain)
@@ -50,7 +50,7 @@ fine; idle UDP rules cost nothing.
 When Plexus runs inside Docker, port publishes in `docker-compose.yml` /
 `docker run -p ...` create `DOCKER` iptables rules that bypass your normal
 `INPUT` chain. To filter what's allowed to reach the container, add rules
-to the `DOCKER-USER` chain instead — Docker runs that chain before
+to the `DOCKER-USER` chain instead - Docker runs that chain before
 `DOCKER` so anything you drop there never reaches the container.
 
 ```bash
@@ -60,14 +60,14 @@ sudo iptables -I DOCKER-USER -i eth0 -p tcp --dport 8080 -s 10.0.0.0/8 -j ACCEPT
 sudo iptables -I DOCKER-USER -i eth0 -p udp --dport 2055 -s 10.0.0.0/8 -j ACCEPT
 sudo iptables -I DOCKER-USER -i eth0 -p udp --dport 6343 -s 10.0.0.0/8 -j ACCEPT
 
-# Drop everything else inbound on the same ports — order matters,
+# Drop everything else inbound on the same ports - order matters,
 # this must come AFTER the ACCEPT rules above.
 sudo iptables -A DOCKER-USER -i eth0 -p tcp --dport 8080 -j DROP
 sudo iptables -A DOCKER-USER -i eth0 -p udp --dport 2055 -j DROP
 sudo iptables -A DOCKER-USER -i eth0 -p udp --dport 6343 -j DROP
 ```
 
-These rules don't survive a reboot on their own — persist them via
+These rules don't survive a reboot on their own - persist them via
 `iptables-save > /etc/iptables/rules.v4` (Debian/Ubuntu `iptables-persistent`
 package) or your distro's equivalent.
 
@@ -83,7 +83,7 @@ services:
       - "6343:6343/udp"        # sFlow
 ```
 
-The `/udp` suffix is required — without it Docker only publishes the TCP
+The `/udp` suffix is required - without it Docker only publishes the TCP
 half of the port and the flow collector won't see any packets.
 
 ### Verifying flows are arriving
@@ -91,10 +91,10 @@ half of the port and the flow collector won't see any packets.
 After enabling the collector and pushing exporter config to a device:
 
 ```bash
-# from the Plexus host — should show flow_collector listening
+# from the Plexus host - should show flow_collector listening
 sudo ss -lunp | grep -E ':(2055|6343)\b'
 
-# from the device side — confirm it's actually exporting
+# from the device side - confirm it's actually exporting
 # (NetFlow on a Cisco IOS-XE box, for example)
 show flow exporter PLEXUS-EXPORT statistics
 
@@ -104,17 +104,17 @@ curl http://localhost:8080/api/flows/exporters
 
 The `/api/flows/exporters` response includes `packets_received` per
 exporter; if that's zero after a few minutes, the packets aren't reaching
-the listener — check the firewall path (host firewall → DOCKER-USER →
+the listener - check the firewall path (host firewall → DOCKER-USER →
 container) before suspecting Plexus.
 
 ## Persistent state (Docker)
 
 The compose file maps two named volumes:
 
-- `/app/state` — SQLite DB (`netcontrol.db`) and the Fernet key
+- `/app/state` - SQLite DB (`netcontrol.db`) and the Fernet key
   (`netcontrol.key`). **Back this up.** Losing the key file means every
   stored credential is unrecoverable.
-- `/app/certs` — TLS certificates when running with `--https`.
+- `/app/certs` - TLS certificates when running with `--https`.
 
 For PostgreSQL deployments, the SQLite file isn't used but the Fernet key
 still lives in `/app/state`.
@@ -142,5 +142,5 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-The flow collector runs inside the same process — there's no separate
+The flow collector runs inside the same process - there's no separate
 daemon to supervise.

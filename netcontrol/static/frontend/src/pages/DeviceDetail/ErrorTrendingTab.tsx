@@ -85,7 +85,7 @@ export function ErrorTrendingTab({ hostId }: { hostId: number }) {
                   className="card-title"
                   style={{ fontSize: '0.85rem', padding: '0.5rem 0.75rem' }}
                 >
-                  {iface.if_name || `idx-${iface.if_index}`} — Errors
+                  {iface.if_name || `idx-${iface.if_index}`} - Errors
                 </div>
                 <ErrorChart hostId={hostId} ifIndex={iface.if_index} />
               </div>

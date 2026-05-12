@@ -41,8 +41,8 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
           <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
               <div><strong>Circuit:</strong> {p.circuit_name || ''}</div>
-              <div><strong>Customer:</strong> {p.customer || '—'}</div>
-              <div><strong>Device:</strong> {p.hostname || '—'}</div>
+              <div><strong>Customer:</strong> {p.customer || '-'}</div>
+              <div><strong>Device:</strong> {p.hostname || '-'}</div>
               <div><strong>Interface:</strong> {p.if_name || ''}</div>
               <div><strong>Period:</strong> {(p.period_start ?? '').slice(0, 10)} – {(p.period_end ?? '').slice(0, 10)}</div>
               <div><strong>Samples:</strong> {p.total_samples ?? 0}</div>
@@ -60,7 +60,7 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
             {isOverage && (
               <div className="card" style={{ padding: '0.75rem', background: 'rgba(220, 38, 38, 0.1)', marginBottom: '1rem' }}>
                 <strong style={{ color: 'var(--danger)' }}>Overage Detected:</strong>{' '}
-                {formatBps(p.overage_bps)} over commit — Cost: ${(p.overage_cost ?? 0).toLocaleString()}
+                {formatBps(p.overage_bps)} over commit - Cost: ${(p.overage_cost ?? 0).toLocaleString()}
               </div>
             )}
             {series.length ? (

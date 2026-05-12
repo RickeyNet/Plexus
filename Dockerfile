@@ -32,7 +32,7 @@ COPY . .
 
 # Pull in the pre-built React bundle from the frontend stage. Source files
 # under netcontrol/static/frontend/ (TS, package.json, etc) are not needed at
-# runtime — only the dist/ directory.
+# runtime - only the dist/ directory.
 COPY --from=frontend-build /frontend/dist /app/netcontrol/static/frontend/dist
 
 RUN mkdir -p /app/state /app/certs

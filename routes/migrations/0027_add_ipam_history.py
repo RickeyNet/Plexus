@@ -2,11 +2,11 @@
 Migration 0027: Historical IP allocation tracking (Phase I).
 
 Adds:
-  - ipam_ip_history — append-only per-IP assignment timeline. Each row records
+  - ipam_ip_history - append-only per-IP assignment timeline. Each row records
     a single assignment lifespan: started_at when an IP was assigned to a
     hostname/source, ended_at when it was released. NULL ended_at = currently
     assigned. Supports forensics ("who had this IP on date X") and per-IP audit.
-  - ipam_subnet_utilization — periodic snapshots of subnet utilization
+  - ipam_subnet_utilization - periodic snapshots of subnet utilization
     (total/used/reserved/pending/free + utilization_pct) for time-series
     charting and exhaustion forecasting.
 """

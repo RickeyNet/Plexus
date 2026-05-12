@@ -760,9 +760,9 @@ function GroupCard({
                         <td>{host.hostname}</td>
                         <td>{host.ip_address}</td>
                         <td>{host.device_type || 'cisco_ios'}</td>
-                        <td>{host.model || '—'}</td>
-                        <td>{host.serial_number || '—'}</td>
-                        <td>{host.software_version || '—'}</td>
+                        <td>{host.model || '-'}</td>
+                        <td>{host.serial_number || '-'}</td>
+                        <td>{host.software_version || '-'}</td>
                         <td>
                           <div style={{ display: 'flex', gap: '0.25rem' }}>
                             <button

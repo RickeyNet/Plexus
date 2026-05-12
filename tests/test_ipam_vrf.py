@@ -56,7 +56,7 @@ def test_same_ip_different_vrfs_is_not_a_conflict(vrf_db):
             ("Branch-B", "rtr-b", "10.0.0.1", "tenant-b"),
         ])
         overview = await db_module.get_ipam_overview()
-        # Same IP but different VRFs — must NOT be flagged as duplicate
+        # Same IP but different VRFs - must NOT be flagged as duplicate
         dups = overview["duplicate_ips"]
         assert dups == [], f"unexpected duplicates: {dups}"
         assert overview["summary"]["duplicate_ip_count"] == 0
@@ -91,7 +91,7 @@ def test_overview_subnet_rows_carry_vrf(vrf_db):
         ])
         overview = await db_module.get_ipam_overview()
         subnets = {(s["subnet"], s["vrf_name"]) for s in overview["subnets"]}
-        # Same /24 appears twice — once per VRF
+        # Same /24 appears twice - once per VRF
         assert ("192.168.10.0/24", "tenant-a") in subnets
         assert ("192.168.10.0/24", "tenant-b") in subnets
 
@@ -178,7 +178,7 @@ def test_replace_ipam_snapshot_inherits_vrf_from_prefix(vrf_db):
                  "vrf": "lab", "vlan": "50", "description": "lab-net"},
             ],
             allocations=[
-                # Allocation has no explicit VRF — should inherit from prefix
+                # Allocation has no explicit VRF - should inherit from prefix
                 {"address": "10.50.0.1", "prefix_subnet": "10.50.0.0/24"},
             ],
         )

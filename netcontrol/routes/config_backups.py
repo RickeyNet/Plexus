@@ -293,7 +293,7 @@ async def download_config_backups_bulk(
     buf = io.BytesIO()
     used_names: set[str] = set()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # The list endpoint omits config_text for performance — re-fetch each
+        # The list endpoint omits config_text for performance - re-fetch each
         # row's text individually.  500-row cap on the query keeps this bounded.
         for row in successful:
             full = await db.get_config_backup(row["id"])
@@ -478,7 +478,7 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     except Exception as exc:
         LOGGER.error("Config restore push failed for host %s backup %s: %s",
                      host["ip_address"], body.backup_id, exc)
-        raise HTTPException(status_code=502, detail="Config push failed — see server logs for details")
+        raise HTTPException(status_code=502, detail="Config push failed - see server logs for details")
 
     # Re-capture and validate
     validated = False
@@ -494,7 +494,7 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
         validated = lines_changed == 0
     except Exception as exc:
         LOGGER.warning("Validation capture failed for backup %s: %s", body.backup_id, exc)
-        diff_text = "Validation capture failed — see server logs for details."
+        diff_text = "Validation capture failed - see server logs for details."
 
     session = _get_session(request)
     await _audit(

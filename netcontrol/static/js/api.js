@@ -34,17 +34,17 @@ async function cachedGet(key, fetchFn, ttlMs = DEFAULT_TTL_MS) {
     const now = Date.now();
 
     if (entry && (now - entry.time < ttlMs)) {
-        // Fresh cache hit — return immediately
+        // Fresh cache hit - return immediately
         return entry.data;
     }
 
     if (entry) {
-        // Stale — return cached data, revalidate in background
+        // Stale - return cached data, revalidate in background
         _revalidate(key, fetchFn);
         return entry.data;
     }
 
-    // No cache — must wait for fetch (but dedup concurrent calls)
+    // No cache - must wait for fetch (but dedup concurrent calls)
     return _revalidate(key, fetchFn);
 }
 
@@ -166,7 +166,7 @@ async function apiRequest(endpoint, options = {}) {
         config.signal = _pageController.signal;
     }
 
-    // Dedup concurrent identical GET requests — return the same in-flight promise
+    // Dedup concurrent identical GET requests - return the same in-flight promise
     if (!isMutation && _getInflight.has(endpoint)) {
         return _getInflight.get(endpoint);
     }

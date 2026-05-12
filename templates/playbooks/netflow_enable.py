@@ -1,16 +1,16 @@
 """
-netflow_enable.py — NetFlow Exporter Configuration Playbook
+netflow_enable.py - NetFlow Exporter Configuration Playbook
 
 Pushes the right ``flow exporter`` / ``flow monitor`` / interface-binding
 config onto Cisco devices so they start exporting NetFlow records to the
 Plexus collector.  Three platforms are supported, each with its own
 syntax:
 
-* ``cisco_ios``  — classic NetFlow v9 via ``ip flow-export destination``
+* ``cisco_ios``  - classic NetFlow v9 via ``ip flow-export destination``
   on each monitored interface (no Flexible NetFlow).
-* ``cisco_xe``   — Flexible NetFlow: ``flow record`` + ``flow exporter``
+* ``cisco_xe``   - Flexible NetFlow: ``flow record`` + ``flow exporter``
   + ``flow monitor`` + ``ip flow monitor PLEXUS-MON input`` per interface.
-* ``cisco_nxos`` — NX-OS Flexible NetFlow with the same shape as IOS-XE
+* ``cisco_nxos`` - NX-OS Flexible NetFlow with the same shape as IOS-XE
   but slightly different syntax (``ip flow monitor PLEXUS-MON input``
   becomes ``ip flow monitor PLEXUS-MON input`` under each L3 interface;
   v9 is the default).
@@ -19,7 +19,7 @@ The collector IP and port come from (in priority order):
   1. The job's ``parameters`` dict (``collector_ip`` / ``collector_port``)
      if the UI ever passes structured params for this playbook.
   2. The ``PLEXUS_COLLECTOR_IP`` env var + ``APP_NETFLOW_PORT`` env var.
-  3. Hard fail — without a collector IP the device has nowhere to send.
+  3. Hard fail - without a collector IP the device has nowhere to send.
 
 Sampling rate is optional; on IOS-XE / NX-OS we wire it via a ``sampler``
 construct.  Defaults to 1:1 (no sampling) since the collector handles
@@ -76,7 +76,7 @@ def _build_ios_commands(
     collector_port: int,
     interfaces: list[str],
 ) -> list[str]:
-    """Classic IOS NetFlow v9 — global destination + per-interface ingress/egress."""
+    """Classic IOS NetFlow v9 - global destination + per-interface ingress/egress."""
     cmds = [
         f"ip flow-export destination {collector_ip} {collector_port}",
         "ip flow-export version 9",
@@ -98,7 +98,7 @@ def _build_xe_commands(
     interfaces: list[str],
     sampling_rate: int,
 ) -> list[str]:
-    """IOS-XE Flexible NetFlow — record, exporter, monitor, optional sampler."""
+    """IOS-XE Flexible NetFlow - record, exporter, monitor, optional sampler."""
     cmds = [
         f"flow record {DEFAULT_RECORD_NAME}",
         " match ipv4 source address",
@@ -205,7 +205,7 @@ class NetflowEnabler(BasePlaybook):
         "collector_ip job parameter."
     )
     tags = ["netflow", "observability", "cisco"]
-    # No template required — the playbook generates platform-specific config
+    # No template required - the playbook generates platform-specific config
     # itself based on device_type and the collector settings.
     requires_template = False
 
@@ -221,7 +221,7 @@ class NetflowEnabler(BasePlaybook):
         parameters = getattr(self, "parameters", None)
         collector_ip, collector_port = _resolve_collector(parameters)
 
-        # Without a collector destination the push is meaningless — fail
+        # Without a collector destination the push is meaningless - fail
         # loudly before touching any device.
         if not collector_ip:
             yield self.log_error(
@@ -231,19 +231,19 @@ class NetflowEnabler(BasePlaybook):
             )
             return
 
-        # Default interface list — operators can override per-host via
+        # Default interface list - operators can override per-host via
         # ``host_info['netflow_interfaces']`` if the UI surfaces it later.
         default_interfaces = (parameters or {}).get("interfaces") or ["GigabitEthernet0/0"]
         sampling_rate = int((parameters or {}).get("sampling_rate") or 1)
 
         yield self.log_info(
-            f"NetFlow Enabler — targeting {len(hosts)} device(s), "
+            f"NetFlow Enabler - targeting {len(hosts)} device(s), "
             f"collector {collector_ip}:{collector_port}, sampling 1:{sampling_rate}"
         )
         if dry_run:
-            yield self.log_warn("*** DRY-RUN MODE — commands will not be written ***")
+            yield self.log_warn("*** DRY-RUN MODE - commands will not be written ***")
         else:
-            yield self.log_warn("*** LIVE MODE — commands WILL be written ***")
+            yield self.log_warn("*** LIVE MODE - commands WILL be written ***")
 
         for host in hosts:
             ip = host.get("ip_address") or host.get("host")
@@ -296,7 +296,7 @@ class NetflowEnabler(BasePlaybook):
             if conn is None:
                 return
 
-            # Show the operator what's already configured — useful when a
+            # Show the operator what's already configured - useful when a
             # device is being re-pointed to a new collector.
             yield self.log_info("Checking existing flow configuration ...", host=hostname)
             try:
@@ -338,7 +338,7 @@ class NetflowEnabler(BasePlaybook):
             output = await asyncio.to_thread(conn.send_config_set, commands)
             yield self.log_info(output or "(no output)", host=hostname)
 
-            # Verify the exporter actually came up — different show commands
+            # Verify the exporter actually came up - different show commands
             # per platform, so guard each separately.
             try:
                 if device_type == "cisco_ios":

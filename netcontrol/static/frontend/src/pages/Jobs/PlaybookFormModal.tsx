@@ -37,9 +37,9 @@ class MyPlaybook(BasePlaybook):
     requires_template = False
 
     async def run(self, hosts, credentials, template_commands=None, dry_run=True):
-        yield self.log_info(f"My Playbook — targeting {len(hosts)} device(s)")
+        yield self.log_info(f"My Playbook - targeting {len(hosts)} device(s)")
         if dry_run:
-            yield self.log_warn("*** DRY-RUN MODE — no changes will be made ***")
+            yield self.log_warn("*** DRY-RUN MODE - no changes will be made ***")
         for host_info in hosts:
             ip = host_info["ip_address"]
             hostname = host_info.get("hostname", ip)

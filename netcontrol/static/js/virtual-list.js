@@ -1,5 +1,5 @@
 /**
- * Virtual List — Renders only visible rows for large data sets.
+ * Virtual List - Renders only visible rows for large data sets.
  *
  * Usage:
  *   const vl = createVirtualList(scrollContainer, {

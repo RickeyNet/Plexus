@@ -24,15 +24,15 @@ const TABS: { key: Tab; label: string; path: string }[] = [
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   assignments: {
     title: 'Run & Track Jobs',
-    text: 'Launch tasks against selected devices and watch progress live. Each row is one execution — open it to see streaming logs, per-host status, and the final outcome.',
+    text: 'Launch tasks against selected devices and watch progress live. Each row is one execution - open it to see streaming logs, per-host status, and the final outcome.',
   },
   tasks: {
     title: 'Reusable Automation Tasks',
-    text: 'Python and Ansible scripts that connect to devices and do work — audits, config pushes, remediations. Tasks marked "requires template" need a matching set of Instructions before they can run.',
+    text: 'Python and Ansible scripts that connect to devices and do work - audits, config pushes, remediations. Tasks marked "requires template" need a matching set of Instructions before they can run.',
   },
   instructions: {
     title: 'Configuration Command Sets',
-    text: 'Blocks of CLI commands pushed into config mode by a task. Reusable across devices — keep one canonical "access port hardening" or "SNMPv3 user" snippet here and tasks pull it in at run time.',
+    text: 'Blocks of CLI commands pushed into config mode by a task. Reusable across devices - keep one canonical "access port hardening" or "SNMPv3 user" snippet here and tasks pull it in at run time.',
   },
   upgrades: {
     title: 'Firmware Upgrade Campaigns',
@@ -86,7 +86,7 @@ export function Jobs() {
       <PageHelp
         pageKey="delegator"
         title="Delegate Work to the Fleet"
-        text="Assign automated tasks against your devices — audits, config pushes, remediations, firmware upgrades — and track them through to completion. Build the inventory of reusable tasks, instructions, and credentials that operators draw from at run time."
+        text="Assign automated tasks against your devices - audits, config pushes, remediations, firmware upgrades - and track them through to completion. Build the inventory of reusable tasks, instructions, and credentials that operators draw from at run time."
       />
 
       <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>

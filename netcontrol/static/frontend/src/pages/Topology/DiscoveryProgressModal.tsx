@@ -64,7 +64,7 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
         append({ text: `Starting discovery: ${event.total_hosts} hosts in ${event.total_groups} group(s)`, color: 'var(--text-muted)' });
       } else if (event.type === 'group_start') {
         setStep(`Scanning group: ${event.group}`);
-        append({ text: `▶ Group "${event.group}" — ${event.host_count} host(s)`, color: 'var(--primary-light)' });
+        append({ text: `▶ Group "${event.group}" - ${event.host_count} host(s)`, color: 'var(--primary-light)' });
       } else if (event.type === 'host_walked') {
         setScanned(event.scanned ?? 0);
         runningLinks += event.neighbors ?? 0;
@@ -73,15 +73,15 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
         if (event.ok) {
           const color = (event.neighbors ?? 0) > 0 ? 'var(--success, #22c55e)' : 'var(--text-muted)';
           const icon = (event.neighbors ?? 0) > 0 ? '✓' : '–';
-          append({ text: `  ${icon} ${event.hostname} (${event.ip}) — ${event.neighbors} neighbor(s)`, color });
+          append({ text: `  ${icon} ${event.hostname} (${event.ip}) - ${event.neighbors} neighbor(s)`, color });
         } else {
-          append({ text: `  ✗ ${event.hostname} (${event.ip}) — failed`, color: 'var(--danger, #ef4444)' });
+          append({ text: `  ✗ ${event.hostname} (${event.ip}) - failed`, color: 'var(--danger, #ef4444)' });
         }
       } else if (event.type === 'db_write_start') {
         setStep(`Saving results for ${event.group}...`);
         append({ text: `  Saving topology data for "${event.group}"...`, color: 'var(--text-muted)' });
       } else if (event.type === 'group_done') {
-        append({ text: `✔ Group "${event.group}" complete — ${event.links} link(s)`, color: 'var(--success, #22c55e)' });
+        append({ text: `✔ Group "${event.group}" complete - ${event.links} link(s)`, color: 'var(--success, #22c55e)' });
       } else if (event.type === 'resolving') {
         setStep('Resolving neighbor identities...');
         append({ text: 'Resolving neighbor host IDs against inventory...', color: 'var(--text-muted)' });

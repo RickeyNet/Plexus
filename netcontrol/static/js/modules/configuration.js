@@ -1,5 +1,5 @@
 /**
- * Configuration Module — Config Drift Detection + Config Backups
+ * Configuration Module - Config Drift Detection + Config Backups
  * Lazy-loaded when user navigates to #configuration
  */
 import * as api from '../api.js';
@@ -279,7 +279,7 @@ window.showDriftDiffModal = async function(eventId) {
         const ev = await api.getConfigDriftEvent(eventId);
         if (!ev) { showError('Drift event not found'); return; }
         const diffHtml = _renderUnifiedDiff(ev.diff_text || '');
-        showModal('Configuration Diff — ' + escapeHtml(ev.hostname || ''), `
+        showModal('Configuration Diff - ' + escapeHtml(ev.hostname || ''), `
             <div class="drift-event-meta" style="margin-bottom:0.75rem">
                 <span>${escapeHtml(ev.ip_address || '')}</span>
                 <span style="opacity:0.4">|</span>
@@ -335,7 +335,7 @@ window.showDriftEventHistory = async function(eventId) {
             </div>`;
         }).join('');
 
-        showModal(`Drift Event Log — ${escapeHtml(ev.hostname || ev.ip_address || '')}`, `
+        showModal(`Drift Event Log - ${escapeHtml(ev.hostname || ev.ip_address || '')}`, `
             <div class="drift-event-meta" style="margin-bottom:0.75rem">
                 <span>Event ID: ${ev.id}</span>
                 <span style="opacity:0.4">|</span>
@@ -561,7 +561,7 @@ window.captureSnapshot = async function(e) {
 window.acceptDriftEvent = async function(eventId) {
     try {
         await api.updateConfigDriftEventStatus(eventId, 'accepted');
-        showSuccess('Drift accepted — baseline updated to match current config');
+        showSuccess('Drift accepted - baseline updated to match current config');
         invalidatePageCache('configuration');
         await loadConfigDrift({ preserveContent: false });
     } catch (err) {
@@ -588,7 +588,7 @@ window.setDriftViewMode = function(mode) {
 window.bulkAcceptDriftEvents = async function(eventIds) {
     try {
         const result = await api.bulkAcceptDriftEvents(eventIds);
-        showSuccess(`${result.accepted} drift event(s) accepted — baselines updated`);
+        showSuccess(`${result.accepted} drift event(s) accepted - baselines updated`);
         invalidatePageCache('configuration');
         await loadConfigDrift({ preserveContent: false });
     } catch (err) {
@@ -1307,7 +1307,7 @@ window.downloadAllBackups = downloadAllBackups;
 async function viewBackupDetail(id) {
     try {
         const backup = await api.getConfigBackup(id);
-        showModal(`Backup Detail — ${escapeHtml(backup.hostname || backup.ip_address)}`, `
+        showModal(`Backup Detail - ${escapeHtml(backup.hostname || backup.ip_address)}`, `
             <div style="font-size:0.85em; margin-bottom:0.75rem; color:var(--text-muted);">
                 Captured: ${new Date(backup.captured_at + 'Z').toLocaleString()} &bull;
                 Method: ${backup.capture_method} &bull; Status: ${backup.status}
@@ -1323,7 +1323,7 @@ async function viewBackupDiff(backupId) {
     try {
         const diff = await api.getConfigBackupDiff(backupId);
         const diffHtml = _renderUnifiedDiff(diff.diff_text || '');
-        showModal(`Backup Diff — ${escapeHtml(diff.hostname || diff.ip_address || '')}`, `
+        showModal(`Backup Diff - ${escapeHtml(diff.hostname || diff.ip_address || '')}`, `
             <div class="drift-event-meta" style="margin-bottom:0.75rem">
                 <span>${escapeHtml(diff.ip_address || '')}</span>
                 <span style="opacity:0.4">|</span>

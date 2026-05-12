@@ -1,4 +1,4 @@
-"""Week 5 — Reliability and Observability tests.
+"""Week 5 - Reliability and Observability tests.
 
 Covers:
   1. Audit-event table creation and add/get functions.

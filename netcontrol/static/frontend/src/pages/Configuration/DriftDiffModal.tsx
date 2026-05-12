@@ -24,7 +24,7 @@ export function DriftDiffModal({
   const update = useUpdateDriftEventStatus();
   const ev = query.data;
   const title = ev
-    ? `Configuration Diff — ${ev.hostname || ''}`
+    ? `Configuration Diff - ${ev.hostname || ''}`
     : 'Configuration Diff';
 
   return (

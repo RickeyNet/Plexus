@@ -166,7 +166,7 @@ async def test_discover_neighbors_cdp(monkeypatch):
         cdp_platform_base: {
             f"{cdp_platform_base}.1.1": "cisco WS-C3750",
         },
-        # LLDP tables — empty
+        # LLDP tables - empty
         "1.0.8802.1.1.2.1.4.1.1.9": {},
         "1.0.8802.1.1.2.1.4.1.1.7": {},
         "1.0.8802.1.1.2.1.4.1.1.8": {},
@@ -210,7 +210,7 @@ async def test_discover_neighbors_lldp(monkeypatch):
         "1.3.6.1.2.1.31.1.1.1.1": {
             "1.3.6.1.2.1.31.1.1.1.1.3": "eth0",
         },
-        # CDP — empty
+        # CDP - empty
         "1.3.6.1.4.1.9.9.23.1.2.1.1.6": {},
         "1.3.6.1.4.1.9.9.23.1.2.1.1.4": {},
         "1.3.6.1.4.1.9.9.23.1.2.1.1.7": {},
@@ -276,14 +276,14 @@ async def test_discover_neighbors_ospf(monkeypatch):
     ospf_state_base = "1.3.6.1.2.1.14.10.1.6"
 
     walk_responses = {
-        # ifName — empty (no L2 data needed for OSPF)
+        # ifName - empty (no L2 data needed for OSPF)
         "1.3.6.1.2.1.31.1.1.1.1": {},
-        # CDP — empty
+        # CDP - empty
         "1.3.6.1.4.1.9.9.23.1.2.1.1.6": {},
         "1.3.6.1.4.1.9.9.23.1.2.1.1.4": {},
         "1.3.6.1.4.1.9.9.23.1.2.1.1.7": {},
         "1.3.6.1.4.1.9.9.23.1.2.1.1.8": {},
-        # LLDP — empty
+        # LLDP - empty
         "1.0.8802.1.1.2.1.4.1.1.9": {},
         "1.0.8802.1.1.2.1.4.1.1.7": {},
         "1.0.8802.1.1.2.1.4.1.1.8": {},
@@ -296,7 +296,7 @@ async def test_discover_neighbors_ospf(monkeypatch):
         ospf_state_base: {
             f"{ospf_state_base}.10.0.0.2.0": "8",
         },
-        # BGP — empty
+        # BGP - empty
         "1.3.6.1.2.1.15.3.1.2": {},
         "1.3.6.1.2.1.15.3.1.9": {},
     }
@@ -328,18 +328,18 @@ async def test_discover_neighbors_bgp(monkeypatch):
 
     walk_responses = {
         "1.3.6.1.2.1.31.1.1.1.1": {},
-        # CDP — empty
+        # CDP - empty
         "1.3.6.1.4.1.9.9.23.1.2.1.1.6": {},
         "1.3.6.1.4.1.9.9.23.1.2.1.1.4": {},
         "1.3.6.1.4.1.9.9.23.1.2.1.1.7": {},
         "1.3.6.1.4.1.9.9.23.1.2.1.1.8": {},
-        # LLDP — empty
+        # LLDP - empty
         "1.0.8802.1.1.2.1.4.1.1.9": {},
         "1.0.8802.1.1.2.1.4.1.1.7": {},
         "1.0.8802.1.1.2.1.4.1.1.8": {},
         "1.0.8802.1.1.2.1.4.1.1.10": {},
         "1.0.8802.1.1.2.1.4.2.1.4": {},
-        # OSPF — empty
+        # OSPF - empty
         "1.3.6.1.2.1.14.10.1.3": {},
         "1.3.6.1.2.1.14.10.1.6": {},
         # BGP peer table
@@ -850,13 +850,13 @@ async def test_get_host_topology_not_found(monkeypatch):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# _correlate_fdb_topology — inferred (FDB+ARP) link discovery
+# _correlate_fdb_topology - inferred (FDB+ARP) link discovery
 # ═════════════════════════════════════════════════════════════════════════════
 #
 # Three hosts:
 #   id=1 sw-a (10.0.0.1, MAC aa:aa:aa:aa:aa:01 on Gi1/0/1)
 #   id=2 sw-b (10.0.0.2, MAC bb:bb:bb:bb:bb:02 on Gi1/0/2)
-#   id=3 sw-c (10.0.0.3) — ifPhysAddress not yet collected; only known via ARP
+#   id=3 sw-c (10.0.0.3) - ifPhysAddress not yet collected; only known via ARP
 #
 # Each test sets up the DB stubs the correlator reads:
 #   db.list_snmp_data_sources(host_id, "interface") -> ifPhysAddress per host

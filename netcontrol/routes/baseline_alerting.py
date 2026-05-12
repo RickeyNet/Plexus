@@ -197,7 +197,7 @@ async def check_baseline_deviation(host_id: int, metric_name: str,
     stddev = baseline["baseline_stddev"]
 
     if stddev <= 0:
-        # No variance — can't compute z-score
+        # No variance - can't compute z-score
         return None
 
     z_score = (current_value - avg) / stddev
@@ -314,7 +314,7 @@ async def run_baseline_computation_cycle():
             for h in hosts:
                 tasks_to_compute.append((h["id"], metric, learning_days))
         else:
-            # Global rule — compute for all hosts
+            # Global rule - compute for all hosts
             groups = await db.get_all_groups()
             for g in groups:
                 hosts = await db.get_hosts_for_group(g["id"])

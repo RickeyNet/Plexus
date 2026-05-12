@@ -48,7 +48,7 @@ Find it:
 ls /etc/netplan/
 ```
 
-Replace its contents with a static config (substitute your interface name —
+Replace its contents with a static config (substitute your interface name -
 find it with `ip -br link`, typically `ens18`, `eth0`, or `enp0s3`):
 
 ```yaml
@@ -81,7 +81,7 @@ ping -c 2 <GATEWAY>                     # confirm L3 reachability
 ```
 
 If you typo the file, `sudo netplan try` will roll back automatically after
-120 s if you don't confirm — safer than `apply` for remote edits.
+120 s if you don't confirm - safer than `apply` for remote edits.
 
 ---
 
@@ -100,7 +100,7 @@ sudo apt-get install -f --no-download   # resolve any local-only deps
 ```
 
 > If `apt-get install -f` complains it can't reach the internet, that's
-> fine — the air-gap apt sources are already gone after step 5. Use
+> fine - the air-gap apt sources are already gone after step 5. Use
 > `sudo dpkg -i *.deb` and let dpkg sort dependencies among the bundled
 > files. The bundle is built with `apt-get install --download-only` which
 > resolves the full dependency closure, so everything chrony needs is
@@ -142,7 +142,7 @@ sudo dpkg -i openssh-server*.deb openssh-sftp-server*.deb openssh-client*.deb 2>
 sudo systemctl enable --now ssh
 ```
 
-Add your public key (paste it into the file — `nano` is on a base server
+Add your public key (paste it into the file - `nano` is on a base server
 install; otherwise `cat >> ~/.ssh/authorized_keys` and Ctrl-D):
 
 ```bash
@@ -163,7 +163,7 @@ sudo systemctl restart ssh
 ```
 
 Test from your workstation **before** disabling password auth on a remote
-session — keep one console session open as a fallback.
+session - keep one console session open as a fallback.
 
 ---
 
@@ -175,7 +175,7 @@ let `dpkg` consume the whole directory at once.
 ```bash
 cd ~/plexus-airgap-bundle/desktop-debs
 sudo dpkg -i *.deb
-# If dpkg reports unmet deps, run again — dpkg processes packages in the
+# If dpkg reports unmet deps, run again - dpkg processes packages in the
 # order it reads them, and a second pass usually resolves what was deferred.
 sudo dpkg -i *.deb
 ```
@@ -214,7 +214,7 @@ auth is configured separately in the web UI (see "Plexus → AD" below).
 ### Prerequisites
 - DC reachable from the VM on TCP/UDP 88 (Kerberos), 389/636 (LDAP/LDAPS),
   53 (DNS), 464 (kpasswd).
-- Time sync against the domain (step 3) — Kerberos rejects skew > 5 min.
+- Time sync against the domain (step 3) - Kerberos rejects skew > 5 min.
 - An AD account with permission to join machines to the domain (or a
   pre-created computer object).
 
@@ -279,10 +279,10 @@ sudo visudo -cf /etc/sudoers.d/ad-admins  # syntax check
 > shows, not what AD displays.
 
 ### Test
-- SSH in as `jdoe@<DOMAIN>` — should work and create `/home/jdoe@<DOMAIN>/`.
+- SSH in as `jdoe@<DOMAIN>` - should work and create `/home/jdoe@<DOMAIN>/`.
 - RDP in as `jdoe@<DOMAIN>` (or just `jdoe` if `default_domain_suffix` is
-  set in `/etc/sssd/sssd.conf`) — should land in XFCE.
-- Run `sudo whoami` as a member of your admin group — should print `root`.
+  set in `/etc/sssd/sssd.conf`) - should land in XFCE.
+- Run `sudo whoami` as a member of your admin group - should print `root`.
 
 ---
 
@@ -312,14 +312,14 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
-> Restrict by source if you can — `sudo ufw allow from <CIDR> to any port 22`
+> Restrict by source if you can - `sudo ufw allow from <CIDR> to any port 22`
 > is safer than the open `allow 22/tcp` on a sensitive network.
 
 ---
 
 ## 8. Plexus → Active Directory (web UI)
 
-This is **separate** from the host AD join in step 6 — this controls who
+This is **separate** from the host AD join in step 6 - this controls who
 can log into Plexus's web UI.
 
 After the Plexus stack is running (per the main README):
@@ -332,7 +332,7 @@ After the Plexus stack is running (per the main README):
 | Field                    | Example                                                 |
 |--------------------------|---------------------------------------------------------|
 | LDAP Server              | `dc01.<DOMAIN>`                                         |
-| Port                     | `389` (LDAP) or `636` (LDAPS — check "Use SSL")         |
+| Port                     | `389` (LDAP) or `636` (LDAPS - check "Use SSL")         |
 | Service Account DN       | `CN=svc_plexus,OU=Service Accounts,DC=corp,DC=local`    |
 | Service Account Password | *(read-only AD service account)*                        |
 | Base DN                  | `DC=corp,DC=local`                                      |
@@ -376,7 +376,7 @@ will hand out tickets.
 
 ### RDP connects but immediately disconnects
 Usually `~/.xsession` is missing/empty/not-executable, or the user's home
-dir doesn't exist (AD users on first login — run `getent passwd <user>`,
+dir doesn't exist (AD users on first login - run `getent passwd <user>`,
 then trigger a console login first to create the home dir). Check
 `/var/log/xrdp.log` and `/var/log/xrdp-sesman.log`.
 

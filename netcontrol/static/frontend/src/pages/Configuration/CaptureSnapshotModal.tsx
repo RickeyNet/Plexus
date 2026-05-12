@@ -81,7 +81,7 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
               if (e.target.value) setHostId(null);
             }}
           >
-            <option value="">— Or select entire group —</option>
+            <option value="">- Or select entire group -</option>
             {(groups.data || []).map((g) => (
               <option key={g.id} value={g.id}>
                 {g.name} ({(g.hosts || []).length} hosts)

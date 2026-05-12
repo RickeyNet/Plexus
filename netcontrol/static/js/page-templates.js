@@ -1,5 +1,5 @@
 /**
- * Page Templates — Lazy DOM creation.
+ * Page Templates - Lazy DOM creation.
  *
  * Each page's inner HTML is generated on first visit instead of being
  * pre-rendered in index.html.  The `ensurePageDOM(page)` function is
@@ -32,7 +32,7 @@ const _templates = {
 
 /**
  * Ensure the page container has its DOM populated.
- * Called once per page — subsequent visits are a no-op.
+ * Called once per page - subsequent visits are a no-op.
  */
 export function ensurePageDOM(page) {
     const container = document.getElementById(`page-${page}`);
@@ -1291,7 +1291,7 @@ function templateSettings() {
             <button type="button" class="btn btn-primary" id="feature-visibility-save">Save Visibility</button>
         </div>
         <p style="color: var(--text-muted); margin: 0 0 0.75rem 0; font-size: 0.85rem;">
-            Hide navigation entries for features your team doesn't use. This only affects what's shown in the sidebar — it does not remove permissions or stop background services.
+            Hide navigation entries for features your team doesn't use. This only affects what's shown in the sidebar - it does not remove permissions or stop background services.
         </p>
         <div id="feature-visibility-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.4rem 1rem;">
             ${skel(2)}

@@ -2,7 +2,7 @@
 Migration 0034: Widen interface counter columns from INTEGER to BIGINT.
 
 SNMP Counter64 OIDs (ifHCInOctets, ifHCOutOctets) routinely exceed signed
-32-bit range — real production switches push tens of billions of bytes per
+32-bit range - real production switches push tens of billions of bytes per
 interface. Postgres treats SCHEMA `INTEGER` as int4 and rejects values >2^31,
 which crashes topology + monitoring writes on busy networks.
 

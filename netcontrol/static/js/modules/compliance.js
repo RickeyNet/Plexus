@@ -1,5 +1,5 @@
 /**
- * Compliance Module — Policy compliance auditing
+ * Compliance Module - Policy compliance auditing
  * Lazy-loaded when user navigates to #compliance
  */
 import * as api from '../api.js';
@@ -16,7 +16,7 @@ import {
 
 let _complianceCurrentTab = 'profiles';
 
-// Temporary store for remediation commands, keyed by index — avoids quoting issues in onclick attrs
+// Temporary store for remediation commands, keyed by index - avoids quoting issues in onclick attrs
 let _findingsRemediationMap = {};
 let _findingsNameMap = {};
 let _findingsResultId = null;
@@ -249,7 +249,7 @@ async function showRunComplianceScanModal() {
         `<option value="${g.id}">${escapeHtml(g.name)} (${(g.hosts || []).length} hosts)</option>`
     ).join('');
     const hostOpts = allHosts.map(h =>
-        `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)}) — ${escapeHtml(h.group_name)}</option>`
+        `<option value="${h.id}">${escapeHtml(h.hostname)} (${escapeHtml(h.ip_address)}) - ${escapeHtml(h.group_name)}</option>`
     ).join('');
 
     showModal('Run Compliance Scan', `
@@ -344,11 +344,11 @@ async function submitRunComplianceScan() {
             const res = await api.runComplianceScan({ host_id: hostId, profile_id: profileId, credential_id: credId });
             closeAllModals();
             if (res.status === 'compliant') {
-                showSuccess(`Scan complete — Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`);
+                showSuccess(`Scan complete - Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`);
             } else if (res.status === 'error') {
-                showError('Scan completed with errors — check findings for details');
+                showError('Scan completed with errors - check findings for details');
             } else {
-                showError(`Scan complete — ${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`);
+                showError(`Scan complete - ${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`);
             }
             if (res.failed_rules > 0 && res.id) await showComplianceFindings(res.id);
         } catch (e) {
@@ -377,7 +377,7 @@ async function submitRunComplianceScan() {
             } else if (res.errors > 0) {
                 showError(`Scan complete: ${res.hosts_scanned} host(s) scanned, ${res.errors} error(s)`);
             } else {
-                showSuccess(`Scan complete: ${res.hosts_scanned} host(s) scanned — all compliant!`);
+                showSuccess(`Scan complete: ${res.hosts_scanned} host(s) scanned - all compliant!`);
             }
         } catch (e) {
             showError(`Scan failed: ${e.message}`);
@@ -405,7 +405,7 @@ async function scanAssignmentNow(assignmentId) {
         } else if (res.errors > 0) {
             showError(`Scan complete: ${res.hosts_scanned} hosts scanned, ${res.errors} error(s)`);
         } else {
-            showSuccess(`Scan complete: ${res.hosts_scanned} hosts scanned — all compliant!`);
+            showSuccess(`Scan complete: ${res.hosts_scanned} hosts scanned - all compliant!`);
         }
         loadCompliance();
     } catch (e) {
@@ -670,7 +670,7 @@ async function showComplianceFindings(resultId) {
             <td style="white-space:nowrap;">${fixBtn}</td>
         </tr>`;
     }).join('');
-    showModal(`Compliance Findings — ${escapeHtml(result.hostname || '?')}`, `
+    showModal(`Compliance Findings - ${escapeHtml(result.hostname || '?')}`, `
         <div style="margin-bottom:1rem;">
             <strong>Profile:</strong> ${escapeHtml(result.profile_name || '?')} ·
             <strong>Status:</strong> ${escapeHtml(result.status)} ·
@@ -704,7 +704,7 @@ window.showComplianceFindings = showComplianceFindings;
 
 function previewComplianceRemediation(ruleName, idx) {
     const commands = _findingsRemediationMap[idx] || [];
-    showModal(`Remediation Preview — ${escapeHtml(ruleName)}`, `
+    showModal(`Remediation Preview - ${escapeHtml(ruleName)}`, `
         <p style="margin-bottom:0.75rem;">The following commands will be pushed in config mode:</p>
         <pre style="background:var(--bg-secondary); padding:1rem; border-radius:0.5rem; overflow-x:auto; font-size:0.9em;">${commands.map(c => escapeHtml(c)).join('\n')}</pre>
         <div style="margin-top:1rem; text-align:right;">
@@ -742,7 +742,7 @@ async function remediateComplianceRule(resultId, ruleName) {
             dry_run: false,
         });
         if (res.rule_now_passes) {
-            showSuccess(`${res.rule} — FIXED. New score: ${res.rescan_passed}/${res.rescan_total}`);
+            showSuccess(`${res.rule} - FIXED. New score: ${res.rescan_passed}/${res.rescan_total}`);
         } else {
             showError(`Remediation applied but rule still failing. Review device output. New score: ${res.rescan_passed}/${res.rescan_total}`);
         }
@@ -812,7 +812,7 @@ async function remediateAllFailedRules(resultId) {
     if (failed === 0) {
         showSuccess(`All ${fixed} rule(s) remediated successfully.`);
     } else {
-        showError(`${fixed} rule(s) fixed, ${failed} still failing — review manually.`);
+        showError(`${fixed} rule(s) fixed, ${failed} still failing - review manually.`);
     }
 
     closeAllModals();

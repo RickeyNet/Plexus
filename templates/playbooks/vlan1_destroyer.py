@@ -1,10 +1,10 @@
 """
-vlan1_destroyer.py — VLAN 1 Access Port Remediation Playbook
+vlan1_destroyer.py - VLAN 1 Access Port Remediation Playbook
 
 Connects to Cisco Catalyst switches, inventories all interfaces,
 finds access ports still parked on VLAN 1 (the default VLAN), and
 applies a replacement interface configuration from the selected
-template — the standard fix for the "everything on VLAN 1" anti-pattern.
+template - the standard fix for the "everything on VLAN 1" anti-pattern.
 
 When Netmiko isn't installed (e.g. local dev), the playbook runs in
 simulation mode with realistic fake output so the UI flow can still be
@@ -16,7 +16,7 @@ import random
 
 from routes.runner import BasePlaybook, register_playbook
 
-# Shared connection / simulation helpers live in _common.py — see that
+# Shared connection / simulation helpers live in _common.py - see that
 # file for the rationale behind each helper.  The leading underscore
 # also hides the module from the playbook auto-loader.
 from templates.playbooks._common import (
@@ -30,8 +30,8 @@ def _parse_vlan1_access_ports(output: str) -> list[str]:
     """Parse ``show interfaces switchport`` output for VLAN 1 access ports.
 
     The command emits a stanza per interface.  We track three pieces of
-    state per stanza — the interface name, whether it's in static
-    access mode, and its access VLAN — and emit the interface when all
+    state per stanza - the interface name, whether it's in static
+    access mode, and its access VLAN - and emit the interface when all
     three conditions match (access + VLAN 1).
     """
     vlan1_ports: list[str] = []
@@ -57,7 +57,7 @@ def _parse_vlan1_access_ports(output: str) -> list[str]:
             vlan_part = line.split("Access Mode VLAN:")[-1].strip()
             access_vlan = vlan_part.split()[0] if vlan_part else None
 
-    # Don't forget the final stanza — it has no following ``Name:`` line.
+    # Don't forget the final stanza - it has no following ``Name:`` line.
     if current_interface and is_access and access_vlan == "1":
         vlan1_ports.append(current_interface)
 
@@ -87,7 +87,7 @@ class Vlan1Destroyer(BasePlaybook):
 
     async def run(self, hosts, credentials, template_commands=None, dry_run=True):
         # ── Header / banner output ─────────────────────────────────────
-        yield self.log_info(f"VLAN 1 Destroyer — targeting {len(hosts)} device(s)")
+        yield self.log_info(f"VLAN 1 Destroyer - targeting {len(hosts)} device(s)")
 
         # If the user didn't pick a template, fall back to a sane built-in
         # so the playbook still does something useful instead of erroring.
@@ -106,11 +106,11 @@ class Vlan1Destroyer(BasePlaybook):
         for cmd in template_commands:
             yield self.log_info(f"  {cmd}")
 
-        # Make the run mode unmistakable — dry-run is preview-only.
+        # Make the run mode unmistakable - dry-run is preview-only.
         if dry_run:
-            yield self.log_warn("*** DRY-RUN MODE — no changes will be made ***")
+            yield self.log_warn("*** DRY-RUN MODE - no changes will be made ***")
         else:
-            yield self.log_warn("*** LIVE MODE — changes WILL be written ***")
+            yield self.log_warn("*** LIVE MODE - changes WILL be written ***")
 
         # Counters used in the final summary line.  Stored on self so
         # the per-device coroutines can update them.
@@ -164,7 +164,7 @@ class Vlan1Destroyer(BasePlaybook):
             if conn is None:
                 return
 
-            # Step 1 — pull the switchport inventory.  ``delay_factor=2``
+            # Step 1 - pull the switchport inventory.  ``delay_factor=2``
             # gives the device extra time on big chassis where the
             # output can take a while to render.
             yield self.log_info("Gathering interface inventory ...", host=hostname)
@@ -173,7 +173,7 @@ class Vlan1Destroyer(BasePlaybook):
             )
             vlan1_ports = _parse_vlan1_access_ports(output)
 
-            # Early-exit when there's nothing to do — saves a noisy log.
+            # Early-exit when there's nothing to do - saves a noisy log.
             if not vlan1_ports:
                 yield self.log_success(
                     "No access ports on VLAN 1 found. Device is clean.",
@@ -191,7 +191,7 @@ class Vlan1Destroyer(BasePlaybook):
             )
             self._total_ports_found += len(vlan1_ports)
 
-            # Step 2 — apply the template per interface.  We prepend
+            # Step 2 - apply the template per interface.  We prepend
             # ``interface <name>`` so each command in the template
             # lands inside that interface's config block.
             for port in vlan1_ports:
@@ -206,7 +206,7 @@ class Vlan1Destroyer(BasePlaybook):
                     yield self.log_success(f"Applied template to {port}", host=hostname)
                 self._total_remediated += 1
 
-            # Step 3 — persist running-config to startup-config so the
+            # Step 3 - persist running-config to startup-config so the
             # change survives a reload.  Only on a real (non-dry) run
             # that actually changed something.
             if not dry_run and self._total_remediated > 0:
@@ -227,7 +227,7 @@ class Vlan1Destroyer(BasePlaybook):
             yield ev
             if ev.level == "error":
                 # An error from simulate_connect is the "device unreachable"
-                # case — skip the rest of this host.
+                # case - skip the rest of this host.
                 return
 
         yield self.log_info("Gathering interface inventory ...", host=hostname)

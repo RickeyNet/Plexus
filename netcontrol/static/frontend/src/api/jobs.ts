@@ -1,5 +1,5 @@
 /**
- * Jobs API — playbooks, jobs, templates, credentials, secret variables.
+ * Jobs API - playbooks, jobs, templates, credentials, secret variables.
  *
  * Mirrors legacy api.js. Job output streaming is handled inline by the
  * Jobs page via a WebSocket on /ws/jobs/<id>; only REST is exposed here.

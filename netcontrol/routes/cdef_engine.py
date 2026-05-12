@@ -188,7 +188,7 @@ def evaluate_cdef_expression(expression: str, data_map: dict[str, list[float]]) 
                     b, a, cond = stack.pop(), stack.pop(), stack.pop()
                     stack.append(a if cond != 0 else b)
             else:
-                # Unknown token — try as number or skip
+                # Unknown token - try as number or skip
                 try:
                     stack.append(float(token))
                 except ValueError:

@@ -1,7 +1,7 @@
 
 #!/usr/bin/env python3
 """
-run.py — Start the Plexus server.
+run.py - Start the Plexus server.
 
 Usage:
     python run.py                   # Starts on localhost:8080

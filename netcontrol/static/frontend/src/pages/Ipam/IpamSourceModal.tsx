@@ -157,7 +157,7 @@ export function IpamSourceModal({ source, onClose }: Props) {
         )}
         <div className="form-group">
           <label className="form-label">
-            Sync Scope <span className="text-muted">(optional — site/tenant filter)</span>
+            Sync Scope <span className="text-muted">(optional - site/tenant filter)</span>
           </label>
           <input
             className="form-input"

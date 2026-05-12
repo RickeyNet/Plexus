@@ -1346,11 +1346,11 @@ async function loadBillingTab() {
                 </tr></thead><tbody>` +
                 circResp.circuits.map(c => `<tr>
                     <td>${escapeHtml(c.name)}</td>
-                    <td>${escapeHtml(c.customer || '—')}</td>
-                    <td>${escapeHtml(c.hostname || '—')}</td>
+                    <td>${escapeHtml(c.customer || '-')}</td>
+                    <td>${escapeHtml(c.hostname || '-')}</td>
                     <td>${escapeHtml(c.if_name || 'idx:' + c.if_index)}</td>
                     <td>${formatBps(c.commit_rate_bps)}</td>
-                    <td>${c.cost_per_mbps > 0 ? '$' + c.cost_per_mbps.toFixed(2) : '—'}</td>
+                    <td>${c.cost_per_mbps > 0 ? '$' + c.cost_per_mbps.toFixed(2) : '-'}</td>
                     <td>${escapeHtml(c.billing_cycle)}</td>
                     <td>${c.enabled ? '<span style="color:var(--success)">Enabled</span>' : '<span style="color:var(--text-muted)">Disabled</span>'}</td>
                     <td style="display:flex; gap:0.25rem;">
@@ -1382,15 +1382,15 @@ async function loadBillingTab() {
                     const isOverage = p.status === 'overage';
                     return `<tr${isOverage ? ' style="background:rgba(var(--danger-rgb),0.05)"' : ''}>
                         <td>${escapeHtml((p.period_start || '').substring(0, 10))} – ${escapeHtml((p.period_end || '').substring(0, 10))}</td>
-                        <td>${escapeHtml(p.customer || '—')}</td>
-                        <td>${escapeHtml(p.circuit_name || '—')}</td>
-                        <td>${escapeHtml(p.hostname || '—')}</td>
+                        <td>${escapeHtml(p.customer || '-')}</td>
+                        <td>${escapeHtml(p.circuit_name || '-')}</td>
+                        <td>${escapeHtml(p.hostname || '-')}</td>
                         <td>${formatBps(p.p95_in_bps)}</td>
                         <td>${formatBps(p.p95_out_bps)}</td>
                         <td><strong>${formatBps(p.p95_billing_bps)}</strong></td>
                         <td>${formatBps(p.commit_rate_bps)}</td>
-                        <td>${isOverage ? '<span style="color:var(--danger)">' + formatBps(p.overage_bps) + '</span>' : '—'}</td>
-                        <td>${p.overage_cost > 0 ? '<span style="color:var(--danger)">$' + p.overage_cost.toLocaleString() + '</span>' : '—'}</td>
+                        <td>${isOverage ? '<span style="color:var(--danger)">' + formatBps(p.overage_bps) + '</span>' : '-'}</td>
+                        <td>${p.overage_cost > 0 ? '<span style="color:var(--danger)">$' + p.overage_cost.toLocaleString() + '</span>' : '-'}</td>
                         <td><span class="badge ${isOverage ? 'badge-danger' : 'badge-success'}">${escapeHtml(p.status)}</span></td>
                         <td><button class="btn btn-xs btn-secondary" onclick="viewBillingPeriod(${p.id})">View</button></td>
                     </tr>`;
@@ -1546,12 +1546,12 @@ async function showGenerateBillingModal() {
     } catch (e) { /* ignore */ }
 
     const content = `
-        <div class="form-group"><label class="form-label">Circuit (optional — leave blank for all)</label>
+        <div class="form-group"><label class="form-label">Circuit (optional - leave blank for all)</label>
             <select id="gen-circuit" class="form-select">
                 <option value="">All enabled circuits</option>
-                ${circuits.map(c => `<option value="${c.id}">${escapeHtml(c.name)} — ${escapeHtml(c.customer || 'No customer')}</option>`).join('')}
+                ${circuits.map(c => `<option value="${c.id}">${escapeHtml(c.name)} - ${escapeHtml(c.customer || 'No customer')}</option>`).join('')}
             </select></div>
-        <div class="form-group"><label class="form-label">Period Start (optional — auto-detect if blank)</label>
+        <div class="form-group"><label class="form-label">Period Start (optional - auto-detect if blank)</label>
             <input id="gen-start" class="form-input" type="date"></div>
         <div class="form-group"><label class="form-label">Period End (optional)</label>
             <input id="gen-end" class="form-input" type="date"></div>
@@ -1575,7 +1575,7 @@ async function showGenerateBillingModal() {
                 closeModal();
                 const count = result.count || 0;
                 const overages = (result.periods || []).filter(p => p.status === 'overage').length;
-                showSuccess(`Generated ${count} billing period(s)` + (overages > 0 ? ` — ${overages} overage(s) detected` : ''));
+                showSuccess(`Generated ${count} billing period(s)` + (overages > 0 ? ` - ${overages} overage(s) detected` : ''));
                 loadBillingTab();
             } catch (e) { showError(e.message); }
         },
@@ -1599,8 +1599,8 @@ async function viewBillingPeriod(periodId) {
     let content = `
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem; margin-bottom:1rem;">
             <div><strong>Circuit:</strong> ${escapeHtml(p.circuit_name || '')}</div>
-            <div><strong>Customer:</strong> ${escapeHtml(p.customer || '—')}</div>
-            <div><strong>Device:</strong> ${escapeHtml(p.hostname || '—')}</div>
+            <div><strong>Customer:</strong> ${escapeHtml(p.customer || '-')}</div>
+            <div><strong>Device:</strong> ${escapeHtml(p.hostname || '-')}</div>
             <div><strong>Interface:</strong> ${escapeHtml(p.if_name || '')}</div>
             <div><strong>Period:</strong> ${escapeHtml((p.period_start || '').substring(0, 10))} – ${escapeHtml((p.period_end || '').substring(0, 10))}</div>
             <div><strong>Samples:</strong> ${p.total_samples || 0}</div>
@@ -1617,7 +1617,7 @@ async function viewBillingPeriod(periodId) {
         </div>
         ${p.status === 'overage' ? `<div class="card" style="padding:0.75rem; background:rgba(var(--danger-rgb),0.1); margin-bottom:1rem;">
             <strong style="color:var(--danger)">Overage Detected:</strong>
-            ${formatBps(p.overage_bps)} over commit — Cost: $${(p.overage_cost || 0).toLocaleString()}
+            ${formatBps(p.overage_bps)} over commit - Cost: $${(p.overage_cost || 0).toLocaleString()}
         </div>` : ''}
         <div id="billing-usage-chart" style="height:300px;"></div>
     `;

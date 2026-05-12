@@ -249,7 +249,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             className="card"
             style={{ borderLeft: '3px solid var(--success)', padding: '0.75rem' }}
           >
-            <strong>SNMP OK</strong> — credentials validated
+            <strong>SNMP OK</strong> - credentials validated
             <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
               <tbody>
                 <tr>
@@ -385,7 +385,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
                   color: 'var(--success)',
                 }}
               >
-                ✓ {entry.ip} — {entry.hostname || 'unknown'} (
+                ✓ {entry.ip} - {entry.hostname || 'unknown'} (
                 {entry.deviceType || 'unknown'})
               </div>
             ))}

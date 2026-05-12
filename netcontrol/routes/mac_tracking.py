@@ -142,7 +142,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         except Exception:
             vlan_ids = [1]
     else:
-        # SNMPv3 / no community — community-string indexing doesn't apply.
+        # SNMPv3 / no community - community-string indexing doesn't apply.
         vlan_ids = [0]
 
     if not vlan_ids:
@@ -199,7 +199,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             except (ValueError, TypeError):
                 return port_name, 0
 
-        # ── Q-BRIDGE VLAN-aware FDB (dot1qTpFdbTable) — has VLAN in OID ──
+        # ── Q-BRIDGE VLAN-aware FDB (dot1qTpFdbTable) - has VLAN in OID ──
         for oid, port_val in q_fdb_port.items():
             suffix = oid[len(DOT1Q_TP_FDB_PORT):].lstrip(".")
             parts = suffix.split(".")
@@ -231,7 +231,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             except Exception:
                 pass
 
-        # ── Standard bridge FDB (dot1dTpFdbTable) — no VLAN in OID ──
+        # ── Standard bridge FDB (dot1dTpFdbTable) - no VLAN in OID ──
         # Tag with vlan_ctx (the community-string VLAN we polled under).
         for oid, mac_val in fdb_addr.items():
             suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
@@ -305,7 +305,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             pass
 
     LOGGER.info(
-        "mac_tracking: host %s (%s) vlans=%s — %d MACs, %d ARPs collected",
+        "mac_tracking: host %s (%s) vlans=%s - %d MACs, %d ARPs collected",
         host_id, ip_address, vlan_ids,
         result["macs_found"], result["arps_found"],
     )

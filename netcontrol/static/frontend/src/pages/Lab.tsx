@@ -113,7 +113,7 @@ function runtimeBadge(status: string | undefined, kind?: string) {
     case 'error':
       return <Badge variant="danger">error</Badge>;
     default:
-      return <Badge variant="secondary">{status || '—'}</Badge>;
+      return <Badge variant="secondary">{status || '-'}</Badge>;
   }
 }
 
@@ -413,12 +413,12 @@ function EnvironmentDetail({
                     onClick={() => onSelectDevice(d.id)}
                   >
                     <td>{d.hostname}</td>
-                    <td>{d.runtime_mgmt_address || d.ip_address || '—'}</td>
+                    <td>{d.runtime_mgmt_address || d.ip_address || '-'}</td>
                     <td>{d.device_type}</td>
                     <td>{runtimeBadge(d.runtime_status, d.runtime_kind)}</td>
                     <td>{d.config_size} B</td>
                     <td>{d.run_count}</td>
-                    <td>{d.source_host_id ? `#${d.source_host_id}` : '—'}</td>
+                    <td>{d.source_host_id ? `#${d.source_host_id}` : '-'}</td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <button
                         type="button"
@@ -673,7 +673,7 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
       {lastResult && (
         <div className="glass-card card">
           <div className="card-title">
-            Last result — {riskBadge(lastResult.risk_level)} (score{' '}
+            Last result - {riskBadge(lastResult.risk_level)} (score{' '}
             {lastResult.risk_score})
           </div>
           <p>
@@ -728,12 +728,12 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
                 >
                   <td>{r.id}</td>
                   <td>{r.created_at}</td>
-                  <td>{r.submitted_by || '—'}</td>
+                  <td>{r.submitted_by || '-'}</td>
                   <td>{riskBadge(r.risk_level)}</td>
                   <td>+{r.diff_added}/−{r.diff_removed}</td>
                   <td>{r.status}</td>
                   <td>
-                    {r.promoted_deployment_id ? `#${r.promoted_deployment_id}` : '—'}
+                    {r.promoted_deployment_id ? `#${r.promoted_deployment_id}` : '-'}
                   </td>
                 </tr>
               ))}
@@ -830,9 +830,9 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
 
       {dev && hasRuntime && (
         <p>
-          <strong>Node kind:</strong> {dev.runtime_node_kind || '—'} ·{' '}
-          <strong>Image:</strong> {dev.runtime_image || '—'} ·{' '}
-          <strong>Mgmt IP:</strong> {dev.runtime_mgmt_address || '—'}{' '}
+          <strong>Node kind:</strong> {dev.runtime_node_kind || '-'} ·{' '}
+          <strong>Image:</strong> {dev.runtime_image || '-'} ·{' '}
+          <strong>Mgmt IP:</strong> {dev.runtime_mgmt_address || '-'}{' '}
           {dev.runtime_lab_name && (
             <>
               · <strong>Lab:</strong> {dev.runtime_lab_name}
@@ -880,7 +880,7 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
               className="form-input"
               value={credentialId}
               onChange={(e) => setCredentialId(e.target.value)}
-              placeholder="optional — required only for live simulate"
+              placeholder="optional - required only for live simulate"
             />
           </div>
           <button
@@ -952,7 +952,7 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
                   <td>{e.created_at}</td>
                   <td>{e.action}</td>
                   <td>{e.status}</td>
-                  <td>{e.actor || '—'}</td>
+                  <td>{e.actor || '-'}</td>
                   <td>{e.detail}</td>
                 </tr>
               ))}
@@ -1308,9 +1308,9 @@ function TopologyEditor({
           {t.devices.map((d) => (
             <tr key={d.id}>
               <td>{d.hostname}</td>
-              <td>{d.runtime_node_kind || '—'}</td>
-              <td>{d.runtime_image || '—'}</td>
-              <td>{d.runtime_mgmt_address || '—'}</td>
+              <td>{d.runtime_node_kind || '-'}</td>
+              <td>{d.runtime_image || '-'}</td>
+              <td>{d.runtime_mgmt_address || '-'}</td>
               <td>
                 <button
                   type="button"
@@ -1334,7 +1334,7 @@ function TopologyEditor({
             onChange={(e) => setMemberPick(e.target.value)}
             style={{ minWidth: 200 }}
           >
-            <option value="">— select a device to add —</option>
+            <option value="">- select a device to add -</option>
             {candidates.map((d) => (
               <option key={d.id} value={String(d.id)}>
                 {d.hostname} ({d.runtime_node_kind || 'no kind'})
@@ -1410,7 +1410,7 @@ function TopologyEditor({
               onChange={(e) => setLinkA(e.target.value)}
               style={{ minWidth: 160 }}
             >
-              <option value="">—</option>
+              <option value="">-</option>
               {t.devices.map((d) => (
                 <option key={d.id} value={String(d.id)}>
                   {d.hostname}
@@ -1436,7 +1436,7 @@ function TopologyEditor({
               onChange={(e) => setLinkB(e.target.value)}
               style={{ minWidth: 160 }}
             >
-              <option value="">—</option>
+              <option value="">-</option>
               {t.devices.map((d) => (
                 <option key={d.id} value={String(d.id)}>
                   {d.hostname}
@@ -1531,7 +1531,7 @@ function DriftCard({ deviceId }: { deviceId: number }) {
         <p>
           Last checked: <strong>{latest.data.checked_at}</strong> · +
           {latest.data.diff_added}/−{latest.data.diff_removed} lines · actor:{' '}
-          {latest.data.actor || '—'}
+          {latest.data.actor || '-'}
           {latest.data.error && (
             <>
               {' · '}
@@ -1575,7 +1575,7 @@ function DriftCard({ deviceId }: { deviceId: number }) {
                   <td>{r.checked_at}</td>
                   <td>{driftBadge(r.status)}</td>
                   <td>+{r.diff_added}/−{r.diff_removed}</td>
-                  <td>{r.actor || '—'}</td>
+                  <td>{r.actor || '-'}</td>
                 </tr>
               ))}
             </tbody>

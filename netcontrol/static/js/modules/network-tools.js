@@ -1,5 +1,5 @@
 /**
- * Network Tools Module — MAC Tracking + Traffic Analysis
+ * Network Tools Module - MAC Tracking + Traffic Analysis
  * Lazy-loaded when user navigates to #mac-tracking or #traffic-analysis
  */
 import * as api from '../api.js';

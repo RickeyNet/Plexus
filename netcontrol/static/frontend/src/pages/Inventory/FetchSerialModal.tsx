@@ -36,7 +36,7 @@ export function FetchSerialModal({ hostId, hostname, onClose }: Props) {
     <Modal
       isOpen
       onClose={onClose}
-      title={`Fetch Serial Number${hostname ? ` — ${hostname}` : ''}`}
+      title={`Fetch Serial Number${hostname ? ` - ${hostname}` : ''}`}
     >
       <p
         style={{
@@ -66,7 +66,7 @@ export function FetchSerialModal({ hostId, hostname, onClose }: Props) {
               }
               required
             >
-              <option value="">— Select —</option>
+              <option value="">- Select -</option>
               {list.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}

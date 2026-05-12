@@ -1,4 +1,4 @@
-"""Tests for IPAM-driven provisioning (Phase H) — allocate_next_ip + lifecycle."""
+"""Tests for IPAM-driven provisioning (Phase H) - allocate_next_ip + lifecycle."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def test_allocate_concurrent_calls_dont_collide(alloc_db):
         # /30 has two usable hosts: .1 and .2
         assert a["address"] == "192.168.1.1"
         assert b["address"] == "192.168.1.2"
-        # Third should fail — no addresses left
+        # Third should fail - no addresses left
         with pytest.raises(ValueError, match="No available"):
             await db_module.allocate_next_ip(subnet="192.168.1.0/30")
 

@@ -160,7 +160,7 @@ function _ensureIpamLayout() {
                     <label id="ipam-form-username-row">Username (Basic Auth)
                         <input id="ipam-form-username" class="form-control" type="text" maxlength="120">
                     </label>
-                    <label>Sync Scope <span class="text-muted">(optional — site/tenant filter)</span>
+                    <label>Sync Scope <span class="text-muted">(optional - site/tenant filter)</span>
                         <input id="ipam-form-scope" class="form-control" type="text" maxlength="255">
                     </label>
                     <label>Notes
@@ -613,8 +613,8 @@ function _renderReconcileDiffs() {
                             <td><code>${escapeHtml(diff.address)}</code></td>
                             <td><span class="badge ${_driftBadgeClass(diff.drift_type)}">${escapeHtml(_driftLabel(diff.drift_type))}</span></td>
                             <td>${escapeHtml(srcName)}</td>
-                            <td>${escapeHtml(plexusHost || '—')}</td>
-                            <td>${escapeHtml(ipamHost || '—')}${ipamStatus ? ` <span class="text-muted">(${escapeHtml(ipamStatus)})</span>` : ''}</td>
+                            <td>${escapeHtml(plexusHost || '-')}</td>
+                            <td>${escapeHtml(ipamHost || '-')}${ipamStatus ? ` <span class="text-muted">(${escapeHtml(ipamStatus)})</span>` : ''}</td>
                             <td style="white-space:nowrap;">
                                 ${pushAvailable ? `<button class="btn btn-primary" style="font-size:0.78em;padding:0.18rem 0.45rem;" onclick="resolveIpamDiff(${Number(diff.id)}, 'accept_plexus')">Push to IPAM</button>` : ''}
                                 <button class="btn btn-secondary" style="font-size:0.78em;padding:0.18rem 0.45rem;" onclick="resolveIpamDiff(${Number(diff.id)}, 'accept_ipam')">Accept IPAM</button>
@@ -776,7 +776,7 @@ function _renderDhcpServers() {
                             <td><span style="color:${statusColor};">${escapeHtml(status)}</span><div class="text-muted" style="font-size:0.8em;">${escapeHtml(s.last_sync_message || '')}</div></td>
                             <td>${s.scope_count || 0}</td>
                             <td>${s.lease_count || 0}</td>
-                            <td>${escapeHtml(s.last_sync_at || '—')}</td>
+                            <td>${escapeHtml(s.last_sync_at || '-')}</td>
                             <td style="text-align:right;white-space:nowrap;">
                                 <button class="btn btn-secondary btn-sm" onclick="triggerDhcpSync(${s.id})">Sync</button>
                                 <button class="btn btn-secondary btn-sm" onclick="openDhcpServerModal(${s.id})">Edit</button>
@@ -1095,8 +1095,8 @@ window.triggerIpamReconcile = async function (sourceId) {
         _renderReconcileRuns();
         _renderReconcileDiffs();
         showError(count
-            ? `Reconciliation complete — ${count} drift${count === 1 ? '' : 's'} detected.`
-            : 'Reconciliation complete — no drift detected.');
+            ? `Reconciliation complete - ${count} drift${count === 1 ? '' : 's'} detected.`
+            : 'Reconciliation complete - no drift detected.');
     } catch (error) {
         showError(`Reconciliation failed: ${error.message}`);
     }

@@ -285,7 +285,7 @@ def _decode_raw_packet_header(header: bytes) -> dict:
         ethertype = int.from_bytes(header[ip_offset + 2:ip_offset + 4], "big")
         ip_offset += 4
 
-    if ethertype != 0x0800:  # not IPv4 — bail (IPv6/ARP/MPLS not in flow_records schema)
+    if ethertype != 0x0800:  # not IPv4 - bail (IPv6/ARP/MPLS not in flow_records schema)
         return {}
     if len(header) < ip_offset + 20:
         return {}
@@ -416,7 +416,7 @@ def _parse_sflow_flow_sample(sample: bytes, exporter_ip: str, expanded: bool) ->
 
     flow_sample (format 1):
         u32 sequence_number
-        u32 source_id               (type<<24 | index)   — 4 bytes
+        u32 source_id               (type<<24 | index)   - 4 bytes
         u32 sampling_rate
         u32 sample_pool
         u32 drops
@@ -693,7 +693,7 @@ async def start_flow_collector(port: int = 2055, sflow_port: int | None = None) 
     Always opens the NetFlow/IPFIX listener on ``port``. If ``sflow_port``
     is provided and non-zero, also opens a second listener for sFlow v5 on
     that port. The sFlow socket failing to bind is logged but doesn't
-    abort startup — NetFlow still works on its own.
+    abort startup - NetFlow still works on its own.
     """
     global _flow_transport, _flow_protocol, _sflow_transport, _sflow_protocol
     if _flow_transport is not None:
@@ -972,7 +972,7 @@ async def apply_flow_collector_config(new_cfg: dict) -> dict:
                 sflow_port=new_sflow if new_sflow else None,
             )
         elif _flow_transport is None:
-            # Was enabled in config but somehow not running — start it.
+            # Was enabled in config but somehow not running - start it.
             await start_flow_collector(
                 new_netflow,
                 sflow_port=new_sflow if new_sflow else None,

@@ -442,7 +442,7 @@ def test_ipam_address_context_returns_subnet_and_conflict(tmp_path, monkeypatch)
         assert body["is_conflict"] is False
         assert body["conflict_groups"] == []
 
-        # IP that appears in two groups — should be flagged as conflict
+        # IP that appears in two groups - should be flagged as conflict
         resp_conflict = client.get("/api/ipam/address/10.0.0.20")
         assert resp_conflict.status_code == 200
         conflict_body = resp_conflict.json()
@@ -451,14 +451,14 @@ def test_ipam_address_context_returns_subnet_and_conflict(tmp_path, monkeypatch)
         assert conflict_body["is_conflict"] is True
         assert len(conflict_body["conflict_groups"]) >= 2
 
-        # IP outside any known subnet — no match
+        # IP outside any known subnet - no match
         resp_miss = client.get("/api/ipam/address/192.168.99.1")
         assert resp_miss.status_code == 200
         miss_body = resp_miss.json()
         assert miss_body["matched_subnet"] is None
         assert miss_body["is_conflict"] is False
 
-        # Invalid IP address — 400
+        # Invalid IP address - 400
         resp_bad = client.get("/api/ipam/address/not-an-ip")
         assert resp_bad.status_code == 400
     finally:

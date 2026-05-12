@@ -1,5 +1,5 @@
 """
-Migration 0030: Phase B-1 — containerlab runtime support for lab mode.
+Migration 0030: Phase B-1 - containerlab runtime support for lab mode.
 
 Extends `lab_devices` with runtime metadata so a single twin can optionally
 back its config snapshot with a real virtual device (Arista cEOS, Nokia
@@ -18,7 +18,7 @@ Adds:
   - lab_devices.runtime_workdir       absolute path to the generated topology workdir
   - lab_devices.runtime_started_at    timestamp the container was last started
 
-  - lab_runtime_events — append-only deploy/destroy/refresh history per device.
+  - lab_runtime_events - append-only deploy/destroy/refresh history per device.
     Stores actor, action, status (ok/error), detail JSON, and timestamps so
     operators can audit runtime activity from the UI.
 """

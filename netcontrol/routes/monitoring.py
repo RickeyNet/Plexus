@@ -95,7 +95,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             mem_total_oid = oid_map.get("mem_total_oid", "")
             uptime_oid = oid_map.get("uptime_oid", "1.3.6.1.2.1.1.3")
 
-            # Interface OIDs are standard MIB-II / IF-MIB — vendor-independent
+            # Interface OIDs are standard MIB-II / IF-MIB - vendor-independent
             if_oper_status_oid = "1.3.6.1.2.1.2.2.1.8"           # ifOperStatus
             if_admin_status_oid = "1.3.6.1.2.1.2.2.1.7"          # ifAdminStatus
             if_name_oid = "1.3.6.1.2.1.31.1.1.1.1"               # ifName
@@ -110,7 +110,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             if_in_discards_oid = "1.3.6.1.2.1.2.2.1.13"          # ifInDiscards
             if_out_discards_oid = "1.3.6.1.2.1.2.2.1.19"         # ifOutDiscards
 
-            # Build walk list — skip empty OIDs
+            # Build walk list - skip empty OIDs
             async def _empty_walk():
                 return {}
 
@@ -166,7 +166,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     except (ValueError, TypeError):
                         pass
 
-            # Memory — supports two patterns:
+            # Memory - supports two patterns:
             #   Cisco:  used + free OIDs (bytes) → compute total
             #   HOST-RESOURCES / Fortinet:  used + total OIDs (allocation units or %)
             if mem_used_vals and mem_free_vals:
@@ -746,7 +746,7 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     except Exception:
         pass
 
-    LOGGER.info("monitoring: poll complete — %d hosts, %d alerts, %d errors",
+    LOGGER.info("monitoring: poll complete - %d hosts, %d alerts, %d errors",
                 hosts_polled, alerts_created, errors)
     return {"enabled": True, "hosts_polled": hosts_polled,
             "alerts_created": alerts_created, "errors": errors}
@@ -788,7 +788,7 @@ async def _alert_escalation_loop() -> None:
             await asyncio.sleep(interval)
             escalated = await _run_alert_escalation()
             if escalated > 0:
-                LOGGER.info("monitoring: escalation cycle — %d alerts escalated", escalated)
+                LOGGER.info("monitoring: escalation cycle - %d alerts escalated", escalated)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

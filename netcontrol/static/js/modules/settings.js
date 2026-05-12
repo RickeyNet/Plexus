@@ -1,5 +1,5 @@
 /**
- * Settings Module — Admin settings, user/group management, auth config
+ * Settings Module - Admin settings, user/group management, auth config
  * Lazy-loaded when user navigates to #settings
  */
 import * as api from '../api.js';

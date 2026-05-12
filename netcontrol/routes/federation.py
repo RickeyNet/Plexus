@@ -371,7 +371,7 @@ async def sync_peer(peer_id: int, request: Request, _user=Depends(_require_admin
         try:
             await cur.execute(
                 "UPDATE federation_peers SET last_sync_at = ?, last_sync_status = ?, last_sync_message = ? WHERE id = ?",
-                (now, "error", "Sync failed — check logs", peer_id),
+                (now, "error", "Sync failed - check logs", peer_id),
             )
             await cur.commit()
         finally:

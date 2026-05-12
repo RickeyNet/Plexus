@@ -90,7 +90,7 @@ function _renderPeerTable(container) {
             <td><code>${escapeHtml(p.url)}</code></td>
             <td>${_enabledBadge(p.enabled)}</td>
             <td>${_syncStatusBadge(p.last_sync_status)}</td>
-            <td>${p.last_sync_at ? escapeHtml(formatDate(p.last_sync_at)) : '<span class="text-muted">—</span>'}</td>
+            <td>${p.last_sync_at ? escapeHtml(formatDate(p.last_sync_at)) : '<span class="text-muted">-</span>'}</td>
             <td>${p.has_token ? '<span class="badge badge-info">Yes</span>' : '<span class="text-muted">No</span>'}</td>
             <td>
                 <div class="btn-group btn-group-sm">
@@ -135,7 +135,7 @@ function _renderPeerDetails(container) {
         return `
             <div class="card" style="padding:1rem;">
                 <h4 style="margin:0 0 .5rem 0;">${escapeHtml(p.name)}</h4>
-                <div class="text-muted" style="margin-bottom:.5rem;">${escapeHtml(p.url)}${p.version ? ` — v${escapeHtml(p.version)}` : ''}</div>
+                <div class="text-muted" style="margin-bottom:.5rem;">${escapeHtml(p.url)}${p.version ? ` - v${escapeHtml(p.version)}` : ''}</div>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.5rem;">
                     <div><strong>${escapeHtml(String(dev.total || 0))}</strong> devices</div>
                     <div style="color:var(--success-color)"><strong>${escapeHtml(String(dev.up || 0))}</strong> up</div>
@@ -145,7 +145,7 @@ function _renderPeerDetails(container) {
                 </div>
                 <div class="text-muted" style="margin-top:.5rem;font-size:.85em;">
                     ${_syncStatusBadge(p.last_sync_status)}
-                    ${p.last_sync_at ? ' — ' + escapeHtml(formatDate(p.last_sync_at)) : ''}
+                    ${p.last_sync_at ? ' - ' + escapeHtml(formatDate(p.last_sync_at)) : ''}
                 </div>
             </div>
         `;
@@ -167,7 +167,7 @@ async function _handleTableAction(e) {
         try {
             const result = await api.testFederationPeer(id);
             if (result.status === 'ok') {
-                showSuccess(`Connection OK — remote version: ${result.remote_version || 'unknown'}`);
+                showSuccess(`Connection OK - remote version: ${result.remote_version || 'unknown'}`);
             } else {
                 showError(`Connection failed: ${result.message || 'Unknown error'}`);
             }
@@ -288,7 +288,7 @@ function _renderPage() {
                 <strong>What is Federation?</strong>
             </summary>
             <div style="font-size:0.85rem;line-height:1.45;color:var(--text-muted);padding:0.5rem 0 0.25rem 2.4rem;">
-                <p style="margin:0 0 0.4rem 0;">Federation lets you connect multiple Plexus instances together so this UI can show aggregated device counts, alerts, and health across all of them — useful for MSPs managing multiple customer networks or organizations with regional deployments (e.g. NA, EU, APAC). Each peer remains independent and authoritative for its own data; this view is read-only aggregation over HTTPS using the remote's API token.</p>
+                <p style="margin:0 0 0.4rem 0;">Federation lets you connect multiple Plexus instances together so this UI can show aggregated device counts, alerts, and health across all of them - useful for MSPs managing multiple customer networks or organizations with regional deployments (e.g. NA, EU, APAC). Each peer remains independent and authoritative for its own data; this view is read-only aggregation over HTTPS using the remote's API token.</p>
                 <p style="margin:0;"><strong style="color:var(--text);">You don't need this if:</strong> you only run a single Plexus instance. In that case, you can hide it from the sidebar via Settings → Feature Visibility.</p>
             </div>
         </details>

@@ -155,7 +155,7 @@ function SlaHostsList({
     : hosts;
 
   if (filtered.length === 0) {
-    return <div className="empty-state">No SLA data available — run monitoring polls to collect metrics.</div>;
+    return <div className="empty-state">No SLA data available - run monitoring polls to collect metrics.</div>;
   }
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>

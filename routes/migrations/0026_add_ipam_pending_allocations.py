@@ -2,7 +2,7 @@
 Migration 0026: IPAM-driven provisioning (Phase H).
 
 Adds:
-  - ipam_pending_allocations — tracks reserved-but-not-committed IP allocations
+  - ipam_pending_allocations - tracks reserved-but-not-committed IP allocations
     issued via POST /api/ipam/allocate. Each row holds subnet, address, vrf,
     intended hostname, optional external IPAM source/ref, expiry, and state
     ('pending' | 'committed' | 'released'). Pending rows participate in
