@@ -38,6 +38,8 @@ Tables:
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import ipaddress
 import json
 import os
@@ -3980,6 +3982,112 @@ async def get_dashboard_stats() -> dict:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+# Serializes audit-event inserts within this process so concurrent writers
+# cannot fork the hash chain. Plexus is single-process today; multi-worker
+# Postgres deployments would need an additional DB-level barrier (e.g.
+# pg_advisory_xact_lock) layered on top.
+_audit_chain_lock = asyncio.Lock()
+
+
+def _audit_canonical_bytes(
+    timestamp: str,
+    category: str,
+    action: str,
+    user: str,
+    detail: str,
+    correlation_id: str,
+    prev_hash: str,
+) -> bytes:
+    """Stable byte serialization of an audit row for hashing. Matches the
+    backfill in migration 0037 and verify_audit_chain. NUL-separated so
+    cross-field injection is impossible.
+    """
+    parts = [
+        timestamp or "",
+        category or "",
+        action or "",
+        user or "",
+        detail or "",
+        correlation_id or "",
+        prev_hash or "",
+    ]
+    return "\x00".join(parts).encode("utf-8")
+
+
+def _audit_row_hash(
+    timestamp: str,
+    category: str,
+    action: str,
+    user: str,
+    detail: str,
+    correlation_id: str,
+    prev_hash: str,
+) -> str:
+    return hashlib.sha256(
+        _audit_canonical_bytes(
+            timestamp, category, action, user, detail, correlation_id, prev_hash
+        )
+    ).hexdigest()
+
+
+async def verify_audit_chain() -> dict:
+    """Walk audit_events in id ASC and verify every prev_hash/row_hash.
+
+    Returns a dict with:
+      - ``ok`` (bool)
+      - ``total_rows`` (int)
+      - ``first_break_id`` (int or None)
+      - ``first_break_reason`` (str or None) — ``"row_hash_mismatch"`` or
+        ``"prev_hash_mismatch"``
+    """
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            'SELECT id, timestamp, category, action, "user", '
+            "COALESCE(detail, ''), COALESCE(correlation_id, ''), "
+            "prev_hash, row_hash "
+            "FROM audit_events ORDER BY id ASC"
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await conn.close()
+
+    expected_prev = ""
+    total = 0
+    for row in rows:
+        row_id = row[0]
+        ts = row[1] if isinstance(row[1], str) else str(row[1])
+        cat, act, usr, det, corr, stored_prev, stored_hash = (
+            row[2], row[3], row[4], row[5], row[6], row[7], row[8]
+        )
+        total += 1
+
+        if (stored_prev or "") != expected_prev:
+            return {
+                "ok": False,
+                "total_rows": total,
+                "first_break_id": row_id,
+                "first_break_reason": "prev_hash_mismatch",
+            }
+
+        recomputed = _audit_row_hash(ts, cat, act, usr, det, corr, stored_prev or "")
+        if recomputed != (stored_hash or ""):
+            return {
+                "ok": False,
+                "total_rows": total,
+                "first_break_id": row_id,
+                "first_break_reason": "row_hash_mismatch",
+            }
+        expected_prev = stored_hash or ""
+
+    return {
+        "ok": True,
+        "total_rows": total,
+        "first_break_id": None,
+        "first_break_reason": None,
+    }
+
+
 async def add_audit_event(
     category: str,
     action: str,
@@ -3987,18 +4095,45 @@ async def add_audit_event(
     detail: str = "",
     correlation_id: str = "",
 ) -> int:
-    """Insert an immutable audit record and return its ID."""
-    conn = await get_db()
-    try:
-        cursor = await conn.execute(
-            """INSERT INTO audit_events (category, action, "user", detail, correlation_id)
-               VALUES (?, ?, ?, ?, ?)""",
-            (category, action, user, detail, correlation_id),
-        )
-        await conn.commit()
-        return cursor.lastrowid
-    finally:
-        await conn.close()
+    """Insert an immutable audit record and return its ID.
+
+    Serializes against ``_audit_chain_lock`` so concurrent inserts cannot
+    fork the hash chain. The hash covers (timestamp, category, action,
+    user, detail, correlation_id, prev_hash); ``id`` is intentionally
+    excluded so the row can be inserted with row_hash already populated.
+    Chain integrity rests on the prev_hash linkage, which detects any
+    insertion, deletion, or reordering of earlier rows.
+    """
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+    async with _audit_chain_lock:
+        conn = await get_db()
+        try:
+            cursor = await conn.execute(
+                "SELECT row_hash FROM audit_events ORDER BY id DESC LIMIT 1"
+            )
+            tail = await cursor.fetchone()
+            prev_hash = (tail[0] if tail else "") or ""
+
+            row_hash = _audit_row_hash(
+                timestamp, category, action, user, detail, correlation_id, prev_hash
+            )
+
+            cursor = await conn.execute(
+                """INSERT INTO audit_events
+                   (timestamp, category, action, "user", detail, correlation_id,
+                    prev_hash, row_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    timestamp, category, action, user, detail, correlation_id,
+                    prev_hash, row_hash,
+                ),
+            )
+            new_id = cursor.lastrowid
+            await conn.commit()
+            return new_id
+        finally:
+            await conn.close()
 
 
 async def get_audit_events(
