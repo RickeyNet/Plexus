@@ -72,7 +72,11 @@ export function useTriggerMacCollection() {
 // ── Traffic analysis (NetFlow / sFlow / IPFIX) ──────────────────────────────
 
 export interface FlowStatus {
+  enabled: boolean;
+  netflow_port: number;
+  sflow_port: number;
   running: boolean;
+  sflow_running: boolean;
 }
 
 export interface FlowTalker {
@@ -101,7 +105,29 @@ export interface FlowTimelinePoint {
   total_bytes: number;
 }
 
+export interface FlowExporter {
+  id: number;
+  exporter_ip: string;
+  host_id: number | null;
+  hostname: string | null;
+  flow_type: string;
+  packets_received: number;
+  sampling_rate: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  last_record_at: string | null;
+}
+
+export interface FlowExportersResponse {
+  exporters: FlowExporter[];
+  cache_size: number;
+}
+
 export type FlowDirection = 'src' | 'dst';
+
+function withHost(base: string, hostId?: number | null): string {
+  return hostId ? `${base}&host_id=${hostId}` : base;
+}
 
 export function useFlowStatus() {
   return useQuery({
@@ -114,50 +140,73 @@ export function useFlowStatus() {
 export function useFlowTopTalkers(args: {
   hours: number;
   direction: FlowDirection;
+  hostId?: number | null;
   limit?: number;
 }) {
-  const { hours, direction, limit = 15 } = args;
+  const { hours, direction, hostId, limit = 15 } = args;
   return useQuery({
-    queryKey: ['flows', 'top-talkers', hours, direction, limit],
+    queryKey: ['flows', 'top-talkers', hours, direction, limit, hostId ?? null],
     queryFn: () =>
       apiRequest<FlowTalker[]>(
-        `/flows/top-talkers?hours=${hours}&direction=${direction}&limit=${limit}`,
+        withHost(
+          `/flows/top-talkers?hours=${hours}&direction=${direction}&limit=${limit}`,
+          hostId,
+        ),
       ),
   });
 }
 
-export function useFlowTopApplications(args: { hours: number; limit?: number }) {
-  const { hours, limit = 15 } = args;
+export function useFlowTopApplications(args: {
+  hours: number;
+  hostId?: number | null;
+  limit?: number;
+}) {
+  const { hours, hostId, limit = 15 } = args;
   return useQuery({
-    queryKey: ['flows', 'top-applications', hours, limit],
+    queryKey: ['flows', 'top-applications', hours, limit, hostId ?? null],
     queryFn: () =>
       apiRequest<FlowApplication[]>(
-        `/flows/top-applications?hours=${hours}&limit=${limit}`,
+        withHost(`/flows/top-applications?hours=${hours}&limit=${limit}`, hostId),
       ),
   });
 }
 
-export function useFlowTopConversations(args: { hours: number; limit?: number }) {
-  const { hours, limit = 15 } = args;
+export function useFlowTopConversations(args: {
+  hours: number;
+  hostId?: number | null;
+  limit?: number;
+}) {
+  const { hours, hostId, limit = 15 } = args;
   return useQuery({
-    queryKey: ['flows', 'top-conversations', hours, limit],
+    queryKey: ['flows', 'top-conversations', hours, limit, hostId ?? null],
     queryFn: () =>
       apiRequest<FlowConversation[]>(
-        `/flows/top-conversations?hours=${hours}&limit=${limit}`,
+        withHost(`/flows/top-conversations?hours=${hours}&limit=${limit}`, hostId),
       ),
   });
 }
 
-export function useFlowTimeline(args: { hours: number }) {
-  const { hours } = args;
+export function useFlowTimeline(args: { hours: number; hostId?: number | null }) {
+  const { hours, hostId } = args;
   // Match the bucket-size logic in the legacy module so timeline shape stays
   // consistent: tighter bucketing for short windows, coarser for long ones.
   const bucketMinutes = hours <= 1 ? 1 : hours <= 6 ? 5 : 15;
   return useQuery({
-    queryKey: ['flows', 'timeline', hours, bucketMinutes],
+    queryKey: ['flows', 'timeline', hours, bucketMinutes, hostId ?? null],
     queryFn: () =>
       apiRequest<FlowTimelinePoint[]>(
-        `/flows/timeline?hours=${hours}&bucket_minutes=${bucketMinutes}`,
+        withHost(
+          `/flows/timeline?hours=${hours}&bucket_minutes=${bucketMinutes}`,
+          hostId,
+        ),
       ),
+  });
+}
+
+export function useFlowExporters() {
+  return useQuery({
+    queryKey: ['flows', 'exporters'],
+    queryFn: () => apiRequest<FlowExportersResponse>('/flows/exporters'),
+    staleTime: 15_000,
   });
 }
