@@ -35,6 +35,24 @@ LOGGER = configure_logging("plexus.inventory")
 router = APIRouter()
 admin_router = APIRouter()
 
+
+async def _notify_flow_collector_host_changed(
+    old_ip: str | None = None,
+    new_ip: str | None = None,
+    host_id: int | None = None,
+) -> None:
+    """Refresh the flow collector's in-memory exporter->host cache.
+
+    Imported lazily to avoid a circular dependency at module load time and
+    wrapped in a broad except so any inventory write that touches a host
+    is never blocked by a flow-collector error.
+    """
+    try:
+        from netcontrol.routes.flow_collector import on_host_changed
+        await on_host_changed(old_ip=old_ip, new_ip=new_ip, host_id=host_id)
+    except Exception as exc:
+        LOGGER.debug("flow_collector cache refresh skipped: %s", type(exc).__name__)
+
 # Reserved IP ranges that should not be added to inventory (mirrors jobs.py)
 _BLOCKED_NETWORKS = [
     ipaddress.ip_network("127.0.0.0/8"),        # loopback
@@ -364,6 +382,9 @@ async def _sync_group_hosts(
                 continue
             await db.remove_host(existing["id"])
             removed += 1
+
+    if added or updated or removed:
+        await _notify_flow_collector_host_changed()
 
     return {
         "added": added,
@@ -697,6 +718,7 @@ async def add_host(group_id: int, body: HostCreate):
         ip_address=body.ip_address,
         source_hint="inventory-add",
     )
+    await _notify_flow_collector_host_changed(new_ip=body.ip_address, host_id=hid)
     return {"id": hid}
 
 
@@ -704,6 +726,8 @@ async def add_host(group_id: int, body: HostCreate):
 async def update_host(host_id: int, body: HostUpdate):
     if body.ip_address:
         _validate_host_ip(body.ip_address)
+    prior = await db.get_host(host_id)
+    prior_ip = (prior.get("ip_address") if prior else "") or ""
     await db.update_host(
         host_id, body.hostname, body.ip_address, body.device_type,
         vrf_name=body.vrf_name,
@@ -724,6 +748,11 @@ async def update_host(host_id: int, body: HostUpdate):
         hostname=body.hostname,
         ip_address=body.ip_address,
         source_hint="inventory-update",
+    )
+    await _notify_flow_collector_host_changed(
+        old_ip=prior_ip or None,
+        new_ip=body.ip_address or None,
+        host_id=host_id,
     )
     return {"ok": True}
 
@@ -750,7 +779,11 @@ async def update_host_category(host_id: int, body: dict):
 
 @router.delete("/api/hosts/{host_id}")
 async def remove_host(host_id: int):
+    prior = await db.get_host(host_id)
+    prior_ip = (prior.get("ip_address") if prior else "") or ""
     await db.remove_host(host_id)
+    if prior_ip:
+        await _notify_flow_collector_host_changed(old_ip=prior_ip)
     return {"ok": True}
 
 
@@ -857,6 +890,10 @@ async def bulk_delete_hosts(body: dict):
         raise HTTPException(400, "host_ids must be a non-empty list")
     host_ids = [int(h) for h in host_ids]
     deleted = await db.bulk_delete_hosts(host_ids)
+    # Refresh the flow collector cache once for the whole batch; specific
+    # exporter rows are unlinked by the ON DELETE SET NULL FK so we just
+    # need the in-memory map to drop the deleted IPs.
+    await _notify_flow_collector_host_changed()
     return {"deleted": deleted}
 
 

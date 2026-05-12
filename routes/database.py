@@ -161,6 +161,7 @@ _INSERT_ID_TABLES = {
     "mac_tracking_history",
     "flow_records",
     "flow_summaries",
+    "flow_exporters",
     "metric_baselines",
     "baseline_alert_rules",
     "upgrade_images",
@@ -1199,6 +1200,20 @@ CREATE TABLE IF NOT EXISTS flow_summaries (
     created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_flow_summary_lookup ON flow_summaries(host_id, summary_type, period_start);
+
+CREATE TABLE IF NOT EXISTS flow_exporters (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    exporter_ip     TEXT    NOT NULL,
+    host_id         INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    flow_type       TEXT    NOT NULL DEFAULT 'netflow',
+    packets_received INTEGER NOT NULL DEFAULT 0,
+    sampling_rate   INTEGER NOT NULL DEFAULT 0,
+    first_seen      TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_seen       TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_record_at  TEXT,
+    UNIQUE(exporter_ip, flow_type)
+);
+CREATE INDEX IF NOT EXISTS idx_flow_exporters_host ON flow_exporters(host_id);
 
 -- ── Metric Baselines (statistical learning) ──────────────────────────────
 
@@ -11379,6 +11394,132 @@ async def cleanup_old_flow_records(hours: int = 48) -> int:
         )
         await db.commit()
         return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def get_exporter_host_map() -> dict[str, int]:
+    """Return ``{ip_address: host_id}`` for every host with a non-empty IP.
+
+    Used by the flow collector at startup and on host CRUD to resolve
+    incoming exporter IPs to inventory hosts without a per-packet DB hit.
+    Last-wins on collisions (same IP across multiple groups), which matches
+    how the flow collector treats exporter identity (per IP, not per group).
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, ip_address FROM hosts WHERE ip_address IS NOT NULL AND ip_address != ''"
+        )
+        rows = await cursor.fetchall()
+        mapping: dict[str, int] = {}
+        for r in rows:
+            d = dict(r)
+            ip = (d.get("ip_address") or "").strip()
+            if ip:
+                mapping[ip] = int(d["id"])
+        return mapping
+    finally:
+        await db.close()
+
+
+async def upsert_flow_exporter(
+    exporter_ip: str,
+    flow_type: str,
+    host_id: int | None,
+    packets_delta: int = 1,
+    sampling_rate: int = 0,
+    last_record_at: str | None = None,
+) -> None:
+    """Insert or update a flow exporter row for ``(exporter_ip, flow_type)``.
+
+    Increments ``packets_received`` by ``packets_delta`` and refreshes
+    ``last_seen`` and ``last_record_at`` on every call. ``host_id`` is
+    overwritten on conflict so a freshly-resolved exporter becomes linked
+    immediately after the corresponding host is added to inventory.
+    """
+    if not exporter_ip or not flow_type:
+        return
+    if DB_ENGINE == "postgres":
+        now_expr = "NOW()"
+        last_record_expr = "COALESCE(EXCLUDED.last_record_at, flow_exporters.last_record_at)"
+    else:
+        now_expr = "datetime('now')"
+        last_record_expr = "COALESCE(EXCLUDED.last_record_at, flow_exporters.last_record_at)"
+    db = await get_db()
+    try:
+        await db.execute(
+            f"""
+            INSERT INTO flow_exporters
+                (exporter_ip, host_id, flow_type, packets_received,
+                 sampling_rate, first_seen, last_seen, last_record_at)
+            VALUES (?, ?, ?, ?, ?, {now_expr}, {now_expr}, ?)
+            ON CONFLICT (exporter_ip, flow_type) DO UPDATE SET
+                host_id = EXCLUDED.host_id,
+                packets_received = flow_exporters.packets_received + EXCLUDED.packets_received,
+                sampling_rate = CASE WHEN EXCLUDED.sampling_rate > 0
+                                     THEN EXCLUDED.sampling_rate
+                                     ELSE flow_exporters.sampling_rate END,
+                last_seen = {now_expr},
+                last_record_at = {last_record_expr}
+            """,
+            (
+                exporter_ip,
+                host_id,
+                flow_type,
+                int(packets_delta),
+                int(sampling_rate or 0),
+                last_record_at,
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_flow_exporter_host_id(exporter_ip: str, host_id: int | None) -> int:
+    """Update host_id on every flow_exporters row matching exporter_ip.
+
+    Called from host CRUD so a host appearing/disappearing in inventory
+    is reflected in the exporter view without waiting for the next packet.
+    """
+    if not exporter_ip:
+        return 0
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE flow_exporters SET host_id = ? WHERE exporter_ip = ?",
+            (host_id, exporter_ip),
+        )
+        await db.commit()
+        return cursor.rowcount or 0
+    finally:
+        await db.close()
+
+
+async def list_flow_exporters() -> list[dict]:
+    """Return all flow exporters joined with host hostname when known."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            SELECT
+                e.id,
+                e.exporter_ip,
+                e.host_id,
+                h.hostname AS hostname,
+                e.flow_type,
+                e.packets_received,
+                e.sampling_rate,
+                e.first_seen,
+                e.last_seen,
+                e.last_record_at
+            FROM flow_exporters e
+            LEFT JOIN hosts h ON h.id = e.host_id
+            ORDER BY e.last_seen DESC, e.exporter_ip ASC
+            """
+        )
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
