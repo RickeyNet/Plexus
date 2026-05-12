@@ -113,7 +113,13 @@ from netcontrol.routes.dashboards import router as dashboards_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
 from netcontrol.routes.cdef_engine import router as cdef_router
 from netcontrol.routes.mac_tracking import router as mac_tracking_router
-from netcontrol.routes.flow_collector import router as flow_collector_router
+from netcontrol.routes.flow_collector import (
+    FLOW_COLLECTOR_CONFIG,
+    flow_aggregation_loop,
+    router as flow_collector_router,
+    start_flow_collector,
+    stop_flow_collector,
+)
 from netcontrol.routes.baseline_alerting import router as baseline_alerting_router
 from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.interface_errors import (
@@ -1179,6 +1185,33 @@ async def lifespan(app: FastAPI):
     dhcp_sync_task = asyncio.create_task(_dhcp_sync_loop())
     lab_runtime_ttl_task = asyncio.create_task(lab_runtime_ttl_loop())
     lab_drift_task = asyncio.create_task(lab_drift_scheduler_loop())
+
+    flow_collector_started = False
+    flow_aggregation_task: asyncio.Task | None = None
+    if os.getenv("APP_NETFLOW_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            netflow_port = int(os.getenv("APP_NETFLOW_PORT", "2055"))
+        except ValueError:
+            netflow_port = 2055
+            LOGGER.warning("APP_NETFLOW_PORT not an integer; using default 2055")
+        FLOW_COLLECTOR_CONFIG["netflow_port"] = netflow_port
+        try:
+            retention_hours = int(os.getenv("APP_FLOW_RETENTION_HOURS", "48"))
+            FLOW_COLLECTOR_CONFIG["retention_hours"] = max(1, retention_hours)
+        except ValueError:
+            LOGGER.warning("APP_FLOW_RETENTION_HOURS not an integer; using default 48")
+        try:
+            agg_interval = int(os.getenv("APP_FLOW_AGGREGATION_INTERVAL_SECONDS", "3600"))
+            FLOW_COLLECTOR_CONFIG["aggregation_interval_seconds"] = max(60, agg_interval)
+        except ValueError:
+            pass
+        try:
+            flow_collector_started = await start_flow_collector(netflow_port)
+        except Exception as exc:
+            LOGGER.warning("flow_collector: startup failed: %s", type(exc).__name__)
+        if flow_collector_started:
+            flow_aggregation_task = asyncio.create_task(flow_aggregation_loop())
+
     try:
         yield
     finally:
@@ -1202,6 +1235,8 @@ async def lifespan(app: FastAPI):
         dhcp_sync_task.cancel()
         lab_runtime_ttl_task.cancel()
         lab_drift_task.cancel()
+        if flow_aggregation_task is not None:
+            flow_aggregation_task.cancel()
         try:
             await retention_task
         except asyncio.CancelledError:
@@ -1282,6 +1317,16 @@ async def lifespan(app: FastAPI):
             await lab_drift_task
         except asyncio.CancelledError:
             pass
+        if flow_aggregation_task is not None:
+            try:
+                await flow_aggregation_task
+            except asyncio.CancelledError:
+                pass
+        if flow_collector_started:
+            try:
+                await stop_flow_collector()
+            except Exception as exc:
+                LOGGER.warning("flow_collector: shutdown failed: %s", type(exc).__name__)
 
 
 async def _rate_limit_cleanup_loop() -> None:
