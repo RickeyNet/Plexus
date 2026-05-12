@@ -48,25 +48,44 @@ function isIntensity(value: string | null): value is SpaceIntensity {
   return !!value && Object.prototype.hasOwnProperty.call(SPACE_INTENSITY_MAP, value);
 }
 
+// Sandboxed iframes / private-mode browsers can throw SecurityError on any
+// localStorage access. Wrap reads/writes so a storage failure never crashes
+// the bundle at module load via initAppearance().
+function safeGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSet(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore — storage may be unavailable */
+  }
+}
+
 export function readSavedTheme(): ThemeName {
-  const v = localStorage.getItem(THEME_KEY);
+  const v = safeGet(THEME_KEY);
   return isTheme(v) ? v : DEFAULT_THEME;
 }
 
 export function readSavedSpaceIntensity(): SpaceIntensity {
-  const v = localStorage.getItem(SPACE_INTENSITY_KEY);
+  const v = safeGet(SPACE_INTENSITY_KEY);
   return isIntensity(v) ? v : DEFAULT_SPACE_INTENSITY;
 }
 
 export function applyTheme(theme: ThemeName): void {
   document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem(THEME_KEY, theme);
+  safeSet(THEME_KEY, theme);
 }
 
 export function applySpaceIntensity(intensity: SpaceIntensity): void {
   const scalar = SPACE_INTENSITY_MAP[intensity];
   document.documentElement.style.setProperty('--space-intensity-user', String(scalar));
-  localStorage.setItem(SPACE_INTENSITY_KEY, intensity);
+  safeSet(SPACE_INTENSITY_KEY, intensity);
 }
 
 export function initAppearance(): void {

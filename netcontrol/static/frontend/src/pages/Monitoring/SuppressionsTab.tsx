@@ -9,6 +9,7 @@ import {
   type AlertSuppression,
   type SuppressionCreate,
 } from '@/api/monitoring';
+import { parseBackendDate } from '@/pages/Dashboard/helpers';
 import { formatTimestamp } from './helpers';
 
 export function SuppressionsTab() {
@@ -35,8 +36,8 @@ export function SuppressionsTab() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {suppressions.data.map((s) => {
-            const ends = new Date(s.ends_at + 'Z');
-            const starts = new Date(s.starts_at + 'Z');
+            const ends = parseBackendDate(s.ends_at) ?? new Date(NaN);
+            const starts = parseBackendDate(s.starts_at) ?? new Date(NaN);
             const isActive = ends > now && starts <= now;
             const status = isActive ? 'Active' : ends <= now ? 'Expired' : 'Scheduled';
             const statusColor = isActive ? 'success' : 'text-muted';
@@ -90,14 +91,24 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!starts) {
+      alert('Start time is required');
+      return;
+    }
     if (!ends) {
       alert('End time is required');
       return;
     }
+    const startsDate = new Date(starts);
+    const endsDate = new Date(ends);
+    if (Number.isNaN(startsDate.getTime()) || Number.isNaN(endsDate.getTime())) {
+      alert('Invalid start or end time');
+      return;
+    }
     const data: SuppressionCreate = {
       name: name.trim(),
-      starts_at: new Date(starts).toISOString().replace('T', ' ').slice(0, 19),
-      ends_at: new Date(ends).toISOString().replace('T', ' ').slice(0, 19),
+      starts_at: startsDate.toISOString().replace('T', ' ').slice(0, 19),
+      ends_at: endsDate.toISOString().replace('T', ' ').slice(0, 19),
       metric: metric || undefined,
       reason: reason.trim() || undefined,
     };

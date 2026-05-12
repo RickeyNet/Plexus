@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+import { PageHelp } from '@/components/PageHelp';
+
 import { DevicesTab } from './DevicesTab';
 import { AlertsTab } from './AlertsTab';
 import { RoutesTab } from './RoutesTab';
@@ -49,13 +51,19 @@ export function Monitoring() {
         <h2>Monitoring</h2>
       </div>
 
-      <div className="tab-bar" role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+      <PageHelp
+        pageKey="monitoring"
+        title="Real-Time Device Monitoring"
+        text="Track CPU, memory, response time, packet loss, and interface status. Includes SLA tracking, availability history, and capacity planning trends."
+      />
+
+      <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
         {TABS.map((t) => (
           <button
             key={t.key}
             role="tab"
             aria-selected={tab === t.key}
-            className={`tab-btn${tab === t.key ? ' active' : ''}`}
+            className={`btn btn-sm btn-secondary mon-tab-btn${tab === t.key ? ' active' : ''}`}
             onClick={() => selectTab(t.key)}
           >
             {t.label}
