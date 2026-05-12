@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { PageHelp } from '@/components/PageHelp';
+
 import {
   type DhcpServer,
   type IpamSource,
@@ -76,6 +78,11 @@ export function Ipam() {
     qc.invalidateQueries({ queryKey: ['ipam-overview'] });
     qc.invalidateQueries({ queryKey: ['ipam-subnet-detail'] });
     qc.invalidateQueries({ queryKey: ['ipam-sources'] });
+    qc.invalidateQueries({ queryKey: ['reconcileRuns'] });
+    qc.invalidateQueries({ queryKey: ['reconcileDiffs'] });
+    qc.invalidateQueries({ queryKey: ['dhcpServers'] });
+    qc.invalidateQueries({ queryKey: ['dhcpExhaustion'] });
+    qc.invalidateQueries({ queryKey: ['dhcpCorrelation'] });
   };
 
   const summaryCards = [
@@ -113,14 +120,6 @@ export function Ipam() {
       >
         <div>
           <h2 style={{ margin: 0 }}>IP Address Management</h2>
-          <p
-            className="text-muted"
-            style={{ margin: '0.35rem 0 0', maxWidth: '72ch' }}
-          >
-            Track inferred inventory subnets, discovered cloud CIDRs, synced
-            external IPAM prefixes, utilization, and duplicate conflicts from
-            one view.
-          </p>
         </div>
         <div
           style={{
@@ -171,6 +170,12 @@ export function Ipam() {
           </button>
         </div>
       </div>
+
+      <PageHelp
+        pageKey="ipam"
+        title="Address Space, Utilization & Conflicts"
+        text="Review inferred on-prem subnets, discovered cloud CIDRs, and duplicate IP conflicts in one place so addressing issues are visible before they become outages."
+      />
 
       <div style={{ marginBottom: '1rem' }}>
         <div

@@ -20,8 +20,8 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
     e.preventDefault();
     const payload: Parameters<typeof generateMut.mutate>[0] = {};
     if (circuitId) payload.circuit_id = parseInt(circuitId, 10);
-    if (start) payload.period_start = `${start}T00:00:00`;
-    if (end) payload.period_end = `${end}T00:00:00`;
+    if (start) payload.period_start = `${start}T00:00:00Z`;
+    if (end) payload.period_end = `${end}T00:00:00Z`;
     generateMut.mutate(payload, {
       onSuccess: (r) => {
         const count = r?.count ?? 0;

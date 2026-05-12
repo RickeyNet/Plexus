@@ -522,29 +522,45 @@ export async function streamPollNow(
   const decoder = new TextDecoder();
   let buffer = '';
 
-  const flushLine = (raw: string) => {
-    let line = raw.trim();
-    if (!line) return;
-    if (line.startsWith('data:')) line = line.slice(5).trim();
-    if (!line) return;
+  const flushEvent = (rawEvent: string) => {
+    // SSE event blocks may contain id:/event:/retry:/data: lines. Multi-line
+    // data: is concatenated with newlines per the spec. We only care about
+    // data: payloads here.
+    const dataLines: string[] = [];
+    for (const line of rawEvent.split('\n')) {
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).replace(/^ /, ''));
+      }
+    }
+    if (!dataLines.length) return;
+    const payload = dataLines.join('\n').trim();
+    if (!payload) return;
     try {
-      onEvent(JSON.parse(line) as PollNowEvent);
+      onEvent(JSON.parse(payload) as PollNowEvent);
     } catch {
       // ignore non-JSON heartbeats
     }
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx = buffer.indexOf('\n');
-    while (idx !== -1) {
-      const raw = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 1);
-      flushLine(raw);
-      idx = buffer.indexOf('\n');
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx = buffer.indexOf('\n\n');
+      while (idx !== -1) {
+        const rawEvent = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        flushEvent(rawEvent);
+        idx = buffer.indexOf('\n\n');
+      }
+    }
+    if (buffer.trim()) flushEvent(buffer);
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* may already be released */
     }
   }
-  if (buffer.trim()) flushLine(buffer);
 }

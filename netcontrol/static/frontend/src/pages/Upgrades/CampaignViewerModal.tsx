@@ -199,6 +199,12 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     };
 
     return () => {
+      // Detach before close so buffered messages / synthetic onclose don't
+      // call setState on an unmounted/replaced effect run.
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
       try {
         ws.close();
       } catch {

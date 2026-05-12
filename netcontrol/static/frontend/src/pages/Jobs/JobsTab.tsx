@@ -9,8 +9,8 @@ import {
 } from '@/api/jobs';
 
 import {
+  compareJobsDesc,
   formatTimestamp,
-  jobSortKey,
   parseDeps,
   priorityColor,
   priorityLabel,
@@ -53,7 +53,7 @@ export function JobsTab() {
         const matchesDate = !ds || withinDateRange(ds, dateRange);
         return text && matchesStatus && matchesDry && matchesDate;
       })
-      .sort((a, b) => jobSortKey(b).localeCompare(jobSortKey(a)));
+      .sort(compareJobsDesc);
   }, [jobsQuery.data, query, status, dryRun, dateRange]);
 
   function handleCancel(id: number) {

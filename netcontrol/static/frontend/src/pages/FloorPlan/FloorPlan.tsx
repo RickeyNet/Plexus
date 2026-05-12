@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { PageHelp } from '@/components/PageHelp';
 import {
   FloorPlacement,
   GeoFloor,
@@ -78,6 +79,12 @@ export function FloorPlan() {
           </button>
         </div>
       </div>
+
+      <PageHelp
+        pageKey="floor-plan"
+        title="Place Devices on Floor Plans"
+        text="Upload floor plan images per site, then drag inventory devices onto them. Devices show live status colors so you can locate problems geographically — handy for closet-based switch ops and physical site reviews."
+      />
 
       <div
         style={{

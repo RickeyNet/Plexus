@@ -905,15 +905,20 @@ async def _load_persisted_security_settings():
 
 
 def require_feature(feature_key: str):
-    async def _dependency(request: Request):
-        session = await require_auth(request)
+    async def _dependency(request: Request, response: Response = None):
+        session = await require_auth(request, response)
         # API tokens (APP_API_TOKEN env var) are server-level secrets with
         # full admin access by design — they bypass per-user feature checks.
         if session and session.get("auth_mode") == "token":
             return session
         user = await db.get_user_by_id(session["user_id"])
         if not user:
-            raise HTTPException(status_code=401, detail="Not authenticated")
+            # Session is valid but the user record is gone (deleted, renamed
+            # via a different user_id, etc.). Clear the orphan cookie so the
+            # next request takes the unauthenticated path cleanly.
+            if response is not None:
+                response.delete_cookie("session", samesite="strict")
+            raise HTTPException(status_code=401, detail="Session user not found")
         features = await _get_user_features(user)
         if user.get("role") != "admin" and feature_key not in features:
             raise HTTPException(status_code=403, detail=f"Access denied for feature '{feature_key}'")
@@ -933,13 +938,15 @@ def require_feature_method(feature_key: str):
     always required even on writes, so granting only `<feature>.write`
     without the base read key denies access.
     """
-    async def _dependency(request: Request):
-        session = await require_auth(request)
+    async def _dependency(request: Request, response: Response = None):
+        session = await require_auth(request, response)
         if session and session.get("auth_mode") == "token":
             return session
         user = await db.get_user_by_id(session["user_id"])
         if not user:
-            raise HTTPException(status_code=401, detail="Not authenticated")
+            if response is not None:
+                response.delete_cookie("session", samesite="strict")
+            raise HTTPException(status_code=401, detail="Session user not found")
         if user.get("role") == "admin":
             return session
         features = set(await _get_user_features(user))
@@ -952,13 +959,13 @@ def require_feature_method(feature_key: str):
         return session
     return _dependency
 
-async def require_admin(request: Request):
+async def require_admin(request: Request, response: Response = None):
     """Dependency that checks for admin access. Returns session dict.
 
     API tokens (APP_API_TOKEN) are server-level secrets equivalent to admin;
     they bypass the per-user role check intentionally.
     """
-    session = await require_auth(request)
+    session = await require_auth(request, response)
     if session and session.get("auth_mode") == "token":
         return session
     # Look up by user_id, not username. A user can rename themselves while
@@ -966,7 +973,11 @@ async def require_admin(request: Request):
     # so a username-based lookup would silently strip their admin rights
     # for the rest of the session.
     user = await db.get_user_by_id(session["user_id"])
-    if not user or user["role"] != "admin":
+    if not user:
+        if response is not None:
+            response.delete_cookie("session", samesite="strict")
+        raise HTTPException(status_code=401, detail="Session user not found")
+    if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return session
 

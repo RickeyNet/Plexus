@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 
 import { App } from '@/App';
 import { initAppearance } from '@/lib/appearance';
+import { TimeRangeProvider } from '@/lib/timeRange';
 
 initAppearance();
 
@@ -24,9 +25,11 @@ if (!rootEl) throw new Error('#root missing in index.html');
 createRoot(rootEl).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter basename="/frontend">
-        <App />
-      </BrowserRouter>
+      <TimeRangeProvider>
+        <BrowserRouter basename="/frontend">
+          <App />
+        </BrowserRouter>
+      </TimeRangeProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

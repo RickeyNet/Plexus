@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import {
@@ -34,7 +34,9 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
   }, [result.data]);
 
   const credList = credentials.data || [];
-  if (credentialId == null && credList.length > 0) setCredentialId(credList[0].id);
+  useEffect(() => {
+    if (credentialId == null && credList.length > 0) setCredentialId(credList[0].id);
+  }, [credentialId, credList]);
 
   const fixable = findings.filter(
     (f) => !f.passed && f.remediation && f.remediation.length > 0,

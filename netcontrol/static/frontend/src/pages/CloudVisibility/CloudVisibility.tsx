@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
+import { PageHelp } from '@/components/PageHelp';
 import { providerLabel } from './helpers';
 import { AccountsTab } from './AccountsTab';
 import { TopologyTab } from './TopologyTab';
@@ -18,6 +19,29 @@ const TABS: { key: Tab; label: string; path: string }[] = [
   { key: 'traffic', label: 'Traffic Metrics', path: '/cloud-visibility/traffic' },
   { key: 'policy', label: 'Policy', path: '/cloud-visibility/policy' },
 ];
+
+const TAB_HELP: Record<Tab, { title: string; text: string }> = {
+  accounts: {
+    title: 'Connected Cloud Accounts',
+    text: 'Register AWS, Azure, and GCP accounts so Plexus can pull their network topology, flow logs, and policies. Capabilities depend on which cloud SDKs are installed on the server.',
+  },
+  topology: {
+    title: 'Hybrid Topology',
+    text: 'Cloud constructs (VPCs, subnets, gateways) rendered alongside on-prem devices. Use this to reason about hybrid connectivity paths and trace traffic between sites and cloud workloads.',
+  },
+  flow: {
+    title: 'VPC Flow Logs',
+    text: 'Query and aggregate cloud-native flow log records — top talkers, top conversations, denied flows. Filter by account and provider above.',
+  },
+  traffic: {
+    title: 'Cloud Traffic Metrics',
+    text: 'Bandwidth and connection metrics pulled from the cloud provider, normalized into the same view as on-prem interface stats.',
+  },
+  policy: {
+    title: 'Cloud Network Policy',
+    text: 'Audit security groups, NACLs, and firewall rules across registered cloud accounts. Spot overly-permissive rules and unused policies.',
+  },
+};
 
 function tabFromPath(pathname: string): Tab {
   const match = TABS.find((t) => t.path === pathname);
@@ -58,11 +82,19 @@ export function CloudVisibility() {
     ? accountList.filter((a) => String(a.provider ?? '').toLowerCase() === filter.provider)
     : accountList;
 
+  const tabHelp = TAB_HELP[tab];
+
   return (
     <div className="page">
       <div className="page-header">
         <h2>Cloud Visibility</h2>
       </div>
+
+      <PageHelp
+        pageKey="cloud-visibility"
+        title="Hybrid Cloud Network Visibility"
+        text="Track AWS/Azure/GCP network constructs alongside on-prem devices. Manage cloud accounts, refresh topology snapshots, and view cloud and hybrid connectivity paths."
+      />
 
       {/* Provider capability hints */}
       {(providers.data?.providers ?? []).length > 0 && (
@@ -118,19 +150,21 @@ export function CloudVisibility() {
         </div>
       </div>
 
-      <div className="tab-bar" role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+      <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
         {TABS.map((t) => (
           <button
             key={t.key}
             role="tab"
             aria-selected={tab === t.key}
-            className={`tab-btn${tab === t.key ? ' active' : ''}`}
+            className={`btn btn-sm btn-secondary mon-tab-btn${tab === t.key ? ' active' : ''}`}
             onClick={() => selectTab(t.key)}
           >
             {t.label}
           </button>
         ))}
       </div>
+
+      <PageHelp pageKey={`cloud-visibility.${tab}`} title={tabHelp.title} text={tabHelp.text} />
 
       {tab === 'accounts' && (
         <AccountsTab
