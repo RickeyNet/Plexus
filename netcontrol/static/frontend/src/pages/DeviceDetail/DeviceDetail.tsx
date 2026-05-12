@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
+import { useAuthStatus } from '@/api/auth';
 import { PageHelp } from '@/components/PageHelp';
 import { TimeSeriesChart, TimeSeries } from '@/lib/echart';
 import {
@@ -17,18 +18,20 @@ import {
 
 import { AlertCorrelationModal } from './AlertCorrelationModal';
 import { ErrorTrendingTab } from './ErrorTrendingTab';
+import { FlowTab } from './FlowTab';
 import { InterfaceTab } from './InterfaceTab';
 import { formatUptime } from './format';
 
-const TABS = [
+const ALL_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'interfaces', label: 'Interfaces' },
   { id: 'errors', label: 'Interface Errors' },
+  { id: 'flow', label: 'Flow' },
   { id: 'alerts', label: 'Alerts' },
   { id: 'compliance', label: 'Compliance' },
   { id: 'syslog', label: 'Syslog' },
 ] as const;
-type TabId = (typeof TABS)[number]['id'];
+type TabId = (typeof ALL_TABS)[number]['id'];
 
 const TAB_HELP: Record<TabId, { title: string; text: string }> = {
   overview: {
@@ -42,6 +45,10 @@ const TAB_HELP: Record<TabId, { title: string; text: string }> = {
   errors: {
     title: 'Interface Error Trending',
     text: 'CRC, input/output errors, and discards per interface — the metrics that catch bad cables and flapping links before they cause an outage.',
+  },
+  flow: {
+    title: 'Flow Traffic for This Device',
+    text: 'NetFlow/sFlow/IPFIX records this device has exported. Top talkers, applications, conversations, and a bps timeline — scoped to this host and the selected time range.',
   },
   alerts: {
     title: 'Open Alerts on This Device',
@@ -66,6 +73,19 @@ export function DeviceDetail() {
   const hostId = Number.isFinite(parsedHostId) ? parsedHostId : null;
   const [tab, setTab] = useState<TabId>('overview');
   const [range, setRange] = useState('24h');
+
+  const auth = useAuthStatus();
+  const flowHidden = useMemo(
+    () => new Set(auth.data?.feature_visibility_hidden ?? []).has('traffic-analysis'),
+    [auth.data?.feature_visibility_hidden],
+  );
+  const TABS = useMemo(
+    () => ALL_TABS.filter((t) => t.id !== 'flow' || !flowHidden),
+    [flowHidden],
+  );
+  useEffect(() => {
+    if (flowHidden && tab === 'flow') setTab('overview');
+  }, [flowHidden, tab]);
 
   const polls = useMonitoringPollHistory(hostId, 1);
   const cpu = useMetricQuery('cpu_percent', hostId, range);
@@ -175,6 +195,7 @@ export function DeviceDetail() {
             <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} />
           )}
           {tab === 'errors' && <ErrorTrendingTab hostId={hostId} />}
+          {tab === 'flow' && !flowHidden && <FlowTab hostId={hostId} range={range} />}
           {tab === 'alerts' && (
             <AlertsTab alerts={alerts.data?.alerts || []} loading={alerts.isLoading} />
           )}
