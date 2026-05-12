@@ -409,6 +409,71 @@ DHCP_SYNC_MAX_INTERVAL = 86400
 DHCP_SYNC_CONFIG: dict = dict(DHCP_SYNC_DEFAULTS)
 
 
+# ── NetFlow / sFlow collector defaults ───────────────────────────────────────
+# Persisted via auth_settings key "flow_collector" so port/retention can be
+# changed from the Settings UI without an APP_* env-var restart. The on-disk
+# value (if any) overrides these defaults; env vars only seed the very first
+# boot, after which the DB row is the source of truth.
+
+FLOW_COLLECTOR_DEFAULTS = {
+    "enabled": False,
+    "netflow_port": 2055,
+    "sflow_port": 6343,           # set to 0 to disable the sFlow listener
+    "retention_hours": 48,
+    "summary_retention_days": 30,
+    "aggregation_interval_seconds": 3600,
+}
+
+FLOW_COLLECTOR_MIN_AGG_INTERVAL = 60
+FLOW_COLLECTOR_MAX_AGG_INTERVAL = 86400
+FLOW_COLLECTOR_MIN_RETENTION_HOURS = 1
+FLOW_COLLECTOR_MAX_RETENTION_HOURS = 24 * 365   # 1 year ceiling
+
+
+def _sanitize_flow_collector_config(data: dict | None) -> dict:
+    cfg = dict(FLOW_COLLECTOR_DEFAULTS)
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        try:
+            netflow_port = int(data.get("netflow_port", cfg["netflow_port"]))
+            if 1 <= netflow_port <= 65535:
+                cfg["netflow_port"] = netflow_port
+        except (TypeError, ValueError):
+            pass
+        try:
+            sflow_port = int(data.get("sflow_port", cfg["sflow_port"]))
+            # 0 is a sentinel meaning "do not bind sFlow"
+            if sflow_port == 0 or 1 <= sflow_port <= 65535:
+                cfg["sflow_port"] = sflow_port
+        except (TypeError, ValueError):
+            pass
+        try:
+            ret_hours = int(data.get("retention_hours", cfg["retention_hours"]))
+            cfg["retention_hours"] = max(
+                FLOW_COLLECTOR_MIN_RETENTION_HOURS,
+                min(FLOW_COLLECTOR_MAX_RETENTION_HOURS, ret_hours),
+            )
+        except (TypeError, ValueError):
+            pass
+        try:
+            summary_days = int(data.get("summary_retention_days", cfg["summary_retention_days"]))
+            cfg["summary_retention_days"] = max(1, min(3650, summary_days))
+        except (TypeError, ValueError):
+            pass
+        try:
+            agg = int(data.get("aggregation_interval_seconds", cfg["aggregation_interval_seconds"]))
+            cfg["aggregation_interval_seconds"] = max(
+                FLOW_COLLECTOR_MIN_AGG_INTERVAL,
+                min(FLOW_COLLECTOR_MAX_AGG_INTERVAL, agg),
+            )
+        except (TypeError, ValueError):
+            pass
+    return cfg
+
+
+FLOW_COLLECTOR_CONFIG: dict = dict(FLOW_COLLECTOR_DEFAULTS)
+
+
 def _sanitize_dhcp_sync_config(data: dict | None) -> dict:
     cfg = dict(DHCP_SYNC_DEFAULTS)
     if isinstance(data, dict):

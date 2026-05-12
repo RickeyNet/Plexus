@@ -48,6 +48,7 @@ _flow_transport = None
 _flow_protocol = None
 _sflow_transport = None
 _sflow_protocol = None
+_flow_aggregation_task: asyncio.Task | None = None
 
 # Resolves exporter source IP -> hosts.id without per-packet DB lookups.
 # Populated at collector start and refreshed via refresh_exporter_cache()
@@ -908,3 +909,112 @@ async def api_stop_collector():
     if not ok:
         raise HTTPException(400, "Collector not running")
     return {"stopped": True}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Persisted Config (Phase D)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Port / retention / toggle state lives in auth_settings("flow_collector").
+# These endpoints let admins change it from the Settings UI without an env-var
+# restart; `apply_flow_collector_config()` runs the diff (start/stop/rebind
+# listeners only when the relevant fields actually changed).
+
+
+def _ensure_aggregation_task() -> None:
+    """Start the aggregation loop if it isn't already running."""
+    global _flow_aggregation_task
+    if _flow_aggregation_task is None or _flow_aggregation_task.done():
+        _flow_aggregation_task = asyncio.create_task(flow_aggregation_loop())
+
+
+async def _cancel_aggregation_task() -> None:
+    global _flow_aggregation_task
+    if _flow_aggregation_task is None:
+        return
+    _flow_aggregation_task.cancel()
+    try:
+        await _flow_aggregation_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    _flow_aggregation_task = None
+
+
+async def apply_flow_collector_config(new_cfg: dict) -> dict:
+    """Apply a new persisted config, hot-restarting listeners on port changes.
+
+    Returns the final FLOW_COLLECTOR_CONFIG snapshot after reconciliation.
+    Callers are expected to have already validated/sanitized `new_cfg`.
+    """
+    old_enabled = bool(FLOW_COLLECTOR_CONFIG.get("enabled"))
+    old_netflow = int(FLOW_COLLECTOR_CONFIG.get("netflow_port", 2055))
+    old_sflow = int(FLOW_COLLECTOR_CONFIG.get("sflow_port", 6343))
+
+    FLOW_COLLECTOR_CONFIG.update(new_cfg)
+
+    new_enabled = bool(FLOW_COLLECTOR_CONFIG.get("enabled"))
+    new_netflow = int(FLOW_COLLECTOR_CONFIG.get("netflow_port", 2055))
+    new_sflow = int(FLOW_COLLECTOR_CONFIG.get("sflow_port", 6343))
+
+    listener_change = (
+        old_netflow != new_netflow
+        or old_sflow != new_sflow
+        or old_enabled != new_enabled
+    )
+
+    if new_enabled:
+        if listener_change:
+            # Stop first so the rebind doesn't hit EADDRINUSE on the old port.
+            if _flow_transport is not None or _sflow_transport is not None:
+                await stop_flow_collector()
+            await start_flow_collector(
+                new_netflow,
+                sflow_port=new_sflow if new_sflow else None,
+            )
+        elif _flow_transport is None:
+            # Was enabled in config but somehow not running — start it.
+            await start_flow_collector(
+                new_netflow,
+                sflow_port=new_sflow if new_sflow else None,
+            )
+        _ensure_aggregation_task()
+    else:
+        # Disabled: ensure both the listener and the aggregation loop are gone.
+        if _flow_transport is not None or _sflow_transport is not None:
+            await stop_flow_collector()
+        await _cancel_aggregation_task()
+
+    # FLOW_COLLECTOR_CONFIG["enabled"] gets flipped to False by stop_flow_collector(),
+    # but the persisted intent is what the admin chose. Restore it.
+    FLOW_COLLECTOR_CONFIG["enabled"] = new_enabled
+
+    return _config_snapshot()
+
+
+def _config_snapshot() -> dict:
+    """Return the publishable config view (omits batch_size internal knob)."""
+    return {
+        "enabled": bool(FLOW_COLLECTOR_CONFIG.get("enabled", False)),
+        "netflow_port": int(FLOW_COLLECTOR_CONFIG.get("netflow_port", 2055)),
+        "sflow_port": int(FLOW_COLLECTOR_CONFIG.get("sflow_port", 6343)),
+        "retention_hours": int(FLOW_COLLECTOR_CONFIG.get("retention_hours", 48)),
+        "summary_retention_days": int(FLOW_COLLECTOR_CONFIG.get("summary_retention_days", 30)),
+        "aggregation_interval_seconds": int(
+            FLOW_COLLECTOR_CONFIG.get("aggregation_interval_seconds", 3600)
+        ),
+        "netflow_running": _flow_transport is not None,
+        "sflow_running": _sflow_transport is not None,
+    }
+
+
+@router.get("/api/admin/flows/config")
+async def api_get_flow_config():
+    return _config_snapshot()
+
+
+@router.put("/api/admin/flows/config")
+async def api_update_flow_config(body: dict):
+    sanitized = state._sanitize_flow_collector_config(body)
+    await db.set_auth_setting("flow_collector", sanitized)
+    snapshot = await apply_flow_collector_config(sanitized)
+    return snapshot
