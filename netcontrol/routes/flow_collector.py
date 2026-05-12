@@ -47,6 +47,12 @@ FLOW_AGGREGATION_MIN_INTERVAL = 60
 _flow_transport = None
 _flow_protocol = None
 
+# Resolves exporter source IP -> hosts.id without per-packet DB lookups.
+# Populated at collector start and refreshed via refresh_exporter_cache()
+# whenever inventory hosts are added/updated/deleted.
+_exporter_cache: dict[str, int] = {}
+_exporter_cache_lock = asyncio.Lock()
+
 
 # Well-known port to service name mapping
 PORT_SERVICES = {
@@ -266,17 +272,28 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
         else:
             return  # Unknown format
 
-        # Resolve exporter to host_id
+        if not records:
+            return
+
         exporter_ip = addr[0]
+        host_id = _exporter_cache.get(exporter_ip)
+        flow_type = records[0]["flow_type"]
+        last_record_at = records[-1].get("end_time")
 
         for rec in records:
             self._buffer.append((
-                rec["exporter_ip"], None, rec["flow_type"],
+                rec["exporter_ip"], host_id, rec["flow_type"],
                 rec["src_ip"], rec["dst_ip"], rec["src_port"], rec["dst_port"],
                 rec["protocol"], rec["bytes"], rec["packets"],
                 rec["src_as"], rec["dst_as"], rec["input_if"], rec["output_if"],
                 rec["tos"], rec["tcp_flags"], rec["start_time"], rec["end_time"],
             ))
+
+        # Per-exporter telemetry: count this packet (not per-record) so the
+        # number matches what the device actually sent over the wire.
+        asyncio.create_task(_record_exporter_packet(
+            exporter_ip, flow_type, host_id, last_record_at
+        ))
 
         if len(self._buffer) >= FLOW_COLLECTOR_CONFIG.get("batch_size", 100):
             asyncio.create_task(self._flush_buffer())
@@ -306,6 +323,71 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Exporter Cache & Telemetry
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def refresh_exporter_cache() -> int:
+    """Reload _exporter_cache from the hosts table.
+
+    Called at collector startup and from host CRUD paths so the in-memory
+    map stays consistent with inventory without per-packet DB lookups.
+    Returns the number of entries loaded.
+    """
+    async with _exporter_cache_lock:
+        try:
+            mapping = await db.get_exporter_host_map()
+        except Exception as exc:
+            LOGGER.warning("flow_collector: exporter cache refresh failed: %s", type(exc).__name__)
+            return len(_exporter_cache)
+        _exporter_cache.clear()
+        _exporter_cache.update(mapping)
+        return len(_exporter_cache)
+
+
+async def on_host_changed(
+    old_ip: str | None = None,
+    new_ip: str | None = None,
+    host_id: int | None = None,
+) -> None:
+    """Hook called from host add/update/remove to keep state consistent.
+
+    Refreshes the in-memory exporter cache and propagates host_id changes
+    to any existing flow_exporters rows for the affected IPs so the
+    exporter table doesn't lag inventory edits.
+    """
+    await refresh_exporter_cache()
+    try:
+        if old_ip and old_ip != new_ip:
+            await db.update_flow_exporter_host_id(old_ip, None)
+        if new_ip and host_id is not None:
+            await db.update_flow_exporter_host_id(new_ip, host_id)
+    except Exception as exc:
+        LOGGER.warning("flow_collector: exporter host_id sync failed: %s", type(exc).__name__)
+
+
+async def _record_exporter_packet(
+    exporter_ip: str,
+    flow_type: str,
+    host_id: int | None,
+    last_record_at: str | None,
+) -> None:
+    """Persist per-exporter packet telemetry. Best-effort: never raises."""
+    try:
+        await db.upsert_flow_exporter(
+            exporter_ip=exporter_ip,
+            flow_type=flow_type,
+            host_id=host_id,
+            packets_delta=1,
+            sampling_rate=0,
+            last_record_at=last_record_at,
+        )
+    except Exception as exc:
+        LOGGER.debug("flow_collector: exporter upsert failed for %s: %s",
+                     exporter_ip, type(exc).__name__)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Collector Lifecycle
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -323,6 +405,7 @@ async def start_flow_collector(port: int = 2055) -> bool:
             local_addr=("0.0.0.0", port),
         )
         FLOW_COLLECTOR_CONFIG["enabled"] = True
+        await refresh_exporter_cache()
         LOGGER.info("flow_collector: started on UDP port %d", port)
         return True
     except Exception as exc:
@@ -461,6 +544,13 @@ async def api_flow_status():
         "netflow_port": FLOW_COLLECTOR_CONFIG.get("netflow_port", 2055),
         "running": _flow_transport is not None,
     }
+
+
+@router.get("/api/flows/exporters")
+async def api_flow_exporters():
+    """List devices that have exported flows, with per-protocol packet counters."""
+    rows = await db.list_flow_exporters()
+    return {"exporters": rows, "cache_size": len(_exporter_cache)}
 
 
 @router.post("/api/admin/flows/start")
