@@ -6,7 +6,12 @@ const PERF_KEY = 'plexus_performance_mode';
 // already keys off `body.reduced-motion`, so toggling that class is enough —
 // the starfield and CSS animations both honor it.
 function readInitial(): boolean {
-  const saved = localStorage.getItem(PERF_KEY);
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem(PERF_KEY);
+  } catch {
+    /* storage unavailable — fall through to media query */
+  }
   if (saved !== null) return saved === '1';
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
@@ -16,7 +21,11 @@ export function usePerformanceMode(): { enabled: boolean; toggle: () => void } {
 
   useEffect(() => {
     document.body.classList.toggle('reduced-motion', enabled);
-    localStorage.setItem(PERF_KEY, enabled ? '1' : '0');
+    try {
+      localStorage.setItem(PERF_KEY, enabled ? '1' : '0');
+    } catch {
+      /* ignore — storage may be unavailable */
+    }
   }, [enabled]);
 
   const toggle = useCallback(() => setEnabled((v) => !v), []);

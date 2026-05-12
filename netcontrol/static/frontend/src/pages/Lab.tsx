@@ -1,11 +1,13 @@
 import { useMemo, useState, ReactNode } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { PageHelp } from '@/components/PageHelp';
 import { TopologyCanvas } from '@/pages/TopologyCanvas';
 import {
   LabDeviceSummary,
   useAddTopologyLink,
   useAddTopologyMember,
+  useCloneHost,
   useCreateDevice,
   useCreateEnvironment,
   useCreateTopology,
@@ -151,15 +153,7 @@ export function Lab() {
   return (
     <>
       <div className="page-header">
-        <div>
-          <h2>Lab / Digital Twin</h2>
-          <p style={{ color: 'var(--text-light)', marginTop: '0.25rem', maxWidth: 720 }}>
-            Safe sandbox for pre-production change testing. Clone a production
-            device, apply proposed commands or templates against the simulated
-            snapshot, review the diff and risk score, then promote a successful
-            change to a real deployment.
-          </p>
-        </div>
+        <h2 style={{ margin: 0 }}>Lab / Digital Twin</h2>
         <button
           type="button"
           className="btn btn-primary"
@@ -168,6 +162,12 @@ export function Lab() {
           New environment
         </button>
       </div>
+
+      <PageHelp
+        pageKey="lab"
+        title="Pre-Production Change Sandbox"
+        text="Clone a production device, apply proposed commands or templates against the simulated snapshot, review the diff and risk score, then promote a successful change to a real deployment."
+      />
 
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
         <div style={{ minWidth: 280 }}>
@@ -460,6 +460,7 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
   const [config, setConfig] = useState('');
   const [cloneHostId, setCloneHostId] = useState('');
   const create = useCreateDevice(envId);
+  const clone = useCloneHost(envId);
 
   return (
     <Modal isOpen onClose={onClose} title="Add lab device">
@@ -548,19 +549,14 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
         <button
           type="button"
           className="btn btn-secondary"
-          disabled={!cloneHostId || Number.isNaN(Number(cloneHostId))}
+          disabled={!cloneHostId || Number.isNaN(Number(cloneHostId)) || clone.isPending}
           onClick={async () => {
-            const res = await fetch(`/api/lab/environments/${envId}/clone-host`, {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ host_id: Number(cloneHostId) }),
-            });
-            if (!res.ok) {
-              alert(`Clone failed: ${res.status}`);
-              return;
+            try {
+              await clone.mutateAsync({ host_id: Number(cloneHostId) });
+              onClose();
+            } catch (err) {
+              alert(`Clone failed: ${(err as Error).message}`);
             }
-            onClose();
           }}
         >
           Clone from inventory host ID

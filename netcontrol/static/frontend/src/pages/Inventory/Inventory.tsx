@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { PageHelp } from '@/components/PageHelp';
+
 import {
   type InventoryGroupFull,
   type InventoryHost,
@@ -61,8 +63,8 @@ export function Inventory() {
 
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<InventorySort>('custom');
-  const [compact, setCompact] = useState<boolean>(loadCompactMode());
-  const [collapsed, setCollapsed] = useState<Set<number>>(loadCollapsedSet());
+  const [compact, setCompact] = useState<boolean>(() => loadCompactMode());
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => loadCollapsedSet());
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
   const [selectedHosts, setSelectedHosts] = useState<Map<number, Set<number>>>(
     new Map(),
@@ -234,6 +236,12 @@ export function Inventory() {
           </button>
         </div>
       </div>
+
+      <PageHelp
+        pageKey="inventory"
+        title="Manage Your Devices"
+        text="Add, edit, and organize network devices into groups. Devices added here are used across monitoring, backups, compliance, and automation features."
+      />
 
       <div
         className="card"

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { PageHelp } from '@/components/PageHelp';
 import {
   FlowApplication,
   FlowConversation,
@@ -71,6 +72,12 @@ export function TrafficAnalysis() {
           <CollectorBadge running={status.data?.running} />
         </div>
       </div>
+
+      <PageHelp
+        pageKey="traffic-analysis"
+        title="Traffic Analysis"
+        text="Analyze network traffic patterns, interface utilization, and bandwidth trends. Identify top talkers and spot congestion before it impacts users."
+      />
 
       {anyLoading && <div className="skeleton-loader" style={{ height: '300px' }} />}
 

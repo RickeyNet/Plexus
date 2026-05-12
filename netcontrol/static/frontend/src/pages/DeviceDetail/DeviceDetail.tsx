@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
+import { PageHelp } from '@/components/PageHelp';
 import { TimeSeriesChart, TimeSeries } from '@/lib/echart';
 import {
   MetricQueryResult,
@@ -29,12 +30,40 @@ const TABS = [
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
 
+const TAB_HELP: Record<TabId, { title: string; text: string }> = {
+  overview: {
+    title: 'Device Health at a Glance',
+    text: 'CPU, memory, response time, and packet loss for this device over the selected range. The first place to look when triaging an alert.',
+  },
+  interfaces: {
+    title: 'Per-Interface Metrics',
+    text: 'Bandwidth in/out and operational status for each interface. Click an interface name to drill into its history.',
+  },
+  errors: {
+    title: 'Interface Error Trending',
+    text: 'CRC, input/output errors, and discards per interface — the metrics that catch bad cables and flapping links before they cause an outage.',
+  },
+  alerts: {
+    title: 'Open Alerts on This Device',
+    text: 'Recent alerts raised against this host. Use to correlate the timing of alarms with config changes or interface events.',
+  },
+  compliance: {
+    title: 'Compliance Status for This Host',
+    text: 'Most recent scan results across every profile assigned to this device. Failed checks expand to show the offending lines.',
+  },
+  syslog: {
+    title: 'Syslog from This Device',
+    text: 'Recent syslog entries received from this device, in chronological order. Useful when an alert points here and you want to see what the device itself logged.',
+  },
+};
+
 const RANGES = ['1h', '6h', '24h', '7d', '30d'];
 
 export function DeviceDetail() {
   const { hostId: hostIdParam } = useParams<{ hostId: string }>();
   const navigate = useNavigate();
-  const hostId = hostIdParam ? parseInt(hostIdParam, 10) : null;
+  const parsedHostId = hostIdParam ? parseInt(hostIdParam, 10) : NaN;
+  const hostId = Number.isFinite(parsedHostId) ? parsedHostId : null;
   const [tab, setTab] = useState<TabId>('overview');
   const [range, setRange] = useState('24h');
 
@@ -109,6 +138,12 @@ export function DeviceDetail() {
       <DeviceInfoBar poll={latestPoll} hostId={hostId} />
       {ipamCtx.data && <IpamContext ctx={ipamCtx.data} vrf={vrf} />}
 
+      <PageHelp
+        pageKey="device-detail"
+        title="Single-Device Drill-Down"
+        text="Everything Plexus knows about one device — health metrics, interface stats, alerts, compliance status, and syslog — scoped to the time range above."
+      />
+
       <div
         className="card"
         style={{ marginTop: '0.75rem', padding: 0, overflow: 'hidden' }}
@@ -132,6 +167,7 @@ export function DeviceDetail() {
           ))}
         </div>
         <div style={{ padding: '0.75rem' }}>
+          <PageHelp pageKey={`device-detail.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
           {tab === 'overview' && (
             <OverviewTab cpu={cpu.data} mem={mem.data} rt={rt.data} pl={pl.data} />
           )}

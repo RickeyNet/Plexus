@@ -461,8 +461,8 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
       metric,
       target_value: parseFloat(targetValue) || 0,
       warning_value: parseFloat(warningValue) || 0,
-      host_id: scope === 'host' ? parseInt(hostId, 10) || null : null,
-      group_id: scope === 'group' ? parseInt(groupId, 10) || null : null,
+      host_id: scope === 'host' ? (Number.isFinite(parseInt(hostId, 10)) ? parseInt(hostId, 10) : null) : null,
+      group_id: scope === 'group' ? (Number.isFinite(parseInt(groupId, 10)) ? parseInt(groupId, 10) : null) : null,
     };
     if (target) {
       updateMut.mutate({ id: target.id, data }, {

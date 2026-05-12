@@ -61,16 +61,28 @@ export function formatUptime(seconds: number | null | undefined): string {
   return `${mins}m`;
 }
 
+// Returns true when an ISO string already has a timezone suffix (Z or ±HH:MM).
+function hasTimezone(s: string): boolean {
+  return /Z$|[+-]\d{2}:?\d{2}$/.test(s);
+}
+
+// Backend returns naive (UTC) timestamps without a tz suffix in some places;
+// callers should funnel through this so we don't accidentally parse them as
+// local time and avoid `+00:00Z` (invalid) when a zone is already present.
+export function parseBackendDate(isoStr: string | null | undefined): Date | null {
+  if (!isoStr) return null;
+  const normalized = hasTimezone(isoStr) ? isoStr : `${isoStr}Z`;
+  const d = new Date(normalized);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function timeAgo(isoStr: string | null | undefined): string {
   if (!isoStr) return '-';
-  try {
-    const date = new Date(isoStr.endsWith('Z') ? isoStr : `${isoStr}Z`);
-    const diff = (Date.now() - date.getTime()) / 1000;
-    if (diff < 60) return 'just now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  } catch {
-    return isoStr;
-  }
+  const date = parseBackendDate(isoStr);
+  if (!date) return isoStr;
+  const diff = (Date.now() - date.getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }

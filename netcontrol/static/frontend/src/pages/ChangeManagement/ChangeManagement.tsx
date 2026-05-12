@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useAuthStatus } from '@/api/auth';
+import { PageHelp } from '@/components/PageHelp';
 import { Deployments } from '@/pages/Deployments/Deployments';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 
@@ -35,6 +36,12 @@ export function ChangeManagement() {
 
   return (
     <div>
+      <PageHelp
+        pageKey="change-management"
+        title="Plan, Analyze & Deploy Changes"
+        text="Assess risk before pushing changes, deploy with staged rollouts, and roll back if needed. The full change lifecycle in one place."
+      />
+
       <div
         style={{
           display: 'flex',
@@ -61,8 +68,26 @@ export function ChangeManagement() {
           </button>
         )}
       </div>
-      {tab === 'risk' && canRisk && <RiskAnalysis />}
-      {tab === 'deployments' && canDeploy && <Deployments />}
+      {tab === 'risk' && canRisk && (
+        <>
+          <PageHelp
+            pageKey="change-management.risk"
+            title="Pre-Change Risk Analysis"
+            text="Score a proposed change before it ships. Compare candidate configs against the running baseline, flag impactful changes, and review which devices and interfaces would be affected."
+          />
+          <RiskAnalysis />
+        </>
+      )}
+      {tab === 'deployments' && canDeploy && (
+        <>
+          <PageHelp
+            pageKey="change-management.deployments"
+            title="Staged Change Deployments"
+            text="Push changes to devices in phases with built-in pause points. Track per-device outcome, roll back affected hosts on failure, and keep an audit trail of every step."
+          />
+          <Deployments />
+        </>
+      )}
     </div>
   );
 }

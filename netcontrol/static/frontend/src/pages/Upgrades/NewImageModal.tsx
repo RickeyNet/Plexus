@@ -19,7 +19,8 @@ export function NewImageModal({ isOpen, onClose }: Props) {
       setError(null);
       upload.reset();
     }
-  }, [isOpen, upload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

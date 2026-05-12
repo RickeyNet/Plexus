@@ -16,10 +16,18 @@ import {
   useScanAssignmentNow,
   useUpdateAssignment,
 } from '@/api/compliance';
+import { PageHelp } from '@/components/PageHelp';
+
+import { parseBackendDate } from '@/pages/Dashboard/helpers';
 
 import { AssignProfileModal, EditProfileModal, NewProfileModal } from './ProfileModals';
 import { FindingsModal } from './FindingsModal';
 import { RunScanModal } from './RunScanModal';
+
+function formatBackendStamp(iso: string | null | undefined, fallback = '-'): string {
+  const d = parseBackendDate(iso);
+  return d ? d.toLocaleString() : fallback;
+}
 
 type Tab = 'profiles' | 'assignments' | 'results' | 'status';
 
@@ -29,6 +37,25 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'results', label: 'Scan Results' },
   { id: 'status', label: 'Host Status' },
 ];
+
+const TAB_HELP: Record<Tab, { title: string; text: string }> = {
+  profiles: {
+    title: 'Compliance Profiles',
+    text: 'A profile is a named set of rules — text patterns the running config must match (or must not match). Build your own or load the built-in CIS/STIG-style profiles to start.',
+  },
+  assignments: {
+    title: 'Profile Assignments',
+    text: 'Bind a profile to an inventory group on a schedule. Assignments are how scans actually happen — without one, profiles just sit there.',
+  },
+  results: {
+    title: 'Scan Results',
+    text: 'Per-scan outcome rows: which host, which profile, how many rules passed, when it ran. Click into a result with violations to see the exact failing lines.',
+  },
+  status: {
+    title: 'Per-Host Compliance Status',
+    text: 'Latest status for each host across all profiles assigned to it. Use this when you want to answer "is this device clean?" without digging through scan history.',
+  },
+};
 
 const formatInterval = (seconds: number): string => {
   if (seconds % 86400 === 0) return `${seconds / 86400}d`;
@@ -97,7 +124,15 @@ export function Compliance() {
         </div>
       </div>
 
+      <PageHelp
+        pageKey="compliance"
+        title="Policy Compliance Auditing"
+        text="Define compliance rules and run audits against your devices. Check configurations against security policies, best practices, and industry standards."
+      />
+
       <SummaryStrip summary={summary.data} />
+
+      <PageHelp pageKey={`compliance.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
 
       <div className="card" style={{ marginTop: '0.75rem', padding: 0, overflow: 'hidden' }}>
         <div
@@ -191,7 +226,7 @@ function SummaryStrip({ summary }: { summary?: { total_profiles?: number; active
     { label: 'Non-compliant', value: String(summary?.hosts_non_compliant ?? '-') },
     {
       label: 'Last scan',
-      value: summary?.last_scan_at ? new Date(summary.last_scan_at + 'Z').toLocaleString() : 'Never',
+      value: formatBackendStamp(summary?.last_scan_at, 'Never'),
     },
   ];
   return (
@@ -381,9 +416,7 @@ function AssignmentsTab({
   return (
     <>
       {filtered.map((a) => {
-        const lastScan = a.last_scan_at
-          ? new Date(a.last_scan_at + 'Z').toLocaleString()
-          : 'Never';
+        const lastScan = formatBackendStamp(a.last_scan_at, 'Never');
         return (
           <div
             key={a.id}
@@ -528,7 +561,7 @@ function ResultsTab({
             : r.status === 'error'
               ? 'danger'
               : 'warning';
-        const scanned = r.scanned_at ? new Date(r.scanned_at + 'Z').toLocaleString() : '-';
+        const scanned = formatBackendStamp(r.scanned_at);
         return (
           <div
             key={r.id}
@@ -620,7 +653,7 @@ function StatusTab({
             : s.status === 'error'
               ? 'danger'
               : 'warning';
-        const scanned = s.scanned_at ? new Date(s.scanned_at + 'Z').toLocaleString() : '-';
+        const scanned = formatBackendStamp(s.scanned_at);
         return (
           <div
             key={i}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import {
@@ -92,7 +92,8 @@ export function EditProfileModal({
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
-  if (profile && !hydrated) {
+  useEffect(() => {
+    if (!profile || hydrated) return;
     setName(profile.name);
     setDescription(profile.description || '');
     setSeverity((SEVERITIES.find((s) => s === profile.severity) ?? 'medium') as (typeof SEVERITIES)[number]);
@@ -104,7 +105,7 @@ export function EditProfileModal({
     }
     setRulesText(pretty);
     setHydrated(true);
-  }
+  }, [profile, hydrated]);
 
   return (
     <Modal isOpen onClose={onClose} title="Edit Compliance Profile">
@@ -180,10 +181,12 @@ export function AssignProfileModal({
   const groupList = groups.data || [];
   const credList = credentials.data || [];
 
-  // Default to first credential when loaded
-  if (credentialId == null && credList.length > 0) {
-    setCredentialId(credList[0].id);
-  }
+  // Default to first credential when loaded.
+  useEffect(() => {
+    if (credentialId == null && credList.length > 0) {
+      setCredentialId(credList[0].id);
+    }
+  }, [credentialId, credList]);
 
   return (
     <Modal isOpen onClose={onClose} title="Assign Profile to Groups">

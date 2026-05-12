@@ -16,8 +16,10 @@ interface RouteItem {
   icon: Icon;
   to: string;
   // Per-user gateable feature key (FEATURE_FLAGS). Omit for items always
-  // visible to authenticated users (e.g., Settings).
-  feature?: string;
+  // visible to authenticated users (e.g., Settings). May be an array, in
+  // which case the entry is visible if the user has *any* listed feature
+  // (e.g., Delegator gates on five sub-features at once).
+  feature?: string | string[];
   // Optional second feature flag — entry is visible if user has either.
   // Used for grouped pages like Changes (risk-analysis | deployments).
   altFeature?: string;
@@ -30,7 +32,7 @@ interface LegacyItem {
   label: string;
   icon: Icon;
   href: string;
-  feature?: string;
+  feature?: string | string[];
   altFeature?: string;
   visKey?: string;
 }
@@ -244,10 +246,15 @@ const ic = {
 const NAV: TopItem[] = [
   { label: 'Dashboard', icon: ic.dashboard, to: '/', feature: 'dashboard' },
   { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
-  { label: 'Playbooks', icon: ic.playbooks, to: '/playbooks', feature: 'playbooks' },
-  { label: 'Jobs', icon: ic.jobs, to: '/jobs', feature: 'jobs' },
-  { label: 'Templates', icon: ic.templates, to: '/templates', feature: 'templates' },
-  { label: 'Credentials', icon: ic.credentials, to: '/credentials', feature: 'credentials' },
+  // Delegator — single entry covering Assignments / Tasks / Instructions /
+  // Upgrades / Credentials. Visible if the user has any of the underlying
+  // sub-features. Lands on the Assignments tab by default.
+  {
+    label: 'Delegator',
+    icon: ic.playbooks,
+    to: '/assignments',
+    feature: ['playbooks', 'jobs', 'templates', 'credentials', 'upgrades'],
+  },
   {
     id: 'network',
     label: 'Network',
@@ -264,7 +271,6 @@ const NAV: TopItem[] = [
       { label: 'Graphs', icon: ic.graphs, to: '/graph-templates', feature: 'graph-templates' },
       { label: 'MAC Tracking', icon: ic.mac, to: '/mac-tracking', feature: 'mac-tracking' },
       { label: 'Traffic Analysis', icon: ic.traffic, to: '/traffic-analysis', feature: 'traffic-analysis' },
-      { label: 'Upgrades', icon: ic.upgrades, to: '/upgrades', feature: 'upgrades' },
       { label: 'Federation', icon: ic.federation, to: '/federation', feature: 'federation' },
       { label: 'Floor Plans', icon: ic.floorPlan, to: '/floor-plan', feature: 'floor-plan' },
     ],
@@ -342,11 +348,19 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
     const hidden = new Set(auth?.feature_visibility_hidden ?? []);
 
     const isItemVisible = (i: RouteItem | LegacyItem): boolean => {
-      const visKey = i.visKey ?? i.feature;
+      // visKey can only be a single string, so use the first feature if the
+      // item gates on an array. Picking element 0 is fine because the
+      // Features admin UI hides whole *groups*, not individual sub-features
+      // within a multi-gated entry like Delegator.
+      const visKey = i.visKey ?? (Array.isArray(i.feature) ? i.feature[0] : i.feature);
       if (visKey && hidden.has(visKey)) return false;
       if (!i.feature) return true; // always-visible (Settings, etc.)
       if (isAdmin) return true;
-      if (access.has(i.feature)) return true;
+      if (Array.isArray(i.feature)) {
+        if (i.feature.some((f) => access.has(f))) return true;
+      } else {
+        if (access.has(i.feature)) return true;
+      }
       if (i.altFeature && access.has(i.altFeature)) return true;
       return false;
     };

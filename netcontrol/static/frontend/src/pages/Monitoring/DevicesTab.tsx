@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { Modal } from '@/components/Modal';
@@ -44,6 +44,15 @@ export function DevicesTab() {
   const [progress, setProgress] = useState<PollProgress>(initialProgress);
   const [detailHost, setDetailHost] = useState<MonitoringPoll | null>(null);
   const [historyHost, setHistoryHost] = useState<{ id: number; hostname: string } | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      pollAbortRef.current?.abort();
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    };
+  }, []);
 
   const filtered = useMemo(() => {
     const list = polls.data ?? [];
@@ -57,6 +66,13 @@ export function DevicesTab() {
   }, [polls.data, query]);
 
   async function pollNow() {
+    pollAbortRef.current?.abort();
+    if (resetTimerRef.current) {
+      clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = null;
+    }
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
     setProgress({ ...initialProgress, active: true, title: 'Starting poll…' });
     try {
       await streamPollNow((event: PollNowEvent) => {
@@ -83,13 +99,20 @@ export function DevicesTab() {
           }
           return prev;
         });
-      });
+      }, controller.signal);
+      if (controller.signal.aborted) return;
       qc.invalidateQueries({ queryKey: ['monitoring-polls'] });
       qc.invalidateQueries({ queryKey: ['monitoring-summary'] });
       qc.invalidateQueries({ queryKey: ['monitoring-alerts'] });
-      setTimeout(() => setProgress(initialProgress), 8000);
+      resetTimerRef.current = setTimeout(() => {
+        resetTimerRef.current = null;
+        setProgress(initialProgress);
+      }, 8000);
     } catch (e) {
+      if (controller.signal.aborted) return;
       setProgress((p) => ({ ...p, failed: true, title: `Poll failed: ${(e as Error).message}` }));
+    } finally {
+      if (pollAbortRef.current === controller) pollAbortRef.current = null;
     }
   }
 

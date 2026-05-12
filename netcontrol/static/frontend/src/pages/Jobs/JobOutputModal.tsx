@@ -39,12 +39,12 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   const wsRef = useRef<WebSocket | null>(null);
   const outputRef = useRef<HTMLDivElement | null>(null);
 
-  // reset on jobId change
+  // reset on open or jobId change
   useEffect(() => {
     setLiveEvents([]);
     setLiveStatus(null);
     setWsState('idle');
-  }, [jobId]);
+  }, [jobId, isOpen]);
 
   const job = jobQuery.data;
   const isLive = job && (job.status === 'running' || job.status === 'queued');
@@ -63,12 +63,16 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
           setLiveStatus(data.status || 'completed');
           ws.close();
         } else {
-          setLiveEvents((prev) => [...prev, {
-            level: data.level || 'info',
-            message: data.message ?? '',
-            host: data.host,
-            timestamp: data.timestamp,
-          }]);
+          setLiveEvents((prev) => {
+            const next = [...prev, {
+              level: data.level || 'info',
+              message: data.message ?? '',
+              host: data.host,
+              timestamp: data.timestamp,
+            }];
+            // Cap to last 5000 lines so long-running jobs don't blow memory.
+            return next.length > 5000 ? next.slice(-5000) : next;
+          });
         }
       } catch {
         /* ignore */
@@ -78,6 +82,10 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     ws.onclose = () => setWsState((s) => (s === 'open' ? 'closed' : s));
     return () => {
       wsRef.current = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
       try { ws.close(); } catch { /* ignore */ }
     };
   }, [isOpen, jobId, isLive]);

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { PageHelp } from '@/components/PageHelp';
 import {
   MacEntry,
   useMacHistory,
@@ -43,6 +44,12 @@ export function MacTracking() {
           </button>
         </div>
       </div>
+
+      <PageHelp
+        pageKey="mac-tracking"
+        title="MAC & ARP Table Tracking"
+        text="Search and browse MAC address and ARP tables collected from network devices. Track where hosts are connected and trace MAC-to-IP mappings across the network."
+      />
 
       {collect.isSuccess && (
         <div

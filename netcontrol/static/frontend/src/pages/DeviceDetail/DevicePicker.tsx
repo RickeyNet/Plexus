@@ -12,7 +12,25 @@ export function DevicePicker() {
   const { data, isLoading, isError, error } = useMonitoringPolls(200);
   const [filter, setFilter] = useState('');
 
-  const polls = useMemo(() => data?.polls || [], [data]);
+  // Backend can return multiple polls per host (recent history). Dedupe by
+  // host_id, keeping the first occurrence (assumed newest-first); fall back
+  // to a synthetic key when host_id is missing so we never collide.
+  const polls = useMemo(() => {
+    const raw = data?.polls || [];
+    const seen = new Set<number>();
+    const out: typeof raw = [];
+    for (const p of raw) {
+      const id = (p as { host_id?: number }).host_id;
+      if (id == null) {
+        out.push(p);
+        continue;
+      }
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(p);
+    }
+    return out;
+  }, [data]);
   const filtered = useMemo(() => {
     if (!filter.trim()) return polls;
     const q = filter.toLowerCase();
