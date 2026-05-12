@@ -39,7 +39,10 @@ FLOW_COLLECTOR_CONFIG = {
     "batch_size": 100,
     "retention_hours": 48,
     "summary_retention_days": 30,
+    "aggregation_interval_seconds": 3600,
 }
+
+FLOW_AGGREGATION_MIN_INTERVAL = 60
 
 _flow_transport = None
 _flow_protocol = None
@@ -343,6 +346,28 @@ async def stop_flow_collector() -> bool:
     FLOW_COLLECTOR_CONFIG["enabled"] = False
     LOGGER.info("flow_collector: stopped")
     return True
+
+
+async def flow_aggregation_loop() -> None:
+    """Background loop: periodically aggregate flows and prune old records.
+
+    Interval is taken from FLOW_COLLECTOR_CONFIG['aggregation_interval_seconds']
+    on each iteration, with a floor of FLOW_AGGREGATION_MIN_INTERVAL.
+    """
+    while True:
+        interval = max(
+            FLOW_AGGREGATION_MIN_INTERVAL,
+            int(FLOW_COLLECTOR_CONFIG.get("aggregation_interval_seconds", 3600)),
+        )
+        await asyncio.sleep(interval)
+        if not FLOW_COLLECTOR_CONFIG.get("enabled"):
+            continue
+        try:
+            await flow_aggregation_cycle()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("flow_collector: aggregation cycle failed: %s", type(exc).__name__)
 
 
 async def flow_aggregation_cycle():
