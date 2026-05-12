@@ -12,6 +12,7 @@ import { DiscoveryTab } from './DiscoveryTab';
 import { FeaturesTab } from './FeaturesTab';
 import { LoggingTab } from './LoggingTab';
 import { MonitoringTab } from './MonitoringTab';
+import { NetFlowTab } from './NetFlowTab';
 import { UsersTab } from './UsersTab';
 
 type Tab =
@@ -22,6 +23,7 @@ type Tab =
   | 'logging'
   | 'discovery'
   | 'monitoring'
+  | 'netflow'
   | 'features';
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
@@ -53,6 +55,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Monitoring Settings',
     text: 'Polling intervals, alert thresholds, retention windows, and which metrics get collected by default. Per-device overrides are possible from the device detail page.',
   },
+  netflow: {
+    title: 'NetFlow / sFlow Collector',
+    text: 'Toggle the UDP collector for NetFlow v5/v9, IPFIX, and sFlow v5; change listen ports and how long raw flows and hourly summaries are retained. Changes apply immediately — no restart needed.',
+  },
   features: {
     title: 'Feature Visibility',
     text: 'Hide or show features for the entire instance. Use this to declutter the UI for operators who only need a subset of Plexus, or to stage rollouts.',
@@ -67,6 +73,7 @@ const ADMIN_TABS: { id: Tab; label: string }[] = [
   { id: 'logging', label: 'Logging' },
   { id: 'discovery', label: 'Discovery' },
   { id: 'monitoring', label: 'Monitoring' },
+  { id: 'netflow', label: 'NetFlow' },
   { id: 'features', label: 'Features' },
 ];
 
@@ -219,6 +226,7 @@ export function Settings() {
           {tab === 'logging' && <LoggingTab />}
           {tab === 'discovery' && <DiscoveryTab />}
           {tab === 'monitoring' && <MonitoringTab />}
+          {tab === 'netflow' && <NetFlowTab />}
           {tab === 'features' && <FeaturesTab capabilities={caps} />}
         </div>
       </div>
