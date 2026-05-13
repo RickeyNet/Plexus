@@ -92,7 +92,7 @@ def test_diff_both_empty():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 2. Database CRUD — config_baselines, config_snapshots, config_drift_events
+# 2. Database CRUD - config_baselines, config_snapshots, config_drift_events
 # ═════════════════════════════════════════════════════════════════════════════
 
 

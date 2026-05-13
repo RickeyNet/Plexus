@@ -1,5 +1,5 @@
 """
-runner.py — Base playbook runner and registry.
+runner.py - Base playbook runner and registry.
 
 Every automation script subclasses BasePlaybook and registers itself.
 The runner executes playbooks as async background tasks, yielding
@@ -73,10 +73,10 @@ class BasePlaybook:
     Abstract base for all automation playbooks.
 
     Subclasses must set:
-        filename     — the script filename used for registration
-        display_name — human-readable name
-        description  — what the playbook does
-        tags         — list of keyword tags
+        filename     - the script filename used for registration
+        display_name - human-readable name
+        description  - what the playbook does
+        tags         - list of keyword tags
 
     Subclasses must implement:
         async def run(self, hosts, credentials, template_commands, dry_run)

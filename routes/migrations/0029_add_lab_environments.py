@@ -2,14 +2,14 @@
 Migration 0029: Digital twin / lab mode for safe pre-production change testing.
 
 Adds:
-  - lab_environments — named workspaces that group simulated devices and runs.
+  - lab_environments - named workspaces that group simulated devices and runs.
     A lab environment is owned by a user and can be private or shared with all
     operators. Each environment carries description and active flag for archival.
-  - lab_devices — virtual or cloned-from-production devices within an
+  - lab_devices - virtual or cloned-from-production devices within an
     environment. Stores a snapshot of the running config text plus metadata
     (device_type, hostname, ip_address, model). source_host_id links to the
     real inventory host the snapshot was cloned from when applicable.
-  - lab_runs — record of each simulated change applied to a lab device. Stores
+  - lab_runs - record of each simulated change applied to a lab device. Stores
     the proposed commands, the resulting simulated config, the unified diff
     against the prior state, optional risk score/level, and a status indicating
     whether the run was simulated only or promoted to production via the

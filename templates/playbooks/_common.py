@@ -1,5 +1,5 @@
 """
-_common.py — Shared helpers for playbooks.
+_common.py - Shared helpers for playbooks.
 
 This module is intentionally underscore-prefixed so the playbook
 auto-loader in ``__init__.py`` skips it.  It contains plumbing that
@@ -113,9 +113,9 @@ async def connect_device(
         # the playbook's async loop responsive.
         conn = await asyncio.to_thread(ConnectHandler, **device)
     except NetmikoTimeoutException:
-        events.append(pb.log_error(f"TIMEOUT connecting to {ip} — skipping.", host=hostname))
+        events.append(pb.log_error(f"TIMEOUT connecting to {ip} - skipping.", host=hostname))
     except NetmikoAuthenticationException:
-        events.append(pb.log_error(f"AUTH FAILED for {ip} — skipping.", host=hostname))
+        events.append(pb.log_error(f"AUTH FAILED for {ip} - skipping.", host=hostname))
     except Exception as exc:  # noqa: BLE001 - surface any other failure to the UI
         events.append(pb.log_error(f"Connection error for {ip}: {exc}", host=hostname))
 
@@ -155,7 +155,7 @@ async def pin_snmp_engine_id(
     Cisco IOS regenerates the engine ID when certain ``snmp-server``
     lines are added or removed.  Because SNMPv3 auth/priv keys are
     *localized* to the engine ID, regeneration silently invalidates
-    every existing user — monitoring then breaks until the keys are
+    every existing user - monitoring then breaks until the keys are
     re-cut.  Reading the current engine ID and pinning it with
     ``snmp-server engineID local <id>`` keeps the keys valid across
     the change.
@@ -166,7 +166,7 @@ async def pin_snmp_engine_id(
         match = re.search(r"[Ll]ocal\s+.*[Ee]ngine\s*ID[:\s]+([0-9A-Fa-f]+)", output)
         if not match:
             yield pb.log_info(
-                "Could not detect SNMP engine ID — skipping pin.",
+                "Could not detect SNMP engine ID - skipping pin.",
                 host=hostname,
             )
             return
@@ -200,6 +200,6 @@ async def simulate_connect(
     """
     await asyncio.sleep(random.uniform(0.2, 0.6))
     if random.random() < SIMULATED_TIMEOUT_RATE:
-        yield pb.log_error(f"TIMEOUT connecting to {ip} — skipping.", host=hostname)
+        yield pb.log_error(f"TIMEOUT connecting to {ip} - skipping.", host=hostname)
         return
     yield pb.log_success(f"Connected to {hostname} ({ip})", host=hostname)

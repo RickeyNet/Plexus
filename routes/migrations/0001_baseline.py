@@ -1,5 +1,5 @@
 """
-Baseline migration — consolidates all pre-framework inline ALTER TABLE
+Baseline migration - consolidates all pre-framework inline ALTER TABLE
 migrations that previously ran inside ``init_db()``.
 
 For **new** databases (created from the current SCHEMA), every column and

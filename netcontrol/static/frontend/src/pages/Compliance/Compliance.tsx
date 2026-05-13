@@ -41,11 +41,11 @@ const TABS: { id: Tab; label: string }[] = [
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   profiles: {
     title: 'Compliance Profiles',
-    text: 'A profile is a named set of rules — text patterns the running config must match (or must not match). Build your own or load the built-in CIS/STIG-style profiles to start.',
+    text: 'A profile is a named set of rules - text patterns the running config must match (or must not match). Build your own or load the built-in CIS/STIG-style profiles to start.',
   },
   assignments: {
     title: 'Profile Assignments',
-    text: 'Bind a profile to an inventory group on a schedule. Assignments are how scans actually happen — without one, profiles just sit there.',
+    text: 'Bind a profile to an inventory group on a schedule. Assignments are how scans actually happen - without one, profiles just sit there.',
   },
   results: {
     title: 'Scan Results',
@@ -466,7 +466,7 @@ function AssignmentsTab({
                             );
                           } else {
                             alert(
-                              `Scan complete: ${res.hosts_scanned} hosts scanned — all compliant!`,
+                              `Scan complete: ${res.hosts_scanned} hosts scanned - all compliant!`,
                             );
                           }
                         },

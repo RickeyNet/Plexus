@@ -17,7 +17,7 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
 
   const isPending = ev.isPending || history.isPending;
   const title = ev.data
-    ? `Drift Event Log — ${ev.data.hostname || ev.data.ip_address || ''}`
+    ? `Drift Event Log - ${ev.data.hostname || ev.data.ip_address || ''}`
     : 'Drift Event Log';
   const entries = history.data || [];
 

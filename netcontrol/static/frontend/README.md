@@ -4,7 +4,7 @@ Phase 1.1 of [FRONTEND_MIGRATION.md](../../../FRONTEND_MIGRATION.md). This
 folder houses the new React + TypeScript + PatternFly app that will, page by
 page, replace the vanilla JS in `netcontrol/static/js/`.
 
-Today this is a Hello World — proves the build pipeline, dev proxy, FastAPI
+Today this is a Hello World - proves the build pipeline, dev proxy, FastAPI
 mount, TanStack Query wiring, and PatternFly styling all work end-to-end.
 
 ## Stack
@@ -25,13 +25,13 @@ mount, TanStack Query wiring, and PatternFly styling all work end-to-end.
 Two terminals.
 
 ```powershell
-# Terminal 1 — FastAPI backend
+# Terminal 1 - FastAPI backend
 $env:APP_ENV = "dev"
 python templates/run.py --host 127.0.0.1 --port 8080
 ```
 
 ```powershell
-# Terminal 2 — Vite dev server (HMR)
+# Terminal 2 - Vite dev server (HMR)
 cd netcontrol/static/frontend
 npm install   # one-time
 npm run dev   # http://localhost:5173/frontend/
@@ -77,5 +77,5 @@ netcontrol/static/frontend/
 
 ## Conventions
 
-See [`FRONTEND_STYLE.md`](../../../FRONTEND_STYLE.md) at the repo root —
+See [`FRONTEND_STYLE.md`](../../../FRONTEND_STYLE.md) at the repo root -
 this app must follow it on every PR.

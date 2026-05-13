@@ -55,7 +55,7 @@ async def test_upsert_and_fetch_interface_error_stats(tmp_path, monkeypatch):
     await _init(tmp_path, monkeypatch)
     host_id = await _add_host()
 
-    # First upsert — creates the row
+    # First upsert - creates the row
     await db_module.upsert_interface_error_stat(
         host_id, if_index=1, if_name="Gi1/0/1",
         in_errors=100, out_errors=50, in_discards=10, out_discards=5,
@@ -65,7 +65,7 @@ async def test_upsert_and_fetch_interface_error_stats(tmp_path, monkeypatch):
     assert rows[0]["in_errors"] == 100
     assert rows[0]["prev_in_errors"] == 0  # no prev on first insert
 
-    # Second upsert — current shifts to prev
+    # Second upsert - current shifts to prev
     await db_module.upsert_interface_error_stat(
         host_id, if_index=1, if_name="Gi1/0/1",
         in_errors=200, out_errors=70, in_discards=15, out_discards=8,

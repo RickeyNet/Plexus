@@ -44,11 +44,11 @@ const TAB_HELP: Record<TabId, { title: string; text: string }> = {
   },
   errors: {
     title: 'Interface Error Trending',
-    text: 'CRC, input/output errors, and discards per interface — the metrics that catch bad cables and flapping links before they cause an outage.',
+    text: 'CRC, input/output errors, and discards per interface - the metrics that catch bad cables and flapping links before they cause an outage.',
   },
   flow: {
     title: 'Flow Traffic for This Device',
-    text: 'NetFlow/sFlow/IPFIX records this device has exported. Top talkers, applications, conversations, and a bps timeline — scoped to this host and the selected time range.',
+    text: 'NetFlow/sFlow/IPFIX records this device has exported. Top talkers, applications, conversations, and a bps timeline - scoped to this host and the selected time range.',
   },
   alerts: {
     title: 'Open Alerts on This Device',
@@ -161,7 +161,7 @@ export function DeviceDetail() {
       <PageHelp
         pageKey="device-detail"
         title="Single-Device Drill-Down"
-        text="Everything Plexus knows about one device — health metrics, interface stats, alerts, compliance status, and syslog — scoped to the time range above."
+        text="Everything Plexus knows about one device - health metrics, interface stats, alerts, compliance status, and syslog - scoped to the time range above."
       />
 
       <div

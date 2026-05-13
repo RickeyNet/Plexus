@@ -1,5 +1,5 @@
 """
-lab_runtime.py — Phase B-1: containerlab single-node runtime for lab mode.
+lab_runtime.py - Phase B-1: containerlab single-node runtime for lab mode.
 
 Drives the `containerlab` CLI to deploy a single virtual network device per
 twin. The driver is intentionally narrow: one container per lab device, no
@@ -65,7 +65,7 @@ LOGGER = configure_logging("plexus.lab_runtime")
 
 # ── Allowlists / validation ──────────────────────────────────────────────────
 
-# containerlab `kind` field — restricted to popular OSS/free images we expect
+# containerlab `kind` field - restricted to popular OSS/free images we expect
 # operators to use. Extending this list is intentional: every entry must be a
 # known containerlab kind so the generated topology validates without shelling
 # out additional syntax.
@@ -173,7 +173,7 @@ async def get_runtime_status() -> dict:
 
 def _build_topology_yaml(*, lab_name: str, node_name: str, kind: str, image: str) -> str:
     """Render a minimal single-node containerlab topology file."""
-    # Nothing here is operator-controlled in a way that escapes YAML syntax —
+    # Nothing here is operator-controlled in a way that escapes YAML syntax -
     # all four fields have already been validated against strict regex/allowlist.
     return (
         f"name: {lab_name}\n"
@@ -438,7 +438,7 @@ async def push_commands_live(
         raise HTTPException(status_code=400, detail="Lab device runtime is not running")
     mgmt_ipv4 = device.get("runtime_mgmt_address") or ""
     if not mgmt_ipv4:
-        raise HTTPException(status_code=400, detail="Runtime has no management IP — refresh first")
+        raise HTTPException(status_code=400, detail="Runtime has no management IP - refresh first")
 
     # Build the netmiko 'host' shape from the lab device + mgmt IP.
     target = {
@@ -684,7 +684,7 @@ def _parse_iso_timestamp(value: str | None) -> datetime | None:
 async def reconcile_running_labs() -> dict:
     """At startup, mark stale 'running' rows accurately against containerlab.
 
-    If containerlab isn't installed we don't touch anything — the status badge
+    If containerlab isn't installed we don't touch anything - the status badge
     will show whatever the DB last saw, and the operator can refresh manually.
     If it is installed, walk each row in (provisioning, running) and reinspect.
     Rows whose topology workdir is gone or whose containers no longer exist
@@ -746,7 +746,7 @@ async def reap_idle_runtimes(now: datetime | None = None) -> dict:
     """Destroy any running lab whose `runtime_started_at` exceeds the TTL.
 
     Returns a summary of what was reaped. Errors are recorded as runtime
-    events but never raised — the caller is a background loop.
+    events but never raised - the caller is a background loop.
     """
     ttl = _runtime_ttl_seconds()
     summary = {"checked": 0, "reaped": 0, "errors": 0, "ttl_seconds": ttl}

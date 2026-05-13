@@ -38,7 +38,7 @@ _MAX_RECORDS_PER_PULL = 10_000
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Watermark helpers — per-account cursor stored in cloud_flow_sync_cursors
+# Watermark helpers - per-account cursor stored in cloud_flow_sync_cursors
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def _get_cursor(account_id: int) -> dict:
@@ -76,7 +76,7 @@ def _window(cursor: dict, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> 
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# AWS puller — CloudWatch Logs Insights or S3
+# AWS puller - CloudWatch Logs Insights or S3
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def pull_aws_flow_logs(account: dict) -> dict:
@@ -250,7 +250,7 @@ async def _cw_insights_query(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Azure puller — Blob Storage NSG Flow Logs
+# Azure puller - Blob Storage NSG Flow Logs
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def pull_azure_flow_logs(account: dict) -> dict:
@@ -374,7 +374,7 @@ def _read_azure_blobs(container_client, prefix: str, start: datetime, end: datet
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GCP puller — Cloud Logging export
+# GCP puller - Cloud Logging export
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def pull_gcp_flow_logs(account: dict) -> dict:

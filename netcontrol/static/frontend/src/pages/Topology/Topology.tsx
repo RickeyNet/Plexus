@@ -150,7 +150,7 @@ export function Topology() {
     }
     renderGraph(data, positions, layout);
     return () => {
-      // do not destroy here — destroy only on unmount
+      // do not destroy here - destroy only on unmount
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, positions, layout]);
@@ -651,7 +651,7 @@ export function Topology() {
     try {
       await deletePositions.mutateAsync();
       savedPositionsRef.current = {};
-      flash('Node positions reset — physics re-enabled');
+      flash('Node positions reset - physics re-enabled');
       const network = networkRef.current;
       const nodesDS = nodesDSRef.current;
       if (network && nodesDS) {
@@ -707,7 +707,7 @@ export function Topology() {
       setPathSource(nodeId);
       const meta = nodeMetaRef.current.get(nodeId);
       const label = meta?.raw.label ?? String(nodeId);
-      setPathStatus(`Source: ${label}  —  click a destination node...`);
+      setPathStatus(`Source: ${label}  -  click a destination node...`);
       nodesDS.update({ id: nodeId, borderWidth: 4 } as never);
       return;
     }

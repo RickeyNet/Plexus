@@ -1,5 +1,5 @@
 /**
- * Change Management Module — Risk Analysis + Deployments / Rollback Orchestration
+ * Change Management Module - Risk Analysis + Deployments / Rollback Orchestration
  * Lazy-loaded when user navigates to #change-management
  */
 import * as api from '../api.js';
@@ -511,10 +511,10 @@ async function showNewDeploymentModal() {
     } catch (e) { /* ignore */ }
     const groupOpts = (groups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
     const credOpts = (creds || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
-    const tplOpts = '<option value="">— None (manual commands) —</option>' +
+    const tplOpts = '<option value="">- None (manual commands) -</option>' +
         (templates || []).map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
-    const raOpts = '<option value="">— None —</option>' +
-        (riskAnalyses || []).filter(r => r.approved).map(r => `<option value="${r.id}">#${r.id} ${escapeHtml(r.risk_level)} — ${escapeHtml(r.hostname || r.group_name || '')}</option>`).join('');
+    const raOpts = '<option value="">- None -</option>' +
+        (riskAnalyses || []).filter(r => r.approved).map(r => `<option value="${r.id}">#${r.id} ${escapeHtml(r.risk_level)} - ${escapeHtml(r.hostname || r.group_name || '')}</option>`).join('');
 
     showModal('New Deployment', `
         <div style="display:flex; flex-direction:column; gap:0.75rem;">
@@ -603,7 +603,7 @@ function showDeploymentJobStream(jobId, deploymentId, title) {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = _trackWs(new WebSocket(`${protocol}//${location.host}/ws/deployment/${jobId}`));
 
-    ws.onopen = () => { if (statusEl) statusEl.textContent = 'Connected — streaming output...'; };
+    ws.onopen = () => { if (statusEl) statusEl.textContent = 'Connected - streaming output...'; };
     ws.onmessage = (event) => {
         try {
             const msg = JSON.parse(event.data);
@@ -621,7 +621,7 @@ function showDeploymentJobStream(jobId, deploymentId, title) {
         } catch (e) { /* ignore */ }
     };
     ws.onerror = () => { if (statusEl) statusEl.textContent = 'WebSocket error'; };
-    ws.onclose = () => { if (statusEl && statusEl.textContent === 'Connected — streaming output...') statusEl.textContent = 'Disconnected'; };
+    ws.onclose = () => { if (statusEl && statusEl.textContent === 'Connected - streaming output...') statusEl.textContent = 'Disconnected'; };
 }
 
 function renderVerificationMetrics(verifyChecks) {
@@ -712,12 +712,12 @@ async function showDeploymentDetail(deploymentId) {
     if (dep.status === 'completed' || dep.status === 'failed' || dep.status === 'verified' || dep.status === 'verification_failed') {
         actions += `<button class="btn btn-secondary" style="border:1px solid var(--warning); color:var(--warning);" onclick="closeModal(); rollbackDeploymentAction(${dep.id})">Rollback</button> `;
     }
-    // Correlation view — available once deployment has started
+    // Correlation view - available once deployment has started
     if (dep.started_at) {
         actions += `<button class="btn btn-secondary" onclick="closeAllModals(); showDeploymentCorrelation(${dep.id})">Correlation</button> `;
     }
 
-    showModal(`Deployment #${dep.id} — ${escapeHtml(dep.name)}`, `
+    showModal(`Deployment #${dep.id} - ${escapeHtml(dep.name)}`, `
         <div style="display:flex; flex-direction:column; gap:1rem;">
             <div style="display:flex; gap:1rem; flex-wrap:wrap;">
                 <div><strong>Status:</strong> <span style="color:var(--${statusColor}); font-weight:600; text-transform:uppercase;">${escapeHtml(dep.status)}</span></div>
@@ -784,7 +784,7 @@ async function showDeploymentCorrelation(deploymentId) {
             type: 'deployment',
             icon: cp.status === 'passed' ? '\u2713' : cp.status === 'failed' ? '\u2717' : '\u25CB',
             title: `${cp.phase}: ${cp.check_type}`,
-            detail: `${cp.hostname || ''} — ${cp.status}`,
+            detail: `${cp.hostname || ''} - ${cp.status}`,
             color: cp.status === 'passed' ? 'var(--success)' : cp.status === 'failed' ? 'var(--danger)' : 'var(--text-muted)',
         });
     }
@@ -796,7 +796,7 @@ async function showDeploymentCorrelation(deploymentId) {
             type: 'drift',
             icon: '\u26A0',
             title: 'Config Drift Detected',
-            detail: `${drift.hostname || 'Host #' + drift.host_id} — +${drift.diff_lines_added || 0}/-${drift.diff_lines_removed || 0} lines`,
+            detail: `${drift.hostname || 'Host #' + drift.host_id} - +${drift.diff_lines_added || 0}/-${drift.diff_lines_removed || 0} lines`,
             color: 'var(--warning)',
         });
     }
@@ -808,7 +808,7 @@ async function showDeploymentCorrelation(deploymentId) {
             type: 'alert',
             icon: '\u25CF',
             title: `Alert: ${alert.metric || alert.alert_type || 'unknown'}`,
-            detail: `${alert.hostname || ''} — ${alert.message || ''}`.trim(),
+            detail: `${alert.hostname || ''} - ${alert.message || ''}`.trim(),
             color: alert.severity === 'critical' ? 'var(--danger)' : 'var(--warning)',
         });
     }
@@ -842,10 +842,10 @@ async function showDeploymentCorrelation(deploymentId) {
     const windowStart = timeWindow.start ? new Date(timeWindow.start + 'Z').toLocaleString() : '?';
     const windowEnd = timeWindow.end ? new Date(timeWindow.end + 'Z').toLocaleString() : '?';
 
-    showModal(`Correlation — Deployment #${dep.id}`, `
+    showModal(`Correlation - Deployment #${dep.id}`, `
         <div style="display:flex; flex-direction:column; gap:1rem;">
             <div style="font-size:0.85em; color:var(--text-muted);">
-                Time window: ${windowStart} — ${windowEnd}
+                Time window: ${windowStart} - ${windowEnd}
                 <span style="margin-left:1rem;">Events: ${events.length}</span>
             </div>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap; font-size:0.8em;">
@@ -899,7 +899,7 @@ async function showAlertCorrelation(alertId) {
             <div>
                 <div style="font-weight:600;">${escapeHtml(dep.name || `Deployment #${dep.id}`)}</div>
                 <div style="font-size:0.85em; color:var(--text-muted);">
-                    ${dep.status} — ${dep.started_at ? new Date(dep.started_at + 'Z').toLocaleString() : ''}
+                    ${dep.status} - ${dep.started_at ? new Date(dep.started_at + 'Z').toLocaleString() : ''}
                 </div>
             </div>
             <button class="btn btn-sm btn-secondary" onclick="closeAllModals(); showDeploymentCorrelation(${dep.id})">View Correlation</button>
@@ -908,14 +908,14 @@ async function showAlertCorrelation(alertId) {
 
     const driftRows = (data.related_drift_events || []).map(drift =>
         `<div style="padding:0.4rem 0; border-bottom:1px solid var(--border);">
-            <div style="font-weight:600;">${escapeHtml(drift.hostname || `Host #${drift.host_id}`)} — Config Drift</div>
+            <div style="font-weight:600;">${escapeHtml(drift.hostname || `Host #${drift.host_id}`)} - Config Drift</div>
             <div style="font-size:0.85em; color:var(--text-muted);">
-                +${drift.diff_lines_added || 0}/-${drift.diff_lines_removed || 0} lines — ${drift.detected_at ? new Date(drift.detected_at + 'Z').toLocaleString() : ''}
+                +${drift.diff_lines_added || 0}/-${drift.diff_lines_removed || 0} lines - ${drift.detected_at ? new Date(drift.detected_at + 'Z').toLocaleString() : ''}
             </div>
         </div>`
     ).join('') || '<div style="color:var(--text-muted);">No related drift events found.</div>';
 
-    showModal(`Alert Correlation — ${escapeHtml(alert.metric || alert.alert_type || 'Alert')}`, `
+    showModal(`Alert Correlation - ${escapeHtml(alert.metric || alert.alert_type || 'Alert')}`, `
         <div style="display:flex; flex-direction:column; gap:1rem;">
             <div class="card" style="padding:1rem;">
                 <div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.9em;">

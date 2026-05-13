@@ -592,8 +592,8 @@ function SourcesCard({
         const count = Number(result?.summary?.diff_count ?? 0);
         alert(
           count
-            ? `Reconciliation complete — ${count} drift${count === 1 ? '' : 's'} detected.`
-            : 'Reconciliation complete — no drift detected.',
+            ? `Reconciliation complete - ${count} drift${count === 1 ? '' : 's'} detected.`
+            : 'Reconciliation complete - no drift detected.',
         );
       },
       onError: (e) => alert(`Reconciliation failed: ${(e as Error).message}`),
@@ -914,9 +914,9 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
                       </span>
                     </td>
                     <td>{src ? src.name : `Source #${diff.source_id}`}</td>
-                    <td>{plexusHost || '—'}</td>
+                    <td>{plexusHost || '-'}</td>
                     <td>
-                      {ipamHost || '—'}
+                      {ipamHost || '-'}
                       {ipamStatus && (
                         <span className="text-muted"> ({ipamStatus})</span>
                       )}

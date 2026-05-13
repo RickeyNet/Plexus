@@ -2,7 +2,7 @@
 Migration 0028: Per-user custom ordering of inventory groups.
 
 Adds:
-  - user_inventory_group_order — stores a user's preferred display order for
+  - user_inventory_group_order - stores a user's preferred display order for
     inventory groups. Each row pins a (user_id, group_id) pair to a position.
     Groups without a row for the current user fall to the bottom alphabetically.
 """

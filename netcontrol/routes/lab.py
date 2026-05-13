@@ -387,7 +387,7 @@ async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
         running_config=config_text,
         notes=(
             "Cloned from inventory host." if config_text
-            else "Cloned from inventory host (no config snapshot available — config is empty)."
+            else "Cloned from inventory host (no config snapshot available - config is empty)."
         ),
     )
     await _audit(
@@ -615,7 +615,7 @@ async def apply_run_to_device(run_id: int, request: Request):
 async def promote_run(run_id: int, body: PromoteRequest, request: Request):
     """Create a Deployment record from a successful lab run.
 
-    The deployment is created in 'planned' state. It does NOT auto-execute —
+    The deployment is created in 'planned' state. It does NOT auto-execute -
     the operator must explicitly execute it through the deployments router.
     """
     run = await db.get_lab_run(run_id)

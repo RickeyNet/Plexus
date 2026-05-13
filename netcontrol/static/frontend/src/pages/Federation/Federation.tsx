@@ -74,7 +74,7 @@ export function Federation() {
           <p style={{ margin: '0 0 0.4rem 0' }}>
             Federation lets you connect multiple Plexus instances together so
             this UI can show aggregated device counts, alerts, and health
-            across all of them — useful for MSPs managing multiple customer
+            across all of them - useful for MSPs managing multiple customer
             networks or organizations with regional deployments (e.g. NA, EU,
             APAC). Each peer remains independent and authoritative for its
             own data; this view is read-only aggregation over HTTPS using the
@@ -250,7 +250,7 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
         {peer.last_sync_at ? (
           formatDate(peer.last_sync_at)
         ) : (
-          <span style={{ color: 'var(--text-muted)' }}>—</span>
+          <span style={{ color: 'var(--text-muted)' }}>-</span>
         )}
       </td>
       <td>
@@ -272,7 +272,7 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
                 const result = await test.mutateAsync(peer.id);
                 if (result.status === 'ok') {
                   alert(
-                    `Connection OK — remote version: ${result.remote_version || 'unknown'}`,
+                    `Connection OK - remote version: ${result.remote_version || 'unknown'}`,
                   );
                 } else {
                   alert(`Connection failed: ${result.message || 'Unknown error'}`);
@@ -371,7 +371,7 @@ function PeerDetailCards({ peers }: { peers: FederationPeerDetail[] }) {
             <h4 style={{ margin: '0 0 0.5rem 0' }}>{p.name}</h4>
             <div style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
               {p.url}
-              {p.version ? ` — v${p.version}` : ''}
+              {p.version ? ` - v${p.version}` : ''}
             </div>
             <div
               style={{
@@ -398,7 +398,7 @@ function PeerDetailCards({ peers }: { peers: FederationPeerDetail[] }) {
             </div>
             <div style={{ color: 'var(--text-muted)', marginTop: '0.5rem', fontSize: '0.85em' }}>
               <SyncStatusBadge status={p.last_sync_status} />
-              {p.last_sync_at ? ` — ${formatDate(p.last_sync_at)}` : ''}
+              {p.last_sync_at ? ` - ${formatDate(p.last_sync_at)}` : ''}
             </div>
           </div>
         );

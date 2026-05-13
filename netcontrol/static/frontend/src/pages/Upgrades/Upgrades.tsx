@@ -12,7 +12,7 @@ const TABS: Array<{ value: Tab; label: string }> = [
   { value: 'backups', label: 'Backups' },
 ];
 
-// Inner content — the Campaigns/Images/Backups sub-tab UI without an outer
+// Inner content - the Campaigns/Images/Backups sub-tab UI without an outer
 // page heading. Used by the Delegator page so Upgrades can live inside its
 // tab bar without showing a duplicate "Upgrades" h2.
 export function UpgradesContent() {
@@ -42,7 +42,7 @@ export function UpgradesContent() {
   );
 }
 
-// Standalone page wrapper — kept for the case where Upgrades needs its own
+// Standalone page wrapper - kept for the case where Upgrades needs its own
 // route. Currently /upgrades resolves to the Delegator page (Upgrades tab),
 // but this export remains so direct usage doesn't break.
 export function Upgrades() {

@@ -1,7 +1,7 @@
 """
-seed.py — Populate the database with starter data for demo/development.
+seed.py - Populate the database with starter data for demo/development.
 
-Run once after init_db(). Idempotent — skips if data already exists.
+Run once after init_db(). Idempotent - skips if data already exists.
 
 WARNING: Seed credentials are for local development only.  Never use in
 production environments.
@@ -17,7 +17,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from templates import playbooks as _pb_module  # noqa: F401 — triggers @register_playbook decorators
+from templates import playbooks as _pb_module  # noqa: F401 - triggers @register_playbook decorators
 
 from routes.crypto import encrypt
 from routes.database import (
@@ -40,7 +40,7 @@ async def seed():
     try:
         count = (await (await db.execute("SELECT COUNT(*) FROM inventory_groups")).fetchone())[0]
         if count > 0:
-            print("[seed] Database already has data — skipping.")
+            print("[seed] Database already has data - skipping.")
             return
     finally:
         await db.close()

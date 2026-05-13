@@ -31,7 +31,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   flow: {
     title: 'VPC Flow Logs',
-    text: 'Query and aggregate cloud-native flow log records — top talkers, top conversations, denied flows. Filter by account and provider above.',
+    text: 'Query and aggregate cloud-native flow log records - top talkers, top conversations, denied flows. Filter by account and provider above.',
   },
   traffic: {
     title: 'Cloud Traffic Metrics',

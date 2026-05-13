@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 1.0.0 — 2026-05-06
+## 1.0.0 - 2026-05-06
 
 First public release on GitHub. Earlier `0.x` versions in this changelog
 are pre-release development snapshots that were not published as GitHub
@@ -83,7 +83,7 @@ releases.
 - Add SQLite-to-Postgres migration runbook.
 - Linux deploy hardening: backup procedures, path cleanup, and bootstrap fix.
 
-## 0.2.0 — 2026-03-05
+## 0.2.0 - 2026-03-05
 - Add shared semantic version constant and `python templates/run.py --version` CLI output.
 - Wire API metadata version to shared app version.
 - Improve deployability docs and compose persistence (named volumes, restart policy, health endpoint).
@@ -92,7 +92,7 @@ releases.
 - Add configurable API timeout/retry/backoff for FTD importer and cleanup scripts.
 - Add MIT `LICENSE`.
 
-## 0.1.0 — 2026-03-04
+## 0.1.0 - 2026-03-04
 - Add CI workflow (lint, type-check, tests) and pinned dependency files.
 - Add Ruff, mypy, pytest, and pre-commit configs.
 - Add unit tests for converter routes with fixtures.

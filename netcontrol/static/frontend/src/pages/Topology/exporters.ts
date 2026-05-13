@@ -31,7 +31,7 @@ export function exportPNG(network: Network, groupName: string): void {
   ctx.fillStyle = '#333';
   ctx.font = `bold ${20 * scale}px Inter, sans-serif`;
   ctx.textAlign = 'center';
-  ctx.fillText(`Network Topology — ${groupName}`, out.width / 2, 28 * scale);
+  ctx.fillText(`Network Topology - ${groupName}`, out.width / 2, 28 * scale);
   ctx.font = `${13 * scale}px Inter, sans-serif`;
   ctx.fillStyle = '#888';
   ctx.fillText(new Date().toLocaleDateString(), out.width / 2, 48 * scale);
@@ -152,7 +152,7 @@ export function exportSVG(network: Network, data: TopologyData, groupName: strin
   }
 
   const dateStr = new Date().toLocaleDateString();
-  const titleSvg = `<text x="${width / 2}" y="24" text-anchor="middle" font-size="16" font-weight="bold" fill="#ccc" font-family="Inter, sans-serif">Network Topology — ${svgEscape(groupName)} — ${dateStr}</text>`;
+  const titleSvg = `<text x="${width / 2}" y="24" text-anchor="middle" font-size="16" font-weight="bold" fill="#ccc" font-family="Inter, sans-serif">Network Topology - ${svgEscape(groupName)} - ${dateStr}</text>`;
 
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height + 40}" viewBox="0 0 ${width} ${height + 40}">

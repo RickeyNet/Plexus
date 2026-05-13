@@ -1,5 +1,5 @@
 """
-builtin_compliance_profiles.py — Preloaded compliance rule sets.
+builtin_compliance_profiles.py - Preloaded compliance rule sets.
 
 Used by seed.py on first install and by the compliance API to load
 built-in profiles into existing installations on demand.
@@ -12,8 +12,8 @@ Rules with remediation=None require manual/environment-specific fixes.
 BUILTIN_PROFILES = [
     # ── CIS Cisco IOS Benchmark (essential subset) ───────────────
     (
-        "CIS IOS Hardening — Management Plane",
-        "CIS Cisco IOS Benchmark v4.1 — management plane controls. "
+        "CIS IOS Hardening - Management Plane",
+        "CIS Cisco IOS Benchmark v4.1 - management plane controls. "
         "Covers SSH, console, VTY, and service hardening. "
         "Based on Section 1 (Management Plane) of the CIS benchmark.",
         "critical",
@@ -55,8 +55,8 @@ BUILTIN_PROFILES = [
         ],
     ),
     (
-        "CIS IOS Hardening — Control Plane",
-        "CIS Cisco IOS Benchmark v4.1 — control plane protections. "
+        "CIS IOS Hardening - Control Plane",
+        "CIS Cisco IOS Benchmark v4.1 - control plane protections. "
         "Covers NTP authentication, logging, SNMP hardening, and CDP restrictions.",
         "critical",
         [
@@ -85,8 +85,8 @@ BUILTIN_PROFILES = [
         ],
     ),
     (
-        "CIS IOS Hardening — Data Plane",
-        "CIS Cisco IOS Benchmark v4.1 — data plane security. "
+        "CIS IOS Hardening - Data Plane",
+        "CIS Cisco IOS Benchmark v4.1 - data plane security. "
         "Covers uRPF, ACLs, CEF, and anti-spoofing protections.",
         "high",
         [
@@ -107,7 +107,7 @@ BUILTIN_PROFILES = [
     # ── Switch-Specific Port Security ────────────────────────────────
     (
         "Switch Port Security Baseline",
-        "Essential L2 switch hardening — port security, STP protections, "
+        "Essential L2 switch hardening - port security, STP protections, "
         "DHCP snooping, and storm control. Applicable to all access-layer switches.",
         "high",
         [
@@ -229,7 +229,7 @@ BUILTIN_PROFILES = [
     # ── Quick Wins / Essential Hygiene ───────────────────────────────
     (
         "Network Device Hygiene",
-        "Lightweight baseline check for universal device hygiene — "
+        "Lightweight baseline check for universal device hygiene - "
         "DNS, domain name, timezone, memory thresholds. "
         "Low severity, good for first-pass audits.",
         "low",

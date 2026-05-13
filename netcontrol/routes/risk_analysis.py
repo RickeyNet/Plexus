@@ -129,7 +129,7 @@ def _classify_change_areas(commands: list[str]) -> list[dict]:
 def _simulate_config_change(current_config: str, commands: list[str]) -> str:
     """Simulate applying commands to a config by appending them.
 
-    This is a best-effort simulation — real device behavior may differ.
+    This is a best-effort simulation - real device behavior may differ.
     For 'no <command>' lines, we attempt to remove the matching line.
     """
     lines = current_config.splitlines()
@@ -148,7 +148,7 @@ def _simulate_config_change(current_config: str, commands: list[str]) -> str:
                 if positive.lower() not in line.lower().strip()
             ]
         else:
-            # Append the command (simplified — real IOS merges into sections)
+            # Append the command (simplified - real IOS merges into sections)
             result_lines.append(stripped)
 
     return "\n".join(result_lines)
@@ -387,7 +387,7 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
         "secret": decrypt(cred["secret"]) if cred["secret"] else "",
     }
 
-    # Resolve proposed commands — from body or from template
+    # Resolve proposed commands - from body or from template
     commands = list(body.proposed_commands)
     if body.template_id and not commands:
         tpl = await db.get_template(body.template_id)
@@ -546,7 +546,7 @@ async def delete_risk_analysis(analysis_id: int, request: Request):
 
 @router.post("/api/risk-analysis/analyze-offline")
 async def run_offline_risk_analysis(request: Request):
-    """Analyze risk without connecting to devices — uses provided config text."""
+    """Analyze risk without connecting to devices - uses provided config text."""
     body = await request.json()
     commands = body.get("proposed_commands", [])
     current_config = body.get("current_config", "")

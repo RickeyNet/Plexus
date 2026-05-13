@@ -72,7 +72,7 @@ def ansible_client(monkeypatch, tmp_path):
     monkeypatch.setitem(state_module.API_RATE_LIMIT, "enabled", False)
 
     with TestClient(app_module.app) as client:
-        # Seed inventory data — use unique names to avoid collision with seed data
+        # Seed inventory data - use unique names to avoid collision with seed data
         headers = {"X-Api-Token": "test-ansible-token"}
 
         # Delete any seeded groups first to start from a clean state

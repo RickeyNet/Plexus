@@ -26,7 +26,7 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
       onSuccess: (r) => {
         const count = r?.count ?? 0;
         const overages = (r?.periods ?? []).filter((p) => p.status === 'overage').length;
-        alert(`Generated ${count} billing period(s)${overages > 0 ? ` — ${overages} overage(s) detected` : ''}`);
+        alert(`Generated ${count} billing period(s)${overages > 0 ? ` - ${overages} overage(s) detected` : ''}`);
         onClose();
       },
       onError: (err) => alert((err as Error).message),
@@ -37,11 +37,11 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
     <Modal isOpen={isOpen} onClose={onClose} title="Generate 95th Percentile Billing">
       <form onSubmit={handleSubmit}>
         <div className="form-group">
-          <label className="form-label">Circuit (optional — leave blank for all)</label>
+          <label className="form-label">Circuit (optional - leave blank for all)</label>
           <select className="form-select" value={circuitId} onChange={(e) => setCircuitId(e.target.value)}>
             <option value="">All enabled circuits</option>
             {(circuitsQuery.data?.circuits ?? []).map((c) => (
-              <option key={c.id} value={c.id}>{c.name} — {c.customer || 'No customer'}</option>
+              <option key={c.id} value={c.id}>{c.name} - {c.customer || 'No customer'}</option>
             ))}
           </select>
         </div>

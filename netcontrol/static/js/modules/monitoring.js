@@ -1,5 +1,5 @@
 /**
- * Monitoring & SLA Module — Device polling, alerts, SLA tracking
+ * Monitoring & SLA Module - Device polling, alerts, SLA tracking
  * Lazy-loaded when user navigates to #monitoring
  */
 import * as api from '../api.js';
@@ -352,7 +352,7 @@ window.runMonitoringPollNow = async function() {
                 if (event.cpu != null) details.push(`CPU ${event.cpu}%`);
                 if (event.memory != null) details.push(`Mem ${event.memory}%`);
                 if (event.alerts > 0) details.push(`<span style="color:var(--danger);">${event.alerts} alert${event.alerts !== 1 ? 's' : ''}</span>`);
-                const detailStr = details.length ? ` — ${details.join(', ')}` : '';
+                const detailStr = details.length ? ` - ${details.join(', ')}` : '';
                 if (progressLog) {
                     progressLog.innerHTML += `<div><span style="color:${statusColor};">${statusIcon}</span> ${escapeHtml(event.hostname)}${detailStr}</div>`;
                     progressLog.scrollTop = progressLog.scrollHeight;
@@ -362,7 +362,7 @@ window.runMonitoringPollNow = async function() {
                 if (progressBar) progressBar.style.width = pct + '%';
                 if (progressCount) progressCount.textContent = `${event.completed} / ${event.total_hosts}`;
                 if (progressLog) {
-                    progressLog.innerHTML += `<div><span style="color:var(--danger);">&#10007;</span> ${escapeHtml(event.hostname)} — <span style="color:var(--danger);">error</span></div>`;
+                    progressLog.innerHTML += `<div><span style="color:var(--danger);">&#10007;</span> ${escapeHtml(event.hostname)} - <span style="color:var(--danger);">error</span></div>`;
                     progressLog.scrollTop = progressLog.scrollHeight;
                 }
             } else if (event.type === 'done') {
@@ -375,7 +375,7 @@ window.runMonitoringPollNow = async function() {
             }
         });
     } catch (e) {
-        if (e.name === 'AbortError') return; // navigated away — silently cancel
+        if (e.name === 'AbortError') return; // navigated away - silently cancel
         showError(e.message);
         if (progressTitle) progressTitle.textContent = 'Poll failed';
         if (progressBar) progressBar.style.background = 'var(--danger)';
@@ -734,7 +734,7 @@ async function loadMonitoringSuppressions() {
                     <button class="btn btn-sm" style="color:var(--danger);" onclick="confirmDeleteSuppression(${s.id}, '${escapeHtml(s.name || '')}')">Delete</button>
                 </div>
                 <div style="margin-top:0.3rem; font-size:0.85em; color:var(--text-muted);">
-                    ${startsStr} — ${endsStr}${s.reason ? ` · Reason: ${escapeHtml(s.reason)}` : ''}${s.created_by ? ` · By ${escapeHtml(s.created_by)}` : ''}
+                    ${startsStr} - ${endsStr}${s.reason ? ` · Reason: ${escapeHtml(s.reason)}` : ''}${s.created_by ? ` · By ${escapeHtml(s.created_by)}` : ''}
                 </div>
             </div>`;
         }).join('');
@@ -1437,7 +1437,7 @@ async function loadAvailability() {
                             </div>
                             <span style="font-size:0.85em; color:var(--text-muted);">Duration: <strong>${dur}</strong></span>
                         </div>
-                        <div style="margin-top:0.3rem; font-size:0.85em; color:var(--text-muted);">${start} — ${end}</div>
+                        <div style="margin-top:0.3rem; font-size:0.85em; color:var(--text-muted);">${start} - ${end}</div>
                     </div>`;
                 }).join('');
             }

@@ -1,39 +1,39 @@
 """
-database.py — Async SQLite database layer for Plexus.
+database.py - Async SQLite database layer for Plexus.
 
 Tables:
-    inventory_groups  — device groups (name, description)
-    hosts             — individual devices linked to a group
-    playbooks         — registered automation scripts
-    templates         — reusable config snippets
-    credentials       — encrypted SSH credentials per inventory group
-    jobs              — execution history
-    job_events        — per-host log lines for each job
-    audit_events      — immutable audit trail for auth, CRUD, and operational actions
-    topology_links    — discovered L2/L3 neighbor relationships between devices
-    interface_stats   — SNMP interface counter snapshots for utilization calculation
-    topology_changes  — detected topology differences between discovery runs
-    stp_port_states   — latest spanning-tree port states per host/VLAN
-    stp_topology_events — spanning-tree root/state change events
-    stp_root_policies — expected STP root-bridge policy by group/VLAN
-    config_baselines  — intended/golden configuration per host
-    config_snapshots  — timestamped running-config captures per host
-    config_drift_events — detected configuration drift instances
-    config_backup_policies — scheduled configuration backup policies per group
-    config_backups     — stored configuration backup records
-    compliance_profiles — golden template compliance rule sets
-    compliance_profile_assignments — profile-to-group bindings with scan schedule
-    compliance_scan_results — per-host compliance scan findings
-    risk_analyses          — pre-change risk analysis records
-    deployments            — deployment orchestration records with rollback support
-    deployment_checkpoints — pre/post deployment validation checks
-    deployment_snapshots   — per-host config snapshots captured before/after deployment
-    monitoring_polls       — periodic device health poll snapshots (CPU/mem/interfaces/VPN/routes)
-    monitoring_alerts      — threshold violations and anomaly alerts (with dedup/escalation)
-    route_snapshots        — route table captures for churn detection
-    alert_rules            — user-defined threshold/anomaly alert rules
-    alert_suppressions     — time-windowed alert suppression entries
-    report_artifacts       — persisted report outputs (CSV/SVG/etc) by run
+    inventory_groups  - device groups (name, description)
+    hosts             - individual devices linked to a group
+    playbooks         - registered automation scripts
+    templates         - reusable config snippets
+    credentials       - encrypted SSH credentials per inventory group
+    jobs              - execution history
+    job_events        - per-host log lines for each job
+    audit_events      - immutable audit trail for auth, CRUD, and operational actions
+    topology_links    - discovered L2/L3 neighbor relationships between devices
+    interface_stats   - SNMP interface counter snapshots for utilization calculation
+    topology_changes  - detected topology differences between discovery runs
+    stp_port_states   - latest spanning-tree port states per host/VLAN
+    stp_topology_events - spanning-tree root/state change events
+    stp_root_policies - expected STP root-bridge policy by group/VLAN
+    config_baselines  - intended/golden configuration per host
+    config_snapshots  - timestamped running-config captures per host
+    config_drift_events - detected configuration drift instances
+    config_backup_policies - scheduled configuration backup policies per group
+    config_backups     - stored configuration backup records
+    compliance_profiles - golden template compliance rule sets
+    compliance_profile_assignments - profile-to-group bindings with scan schedule
+    compliance_scan_results - per-host compliance scan findings
+    risk_analyses          - pre-change risk analysis records
+    deployments            - deployment orchestration records with rollback support
+    deployment_checkpoints - pre/post deployment validation checks
+    deployment_snapshots   - per-host config snapshots captured before/after deployment
+    monitoring_polls       - periodic device health poll snapshots (CPU/mem/interfaces/VPN/routes)
+    monitoring_alerts      - threshold violations and anomaly alerts (with dedup/escalation)
+    route_snapshots        - route table captures for churn detection
+    alert_rules            - user-defined threshold/anomaly alert rules
+    alert_suppressions     - time-windowed alert suppression entries
+    report_artifacts       - persisted report outputs (CSV/SVG/etc) by run
 """
 
 from __future__ import annotations
@@ -2070,7 +2070,7 @@ def _extract_postgres_fks(stmt: str) -> tuple[str, list[str]]:
     (rewritten_statement, list_of_alter_table_statements).
 
     Only column-level inline `REFERENCES tbl(col) [ON DELETE ...]` clauses are
-    handled — table-level FOREIGN KEY (...) constraints are passed through.
+    handled - table-level FOREIGN KEY (...) constraints are passed through.
     Returns (stmt, []) for non-CREATE-TABLE statements.
     """
     m = _CREATE_TABLE_RE.search(stmt)
@@ -2096,7 +2096,7 @@ def _extract_postgres_fks(stmt: str) -> tuple[str, list[str]]:
         on_delete_clause = f" ON DELETE {on_delete}" if on_delete else ""
         on_update_clause = f" ON UPDATE {on_update}" if on_update else ""
         # Wrapped in a DO block so re-running init_db on an already-initialized
-        # database doesn't fail with "constraint already exists" — Postgres
+        # database doesn't fail with "constraint already exists" - Postgres
         # doesn't support `ADD CONSTRAINT IF NOT EXISTS` for FKs.
         alters.append(
             "DO $$ BEGIN "
@@ -2137,7 +2137,7 @@ def _convert_qmark_to_dollar_params(query: str) -> str:
     return converted
 
 
-# Match `datetime(<expr>, <modifier>)` — the SQLite two-argument form. We rewrite
+# Match `datetime(<expr>, <modifier>)` - the SQLite two-argument form. We rewrite
 # these into postgres `(<expr>::timestamptz <op> <interval>)` because postgres
 # has no equivalent function. Patterns we handle (post-`?`→`$N` substitution):
 #
@@ -2148,7 +2148,7 @@ def _convert_qmark_to_dollar_params(query: str) -> str:
 #   datetime(col, '+' || other_col || ' seconds')  -- column-relative offset
 #
 # Anything outside these shapes will fall through unchanged and surface as a
-# postgres syntax error — flagging unhandled patterns is preferable to silently
+# postgres syntax error - flagging unhandled patterns is preferable to silently
 # producing wrong SQL.
 _SQLITE_DT_BASE = r"(?:'now'|[\w.]+)"   # 'now' or an unquoted column reference
 _SQLITE_DT_LITERAL_MOD = r"'([+-]?\d+\s+\w+)'"          # '-7 days'
@@ -2191,7 +2191,7 @@ def _pg_base(expr: str) -> str:
 def _convert_sqlite_datetime_modifiers_to_postgres(query: str) -> str:
     # Schema stores all datetime columns as TEXT (ISO-8601). When the
     # comparison side is text, we have to cast our timestamptz result back
-    # to text — otherwise postgres rejects `text </>= timestamptz`. Using
+    # to text - otherwise postgres rejects `text </>= timestamptz`. Using
     # `::text` on a postgres timestamptz produces a sortable ISO-8601 string
     # that lexically orders correctly against other postgres-written rows.
     def _col_unit(m: re.Match) -> str:
@@ -2205,7 +2205,7 @@ def _convert_sqlite_datetime_modifiers_to_postgres(query: str) -> str:
         base = _pg_base(m.group(1))
         sign, n, unit = m.group(2), m.group(3), m.group(4)
         op = "+" if sign == "+" else "-"
-        # Cast $N to text — caller may pass an int, but `||` requires text.
+        # Cast $N to text - caller may pass an int, but `||` requires text.
         return f"({base} {op} (${n}::text || ' {unit}')::interval)::text"
     query = _DT_RE_SIGN_PARAM_UNIT.sub(_sign_param_unit, query)
 
@@ -2232,7 +2232,7 @@ def _convert_sqlite_datetime_modifiers_to_postgres(query: str) -> str:
 
 # Match top-level `INSERT OR IGNORE INTO <table> (...) VALUES (...)` and rewrite
 # to postgres `INSERT INTO ... ON CONFLICT DO NOTHING`. We don't need to know
-# the conflict columns — `DO NOTHING` without a target tells postgres to skip
+# the conflict columns - `DO NOTHING` without a target tells postgres to skip
 # any conflict on any unique constraint, which matches SQLite's IGNORE
 # semantics for the way the codebase uses it.
 _INSERT_OR_IGNORE_RE = re.compile(r"\bINSERT\s+OR\s+IGNORE\b", re.IGNORECASE)
@@ -2706,7 +2706,7 @@ async def get_user_effective_features(user_id: int) -> list[str] | None:
         )
         count = (await cursor.fetchone())[0]
         if count == 0:
-            return None  # No memberships — caller decides default
+            return None  # No memberships - caller decides default
 
         cursor = await db.execute(
             """
@@ -3989,6 +3989,23 @@ async def get_dashboard_stats() -> dict:
 _audit_chain_lock = asyncio.Lock()
 
 
+# Optional async hook fired after every successful audit insert. The SIEM
+# forwarder registers itself here via ``set_audit_event_hook`` at app
+# startup. The hook is fire-and-forget - exceptions never propagate to the
+# caller, so a wedged SIEM cannot block audit writes.
+_audit_event_hook = None  # type: ignore[var-annotated]
+
+
+def set_audit_event_hook(hook) -> None:
+    """Register a coroutine fn(event: dict) -> None called after each insert.
+
+    Pass ``None`` to clear. Tests and the SIEM forwarder are the only
+    expected callers.
+    """
+    global _audit_event_hook
+    _audit_event_hook = hook
+
+
 def _audit_canonical_bytes(
     timestamp: str,
     category: str,
@@ -4037,7 +4054,7 @@ async def verify_audit_chain() -> dict:
       - ``ok`` (bool)
       - ``total_rows`` (int)
       - ``first_break_id`` (int or None)
-      - ``first_break_reason`` (str or None) — ``"row_hash_mismatch"`` or
+      - ``first_break_reason`` (str or None) - ``"row_hash_mismatch"`` or
         ``"prev_hash_mismatch"``
     """
     conn = await get_db()
@@ -4131,9 +4148,28 @@ async def add_audit_event(
             )
             new_id = cursor.lastrowid
             await conn.commit()
-            return new_id
         finally:
             await conn.close()
+
+    if _audit_event_hook is not None:
+        event = {
+            "id": new_id,
+            "timestamp": timestamp,
+            "category": category,
+            "action": action,
+            "user": user,
+            "detail": detail,
+            "correlation_id": correlation_id,
+            "prev_hash": prev_hash,
+            "row_hash": row_hash,
+        }
+        try:
+            await _audit_event_hook(event)
+        except Exception:
+            # Forwarding must never break audit ingestion. The DB row is
+            # already committed; downstream observability is best-effort.
+            pass
+    return new_id
 
 
 async def get_audit_events(
@@ -5447,7 +5483,7 @@ def _has_redos_shape(pattern: str) -> bool:
     """Single-pass O(n) scan that flags catastrophic-backtracking shapes.
 
     Detects: (1) a quantifier (+, *, {n,}) immediately following a closing
-    group paren — i.e. (...)+ / (...)* — when the group itself contains a
+    group paren - i.e. (...)+ / (...)* - when the group itself contains a
     quantifier or top-level alternation. This covers (a+)+, (a*)*, (a|b)+,
     (a|a)*, etc. Uses no regex (would itself be ReDoS-prone) and does no
     backtracking.
@@ -11014,7 +11050,7 @@ async def upsert_snmp_data_source(
         if k in allowed:
             update_sets.append(f"{k} = excluded.{k}")
     if not update_sets:
-        # Nothing to update on conflict — no-op SET
+        # Nothing to update on conflict - no-op SET
         update_sets = ["name = excluded.name"]
     db = await get_db()
     try:
@@ -12202,7 +12238,7 @@ async def get_upgrade_events(campaign_id, device_id=None, limit=10000):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# IPAM — Lightweight IP Address Management
+# IPAM - Lightweight IP Address Management
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -12286,7 +12322,7 @@ async def get_ipam_overview(
                 subnet_vlans.setdefault(key, set()).add(vlan)
             ip_groups.setdefault((vrf, ip), set()).add(group)
 
-        # ── 2. Cloud resources (no VRF concept — keyed with vrf="") ─────────
+        # ── 2. Cloud resources (no VRF concept - keyed with vrf="") ─────────
         cloud_keys: set[tuple[str, str]] = set()
         subnet_cloud_count: dict[tuple[str, str], int] = {}
 
@@ -12546,7 +12582,7 @@ async def get_ipam_subnet_detail(
         # ── Build allocations list ──────────────────────────────────────────
         allocations_out: list[dict] = []
 
-        # Inventory entries (include even if reserved — flag them)
+        # Inventory entries (include even if reserved - flag them)
         for h in inv_in_subnet:
             ip_s = h["ip"]
             allocations_out.append({
@@ -13052,7 +13088,7 @@ async def create_ipam_prefix(
         await db.commit()
         prefix_id = cursor.lastrowid
         if not prefix_id:
-            # Already existed — fetch it
+            # Already existed - fetch it
             cursor2 = await db.execute(
                 "SELECT * FROM ipam_prefixes WHERE source_id = ? AND subnet = ? LIMIT 1",
                 (source_id, subnet_key),
@@ -13600,7 +13636,7 @@ async def record_ip_release(
                WHERE address = ? AND vrf_name = ? AND ended_at IS NULL""",
             (now_iso, note or "", note or "", address, vrf_name),
         )
-        # recorded_by is intentionally not stored on release — it's an event,
+        # recorded_by is intentionally not stored on release - it's an event,
         # not a new assignment. Caller can pass via note if needed.
         _ = recorded_by
         await db.commit()
@@ -15972,7 +16008,7 @@ async def get_cloud_traffic_metric_top_resources(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Geolocation — Sites, Floors, Placements
+# Geolocation - Sites, Floors, Placements
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def list_geo_sites() -> list:
@@ -16924,7 +16960,7 @@ async def get_latest_lab_drift_run(lab_device_id: int) -> dict | None:
 
 
 async def list_drift_eligible_devices() -> list[dict]:
-    """Lab devices with a source host attached — the only ones drift checks
+    """Lab devices with a source host attached - the only ones drift checks
     can compare. Used by the scheduler to decide what to walk each tick.
     """
     db = await get_db()

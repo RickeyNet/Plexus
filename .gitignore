@@ -213,7 +213,7 @@ logs/
 *.log
 *.log.*
 
-# (Removed `_*.py` rule — Python convention uses leading underscore for
+# (Removed `_*.py` rule - Python convention uses leading underscore for
 #  private modules like _common.py, which this rule was silently excluding.
 #  Use a more specific name like _scratch_*.py or _tmp_*.py for actual
 #  throwaway helpers.)
@@ -252,7 +252,7 @@ floor_plans/
 *.config
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Air-gapped deployment bundle (built artifacts — not committed)
+# Air-gapped deployment bundle (built artifacts - not committed)
 # ═══════════════════════════════════════════════════════════════════════════════
 plexus-airgap-bundle/
 plexus-airgap.tar.gz

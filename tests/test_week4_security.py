@@ -1,4 +1,4 @@
-"""Week 4 — Security Hardening tests.
+"""Week 4 - Security Hardening tests.
 
 Covers:
   1. First-login password reset enforcement for default admin.

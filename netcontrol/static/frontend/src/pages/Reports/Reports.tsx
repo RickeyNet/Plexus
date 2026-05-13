@@ -24,7 +24,7 @@ const TABS: { value: Tab; label: string }[] = [
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   generate: {
     title: 'Generate a Report',
-    text: 'Pick a report type — availability, compliance, utilization, network documentation — choose a scope and time range, and export to PDF or CSV.',
+    text: 'Pick a report type - availability, compliance, utilization, network documentation - choose a scope and time range, and export to PDF or CSV.',
   },
   history: {
     title: 'Past Reports',
@@ -44,7 +44,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   'oid-profiles': {
     title: 'Custom OID Profiles',
-    text: 'Define extra SNMP OIDs to poll beyond the built-in metrics — vendor-specific counters, environmental sensors, anything walkable.',
+    text: 'Define extra SNMP OIDs to poll beyond the built-in metrics - vendor-specific counters, environmental sensors, anything walkable.',
   },
   billing: {
     title: 'Bandwidth Billing (95th Percentile)',

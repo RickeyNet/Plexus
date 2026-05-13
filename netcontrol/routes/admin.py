@@ -149,6 +149,30 @@ class SyslogConfigRequest(BaseModel):
     app_name: str = "plexus"
 
 
+class SiemSinkRequest(BaseModel):
+    """One audit-event forwarding sink. Validated by
+    siem_forwarder.sanitize_sink before being stored."""
+
+    id: str = ""  # generated if blank on create
+    name: str = ""
+    enabled: bool = True
+    protocol: str = "udp"     # udp | tcp | tls | https
+    format: str = "json"      # cef | json
+    host: str = ""
+    port: int = Field(default=514, ge=1, le=65535)
+    url: str = ""
+    bearer_token: str = ""
+    tls_verify: bool = True
+    tls_ca_pem: str = ""
+    tls_client_cert_pem: str = ""
+    tls_client_key_pem: str = ""
+    severity_floor: str = "info"
+    queue_size: int = Field(default=1000, ge=10, le=100_000)
+    max_retries: int = Field(default=5, ge=0, le=20)
+    backoff_base: float = Field(default=1.0, ge=0.1, le=30.0)
+    backoff_cap: float = Field(default=60.0, ge=1.0, le=600.0)
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 FEATURE_FLAGS = state.FEATURE_FLAGS
@@ -578,6 +602,134 @@ async def admin_test_syslog_config(request: Request):
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
+
+
+# ── SIEM audit-event forwarding ────────────────────────────────────────────
+
+from netcontrol.routes import siem_forwarder  # noqa: E402
+
+
+async def _persist_and_apply_sinks() -> list[dict]:
+    """Persist `state.SIEM_SINKS` to auth_settings and reconcile the
+    dispatcher. Returns the list of redacted dicts the API surfaces."""
+    payload = {"sinks": [siem_forwarder.sink_config_to_dict(sc, redact_secrets=False)
+                         for sc in state.SIEM_SINKS]}
+    await db.set_auth_setting("siem_sinks", payload)
+    await siem_forwarder.apply_sinks(state.SIEM_SINKS)
+    return [siem_forwarder.sink_config_to_dict(sc) for sc in state.SIEM_SINKS]
+
+
+def _sink_index(sink_id: str) -> int:
+    for i, sc in enumerate(state.SIEM_SINKS):
+        if sc.id == sink_id:
+            return i
+    return -1
+
+
+def _merge_secrets(new: dict, existing) -> dict:
+    """If the client posts the redaction sentinel for a secret field, keep
+    the previously stored value instead of overwriting."""
+    mask = "••••••••"
+    if existing is None:
+        return new
+    if new.get("bearer_token") == mask:
+        new["bearer_token"] = existing.bearer_token
+    if new.get("tls_client_key_pem") == mask:
+        new["tls_client_key_pem"] = existing.tls_client_key_pem
+    return new
+
+
+@router.get("/api/admin/siem-sinks")
+async def admin_list_siem_sinks():
+    """Return the configured sinks (secrets redacted) plus live runtime stats."""
+    return {
+        "sinks": [siem_forwarder.sink_config_to_dict(sc) for sc in state.SIEM_SINKS],
+        "stats": siem_forwarder.get_stats(),
+    }
+
+
+@router.post("/api/admin/siem-sinks")
+async def admin_create_siem_sink(body: SiemSinkRequest, request: Request):
+    data = body.model_dump()
+    if not data.get("id"):
+        data["id"] = secrets.token_hex(8)
+    if _sink_index(data["id"]) >= 0:
+        raise HTTPException(status_code=409, detail="Sink id already exists")
+    sc = siem_forwarder.sanitize_sink(data)
+    if sc is None:
+        raise HTTPException(status_code=400, detail="Invalid sink configuration")
+    state.SIEM_SINKS.append(sc)
+    redacted = await _persist_and_apply_sinks()
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "siem.sink.create",
+        user=session["user"] if session else "",
+        detail=f"sink={sc.id} protocol={sc.protocol} format={sc.format}",
+        correlation_id=_corr_id(request),
+    )
+    return next((s for s in redacted if s["id"] == sc.id), None)
+
+
+@router.put("/api/admin/siem-sinks/{sink_id}")
+async def admin_update_siem_sink(sink_id: str, body: SiemSinkRequest, request: Request):
+    idx = _sink_index(sink_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Sink not found")
+    data = body.model_dump()
+    data["id"] = sink_id
+    data = _merge_secrets(data, state.SIEM_SINKS[idx])
+    sc = siem_forwarder.sanitize_sink(data)
+    if sc is None:
+        raise HTTPException(status_code=400, detail="Invalid sink configuration")
+    state.SIEM_SINKS[idx] = sc
+    redacted = await _persist_and_apply_sinks()
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "siem.sink.update",
+        user=session["user"] if session else "",
+        detail=f"sink={sc.id} protocol={sc.protocol} enabled={sc.enabled}",
+        correlation_id=_corr_id(request),
+    )
+    return next((s for s in redacted if s["id"] == sc.id), None)
+
+
+@router.delete("/api/admin/siem-sinks/{sink_id}")
+async def admin_delete_siem_sink(sink_id: str, request: Request):
+    idx = _sink_index(sink_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Sink not found")
+    state.SIEM_SINKS.pop(idx)
+    await _persist_and_apply_sinks()
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "siem.sink.delete",
+        user=session["user"] if session else "",
+        detail=f"sink={sink_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
+
+
+@router.post("/api/admin/siem-sinks/{sink_id}/test")
+async def admin_test_siem_sink(sink_id: str, request: Request):
+    """Synthesize a probe event and deliver it through the configured sink.
+    Useful for verifying credentials/connectivity from the Settings UI."""
+    idx = _sink_index(sink_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Sink not found")
+    result = await siem_forwarder.send_test_event(sink_id)
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "siem.sink.test",
+        user=session["user"] if session else "",
+        detail=f"sink={sink_id} ok={result['ok']} error={result['error']}",
+        correlation_id=_corr_id(request),
+    )
+    return result
 
 
 @router.post("/api/admin/retention/cleanup-now")

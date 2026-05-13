@@ -23,7 +23,7 @@ def _can_modify(cred: dict, session: dict | None) -> bool:
     other users' credentials. API-token callers (server-level auth)
     bypass the check by design.
 
-    Service credentials (is_service=1) are explicitly excluded — they
+    Service credentials (is_service=1) are explicitly excluded - they
     have their own admin-only endpoints under /api/credentials/service.
     """
     if not session:

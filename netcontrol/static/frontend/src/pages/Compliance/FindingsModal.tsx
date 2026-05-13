@@ -63,7 +63,7 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
         dry_run: false,
       });
       if (res.rule_now_passes) {
-        alert(`${res.rule} — FIXED. New score: ${res.rescan_passed}/${res.rescan_total}`);
+        alert(`${res.rule} - FIXED. New score: ${res.rescan_passed}/${res.rescan_total}`);
       } else {
         alert(
           `Remediation applied but rule still failing. Review device output. New score: ${res.rescan_passed}/${res.rescan_total}`,
@@ -114,13 +114,13 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
     if (failed === 0) {
       alert(`All ${fixed} rule(s) remediated successfully.`);
     } else {
-      alert(`${fixed} rule(s) fixed, ${failed} still failing — review manually.`);
+      alert(`${fixed} rule(s) fixed, ${failed} still failing - review manually.`);
     }
     onRescan(lastRescanId);
   };
 
   const title = result.data
-    ? `Compliance Findings — ${result.data.hostname || '?'}`
+    ? `Compliance Findings - ${result.data.hostname || '?'}`
     : 'Compliance Findings';
 
   return (
@@ -234,7 +234,7 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
         <Modal
           isOpen
           onClose={() => setPreviewIndex(null)}
-          title={`Remediation Preview — ${findings[previewIndex].name}`}
+          title={`Remediation Preview - ${findings[previewIndex].name}`}
         >
           <p style={{ marginBottom: '0.75rem' }}>
             The following commands will be pushed in config mode:
