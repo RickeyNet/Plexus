@@ -738,6 +738,13 @@ async def require_auth(request: Request, response: Response = None):
             elapsed = int(time.time()) - last_activity
             if elapsed > idle_timeout:
                 response.delete_cookie("session", samesite="strict")
+                await shared._audit(
+                    "auth",
+                    "session.idle_timeout",
+                    user=session.get("user", ""),
+                    detail=f"idle={elapsed}s threshold={idle_timeout}s path={path}",
+                    correlation_id=shared._corr_id(request),
+                )
                 raise HTTPException(status_code=401, detail="Session idle timeout exceeded")
         # Bump activity by re-issuing the cookie. Re-using the same attributes
         # the login flow uses keeps the cookie behavior consistent.

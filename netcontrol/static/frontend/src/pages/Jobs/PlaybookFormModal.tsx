@@ -1,4 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+
+import CodeMirror from '@uiw/react-codemirror';
+import { python } from '@codemirror/lang-python';
+import { yaml } from '@codemirror/lang-yaml';
+import { dracula } from '@uiw/codemirror-theme-dracula';
 
 import { Modal } from '@/components/Modal';
 import {
@@ -80,6 +85,8 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   const [tagsStr, setTagsStr] = useState('');
   const [content, setContent] = useState(PYTHON_DEFAULT);
   const [contentDirty, setContentDirty] = useState(false);
+
+  const editorExtensions = useMemo(() => [type === 'ansible' ? yaml() : python()], [type]);
 
   useEffect(() => {
     if (mode === 'create') {
@@ -176,14 +183,21 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
           </div>
           <div className="form-group">
             <label className="form-label">{type === 'ansible' ? 'Ansible YAML' : 'Python Code'}</label>
-            <textarea
-              className="form-input"
+            <CodeMirror
               value={content}
-              onChange={(e) => { setContent(e.target.value); setContentDirty(true); }}
-              spellCheck={false}
-              wrap="off"
-              required
-              style={{ minHeight: 360, fontFamily: 'monospace', fontSize: '0.85rem' }}
+              height="360px"
+              theme={dracula}
+              extensions={editorExtensions}
+              onChange={(value) => { setContent(value); setContentDirty(true); }}
+              basicSetup={{
+                lineNumbers: true,
+                highlightActiveLine: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                indentOnInput: true,
+                tabSize: 4,
+              }}
+              style={{ fontSize: '0.85rem', border: '1px solid var(--border, #444)', borderRadius: 4 }}
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
