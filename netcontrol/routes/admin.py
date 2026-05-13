@@ -465,6 +465,12 @@ async def admin_get_audit_events(limit: int = Query(200, ge=1, le=1000)):
     return await db.get_audit_events(limit=limit)
 
 
+@router.get("/api/admin/audit-events/verify")
+async def admin_verify_audit_chain():
+    """Walk the audit_events hash chain and report tamper status."""
+    return await db.verify_audit_chain()
+
+
 @router.get("/api/admin/login-rules")
 async def admin_get_login_rules():
     return state.LOGIN_RULES
