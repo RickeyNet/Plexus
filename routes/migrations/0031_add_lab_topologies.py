@@ -1,5 +1,5 @@
 """
-Migration 0031: Phase B-2 — multi-device lab topologies.
+Migration 0031: Phase B-2 - multi-device lab topologies.
 
 Phase B-1 deployed each lab device as its own containerlab single-node lab.
 Phase B-2 lets operators link N devices into one containerlab topology so
@@ -7,13 +7,13 @@ routing/STP/LACP behaviors can be exercised end-to-end against real NOS
 images.
 
 Adds:
-  - lab_topologies — one row per multi-node topology. Lives inside a lab
+  - lab_topologies - one row per multi-node topology. Lives inside a lab
     environment. Stores its own runtime status, lab name, workdir, and an
     optional management subnet override.
-  - lab_topology_links — one row per cable between two lab devices. Stores
+  - lab_topology_links - one row per cable between two lab devices. Stores
     the endpoint name on each side (e.g. eth1, GigabitEthernet0/1) so the
     YAML generator can emit a containerlab `links` entry verbatim.
-  - lab_devices.topology_id — nullable FK so a device knows whether it's
+  - lab_devices.topology_id - nullable FK so a device knows whether it's
     a free-standing twin (Phase B-1) or a member of a topology (Phase B-2).
     The two modes are mutually exclusive at deploy time.
 

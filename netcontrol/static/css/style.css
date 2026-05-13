@@ -2,7 +2,7 @@
    Self-Hosted Fonts (no external requests)
    ═══════════════════════════════════════════════════════════════════════════════ */
 
-/* Inter — variable weight 300-700 */
+/* Inter - variable weight 300-700 */
 @font-face {
     font-family: 'Inter';
     font-style: normal;
@@ -21,7 +21,7 @@
     unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* JetBrains Mono — variable weight 400-600 */
+/* JetBrains Mono - variable weight 400-600 */
 @font-face {
     font-family: 'JetBrains Mono';
     font-style: normal;
@@ -120,7 +120,7 @@
     --space-intensity: calc(var(--space-intensity-base) * var(--space-intensity-user));
 }
 
-/* [data-theme="forest"] intentionally omitted — :root already defaults to forest palette */
+/* [data-theme="forest"] intentionally omitted - :root already defaults to forest palette */
 
 [data-theme="dark-modern"] {
     --primary: #4ea1ff;
@@ -217,7 +217,7 @@
 }
 
 /* Astral: use space-scene image instead of floating orbs.
-   Image lives on .animated-bg (already position:fixed) — avoids
+   Image lives on .animated-bg (already position:fixed) - avoids
    background-attachment:fixed which kills GPU compositing on scroll. */
 [data-theme="astral"] .animated-bg {
     background:
@@ -494,7 +494,7 @@
 /* ─── Sandstone depth & immersion overrides ─── */
 
 /* Sandstone: use desert painting as background, hide orbs/stars.
-   Image lives on .animated-bg (already position:fixed) — avoids
+   Image lives on .animated-bg (already position:fixed) - avoids
    background-attachment:fixed which kills GPU compositing on scroll. */
 [data-theme="sandstone"] .animated-bg {
     background:
@@ -1640,7 +1640,7 @@ body {
     animation: page-fade-in 0.12s ease-out;
 }
 
-/* React app (mounted at #root) doesn't use the legacy .active toggle —
+/* React app (mounted at #root) doesn't use the legacy .active toggle -
    show every .page inside it unconditionally. Scoped to #root so the
    vanilla-JS SPA's show/hide behavior is preserved elsewhere. */
 #root .page {
@@ -2060,7 +2060,7 @@ body {
     line-height: 1.4;
 }
 
-/* Tab row layout — single horizontal row with uniform spacing */
+/* Tab row layout - single horizontal row with uniform spacing */
 .tab-controls {
     display: flex;
     gap: 0.5rem;
@@ -3645,7 +3645,7 @@ code {
         transform: translateX(0);
     }
 
-    /* Override collapsed state on mobile — always show full sidebar when open */
+    /* Override collapsed state on mobile - always show full sidebar when open */
     .sidebar.collapsed.mobile-open {
         width: 240px;
         min-width: 240px;
@@ -3729,7 +3729,7 @@ code {
     filter: drop-shadow(0 0 4px var(--warning));
 }
 
-/* Shared reduced-motion rules — applied by class or OS preference */
+/* Shared reduced-motion rules - applied by class or OS preference */
 .reduced-motion *,
 .reduced-motion *::before,
 .reduced-motion *::after {
@@ -4348,7 +4348,7 @@ code {
         display: none !important;
     }
 
-    /* Print title block — injected via JS before print */
+    /* Print title block - injected via JS before print */
     .topology-print-header {
         display: block !important;
         text-align: center;

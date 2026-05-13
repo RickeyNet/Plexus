@@ -206,7 +206,7 @@ DEFAULT_LOGIN_RULES = {
     "session_idle_timeout": 1800,
 }
 
-# Global API rate-limit defaults — applied to all authenticated API endpoints
+# Global API rate-limit defaults - applied to all authenticated API endpoints
 # beyond login.  Limits state-changing methods (POST/PUT/DELETE) more tightly
 # than read-only (GET).
 DEFAULT_API_RATE_LIMIT = {
@@ -329,7 +329,7 @@ JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
 LOGIN_ATTEMPTS: dict = {}
 LOCKED_OUT: dict = {}
 
-# Global API rate-limit state — keyed by client IP.
+# Global API rate-limit state - keyed by client IP.
 # Each value is a list of ``time.time()`` timestamps of recent requests.
 API_RATE_LIMIT_TRACKER: dict[str, list[float]] = {}
 API_RATE_LIMIT_LOCK: asyncio.Lock | None = None  # initialised at startup
@@ -348,6 +348,9 @@ CONFIG_BACKUP_CONFIG = dict(CONFIG_BACKUP_DEFAULTS)
 COMPLIANCE_CHECK_CONFIG = dict(COMPLIANCE_CHECK_DEFAULTS)
 MONITORING_CONFIG = dict(MONITORING_DEFAULTS)
 SYSLOG_CONFIG = dict(SYSLOG_DEFAULTS)
+# SIEM audit-event forwarding sinks. List of siem_forwarder.SinkConfig
+# (loaded at startup; mutated by /api/admin/siem-sinks endpoints).
+SIEM_SINKS: list = []
 FEATURE_VISIBILITY_HIDDEN: list[str] = []
 
 CLOUD_FLOW_SYNC_DEFAULTS = {

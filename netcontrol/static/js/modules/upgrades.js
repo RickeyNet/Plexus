@@ -1,5 +1,5 @@
 /**
- * Upgrades Module — Firmware upgrade campaigns, image library, config backups
+ * Upgrades Module - Firmware upgrade campaigns, image library, config backups
  * Lazy-loaded when user navigates to #upgrades
  */
 import * as api from '../api.js';
@@ -733,7 +733,7 @@ async function editCampaign(campaignId) {
                 },
             });
 
-            showToast(`Campaign updated — ${result.total_devices} devices (${result.devices_added} new)`, 'success');
+            showToast(`Campaign updated - ${result.total_devices} devices (${result.devices_added} new)`, 'success');
             closeAllModals();
             loadUpgradeCampaigns();
         } catch (err) {
@@ -1034,7 +1034,7 @@ async function viewCampaign(campaignId) {
                                     : data.error_message;
                                 lastCell.innerHTML = `<span style="color:var(--error-color); font-size:0.85em;" title="${escapeHtml(data.error_message)}">${escapeHtml(short)}</span>`;
                             } else if ('error_message' in data) {
-                                // Explicitly cleared — show phase instead
+                                // Explicitly cleared - show phase instead
                                 const phase = data.verify_status === 'completed' ? 'verified'
                                     : data.activate_status === 'completed' ? 'completed'
                                     : '';
@@ -1061,7 +1061,7 @@ async function viewCampaign(campaignId) {
                 }
             },
             (data) => {
-                // Phase complete — reload campaign detail
+                // Phase complete - reload campaign detail
                 const label = getUpgradePhaseLabel(data.phase || '');
                 showToast(`${label} ${data.status || 'complete'}`, 'success');
                 viewCampaign(campaignId);
@@ -1076,7 +1076,7 @@ async function viewCampaign(campaignId) {
                 }
             },
             (events) => {
-                // Batch replay — build all lines in a fragment, append once
+                // Batch replay - build all lines in a fragment, append once
                 const output = document.getElementById('upgrade-live-output');
                 if (!output) return;
                 const frag = document.createDocumentFragment();

@@ -20,10 +20,10 @@ interface RouteItem {
   // which case the entry is visible if the user has *any* listed feature
   // (e.g., Delegator gates on five sub-features at once).
   feature?: string | string[];
-  // Optional second feature flag — entry is visible if user has either.
+  // Optional second feature flag - entry is visible if user has either.
   // Used for grouped pages like Changes (risk-analysis | deployments).
   altFeature?: string;
-  // Global visibility key (FEATURE_VISIBILITY_CATALOG) — what admins can hide
+  // Global visibility key (FEATURE_VISIBILITY_CATALOG) - what admins can hide
   // via Settings → Features. Defaults to `feature` if not set.
   visKey?: string;
 }
@@ -246,7 +246,7 @@ const ic = {
 const NAV: TopItem[] = [
   { label: 'Dashboard', icon: ic.dashboard, to: '/', feature: 'dashboard' },
   { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
-  // Delegator — single entry covering Assignments / Tasks / Instructions /
+  // Delegator - single entry covering Assignments / Tasks / Instructions /
   // Upgrades / Credentials. Visible if the user has any of the underlying
   // sub-features. Lands on the Assignments tab by default.
   {
@@ -415,7 +415,7 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
         <a
           href="#"
           className={`nav-link perf-toggle${perfEnabled ? ' active' : ''}`}
-          title={perfEnabled ? 'Performance Mode ON — click to disable' : 'Performance Mode — reduce animations and blur'}
+          title={perfEnabled ? 'Performance Mode ON - click to disable' : 'Performance Mode - reduce animations and blur'}
           onClick={(e) => {
             e.preventDefault();
             togglePerf();

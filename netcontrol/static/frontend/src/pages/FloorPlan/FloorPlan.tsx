@@ -83,7 +83,7 @@ export function FloorPlan() {
       <PageHelp
         pageKey="floor-plan"
         title="Place Devices on Floor Plans"
-        text="Upload floor plan images per site, then drag inventory devices onto them. Devices show live status colors so you can locate problems geographically — handy for closet-based switch ops and physical site reviews."
+        text="Upload floor plan images per site, then drag inventory devices onto them. Devices show live status colors so you can locate problems geographically - handy for closet-based switch ops and physical site reviews."
       />
 
       <div
@@ -261,7 +261,7 @@ function FloorList({
     >
       {floors.length === 0 && (
         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-          No floors — add one above
+          No floors - add one above
         </div>
       )}
       {floors.map((f) => {
@@ -321,7 +321,7 @@ function CanvasPanel({
   unplaced: InventoryHost[];
 }) {
   const breadcrumb = floor
-    ? `${site?.name ?? '—'} › ${floor.name}`
+    ? `${site?.name ?? '-'} › ${floor.name}`
     : site
       ? site.name
       : 'Select a site and floor';
@@ -472,7 +472,7 @@ function UnplacedDevicesSidebar({ hosts }: { hosts: InventoryHost[] }) {
           color: 'var(--text-muted)',
         }}
       >
-        UNPLACED DEVICES — drag onto the floor plan above
+        UNPLACED DEVICES - drag onto the floor plan above
       </div>
       {hosts.length === 0 ? (
         <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>

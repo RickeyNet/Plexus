@@ -96,7 +96,7 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
             value={groupId}
             onChange={(e) => setGroupId(e.target.value)}
           >
-            <option value="">— Select a group —</option>
+            <option value="">- Select a group -</option>
             {(groups.data || []).map((g) => (
               <option key={g.id} value={String(g.id)}>
                 {g.name}
@@ -112,7 +112,7 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
             onChange={(e) => setCredentialId(e.target.value)}
             required
           >
-            <option value="">— Select a credential —</option>
+            <option value="">- Select a credential -</option>
             {(creds.data || []).map((c) => (
               <option key={c.id} value={String(c.id)}>
                 {c.name}
@@ -127,7 +127,7 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
             value={templateId}
             onChange={(e) => setTemplateId(e.target.value)}
           >
-            <option value="">— Enter commands manually —</option>
+            <option value="">- Enter commands manually -</option>
             {(templates.data || []).map((t) => (
               <option key={t.id} value={String(t.id)}>
                 {t.name}

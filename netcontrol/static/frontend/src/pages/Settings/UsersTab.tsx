@@ -14,7 +14,7 @@ import {
 } from './UserModals';
 
 const formatDate = (raw?: string): string => {
-  if (!raw) return '—';
+  if (!raw) return '-';
   const date = new Date(raw.endsWith('Z') ? raw : raw + 'Z');
   if (Number.isNaN(date.getTime())) return raw;
   return date.toLocaleDateString();

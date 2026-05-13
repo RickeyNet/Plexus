@@ -326,7 +326,7 @@ async def dhcp_correlation_api(
     """Cross-reference DHCP leases against discovered inventory hosts.
 
     Returns leases split into ``known`` (lease IP appears in inventory) and
-    ``unknown`` (lease IP not seen by Plexus discovery — potential rogue
+    ``unknown`` (lease IP not seen by Plexus discovery - potential rogue
     devices).
     """
     rows = await db.list_dhcp_leases(server_id=server_id, limit=limit)

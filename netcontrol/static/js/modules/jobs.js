@@ -1,5 +1,5 @@
 /**
- * Jobs Module — Jobs, Playbooks, Templates, Credentials, Secret Variables
+ * Jobs Module - Jobs, Playbooks, Templates, Credentials, Secret Variables
  * page loaders, CRUD form modals, and Job Output Viewer.
  * Lazy-loaded when user navigates to #jobs, #playbooks, #templates, or #credentials
  */
@@ -204,7 +204,7 @@ function renderJobsQueuePanel(q) {
         items.innerHTML = (q.jobs || []).map(j => {
             const isRunning = j.status === 'running';
             const pColor = JOB_PRIORITY_COLORS[j.priority] || 'text-muted';
-            return `<span class="job-queue-chip ${isRunning ? 'job-queue-chip-running' : ''}" title="${escapeHtml(j.playbook_name || '')} — ${JOB_PRIORITY_LABELS[j.priority] || 'Normal'}">
+            return `<span class="job-queue-chip ${isRunning ? 'job-queue-chip-running' : ''}" title="${escapeHtml(j.playbook_name || '')} - ${JOB_PRIORITY_LABELS[j.priority] || 'Normal'}">
                 <span class="job-queue-chip-dot" style="background:var(--${isRunning ? 'success' : pColor});"></span>
                 ${escapeHtml((j.playbook_name || 'Job').substring(0, 20))}
                 ${!isRunning ? `<span class="job-queue-chip-pri">${JOB_PRIORITY_LABELS[j.priority] || 'Normal'}</span>` : ''}
@@ -636,7 +636,7 @@ async function deleteSecretVar(varId, name) {
 window.deleteSecretVar = deleteSecretVar;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CRUD Forms — Launch Job
+// CRUD Forms - Launch Job
 // ═══════════════════════════════════════════════════════════════════════════════
 
 window.showLaunchJobModal = async function() {
@@ -823,7 +823,7 @@ window.launchJob = async function(e) {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CRUD Forms — Templates
+// CRUD Forms - Templates
 // ═══════════════════════════════════════════════════════════════════════════════
 
 window.editTemplate = async function(templateId) {
@@ -904,7 +904,7 @@ window.createTemplate = async function(e) {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CRUD Forms — Credentials
+// CRUD Forms - Credentials
 // ═══════════════════════════════════════════════════════════════════════════════
 
 window.showCreateCredentialModal = function() {
@@ -948,7 +948,7 @@ window.createCredential = async function(e) {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CRUD Forms — Playbooks
+// CRUD Forms - Playbooks
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function attachCodeMirror(textareaId, mode) {
@@ -1003,10 +1003,10 @@ class MyPlaybook(BasePlaybook):
     requires_template = False
 
     async def run(self, hosts, credentials, template_commands=None, dry_run=True):
-        yield self.log_info(f"My Playbook — targeting {len(hosts)} device(s)")
+        yield self.log_info(f"My Playbook - targeting {len(hosts)} device(s)")
 
         if dry_run:
-            yield self.log_warn("*** DRY-RUN MODE — no changes will be made ***")
+            yield self.log_warn("*** DRY-RUN MODE - no changes will be made ***")
 
         for host_info in hosts:
             ip = host_info["ip_address"]
@@ -1041,7 +1041,7 @@ class MyPlaybook(BasePlaybook):
                 except Exception as e:
                     yield self.log_error(f"Error: {e}", host=hostname)
             else:
-                yield self.log_warn("Netmiko not available — running in simulation mode", host=hostname)
+                yield self.log_warn("Netmiko not available - running in simulation mode", host=hostname)
                 await asyncio.sleep(0.5)
 
             yield self.log_success(f"Finished processing {hostname} ({ip})", host=hostname)
@@ -1337,7 +1337,7 @@ window.deletePlaybook = async function(playbookId) {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CRUD Forms — Delete (Templates, Credentials)
+// CRUD Forms - Delete (Templates, Credentials)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 window.deleteTemplate = async function(templateId) {

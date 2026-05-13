@@ -200,7 +200,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
               })
             }
           >
-            <option value="">— None —</option>
+            <option value="">- None -</option>
             {(credentials.data || []).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -224,7 +224,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
               })
             }
           >
-            <option value="">— None —</option>
+            <option value="">- None -</option>
             {(serviceCredentials.data || []).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -678,7 +678,7 @@ function ServiceCredentialsSection() {
             (list.data || []).map((c) => (
               <tr key={c.id}>
                 <td>{c.name}</td>
-                <td>{c.username || '—'}</td>
+                <td>{c.username || '-'}</td>
                 <td>
                   <button
                     type="button"

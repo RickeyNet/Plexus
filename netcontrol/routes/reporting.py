@@ -333,7 +333,7 @@ async def _execute_report_run(
     except Exception as exc:
         LOGGER.error("Report generation failed (type=%s): %s", report_type, exc)
         await db.complete_report_run(run["id"], json.dumps({"error": "generation_failed"}), 0, "error")
-        raise HTTPException(status_code=500, detail="Report generation failed — see server logs")
+        raise HTTPException(status_code=500, detail="Report generation failed - see server logs")
 
 
 async def _run_scheduled_reports_once() -> dict:

@@ -1,5 +1,5 @@
 /**
- * Dashboard Module — Main dashboard, custom dashboards, and list page controls
+ * Dashboard Module - Main dashboard, custom dashboards, and list page controls
  * Lazy-loaded when user navigates to #dashboard
  */
 import * as api from '../api.js';
@@ -46,7 +46,7 @@ async function loadDashboard(_options = {}) {
         animateCounter('stat-playbooks', playbooks);
         animateCounter('stat-jobs', jobs);
 
-        // Animate ring charts — use a sensible max so partial rings look meaningful
+        // Animate ring charts - use a sensible max so partial rings look meaningful
         const ringMax = Math.max(hosts, playbooks, jobs, 1);
         animateRing('ring-hosts', hosts, ringMax);
         animateRing('ring-playbooks', playbooks, ringMax);
@@ -450,7 +450,7 @@ async function viewDashboard(id) {
 
         document.getElementById('dashboard-viewer-title').textContent = dashboard.name || 'Dashboard';
 
-        // Register time-range listener — remove old one first to avoid stale closure
+        // Register time-range listener - remove old one first to avoid stale closure
         if (_dashboardTimeListener) { offTimeRangeChange(_dashboardTimeListener); _dashboardTimeListener = null; }
         _dashboardTimeListener = () => renderAllDashboardPanels(panels);
         onTimeRangeChange(_dashboardTimeListener);

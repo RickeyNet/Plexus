@@ -1,4 +1,4 @@
-"""Tests for Phase B-3a — drift-from-twin checks."""
+"""Tests for Phase B-3a - drift-from-twin checks."""
 
 from __future__ import annotations
 
@@ -225,7 +225,7 @@ def test_run_drift_check_all_walks_only_eligible_devices(tmp_path, monkeypatch):
         json={"host_id": host_id},
     ).json()["id"]
 
-    # Ineligible: blank manual device — no source host.
+    # Ineligible: blank manual device - no source host.
     client.post(
         f"/api/lab/environments/{env_id}/devices",
         json={"hostname": "manual-twin", "running_config": "hostname manual-twin\n"},
@@ -256,7 +256,7 @@ def test_drift_scheduler_respects_disable_flag(monkeypatch):
 
 def test_drift_scheduler_interval_clamped_minimum(monkeypatch):
     monkeypatch.setenv("PLEXUS_LAB_DRIFT_INTERVAL_SECONDS", "5")
-    # Floor is 60s — anything smaller is bumped up.
+    # Floor is 60s - anything smaller is bumped up.
     assert lab_drift._drift_interval_seconds() == 60
     monkeypatch.setenv("PLEXUS_LAB_DRIFT_INTERVAL_SECONDS", "1800")
     assert lab_drift._drift_interval_seconds() == 1800

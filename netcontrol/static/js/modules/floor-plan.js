@@ -1,5 +1,5 @@
 /**
- * floor-plan.js — Geolocation and Floor Plan Mapping module.
+ * floor-plan.js - Geolocation and Floor Plan Mapping module.
  *
  * Provides:
  *   - Site list with online/offline/unknown device status summary
@@ -69,7 +69,7 @@ function _ensureLayout(page) {
         </div>
         <!-- Device sidebar (shown when place mode is on) -->
         <div id="geo-device-sidebar" style="display:none; border-top:1px solid var(--border); max-height:200px; overflow-y:auto; padding:0.5rem 0.75rem;">
-            <div style="font-size:0.8rem; font-weight:600; margin-bottom:0.4rem; color:var(--text-muted);">UNPLACED DEVICES — drag onto the floor plan above</div>
+            <div style="font-size:0.8rem; font-weight:600; margin-bottom:0.4rem; color:var(--text-muted);">UNPLACED DEVICES - drag onto the floor plan above</div>
             <div id="geo-unplaced-list" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>
         </div>
     </div>
@@ -162,7 +162,7 @@ function _renderFloorListFor(site) {
     if (!el) return;
     const floors = site.floors || [];
     if (!floors.length) {
-        el.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted);">No floors — add one above</div>`;
+        el.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted);">No floors - add one above</div>`;
     } else {
         el.innerHTML = floors.map(f => {
             const active = _currentFloor && _currentFloor.id === f.id;

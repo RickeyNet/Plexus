@@ -19,7 +19,7 @@ export function AlertCorrelationModal({ isOpen, onClose, alertId }: Props) {
   const [deploymentId, setDeploymentId] = useState<number | null>(null);
 
   const title = query.data
-    ? `Alert Correlation — ${
+    ? `Alert Correlation - ${
         query.data.alert.metric ||
         query.data.alert.alert_type ||
         'Alert'
@@ -128,7 +128,7 @@ function Body({
                   {dep.name || `Deployment #${dep.id}`}
                 </div>
                 <div style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
-                  {dep.status || ''} — {formatStamp(dep.started_at)}
+                  {dep.status || ''} - {formatStamp(dep.started_at)}
                 </div>
               </div>
               <button
@@ -159,10 +159,10 @@ function Body({
               }}
             >
               <div style={{ fontWeight: 600 }}>
-                {d.hostname || `Host #${d.host_id}`} — Config Drift
+                {d.hostname || `Host #${d.host_id}`} - Config Drift
               </div>
               <div style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
-                +{d.diff_lines_added || 0}/-{d.diff_lines_removed || 0} lines —{' '}
+                +{d.diff_lines_added || 0}/-{d.diff_lines_removed || 0} lines -{' '}
                 {formatStamp(d.detected_at)}
               </div>
             </div>

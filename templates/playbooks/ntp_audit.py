@@ -1,10 +1,10 @@
 """
-ntp_audit.py — NTP Compliance Audit Playbook
+ntp_audit.py - NTP Compliance Audit Playbook
 
 Walks the inventory and reports which devices are using the expected
 corporate NTP servers vs. unauthorized ones.
 
-NOTE: this playbook is currently *simulation-only* — there is no
+NOTE: this playbook is currently *simulation-only* - there is no
 Netmiko code path yet.  It exists to demonstrate the audit-style
 playbook shape (read-only, summary at the end) and to wire up the UI
 flow.  When a real implementation is added, follow the pattern in
@@ -60,7 +60,7 @@ class NtpAudit(BasePlaybook):
     async def _run_simulated(
         self, hosts, credentials, template_commands, dry_run
     ) -> AsyncGenerator[LogEvent, None]:
-        yield self.log_info(f"NTP Compliance Audit — checking {len(hosts)} host(s)")
+        yield self.log_info(f"NTP Compliance Audit - checking {len(hosts)} host(s)")
         yield self.log_info(f"Expected NTP servers: {', '.join(EXPECTED_NTP_SERVERS)}")
 
         # Tallies for the closing summary line.
@@ -74,9 +74,9 @@ class NtpAudit(BasePlaybook):
             yield self.log_info(f"Connecting to {ip} ...", host=ip)
             await asyncio.sleep(random.uniform(0.2, 0.5))
 
-            # 8% fake timeout rate — same shape as ``_common.simulate_connect``.
+            # 8% fake timeout rate - same shape as ``_common.simulate_connect``.
             if random.random() < 0.08:
-                yield self.log_error(f"TIMEOUT connecting to {ip} — skipping.", host=ip)
+                yield self.log_error(f"TIMEOUT connecting to {ip} - skipping.", host=ip)
                 continue
 
             yield self.log_success(f"Connected to {hostname} ({ip})", host=ip)
@@ -84,11 +84,11 @@ class NtpAudit(BasePlaybook):
             await asyncio.sleep(random.uniform(0.2, 0.4))
 
             # Bias the simulation toward compliance (75%) to mimic a
-            # mostly-clean fleet — failures stand out, which is what
+            # mostly-clean fleet - failures stand out, which is what
             # the real-world output usually looks like.
             if random.random() < 0.75:
                 yield self.log_success(
-                    f"COMPLIANT — NTP servers: {', '.join(EXPECTED_NTP_SERVERS)}",
+                    f"COMPLIANT - NTP servers: {', '.join(EXPECTED_NTP_SERVERS)}",
                     host=ip,
                 )
                 compliant += 1
@@ -97,7 +97,7 @@ class NtpAudit(BasePlaybook):
                 # an unauthorized NTP source the audit found.
                 rogue = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
                 yield self.log_warn(
-                    f"NON-COMPLIANT — Found unauthorized NTP server: {rogue}",
+                    f"NON-COMPLIANT - Found unauthorized NTP server: {rogue}",
                     host=ip,
                 )
                 non_compliant += 1

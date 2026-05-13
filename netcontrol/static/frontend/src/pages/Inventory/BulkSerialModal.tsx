@@ -44,7 +44,7 @@ export function BulkSerialModal({ groupId, groupName, onClose }: Props) {
     <Modal
       isOpen
       onClose={onClose}
-      title={`Fetch All Serials${groupName ? ` — ${groupName}` : ''}`}
+      title={`Fetch All Serials${groupName ? ` - ${groupName}` : ''}`}
     >
       <p
         style={{
@@ -75,7 +75,7 @@ export function BulkSerialModal({ groupId, groupName, onClose }: Props) {
               }
               required
             >
-              <option value="">— Select —</option>
+              <option value="">- Select -</option>
               {list.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}

@@ -395,7 +395,7 @@ async def test_create_flow_records_batch_and_top_talkers(tmp_path, monkeypatch):
         ("10.10.10.1", host_id, "netflow_v5",
          "10.0.0.1", "1.1.1.1", 2222, 443, 6, 2000, 4, 0, 0, 1, 2, 0, 0,
          "2026-05-12T00:00:02+00:00", "2026-05-12T00:00:03+00:00"),
-        # 10.0.0.2 has fewer bytes — should sort second.
+        # 10.0.0.2 has fewer bytes - should sort second.
         ("10.10.10.1", host_id, "netflow_v5",
          "10.0.0.2", "8.8.8.8", 3333, 53, 17, 500, 1, 0, 0, 1, 2, 0, 0,
          "2026-05-12T00:00:04+00:00", "2026-05-12T00:00:05+00:00"),
@@ -516,7 +516,7 @@ async def test_on_host_changed_updates_cache_and_exporter_rows(tmp_path, monkeyp
     rows = await db_module.list_flow_exporters()
     assert rows[0]["host_id"] is None
 
-    # Add the host and notify the collector — both the cache and the
+    # Add the host and notify the collector - both the cache and the
     # exporter row should pick up the new host_id without a restart.
     host_id = await _add_host(hostname="sw-c", ip="10.99.0.1")
     await flow_collector.on_host_changed(

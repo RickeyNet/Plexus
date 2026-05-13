@@ -16,7 +16,7 @@ const TABS: { value: Tab; label: string }[] = [
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   'graph-templates': {
     title: 'Reusable Graph Definitions',
-    text: 'A graph template is a chart recipe — what to plot, how to aggregate, what colors and units. Define once, apply to many devices.',
+    text: 'A graph template is a chart recipe - what to plot, how to aggregate, what colors and units. Define once, apply to many devices.',
   },
   'host-templates': {
     title: 'Map Device Types to Graphs',

@@ -1,5 +1,5 @@
 /**
- * IPAM API — overview, subnet drilldown, external sources, reconciliation,
+ * IPAM API - overview, subnet drilldown, external sources, reconciliation,
  * DHCP server integration. Mirrors the legacy api.js IPAM/DHCP functions.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';

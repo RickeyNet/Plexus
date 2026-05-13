@@ -73,13 +73,13 @@ _CATEGORY_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"AIR-AP|AIR-CAP|C9120|C9130|C9136|C9162|C9164|CW916", re.I), "wireless"),
     # Cisco IP phones
     (re.compile(r"CP-\d|IP\s?Phone|SEP[0-9A-F]", re.I), "phone"),
-    # Cisco routers — ISR, ASR, CSR, NCS
+    # Cisco routers - ISR, ASR, CSR, NCS
     (re.compile(r"ISR\d|ASR\d|CSR1|NCS-|C8[0-9]{3}|CISCO[0-9]{4}", re.I), "router"),
-    # Cisco switches — Catalyst 9xxx, 3xxx, 2xxx series
+    # Cisco switches - Catalyst 9xxx, 3xxx, 2xxx series
     (re.compile(r"C9[0-9]{3}|C3[0-9]{3}|C2[0-9]{3}|WS-C|C1[01][0-9]{2}F?", re.I), "switch"),
     # Cisco Nexus
     (re.compile(r"N[3579]K|N[0-9]{4}|Nexus", re.I), "switch"),
-    # Fortinet — everything is a firewall appliance
+    # Fortinet - everything is a firewall appliance
     (re.compile(r"forti", re.I), "firewall"),
     # Juniper routers
     (re.compile(r"MX\d|PTX|ACX|SRX[0-9]{4}", re.I), "router"),
@@ -120,7 +120,7 @@ def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
 
     if "cisco" in lowered:
         vendor = "cisco"
-        # Distinguish IOS-XE from classic IOS — Catalyst 9xxx, 3850,
+        # Distinguish IOS-XE from classic IOS - Catalyst 9xxx, 3850,
         # 3650, ISR 1000/4000, ASR 1000, etc. all run IOS-XE.
         # sysDescr variants: "Cisco IOS XE Software", "IOS-XE", "(CAT9K_IOSXE)", etc.
         if "ios-xe" in lowered or "iosxe" in lowered or "ios xe" in lowered:
@@ -235,7 +235,7 @@ async def _resolve_snmp_secrets(snmp_config: dict) -> dict:
         )
         return cfg
     except Exception as exc:
-        LOGGER.error("SNMPv3 secret resolution FAILED — using raw value as password: %s", exc)
+        LOGGER.error("SNMPv3 secret resolution FAILED - using raw value as password: %s", exc)
         return snmp_config
 
 
@@ -372,7 +372,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     ent_model = values.get("1.3.6.1.2.1.47.1.1.1.1.13.1", "")
 
     # pysnmp returns special objects (NoSuchInstance, NoSuchObject, endOfMibView)
-    # that str() converts to long descriptive strings — treat those as empty.
+    # that str() converts to long descriptive strings - treat those as empty.
     if sys_name and any(m in sys_name.lower() for m in _SNMP_BAD_MARKERS):
         sys_name = ""
     if sys_descr and any(m in sys_descr.lower() for m in _SNMP_BAD_MARKERS):
@@ -571,7 +571,7 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
 
     LOGGER.info("topology: starting parallel SNMP walks for %s (%s)", ip_address, host_id)
 
-    # Fire ALL walks in parallel — one round-trip instead of 17 sequential ones
+    # Fire ALL walks in parallel - one round-trip instead of 17 sequential ones
     (if_names, if_descr,
      hc_in, hc_out, lo_in, lo_out, high_speed_raw, speed_raw,
      cdp_device_ids, cdp_addresses, cdp_ports, cdp_platforms,
@@ -591,7 +591,7 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         _walk(bgp_peer_state_base), _walk(bgp_peer_remote_as_base),
     )
 
-    LOGGER.info("topology: SNMP walks complete for %s — CDP:%d LLDP:%d OSPF:%d BGP:%d ifStats:%d",
+    LOGGER.info("topology: SNMP walks complete for %s - CDP:%d LLDP:%d OSPF:%d BGP:%d ifStats:%d",
                 ip_address, len(cdp_device_ids), len(lldp_names),
                 len(ospf_rtr_ids), len(bgp_states), len(hc_in) or len(lo_in))
 
@@ -975,6 +975,6 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
             pass
 
     counts["total"] = counts["interfaces"] + counts["storage"]
-    LOGGER.info("data_source_discovery: host %s (%s) — %d interfaces, %d storage entries",
+    LOGGER.info("data_source_discovery: host %s (%s) - %d interfaces, %d storage entries",
                 host_id, ip_address, counts["interfaces"], counts["storage"])
     return counts

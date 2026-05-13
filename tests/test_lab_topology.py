@@ -1,4 +1,4 @@
-"""Tests for Phase B-2 — multi-device lab topologies."""
+"""Tests for Phase B-2 - multi-device lab topologies."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 """
-Migration runner — discovers, orders, and applies schema migrations.
+Migration runner - discovers, orders, and applies schema migrations.
 
 The ``schema_migrations`` table stores the version number, description,
 and timestamp of every migration that has been applied.  On each startup
@@ -225,7 +225,7 @@ async def run_migrations(db, *, engine: str = "sqlite") -> int:
         for mig in pending:
             ver = mig["version"]
             desc = mig["description"]
-            _LOGGER.info("schema: applying migration %04d — %s", ver, desc)
+            _LOGGER.info("schema: applying migration %04d - %s", ver, desc)
             t0 = time.monotonic()
             try:
                 await mig["up"](db)
@@ -234,7 +234,7 @@ async def run_migrations(db, *, engine: str = "sqlite") -> int:
                 _LOGGER.info("schema: migration %04d applied (%.0f ms)", ver, elapsed)
             except Exception:
                 _LOGGER.error(
-                    "schema: migration %04d FAILED — database may need manual repair",
+                    "schema: migration %04d FAILED - database may need manual repair",
                     ver,
                     exc_info=True,
                 )

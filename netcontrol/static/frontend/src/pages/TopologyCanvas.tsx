@@ -1,10 +1,10 @@
 /**
- * TopologyCanvas — lightweight SVG topology view for Phase B-2.
+ * TopologyCanvas - lightweight SVG topology view for Phase B-2.
  *
  * Lays nodes out on a circle (deterministic, no physics engine) and draws
  * edges between them. Click a node to select it; clicking a second node
  * fires `onProposeLink` with both endpoints so the parent can prompt for
- * interface names. No drag, no zoom — those come later if anyone asks.
+ * interface names. No drag, no zoom - those come later if anyone asks.
  *
  * Pure SVG keeps the bundle small (no vis-network / reactflow / d3 dep)
  * and avoids ResizeObserver / canvas portability headaches.
@@ -291,10 +291,10 @@ export function TopologyCanvas({
           >
             <strong>{d.hostname}</strong>
             <div>
-              kind: {d.runtime_node_kind || '—'} · status: {d.runtime_status || '—'}
+              kind: {d.runtime_node_kind || '-'} · status: {d.runtime_status || '-'}
             </div>
-            <div>image: {d.runtime_image || '—'}</div>
-            <div>mgmt: {d.runtime_mgmt_address || '—'}</div>
+            <div>image: {d.runtime_image || '-'}</div>
+            <div>mgmt: {d.runtime_mgmt_address || '-'}</div>
           </div>
         );
       })()}

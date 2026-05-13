@@ -13,7 +13,7 @@ export function BackupDiffModal({ backupId, onClose }: Props) {
   const query = useConfigBackupDiff(backupId);
   const data = query.data;
   const title = data
-    ? `Backup Diff — ${data.hostname || data.ip_address || ''}`
+    ? `Backup Diff - ${data.hostname || data.ip_address || ''}`
     : 'Backup Diff';
 
   return (

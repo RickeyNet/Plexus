@@ -1,5 +1,5 @@
 """
-secret_variables.py — CRUD routes for encrypted secret variables.
+secret_variables.py - CRUD routes for encrypted secret variables.
 
 Secret variables are referenced in config templates via {{secret.NAME}}
 and resolved at job execution time.  Values are AES-256-GCM encrypted at rest.
@@ -82,7 +82,7 @@ class SecretVariableUpdate(BaseModel):
 
 @router.get("/api/secret-variables")
 async def list_secret_variables(request: Request):
-    """Return all secret variable metadata (names, descriptions — never values).
+    """Return all secret variable metadata (names, descriptions - never values).
 
     Admin-only: even though values are never returned, leaking the set of
     variable names exposes which integrations and external services are
@@ -97,7 +97,7 @@ async def list_secret_variables(request: Request):
 # validation on the string, and returns 422.
 @router.get("/api/secret-variables/names")
 async def list_secret_variable_names(request: Request):
-    """Return just the names — for template editor autocomplete.
+    """Return just the names - for template editor autocomplete.
 
     Admin-only for the same reason as list_secret_variables.
     """

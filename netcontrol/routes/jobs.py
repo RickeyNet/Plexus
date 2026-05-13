@@ -40,7 +40,7 @@ except ImportError:
 LOGGER = configure_logging("plexus.jobs")
 
 router = APIRouter()
-ws_router = APIRouter()  # WebSocket routes — registered without HTTP auth dependency
+ws_router = APIRouter()  # WebSocket routes - registered without HTTP auth dependency
 
 # ── Late-binding auth dependencies ────────────────────────────────────────────
 
@@ -159,7 +159,7 @@ async def _reprobe_hosts_after_job(hosts: list[dict], credentials: dict, dry_run
                     discovered.append(result)
             if discovered:
                 await _sync_group_hosts(group_id, discovered, remove_absent=False)
-                LOGGER.info("post-job reprobe: group %s — %d/%d hosts re-synced via SNMP",
+                LOGGER.info("post-job reprobe: group %s - %d/%d hosts re-synced via SNMP",
                             group_id, len(discovered), len(group_hosts))
     except Exception as exc:
         LOGGER.warning("post-job SNMP reprobe failed: %s", exc)
@@ -203,7 +203,7 @@ async def _process_job_queue_inner():
         await db.add_job_event(job_id, "error", "Playbook not found")
         return
 
-    # Get hosts — use stored host_ids (specific selection) or fall back to full group
+    # Get hosts - use stored host_ids (specific selection) or fall back to full group
     hosts = []
     stored_host_ids = None
     if next_job.get("host_ids"):
@@ -237,7 +237,7 @@ async def _process_job_queue_inner():
         await db.add_job_event(job_id, "error", "No hosts found for this job")
         return
 
-    # Get credentials — use job-specific, then app-wide default.  Revalidate
+    # Get credentials - use job-specific, then app-wide default.  Revalidate
     # ownership against the job's original submitter (launched_by) so a queued
     # job can never execute with a credential the submitter doesn't own.
     credentials = None
@@ -259,7 +259,7 @@ async def _process_job_queue_inner():
             return
     if not credentials:
         await db.update_job_status(job_id, "failed")
-        await db.add_job_event(job_id, "error", "No credential configured — set a default credential in Settings or select one when launching the job")
+        await db.add_job_event(job_id, "error", "No credential configured - set a default credential in Settings or select one when launching the job")
         return
 
     # Get template commands
@@ -295,7 +295,7 @@ async def _process_job_queue_inner():
                 job_id, raw_dry_run, dry_run, playbook.get("name", "?"), len(hosts))
 
     # Record the mode as the first job event so it's always visible in output
-    mode_label = "DRY-RUN (simulation only — no changes will be made)" if dry_run else "LIVE MODE — changes WILL be applied"
+    mode_label = "DRY-RUN (simulation only - no changes will be made)" if dry_run else "LIVE MODE - changes WILL be applied"
     await db.add_job_event(job_id, "info", f"Job mode: {mode_label}")
 
     pb_type = playbook.get("type", "python")
@@ -549,7 +549,7 @@ async def launch_job(body: JobLaunch, request: Request):
     if not playbook:
         raise HTTPException(404, "Playbook not found")
 
-    # Ansible playbooks can execute arbitrary code — restrict to admin only
+    # Ansible playbooks can execute arbitrary code - restrict to admin only
     if playbook.get("type") == "ansible" and _require_admin:
         await _require_admin(request)
 
@@ -591,12 +591,12 @@ async def launch_job(body: JobLaunch, request: Request):
     if not hosts:
         raise HTTPException(400, "Must specify host_ids, ad_hoc_ips, or inventory_group_id")
 
-    # Get credentials — use job-specific, then app-wide default.  The default
+    # Get credentials - use job-specific, then app-wide default.  The default
     # credential is only usable by callers who actually own it (or are admin);
     # it does not grant regular users implicit access to another user's creds.
     cred_id = body.credential_id or state.AUTH_CONFIG.get("default_credential_id")
     if not cred_id:
-        raise HTTPException(400, "No credential configured — set a default credential in Settings or select one when launching the job")
+        raise HTTPException(400, "No credential configured - set a default credential in Settings or select one when launching the job")
     cred = await require_credential_access(cred_id, session=session)
     credentials = {
         "username": cred["username"],
@@ -618,7 +618,7 @@ async def launch_job(body: JobLaunch, request: Request):
     if template_commands and has_secret_references("\n".join(template_commands)):
         try:
             # Dry-resolve (redacted) to verify all secrets exist without
-            # decrypting yet — actual decryption happens at execution time.
+            # decrypting yet - actual decryption happens at execution time.
             await resolve_secrets(template_commands, redact=True)
         except SecretResolutionError as exc:
             raise HTTPException(
@@ -757,7 +757,7 @@ async def rerun_job_endpoint(job_id: int, request: Request):
     if not job:
         raise HTTPException(404, "Job not found")
     if job["status"] in ("queued", "running"):
-        raise HTTPException(400, f"Job is still {job['status']} — wait for it to finish first")
+        raise HTTPException(400, f"Job is still {job['status']} - wait for it to finish first")
 
     session = _get_session(request)
     user = session["user"] if session else "admin"

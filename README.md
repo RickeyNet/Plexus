@@ -1,8 +1,8 @@
-# Plexus — Network Automation Hub
+# Plexus - Network Automation Hub
 
 A Python-first network automation control center inspired by Ansible Tower / AWX.
 Manage device inventories, run automation playbooks, store config templates, and
-stream live job output — all through a REST API with WebSocket support.
+stream live job output - all through a REST API with WebSocket support.
 
 **Scope (current):** FastAPI backend with playbook runner, WebSocket streaming, SNMP discovery, IPAM, topology, compliance, and digital-twin lab mode.
 
@@ -17,7 +17,7 @@ stream live job output — all through a REST API with WebSocket support.
 
 ```
 netcontrol/
-├── app.py                  # FastAPI application — all REST + WebSocket routes
+├── app.py                  # FastAPI application - all REST + WebSocket routes
 ├── database.py             # Async SQLite data layer (aiosqlite)
 ├── crypto.py               # Fernet encryption for stored credentials
 ├── runner.py               # BasePlaybook class + executor + registry
@@ -94,7 +94,7 @@ source .venv/bin/activate
 3) Install dependencies:
 
 ```bash
-# core (SQLite only — works on Windows and Linux)
+# core (SQLite only - works on Windows and Linux)
 python -m pip install -r requirements.txt
 
 # with PostgreSQL support (Linux/production)
@@ -210,7 +210,7 @@ and device type. Similar to Ansible inventory groups.
 ### Playbooks
 Python scripts that subclass `BasePlaybook` and register themselves with
 the `@register_playbook` decorator. Each playbook is an async generator
-that yields `LogEvent` objects — enabling real-time streaming to the frontend.
+that yields `LogEvent` objects - enabling real-time streaming to the frontend.
 
 ### Templates
 Reusable config snippets (IOS commands) that playbooks can consume.
@@ -246,13 +246,13 @@ under `Traffic Analysis` (also visible per-device on the Device Detail page's
 
 Both listeners bind to `0.0.0.0` so any device on the management network can
 export to them. The collector is **off by default**; turn it on via
-`APP_NETFLOW_ENABLED=true` in `.env` (first boot only — after that the toggle
+`APP_NETFLOW_ENABLED=true` in `.env` (first boot only - after that the toggle
 lives in `Settings > NetFlow` in the UI).
 
 ### Enabling the collector
 
 In the UI: `Settings > NetFlow`. Toggle `Enabled`, optionally change the
-ports/retention, and click `Save`. Changes apply immediately — the UDP
+ports/retention, and click `Save`. Changes apply immediately - the UDP
 listeners are rebound in-process, no restart required.
 
 From the API:
@@ -261,7 +261,7 @@ From the API:
 # read current config
 curl http://localhost:8080/api/admin/flows/config
 
-# update — rebinds listeners only when enabled/ports actually change
+# update - rebinds listeners only when enabled/ports actually change
 curl -X PUT http://localhost:8080/api/admin/flows/config \
   -H "Content-Type: application/json" \
   -d '{
@@ -282,11 +282,11 @@ curl http://localhost:8080/api/flows/exporters
 The `Enable NetFlow Export` playbook (`templates/playbooks/netflow_enable.py`)
 pushes platform-appropriate exporter config to selected hosts:
 
-- **Cisco IOS** (`cisco_ios`) — classic `ip flow-export destination` plus
+- **Cisco IOS** (`cisco_ios`) - classic `ip flow-export destination` plus
   per-interface `ip flow ingress/egress`.
-- **Cisco IOS-XE** (`cisco_xe`) — Flexible NetFlow (`flow record` / `flow
+- **Cisco IOS-XE** (`cisco_xe`) - Flexible NetFlow (`flow record` / `flow
   exporter` / `flow monitor`) with an optional `sampler` block.
-- **Cisco NX-OS** (`cisco_nxos`, `cisco_nxos_ssh`) — same Flex shape with
+- **Cisco NX-OS** (`cisco_nxos`, `cisco_nxos_ssh`) - same Flex shape with
   NX-OS syntax plus a leading `feature netflow`.
 
 The collector destination IP resolves in priority order:
@@ -301,7 +301,7 @@ running-config | include flow|ip flow-export` to capture state, applies via
 `send_config_set`, verifies, and `save_config`s on success.
 
 If you're running Plexus in Docker, devices need to reach the **host** IP on
-UDP 2055/6343 — not the container IP. Make sure the host firewall allows
+UDP 2055/6343 - not the container IP. Make sure the host firewall allows
 inbound UDP on those ports; see `DEPLOYMENT.md`.
 
 ### Retention
@@ -407,7 +407,7 @@ class MyScript(BasePlaybook):
         yield self.log_success("All done.")
 ```
 
-4. Restart the server — playbooks auto-register on import
+4. Restart the server - playbooks auto-register on import
 5. Register it in the DB via API:
 ```bash
 curl -X POST http://localhost:8080/api/playbooks \
@@ -439,9 +439,9 @@ output. This is useful for frontend development and demos.
 
 ## Security Notes
 
-- **netcontrol.key** — Fernet encryption key for credentials. Back it up.
+- **netcontrol.key** - Fernet encryption key for credentials. Back it up.
   Losing it means stored passwords are unrecoverable.
 - Credentials are encrypted at rest but decrypted in memory during job execution.
 - API token protection is supported via `APP_API_TOKEN`; set `APP_REQUIRE_API_TOKEN=true` to enforce token auth for API routes.
-- Default seed credential uses `netadmin / cisco123` — change in production.
+- Default seed credential uses `netadmin / cisco123` - change in production.
 - License: MIT (`LICENSE`).

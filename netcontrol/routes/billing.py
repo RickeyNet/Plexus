@@ -258,7 +258,7 @@ def _format_bps(bps: float) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# API Endpoints — Billing Circuits
+# API Endpoints - Billing Circuits
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -336,7 +336,7 @@ async def list_customers():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# API Endpoints — Billing Period Reports
+# API Endpoints - Billing Period Reports
 # ═════════════════════════════════════════════════════════════════════════════
 
 

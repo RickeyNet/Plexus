@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════
-# Plexus Bootstrap — fresh Ubuntu → running stack in one command
+# Plexus Bootstrap - fresh Ubuntu → running stack in one command
 #
 # Usage (run on a clean Ubuntu 24.04 / 26.04 box):
 #   curl -fsSL https://raw.githubusercontent.com/RickeyNet/Plexus/main/deploy/bootstrap.sh | sudo bash
@@ -8,7 +8,7 @@
 # Or after `git clone`:
 #   sudo bash deploy/bootstrap.sh
 #
-# Idempotent — safe to re-run. Skips steps already done.
+# Idempotent - safe to re-run. Skips steps already done.
 # ═══════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -23,7 +23,7 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 if [[ "${TARGET_USER}" == "root" ]]; then
-    echo "WARN: running as root user — docker group membership won't be added to a regular account."
+    echo "WARN: running as root user - docker group membership won't be added to a regular account."
 fi
 
 log() { printf '\n\033[1;36m[bootstrap]\033[0m %s\n' "$*"; }
@@ -51,7 +51,7 @@ if ! command -v docker >/dev/null 2>&1; then
     apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     systemctl enable --now docker
 else
-    log "Docker already installed — skipping"
+    log "Docker already installed - skipping"
 fi
 
 # ── 4. Add invoking user to docker group ──────────────────────────────
@@ -66,7 +66,7 @@ fi
 mkdir -p "${INSTALL_DIR}"
 chown -R "${TARGET_USER}:${TARGET_USER}" "${INSTALL_DIR}"
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
-    log "Repo already cloned at ${INSTALL_DIR} — pulling latest"
+    log "Repo already cloned at ${INSTALL_DIR} - pulling latest"
     sudo -u "${TARGET_USER}" git -C "${INSTALL_DIR}" pull --ff-only
 else
     log "Cloning ${REPO_URL} into ${INSTALL_DIR}"
@@ -92,7 +92,7 @@ if ufw status | grep -q "Status: active"; then
     ufw allow 162/udp >/dev/null
     ufw allow 1514/udp >/dev/null
 else
-    log "ufw is inactive — skipping firewall rules. Enable with: sudo ufw enable"
+    log "ufw is inactive - skipping firewall rules. Enable with: sudo ufw enable"
 fi
 
 # ── 9. Final status ───────────────────────────────────────────────────

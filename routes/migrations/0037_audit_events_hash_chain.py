@@ -3,10 +3,10 @@ Migration 0037: Tamper-evident audit log via hash chaining.
 
 Adds two columns to ``audit_events``:
 
-* ``prev_hash`` — the ``row_hash`` of the previous row (empty for the first
+* ``prev_hash`` - the ``row_hash`` of the previous row (empty for the first
   row). Forms a chain so any earlier mutation invalidates everything after
   it.
-* ``row_hash`` — sha256 over the canonical row bytes (id, timestamp,
+* ``row_hash`` - sha256 over the canonical row bytes (id, timestamp,
   category, action, user, detail, correlation_id, prev_hash).
 
 Backfills both columns over existing rows in a single transaction, walking
@@ -37,7 +37,7 @@ def _canonical_row_bytes(
     correlation_id: str,
     prev_hash: str,
 ) -> bytes:
-    """Stable serialization for hashing — must match
+    """Stable serialization for hashing - must match
     ``routes.database._audit_canonical_bytes``. NUL-separated to make
     cross-field injection impossible. ``id`` is intentionally excluded so
     the application can write row_hash atomically with the INSERT;
@@ -108,7 +108,7 @@ async def _up_sqlite(db) -> None:
         )
         prev_hash = rh
 
-    # Triggers — block UPDATE and DELETE outright. Inserts are allowed.
+    # Triggers - block UPDATE and DELETE outright. Inserts are allowed.
     await db.execute("DROP TRIGGER IF EXISTS audit_events_no_update")
     await db.execute(
         """
