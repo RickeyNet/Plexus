@@ -87,6 +87,22 @@ def test_generic_driver_raises_on_config_capabilities() -> None:
         drv.save_config_commands()
 
 
+def test_generic_driver_raises_on_snmpv3_capabilities() -> None:
+    # Mirrors the netflow + config-capture contract: a host whose
+    # device_type isn't registered must produce a loud capability error
+    # so the SNMPv3 playbook can refuse to push Cisco syntax at an
+    # unknown vendor.
+    drv = get_driver("frobozz_os")
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_show_existing_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_engine_id_show_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_engine_id_pin_command("ABC123")
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_verify_users_command()
+
+
 def test_register_driver_rejects_duplicate_device_type() -> None:
     # Define a competing driver for an already-registered type; the
     # decorator should refuse to shadow CiscoIOSDriver.
@@ -132,6 +148,17 @@ def test_cisco_ios_config_capture_and_save() -> None:
     drv = get_driver("cisco_ios")
     assert drv.capture_running_config_command() == "show running-config"
     assert drv.save_config_commands() == ["write memory"]
+
+
+def test_cisco_ios_snmpv3_capability_surface() -> None:
+    drv = get_driver("cisco_ios")
+    assert drv.snmpv3_show_existing_command() == "show running-config | include snmp-server"
+    assert drv.snmpv3_engine_id_show_command() == "show snmp engineID"
+    assert (
+        drv.snmpv3_engine_id_pin_command("80000009030050568D9CDFC0")
+        == "snmp-server engineID local 80000009030050568D9CDFC0"
+    )
+    assert drv.snmpv3_verify_users_command() == "show snmp user"
 
 
 def test_cisco_ios_ignores_sampling_rate() -> None:
@@ -183,6 +210,17 @@ def test_cisco_xe_config_capture_and_save() -> None:
     assert drv.save_config_commands() == ["write memory"]
 
 
+def test_cisco_xe_snmpv3_capability_surface() -> None:
+    # IOS-XE shares the SNMPv3 command vocabulary with classic IOS;
+    # the test exists as a regression guard so a future XE-specific
+    # tweak doesn't silently drift away from IOS.
+    drv = get_driver("cisco_xe")
+    assert drv.snmpv3_show_existing_command() == "show running-config | include snmp-server"
+    assert drv.snmpv3_engine_id_show_command() == "show snmp engineID"
+    assert drv.snmpv3_engine_id_pin_command("AB12") == "snmp-server engineID local AB12"
+    assert drv.snmpv3_verify_users_command() == "show snmp user"
+
+
 # ── cisco_nxos output ───────────────────────────────────────────────────────
 
 
@@ -226,6 +264,21 @@ def test_cisco_nxos_config_capture_and_save() -> None:
     drv = get_driver("cisco_nxos")
     assert drv.capture_running_config_command() == "show running-config"
     assert drv.save_config_commands() == ["copy running-config startup-config"]
+
+
+def test_cisco_nxos_snmpv3_engine_id_is_platform_managed() -> None:
+    # NX-OS persists the SNMP engine ID across reloads automatically
+    # and does not expose ``snmp-server engineID local`` as a knob.  Both
+    # the show command and the pin command must return empty strings so
+    # the playbook's pin step short-circuits.  Returning a Cisco-IOS
+    # style command here would error out on the device.
+    drv = get_driver("cisco_nxos")
+    assert drv.snmpv3_engine_id_show_command() == ""
+    assert drv.snmpv3_engine_id_pin_command("ABC") == ""
+    # The show-existing and verify-users commands are still valid on
+    # NX-OS, so they're populated even though the pin step isn't.
+    assert drv.snmpv3_show_existing_command() == "show running-config | include snmp-server"
+    assert drv.snmpv3_verify_users_command() == "show snmp user"
 
 
 # ── parity with the existing netflow_enable playbook ─────────────────────────

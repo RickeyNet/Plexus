@@ -64,3 +64,22 @@ class CiscoNXOSDriver(Driver):
         # NX-OS doesn't accept "write memory" - the canonical save command
         # is the explicit copy form.
         return ["copy running-config startup-config"]
+
+    def snmpv3_show_existing_command(self) -> str:
+        # NX-OS accepts the same include-style filter as IOS/XE.
+        return "show running-config | include snmp-server"
+
+    def snmpv3_engine_id_show_command(self) -> str:
+        # NX-OS persists the SNMP engine ID across reloads automatically
+        # and does not expose a configurable ``snmp-server engineID
+        # local`` knob.  Returning an empty string signals the playbook
+        # to skip the engine-ID pin step entirely on this platform.
+        return ""
+
+    def snmpv3_engine_id_pin_command(self, engine_id: str) -> str:
+        # Counterpart to the empty show-command above.  Pinning is a no-op
+        # on NX-OS because the engine ID is already stable.
+        return ""
+
+    def snmpv3_verify_users_command(self) -> str:
+        return "show snmp user"
