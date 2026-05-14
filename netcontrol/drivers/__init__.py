@@ -29,7 +29,9 @@ from netcontrol.drivers import (  # noqa: F401
     cisco_nxos,
     cisco_xe,
     cisco_xr,
+    fortinet_fortios,
     juniper_junos,
+    paloalto_panos,
 )
 from netcontrol.drivers.base import (
     Driver,
