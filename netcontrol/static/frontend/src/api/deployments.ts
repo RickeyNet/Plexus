@@ -26,6 +26,12 @@ export interface DeploymentSummary {
   failed?: number;
 }
 
+export type ApprovalStatus =
+  | 'not_required'
+  | 'pending'
+  | 'approved'
+  | 'rejected';
+
 export interface Deployment {
   id: number;
   name: string;
@@ -40,6 +46,12 @@ export interface Deployment {
   template_id?: number | null;
   risk_analysis_id?: number | null;
   host_ids?: string | null;
+  requires_approval?: number | boolean | null;
+  approval_status?: ApprovalStatus | null;
+  approval_requested_at?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  approval_comment?: string | null;
   created_at?: string | null;
   created_by?: string | null;
   started_at?: string | null;
@@ -245,6 +257,46 @@ export function useDeleteDeployment() {
   return useMutation({
     mutationFn: (id: number) =>
       apiRequest(`/deployments/${id}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateDeployments(qc),
+  });
+}
+
+export interface ApprovalDecisionPayload {
+  comment?: string;
+}
+
+export function useRequestDeploymentApproval() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiRequest<{ ok: boolean; approval_status: ApprovalStatus }>(
+        `/deployments/${id}/request-approval`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => invalidateDeployments(qc),
+  });
+}
+
+export function useApproveDeployment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, comment }: { id: number; comment?: string }) =>
+      apiRequest<{ ok: boolean; approval_status: ApprovalStatus }>(
+        `/deployments/${id}/approve`,
+        { method: 'POST', body: { comment: comment || '' } },
+      ),
+    onSuccess: () => invalidateDeployments(qc),
+  });
+}
+
+export function useRejectDeployment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, comment }: { id: number; comment?: string }) =>
+      apiRequest<{ ok: boolean; approval_status: ApprovalStatus }>(
+        `/deployments/${id}/reject`,
+        { method: 'POST', body: { comment: comment || '' } },
+      ),
     onSuccess: () => invalidateDeployments(qc),
   });
 }

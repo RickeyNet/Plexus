@@ -26,6 +26,7 @@ from netcontrol.routes.shared import (
     _push_config_to_device,
 )
 from netcontrol.routes.config_drift import _analyze_drift_for_host
+from netcontrol.routes.maintenance_windows import evaluate_change_gate
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -75,6 +76,15 @@ class DeploymentExecute(BaseModel):
 class DeploymentRollback(BaseModel):
     """Roll back a deployment to pre-deployment state."""
     deployment_id: int
+
+
+class DeploymentApprovalDecision(BaseModel):
+    """Approve or reject a pending deployment approval."""
+    comment: str = ""
+
+
+# Risk levels that auto-require human approval before execute.
+_AUTO_APPROVAL_RISK_LEVELS = {"high", "critical"}
 
 
 # ── Module-level state ────────────────────────────────────────────────────────
@@ -668,13 +678,43 @@ async def create_deployment(body: DeploymentCreate, request: Request):
         created_by=user,
     )
 
+    # Auto-flag approval when (a) target group is marked production, or
+    # (b) the linked risk analysis is high/critical. Flip approval_status
+    # to 'pending' so the UI surfaces the gate immediately.
+    require = False
+    reason_bits: list[str] = []
+    group = await db.get_group(body.group_id)
+    if group and (group.get("environment") or "").lower() == "production":
+        require = True
+        reason_bits.append("production group")
+    if body.risk_analysis_id:
+        analysis = await db.get_risk_analysis(body.risk_analysis_id)
+        if analysis and (analysis.get("risk_level") or "").lower() in _AUTO_APPROVAL_RISK_LEVELS:
+            require = True
+            reason_bits.append(f"risk={analysis['risk_level']}")
+    if require:
+        await db.set_deployment_approval(
+            deployment_id,
+            requires_approval=True,
+            approval_status="pending",
+            request=True,
+        )
+
     await _audit(
         "deployments", "deployment.created",
         user=user,
-        detail=f"id={deployment_id} name={body.name} group_id={body.group_id}",
+        detail=(
+            f"id={deployment_id} name={body.name} group_id={body.group_id}"
+            + (f" requires_approval=1 ({', '.join(reason_bits)})" if require else "")
+        ),
         correlation_id=_corr_id(request),
     )
-    return {"id": deployment_id, "status": "planning"}
+    return {
+        "id": deployment_id,
+        "status": "planning",
+        "requires_approval": require,
+        "approval_status": "pending" if require else "not_required",
+    }
 
 
 @router.get("/api/deployments")
@@ -746,6 +786,39 @@ async def execute_deployment(deployment_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
 
+    # ── Approval gate ────────────────────────────────────────────────────────
+    if dep.get("requires_approval"):
+        status = dep.get("approval_status") or "pending"
+        if status != "approved":
+            await _audit(
+                "deployments", "deployment.execute_blocked",
+                user=user,
+                detail=f"id={deployment_id} reason=approval_status={status}",
+                correlation_id=_corr_id(request),
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=f"Deployment requires approval before execute (status={status})",
+            )
+
+    # ── Maintenance window gate ──────────────────────────────────────────────
+    verdict = await evaluate_change_gate([dep["group_id"]])
+    if not verdict["allowed"]:
+        await _audit(
+            "deployments", "deployment.execute_blocked",
+            user=user,
+            detail=f"id={deployment_id} reason=maintenance_window window_id={verdict['window']['id'] if verdict.get('window') else ''}",
+            correlation_id=_corr_id(request),
+        )
+        raise HTTPException(status_code=409, detail=verdict["reason"])
+    if verdict.get("warning"):
+        await _audit(
+            "deployments", "deployment.execute_outside_window",
+            user=user,
+            detail=f"id={deployment_id} warning={verdict['warning']}",
+            correlation_id=_corr_id(request),
+        )
+
     # Resolve credentials
     cred = await db.get_credential_raw(dep["credential_id"])
     if not cred:
@@ -782,6 +855,100 @@ async def execute_deployment(deployment_id: int, request: Request):
         correlation_id=_corr_id(request),
     )
     return {"job_id": job_id, "deployment_id": deployment_id}
+
+
+@router.post("/api/deployments/{deployment_id}/request-approval")
+async def request_deployment_approval(deployment_id: int, request: Request):
+    """Flip an unflagged deployment into the approval workflow. Useful
+    when ops decides post-hoc that a deployment needs four-eyes review
+    even though no auto-rule fired."""
+    dep = await db.get_deployment(deployment_id)
+    if not dep:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    if dep["status"] not in ("planning", "failed"):
+        raise HTTPException(status_code=400, detail=f"Cannot request approval in '{dep['status']}' status")
+    if dep.get("approval_status") == "pending":
+        return {"ok": True, "approval_status": "pending"}
+    await db.set_deployment_approval(
+        deployment_id,
+        requires_approval=True,
+        approval_status="pending",
+        request=True,
+    )
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    await _audit(
+        "deployments", "deployment.approval_requested",
+        user=user,
+        detail=f"id={deployment_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "approval_status": "pending"}
+
+
+@router.post("/api/deployments/{deployment_id}/approve")
+async def approve_deployment(deployment_id: int, body: DeploymentApprovalDecision, request: Request):
+    """Approve a deployment. The approver must be different from the
+    deployment's creator (four-eyes)."""
+    dep = await db.get_deployment(deployment_id)
+    if not dep:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    if not dep.get("requires_approval"):
+        raise HTTPException(status_code=400, detail="Deployment does not require approval")
+    if dep.get("approval_status") != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot approve deployment with approval_status='{dep.get('approval_status')}'",
+        )
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    if user and user == (dep.get("created_by") or ""):
+        raise HTTPException(status_code=403, detail="Approver must be different from creator (four-eyes)")
+    await db.set_deployment_approval(
+        deployment_id,
+        approval_status="approved",
+        approved_by=user,
+        approval_comment=body.comment,
+    )
+    await _audit(
+        "deployments", "deployment.approved",
+        user=user,
+        detail=f"id={deployment_id}" + (f" comment={body.comment[:80]}" if body.comment else ""),
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "approval_status": "approved"}
+
+
+@router.post("/api/deployments/{deployment_id}/reject")
+async def reject_deployment(deployment_id: int, body: DeploymentApprovalDecision, request: Request):
+    """Reject a deployment's approval request. The deployment stays in
+    'planning' but cannot be executed until a fresh approval request is
+    raised."""
+    dep = await db.get_deployment(deployment_id)
+    if not dep:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    if not dep.get("requires_approval"):
+        raise HTTPException(status_code=400, detail="Deployment does not require approval")
+    if dep.get("approval_status") != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot reject deployment with approval_status='{dep.get('approval_status')}'",
+        )
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    await db.set_deployment_approval(
+        deployment_id,
+        approval_status="rejected",
+        approved_by=user,
+        approval_comment=body.comment,
+    )
+    await _audit(
+        "deployments", "deployment.approval_rejected",
+        user=user,
+        detail=f"id={deployment_id}" + (f" comment={body.comment[:80]}" if body.comment else ""),
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "approval_status": "rejected"}
 
 
 @router.post("/api/deployments/{deployment_id}/rollback")

@@ -239,6 +239,10 @@ from netcontrol.routes.playbooks import (
     write_playbook_file,
 )
 from netcontrol.routes.reporting import _report_scheduler_loop, router as reporting_router
+from netcontrol.routes.maintenance_windows import (
+    init_maintenance_windows,
+    router as maintenance_windows_router,
+)
 from netcontrol.routes.risk_analysis import (
     _CRITICAL_PATTERNS,
     RiskAnalysisRequest,
@@ -1782,6 +1786,7 @@ init_config_backups(require_auth, require_feature, require_admin, verify_session
 init_compliance(require_auth, require_feature, require_admin)
 init_risk_analysis(require_auth, require_feature)
 init_deployments(require_auth, require_feature, verify_session_token, _get_user_features)
+init_maintenance_windows(require_auth, require_feature)
 init_monitoring(require_auth, require_feature, require_admin)
 init_interface_errors(require_auth, require_admin)
 init_billing(require_auth, require_admin)
@@ -1854,6 +1859,13 @@ app.include_router(
     dependencies=[Depends(require_auth), Depends(require_feature("deployments"))],
 )
 app.include_router(deployments_ws_router)  # WebSocket - handles its own auth
+# Maintenance windows (gating layer for deployments) -- shares the
+# deployments feature key so any operator who can run a deployment can
+# also see/manage the windows that govern it.
+app.include_router(
+    maintenance_windows_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("deployments"))],
+)
 # Monitoring + SLA + admin
 app.include_router(
     monitoring_router,

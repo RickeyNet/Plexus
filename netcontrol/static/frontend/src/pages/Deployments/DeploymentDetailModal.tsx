@@ -1,9 +1,15 @@
+import { useState } from 'react';
+
+import { useAuthStatus } from '@/api/auth';
 import {
   type DeploymentCheckpoint,
   type DeploymentDetail,
   type DeploymentJobStartResult,
+  useApproveDeployment,
   useDeployment,
   useExecuteDeployment,
+  useRejectDeployment,
+  useRequestDeploymentApproval,
   useRollbackDeployment,
 } from '@/api/deployments';
 import { Modal } from '@/components/Modal';
@@ -85,8 +91,19 @@ function DetailBody({
 }) {
   const execute = useExecuteDeployment();
   const rollback = useRollbackDeployment();
+  const approve = useApproveDeployment();
+  const reject = useRejectDeployment();
+  const requestApproval = useRequestDeploymentApproval();
+  const { data: auth } = useAuthStatus();
+  const [approvalComment, setApprovalComment] = useState('');
 
   const color = statusColor(deployment.status);
+  const requiresApproval = !!deployment.requires_approval;
+  const approvalStatus = deployment.approval_status || 'not_required';
+  const approvalBlocking = requiresApproval && approvalStatus !== 'approved';
+  const isApprover =
+    !!auth?.username &&
+    auth.username !== (deployment.created_by || '');
   const checkpoints = deployment.checkpoints || [];
   const snapshots = deployment.snapshots || [];
   const preChecks = checkpoints.filter((c) => c.phase === 'pre');
@@ -97,6 +114,10 @@ function DetailBody({
   const postSnaps = snapshots.filter((s) => s.phase === 'post');
 
   const handleExecute = () => {
+    if (approvalBlocking) {
+      alert('This deployment is awaiting approval and cannot be executed.');
+      return;
+    }
     if (
       !confirm(
         'Execute this deployment? Pre-deployment snapshots will be captured before pushing config changes.',
@@ -173,6 +194,50 @@ function DetailBody({
           <div style={{ fontSize: '0.9em' }}>{deployment.description}</div>
         )}
 
+        {requiresApproval && (
+          <ApprovalSection
+            status={approvalStatus}
+            approvedBy={deployment.approved_by || ''}
+            approvedAt={deployment.approved_at || ''}
+            comment={deployment.approval_comment || ''}
+            requestedAt={deployment.approval_requested_at || ''}
+            canApprove={isApprover && approvalStatus === 'pending'}
+            approverInput={approvalComment}
+            onApproverInput={setApprovalComment}
+            isPending={approve.isPending || reject.isPending}
+            onApprove={() =>
+              approve.mutate(
+                { id: deployment.id, comment: approvalComment },
+                { onError: (e) => alert((e as Error).message) },
+              )
+            }
+            onReject={() => {
+              if (!confirm('Reject this deployment? It will need a fresh approval request.')) return;
+              reject.mutate(
+                { id: deployment.id, comment: approvalComment },
+                { onError: (e) => alert((e as Error).message) },
+              );
+            }}
+          />
+        )}
+
+        {!requiresApproval && canExecute(deployment.status) && (
+          <div style={{ fontSize: '0.85em' }}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={requestApproval.isPending}
+              onClick={() =>
+                requestApproval.mutate(deployment.id, {
+                  onError: (e) => alert((e as Error).message),
+                })
+              }
+            >
+              {requestApproval.isPending ? 'Requesting…' : 'Request approval gate'}
+            </button>
+          </div>
+        )}
+
         <details>
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
             Proposed Commands ({commandCount(deployment.proposed_commands)})
@@ -216,7 +281,8 @@ function DetailBody({
             <button
               type="button"
               className="btn btn-primary"
-              disabled={execute.isPending}
+              disabled={execute.isPending || approvalBlocking}
+              title={approvalBlocking ? 'Waiting on approval' : undefined}
               onClick={handleExecute}
             >
               {execute.isPending ? 'Starting…' : 'Execute'}
@@ -250,6 +316,109 @@ function DetailBody({
     </>
   );
 }
+
+function ApprovalSection({
+  status,
+  approvedBy,
+  approvedAt,
+  comment,
+  requestedAt,
+  canApprove,
+  approverInput,
+  onApproverInput,
+  isPending,
+  onApprove,
+  onReject,
+}: {
+  status: string;
+  approvedBy: string;
+  approvedAt: string;
+  comment: string;
+  requestedAt: string;
+  canApprove: boolean;
+  approverInput: string;
+  onApproverInput: (v: string) => void;
+  isPending: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const color =
+    status === 'approved' ? 'success' :
+    status === 'rejected' ? 'danger' :
+    status === 'pending' ? 'warning' :
+    'text-muted';
+  return (
+    <div
+      style={{
+        border: `1px solid var(--${color})`,
+        background: 'var(--bg-secondary)',
+        padding: '0.75rem',
+        borderRadius: 6,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <strong>Approval gate:</strong>
+        <span style={{ color: `var(--${color})`, textTransform: 'uppercase', fontWeight: 600 }}>
+          {status}
+        </span>
+        {requestedAt && status === 'pending' && (
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>
+            requested {formatStamp(requestedAt)}
+          </span>
+        )}
+      </div>
+      {status === 'approved' && (
+        <div style={{ marginTop: '0.4rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
+          Approved by {approvedBy || 'unknown'} at {formatStamp(approvedAt)}.
+          {comment && <div>"{comment}"</div>}
+        </div>
+      )}
+      {status === 'rejected' && (
+        <div style={{ marginTop: '0.4rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
+          Rejected by {approvedBy || 'unknown'} at {formatStamp(approvedAt)}.
+          {comment && <div>"{comment}"</div>}
+        </div>
+      )}
+      {canApprove && (
+        <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <input
+            type="text"
+            className="input"
+            placeholder="Optional comment"
+            value={approverInput}
+            onChange={(e) => onApproverInput(e.target.value)}
+            style={{ width: '100%' }}
+          />
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
+              disabled={isPending}
+              onClick={onReject}
+            >
+              Reject
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={isPending}
+              onClick={onApprove}
+            >
+              {isPending ? 'Saving…' : 'Approve'}
+            </button>
+          </div>
+        </div>
+      )}
+      {!canApprove && status === 'pending' && (
+        <div style={{ marginTop: '0.4rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
+          This deployment is awaiting approval from a user other than the creator.
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function CheckpointSection({
   title,
