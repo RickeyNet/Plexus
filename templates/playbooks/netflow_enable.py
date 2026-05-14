@@ -209,6 +209,41 @@ class NetflowEnabler(BasePlaybook):
     # itself based on device_type and the collector settings.
     requires_template = False
 
+    parameters_schema = [
+        {
+            "name": "collector_ip",
+            "type": "string",
+            "label": "Collector IP",
+            "required": True,
+            "default": "",
+            "help": "Reachable address of the Plexus NetFlow collector. Falls back to $PLEXUS_COLLECTOR_IP.",
+        },
+        {
+            "name": "collector_port",
+            "type": "int",
+            "label": "Collector Port",
+            "required": False,
+            "default": 2055,
+            "help": "UDP port the collector listens on. Defaults to 2055.",
+        },
+        {
+            "name": "interfaces",
+            "type": "list",
+            "label": "Interfaces",
+            "required": False,
+            "default": "GigabitEthernet0/0",
+            "help": "Comma-separated list of interfaces to enable flow export on. Per-host override via host_info['netflow_interfaces'] still wins.",
+        },
+        {
+            "name": "sampling_rate",
+            "type": "int",
+            "label": "Sampling Rate (1:N)",
+            "required": False,
+            "default": 1,
+            "help": "1 = sample every packet. Higher N reduces device CPU at the cost of resolution.",
+        },
+    ]
+
     async def run(
         self,
         hosts: list[dict],

@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import {
@@ -6,6 +6,7 @@ import {
   useLaunchJob,
   usePlaybooks,
   useTemplates,
+  type PlaybookParameter,
 } from '@/api/jobs';
 import { useInventoryGroupsFull } from '@/api/inventory';
 
@@ -30,17 +31,37 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const [dryRun, setDryRun] = useState(true);
   const [adHocIps, setAdHocIps] = useState('');
   const [hostIds, setHostIds] = useState<Set<number>>(new Set());
+  const [paramValues, setParamValues] = useState<Record<string, string | boolean>>({});
 
   const selectedPb = useMemo(
     () => playbooksQuery.data?.find((p) => String(p.id) === playbookId),
     [playbooksQuery.data, playbookId],
   );
   const isAnsible = selectedPb?.type === 'ansible';
+  const paramSchema: PlaybookParameter[] = selectedPb?.parameters_schema ?? [];
+
+  // Seed defaults whenever the user picks a different playbook so the form
+  // shows the schema's defaults instead of stale state from a prior selection.
+  useEffect(() => {
+    if (!selectedPb) {
+      setParamValues({});
+      return;
+    }
+    const seeded: Record<string, string | boolean> = {};
+    for (const f of paramSchema) {
+      if (f.type === 'bool') {
+        seeded[f.name] = typeof f.default === 'boolean' ? f.default : false;
+      } else {
+        seeded[f.name] = f.default == null ? '' : String(f.default);
+      }
+    }
+    setParamValues(seeded);
+  }, [selectedPb?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function reset() {
     setPlaybookId(''); setCredentialId(''); setTemplateId('');
     setPriority('2'); setDependsOn(''); setDryRun(true);
-    setAdHocIps(''); setHostIds(new Set());
+    setAdHocIps(''); setHostIds(new Set()); setParamValues({});
   }
 
   function toggleGroup(groupHostIds: number[], checked: boolean) {
@@ -76,6 +97,13 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
       ? dependsOn.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n))
       : undefined;
 
+    const parameters: Record<string, unknown> = {};
+    for (const f of paramSchema) {
+      const v = paramValues[f.name];
+      if (v === '' || v === undefined) continue; // server fills in defaults
+      parameters[f.name] = v;
+    }
+
     launchMut.mutate(
       {
         playbook_id: parseInt(playbookId, 10),
@@ -86,6 +114,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         host_ids: hostIds.size > 0 ? Array.from(hostIds) : undefined,
         depends_on: depsList && depsList.length > 0 ? depsList : undefined,
         ad_hoc_ips: adHocList.length > 0 ? adHocList : undefined,
+        parameters: paramSchema.length > 0 ? parameters : undefined,
       },
       {
         onSuccess: (r) => {
@@ -188,6 +217,50 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
               ))}
             </select>
             <small className="text-muted">Required if the selected playbook expects a template.</small>
+          </div>
+        )}
+
+        {paramSchema.length > 0 && (
+          <div style={{ padding: '0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: '1rem' }}>
+            <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Playbook Parameters</div>
+            {paramSchema.map((f) => {
+              const val = paramValues[f.name];
+              const id = `pb-param-${f.name}`;
+              if (f.type === 'bool') {
+                return (
+                  <div className="form-group" key={f.name}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        id={id}
+                        type="checkbox"
+                        checked={Boolean(val)}
+                        onChange={(e) => setParamValues((p) => ({ ...p, [f.name]: e.target.checked }))}
+                      />
+                      {f.label}
+                      {f.required && <span style={{ color: 'var(--danger)' }}>*</span>}
+                    </label>
+                    {f.help && <small className="text-muted">{f.help}</small>}
+                  </div>
+                );
+              }
+              return (
+                <div className="form-group" key={f.name}>
+                  <label className="form-label" htmlFor={id}>
+                    {f.label}
+                    {f.required && <span style={{ color: 'var(--danger)', marginLeft: '0.25rem' }}>*</span>}
+                  </label>
+                  <input
+                    id={id}
+                    className="form-input"
+                    type={f.type === 'int' ? 'number' : 'text'}
+                    value={typeof val === 'string' ? val : ''}
+                    required={f.required}
+                    onChange={(e) => setParamValues((p) => ({ ...p, [f.name]: e.target.value }))}
+                  />
+                  {f.help && <small className="text-muted">{f.help}</small>}
+                </div>
+              );
+            })}
           </div>
         )}
 

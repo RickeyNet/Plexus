@@ -33,6 +33,8 @@ def list_registered_playbooks() -> list[dict]:
             "name": cls.display_name,
             "description": cls.description,
             "tags": cls.tags,
+            "requires_template": cls.requires_template,
+            "parameters_schema": cls.parameters_schema,
         }
         for cls in _PLAYBOOK_REGISTRY.values()
     ]
@@ -94,6 +96,17 @@ class BasePlaybook:
     # Set to True to indicate this playbook needs a template
     requires_template: bool = False
 
+    # Declarative schema for per-job parameters. Each entry is rendered as a
+    # form field in the job-launch modal; the entered values are stored on the
+    # job row and assigned to ``self.parameters`` before ``run()`` executes.
+    # Shape: [{"name": "collector_ip", "type": "string", "label": "Collector IP",
+    #          "required": True, "default": "", "help": "..."}].
+    # Supported types: "string", "int", "bool", "list" (comma-separated input).
+    parameters_schema: list[dict] = []
+
+    # Populated by the executor right before run() — never read directly here.
+    parameters: dict | None = None
+
     async def run(
         self,
         hosts: list[dict],
@@ -131,6 +144,7 @@ async def execute_playbook(
     template_commands: list[str] | None = None,
     dry_run: bool = True,
     event_callback=None,
+    parameters: dict | None = None,
 ) -> PlaybookResult:
     """
     Run a playbook and collect results.
@@ -138,6 +152,7 @@ async def execute_playbook(
     event_callback is an async callable(LogEvent) for real-time streaming.
     """
     pb = playbook_cls()
+    pb.parameters = parameters or {}
     hosts_ok = 0
     hosts_failed = 0
     hosts_skipped = 0
