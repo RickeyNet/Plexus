@@ -1,59 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
 
 import { Modal } from '@/components/Modal';
 import {
-  streamPollNow,
   useMonitoringPollHistory,
   useMonitoringPolls,
   useMonitoringSummary,
   type MonitoringPoll,
-  type PollNowEvent,
 } from '@/api/monitoring';
 import { formatTimestamp, formatUptime } from './helpers';
-
-interface ProgressLine {
-  ok: boolean;
-  hostname: string;
-  detail: string;
-}
-
-interface PollProgress {
-  active: boolean;
-  total: number;
-  completed: number;
-  title: string;
-  failed: boolean;
-  log: ProgressLine[];
-}
-
-const initialProgress: PollProgress = {
-  active: false,
-  total: 0,
-  completed: 0,
-  title: '',
-  failed: false,
-  log: [],
-};
+import {
+  dismissPollProgress,
+  getPollProgress,
+  startPollNow,
+  subscribePollProgress,
+} from './pollNowStore';
 
 export function DevicesTab() {
-  const qc = useQueryClient();
   const navigate = useNavigate();
   const summary = useMonitoringSummary();
   const polls = useMonitoringPolls();
   const [query, setQuery] = useState('');
-  const [progress, setProgress] = useState<PollProgress>(initialProgress);
   const [historyHost, setHistoryHost] = useState<{ id: number; hostname: string } | null>(null);
-  const pollAbortRef = useRef<AbortController | null>(null);
-  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      pollAbortRef.current?.abort();
-      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-    };
-  }, []);
+  const progress = useSyncExternalStore(subscribePollProgress, getPollProgress, getPollProgress);
 
   const filtered = useMemo(() => {
     const list = polls.data ?? [];
@@ -66,56 +35,11 @@ export function DevicesTab() {
     );
   }, [polls.data, query]);
 
-  async function pollNow() {
-    pollAbortRef.current?.abort();
-    if (resetTimerRef.current) {
-      clearTimeout(resetTimerRef.current);
-      resetTimerRef.current = null;
-    }
-    const controller = new AbortController();
-    pollAbortRef.current = controller;
-    setProgress({ ...initialProgress, active: true, title: 'Starting poll…' });
-    try {
-      await streamPollNow((event: PollNowEvent) => {
-        setProgress((prev) => {
-          if (event.type === 'start') {
-            return { ...prev, total: event.total_hosts ?? 0, title: `Polling ${event.total_hosts} device(s)…` };
-          }
-          if (event.type === 'host_done' || event.type === 'host_error') {
-            const ok = event.type === 'host_done' && event.status === 'ok';
-            const details: string[] = [];
-            if (event.cpu != null) details.push(`CPU ${event.cpu}%`);
-            if (event.memory != null) details.push(`Mem ${event.memory}%`);
-            if (event.alerts && event.alerts > 0) details.push(`${event.alerts} alert${event.alerts !== 1 ? 's' : ''}`);
-            const detail = event.type === 'host_error' ? 'error' : details.join(', ');
-            return {
-              ...prev,
-              completed: event.completed ?? prev.completed,
-              total: event.total_hosts ?? prev.total,
-              log: [...prev.log, { ok, hostname: event.hostname ?? '', detail }],
-            };
-          }
-          if (event.type === 'done') {
-            return { ...prev, completed: prev.total, title: `Poll complete: ${event.hosts_polled} polled, ${event.alerts_created} alerts, ${event.errors} errors` };
-          }
-          return prev;
-        });
-      }, controller.signal);
-      if (controller.signal.aborted) return;
-      qc.invalidateQueries({ queryKey: ['monitoring-polls'] });
-      qc.invalidateQueries({ queryKey: ['monitoring-summary'] });
-      qc.invalidateQueries({ queryKey: ['monitoring-alerts'] });
-      resetTimerRef.current = setTimeout(() => {
-        resetTimerRef.current = null;
-        setProgress(initialProgress);
-      }, 8000);
-    } catch (e) {
-      if (controller.signal.aborted) return;
-      setProgress((p) => ({ ...p, failed: true, title: `Poll failed: ${(e as Error).message}` }));
-    } finally {
-      if (pollAbortRef.current === controller) pollAbortRef.current = null;
-    }
+  function pollNow() {
+    void startPollNow();
   }
+
+  const showProgress = progress.active || (progress.startedAt != null && (progress.completed > 0 || progress.failed || progress.title));
 
   return (
     <div>
@@ -129,17 +53,30 @@ export function DevicesTab() {
           onChange={(e) => setQuery(e.target.value)}
           style={{ flex: 1, minWidth: 200 }}
         />
-        <button className="btn btn-primary" onClick={pollNow} disabled={progress.active && !progress.failed && progress.completed < progress.total}>
-          {progress.active && !progress.failed && progress.completed < progress.total ? 'Polling…' : 'Poll Now'}
+        <button className="btn btn-primary" onClick={pollNow} disabled={progress.active}>
+          {progress.active ? 'Polling…' : 'Poll Now'}
         </button>
         <button className="btn btn-secondary" onClick={() => { polls.refetch(); summary.refetch(); }}>Refresh</button>
       </div>
 
-      {progress.active && (
+      {showProgress && (
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', gap: '0.5rem' }}>
             <strong>{progress.title}</strong>
-            <span className="text-muted" style={{ fontSize: '0.85em' }}>{progress.completed} / {progress.total}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span className="text-muted" style={{ fontSize: '0.85em' }}>{progress.completed} / {progress.total}</span>
+              {!progress.active && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={dismissPollProgress}
+                  aria-label="Dismiss poll progress"
+                  title="Dismiss"
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </div>
           <div style={{ background: 'var(--bg-secondary)', borderRadius: 4, height: 6, overflow: 'hidden' }}>
             <div

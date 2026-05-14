@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 
 import { App } from '@/App';
 import { initAppearance } from '@/lib/appearance';
+import { bindQueryClient as bindPollNowQueryClient } from '@/pages/Monitoring/pollNowStore';
 import { TimeRangeProvider } from '@/lib/timeRange';
 
 initAppearance();
@@ -18,6 +19,8 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+bindPollNowQueryClient(queryClient);
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root missing in index.html');
