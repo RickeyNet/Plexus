@@ -73,6 +73,35 @@ class Driver:
             f"{type(self).__name__} does not implement netflow_verify_command()"
         )
 
+    def capture_running_config_command(self) -> str:
+        """Return the show command that dumps the device's running config.
+
+        The result is consumed by config-backup and lab snapshot code that
+        SSHes to the device, runs the command, and stores the raw text.
+        Vendor-specific because e.g. Juniper Junos uses
+        ``show configuration | display set`` while Cisco uses
+        ``show running-config``.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement capture_running_config_command()"
+        )
+
+    def save_config_commands(self) -> list[str]:
+        """Return the command(s) that persist running-config to startup.
+
+        Returned as a list because some platforms (NX-OS) want a single
+        ``copy running-config startup-config`` while others may need
+        multiple steps.  An empty list means "no save step required"
+        (e.g. Junos commit semantics, where ``commit`` already persists).
+
+        Most callers will prefer Netmiko's ``conn.save_config()`` which
+        handles vendor quirks automatically; this exists for routes that
+        push config without Netmiko's high-level helper.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement save_config_commands()"
+        )
+
 
 class GenericDriver(Driver):
     """Fallback used when no driver is registered for a device_type.

@@ -203,48 +203,76 @@ def _compute_config_diff(
     return diff_text, added, removed
 
 
-async def _capture_running_config(host: dict, credentials: dict) -> str:
-    """SSH to a device and pull running-config via Netmiko.
+def _open_netmiko_session(host: dict, credentials: dict):
+    """Open a Netmiko session, autodetecting device_type when generic.
 
-    When the stored device_type is the generic 'cisco_ios' default,
-    Netmiko's SSHDetect is used first to autodetect the real platform
-    (e.g. cisco_xe for IOS-XE devices like Catalyst 9200/9300).
+    Returns ``(connection, resolved_device_type)``.  The caller is
+    responsible for ``disconnect()``.
+
+    When the stored device_type is the generic 'cisco_ios' default
+    (or 'unknown'), Netmiko's SSHDetect is used first to autodetect the
+    real platform (e.g. cisco_xe for IOS-XE devices like Catalyst
+    9200/9300).  Returning the resolved type lets callers look up the
+    matching ``Driver`` after the autodetect, so per-vendor command
+    syntax is correct even when inventory has the wrong type stored.
     """
     import netmiko
     from netmiko import SSHDetect
     from routes.crypto import decrypt
 
+    device = {
+        "device_type": host.get("device_type", "cisco_ios"),
+        "host": host["ip_address"],
+        "username": credentials["username"],
+        "password": decrypt(credentials["password"]),
+        "secret": decrypt(credentials.get("secret", "")),
+    }
+
+    # Autodetect when the stored type is a generic Cisco default
+    # that may be wrong (e.g. IOS-XE devices mis-classified as IOS).
+    if device["device_type"] in ("cisco_ios", "unknown"):
+        try:
+            detect_device = {**device, "device_type": "autodetect"}
+            guesser = SSHDetect(**detect_device)
+            best = guesser.autodetect()
+            if best:
+                LOGGER.info("Autodetected device_type %s for %s (was %s)",
+                            best, device["host"], device["device_type"])
+                device["device_type"] = best
+            guesser.connection.disconnect()
+        except Exception:
+            LOGGER.debug("SSHDetect failed for %s, using %s",
+                         device["host"], device["device_type"])
+
+    net_connect = netmiko.ConnectHandler(**device)
+    if device["secret"]:
+        net_connect.enable()
+    return net_connect, device["device_type"]
+
+
+async def _capture_running_config(host: dict, credentials: dict) -> str:
+    """SSH to a device and pull running-config via Netmiko.
+
+    The exact show-command comes from the driver registered for the
+    autodetected device_type, so non-Cisco vendors (Junos uses
+    ``show configuration | display set``) get the right syntax once a
+    driver ships.  Falls back to ``show running-config`` if the
+    resolved driver doesn't implement the capability - matches the
+    legacy behaviour and keeps backups working for vendors that share
+    the Cisco command.
+    """
+    from netcontrol.drivers import DriverCapabilityError, get_driver
+
     def _do_capture():
-        device = {
-            "device_type": host.get("device_type", "cisco_ios"),
-            "host": host["ip_address"],
-            "username": credentials["username"],
-            "password": decrypt(credentials["password"]),
-            "secret": decrypt(credentials.get("secret", "")),
-        }
-
-        # Autodetect when the stored type is a generic Cisco default
-        # that may be wrong (e.g. IOS-XE devices mis-classified as IOS).
-        if device["device_type"] in ("cisco_ios", "unknown"):
+        conn, resolved_type = _open_netmiko_session(host, credentials)
+        try:
             try:
-                detect_device = {**device, "device_type": "autodetect"}
-                guesser = SSHDetect(**detect_device)
-                best = guesser.autodetect()
-                if best:
-                    LOGGER.info("Autodetected device_type %s for %s (was %s)",
-                                best, device["host"], device["device_type"])
-                    device["device_type"] = best
-                guesser.connection.disconnect()
-            except Exception:
-                LOGGER.debug("SSHDetect failed for %s, using %s",
-                             device["host"], device["device_type"])
-
-        net_connect = netmiko.ConnectHandler(**device)
-        if device["secret"]:
-            net_connect.enable()
-        config = net_connect.send_command("show running-config")
-        net_connect.disconnect()
-        return config
+                capture_cmd = get_driver(resolved_type).capture_running_config_command()
+            except DriverCapabilityError:
+                capture_cmd = "show running-config"
+            return conn.send_command(capture_cmd)
+        finally:
+            conn.disconnect()
 
     return await asyncio.to_thread(_do_capture)
 
@@ -252,82 +280,34 @@ async def _capture_running_config(host: dict, credentials: dict) -> str:
 async def _run_show_command(host: dict, credentials: dict, command: str) -> str:
     """SSH to a device and run a single show command via Netmiko.
 
-    Uses the same autodetect logic as _capture_running_config.
-    Returns the raw command output string.
+    The command is supplied by the caller verbatim - this helper only
+    handles the SSH session lifecycle and autodetect.  Returns the raw
+    command output string.
     """
-    import netmiko
-    from netmiko import SSHDetect
-    from routes.crypto import decrypt
-
     def _do_run():
-        device = {
-            "device_type": host.get("device_type", "cisco_ios"),
-            "host": host["ip_address"],
-            "username": credentials["username"],
-            "password": decrypt(credentials["password"]),
-            "secret": decrypt(credentials.get("secret", "")),
-        }
-
-        if device["device_type"] in ("cisco_ios", "unknown"):
-            try:
-                detect_device = {**device, "device_type": "autodetect"}
-                guesser = SSHDetect(**detect_device)
-                best = guesser.autodetect()
-                if best:
-                    LOGGER.info("Autodetected device_type %s for %s (was %s)",
-                                best, device["host"], device["device_type"])
-                    device["device_type"] = best
-                guesser.connection.disconnect()
-            except Exception:
-                LOGGER.debug("SSHDetect failed for %s, using %s",
-                             device["host"], device["device_type"])
-
-        net_connect = netmiko.ConnectHandler(**device)
-        if device["secret"]:
-            net_connect.enable()
-        output = net_connect.send_command(command)
-        net_connect.disconnect()
-        return output
+        conn, _ = _open_netmiko_session(host, credentials)
+        try:
+            return conn.send_command(command)
+        finally:
+            conn.disconnect()
 
     return await asyncio.to_thread(_do_run)
 
 
 async def _push_config_to_device(host: dict, credentials: dict, config_lines: list[str]) -> str:
-    """SSH to a device and push config lines via Netmiko."""
-    import netmiko
-    from netmiko import SSHDetect
-    from routes.crypto import decrypt
-
+    """SSH to a device and push config lines via Netmiko, then save."""
     def _do_push():
-        device = {
-            "device_type": host.get("device_type", "cisco_ios"),
-            "host": host["ip_address"],
-            "username": credentials["username"],
-            "password": decrypt(credentials["password"]),
-            "secret": decrypt(credentials.get("secret", "")),
-        }
-
-        # Autodetect when the stored type is a generic Cisco default
-        if device["device_type"] in ("cisco_ios", "unknown"):
-            try:
-                detect_device = {**device, "device_type": "autodetect"}
-                guesser = SSHDetect(**detect_device)
-                best = guesser.autodetect()
-                if best:
-                    LOGGER.info("Autodetected device_type %s for %s (was %s)",
-                                best, device["host"], device["device_type"])
-                    device["device_type"] = best
-                guesser.connection.disconnect()
-            except Exception:
-                LOGGER.debug("SSHDetect failed for %s, using %s",
-                             device["host"], device["device_type"])
-
-        net_connect = netmiko.ConnectHandler(**device)
-        if device["secret"]:
-            net_connect.enable()
-        output = net_connect.send_config_set(config_lines)
-        save_output = net_connect.save_config()
-        net_connect.disconnect()
-        return output + "\n" + save_output
+        conn, _ = _open_netmiko_session(host, credentials)
+        try:
+            output = conn.send_config_set(config_lines)
+            # save_config() is Netmiko's vendor-aware persist call - it
+            # already knows ``write memory`` vs ``copy running-config
+            # startup-config`` per platform, so the driver's
+            # save_config_commands() is only used by routes that bypass
+            # Netmiko's high-level helper.
+            save_output = conn.save_config()
+            return output + "\n" + save_output
+        finally:
+            conn.disconnect()
 
     return await asyncio.to_thread(_do_push)

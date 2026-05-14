@@ -59,3 +59,9 @@ class CiscoXEDriver(Driver):
         # ``exporter_name`` on NetflowConfig should construct the verify
         # command themselves; for now Plexus always uses PLEXUS-EXPORT.
         return "show flow exporter PLEXUS-EXPORT"
+
+    def capture_running_config_command(self) -> str:
+        return "show running-config"
+
+    def save_config_commands(self) -> list[str]:
+        return ["write memory"]

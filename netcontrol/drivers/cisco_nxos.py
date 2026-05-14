@@ -56,3 +56,11 @@ class CiscoNXOSDriver(Driver):
 
     def netflow_verify_command(self) -> str:
         return "show flow exporter PLEXUS-EXPORT"
+
+    def capture_running_config_command(self) -> str:
+        return "show running-config"
+
+    def save_config_commands(self) -> list[str]:
+        # NX-OS doesn't accept "write memory" - the canonical save command
+        # is the explicit copy form.
+        return ["copy running-config startup-config"]
