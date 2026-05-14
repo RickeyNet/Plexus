@@ -28,6 +28,7 @@ from netcontrol.drivers import (
 from netcontrol.drivers.cisco_ios import CiscoIOSDriver
 from netcontrol.drivers.cisco_nxos import CiscoNXOSDriver
 from netcontrol.drivers.cisco_xe import CiscoXEDriver
+from netcontrol.drivers.juniper_junos import JuniperJunosDriver
 
 
 def _cfg(sampling_rate: int = 1, interfaces: list[str] | None = None) -> NetflowConfig:
@@ -50,12 +51,22 @@ def test_registry_resolves_each_cisco_device_type() -> None:
     assert isinstance(get_driver("cisco_nxos_ssh"), CiscoNXOSDriver)
 
 
+def test_registry_resolves_juniper_junos() -> None:
+    # First non-Cisco driver: the Netmiko device_type string for Juniper
+    # is "juniper_junos" and the routes/inventory.py + routes/snmp.py
+    # vendor inference already emits that exact value, so the driver
+    # must register under it (no aliasing needed).
+    assert isinstance(get_driver("juniper_junos"), JuniperJunosDriver)
+    assert get_driver("juniper_junos").vendor == "juniper"
+
+
 def test_registered_device_types_includes_cisco_set() -> None:
     types = registered_device_types()
     assert "cisco_ios" in types
     assert "cisco_xe" in types
     assert "cisco_nxos" in types
     assert "cisco_nxos_ssh" in types
+    assert "juniper_junos" in types
 
 
 def test_unknown_device_type_falls_back_to_generic() -> None:
@@ -452,3 +463,128 @@ def test_drivers_produce_identical_lines_to_existing_playbook_format() -> None:
         "exit",
     ]
     assert get_driver("cisco_nxos").build_netflow_config(cfg) == expected_nxos
+
+
+# ── juniper_junos output ────────────────────────────────────────────────────
+
+
+def test_juniper_junos_build_netflow_config_uses_set_syntax() -> None:
+    # The whole point of the Junos driver is to prove the framework
+    # accommodates non-Cisco config syntax.  Junos NetFlow lives under
+    # ``forwarding-options sampling`` + ``services flow-monitoring`` and
+    # is configured as "set ..." statements, not config-mode stanzas.
+    drv = get_driver("juniper_junos")
+    cmds = drv.build_netflow_config(_cfg())
+    # Every line should start with "set " — no Cisco-style stanza lines
+    # (those start with bare keywords like "flow record" or "interface").
+    assert all(c.startswith("set ") for c in cmds), cmds
+    # Collector + port are baked into the flow-server line.
+    assert any("flow-server 10.0.0.5 port 2055" in c for c in cmds)
+    # version9 template wiring is present.
+    assert any("version9 template PLEXUS-RECORD" in c for c in cmds)
+    # Per-interface family-inet sampling is enabled for every interface
+    # in the input (both directions).
+    assert sum("family inet sampling input" in c for c in cmds) == 2
+    assert sum("family inet sampling output" in c for c in cmds) == 2
+
+
+def test_juniper_junos_netflow_respects_sampling_rate() -> None:
+    # Unlike classic IOS, Junos exposes a native sampling rate knob, so
+    # the driver must honour cfg.sampling_rate (passing rate=1 means
+    # "sample every packet"; rate=1024 means "1 in 1024").
+    drv = get_driver("juniper_junos")
+    base = drv.build_netflow_config(_cfg(sampling_rate=1))
+    sampled = drv.build_netflow_config(_cfg(sampling_rate=1024))
+    assert any("input rate 1" in c for c in base)
+    assert any("input rate 1024" in c for c in sampled)
+    # No-sampling and high-sampling configs differ only in the rate line
+    # — the rest of the surface area is identical, which guards against
+    # accidentally tying other knobs (template, instance) to the rate.
+    base_norm = [c for c in base if "input rate" not in c]
+    sampled_norm = [c for c in sampled if "input rate" not in c]
+    assert base_norm == sampled_norm
+
+
+def test_juniper_junos_verify_command() -> None:
+    # Junos has no direct analogue of "show flow exporter X"; the
+    # closest "is my sampling configured and accepted?" check is
+    # show forwarding-options sampling.
+    assert (
+        get_driver("juniper_junos").netflow_verify_command()
+        == "show forwarding-options sampling"
+    )
+
+
+def test_juniper_junos_config_capture_and_save() -> None:
+    drv = get_driver("juniper_junos")
+    # `| display set` produces the discrete-set-statements form, which
+    # is what Plexus's diff/backup code consumes (line-oriented text,
+    # not the curly-brace tree).
+    assert drv.capture_running_config_command() == "show configuration | display set"
+    # Junos persists via ``commit`` (handled by Netmiko's save_config()),
+    # so there is no extra save step here.  Empty list — not None —
+    # because the playbook's iter-over-save-commands loop must work.
+    assert drv.save_config_commands() == []
+
+
+def test_juniper_junos_snmpv3_capability_surface() -> None:
+    drv = get_driver("juniper_junos")
+    # Existing-config dump uses the Junos config form (set lines under
+    # the snmp stanza), not the Cisco include-snmp-server filter.
+    assert (
+        drv.snmpv3_show_existing_command()
+        == "show configuration snmp | display set"
+    )
+    # Engine ID is platform-managed on Junos (same model as NX-OS): both
+    # show and pin return empty strings so pin_snmp_engine_id() emits its
+    # short-circuit info event instead of running a Cisco-shaped command
+    # against the Junos device.
+    assert drv.snmpv3_engine_id_show_command() == ""
+    assert drv.snmpv3_engine_id_pin_command("ABC123") == ""
+    # Verify-users uses the Junos-flavoured "show snmp v3 user", which
+    # is meaningfully different from Cisco's "show snmp user".  Routing
+    # the Cisco command at Junos returns a parse error, so this is a
+    # regression guard against someone copy-pasting from cisco_ios.py.
+    assert drv.snmpv3_verify_users_command() == "show snmp v3 user"
+
+
+def test_juniper_junos_health_check_capability_surface() -> None:
+    drv = get_driver("juniper_junos")
+    # show version is unmodified on Junos.
+    assert drv.show_version_command() == "show version"
+    # Serial filter anchors on the "Chassis" row of ``show chassis
+    # hardware`` — that's the row that carries the chassis-level serial.
+    assert drv.serial_number_show_command() == "show chassis hardware | match Chassis"
+
+    # Real Junos ``show chassis hardware`` rows are whitespace-aligned.
+    # The Chassis row carries empty Version + Part-number columns, so
+    # the serial is the first alphanumeric token of length >= 6.
+    junos_output = (
+        "Hardware inventory:\n"
+        "Item             Version  Part number  Serial number     Description\n"
+        "Chassis                                JN12345AB         EX4300-48T\n"
+        "Routing Engine 0 REV 06   750-054855   AB1234567890      RE-EX4300-48T\n"
+    )
+    assert drv.parse_serial_number(junos_output) == "JN12345AB"
+
+    # Cisco's "System Serial Number" wording must NOT match the Junos
+    # parser - cross-vendor parser mixups are exactly the bug class the
+    # driver framework exists to prevent.
+    assert drv.parse_serial_number("System Serial Number : FCW2346L0AJ") is None
+
+    # No Chassis row at all -> None (route handler converts to 422).
+    assert drv.parse_serial_number("Hardware inventory:\nItem ... Description\n") is None
+
+
+def test_juniper_junos_parse_serial_ignores_engine_chassis_lines() -> None:
+    # Sub-component rows like "Routing Engine 0" or "FPC 0" can include
+    # the word "chassis" inside their description text.  The parser
+    # only accepts lines that *start* with "Chassis " (the literal
+    # top-of-table label), not lines that merely contain it - otherwise
+    # we'd return an FPC's serial as the chassis serial.
+    drv = get_driver("juniper_junos")
+    misleading = (
+        "Routing Engine 0  REV 06  750-054855  RE9999  chassis controller\n"
+        "FPC 0             REV 32  750-054850  AAAAAA  Chassis FPC\n"
+    )
+    assert drv.parse_serial_number(misleading) is None

@@ -23,7 +23,7 @@ Public surface::
 """
 
 # Importing the concrete drivers registers them as a side-effect.
-from netcontrol.drivers import cisco_ios, cisco_nxos, cisco_xe  # noqa: F401
+from netcontrol.drivers import cisco_ios, cisco_nxos, cisco_xe, juniper_junos  # noqa: F401
 from netcontrol.drivers.base import (
     Driver,
     DriverCapabilityError,
