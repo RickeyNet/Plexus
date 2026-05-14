@@ -11,6 +11,10 @@ export interface AuthStatus {
   feature_access?: string[];
   feature_visibility_hidden?: string[];
   must_change_password?: boolean;
+  idle_timeout_seconds?: number;
+  session_last_activity?: number;
+  session_never_expires?: boolean;
+  server_time?: number;
 }
 
 export interface LoginResponse {
@@ -91,6 +95,38 @@ export function useUpdateProfile() {
         body: vars,
       }),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['auth', 'status'] });
+    },
+  });
+}
+
+export interface HeartbeatResponse {
+  ok: true;
+  session_last_activity: number;
+  idle_timeout_seconds: number;
+  server_time: number;
+}
+
+export function useSessionHeartbeat() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<HeartbeatResponse>('/auth/heartbeat', { method: 'POST' }),
+    onSuccess: () => {
+      // Pull a fresh status so idle_timeout_seconds / session_last_activity
+      // in the cache match what the server now believes.
+      qc.invalidateQueries({ queryKey: ['auth', 'status'] });
+    },
+  });
+}
+
+export function useLogout() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<{ ok: true }>('/auth/logout', { method: 'POST' }),
+    onSuccess: () => {
+      setCsrfToken(null);
       qc.invalidateQueries({ queryKey: ['auth', 'status'] });
     },
   });
