@@ -2170,6 +2170,17 @@ input[type="search"].form-input::-webkit-search-results-decoration {
     tab-size: 4;
 }
 
+/* React playbook editor (CodeMirror 6): grow with content so the modal
+   body / window handles scrolling instead of a nested scrollbar — matches
+   the classic SPA's viewportMargin: Infinity behavior. */
+.playbook-code-editor .cm-editor {
+    height: auto;
+}
+.playbook-code-editor .cm-scroller {
+    overflow: visible;
+    max-height: none;
+}
+
 .form-input:focus,
 .form-textarea:focus,
 .form-select:focus {
