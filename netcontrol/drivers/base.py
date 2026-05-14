@@ -230,6 +230,26 @@ class Driver:
     # Junos host and get a clear ``DriverCapabilityError`` instead of
     # silently shipping Cisco syntax to a Juniper SSH session.
 
+    def upgrade_has_discrete_prestage(self) -> bool:
+        """Return True if the platform has a separate "stage image" step.
+
+        IOS-XE install mode splits the workflow in two: ``install add
+        file`` pre-stages the package, then a later ``install activate``
+        flips to it and reloads.  The upgrade route runs both as
+        distinct phases (``transfer`` ends with the install-add;
+        ``activate`` runs after operator approval).
+
+        Junos collapses the two into a single ``request system software
+        add ... reboot`` operation - there is no "staged but not yet
+        activated" state to land in - so the route must skip the
+        prestage call and let the activate phase do both at once.
+
+        Default is False so drivers that don't override (Junos, NX-OS,
+        classic IOS) get the single-phase shape, which matches the
+        majority of non-IOS-XE vendors.  IOS-XE returns True.
+        """
+        return False
+
     def upgrade_install_add_command(self, image_path: str) -> str:
         """Return the command that pre-stages a software image.
 
@@ -239,6 +259,12 @@ class Driver:
         pre-stage step (Junos performs add+activate as one operation)
         should raise ``DriverCapabilityError`` so the caller routes
         through ``upgrade_activate_commands`` instead.
+
+        Callers should consult ``upgrade_has_discrete_prestage()`` and
+        skip this call entirely when it returns False - otherwise the
+        ``DriverCapabilityError`` raised here will surface as a "pre-
+        stage not supported" error in the operator log, which is
+        misleading for platforms that simply don't need pre-staging.
         """
         raise DriverCapabilityError(
             f"{type(self).__name__} does not implement upgrade_install_add_command()"

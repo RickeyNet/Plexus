@@ -1099,14 +1099,29 @@ async def _run_install_add_prestage(
 
     Delegates the actual install-add verb to the driver so non-Cisco-XE
     platforms (when their drivers gain ``upgrade_install_add_command``)
-    surface the right syntax.  Platforms that don't model a discrete
-    pre-stage step raise ``DriverCapabilityError`` and the caller
-    reports the gap to the operator instead of shipping IOS-XE syntax
-    to a non-IOS-XE session.
+    surface the right syntax.  Platforms whose driver reports
+    ``upgrade_has_discrete_prestage() == False`` (Junos, NX-OS, classic
+    IOS) bypass the install-add entirely - their upgrade model
+    combines staging and activation into a single later step, so
+    running an install-add at this point would either error
+    out (Junos has no equivalent command) or pre-stage redundantly.
+    The function returns ``(True, None)`` in that case so the transfer
+    phase can complete and the activate phase can do both halves of
+    the operation at once.
     """
+    driver = get_driver(device_type)
+    if not driver.upgrade_has_discrete_prestage():
+        await _emit(
+            campaign_id,
+            dev_id,
+            "info",
+            "Platform combines add+activate; deferring stage until activate phase",
+            host=ip,
+        )
+        return True, None
     full_path = f"{dest_path}{image_name}"
     try:
-        install_add_cmd = get_driver(device_type).upgrade_install_add_command(full_path)
+        install_add_cmd = driver.upgrade_install_add_command(full_path)
     except DriverCapabilityError as e:
         await _emit(campaign_id, dev_id, "error",
                     f"Pre-stage not supported on this platform: {e}", host=ip)

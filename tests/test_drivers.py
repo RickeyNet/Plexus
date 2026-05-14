@@ -650,19 +650,66 @@ def test_cisco_nxos_does_not_implement_install_mode() -> None:
         drv.upgrade_commit_command()
 
 
-def test_juniper_junos_does_not_implement_install_mode() -> None:
-    # Junos uses "request system software add ... no-validate" followed
-    # by "request system reboot" - a single combined operation, not the
-    # IOS-XE add/activate two-phase split.  We could model this if/when
-    # we ship a Junos-aware upgrade flow, but for now the driver should
-    # refuse rather than let Cisco syntax leak onto a Junos session.
+def test_juniper_junos_upgrade_is_single_phase() -> None:
+    # Junos has no "stage now, activate later" workflow: ``request
+    # system software add`` validates + lays down + reboots in one
+    # operation.  ``upgrade_has_discrete_prestage()`` must return
+    # False so the upgrade route skips the install-add prestage call
+    # (otherwise the route would try to run install-add against a
+    # Junos session, the driver would raise DriverCapabilityError,
+    # and the operator would see a misleading "pre-stage not
+    # supported" error for a platform that simply doesn't need it).
     drv = get_driver("juniper_junos")
+    assert drv.upgrade_has_discrete_prestage() is False
+    # No discrete prestage means upgrade_install_add_command should
+    # still raise - the route never calls it for a single-phase
+    # platform but the contract is "raise unless you implement it".
     with pytest.raises(DriverCapabilityError):
         drv.upgrade_install_add_command("/var/tmp/jinstall.tgz")
-    with pytest.raises(DriverCapabilityError):
-        drv.upgrade_activate_commands("/var/tmp/jinstall.tgz")
-    with pytest.raises(DriverCapabilityError):
-        drv.upgrade_commit_command()
+
+
+def test_juniper_junos_activate_uses_single_combined_command() -> None:
+    # The Junos activate is a single command that validates, adds, and
+    # reboots in one shot.  ``no-validate`` is critical for non-
+    # interactive execution (without it Junos prompts for cross-platform
+    # validation confirmation and blocks the SSH session); the inline
+    # ``reboot`` keyword skips a second "reboot the system?" prompt.
+    # Both keywords being present is a regression guard - drop either
+    # and every Junos upgrade hangs at a prompt.
+    drv = get_driver("juniper_junos")
+    cmds = drv.upgrade_activate_commands("/var/tmp/jinstall-host-arm-22.4R3.tgz")
+    assert cmds == [
+        "request system software add /var/tmp/jinstall-host-arm-22.4R3.tgz "
+        "no-validate reboot"
+    ]
+
+
+def test_juniper_junos_commit_is_no_op() -> None:
+    # Junos persists the new image automatically on reboot - there is
+    # no operator-visible commit knob analogous to IOS-XE's ``install
+    # commit``.  An empty string signals "skip commit" to the route.
+    assert get_driver("juniper_junos").upgrade_commit_command() == ""
+
+
+def test_cisco_xe_has_discrete_prestage() -> None:
+    # IOS-XE install mode has a real two-phase workflow that the route
+    # exploits to let the operator approve activate-and-reboot in a
+    # maintenance window after the slow upload finishes.  Flipping this
+    # to False would collapse the two phases into one and remove the
+    # approval gate from the upgrade flow.
+    assert get_driver("cisco_xe").upgrade_has_discrete_prestage() is True
+
+
+def test_single_phase_default_for_drivers_without_install_mode() -> None:
+    # Drivers that don't override ``upgrade_has_discrete_prestage``
+    # inherit the base False default - that's the right behaviour for
+    # any platform whose vendor verbs collapse add+activate (classic
+    # IOS, NX-OS, Junos).  Inverting this default would force every
+    # new vendor driver to implement a prestage step even when its
+    # vendor model doesn't have one.
+    assert get_driver("cisco_ios").upgrade_has_discrete_prestage() is False
+    assert get_driver("cisco_nxos").upgrade_has_discrete_prestage() is False
+    assert get_driver("frobozz_os").upgrade_has_discrete_prestage() is False
 
 
 def test_generic_driver_upgrade_methods_raise() -> None:

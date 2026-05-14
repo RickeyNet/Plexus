@@ -118,6 +118,42 @@ class JuniperJunosDriver(Driver):
         # share the table.
         return "show chassis hardware | match Chassis"
 
+    # ── Software upgrade capability surface ────────────────────────────────
+    #
+    # Junos does not have a "stage now, activate later" workflow.  The
+    # canonical operational command is ``request system software add
+    # <package> no-validate reboot`` which validates the package, lays
+    # it down on alternate slice, and reboots the box - all in one
+    # operation.  ``no-validate`` skips the cross-platform validation
+    # step that's irrelevant when the operator has already chosen the
+    # right package for the model (and would otherwise prompt for
+    # confirmation, which can't run non-interactively before the reboot
+    # drops the SSH session).  There is no separate commit step: once
+    # the new image is booted the candidate config is committed
+    # automatically and the box is "running the new version" - so the
+    # driver also reports ``upgrade_has_discrete_prestage()`` as False
+    # (inherited from the base) so the upgrade route skips the install-
+    # add prestage call entirely.
+
+    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+        # Single-command activate-and-reboot.  ``no-validate`` is
+        # critical for non-interactive execution: without it Junos
+        # prints a "validate this package on this platform?" prompt
+        # that blocks the SSH session forever, then the route would
+        # never see the reboot.  ``reboot`` is the same word the
+        # CLI accepts inline; appending it skips a second prompt
+        # ("Reboot the system?") that fires when the add finishes.
+        return [f"request system software add {image_path} no-validate reboot"]
+
+    def upgrade_commit_command(self) -> str:
+        # Junos persists the new image on its own: the boot media
+        # carries forward the candidate config + new package, and
+        # there is no operator-visible "commit my upgrade choice"
+        # knob analogous to IOS-XE's ``install commit``.  Returning
+        # an empty string short-circuits the commit step in the
+        # route (same pattern NX-OS would use).
+        return ""
+
     def parse_serial_number(self, output: str) -> str | None:
         # The Junos table is whitespace-aligned, e.g.:
         #   Item             Version  Part number  Serial number  Description
