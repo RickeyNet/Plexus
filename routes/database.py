@@ -3743,22 +3743,24 @@ async def create_job(playbook_id: int, inventory_group_id: int | None,
                      priority: int = 2,
                      depends_on: list[int] | None = None,
                      host_ids: list[int] | None = None,
-                     ad_hoc_ips: list[str] | None = None) -> int:
+                     ad_hoc_ips: list[str] | None = None,
+                     parameters: dict | None = None) -> int:
     db = await get_db()
     try:
         deps_json = json.dumps(depends_on or [])
         host_ids_json = json.dumps(host_ids) if host_ids else None
         ad_hoc_json = json.dumps(ad_hoc_ips) if ad_hoc_ips else None
+        params_json = json.dumps(parameters) if parameters else None
         now = datetime.now(UTC).isoformat()
         cursor = await db.execute(
             """INSERT INTO jobs
                (playbook_id, inventory_group_id, credential_id, template_id,
                 dry_run, status, priority, depends_on, queued_at, launched_by,
-                host_ids, ad_hoc_ips)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                host_ids, ad_hoc_ips, parameters)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (playbook_id, inventory_group_id, credential_id, template_id,
              1 if dry_run else 0, "queued", priority, deps_json, now, launched_by,
-             host_ids_json, ad_hoc_json),
+             host_ids_json, ad_hoc_json, params_json),
         )
         await db.commit()
         return cursor.lastrowid

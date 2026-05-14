@@ -109,9 +109,59 @@ class JobLaunch(BaseModel):
     dry_run: bool = True
     priority: int = 2  # 0=low, 1=below-normal, 2=normal, 3=high, 4=critical
     depends_on: list[int] | None = None  # Job IDs that must complete before this runs
+    parameters: dict | None = None  # Values for the playbook's parameters_schema
 
     # Forbid unknown fields for strict payload validation.
     model_config = ConfigDict(extra="forbid")
+
+
+# ── Parameters schema coercion ──────────────────────────────────────────────
+
+
+def _coerce_parameters(schema: list[dict], raw: dict) -> dict:
+    """Validate + coerce launch-time parameters against the playbook's schema.
+
+    Returns the coerced dict (only keys declared in schema, properly typed).
+    Raises HTTPException(400) on missing-required or unparseable values so
+    the operator sees the error before the job is queued.
+    """
+    if not schema:
+        return {}
+    out: dict = {}
+    for field in schema:
+        name = field.get("name")
+        if not name:
+            continue
+        ftype = (field.get("type") or "string").lower()
+        required = bool(field.get("required"))
+        default = field.get("default")
+        raw_val = raw.get(name)
+        # Treat empty string as "not provided" so defaults kick in.
+        if raw_val is None or raw_val == "":
+            if required and (default is None or default == ""):
+                raise HTTPException(400, f"Parameter '{name}' is required")
+            if default is None or default == "":
+                continue
+            raw_val = default
+        try:
+            if ftype == "int":
+                out[name] = int(raw_val)
+            elif ftype == "bool":
+                if isinstance(raw_val, bool):
+                    out[name] = raw_val
+                else:
+                    out[name] = str(raw_val).strip().lower() in ("1", "true", "yes", "on")
+            elif ftype == "list":
+                if isinstance(raw_val, list):
+                    items = [str(x).strip() for x in raw_val if str(x).strip()]
+                else:
+                    items = [s.strip() for s in str(raw_val).split(",") if s.strip()]
+                out[name] = items
+            else:
+                out[name] = str(raw_val)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"Parameter '{name}': {exc}")
+    return out
 
 
 # ── Post-job SNMP re-probe ──────────────────────────────────────────────────
@@ -324,7 +374,18 @@ async def _process_job_queue_inner():
             await db.add_job_event(job_id, "error", f"No runner for '{playbook['filename']}'")
             return
         await db.start_job(job_id)
-        task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run, _secret_redact_values))
+        # Deserialize stored job parameters (JSON in DB) for the runner.
+        params_raw = next_job.get("parameters")
+        if isinstance(params_raw, str) and params_raw:
+            try:
+                job_parameters = json.loads(params_raw)
+            except (TypeError, ValueError):
+                job_parameters = {}
+        elif isinstance(params_raw, dict):
+            job_parameters = params_raw
+        else:
+            job_parameters = {}
+        task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run, _secret_redact_values, job_parameters))
     async with _running_tasks_lock:
         _running_job_tasks[job_id] = task
 
@@ -416,6 +477,7 @@ async def _run_job(
     template_commands: list[str],
     dry_run: bool,
     secret_redact_values: set[str] | None = None,
+    parameters: dict | None = None,
 ):
     """Background task: execute playbook, store events, broadcast via WebSocket."""
     hosts_ok = 0
@@ -463,7 +525,8 @@ async def _run_job(
     job_succeeded = False
     try:
         result = await execute_playbook(
-            pb_class, hosts, credentials, template_commands, dry_run, on_event
+            pb_class, hosts, credentials, template_commands, dry_run, on_event,
+            parameters=parameters,
         )
         await db.finish_job(
             job_id,
@@ -629,6 +692,7 @@ async def launch_job(body: JobLaunch, request: Request):
 
     # Validate the playbook can be executed
     pb_type = playbook.get("type", "python")
+    pb_class = None
     if pb_type == "ansible":
         if not ANSIBLE_RUNNER_AVAILABLE:
             raise HTTPException(400, "Ansible runner is not installed on the server")
@@ -638,6 +702,14 @@ async def launch_job(body: JobLaunch, request: Request):
         pb_class = get_playbook_class(playbook["filename"])
         if not pb_class:
             raise HTTPException(400, f"No runner registered for '{playbook['filename']}'")
+
+    # Coerce + validate parameters against the playbook's declared schema.
+    # Done at launch time so the user sees errors immediately rather than
+    # discovering them mid-run in the job log.
+    coerced_params = _coerce_parameters(
+        getattr(pb_class, "parameters_schema", []) if pb_class else [],
+        body.parameters or {},
+    )
 
     launched_by = session["user"] if session else "admin"
     priority = max(0, min(4, body.priority))
@@ -652,6 +724,7 @@ async def launch_job(body: JobLaunch, request: Request):
         priority=priority, depends_on=body.depends_on,
         host_ids=selected_host_ids,
         ad_hoc_ips=stored_ad_hoc,
+        parameters=coerced_params,
     )
 
     # Trigger queue processor to potentially start this job immediately
@@ -728,6 +801,12 @@ async def retry_job_endpoint(job_id: int, request: Request):
             retry_ad_hoc = json.loads(job["ad_hoc_ips"])
         except (json.JSONDecodeError, TypeError):
             pass
+    retry_params = None
+    if job.get("parameters"):
+        try:
+            retry_params = json.loads(job["parameters"])
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     new_job_id = await db.create_job(
         job["playbook_id"], job.get("inventory_group_id"),
@@ -736,6 +815,7 @@ async def retry_job_endpoint(job_id: int, request: Request):
         priority=job.get("priority", 2),
         host_ids=retry_host_ids,
         ad_hoc_ips=retry_ad_hoc,
+        parameters=retry_params,
     )
 
     asyncio.ensure_future(_process_job_queue())
@@ -774,6 +854,12 @@ async def rerun_job_endpoint(job_id: int, request: Request):
             rerun_ad_hoc = json.loads(job["ad_hoc_ips"])
         except (json.JSONDecodeError, TypeError):
             pass
+    rerun_params = None
+    if job.get("parameters"):
+        try:
+            rerun_params = json.loads(job["parameters"])
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     new_job_id = await db.create_job(
         job["playbook_id"], job.get("inventory_group_id"),
@@ -783,6 +869,7 @@ async def rerun_job_endpoint(job_id: int, request: Request):
         priority=job.get("priority", 2),
         host_ids=rerun_host_ids,
         ad_hoc_ips=rerun_ad_hoc,
+        parameters=rerun_params,
     )
 
     asyncio.ensure_future(_process_job_queue())

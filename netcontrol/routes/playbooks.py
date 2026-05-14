@@ -129,6 +129,23 @@ async def sync_playbooks_from_registry():
                     LOGGER.warning("sync: error adding playbook '%s': %s", pb['name'], e)
 
 
+def _attach_parameters_schema(playbook: dict) -> dict:
+    """Decorate a playbook dict with parameters_schema from the registered class.
+
+    The schema lives on the Python class (BasePlaybook subclass), not in the
+    DB — it's a code-level contract, not user-editable data. Attach it on the
+    way out so the frontend can render a launch form without a second round-trip.
+    """
+    from routes.runner import get_playbook_class
+
+    cls = get_playbook_class(playbook.get("filename", ""))
+    if cls is not None:
+        playbook["parameters_schema"] = getattr(cls, "parameters_schema", []) or []
+    else:
+        playbook["parameters_schema"] = []
+    return playbook
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.get("/api/playbooks/{playbook_id}")
@@ -168,13 +185,14 @@ async def get_playbook(playbook_id: int):
     if "content" not in playbook:
         playbook["content"] = ""
 
-    return playbook
+    return _attach_parameters_schema(playbook)
 
 
 @router.get("/api/playbooks")
 async def list_playbooks():
     await sync_playbooks_from_registry()
-    return await db.get_all_playbooks()
+    playbooks = await db.get_all_playbooks()
+    return [_attach_parameters_schema(pb) for pb in playbooks]
 
 
 @router.post("/api/playbooks", status_code=201)

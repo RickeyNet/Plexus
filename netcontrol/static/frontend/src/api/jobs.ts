@@ -12,6 +12,17 @@ import { apiRequest } from './client';
 
 export type PlaybookType = 'python' | 'ansible';
 
+export type PlaybookParameterType = 'string' | 'int' | 'bool' | 'list';
+
+export interface PlaybookParameter {
+  name: string;
+  type: PlaybookParameterType;
+  label: string;
+  required?: boolean;
+  default?: string | number | boolean | null;
+  help?: string;
+}
+
 export interface Playbook {
   id: number;
   name: string;
@@ -20,6 +31,7 @@ export interface Playbook {
   tags?: string[] | string | null;
   content?: string;
   type?: PlaybookType;
+  parameters_schema?: PlaybookParameter[];
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -69,6 +81,7 @@ export interface JobLaunchBody {
   priority?: number;
   depends_on?: number[];
   ad_hoc_ips?: string[];
+  parameters?: Record<string, unknown>;
 }
 
 export interface JobLaunchResult {
