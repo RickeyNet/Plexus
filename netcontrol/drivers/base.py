@@ -214,6 +214,62 @@ class Driver:
             f"{type(self).__name__} does not implement parse_serial_number()"
         )
 
+    # ── Software upgrade capability surface ────────────────────────────────
+    #
+    # The upgrades route (``netcontrol/routes/upgrades.py``) historically
+    # hard-coded Cisco IOS-XE "install mode" verbs: ``install add file``
+    # to pre-stage, ``install activate prompt-level none`` to activate +
+    # reload, ``install commit`` to make the new image permanent.  Junos
+    # uses ``request system software add`` + ``request system reboot``
+    # in a single phase (no separate add/activate split); NX-OS uses
+    # ``install all nxos``; classic IOS uses ``copy tftp:`` + ``boot
+    # system flash:`` + ``reload``.  These methods give the driver a
+    # place to surface the right verb so the route doesn't have to
+    # branch on device_type.  Routes that have only implemented the
+    # IOS-XE flow can still call ``upgrade_install_add_command`` on a
+    # Junos host and get a clear ``DriverCapabilityError`` instead of
+    # silently shipping Cisco syntax to a Juniper SSH session.
+
+    def upgrade_install_add_command(self, image_path: str) -> str:
+        """Return the command that pre-stages a software image.
+
+        ``image_path`` is the full device-side path (e.g.
+        ``flash:cat9k_iosxe.17.09.04a.SPA.bin``).  IOS-XE: ``install
+        add file <path>``.  Platforms that don't have a discrete
+        pre-stage step (Junos performs add+activate as one operation)
+        should raise ``DriverCapabilityError`` so the caller routes
+        through ``upgrade_activate_commands`` instead.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement upgrade_install_add_command()"
+        )
+
+    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+        """Return the command(s) that activate the staged image and reboot.
+
+        Returns a list because some platforms need multiple steps
+        (e.g. Junos: ``request system software add ... no-validate``
+        then ``request system reboot``).  The final command in the
+        list is expected to trigger the reload - the caller treats a
+        dropped SSH session after the last command as success.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement upgrade_activate_commands()"
+        )
+
+    def upgrade_commit_command(self) -> str:
+        """Return the command that makes the new image permanent.
+
+        Cisco IOS-XE install mode rolls back automatically on the
+        next reload unless ``install commit`` runs after the activate
+        completes.  NX-OS auto-commits.  Junos persists on commit.
+        Platforms with no separate commit step should return an empty
+        string so the caller can short-circuit.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement upgrade_commit_command()"
+        )
+
 
 class GenericDriver(Driver):
     """Fallback used when no driver is registered for a device_type.

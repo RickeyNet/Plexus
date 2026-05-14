@@ -92,3 +92,22 @@ class CiscoXEDriver(Driver):
                 if len(parts) == 2 and parts[1].strip():
                     return parts[1].strip()
         return None
+
+    def upgrade_install_add_command(self, image_path: str) -> str:
+        # IOS-XE install-mode pre-stage: copies the package out of the
+        # .bin into the install-mode unpacked layout.  ``image_path``
+        # is the device-side full path (e.g. ``flash:cat9k.bin``).
+        return f"install add file {image_path}"
+
+    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+        # ``prompt-level none`` suppresses the interactive y/n prompt so
+        # the command can be sent non-interactively before the reload
+        # drops the SSH session.  ``image_path`` isn't interpolated
+        # because in install mode the activate operates on whatever
+        # was just added, not a path argument.
+        return ["install activate prompt-level none"]
+
+    def upgrade_commit_command(self) -> str:
+        # Without ``install commit`` an IOS-XE box auto-rolls-back to
+        # the prior image on the *next* reload.  This finalizes it.
+        return "install commit"

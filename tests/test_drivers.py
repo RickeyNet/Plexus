@@ -588,3 +588,91 @@ def test_juniper_junos_parse_serial_ignores_engine_chassis_lines() -> None:
         "FPC 0             REV 32  750-054850  AAAAAA  Chassis FPC\n"
     )
     assert drv.parse_serial_number(misleading) is None
+
+
+# ── software upgrade capability surface ─────────────────────────────────────
+
+
+def test_cisco_xe_install_add_command_uses_full_path() -> None:
+    # IOS-XE install-mode add takes the device-side full path; the
+    # driver shouldn't second-guess the caller's path format (flash:
+    # vs bootflash:/ vs slot0:) — it just stitches it into the command.
+    drv = get_driver("cisco_xe")
+    assert (
+        drv.upgrade_install_add_command("flash:cat9k_iosxe.17.09.04a.SPA.bin")
+        == "install add file flash:cat9k_iosxe.17.09.04a.SPA.bin"
+    )
+
+
+def test_cisco_xe_activate_returns_prompt_level_none() -> None:
+    # The "prompt-level none" suffix is what suppresses the interactive
+    # y/n confirmation so the command can be sent non-interactively
+    # before the reload drops the SSH session.  A driver that drops
+    # this suffix would hang every upgrade.
+    drv = get_driver("cisco_xe")
+    cmds = drv.upgrade_activate_commands("flash:cat9k_iosxe.17.09.04a.SPA.bin")
+    assert cmds == ["install activate prompt-level none"]
+
+
+def test_cisco_xe_commit_command() -> None:
+    # Without "install commit" IOS-XE auto-rolls-back on the next reload,
+    # silently undoing the upgrade.  Regression guard against returning
+    # an empty string here.
+    assert get_driver("cisco_xe").upgrade_commit_command() == "install commit"
+
+
+def test_cisco_ios_does_not_implement_install_mode() -> None:
+    # Classic IOS uses copy + boot-system + reload, not install mode.
+    # The Plexus upgrade route only knows the install-mode flow, so the
+    # IOS driver intentionally leaves these unimplemented - a classic-IOS
+    # host attempting upgrade should fail loudly, not silently send
+    # IOS-XE syntax that classic IOS doesn't parse.
+    drv = get_driver("cisco_ios")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_install_add_command("flash:image.bin")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_activate_commands("flash:image.bin")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_commit_command()
+
+
+def test_cisco_nxos_does_not_implement_install_mode() -> None:
+    # NX-OS uses "install all nxos <image>" as a single command (not the
+    # IOS-XE add/activate split) and doesn't need a separate commit.
+    # Until we implement those verbs explicitly, the NX-OS driver should
+    # raise rather than letting the route handler send IOS-XE syntax.
+    drv = get_driver("cisco_nxos")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_install_add_command("bootflash:image.bin")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_activate_commands("bootflash:image.bin")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_commit_command()
+
+
+def test_juniper_junos_does_not_implement_install_mode() -> None:
+    # Junos uses "request system software add ... no-validate" followed
+    # by "request system reboot" - a single combined operation, not the
+    # IOS-XE add/activate two-phase split.  We could model this if/when
+    # we ship a Junos-aware upgrade flow, but for now the driver should
+    # refuse rather than let Cisco syntax leak onto a Junos session.
+    drv = get_driver("juniper_junos")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_install_add_command("/var/tmp/jinstall.tgz")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_activate_commands("/var/tmp/jinstall.tgz")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_commit_command()
+
+
+def test_generic_driver_upgrade_methods_raise() -> None:
+    # Unknown vendor: every upgrade entry point must raise so the route
+    # handler reports "no driver" rather than silently sending Cisco
+    # syntax over the SSH session.
+    drv = get_driver("frobozz_os")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_install_add_command("flash:image")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_activate_commands("flash:image")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_commit_command()
