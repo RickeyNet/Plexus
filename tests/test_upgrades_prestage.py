@@ -137,6 +137,68 @@ async def test_run_install_add_prestage_short_circuits_for_arista_eos(
 
 
 @pytest.mark.asyncio
+async def test_run_install_add_prestage_runs_for_cisco_xr(
+    monkeypatch: pytest.MonkeyPatch,
+    _stub_emit: list[tuple],
+) -> None:
+    """IOS-XR: the install-add command really fires (uses ``source``).
+
+    XR is the second driver (after IOS-XE) to expose a discrete
+    prestage step, so this test mirrors the XE happy-path but asserts
+    the XR-specific ``install add source <path>`` verb instead of
+    XE's ``install add file <path>``.  Without this guard, a future
+    refactor could silently downgrade XR back to single-phase or send
+    the XE wording at an XR session - the latter parse-errors because
+    XR uses ``source``, not ``file``.
+    """
+
+    class _XRSuccessConn:
+        def __init__(self) -> None:
+            self.commands: list[str] = []
+
+        def send_command(self, command: str, **_: object) -> str:
+            self.commands.append(command)
+            if command.startswith("install add source"):
+                # XR prints a packaging operation ID on success; the
+                # route doesn't parse the ID (bare ``install activate``
+                # picks up all newly-added packages later), but the
+                # success-path tokens must not contain ``proceed`` /
+                # ``y/n`` or the helper would think the device is
+                # asking for confirmation.
+                return "Install operation 1 succeeded"
+            if command.startswith("dir"):
+                # ``_verify_install_add_unpacked_files`` calls
+                # ``dir | include <version>`` - return a line that
+                # contains the extracted version so the verify path
+                # accepts it.
+                return "  -rw- 12345 Jan 1 2024 asr9k-mini-x64-7.5.2.iso\n"
+            return ""
+
+    conn = _XRSuccessConn()
+    ok, err = await upgrades._run_install_add_prestage(
+        conn,
+        campaign_id=1,
+        dev_id=42,
+        ip="10.0.0.1",
+        image_name="asr9k-mini-x64-7.5.2.iso",
+        dest_path="harddisk:",
+        device_type="cisco_xr",
+    )
+    assert ok is True
+    assert err is None
+    # The install-add command must be XR's ``install add source ...``,
+    # not XE's ``install add file ...`` - the latter parse-errors on XR.
+    assert any(
+        c.startswith("install add source harddisk:asr9k-mini-x64-7.5.2.iso")
+        for c in conn.commands
+    )
+    # And the XE wording must NOT appear - a regression where the
+    # route fell back to XE syntax would silently break every XR
+    # upgrade.
+    assert not any(c.startswith("install add file") for c in conn.commands)
+
+
+@pytest.mark.asyncio
 async def test_run_install_add_prestage_runs_for_cisco_xe(
     monkeypatch: pytest.MonkeyPatch,
     _stub_emit: list[tuple],
