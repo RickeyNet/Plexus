@@ -636,18 +636,65 @@ def test_cisco_ios_does_not_implement_install_mode() -> None:
         drv.upgrade_commit_command()
 
 
-def test_cisco_nxos_does_not_implement_install_mode() -> None:
-    # NX-OS uses "install all nxos <image>" as a single command (not the
-    # IOS-XE add/activate split) and doesn't need a separate commit.
-    # Until we implement those verbs explicitly, the NX-OS driver should
-    # raise rather than letting the route handler send IOS-XE syntax.
+def test_cisco_nxos_upgrade_is_single_phase() -> None:
+    # NX-OS collapses add+activate+commit into a single ``install all
+    # nxos <image>`` operation; there is no "staged but not yet
+    # activated" state to land in.  ``upgrade_has_discrete_prestage()``
+    # must return False so the upgrade route skips the install-add
+    # prestage call (same shape as Junos - sending IOS-XE's ``install
+    # add file`` at an NX-OS session would parse-error).
     drv = get_driver("cisco_nxos")
+    assert drv.upgrade_has_discrete_prestage() is False
+    # No discrete prestage means upgrade_install_add_command should
+    # still raise - the route never calls it for a single-phase
+    # platform but the contract is "raise unless you implement it".
     with pytest.raises(DriverCapabilityError):
         drv.upgrade_install_add_command("bootflash:image.bin")
-    with pytest.raises(DriverCapabilityError):
-        drv.upgrade_activate_commands("bootflash:image.bin")
-    with pytest.raises(DriverCapabilityError):
-        drv.upgrade_commit_command()
+
+
+def test_cisco_nxos_activate_uses_install_all_nxos() -> None:
+    # ``install all nxos <path>`` is the canonical single-command
+    # upgrade verb for NX-OS.  Regression guard against accidentally
+    # swapping in IOS-XE's ``install activate`` (which NX-OS parses
+    # as "install all" + garbage) or dropping the ``nxos`` keyword
+    # (which selects a target image set; without it the platform
+    # prompts interactively and the SSH session hangs before reload).
+    drv = get_driver("cisco_nxos")
+    cmds = drv.upgrade_activate_commands("bootflash:nxos.10.3.4a.M.bin")
+    assert cmds == ["install all nxos bootflash:nxos.10.3.4a.M.bin"]
+
+
+def test_cisco_nxos_activate_preserves_caller_path_format() -> None:
+    # NX-OS accepts a couple of device-side path prefixes (bootflash:,
+    # bootflash:/, volatile:) and the driver shouldn't second-guess
+    # which one the caller picked - it just stitches the path into
+    # the command verbatim.  Regression guard against the driver
+    # silently rewriting the path prefix.
+    drv = get_driver("cisco_nxos")
+    cmds = drv.upgrade_activate_commands("bootflash:/nxos.10.3.4a.M.bin")
+    assert cmds == ["install all nxos bootflash:/nxos.10.3.4a.M.bin"]
+
+
+def test_cisco_nxos_commit_is_no_op() -> None:
+    # NX-OS auto-commits the new boot variable when the device boots
+    # successfully into the new image; there is no analogue to
+    # IOS-XE's ``install commit``.  An empty string signals "skip
+    # commit" to the route (same pattern Junos uses).
+    assert get_driver("cisco_nxos").upgrade_commit_command() == ""
+
+
+def test_cisco_nxos_ssh_alias_shares_upgrade_methods() -> None:
+    # cisco_nxos and cisco_nxos_ssh resolve to the same driver class,
+    # so the upgrade methods must produce identical output regardless
+    # of which alias Netmiko's autodetect happens to pick.  Without
+    # this guarantee an autodetect that returned cisco_nxos_ssh
+    # instead of cisco_nxos could silently change the upgrade flow.
+    a = get_driver("cisco_nxos")
+    b = get_driver("cisco_nxos_ssh")
+    assert a.upgrade_activate_commands("bootflash:image.bin") == \
+        b.upgrade_activate_commands("bootflash:image.bin")
+    assert a.upgrade_commit_command() == b.upgrade_commit_command()
+    assert a.upgrade_has_discrete_prestage() == b.upgrade_has_discrete_prestage()
 
 
 def test_juniper_junos_upgrade_is_single_phase() -> None:

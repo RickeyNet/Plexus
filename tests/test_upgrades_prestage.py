@@ -76,6 +76,36 @@ async def test_run_install_add_prestage_short_circuits_for_single_phase_driver(
 
 
 @pytest.mark.asyncio
+async def test_run_install_add_prestage_short_circuits_for_cisco_nxos(
+    _stub_emit: list[tuple],
+) -> None:
+    """NX-OS combines add+activate via ``install all nxos`` - prestage skips."""
+    conn = _RecordingConn()
+    ok, err = await upgrades._run_install_add_prestage(
+        conn,
+        campaign_id=1,
+        dev_id=42,
+        ip="10.0.0.1",
+        image_name="nxos.10.3.4a.M.bin",
+        dest_path="bootflash:",
+        device_type="cisco_nxos",
+    )
+    assert ok is True
+    assert err is None
+    # No commands hit the device - the route would otherwise be sending
+    # IOS-XE ``install add file ...`` syntax at an NX-OS session, which
+    # NX-OS parses as a different command and would silently misbehave.
+    assert conn.commands == []
+    # The operator log must explain the skip as "deferral", not
+    # "platform unsupported" - NX-OS is supported, it just doesn't have
+    # a discrete prestage phase.
+    levels_and_messages = [(lvl, msg) for (lvl, msg, _h) in _stub_emit]
+    assert any(
+        lvl == "info" and "defer" in msg.lower() for (lvl, msg) in levels_and_messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_install_add_prestage_runs_for_cisco_xe(
     monkeypatch: pytest.MonkeyPatch,
     _stub_emit: list[tuple],
