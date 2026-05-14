@@ -25,6 +25,7 @@ from netcontrol.drivers import (
     register_driver,
     registered_device_types,
 )
+from netcontrol.drivers.arista_eos import AristaEOSDriver
 from netcontrol.drivers.cisco_ios import CiscoIOSDriver
 from netcontrol.drivers.cisco_nxos import CiscoNXOSDriver
 from netcontrol.drivers.cisco_xe import CiscoXEDriver
@@ -67,6 +68,17 @@ def test_registered_device_types_includes_cisco_set() -> None:
     assert "cisco_nxos" in types
     assert "cisco_nxos_ssh" in types
     assert "juniper_junos" in types
+    assert "arista_eos" in types
+
+
+def test_registry_resolves_arista_eos() -> None:
+    # Second non-Cisco driver: the Netmiko device_type string for Arista
+    # EOS is "arista_eos", which is what routes/inventory.py and
+    # routes/snmp.py infer from EOS device banners + sysDescr.  The
+    # vendor tag must be "arista" so filtering by vendor groups EOS
+    # devices separately from Cisco / Juniper hosts.
+    assert isinstance(get_driver("arista_eos"), AristaEOSDriver)
+    assert get_driver("arista_eos").vendor == "arista"
 
 
 def test_unknown_device_type_falls_back_to_generic() -> None:
@@ -756,6 +768,7 @@ def test_single_phase_default_for_drivers_without_install_mode() -> None:
     # vendor model doesn't have one.
     assert get_driver("cisco_ios").upgrade_has_discrete_prestage() is False
     assert get_driver("cisco_nxos").upgrade_has_discrete_prestage() is False
+    assert get_driver("arista_eos").upgrade_has_discrete_prestage() is False
     assert get_driver("frobozz_os").upgrade_has_discrete_prestage() is False
 
 
@@ -770,3 +783,192 @@ def test_generic_driver_upgrade_methods_raise() -> None:
         drv.upgrade_activate_commands("flash:image")
     with pytest.raises(DriverCapabilityError):
         drv.upgrade_commit_command()
+
+
+# ── arista_eos output ───────────────────────────────────────────────────────
+
+
+def test_arista_eos_build_netflow_config_uses_flow_tracking() -> None:
+    # EOS uses ``flow tracking hardware`` / ``tracker`` / ``exporter``
+    # nested stanzas rather than Cisco's flat ``flow record`` + ``flow
+    # exporter`` + ``flow monitor`` triad.  Emitting Cisco Flexible
+    # NetFlow lines at an EOS session would parse-error on the very
+    # first ``flow record`` line, so the regression guard is that the
+    # output starts with the EOS top-level anchor and never contains
+    # the Cisco ``flow record`` or ``flow monitor`` keywords.
+    drv = get_driver("arista_eos")
+    cmds = drv.build_netflow_config(_cfg())
+    assert cmds[0] == "flow tracking hardware"
+    # Tracker, exporter, and collector wiring all present.
+    joined = "\n".join(cmds)
+    assert "tracker PLEXUS-MON" in joined
+    assert "exporter PLEXUS-EXPORT" in joined
+    assert "collector 10.0.0.5 port 2055" in joined
+    # Cisco's Flexible NetFlow shapes must not leak in.
+    assert "flow record" not in joined
+    assert "flow monitor" not in joined
+    # Per-interface attachment uses the EOS ``flow tracker hardware``
+    # noun, not Cisco's ``ip flow monitor``.
+    assert "flow tracker hardware PLEXUS-MON" in joined
+    assert "ip flow monitor" not in joined
+
+
+def test_arista_eos_netflow_includes_each_interface() -> None:
+    # Each requested interface must get its own per-interface stanza.
+    # A regression where only the first interface is bound would
+    # silently lose visibility on every other monitored port.
+    drv = get_driver("arista_eos")
+    cmds = drv.build_netflow_config(
+        _cfg(interfaces=["Ethernet1", "Ethernet2", "Ethernet48"])
+    )
+    joined = "\n".join(cmds)
+    assert "interface Ethernet1" in joined
+    assert "interface Ethernet2" in joined
+    assert "interface Ethernet48" in joined
+
+
+def test_arista_eos_netflow_respects_sampling_rate() -> None:
+    # The sample rate must flow through to a ``sample N`` line; the
+    # rest of the output must be otherwise identical.  This is a
+    # regression guard against accidentally coupling other knobs
+    # (timeouts, template interval) to the sample-rate field.
+    drv = get_driver("arista_eos")
+    low = drv.build_netflow_config(_cfg(sampling_rate=1))
+    high = drv.build_netflow_config(_cfg(sampling_rate=1024))
+    # Both runs include a sample line, only the integer differs.
+    assert "  sample 1" in low
+    assert "  sample 1024" in high
+    # All other lines are identical.
+    diff = [a for a, b in zip(low, high) if a != b]
+    assert diff == ["  sample 1"]
+
+
+def test_arista_eos_verify_command() -> None:
+    # ``show flow tracking hardware`` is EOS's analogue to Cisco's
+    # ``show flow exporter`` - the latter does not exist on EOS and
+    # would parse-error.
+    assert (
+        get_driver("arista_eos").netflow_verify_command()
+        == "show flow tracking hardware"
+    )
+
+
+def test_arista_eos_config_capture_and_save() -> None:
+    drv = get_driver("arista_eos")
+    # EOS uses Cisco-style ``show running-config`` verbatim.
+    assert drv.capture_running_config_command() == "show running-config"
+    # ``copy running-config startup-config`` is Arista's documented
+    # save form and matches the NX-OS driver - both datacenter
+    # platforms use the explicit-copy save surface.
+    assert drv.save_config_commands() == ["copy running-config startup-config"]
+
+
+def test_arista_eos_snmpv3_capability_surface() -> None:
+    # EOS mirrors IOS-XE's ``snmp-server`` config noun and supports
+    # ``snmp-server engineID local`` pinning - unlike NX-OS and Junos,
+    # which return empty strings because their engine ID is platform-
+    # managed.  This test locks in that EOS gets the real pin command,
+    # not the empty-string short-circuit.
+    drv = get_driver("arista_eos")
+    assert drv.snmpv3_show_existing_command() == "show running-config | include snmp-server"
+    assert drv.snmpv3_engine_id_show_command() == "show snmp engineID"
+    assert (
+        drv.snmpv3_engine_id_pin_command("80000009030011AABBCCDDEE")
+        == "snmp-server engineID local 80000009030011AABBCCDDEE"
+    )
+    assert drv.snmpv3_verify_users_command() == "show snmp user"
+
+
+def test_arista_eos_health_check_capability_surface() -> None:
+    drv = get_driver("arista_eos")
+    assert drv.show_version_command() == "show version"
+    # EOS uses lowercase-n "Serial number" with a colon, not IOS-XE's
+    # "System Serial Number".  Sending the IOS filter at EOS returns
+    # zero rows; sending the EOS filter at IOS returns zero rows.
+    assert drv.serial_number_show_command() == "show version | include Serial number"
+    # Typical EOS show-version line:
+    #   "Serial number:                          JPE19450ABC"
+    # Variable whitespace between the colon and the value is normal
+    # across EOS releases; the parser must not assume a fixed column.
+    sample = (
+        "Arista DCS-7280SR-48C6-F\n"
+        "Hardware version:    11.00\n"
+        "Serial number:                          JPE19450ABC\n"
+        "System MAC address:  001c.7300.0001\n"
+    )
+    assert drv.parse_serial_number(sample) == "JPE19450ABC"
+
+
+def test_arista_eos_parse_serial_handles_tight_whitespace() -> None:
+    # Older / minimal EOS outputs may print "Serial number: VALUE" with
+    # a single space.  The parser must work regardless of how many
+    # spaces follow the colon - splitting on ``:`` and stripping is
+    # the right shape; anchoring on a fixed column would silently fail.
+    drv = get_driver("arista_eos")
+    assert drv.parse_serial_number("Serial number: ABC123XYZ\n") == "ABC123XYZ"
+
+
+def test_arista_eos_parse_serial_rejects_unrelated_lines() -> None:
+    # ``show version`` includes lines like "Hardware version:" that
+    # share the "<label>: <value>" shape but are not the serial.  The
+    # parser anchors on the leading "Serial number" phrase so those
+    # lines must not match.
+    drv = get_driver("arista_eos")
+    noise = (
+        "Hardware version:    01.00\n"
+        "Software image version: 4.30.5M\n"
+        "Internal build version: 4.30.5M-12345\n"
+    )
+    assert drv.parse_serial_number(noise) is None
+
+
+def test_arista_eos_upgrade_is_single_phase() -> None:
+    # EOS has no "stage now, activate later" workflow: ``install
+    # source`` validates + sets the boot image, then ``reload now``
+    # reboots.  ``upgrade_has_discrete_prestage()`` must return False
+    # so the upgrade route's prestage helper short-circuits without
+    # trying to install-add against an EOS session.
+    drv = get_driver("arista_eos")
+    assert drv.upgrade_has_discrete_prestage() is False
+    # No discrete prestage means upgrade_install_add_command should
+    # still raise - the route never calls it for a single-phase
+    # platform, but the raise is defense-in-depth against a future
+    # caller bypassing the gate.
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_install_add_command("flash:EOS-4.30.5M.swi")
+
+
+def test_arista_eos_activate_uses_install_source_then_reload_now() -> None:
+    # The EOS activate is two commands: ``install source`` (validates +
+    # sets boot image, synchronous) and ``reload now`` (drops the SSH
+    # session).  ``reload now`` instead of bare ``reload`` skips the
+    # "Save current configuration?" / "Proceed with reload?" prompts -
+    # dropping the ``now`` qualifier would hang the route forever
+    # waiting on those prompts.  Order matters: the route iterates the
+    # list and the final command is the one expected to drop the SSH
+    # session, so reload must come last.
+    drv = get_driver("arista_eos")
+    cmds = drv.upgrade_activate_commands("flash:EOS-4.30.5M.swi")
+    assert cmds == [
+        "install source flash:EOS-4.30.5M.swi",
+        "reload now",
+    ]
+
+
+def test_arista_eos_activate_preserves_caller_path_format() -> None:
+    # EOS accepts paths in several forms (``flash:``, ``flash:/``,
+    # ``file:/mnt/flash/...``).  The driver passes whatever the caller
+    # supplied through verbatim instead of rewriting it - a regression
+    # where the driver normalized the prefix would silently change the
+    # boot path on platforms where the path matters.
+    drv = get_driver("arista_eos")
+    cmds = drv.upgrade_activate_commands("file:/mnt/flash/EOS-4.30.5M.swi")
+    assert cmds[0] == "install source file:/mnt/flash/EOS-4.30.5M.swi"
+
+
+def test_arista_eos_commit_is_no_op() -> None:
+    # EOS auto-persists the boot image selection once the device
+    # successfully boots into the new version - no operator-visible
+    # commit knob analogous to IOS-XE's ``install commit``.  Empty
+    # string signals "skip commit" to the route.
+    assert get_driver("arista_eos").upgrade_commit_command() == ""

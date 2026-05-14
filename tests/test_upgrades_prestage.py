@@ -106,6 +106,37 @@ async def test_run_install_add_prestage_short_circuits_for_cisco_nxos(
 
 
 @pytest.mark.asyncio
+async def test_run_install_add_prestage_short_circuits_for_arista_eos(
+    _stub_emit: list[tuple],
+) -> None:
+    """Arista EOS uses ``install source`` + ``reload now`` - prestage skips."""
+    conn = _RecordingConn()
+    ok, err = await upgrades._run_install_add_prestage(
+        conn,
+        campaign_id=1,
+        dev_id=42,
+        ip="10.0.0.1",
+        image_name="EOS-4.30.5M.swi",
+        dest_path="flash:",
+        device_type="arista_eos",
+    )
+    assert ok is True
+    assert err is None
+    # No commands hit the device - the route would otherwise be sending
+    # IOS-XE ``install add file ...`` syntax at an Arista EOS session,
+    # which EOS parses as a wholly different ``install`` subcommand and
+    # would either error out or (worse) attempt the wrong operation.
+    assert conn.commands == []
+    # The operator must see the deferral as "info", not "pre-stage not
+    # supported" - EOS is supported, it just doesn't have a discrete
+    # prestage phase (same single-phase shape as Junos / NX-OS).
+    levels_and_messages = [(lvl, msg) for (lvl, msg, _h) in _stub_emit]
+    assert any(
+        lvl == "info" and "defer" in msg.lower() for (lvl, msg) in levels_and_messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_install_add_prestage_runs_for_cisco_xe(
     monkeypatch: pytest.MonkeyPatch,
     _stub_emit: list[tuple],
