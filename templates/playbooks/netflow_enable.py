@@ -2,32 +2,16 @@
 netflow_enable.py - NetFlow Exporter Configuration Playbook
 
 Pushes the right ``flow exporter`` / ``flow monitor`` / interface-binding
-config onto Cisco devices so they start exporting NetFlow records to the
-Plexus collector.  Three platforms are supported, each with its own
-syntax:
-
-* ``cisco_ios``  - classic NetFlow v9 via ``ip flow-export destination``
-  on each monitored interface (no Flexible NetFlow).
-* ``cisco_xe``   - Flexible NetFlow: ``flow record`` + ``flow exporter``
-  + ``flow monitor`` + ``ip flow monitor PLEXUS-MON input`` per interface.
-* ``cisco_nxos`` - NX-OS Flexible NetFlow with the same shape as IOS-XE
-  but slightly different syntax (``ip flow monitor PLEXUS-MON input``
-  becomes ``ip flow monitor PLEXUS-MON input`` under each L3 interface;
-  v9 is the default).
+config onto a device so it starts exporting NetFlow records to the
+Plexus collector.  Vendor-specific syntax lives in the
+``netcontrol.drivers`` package - this playbook only orchestrates the
+job (resolve collector, pick a driver per host, dry-run vs live).
 
 The collector IP and port come from (in priority order):
   1. The job's ``parameters`` dict (``collector_ip`` / ``collector_port``)
      if the UI ever passes structured params for this playbook.
   2. The ``PLEXUS_COLLECTOR_IP`` env var + ``APP_NETFLOW_PORT`` env var.
   3. Hard fail - without a collector IP the device has nowhere to send.
-
-Sampling rate is optional; on IOS-XE / NX-OS we wire it via a ``sampler``
-construct.  Defaults to 1:1 (no sampling) since the collector handles
-de-sampling automatically when ``sampling_rate`` is reported.
-
-Dry-run prints the exact lines that *would* be applied, grouped per
-device, so an operator can paste them into change control before going
-live.
 """
 
 from __future__ import annotations
@@ -36,6 +20,11 @@ import asyncio
 import os
 from collections.abc import AsyncGenerator
 
+from netcontrol.drivers import (
+    DriverCapabilityError,
+    NetflowConfig,
+    get_driver,
+)
 from routes.runner import BasePlaybook, LogEvent, register_playbook
 
 from templates.playbooks._common import (
@@ -43,12 +32,6 @@ from templates.playbooks._common import (
     connect_device,
     simulate_connect,
 )
-
-
-DEFAULT_EXPORTER_NAME = "PLEXUS-EXPORT"
-DEFAULT_MONITOR_NAME = "PLEXUS-MON"
-DEFAULT_RECORD_NAME = "PLEXUS-RECORD"
-DEFAULT_SAMPLER_NAME = "PLEXUS-SAMPLER"
 
 
 def _resolve_collector(parameters: dict | None) -> tuple[str | None, int]:
@@ -69,129 +52,6 @@ def _resolve_collector(parameters: dict | None) -> tuple[str | None, int]:
     except (TypeError, ValueError):
         port = 2055
     return ip, port
-
-
-def _build_ios_commands(
-    collector_ip: str,
-    collector_port: int,
-    interfaces: list[str],
-) -> list[str]:
-    """Classic IOS NetFlow v9 - global destination + per-interface ingress/egress."""
-    cmds = [
-        f"ip flow-export destination {collector_ip} {collector_port}",
-        "ip flow-export version 9",
-        "ip flow-export source Loopback0",
-    ]
-    for intf in interfaces:
-        cmds += [
-            f"interface {intf}",
-            "ip flow ingress",
-            "ip flow egress",
-            "exit",
-        ]
-    return cmds
-
-
-def _build_xe_commands(
-    collector_ip: str,
-    collector_port: int,
-    interfaces: list[str],
-    sampling_rate: int,
-) -> list[str]:
-    """IOS-XE Flexible NetFlow - record, exporter, monitor, optional sampler."""
-    cmds = [
-        f"flow record {DEFAULT_RECORD_NAME}",
-        " match ipv4 source address",
-        " match ipv4 destination address",
-        " match transport source-port",
-        " match transport destination-port",
-        " match ipv4 protocol",
-        " collect counter bytes",
-        " collect counter packets",
-        " collect timestamp sys-uptime first",
-        " collect timestamp sys-uptime last",
-        "exit",
-        f"flow exporter {DEFAULT_EXPORTER_NAME}",
-        f" destination {collector_ip}",
-        f" transport udp {collector_port}",
-        " export-protocol netflow-v9",
-        " source Loopback0",
-        "exit",
-        f"flow monitor {DEFAULT_MONITOR_NAME}",
-        f" record {DEFAULT_RECORD_NAME}",
-        f" exporter {DEFAULT_EXPORTER_NAME}",
-        " cache timeout active 60",
-        "exit",
-    ]
-    if sampling_rate > 1:
-        cmds += [
-            f"sampler {DEFAULT_SAMPLER_NAME}",
-            f" mode random 1 out-of {sampling_rate}",
-            "exit",
-        ]
-    for intf in interfaces:
-        cmds.append(f"interface {intf}")
-        cmds.append(f" ip flow monitor {DEFAULT_MONITOR_NAME} input")
-        if sampling_rate > 1:
-            cmds.append(f" ip flow monitor {DEFAULT_MONITOR_NAME} sampler {DEFAULT_SAMPLER_NAME} input")
-        cmds.append("exit")
-    return cmds
-
-
-def _build_nxos_commands(
-    collector_ip: str,
-    collector_port: int,
-    interfaces: list[str],
-    sampling_rate: int,
-) -> list[str]:
-    """NX-OS Flexible NetFlow.  Note: NX-OS requires ``feature netflow`` first."""
-    cmds = [
-        "feature netflow",
-        f"flow record {DEFAULT_RECORD_NAME}",
-        " match ipv4 source address",
-        " match ipv4 destination address",
-        " match transport source-port",
-        " match transport destination-port",
-        " match ip protocol",
-        " collect counter bytes",
-        " collect counter packets",
-        " collect timestamp sys-uptime first",
-        " collect timestamp sys-uptime last",
-        "exit",
-        f"flow exporter {DEFAULT_EXPORTER_NAME}",
-        f" destination {collector_ip}",
-        f" transport udp {collector_port}",
-        " version 9",
-        " source loopback0",
-        "exit",
-        f"flow monitor {DEFAULT_MONITOR_NAME}",
-        f" record {DEFAULT_RECORD_NAME}",
-        f" exporter {DEFAULT_EXPORTER_NAME}",
-        "exit",
-    ]
-    if sampling_rate > 1:
-        cmds += [
-            f"sampler {DEFAULT_SAMPLER_NAME}",
-            f" mode 1 out-of {sampling_rate}",
-            "exit",
-        ]
-    for intf in interfaces:
-        cmds.append(f"interface {intf}")
-        cmds.append(f" ip flow monitor {DEFAULT_MONITOR_NAME} input")
-        if sampling_rate > 1:
-            cmds.append(f" ip flow monitor {DEFAULT_MONITOR_NAME} sampler {DEFAULT_SAMPLER_NAME}")
-        cmds.append("exit")
-    return cmds
-
-
-def _platform_builder(device_type: str):
-    """Map a Plexus device_type string to its platform-specific builder."""
-    if device_type == "cisco_xe":
-        return _build_xe_commands
-    if device_type in ("cisco_nxos", "cisco_nxos_ssh"):
-        return _build_nxos_commands
-    # cisco_ios and any unknown variants fall back to classic IOS syntax.
-    return _build_ios_commands
 
 
 @register_playbook
@@ -250,7 +110,7 @@ class NetflowEnabler(BasePlaybook):
         credentials: dict,
         template_commands: list[str] | None = None,
         dry_run: bool = True,
-    ) -> AsyncGenerator[LogEvent, None]:
+    ) -> AsyncGenerator[LogEvent]:
         # Parameters arrive on ``self`` for playbooks that opt into them;
         # fall back to ``None`` so _resolve_collector can default cleanly.
         parameters = getattr(self, "parameters", None)
@@ -294,15 +154,30 @@ class NetflowEnabler(BasePlaybook):
                 host=hostname,
             )
 
-            builder = _platform_builder(device_type)
-            if device_type == "cisco_ios":
-                commands = builder(collector_ip, collector_port, interfaces)
-            else:
-                commands = builder(collector_ip, collector_port, interfaces, sampling_rate)
+            driver = get_driver(device_type)
+            try:
+                commands = driver.build_netflow_config(
+                    NetflowConfig(
+                        collector_ip=collector_ip,
+                        collector_port=collector_port,
+                        interfaces=list(interfaces),
+                        sampling_rate=sampling_rate,
+                    )
+                )
+            except DriverCapabilityError as exc:
+                # No driver for this device_type, or the driver doesn't
+                # support NetFlow.  Skip this host with a clear message
+                # rather than guessing at Cisco syntax.
+                yield self.log_error(
+                    f"Skipping {hostname}: {exc}",
+                    host=hostname,
+                )
+                continue
+            verify_cmd = driver.netflow_verify_command()
 
             if NETMIKO_AVAILABLE:
                 async for event in self._process_real_device(
-                    ip, hostname, device_type, credentials, commands, dry_run,
+                    ip, hostname, device_type, credentials, commands, verify_cmd, dry_run,
                 ):
                     yield event
             else:
@@ -321,8 +196,9 @@ class NetflowEnabler(BasePlaybook):
         device_type: str,
         credentials: dict,
         commands: list[str],
+        verify_cmd: str,
         dry_run: bool,
-    ) -> AsyncGenerator[LogEvent, None]:
+    ) -> AsyncGenerator[LogEvent]:
         async with connect_device(
             self, ip, hostname, device_type, credentials,
         ) as (conn, events):
@@ -373,18 +249,10 @@ class NetflowEnabler(BasePlaybook):
             output = await asyncio.to_thread(conn.send_config_set, commands)
             yield self.log_info(output or "(no output)", host=hostname)
 
-            # Verify the exporter actually came up - different show commands
-            # per platform, so guard each separately.
+            # Verify the exporter actually came up.  The driver tells us
+            # which show command to use, so the playbook stays vendor-neutral.
             try:
-                if device_type == "cisco_ios":
-                    verify = await asyncio.to_thread(
-                        conn.send_command, "show ip flow export"
-                    )
-                else:
-                    verify = await asyncio.to_thread(
-                        conn.send_command,
-                        f"show flow exporter {DEFAULT_EXPORTER_NAME}",
-                    )
+                verify = await asyncio.to_thread(conn.send_command, verify_cmd)
                 yield self.log_info(
                     f"Exporter verification:\n{verify}",
                     host=hostname,
@@ -407,7 +275,7 @@ class NetflowEnabler(BasePlaybook):
         hostname: str,
         commands: list[str],
         dry_run: bool,
-    ) -> AsyncGenerator[LogEvent, None]:
+    ) -> AsyncGenerator[LogEvent]:
         async for ev in simulate_connect(self, ip, hostname):
             yield ev
             if ev.level == "error":
@@ -430,8 +298,8 @@ class NetflowEnabler(BasePlaybook):
             )
             yield self.log_success("Flow exporter configured.", host=hostname)
             yield self.log_info(
-                f"Exporter verification:\n  {DEFAULT_EXPORTER_NAME} active, "
-                f"packets sent: 0 (just configured)",
+                "Exporter verification:\n  PLEXUS-EXPORT active, "
+                "packets sent: 0 (just configured)",
                 host=hostname,
             )
             yield self.log_success("Config saved.", host=hostname)
