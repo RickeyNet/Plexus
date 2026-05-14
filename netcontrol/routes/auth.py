@@ -733,6 +733,27 @@ async def logout():
     return response
 
 
+@router.post("/api/auth/heartbeat")
+async def heartbeat(request: Request, response: Response):
+    """Bump session activity without doing anything else.
+
+    Used by the SPA's idle-countdown banner "Stay signed in" button. Calls
+    require_auth directly (instead of via _require_auth_dep) so the response
+    is in scope and the cookie's last_activity field is actually refreshed.
+    Returns the new deadline so the SPA can reset its timer without waiting
+    for the next /api/auth/status poll.
+    """
+    await _require_auth(request, response)
+    idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
+    now = int(time.time())
+    return {
+        "ok": True,
+        "session_last_activity": now,
+        "idle_timeout_seconds": idle_timeout,
+        "server_time": now,
+    }
+
+
 @router.get("/api/auth/status")
 async def auth_status(request: Request, response: Response):
     _app = _app_module()
@@ -752,10 +773,21 @@ async def auth_status(request: Request, response: Response):
         idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
         last_activity = int(session.get("last_activity") or 0)
         if idle_timeout > 0 and last_activity > 0:
-            if int(time.time()) - last_activity > idle_timeout:
+            elapsed = int(time.time()) - last_activity
+            if elapsed > idle_timeout:
                 response.delete_cookie("session", samesite="strict")
+                await _audit(
+                    "auth",
+                    "session.idle_timeout",
+                    user=user["username"],
+                    detail=f"idle={elapsed}s threshold={idle_timeout}s path=/api/auth/status",
+                    correlation_id=_corr_id(request),
+                )
                 return {"authenticated": False}
 
+    never_expires = bool(user.get("session_never_expires"))
+    idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
+    last_activity = int(session.get("last_activity") or 0)
     return {
         "authenticated": True,
         "username": user["username"],
@@ -766,6 +798,14 @@ async def auth_status(request: Request, response: Response):
         "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
         "csrf_token": _generate_csrf_token(user["username"]),
         "must_change_password": bool(user.get("must_change_password")),
+        # Drives the SPA idle-countdown banner. The SPA computes
+        # remaining = (last_activity + idle_timeout) - now, accounting for
+        # clock skew via server_time. idle_timeout=0 disables enforcement;
+        # session_never_expires=true means this user bypasses the timer.
+        "idle_timeout_seconds": idle_timeout,
+        "session_last_activity": last_activity,
+        "session_never_expires": never_expires,
+        "server_time": int(time.time()),
     }
 
 

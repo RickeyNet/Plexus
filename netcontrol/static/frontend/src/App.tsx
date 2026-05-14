@@ -6,6 +6,7 @@ import { useAuthStatus } from '@/api/auth';
 import { resetSessionExpiryFlag, setSessionExpiredHandler } from '@/api/client';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
+import { IdleTimeoutWatcher } from '@/components/IdleTimeoutWatcher';
 import { Sidebar } from '@/components/Sidebar';
 import { TimeRangeBar } from '@/components/TimeRangeBar';
 import { UserMenu } from '@/components/UserMenu';
@@ -231,6 +232,7 @@ export function App() {
       </main>
 
       <UserMenu isOpen={userMenuOpen} onClose={() => setUserMenuOpen(false)} />
+      <IdleTimeoutWatcher />
       <ChangePasswordModal
         isOpen={mustChangePassword}
         forced
