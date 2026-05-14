@@ -83,3 +83,25 @@ class CiscoNXOSDriver(Driver):
 
     def snmpv3_verify_users_command(self) -> str:
         return "show snmp user"
+
+    def show_version_command(self) -> str:
+        return "show version"
+
+    def serial_number_show_command(self) -> str:
+        # NX-OS labels the chassis serial "Processor Board ID" in show
+        # version output (not "System Serial Number" like IOS/XE), so the
+        # include filter has to match that phrase instead.
+        return 'show version | include "Processor Board ID"'
+
+    def parse_serial_number(self, output: str) -> str | None:
+        # Typical NX-OS line: "Processor Board ID FOX1234ABCD"
+        # Note: NX-OS uses a space after the label, not a colon - parser
+        # has to handle both the "Label: VALUE" and "Label VALUE" shapes.
+        for line in output.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Processor Board ID"):
+                # Strip the label prefix and any optional colon/whitespace.
+                tail = stripped[len("Processor Board ID"):].lstrip(": ").strip()
+                if tail:
+                    return tail
+        return None

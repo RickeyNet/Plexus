@@ -162,6 +162,58 @@ class Driver:
             f"{type(self).__name__} does not implement snmpv3_verify_users_command()"
         )
 
+    # ── Health-check / fingerprint capability surface ──────────────────────
+    #
+    # Inventory's "fetch serial" feature and the upgrade pre-stage health
+    # check both need to read the device's chassis identity (serial,
+    # model, software version).  Each platform spells these differently:
+    # IOS / IOS-XE expose "System Serial Number" via ``show version``,
+    # NX-OS calls the same field "Processor Board ID" in its ``show
+    # version`` output, Junos uses ``show chassis hardware`` and prints
+    # "Serial number" lines.  The driver owns both the command to run
+    # and the parser that pulls the serial out so callers don't have to
+    # branch on device_type.
+
+    def show_version_command(self) -> str:
+        """Return the full ``show version`` command for this platform.
+
+        Used by the upgrade pre-stage code that needs the unfiltered
+        version output to extract both software version and chassis
+        model.  Most platforms accept ``show version`` verbatim; Junos
+        would override with ``show version detail``.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement show_version_command()"
+        )
+
+    def serial_number_show_command(self) -> str:
+        """Return an include-filtered show command for the serial line only.
+
+        The inventory fetch-serial UI fires this against many hosts in
+        parallel; filtering at the device (rather than pulling the
+        whole ``show version`` over SSH) keeps the round-trip small.
+        IOS / IOS-XE use ``show version | include System Serial Number``;
+        NX-OS uses ``show version | include "Processor Board"`` because
+        the NX-OS chassis serial is printed as "Processor Board ID" not
+        "System Serial Number".
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement serial_number_show_command()"
+        )
+
+    def parse_serial_number(self, output: str) -> str | None:
+        """Extract the chassis serial from ``show version`` output.
+
+        Accepts either the full ``show version`` output or the
+        filtered output from ``serial_number_show_command()`` - the
+        parser scans line-by-line for the platform's serial label.
+        Returns ``None`` when no serial line is found (the caller
+        decides whether that is a 422 or a "try again later").
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement parse_serial_number()"
+        )
+
 
 class GenericDriver(Driver):
     """Fallback used when no driver is registered for a device_type.

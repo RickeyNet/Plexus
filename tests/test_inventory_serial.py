@@ -9,7 +9,6 @@ import netcontrol.routes.inventory as inventory_routes
 import pytest
 import routes.database as db_module
 
-
 # ── Shared auth-client helper (mirrors test_ipam.py pattern) ─────────────────
 
 
@@ -274,6 +273,108 @@ def test_fetch_serial_no_serial_in_output(tmp_path, monkeypatch):
         json={"credential_id": cred_id},
     )
     assert resp.status_code == 422
+
+
+def test_fetch_serial_unknown_vendor_is_rejected(tmp_path, monkeypatch):
+    """A host with no registered driver must 422 before any SSH is attempted.
+
+    Phase 4 of the driver framework: fetching a serial against an
+    unknown vendor used to silently send Cisco syntax and then return
+    "not found in output".  The new code path refuses with a clear
+    "no driver" message so the operator knows it's a driver gap, not
+    a parsing bug.  Also asserts ``_run_show_command`` was never
+    called, which catches a regression where the guard moves below the
+    SSH attempt.
+    """
+    client = _make_auth_client(tmp_path, monkeypatch)
+
+    resp = client.post("/api/inventory", json={"name": "Mixed", "description": ""})
+    group_id = resp.json()["id"]
+
+    # Seed a host with a device_type that has no driver registered.
+    async def _seed_unknown() -> int:
+        db = await db_module.get_db()
+        try:
+            cursor = await db.execute(
+                "INSERT INTO hosts (group_id, hostname, ip_address, device_type, status)"
+                " VALUES (?, 'weird-box', '10.0.0.99', 'frobozz_os', 'online')",
+                (group_id,),
+            )
+            await db.commit()
+            return int(cursor.lastrowid)
+        finally:
+            await db.close()
+
+    host_id = asyncio.run(_seed_unknown())
+    cred_id = _seed_credential()
+
+    called = {"count": 0}
+
+    async def _should_not_be_called(host, credentials, command):
+        called["count"] += 1
+        return ""
+
+    monkeypatch.setattr(inventory_routes, "_run_show_command", _should_not_be_called)
+
+    resp = client.post(
+        f"/api/hosts/{host_id}/fetch-serial",
+        json={"credential_id": cred_id},
+    )
+    assert resp.status_code == 422
+    # The guard runs before the SSH attempt - no command should have been sent.
+    assert called["count"] == 0
+    # And the body explains what's wrong.
+    assert "frobozz_os" in resp.text
+
+
+def test_fetch_serial_nxos_uses_processor_board_id(tmp_path, monkeypatch):
+    """NX-OS hosts route through the NX-OS driver, not the IOS one.
+
+    The driver-aware refactor's value-add is exactly this case: a
+    cisco_nxos host's serial lives in the "Processor Board ID" line,
+    not "System Serial Number".  Pre-refactor we would have sent the
+    IOS-style include filter and parsed for "System Serial Number" -
+    both wrong, both silently returning "Not found in output".
+    """
+    client = _make_auth_client(tmp_path, monkeypatch)
+
+    resp = client.post("/api/inventory", json={"name": "DC", "description": ""})
+    group_id = resp.json()["id"]
+
+    async def _seed_nxos() -> int:
+        db = await db_module.get_db()
+        try:
+            cursor = await db.execute(
+                "INSERT INTO hosts (group_id, hostname, ip_address, device_type, status)"
+                " VALUES (?, 'nx-01', '10.0.0.10', 'cisco_nxos', 'online')",
+                (group_id,),
+            )
+            await db.commit()
+            return int(cursor.lastrowid)
+        finally:
+            await db.close()
+
+    host_id = asyncio.run(_seed_nxos())
+    cred_id = _seed_credential()
+
+    seen_commands: list[str] = []
+
+    async def _mock_run_show(host, credentials, command):
+        seen_commands.append(command)
+        # Real NX-OS output for the filtered include.
+        return "Processor Board ID FOX2401P12X"
+
+    monkeypatch.setattr(inventory_routes, "_run_show_command", _mock_run_show)
+
+    resp = client.post(
+        f"/api/hosts/{host_id}/fetch-serial",
+        json={"credential_id": cred_id},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["serial_number"] == "FOX2401P12X"
+    # And the command that was actually sent is the NX-OS form (quoted
+    # multi-word include) - never the IOS form.
+    assert seen_commands == ['show version | include "Processor Board ID"']
 
 
 def test_serial_number_column_exists(tmp_path, monkeypatch):
