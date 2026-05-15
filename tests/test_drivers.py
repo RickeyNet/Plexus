@@ -30,7 +30,9 @@ from netcontrol.drivers.cisco_ios import CiscoIOSDriver
 from netcontrol.drivers.cisco_nxos import CiscoNXOSDriver
 from netcontrol.drivers.cisco_xe import CiscoXEDriver
 from netcontrol.drivers.cisco_xr import CiscoXRDriver
+from netcontrol.drivers.fortinet_fortios import FortinetFortiOSDriver
 from netcontrol.drivers.juniper_junos import JuniperJunosDriver
+from netcontrol.drivers.paloalto_panos import PaloAltoPANOSDriver
 
 
 def _cfg(sampling_rate: int = 1, interfaces: list[str] | None = None) -> NetflowConfig:
@@ -71,6 +73,8 @@ def test_registered_device_types_includes_cisco_set() -> None:
     assert "cisco_xr" in types
     assert "juniper_junos" in types
     assert "arista_eos" in types
+    assert "paloalto_panos" in types
+    assert "fortinet" in types
 
 
 def test_registry_resolves_cisco_xr() -> None:
@@ -1208,3 +1212,281 @@ def test_cisco_xr_commit_command() -> None:
     # against returning an empty string here (which would short-circuit
     # the commit step in the route and leave XR pending auto-rollback).
     assert get_driver("cisco_xr").upgrade_commit_command() == "install commit"
+
+
+# ── Palo Alto PAN-OS ────────────────────────────────────────────────────────
+#
+# PAN-OS is the first firewall driver and the first *monitoring-only*
+# driver.  Plexus does not push config, NetFlow, SNMPv3, or upgrades to
+# firewalls, so the driver implements just two methods - serial CLI and
+# serial parser - and intentionally leaves every other capability at the
+# base ``DriverCapabilityError``.  These tests lock in both halves: the
+# implemented methods do the right thing, *and* the unimplemented ones
+# still raise (so a future caller can't accidentally ship Cisco syntax
+# at a PAN-OS host).
+
+
+def test_registry_resolves_paloalto_panos() -> None:
+    # The Plexus device_type string for PAN-OS is ``paloalto_panos``
+    # (Netmiko's canonical name).  The vendor tag is ``paloalto`` so
+    # filtering by vendor groups firewalls separately from switches.
+    drv = get_driver("paloalto_panos")
+    assert isinstance(drv, PaloAltoPANOSDriver)
+    assert drv.vendor == "paloalto"
+
+
+def test_paloalto_panos_serial_command_uses_show_system_info() -> None:
+    # ``show system info | match serial`` is PAN-OS syntax; ``| include``
+    # is Cisco's spelling and would parse-error on the firewall.  This
+    # regression guard catches a copy-paste from any Cisco driver that
+    # would otherwise silently fail in production with a cryptic
+    # "Unknown command" reply.
+    cmd = get_driver("paloalto_panos").serial_number_show_command()
+    assert cmd == "show system info | match serial"
+    assert "| include" not in cmd
+
+
+def test_paloalto_panos_parse_serial_extracts_value() -> None:
+    # Representative PAN-OS ``show system info | match serial`` output.
+    # PAN-OS prints several keys whose names *contain* "serial"; the
+    # parser must pick only the bare ``serial:`` line.
+    sample = (
+        "serial: 015351000123\n"
+        "serial-number-status: ok\n"
+        "cloud-serial-id: 015351000123-abcd\n"
+    )
+    assert (
+        get_driver("paloalto_panos").parse_serial_number(sample) == "015351000123"
+    )
+
+
+def test_paloalto_panos_parse_serial_anchors_on_exact_key() -> None:
+    # ``serial-number-status`` and ``cloud-serial-id`` both *contain*
+    # the substring "serial" and both will be matched by the ``| match
+    # serial`` filter on the device.  A loose parser that anchored on
+    # the word "serial" alone would pick up ``serial-number-status: ok``
+    # and return ``ok`` as the serial - this regression guard makes
+    # sure the strict ``serial:`` (with colon) anchor stays in place.
+    sample = (
+        "serial-number-status: ok\n"
+        "cloud-serial-id: 015351000123-abcd\n"
+    )
+    assert get_driver("paloalto_panos").parse_serial_number(sample) is None
+
+
+def test_paloalto_panos_parse_serial_returns_none_when_missing() -> None:
+    # When the SSH output never contains a ``serial:`` line - for
+    # example because the firewall is locked down to admin-only show
+    # commands - the parser must return ``None`` so the caller can
+    # surface a clean 422 instead of mistakenly storing an empty
+    # string or a neighbouring field value as the device serial.
+    assert get_driver("paloalto_panos").parse_serial_number("") is None
+    assert (
+        get_driver("paloalto_panos").parse_serial_number(
+            "hostname: fw-edge-01\nip-address: 10.0.0.1\n"
+        )
+        is None
+    )
+
+
+def test_paloalto_panos_unsupported_capabilities_raise() -> None:
+    # Plexus does not push NetFlow, save, capture, SNMPv3, or upgrades
+    # to firewalls.  Each of those capabilities must therefore raise
+    # ``DriverCapabilityError`` so a future caller that accidentally
+    # points a switch route at a PAN-OS host fails loudly instead of
+    # silently shipping Cisco syntax over SSH to the firewall.
+    drv = get_driver("paloalto_panos")
+    with pytest.raises(DriverCapabilityError):
+        drv.build_netflow_config(_cfg())
+    with pytest.raises(DriverCapabilityError):
+        drv.netflow_verify_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.capture_running_config_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.save_config_commands()
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_show_existing_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_engine_id_show_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_engine_id_pin_command("0x80")
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_verify_users_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_install_add_command("path")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_activate_commands("path")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_commit_command()
+
+
+def test_paloalto_panos_upgrade_has_discrete_prestage_default() -> None:
+    # The driver does not override ``upgrade_has_discrete_prestage``,
+    # so it inherits the base ``False``.  This is the right value -
+    # if a future caller did wire PAN-OS upgrades through Plexus, the
+    # vendor model is single-phase (``request system software install``
+    # downloads, installs, and reboots in one operation).  Locking in
+    # ``False`` here means a defensive caller that *does* consult this
+    # gate before calling ``upgrade_install_add_command`` will correctly
+    # skip the prestage step and route through ``upgrade_activate_commands``
+    # (which will then raise ``DriverCapabilityError`` - the desired
+    # failure mode, since firewall upgrades are out of scope).
+    assert get_driver("paloalto_panos").upgrade_has_discrete_prestage() is False
+
+
+# ── Fortinet FortiOS ────────────────────────────────────────────────────────
+#
+# FortiOS is the second firewall / monitoring-only driver.  Same shape
+# as PAN-OS - just serial CLI + parser, every other capability raises.
+# The interesting test here is the cross-vendor parser-boundary guard:
+# FortiOS's ``Serial number:`` label is lexically identical to Arista
+# EOS's, and IOS-XR uses the capitalised variant ``Serial Number:``.
+# The FortiOS parser is case-sensitive on the FortiOS-specific
+# capitalisation so a future refactor that loosens it (or copies the
+# EOS ``.lower()`` form) gets caught at test time.
+
+
+def test_registry_resolves_fortinet_fortios() -> None:
+    # The Plexus device_type for FortiGate is ``fortinet`` (Netmiko's
+    # canonical name; FortiOS does not have a separate Netmiko handler).
+    # Vendor tag is ``fortinet`` for the same vendor-filtering reason as
+    # PAN-OS.
+    drv = get_driver("fortinet")
+    assert isinstance(drv, FortinetFortiOSDriver)
+    assert drv.vendor == "fortinet"
+
+
+def test_fortinet_fortios_serial_command_is_get_hardware_status() -> None:
+    # ``get hardware status`` is the FortiOS canonical command.  No
+    # Cisco-style ``| include`` filter is appended because FortiOS does
+    # not implement the include pipe across all the models Plexus
+    # monitors - the parser does the narrowing.
+    cmd = get_driver("fortinet").serial_number_show_command()
+    assert cmd == "get hardware status"
+    # Defensive guard: a copy-paste from any Cisco driver that left
+    # ``| include`` attached would silently parse-error on FortiOS.
+    assert "| include" not in cmd
+    # Same for FortiOS's own ``| grep`` - we deliberately do not depend
+    # on it because it is not universal across FortiGate models.
+    assert "| grep" not in cmd
+
+
+def test_fortinet_fortios_parse_serial_extracts_value() -> None:
+    # Representative FortiOS ``get hardware status`` output - chassis
+    # identity is printed in plain ``Key: value`` form, one per line.
+    sample = (
+        "Model name: FortiGate-60E\n"
+        "ASIC version: CP9\n"
+        "ASIC SRAM: 64M\n"
+        "CPU: ARMv7 Processor rev 1 (v7l)\n"
+        "Number of CPUs: 2\n"
+        "RAM: 1977 MB\n"
+        "Compact Flash: 14776 MB /dev/sda\n"
+        "Hard disk: not available\n"
+        "USB Flash: not available\n"
+        "Network Card chipset: FortiASIC NP6lite Adapter\n"
+        "Serial number: FGT60E1234567890\n"
+        "BIOS version: 04000016\n"
+        "System Part-Number: P09373-04\n"
+    )
+    assert (
+        get_driver("fortinet").parse_serial_number(sample) == "FGT60E1234567890"
+    )
+
+
+def test_fortinet_fortios_parse_serial_is_case_sensitive_vs_xr() -> None:
+    # IOS-XR labels its serial line ``Serial Number:`` (capital ``N``).
+    # FortiOS uses ``Serial number:`` (lowercase ``n``).  The FortiOS
+    # parser anchors with case-sensitive ``startswith`` so an XR line
+    # accidentally fed to the FortiOS parser does NOT match - the
+    # cross-vendor regression guard mirroring the XR-vs-EOS one in
+    # Phase 10.  Without this, a future loosening of the parser would
+    # silently let serials leak across vendor parsers.
+    xr_line = "Serial Number: FOX1234ABCD\n"
+    assert get_driver("fortinet").parse_serial_number(xr_line) is None
+    # And lowercase ``serial number:`` (no capital ``S`` at all) also
+    # must not match - that is neither FortiOS nor XR, but a stricter
+    # parser is the right default.
+    assert get_driver("fortinet").parse_serial_number(
+        "serial number: foo\n"
+    ) is None
+
+
+def test_fortinet_fortios_parse_serial_returns_none_when_missing() -> None:
+    # As with PAN-OS, an empty or filtered output must return ``None``
+    # so the inventory route can surface a clean 422.
+    assert get_driver("fortinet").parse_serial_number("") is None
+    assert (
+        get_driver("fortinet").parse_serial_number(
+            "Model name: FortiGate-60E\nBIOS version: 04000016\n"
+        )
+        is None
+    )
+
+
+def test_fortinet_fortios_unsupported_capabilities_raise() -> None:
+    # Mirror of the PAN-OS capability-error test: firewalls are
+    # monitoring-only in Plexus, so every non-serial method must raise
+    # ``DriverCapabilityError``.  Locking these in catches the failure
+    # mode where a switch-only route accidentally targets a FortiGate.
+    drv = get_driver("fortinet")
+    with pytest.raises(DriverCapabilityError):
+        drv.build_netflow_config(_cfg())
+    with pytest.raises(DriverCapabilityError):
+        drv.netflow_verify_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.capture_running_config_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.save_config_commands()
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_show_existing_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_engine_id_show_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_engine_id_pin_command("0x80")
+    with pytest.raises(DriverCapabilityError):
+        drv.snmpv3_verify_users_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_install_add_command("path")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_activate_commands("path")
+    with pytest.raises(DriverCapabilityError):
+        drv.upgrade_commit_command()
+
+
+def test_fortinet_fortios_upgrade_has_discrete_prestage_default() -> None:
+    # Same rationale as the PAN-OS counterpart: FortiOS upgrade
+    # (``execute restore image ...``) is single-phase, so the inherited
+    # ``False`` is the right value; a defensive caller checking this
+    # gate before calling ``upgrade_install_add_command`` will skip
+    # straight to the activate verb, which then correctly raises
+    # ``DriverCapabilityError`` because firewall upgrades are out of
+    # scope for Plexus.
+    assert get_driver("fortinet").upgrade_has_discrete_prestage() is False
+
+
+def test_firewall_drivers_do_not_collide_with_switch_parsers() -> None:
+    # Cross-vendor sanity check that the two firewall serial parsers
+    # don't accidentally match the *other* firewall's label, and don't
+    # match any switch parser's label.  This is the higher-level
+    # version of the per-driver case-sensitivity tests: if anyone ever
+    # refactors the parsers to share a helper, this test fails before
+    # the cross-vendor mismatch hits production.
+    pan = get_driver("paloalto_panos")
+    forti = get_driver("fortinet")
+
+    forti_line = "Serial number: FGT60E1234567890\n"
+    pan_line = "serial: 015351000123\n"
+    # XR (capital ``N``) and EOS (lowercase ``n``, lexically identical
+    # to FortiOS but coming from a switch) are the cross-vendor lines
+    # we explicitly want to reject from the firewall parsers.
+    xr_line = "Serial Number: FOX1234ABCD\n"
+
+    # PAN-OS parser only accepts ``serial:`` - reject every variant
+    # that names "Serial number" or "Serial Number".
+    assert pan.parse_serial_number(forti_line) is None
+    assert pan.parse_serial_number(xr_line) is None
+    # FortiOS parser only accepts ``Serial number:`` - reject
+    # PAN-OS's lowercase ``serial:`` and XR's capital ``Serial Number``.
+    assert forti.parse_serial_number(pan_line) is None
+    assert forti.parse_serial_number(xr_line) is None
