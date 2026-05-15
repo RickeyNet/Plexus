@@ -116,8 +116,20 @@ export interface ConfigTemplate {
   name: string;
   description?: string;
   content: string;
+  // Empty = generic body (applied to any vendor).  A Netmiko
+  // device_type string (e.g. "paloalto_panos") makes this a
+  // vendor-specific variant of the same name; at job run time the
+  // body matching each host's platform is resolved automatically.
+  device_type?: string;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface TemplatePayload {
+  name: string;
+  content: string;
+  description?: string;
+  device_type?: string;
 }
 
 export interface Credential {
@@ -284,7 +296,7 @@ export function useTemplate(id: number | null) {
 export function useCreateTemplate() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; content: string; description?: string }) =>
+    mutationFn: (body: TemplatePayload) =>
       apiRequest<ConfigTemplate>('/templates', { method: 'POST', body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['config-templates'] }),
   });
@@ -293,7 +305,7 @@ export function useCreateTemplate() {
 export function useUpdateTemplate() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { name: string; content: string; description?: string } }) =>
+    mutationFn: ({ id, data }: { id: number; data: TemplatePayload }) =>
       apiRequest<ConfigTemplate>(`/templates/${id}`, { method: 'PUT', body: data }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['config-templates'] }),
   });

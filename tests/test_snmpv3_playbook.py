@@ -294,3 +294,160 @@ async def test_live_push_uses_driver_verify_and_saves(fake_netmiko):
     # And the run finished successfully.
     assert any(e.level == "success" and "Finished processing" in e.message
                for e in events)
+
+
+# ── Phase 12: per-device_type template resolution ──────────────────────────
+#
+# A job binds one template_id, but Phase 12 lets that logical template
+# carry vendor-specific bodies.  jobs.py resolves the right body per
+# host and hands the playbook a ``template_by_device_type`` map (set on
+# the instance, mirroring ``parameters``).  These tests exercise the
+# playbook's consumption of that map directly - the DB resolution
+# itself is covered in tests/test_template_resolution.py.
+
+
+@pytest.mark.asyncio
+async def test_per_vendor_body_sent_to_matching_host(fake_netmiko):
+    """Each host receives the body resolved for *its* device_type.
+
+    Two hosts of different vendors run in one job.  The PAN-OS host
+    must get the PAN-OS body and the FortiGate host the FortiOS body -
+    not the flat ``template_commands`` and not each other's body.
+    """
+    from templates.playbooks.snmpv3_configurator import Snmpv3Configurator
+
+    pb = Snmpv3Configurator()
+    # The executor sets this attribute before run(); simulate that.
+    pb.template_by_device_type = {
+        "paloalto_panos": ["set deviceconfig system snmp-setting access-setting"],
+        "fortinet": ["config system snmp user", "edit netops", "end"],
+    }
+    # Dry-run so the per-host body is echoed line-by-line in the
+    # "[DRY-RUN] Would apply" preview (live mode only logs the fake's
+    # "<applied N lines>" string, and the conn holder keeps only the
+    # last host's conn - the event stream is the per-host source).
+    events = await _drain(pb.run(
+        hosts=[
+            {"ip_address": "10.0.0.10", "hostname": "fw-pa",
+             "device_type": "paloalto_panos"},
+            {"ip_address": "10.0.0.11", "hostname": "fw-forti",
+             "device_type": "fortinet"},
+        ],
+        credentials={"username": "u", "password": "p", "secret": ""},
+        # Flat body is intentionally a sentinel that must NEVER be sent
+        # because both hosts have a vendor-specific variant.
+        template_commands=["GENERIC-SENTINEL-MUST-NOT-APPEAR"],
+        dry_run=True,
+    ))
+
+    # Each host's would-apply preview must contain its own vendor body.
+    pa_msgs = [e.message for e in events if e.host == "fw-pa"]
+    forti_msgs = [e.message for e in events if e.host == "fw-forti"]
+    assert any("set deviceconfig system snmp-setting access-setting" in m
+               for m in pa_msgs)
+    assert any("config system snmp user" in m for m in forti_msgs)
+    # Neither host got the other's body or the generic sentinel.
+    assert all("config system snmp user" not in m for m in pa_msgs)
+    assert all("set deviceconfig system snmp-setting" not in m
+               for m in forti_msgs)
+    joined = "\n".join(e.message for e in events)
+    assert "GENERIC-SENTINEL-MUST-NOT-APPEAR" not in joined
+    # Both hosts finished.
+    assert sum(1 for e in events
+               if e.level == "success" and "Finished processing" in e.message) == 2
+
+
+@pytest.mark.asyncio
+async def test_generic_fallback_when_no_vendor_variant(fake_netmiko):
+    """A host whose vendor has no variant falls back to the generic body.
+
+    The map has a PAN-OS variant and a generic ('' key) body.  An
+    Arista host (no 'arista_eos' key) must receive the generic body,
+    not the PAN-OS one.
+    """
+    from templates.playbooks.snmpv3_configurator import Snmpv3Configurator
+
+    pb = Snmpv3Configurator()
+    pb.template_by_device_type = {
+        "": ["snmp-server user netops SECURE v3 auth sha s priv aes 256 p"],
+        "paloalto_panos": ["set deviceconfig system snmp-setting PA-ONLY"],
+    }
+    events = await _drain(pb.run(
+        hosts=[{"ip_address": "10.0.0.20", "hostname": "eos1",
+                "device_type": "arista_eos"}],
+        credentials={"username": "u", "password": "p", "secret": ""},
+        template_commands=None,
+        dry_run=False,
+    ))
+
+    conn = fake_netmiko["conn"]
+    assert conn is not None
+    # The generic body was pushed; the PAN-OS-only line never appears.
+    pushed = [c for batch in conn.config_sets for c in batch]
+    assert any(c.startswith("snmp-server user netops") for c in pushed)
+    assert all("PA-ONLY" not in c for c in pushed)
+    assert any(e.level == "success" and "Finished processing" in e.message
+               for e in events)
+
+
+@pytest.mark.asyncio
+async def test_host_with_no_resolvable_body_is_skipped(fake_netmiko):
+    """No vendor variant and no generic body → loud skip, no SSH.
+
+    If the map only has a PAN-OS body and the host is FortiGate (no
+    generic '' fallback), the playbook must skip that host with a clear
+    error rather than push PAN-OS syntax at the FortiGate.
+    """
+    from templates.playbooks.snmpv3_configurator import Snmpv3Configurator
+
+    pb = Snmpv3Configurator()
+    pb.template_by_device_type = {
+        "paloalto_panos": ["set deviceconfig system snmp-setting PA-ONLY"],
+    }
+    events = await _drain(pb.run(
+        hosts=[{"ip_address": "10.0.0.30", "hostname": "fw-forti",
+                "device_type": "fortinet"}],
+        credentials={"username": "u", "password": "p", "secret": ""},
+        template_commands=None,
+        dry_run=False,
+    ))
+
+    assert fake_netmiko["conn"] is None
+    errors = [e for e in events if e.level == "error"]
+    assert any("No SNMPv3 template body resolved" in e.message for e in errors)
+    assert any("fortinet" in e.message for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_firewall_snmpv3_skips_engine_id_pin(fake_netmiko):
+    """PAN-OS / FortiOS engine ID is platform-managed → pin step skipped.
+
+    Mirrors the NX-OS test but for a firewall.  The driver returns ''
+    for the engine-ID show command, so pin_snmp_engine_id must
+    short-circuit, emit its info event, and never send a Cisco-shaped
+    ``snmp-server engineID local`` line at the firewall.
+    """
+    from templates.playbooks.snmpv3_configurator import Snmpv3Configurator
+
+    pb = Snmpv3Configurator()
+    pb.template_by_device_type = {
+        "paloalto_panos": ["set deviceconfig system snmp-setting access-setting"],
+    }
+    events = await _drain(pb.run(
+        hosts=[{"ip_address": "10.0.0.40", "hostname": "fw-pa",
+                "device_type": "paloalto_panos"}],
+        credentials={"username": "u", "password": "p", "secret": ""},
+        template_commands=None,
+        dry_run=False,
+    ))
+
+    conn = fake_netmiko["conn"]
+    assert conn is not None
+    pushed = [c for batch in conn.config_sets for c in batch]
+    assert all("snmp-server engineID local" not in c for c in pushed)
+    assert "show snmp engineID" not in conn.send_commands
+    assert any("engine ID is platform-managed" in e.message for e in events)
+    # The PAN-OS show-existing command (driver-supplied) actually ran.
+    assert any(
+        c.startswith("show config running xpath") for c in conn.send_commands
+    )
