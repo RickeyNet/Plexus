@@ -18,7 +18,6 @@ import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { DashboardViewer } from '@/pages/Dashboard/DashboardViewer';
 import { Deployments } from '@/pages/Deployments/Deployments';
 import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
-import { DevicePicker } from '@/pages/DeviceDetail/DevicePicker';
 import { Federation } from '@/pages/Federation/Federation';
 import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
 import { GraphTemplates } from '@/pages/GraphTemplates/GraphTemplates';
@@ -40,7 +39,6 @@ import { Topology } from '@/pages/Topology/Topology';
 const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
   '/dashboards': 'Dashboards',
-  '/devices': 'Devices',
   '/lab': 'Lab / Digital Twin',
   '/mac-tracking': 'MAC Tracking',
   '/traffic-analysis': 'Traffic Analysis',
@@ -186,7 +184,6 @@ export function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/dashboards" element={<CustomDashboards />} />
           <Route path="/dashboards/:id" element={<DashboardViewer />} />
-          <Route path="/devices" element={<DevicePicker />} />
           <Route path="/devices/:hostId" element={<DeviceDetail />} />
           <Route path="/lab" element={<Lab />} />
           <Route path="/mac-tracking" element={<MacTracking />} />

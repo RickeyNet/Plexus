@@ -107,7 +107,7 @@ export function DeviceDetail() {
     return (
       <div>
         <p className="error">Invalid host id.</p>
-        <button className="btn btn-secondary" onClick={() => navigate('/devices')}>
+        <button className="btn btn-secondary" onClick={() => navigate('/monitoring')}>
           Back to device list
         </button>
       </div>
@@ -132,7 +132,7 @@ export function DeviceDetail() {
         <div>
           <button
             className="btn btn-sm btn-ghost"
-            onClick={() => navigate('/devices')}
+            onClick={() => navigate('/monitoring')}
             style={{ marginRight: '0.5rem' }}
           >
             ← Devices

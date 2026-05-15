@@ -275,7 +275,6 @@ const NAV: TopItem[] = [
       { label: 'Floor Plans', icon: ic.floorPlan, to: '/floor-plan', feature: 'floor-plan' },
     ],
   },
-  { label: 'Devices', icon: ic.inventory, to: '/devices', feature: 'inventory' },
   { label: 'Lab / Digital Twin', icon: ic.lab, to: '/lab', feature: 'lab' },
   { label: 'Settings', icon: ic.settings, to: '/settings' },
 ];
