@@ -105,3 +105,40 @@ class CiscoNXOSDriver(Driver):
                 if tail:
                     return tail
         return None
+
+    # ── Software upgrade capability surface ────────────────────────────────
+    #
+    # NX-OS does not split the upgrade into add/activate/commit the way
+    # IOS-XE install-mode does.  The canonical operational command is
+    # ``install all nxos <image>`` which validates the image, copies
+    # it into the active boot variable, and reboots the chassis - all
+    # in one operation.  There is no operator-visible commit step:
+    # once the new image boots successfully NX-OS sets it as the
+    # persistent boot variable on its own, so the driver reports
+    # ``upgrade_has_discrete_prestage()`` as False (inherited from the
+    # base) and ``upgrade_commit_command()`` as an empty string (same
+    # pattern Junos uses).  ``upgrade_install_add_command`` stays
+    # raising ``DriverCapabilityError`` as defense-in-depth: the
+    # upgrade route should consult ``upgrade_has_discrete_prestage()``
+    # and skip install-add entirely on this platform, but if a future
+    # caller bypasses the gate the raise surfaces the bug instead of
+    # silently sending IOS-XE syntax at an NX-OS session.
+
+    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+        # Single combined add-and-reboot.  ``install all nxos`` does
+        # the compatibility check, sets the boot variable, copies the
+        # image to standby if applicable (dual-sup chassis), and
+        # initiates the reload - all without an intermediate operator
+        # prompt when the image and platform are compatible.  The
+        # image_path is the device-side full path (typically
+        # ``bootflash:nxos.10.3.4a.M.bin``); the driver doesn't
+        # second-guess the caller's path format.
+        return [f"install all nxos {image_path}"]
+
+    def upgrade_commit_command(self) -> str:
+        # NX-OS commits the new boot variable automatically once the
+        # device boots into the new image; there is no analogue to
+        # IOS-XE's ``install commit``.  Returning an empty string
+        # short-circuits the commit step in the upgrade route (same
+        # pattern Junos uses).
+        return ""
