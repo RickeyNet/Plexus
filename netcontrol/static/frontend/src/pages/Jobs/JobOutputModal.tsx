@@ -36,6 +36,8 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [wsState, setWsState] = useState<'idle' | 'connecting' | 'open' | 'closed' | 'error'>('idle');
+  const [confirmRunLive, setConfirmRunLive] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const outputRef = useRef<HTMLDivElement | null>(null);
 
@@ -44,6 +46,8 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     setLiveEvents([]);
     setLiveStatus(null);
     setWsState('idle');
+    setConfirmRunLive(false);
+    setConfirmCancel(false);
   }, [jobId, isOpen]);
 
   const job = jobQuery.data;
@@ -102,8 +106,16 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   const isDry = Boolean(job?.dry_run);
 
   function handleCancel() {
-    if (!jobId || !confirm('Cancel this job?')) return;
-    cancelMut.mutate(jobId, { onError: (e) => alert((e as Error).message) });
+    if (!jobId) return;
+    setConfirmCancel(true);
+  }
+
+  function confirmCancelJob() {
+    if (!jobId) return;
+    cancelMut.mutate(jobId, {
+      onSuccess: () => setConfirmCancel(false),
+      onError: (e) => { setConfirmCancel(false); alert((e as Error).message); },
+    });
   }
 
   function handleRetry() {
@@ -116,10 +128,14 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
 
   function handleRunLive() {
     if (!jobId) return;
-    if (!confirm('This will re-run the same job with dry run disabled. Changes will be applied to devices. Continue?')) return;
+    setConfirmRunLive(true);
+  }
+
+  function confirmRunLiveJob() {
+    if (!jobId) return;
     rerunMut.mutate(jobId, {
-      onSuccess: (r) => { onRetried?.(r.job_id); },
-      onError: (e) => alert((e as Error).message),
+      onSuccess: (r) => { setConfirmRunLive(false); onRetried?.(r.job_id); },
+      onError: (e) => { setConfirmRunLive(false); alert((e as Error).message); },
     });
   }
 
@@ -201,6 +217,63 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
           </div>
         </>
       )}
+      <Modal
+        isOpen={confirmRunLive}
+        onClose={() => { if (!rerunMut.isPending) setConfirmRunLive(false); }}
+        title="Run Live?"
+      >
+        <p style={{ margin: '0 0 0.5rem' }}>
+          This will re-run the same job with dry run disabled.
+        </p>
+        <p style={{ margin: '0 0 1rem', color: 'var(--danger)', fontWeight: 600 }}>
+          Changes will be applied to devices.
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setConfirmRunLive(false)}
+            disabled={rerunMut.isPending}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={confirmRunLiveJob}
+            disabled={rerunMut.isPending}
+            autoFocus
+          >
+            {rerunMut.isPending ? 'Starting…' : 'Run Live'}
+          </button>
+        </div>
+      </Modal>
+      <Modal
+        isOpen={confirmCancel}
+        onClose={() => { if (!cancelMut.isPending) setConfirmCancel(false); }}
+        title="Cancel Job?"
+      >
+        <p style={{ margin: '0 0 1rem' }}>Cancel this job?</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setConfirmCancel(false)}
+            disabled={cancelMut.isPending}
+          >
+            Keep Running
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={confirmCancelJob}
+            disabled={cancelMut.isPending}
+            autoFocus
+          >
+            {cancelMut.isPending ? 'Cancelling…' : 'Cancel Job'}
+          </button>
+        </div>
+      </Modal>
     </Modal>
   );
 }
