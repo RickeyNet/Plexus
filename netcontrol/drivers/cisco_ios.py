@@ -38,3 +38,15 @@ class CiscoIOSDriver(Driver):
 
     def save_config_commands(self) -> list[str]:
         return ["write memory"]
+
+    def snmpv3_show_existing_command(self) -> str:
+        return "show running-config | include snmp-server"
+
+    def snmpv3_engine_id_show_command(self) -> str:
+        return "show snmp engineID"
+
+    def snmpv3_engine_id_pin_command(self, engine_id: str) -> str:
+        return f"snmp-server engineID local {engine_id}"
+
+    def snmpv3_verify_users_command(self) -> str:
+        return "show snmp user"
