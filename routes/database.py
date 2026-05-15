@@ -3552,6 +3552,35 @@ async def resolve_template_for_device_type(
     return base
 
 
+def resolve_variant_in_memory(
+    base: dict, variants: list[dict], device_type: str
+) -> dict:
+    """Pure, no-I/O twin of ``resolve_template_for_device_type``'s rule.
+
+    Given the already-fetched selected row (``base``) and every row
+    sharing its ``name`` (``variants`` from :func:`get_template_variants`),
+    pick the body for ``device_type`` using the identical order:
+
+      1. exact ``(name, device_type)`` vendor row, else
+      2. the ``(name, '')`` generic sibling, else
+      3. the originally-selected row itself.
+
+    The job-launch path resolves many device_types against one template;
+    doing it in memory off two queries (``get_template`` +
+    ``get_template_variants``) avoids the ~3 fresh aiosqlite connections
+    per device_type that calling ``resolve_template_for_device_type`` in
+    a loop would otherwise open on the queued→running critical path.
+    """
+    want = device_type or ""
+    exact = next((r for r in variants if (r["device_type"] or "") == want), None)
+    if exact is not None:
+        return exact
+    generic = next((r for r in variants if (r["device_type"] or "") == ""), None)
+    if generic is not None:
+        return generic
+    return base
+
+
 async def delete_template(template_id: int):
     db = await get_db()
     try:
