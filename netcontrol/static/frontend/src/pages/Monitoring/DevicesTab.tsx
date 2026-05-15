@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { Modal } from '@/components/Modal';
@@ -38,11 +39,11 @@ const initialProgress: PollProgress = {
 
 export function DevicesTab() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const summary = useMonitoringSummary();
   const polls = useMonitoringPolls();
   const [query, setQuery] = useState('');
   const [progress, setProgress] = useState<PollProgress>(initialProgress);
-  const [detailHost, setDetailHost] = useState<MonitoringPoll | null>(null);
   const [historyHost, setHistoryHost] = useState<{ id: number; hostname: string } | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -174,13 +175,12 @@ export function DevicesTab() {
           <PollRow
             key={p.host_id}
             poll={p}
-            onDetail={() => setDetailHost(p)}
+            onDetail={() => navigate(`/devices/${p.host_id}`)}
             onHistory={() => setHistoryHost({ id: p.host_id, hostname: p.hostname ?? '' })}
           />
         ))}
       </div>
 
-      {detailHost && <HostDetailModal poll={detailHost} onClose={() => setDetailHost(null)} />}
       {historyHost && (
         <HostHistoryModal
           hostId={historyHost.id}
@@ -264,95 +264,6 @@ function PollRow({ poll, onDetail, onHistory }: { poll: MonitoringPoll; onDetail
       </div>
       <div className="text-muted" style={{ marginTop: '0.4rem', fontSize: '0.8em' }}>Last poll: {formatTimestamp(poll.polled_at)}</div>
     </div>
-  );
-}
-
-interface IfDetail {
-  name: string;
-  status: string;
-  speed_mbps?: number | null;
-  in_octets?: number;
-  out_octets?: number;
-}
-
-interface VpnDetail {
-  peer?: string;
-  status: string;
-}
-
-function HostDetailModal({ poll, onClose }: { poll: MonitoringPoll; onClose: () => void }) {
-  let ifDetails: IfDetail[] = [];
-  try {
-    ifDetails = JSON.parse(poll.if_details ?? '[]');
-  } catch { /* ignore */ }
-  let vpnDetails: VpnDetail[] = [];
-  try {
-    vpnDetails = JSON.parse(poll.vpn_details ?? '[]');
-  } catch { /* ignore */ }
-
-  return (
-    <Modal isOpen onClose={onClose} title={`${poll.hostname ?? 'Device'} - Monitoring Detail`} size="large">
-      <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <div><strong>CPU:</strong> {poll.cpu_percent != null ? `${poll.cpu_percent}%` : 'N/A'}</div>
-        <div><strong>Memory:</strong> {poll.memory_percent != null ? `${poll.memory_percent}%` : 'N/A'}{poll.memory_used_mb != null ? ` (${poll.memory_used_mb}/${poll.memory_total_mb} MB)` : ''}</div>
-        <div><strong>Uptime:</strong> {formatUptime(poll.uptime_seconds)}</div>
-        <div><strong>Routes:</strong> {poll.route_count}</div>
-        <div><strong>Last Poll:</strong> {formatTimestamp(poll.polled_at)}</div>
-      </div>
-      {poll.poll_status === 'error' && (
-        <div style={{ color: 'var(--danger)', marginBottom: '0.5rem' }}>Poll Error: {poll.poll_error}</div>
-      )}
-      <h4>Interfaces ({ifDetails.length})</h4>
-      {ifDetails.length === 0 ? (
-        <p className="text-muted">No interface data available.</p>
-      ) : (
-        <div style={{ maxHeight: 300, overflow: 'auto' }}>
-          <table style={{ width: '100%', fontSize: '0.85em', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <th style={{ textAlign: 'left', padding: '4px 8px' }}>Name</th>
-                <th style={{ textAlign: 'left', padding: '4px 8px' }}>Status</th>
-                <th style={{ textAlign: 'right', padding: '4px 8px' }}>Speed</th>
-                <th style={{ textAlign: 'right', padding: '4px 8px' }}>In Octets</th>
-                <th style={{ textAlign: 'right', padding: '4px 8px' }}>Out Octets</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ifDetails.map((i, idx) => {
-                const sColor = i.status === 'up' ? 'success' : i.status === 'admin_down' ? 'text-muted' : 'danger';
-                return (
-                  <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    <td style={{ padding: '4px 8px' }}>{i.name}</td>
-                    <td style={{ padding: '4px 8px', color: `var(--${sColor})` }}>{i.status}</td>
-                    <td style={{ padding: '4px 8px', textAlign: 'right' }}>{i.speed_mbps ? `${i.speed_mbps} Mbps` : '-'}</td>
-                    <td style={{ padding: '4px 8px', textAlign: 'right' }}>{(i.in_octets ?? 0).toLocaleString()}</td>
-                    <td style={{ padding: '4px 8px', textAlign: 'right' }}>{(i.out_octets ?? 0).toLocaleString()}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <h4 style={{ marginTop: '1rem' }}>VPN Tunnels ({vpnDetails.length})</h4>
-      {vpnDetails.length === 0 ? (
-        <p className="text-muted">No VPN data available.</p>
-      ) : (
-        <table style={{ width: '100%', fontSize: '0.85em', borderCollapse: 'collapse' }}>
-          <tbody>
-            {vpnDetails.map((v, idx) => {
-              const vColor = v.status === 'up' ? 'success' : 'danger';
-              return (
-                <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '4px 8px' }}>{v.peer}</td>
-                  <td style={{ padding: '4px 8px', color: `var(--${vColor})` }}>{v.status}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </Modal>
   );
 }
 

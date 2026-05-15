@@ -185,7 +185,6 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
             <label className="form-label">{type === 'ansible' ? 'Ansible YAML' : 'Python Code'}</label>
             <CodeMirror
               value={content}
-              height="360px"
               theme={dracula}
               extensions={editorExtensions}
               onChange={(value) => { setContent(value); setContentDirty(true); }}
@@ -198,6 +197,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
                 tabSize: 4,
               }}
               style={{ fontSize: '0.85rem', border: '1px solid var(--border, #444)', borderRadius: 4 }}
+              className="playbook-code-editor"
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
