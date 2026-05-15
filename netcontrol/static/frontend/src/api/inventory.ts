@@ -87,7 +87,7 @@ export interface DiscoveryOptions {
 }
 
 export interface ScanStreamEvent {
-  type: 'start' | 'progress' | 'done' | string;
+  type: 'start' | 'progress' | 'syncing' | 'done' | string;
   total?: number;
   scanned?: number;
   ip?: string;
@@ -96,6 +96,7 @@ export interface ScanStreamEvent {
   discovered_hosts?: DiscoveredHost[];
   scanned_hosts?: number;
   discovered_count?: number;
+  sync?: DiscoverySyncResult['sync'];
 }
 
 export interface SnmpTestResponse {
@@ -358,7 +359,11 @@ export function useAssignSnmpProfile() {
 
 // ── Discovery ──────────────────────────────────────────────────────────────
 
-function discoveryBody(cidrs: string[], opts: DiscoveryOptions) {
+function discoveryBody(
+  cidrs: string[],
+  opts: DiscoveryOptions,
+  includeRemoveAbsent = false,
+) {
   return {
     cidrs,
     timeout_seconds: opts.timeoutSeconds,
@@ -366,6 +371,7 @@ function discoveryBody(cidrs: string[], opts: DiscoveryOptions) {
     device_type: opts.deviceType,
     hostname_prefix: opts.hostnamePrefix,
     use_snmp: opts.useSnmp !== false,
+    ...(includeRemoveAbsent ? { remove_absent: !!opts.removeAbsent } : {}),
   };
 }
 
@@ -434,19 +440,20 @@ export function useTestGroupSnmpProfile() {
   });
 }
 
-// ── Streaming scan (SSE-style line-delimited JSON) ────────────────────────
+// ── Streaming scan/sync (SSE-style line-delimited JSON) ───────────────────
 
 /**
- * Streams scan events from POST `/api/inventory/{id}/discovery/scan/stream`.
- * The legacy backend writes one JSON object per line. We do the same parsing
- * here directly so we can render live progress updates.
+ * POSTs to an NDJSON streaming discovery endpoint and invokes `onEvent` for
+ * each JSON line as it arrives, so callers can render live progress.
+ * Shared by the scan and sync streams (identical wire format).
  */
-export async function streamScanInventoryGroup(
-  groupId: number,
+async function streamDiscovery(
+  path: string,
   cidrs: string[],
   opts: DiscoveryOptions,
   onEvent: (event: ScanStreamEvent) => void,
   signal?: AbortSignal,
+  includeRemoveAbsent = false,
 ): Promise<void> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -455,20 +462,17 @@ export async function streamScanInventoryGroup(
   const csrf = getCsrfToken();
   if (csrf) headers['X-CSRF-Token'] = csrf;
 
-  const res = await fetch(
-    `/api/inventory/${groupId}/discovery/scan/stream`,
-    {
-      method: 'POST',
-      credentials: 'include',
-      headers,
-      body: JSON.stringify(discoveryBody(cidrs, opts)),
-      signal,
-    },
-  );
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(discoveryBody(cidrs, opts, includeRemoveAbsent)),
+    signal,
+  });
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    throw new Error(text || `Scan stream failed: ${res.status}`);
+    throw new Error(text || `Discovery stream failed: ${res.status}`);
   }
 
   const reader = res.body.getReader();
@@ -502,6 +506,47 @@ export async function streamScanInventoryGroup(
     }
   }
   if (buffer.trim()) flushLine(buffer);
+}
+
+/**
+ * Streams scan events from POST `/api/inventory/{id}/discovery/scan/stream`.
+ */
+export function streamScanInventoryGroup(
+  groupId: number,
+  cidrs: string[],
+  opts: DiscoveryOptions,
+  onEvent: (event: ScanStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamDiscovery(
+    `/api/inventory/${groupId}/discovery/scan/stream`,
+    cidrs,
+    opts,
+    onEvent,
+    signal,
+  );
+}
+
+/**
+ * Streams sync events from POST `/api/inventory/{id}/discovery/sync/stream`:
+ * per-host probe `progress`, a `syncing` event while reconciling with the
+ * DB, then a `done` event carrying the add/update/remove counts.
+ */
+export function streamSyncInventoryGroup(
+  groupId: number,
+  cidrs: string[],
+  opts: DiscoveryOptions,
+  onEvent: (event: ScanStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamDiscovery(
+    `/api/inventory/${groupId}/discovery/sync/stream`,
+    cidrs,
+    opts,
+    onEvent,
+    signal,
+    true,
+  );
 }
 
 // ── Serial number fetching ─────────────────────────────────────────────────

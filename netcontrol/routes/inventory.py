@@ -1076,6 +1076,84 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
     }
 
 
+@router.post("/api/inventory/{group_id}/discovery/sync/stream")
+async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, request: Request):
+    """SSE streaming sync -- yields per-host probe progress, then a final
+    'done' event carrying the add/update/remove counts. Mirrors
+    discovery_scan_stream so the frontend can reuse its progress UI."""
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+
+    # If no CIDRs provided, auto-populate from the group's existing host IPs
+    # (same behaviour as the non-streaming /discovery/sync endpoint).
+    if not body.cidrs:
+        existing_hosts = await db.get_hosts_for_group(group_id)
+        host_ips = [str(h["ip_address"]) for h in existing_hosts if h.get("ip_address")]
+        if not host_ips:
+            raise HTTPException(400, "Group has no hosts to sync. Add hosts first or provide CIDR targets.")
+        body.cidrs = host_ips
+
+    try:
+        targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    total = len(targets)
+    semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
+    snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+
+    async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
+        async with semaphore:
+            result = await _probe_discovery_target(
+                ip_address=ip_address,
+                timeout_seconds=body.timeout_seconds,
+                device_type=body.device_type,
+                hostname_prefix=body.hostname_prefix,
+                use_snmp=body.use_snmp,
+                snmp_config=snmp_cfg,
+            )
+            return ip_address, result
+
+    session = _get_session(request)
+    audit_user = session["user"] if session else "api-token"
+    corr_id = _corr_id(request)
+
+    async def event_generator():
+        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
+
+        scanned = 0
+        discovered = []
+        tasks = [asyncio.create_task(_scan_one(ip)) for ip in targets]
+
+        for coro in asyncio.as_completed(tasks):
+            ip_address, result = await coro
+            scanned += 1
+            if result is not None:
+                discovered.append(result)
+            yield f"data: {json.dumps({'type': 'progress', 'scanned': scanned, 'total': total, 'ip': ip_address, 'found': result is not None, 'host': result})}\n\n"
+
+        discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
+
+        # Persisting phase: probing is done, now reconcile with the DB.
+        yield f"data: {json.dumps({'type': 'syncing', 'discovered_count': len(discovered)})}\n\n"
+        sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
+
+        await _audit(
+            "inventory",
+            "discovery.sync",
+            user=audit_user,
+            detail=(
+                f"group_id={group_id} scanned={total} discovered={len(discovered)} "
+                f"added={sync_result['added']} updated={sync_result['updated']} removed={sync_result['removed']}"
+            ),
+            correlation_id=corr_id,
+        )
+
+        yield f"data: {json.dumps({'type': 'done', 'scanned_hosts': total, 'discovered_count': len(discovered), 'sync': sync_result})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @router.post("/api/inventory/{group_id}/discovery/onboard")
 async def discovery_onboard(group_id: int, body: DiscoveryOnboardRequest, request: Request):
     group = await db.get_group(group_id)
