@@ -8,7 +8,6 @@ Ported from standalone iosxe_upgrade.py into the Plexus platform.
 """
 from __future__ import annotations
 
-
 import asyncio
 import hashlib
 import json
@@ -19,13 +18,13 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, WebSocket, WebSocketDisconnect
+import routes.database as db
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-
-import routes.database as db
 from routes.crypto import decrypt
 
+from netcontrol.drivers import DriverCapabilityError, get_driver
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 
@@ -1021,10 +1020,38 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
     })
 
 
-def _build_device_params(ip, credentials, options):
-    """Build Netmiko device parameters."""
+async def _resolve_device_type(dev) -> str:
+    """Look up the host's stored device_type, falling back to ``cisco_xe``.
+
+    ``upgrade_devices`` rows can be ad-hoc IPs (host_id is NULL) for
+    campaigns that target unmanaged hardware, so the fallback keeps
+    those flows working.  When ``host_id`` is set we read the device
+    type off the ``hosts`` row, which is also the value Netmiko needs
+    to open the session with the right CLI handler.
+    """
+    host_id = dev.get("host_id")
+    if not host_id:
+        return "cisco_xe"
+    try:
+        host = await db.get_host(host_id)
+    except Exception:
+        return "cisco_xe"
+    if not host:
+        return "cisco_xe"
+    return host.get("device_type") or "cisco_xe"
+
+
+def _build_device_params(ip, credentials, options, device_type="cisco_xe"):
+    """Build Netmiko device parameters.
+
+    ``device_type`` defaults to ``cisco_xe`` for backwards compatibility
+    with ad-hoc IP campaigns (no host record, no known device_type) but
+    callers that resolve the host's real device_type should pass it
+    through so non-Cisco-XE platforms (when their drivers gain upgrade
+    capabilities) open the SSH session with the right Netmiko handler.
+    """
     return {
-        "device_type": "cisco_xe",
+        "device_type": device_type or "cisco_xe",
         "host": ip,
         "username": credentials["username"],
         "password": credentials["password"],
@@ -1036,9 +1063,9 @@ def _build_device_params(ip, credentials, options):
     }
 
 
-async def _connect_device(ip, credentials, options, retries=1):
+async def _connect_device(ip, credentials, options, retries=1, device_type="cisco_xe"):
     """Connect to a device via SSH with retry support."""
-    device = _build_device_params(ip, credentials, options)
+    device = _build_device_params(ip, credentials, options, device_type=device_type)
     last_err = None
 
     for attempt in range(1, retries + 1):
@@ -1065,10 +1092,25 @@ def _resolve_image(model, image_map):
     return None
 
 
-async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, dest_path):
-    """Pre-stage packages so activate can run without a new add."""
+async def _run_install_add_prestage(
+    conn, campaign_id, dev_id, ip, image_name, dest_path, device_type="cisco_xe"
+):
+    """Pre-stage packages so activate can run without a new add.
+
+    Delegates the actual install-add verb to the driver so non-Cisco-XE
+    platforms (when their drivers gain ``upgrade_install_add_command``)
+    surface the right syntax.  Platforms that don't model a discrete
+    pre-stage step raise ``DriverCapabilityError`` and the caller
+    reports the gap to the operator instead of shipping IOS-XE syntax
+    to a non-IOS-XE session.
+    """
     full_path = f"{dest_path}{image_name}"
-    install_add_cmd = f"install add file {full_path}"
+    try:
+        install_add_cmd = get_driver(device_type).upgrade_install_add_command(full_path)
+    except DriverCapabilityError as e:
+        await _emit(campaign_id, dev_id, "error",
+                    f"Pre-stage not supported on this platform: {e}", host=ip)
+        return False, str(e)
     await _emit(campaign_id, dev_id, "info", f"Pre-staging image: {install_add_cmd}", host=ip)
     await _emit(campaign_id, dev_id, "info", "This may take several minutes...", host=ip)
 
@@ -1259,6 +1301,7 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
     """Prestage: health check, backup config, write memory, remove inactive packages."""
     ip = dev["ip_address"]
     dev_id = dev["id"]
+    device_type = await _resolve_device_type(dev)
 
     await db.update_upgrade_device(dev_id, prestage_status="running", phase="prestage",
                                    started_at=datetime.now(UTC).isoformat())
@@ -1266,7 +1309,9 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options, retries=options.get("retries", 2))
+        conn = await _connect_device(ip, credentials, options,
+                                     retries=options.get("retries", 2),
+                                     device_type=device_type)
     except Exception as e:
         await db.update_upgrade_device(dev_id, prestage_status="failed", phase="failed",
                                        error_message=f"Connection failed: {e}")
@@ -1377,6 +1422,7 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
     ip = dev["ip_address"]
     dev_id = dev["id"]
     dest_path = options.get("dest_path", "flash:")
+    device_type = await _resolve_device_type(dev)
 
     await db.update_upgrade_device(dev_id, transfer_status="running", phase="transfer",
                                    started_at=datetime.now(UTC).isoformat())
@@ -1384,7 +1430,9 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options, retries=options.get("retries", 2))
+        conn = await _connect_device(ip, credentials, options,
+                                     retries=options.get("retries", 2),
+                                     device_type=device_type)
     except Exception as e:
         await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
                                        error_message=f"Connection failed: {e}")
@@ -1499,7 +1547,8 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
 
             if should_prestage:
                 prestage_ok, prestage_err = await _run_install_add_prestage(
-                    conn, campaign_id, dev_id, ip, image_name, dest_path
+                    conn, campaign_id, dev_id, ip, image_name, dest_path,
+                    device_type=device_type,
                 )
                 if not prestage_ok:
                     await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
@@ -1544,7 +1593,8 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 pass
 
             prestage_ok, prestage_err = await _run_install_add_prestage(
-                conn, campaign_id, dev_id, ip, image_name, dest_path
+                conn, campaign_id, dev_id, ip, image_name, dest_path,
+                device_type=device_type,
             )
             if not prestage_ok:
                 await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
@@ -1562,7 +1612,8 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
             await _emit(campaign_id, dev_id, "warn",
                         f"SCP error after {elapsed/60:.1f} minutes: {transfer_err or 'unknown'} - verifying flash...", host=ip)
             try:
-                verify_conn = await _connect_device(ip, credentials, options, retries=1)
+                verify_conn = await _connect_device(ip, credentials, options, retries=1,
+                                                    device_type=device_type)
                 exists = await asyncio.to_thread(_check_image_exists, verify_conn, image_name, dest_path)
                 if exists:
                     await _emit(campaign_id, dev_id, "success",
@@ -1586,7 +1637,8 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                         except Exception:
                             pass
                         prestage_ok, prestage_err = await _run_install_add_prestage(
-                            verify_conn, campaign_id, dev_id, ip, image_name, dest_path
+                            verify_conn, campaign_id, dev_id, ip, image_name, dest_path,
+                            device_type=device_type,
                         )
                         if not prestage_ok:
                             await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
@@ -1639,6 +1691,7 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
     ip = dev["ip_address"]
     dev_id = dev["id"]
     dest_path = options.get("dest_path", "flash:")
+    device_type = await _resolve_device_type(dev)
 
     await db.update_upgrade_device(dev_id, activate_status="running", phase="activate",
                                    started_at=datetime.now(UTC).isoformat())
@@ -1646,7 +1699,9 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options, retries=options.get("retries", 2))
+        conn = await _connect_device(ip, credentials, options,
+                                     retries=options.get("retries", 2),
+                                     device_type=device_type)
     except Exception as e:
         await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
                                        error_message=f"Connection failed: {e}")
@@ -1720,18 +1775,37 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
         await _emit(campaign_id, dev_id, "info", f"Image verified on flash: {dest_path}{image_name}", host=ip)
 
-        # Image already pre-staged during transfer (install add), just activate
-        command = "install activate prompt-level none"
-        await _emit(campaign_id, dev_id, "cmd", f"Executing: {command}", host=ip)
-        await _emit(campaign_id, dev_id, "info", "This will trigger a reload (5-15 minutes)...", host=ip)
-
+        # Image already pre-staged during transfer (install add), just activate.
+        # The driver supplies the platform-specific activate verb(s); for
+        # IOS-XE that's a single "install activate prompt-level none" line,
+        # but multi-command sequences (e.g. Junos: software-add + reboot)
+        # are also supported - they're sent one at a time and the last one
+        # is expected to drop the SSH session.
+        full_path = f"{dest_path}{image_name}"
         try:
-            await asyncio.to_thread(
-                conn.send_command, command, read_timeout=120,
-            )
-        except Exception as e:
-            # Expected - switch reboots and drops the SSH session
-            await _emit(campaign_id, dev_id, "info", f"Connection closed (expected during reload): {e}", host=ip)
+            activate_commands = get_driver(device_type).upgrade_activate_commands(full_path)
+        except DriverCapabilityError as e:
+            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
+                                           error_message=str(e))
+            await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=str(e))
+            await _emit(campaign_id, dev_id, "error",
+                        f"Activate not supported on this platform: {e}", host=ip)
+            return
+        for command in activate_commands:
+            await _emit(campaign_id, dev_id, "cmd", f"Executing: {command}", host=ip)
+            await _emit(campaign_id, dev_id, "info", "This will trigger a reload (5-15 minutes)...", host=ip)
+
+            try:
+                await asyncio.to_thread(
+                    conn.send_command, command, read_timeout=120,
+                )
+            except Exception as e:
+                # Expected on the final command - the switch reboots and drops
+                # the SSH session.  We don't try to distinguish "reboot drop"
+                # from a real error here; if the switch comes back at the
+                # right version the upgrade was a success.
+                await _emit(campaign_id, dev_id, "info", f"Connection closed (expected during reload): {e}", host=ip)
+                break
 
         await _emit(campaign_id, dev_id, "success", "Activate sent - switch is rebooting", host=ip)
 
@@ -1753,7 +1827,7 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                             "Switch never went offline - it may not have reloaded. Checking version anyway...", host=ip)
 
             # Then: wait for switch to come BACK online
-            new_conn = await _wait_for_reboot(ip, credentials, options, verify_wait, check_interval, campaign_id, dev_id)
+            new_conn = await _wait_for_reboot(ip, credentials, options, verify_wait, check_interval, campaign_id, dev_id, device_type=device_type)
 
             if new_conn:
                 await _emit(campaign_id, dev_id, "success", "Switch is back online!", host=ip)
@@ -1766,17 +1840,28 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                         await _emit(campaign_id, dev_id, "success",
                                     f"Version verified: {running_version} (expected {expected_version})", host=ip)
 
-                        # Commit the install to make the new version permanent
-                        await _emit(campaign_id, dev_id, "info", "Running install commit to lock in new version...", host=ip)
+                        # Commit the install to make the new version permanent.
+                        # Driver returns an empty string for platforms that
+                        # don't need an explicit commit step (NX-OS auto-
+                        # commits, Junos persists on the activate's commit).
                         try:
-                            commit_output = await asyncio.to_thread(
-                                new_conn.send_command, "install commit", read_timeout=300,
-                            )
-                            await _emit(campaign_id, dev_id, "success", "Install committed - new version is permanent", host=ip)
-                            if commit_output:
-                                await _emit(campaign_id, dev_id, "info", commit_output[-500:], host=ip)
-                        except Exception as e:
-                            await _emit(campaign_id, dev_id, "warn", f"install commit failed: {e} - switch may rollback on next reload!", host=ip)
+                            commit_cmd = get_driver(device_type).upgrade_commit_command()
+                        except DriverCapabilityError as e:
+                            await _emit(campaign_id, dev_id, "warn",
+                                        f"Skipping commit: {e}", host=ip)
+                            commit_cmd = ""
+                        if commit_cmd:
+                            await _emit(campaign_id, dev_id, "info",
+                                        f"Running {commit_cmd} to lock in new version...", host=ip)
+                            try:
+                                commit_output = await asyncio.to_thread(
+                                    new_conn.send_command, commit_cmd, read_timeout=300,
+                                )
+                                await _emit(campaign_id, dev_id, "success", "Install committed - new version is permanent", host=ip)
+                                if commit_output:
+                                    await _emit(campaign_id, dev_id, "info", commit_output[-500:], host=ip)
+                            except Exception as e:
+                                await _emit(campaign_id, dev_id, "warn", f"{commit_cmd} failed: {e} - switch may rollback on next reload!", host=ip)
 
                         await db.update_upgrade_device(dev_id, verify_status="completed",
                                                        current_version=running_version)
@@ -1823,13 +1908,16 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
     """Verify: connect to switch and check running version against target image."""
     ip = dev["ip_address"]
     dev_id = dev["id"]
+    device_type = await _resolve_device_type(dev)
 
     await db.update_upgrade_device(dev_id, verify_status="running", phase="verify")
     await _emit_device_status(campaign_id, dev_id, verify_status="running")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options, retries=options.get("retries", 2))
+        conn = await _connect_device(ip, credentials, options,
+                                     retries=options.get("retries", 2),
+                                     device_type=device_type)
     except Exception as e:
         await db.update_upgrade_device(dev_id, verify_status="failed", phase="failed",
                                        error_message=f"Connection failed: {e}")
@@ -1925,6 +2013,7 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
     ip = dev["ip_address"]
     dev_id = dev["id"]
     dest_path = options.get("dest_path", "flash:")
+    device_type = await _resolve_device_type(dev)
 
     await db.update_upgrade_device(
         dev_id,
@@ -1936,7 +2025,9 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip} for prestage verification...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options, retries=options.get("retries", 2))
+        conn = await _connect_device(ip, credentials, options,
+                                     retries=options.get("retries", 2),
+                                     device_type=device_type)
     except Exception as e:
         err_msg = f"Connection failed: {e}"
         await db.update_upgrade_device(
@@ -2200,7 +2291,7 @@ async def _wait_for_down(ip, timeout=300, check_interval=10, campaign_id=None, d
     return False  # Never went down within timeout
 
 
-async def _wait_for_reboot(ip, credentials, options, max_wait, check_interval, campaign_id, dev_id):
+async def _wait_for_reboot(ip, credentials, options, max_wait, check_interval, campaign_id, dev_id, device_type="cisco_xe"):
     """Wait for switch to come back online after reboot."""
     start = time.time()
 
@@ -2211,7 +2302,8 @@ async def _wait_for_reboot(ip, credentials, options, max_wait, check_interval, c
                         f"Waiting for reboot... ({elapsed}s elapsed)", host=ip)
 
         try:
-            conn = await _connect_device(ip, credentials, options, retries=1)
+            conn = await _connect_device(ip, credentials, options, retries=1,
+                                         device_type=device_type)
             return conn
         except Exception:
             await asyncio.sleep(check_interval)
