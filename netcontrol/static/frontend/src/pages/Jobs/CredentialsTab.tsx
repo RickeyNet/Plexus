@@ -10,11 +10,15 @@ export function CredentialsTab() {
 
   return (
     <div>
-      <div className="tab-bar" role="tablist" style={{ marginBottom: '1rem' }}>
+      {/* Match the parent Delegator tab row exactly: tab-bar/tab-btn
+          are not defined in the legacy stylesheet, so they rendered as
+          bare unstyled boxes. btn btn-sm btn-secondary + mon-tab-btn is
+          the established working convention (see Jobs.tsx). */}
+      <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
         <button
           role="tab"
           aria-selected={sub === 'credentials'}
-          className={`tab-btn${sub === 'credentials' ? ' active' : ''}`}
+          className={`btn btn-sm btn-secondary mon-tab-btn${sub === 'credentials' ? ' active' : ''}`}
           onClick={() => setSub('credentials')}
         >
           Credentials
@@ -22,7 +26,7 @@ export function CredentialsTab() {
         <button
           role="tab"
           aria-selected={sub === 'secrets'}
-          className={`tab-btn${sub === 'secrets' ? ' active' : ''}`}
+          className={`btn btn-sm btn-secondary mon-tab-btn${sub === 'secrets' ? ' active' : ''}`}
           onClick={() => setSub('secrets')}
         >
           Secret Variables

@@ -60,13 +60,16 @@ export function AvailabilityTab() {
         ))}
       </div>
 
-      <div className="tab-bar" role="tablist" style={{ marginBottom: '0.75rem' }}>
+      {/* tab-bar/tab-btn are not in the legacy stylesheet (would render
+          as bare unstyled boxes); use the established working tab-row
+          convention - see Jobs.tsx / Monitoring.tsx. */}
+      <div role="tablist" style={{ marginBottom: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
         {(['hosts', 'outages', 'transitions'] as SubTab[]).map((t) => (
           <button
             key={t}
             role="tab"
             aria-selected={subTab === t}
-            className={`tab-btn${subTab === t ? ' active' : ''}`}
+            className={`btn btn-sm btn-secondary mon-tab-btn${subTab === t ? ' active' : ''}`}
             onClick={() => setSubTab(t)}
           >
             {t === 'hosts' ? 'Hosts' : t === 'outages' ? 'Outages' : 'Transitions'}
