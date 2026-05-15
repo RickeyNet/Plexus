@@ -93,6 +93,15 @@ class CiscoXEDriver(Driver):
                     return parts[1].strip()
         return None
 
+    def upgrade_has_discrete_prestage(self) -> bool:
+        # IOS-XE install mode has a real two-phase workflow: ``install
+        # add file`` lands the package in the install-mode unpacked
+        # layout and ``install activate`` later flips to it.  The route
+        # uses this to keep the transfer phase distinct from the
+        # activate-and-reboot phase so an operator can approve activate
+        # in a maintenance window after the long upload finishes.
+        return True
+
     def upgrade_install_add_command(self, image_path: str) -> str:
         # IOS-XE install-mode pre-stage: copies the package out of the
         # .bin into the install-mode unpacked layout.  ``image_path``
