@@ -87,7 +87,7 @@
 - [x] Add scheduled configuration backup policies with restore validation checks.
 - [x] Add golden templates/compliance profiles with continuous compliance scans.
 - [x] Add pre-change risk analysis and impact simulation for policy/route/NAT changes.
-- [ ] Add maintenance windows and approval gates for production changes.
+- [x] Add maintenance windows and approval gates for production changes.
 - [x] Add rollback orchestration with pre/post deployment checkpoints.
 
 ### Next (Operations and Observability)

@@ -4,15 +4,16 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStatus } from '@/api/auth';
 import { PageHelp } from '@/components/PageHelp';
 import { Deployments } from '@/pages/Deployments/Deployments';
+import { MaintenanceWindows } from '@/pages/MaintenanceWindows/MaintenanceWindows';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 
-type Tab = 'risk' | 'deployments';
+type Tab = 'risk' | 'deployments' | 'maintenance';
 
 const TAB_QUERY_KEY = 'tab';
 
 function readTab(search: string): Tab | null {
   const v = new URLSearchParams(search).get(TAB_QUERY_KEY);
-  return v === 'risk' || v === 'deployments' ? v : null;
+  return v === 'risk' || v === 'deployments' || v === 'maintenance' ? v : null;
 }
 
 export function ChangeManagement() {
@@ -24,9 +25,11 @@ export function ChangeManagement() {
   const access = useMemo(() => new Set(auth?.feature_access ?? []), [auth?.feature_access]);
   const canRisk = isAdmin || access.has('risk-analysis');
   const canDeploy = isAdmin || access.has('deployments');
+  // Maintenance windows ride on the deployments feature key.
+  const canMaintenance = canDeploy;
 
   const queryTab = readTab(search);
-  const defaultTab: Tab = canRisk ? 'risk' : 'deployments';
+  const defaultTab: Tab = canRisk ? 'risk' : canDeploy ? 'deployments' : 'maintenance';
   const [tab, setTab] = useState<Tab>(queryTab ?? defaultTab);
 
   function selectTab(next: Tab) {
@@ -67,6 +70,14 @@ export function ChangeManagement() {
             Deployments
           </button>
         )}
+        {canMaintenance && (
+          <button
+            className={`btn btn-sm ${tab === 'maintenance' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => selectTab('maintenance')}
+          >
+            Maintenance
+          </button>
+        )}
       </div>
       {tab === 'risk' && canRisk && (
         <>
@@ -87,6 +98,9 @@ export function ChangeManagement() {
           />
           <Deployments />
         </>
+      )}
+      {tab === 'maintenance' && canMaintenance && (
+        <MaintenanceWindows />
       )}
     </div>
   );
