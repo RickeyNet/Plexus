@@ -103,6 +103,21 @@ def test_generic_driver_raises_on_snmpv3_capabilities() -> None:
         drv.snmpv3_verify_users_command()
 
 
+def test_generic_driver_raises_on_health_check_capabilities() -> None:
+    # Inventory's fetch-serial endpoint depends on this: an unknown
+    # device_type must not silently fall through to a Cisco-style
+    # ``show version | include System Serial Number`` and then return
+    # an empty serial because the parser didn't match.  The driver
+    # gap has to be obvious.
+    drv = get_driver("frobozz_os")
+    with pytest.raises(DriverCapabilityError):
+        drv.show_version_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.serial_number_show_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.parse_serial_number("System Serial Number: ABC123")
+
+
 def test_register_driver_rejects_duplicate_device_type() -> None:
     # Define a competing driver for an already-registered type; the
     # decorator should refuse to shadow CiscoIOSDriver.
@@ -159,6 +174,30 @@ def test_cisco_ios_snmpv3_capability_surface() -> None:
         == "snmp-server engineID local 80000009030050568D9CDFC0"
     )
     assert drv.snmpv3_verify_users_command() == "show snmp user"
+
+
+def test_cisco_ios_health_check_capability_surface() -> None:
+    drv = get_driver("cisco_ios")
+    assert drv.show_version_command() == "show version"
+    assert (
+        drv.serial_number_show_command()
+        == "show version | include System Serial Number"
+    )
+    # Full-line shape from a real device.
+    assert (
+        drv.parse_serial_number("System Serial Number              : FCW2346L0AJ")
+        == "FCW2346L0AJ"
+    )
+    # Multi-line input with surrounding noise still resolves the right field.
+    multi = (
+        "Cisco IOS Software, ...\n"
+        "Processor board ID FCW2346L0AJ\n"
+        "System Serial Number : FCW2346L0AJ\n"
+        "Switch uptime is 47 weeks, 3 days\n"
+    )
+    assert drv.parse_serial_number(multi) == "FCW2346L0AJ"
+    # No serial line in output -> None (callers turn this into a 422).
+    assert drv.parse_serial_number("Cisco IOS, no serial info.") is None
 
 
 def test_cisco_ios_ignores_sampling_rate() -> None:
@@ -221,6 +260,22 @@ def test_cisco_xe_snmpv3_capability_surface() -> None:
     assert drv.snmpv3_verify_users_command() == "show snmp user"
 
 
+def test_cisco_xe_health_check_capability_surface() -> None:
+    # XE prints "System Serial Number" the same way IOS does, so the
+    # capability surface is identical.  Test exists as a regression
+    # guard against XE drifting away from IOS.
+    drv = get_driver("cisco_xe")
+    assert drv.show_version_command() == "show version"
+    assert (
+        drv.serial_number_show_command()
+        == "show version | include System Serial Number"
+    )
+    assert (
+        drv.parse_serial_number("System Serial Number : ABC1234WXYZ")
+        == "ABC1234WXYZ"
+    )
+
+
 # ── cisco_nxos output ───────────────────────────────────────────────────────
 
 
@@ -279,6 +334,34 @@ def test_cisco_nxos_snmpv3_engine_id_is_platform_managed() -> None:
     # NX-OS, so they're populated even though the pin step isn't.
     assert drv.snmpv3_show_existing_command() == "show running-config | include snmp-server"
     assert drv.snmpv3_verify_users_command() == "show snmp user"
+
+
+def test_cisco_nxos_health_check_uses_processor_board_id() -> None:
+    # The meaningful divergence vs IOS/XE: NX-OS labels the chassis
+    # serial "Processor Board ID" (no colon, space-separated) and the
+    # include filter needs the quoted multi-word phrase to match.
+    # Routing the IOS command at NX-OS would return zero rows and the
+    # parser would never find a serial - this test guards that gap.
+    drv = get_driver("cisco_nxos")
+    assert drv.show_version_command() == "show version"
+    assert (
+        drv.serial_number_show_command()
+        == 'show version | include "Processor Board ID"'
+    )
+    # Real-world NX-OS output uses a space, not a colon, after the label.
+    assert (
+        drv.parse_serial_number("Processor Board ID FOX1234ABCD")
+        == "FOX1234ABCD"
+    )
+    # Some NX-OS releases print a colon variant; both shapes parse.
+    assert (
+        drv.parse_serial_number("Processor Board ID: FOX9999ZZZZ")
+        == "FOX9999ZZZZ"
+    )
+    # And the "System Serial Number" wording from IOS must NOT match
+    # the NX-OS parser - mixing parsers across vendors is the bug we're
+    # guarding against.
+    assert drv.parse_serial_number("System Serial Number : FCW2346L0AJ") is None
 
 
 # ── parity with the existing netflow_enable playbook ─────────────────────────
