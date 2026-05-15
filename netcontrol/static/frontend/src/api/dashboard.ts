@@ -229,6 +229,55 @@ export function useMetricsQuery({
   });
 }
 
+// ── Chart annotations ──────────────────────────────────────────────────────
+// Mirrors legacy api.js getAnnotations() — deployment/config/alert event
+// markers overlaid on custom-dashboard time-series charts.
+
+export interface Annotation {
+  timestamp: string;
+  category?: string;
+  title?: string;
+  action?: string;
+}
+
+interface AnnotationsResponse {
+  annotations?: Annotation[];
+}
+
+// Legacy uses h/d only (app.js rangeToMs); default 24h, same as legacy.
+function rangeToMs(range: string): number {
+  const m = /^(\d+)([hd])$/.exec(range);
+  if (!m) return 86_400_000;
+  const units: Record<string, number> = { h: 3_600_000, d: 86_400_000 };
+  return parseInt(m[1], 10) * units[m[2]];
+}
+
+export interface AnnotationsArgs {
+  host?: string;
+  range?: string;
+  enabled?: boolean;
+}
+
+export function useAnnotations({ host = '*', range = '24h', enabled = true }: AnnotationsArgs) {
+  return useQuery<Annotation[]>({
+    queryKey: ['annotations', host, range],
+    queryFn: async () => {
+      const end = new Date();
+      const start = new Date(end.getTime() - rangeToMs(range));
+      const params = new URLSearchParams({
+        start: start.toISOString(),
+        end: end.toISOString(),
+        categories: 'deployment,config,alert',
+      });
+      // Legacy only sends host_id when a specific host is selected.
+      if (host && host !== '*') params.set('host_id', host);
+      const res = await apiRequest<AnnotationsResponse>(`/annotations?${params.toString()}`);
+      return res?.annotations ?? [];
+    },
+    enabled,
+  });
+}
+
 // ── Inventory groups (with optional hosts) ────────────────────────────────
 
 export interface InventoryHostBrief {
