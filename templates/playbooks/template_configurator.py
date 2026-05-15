@@ -13,6 +13,7 @@ import asyncio
 import random
 from collections.abc import AsyncGenerator
 
+from netcontrol.drivers import GenericDriver, get_driver
 from routes.runner import BasePlaybook, LogEvent, register_playbook
 
 # Shared helpers - see _common.py.  Underscore prefix keeps the module
@@ -44,7 +45,7 @@ class TemplateConfigurator(BasePlaybook):
         credentials: dict,
         template_commands: list[str] | None = None,
         dry_run: bool = True,
-    ) -> AsyncGenerator[LogEvent, None]:
+    ) -> AsyncGenerator[LogEvent]:
         # Hard fail when no template was selected - there is nothing
         # generic to push without one.
         if not template_commands:
@@ -120,7 +121,7 @@ class TemplateConfigurator(BasePlaybook):
         credentials: dict,
         template_commands: list[str],
         dry_run: bool,
-    ) -> AsyncGenerator[LogEvent, None]:
+    ) -> AsyncGenerator[LogEvent]:
         # connect_device manages the device dict, exception handling,
         # enable-mode promotion, and clean disconnect on exit.
         async with connect_device(
@@ -135,13 +136,25 @@ class TemplateConfigurator(BasePlaybook):
                 # If the template touches SNMP, pin the engine ID
                 # *before* the push so SNMPv3 user keys keep working
                 # afterwards.  See pin_snmp_engine_id docstring for why.
+                # The driver controls the actual commands; unknown
+                # vendors skip the pin step (the helper's no-driver
+                # path is conservative - it logs and returns).
                 has_snmp_cmds = any(
                     cmd.strip().lower().startswith("snmp-server")
                     for cmd in template_commands
                 )
                 if has_snmp_cmds and not dry_run:
-                    async for ev in pin_snmp_engine_id(self, conn, hostname):
-                        yield ev
+                    driver = get_driver(device_type)
+                    if isinstance(driver, GenericDriver):
+                        yield self.log_warn(
+                            "No driver registered; skipping SNMP engine-ID pin.",
+                            host=hostname,
+                        )
+                    else:
+                        async for ev in pin_snmp_engine_id(
+                            self, conn, hostname, driver
+                        ):
+                            yield ev
 
                 if dry_run:
                     # Preview only - print exactly what would be sent.
@@ -184,7 +197,7 @@ class TemplateConfigurator(BasePlaybook):
         hostname: str,
         template_commands: list[str],
         dry_run: bool,
-    ) -> AsyncGenerator[LogEvent, None]:
+    ) -> AsyncGenerator[LogEvent]:
         # Fake the connect handshake (random delay + 8% fake timeout).
         async for ev in simulate_connect(self, ip, hostname):
             yield ev

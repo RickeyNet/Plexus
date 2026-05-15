@@ -102,6 +102,66 @@ class Driver:
             f"{type(self).__name__} does not implement save_config_commands()"
         )
 
+    # ── SNMPv3 capability surface ──────────────────────────────────────────
+    #
+    # SNMPv3 provisioning happens in a single playbook
+    # (``templates/playbooks/snmpv3_configurator.py``).  The playbook owns
+    # the high-level flow (show existing → pin engine ID → push user
+    # template → verify); each step's vendor-specific command comes from
+    # the driver so the playbook itself can be vendor-neutral.
+
+    def snmpv3_show_existing_command(self) -> str:
+        """Return a show command that prints the device's current SNMP config.
+
+        Used by the SNMPv3 playbook as the "before" snapshot so the
+        operator can see what was already there.  Cisco platforms use
+        ``show running-config | include snmp-server``; Junos would be
+        ``show configuration snmp | display set``.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement snmpv3_show_existing_command()"
+        )
+
+    def snmpv3_engine_id_show_command(self) -> str:
+        """Return the show command that prints the local SNMP engine ID.
+
+        Returns an empty string when the platform doesn't expose engine
+        ID pinning as a config knob (NX-OS persists the engine ID by
+        default, so pinning is unnecessary and ``snmp-server engineID
+        local`` is not a valid command).
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement snmpv3_engine_id_show_command()"
+        )
+
+    def snmpv3_engine_id_pin_command(self, engine_id: str) -> str:
+        """Return the config line that pins the SNMP engine ID.
+
+        Cisco IOS / IOS-XE regenerate the engine ID when certain
+        ``snmp-server`` lines are added or removed.  Because SNMPv3 keys
+        are *localized* to the engine ID, regeneration silently
+        invalidates every existing user - monitoring then breaks until
+        the keys are re-cut.  Pinning the current ID before any change
+        keeps the keys valid.
+
+        Returns an empty string when the platform doesn't support
+        pinning (see ``snmpv3_engine_id_show_command``).
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement snmpv3_engine_id_pin_command()"
+        )
+
+    def snmpv3_verify_users_command(self) -> str:
+        """Return the show command that lists configured SNMPv3 users.
+
+        Used as the "after" verification step in the SNMPv3 playbook.
+        ``show snmp user`` is the de-facto common command across IOS,
+        IOS-XE, and NX-OS; Junos uses ``show snmp v3 user``.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement snmpv3_verify_users_command()"
+        )
+
 
 class GenericDriver(Driver):
     """Fallback used when no driver is registered for a device_type.

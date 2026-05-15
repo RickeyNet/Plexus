@@ -86,7 +86,7 @@ async def connect_device(
     hostname: str,
     device_type: str,
     credentials: dict,
-) -> AsyncGenerator[tuple[Any | None, list[LogEvent]], None]:
+) -> AsyncGenerator[tuple[Any | None, list[LogEvent]]]:
     """Async context manager that opens a Netmiko connection.
 
     Usage:
@@ -149,19 +149,31 @@ async def pin_snmp_engine_id(
     pb: BasePlaybook,
     conn: Any,
     hostname: str,
-) -> AsyncGenerator[LogEvent, None]:
+    driver: Any,
+) -> AsyncGenerator[LogEvent]:
     """Pin the device's current SNMP engine ID before SNMP changes.
 
     Cisco IOS regenerates the engine ID when certain ``snmp-server``
     lines are added or removed.  Because SNMPv3 auth/priv keys are
     *localized* to the engine ID, regeneration silently invalidates
     every existing user - monitoring then breaks until the keys are
-    re-cut.  Reading the current engine ID and pinning it with
-    ``snmp-server engineID local <id>`` keeps the keys valid across
-    the change.
+    re-cut.  Reading the current engine ID and pinning it with the
+    driver-supplied pin command keeps the keys valid across the change.
+
+    Drivers whose platform persists the engine ID by default (e.g.
+    NX-OS) return an empty ``snmpv3_engine_id_show_command()``; the
+    helper short-circuits in that case and emits an info-level event
+    so the operator can see why the step was skipped.
     """
+    show_cmd = driver.snmpv3_engine_id_show_command()
+    if not show_cmd:
+        yield pb.log_info(
+            f"{driver.display_name}: engine ID is platform-managed; skipping pin.",
+            host=hostname,
+        )
+        return
     try:
-        output = await asyncio.to_thread(conn.send_command, "show snmp engineID")
+        output = await asyncio.to_thread(conn.send_command, show_cmd)
         # Typical output: "Local SNMP engineID: 80000009030050568D9CDFC0"
         match = re.search(r"[Ll]ocal\s+.*[Ee]ngine\s*ID[:\s]+([0-9A-Fa-f]+)", output)
         if not match:
@@ -171,14 +183,18 @@ async def pin_snmp_engine_id(
             )
             return
         engine_id = match.group(1).strip()
+        pin_cmd = driver.snmpv3_engine_id_pin_command(engine_id)
+        if not pin_cmd:
+            yield pb.log_info(
+                f"{driver.display_name}: engine ID {engine_id} is not pinnable; skipping.",
+                host=hostname,
+            )
+            return
         yield pb.log_info(
             f"Pinning SNMP engine ID ({engine_id}) to prevent SNMPv3 key invalidation.",
             host=hostname,
         )
-        await asyncio.to_thread(
-            conn.send_config_set,
-            [f"snmp-server engineID local {engine_id}"],
-        )
+        await asyncio.to_thread(conn.send_config_set, [pin_cmd])
     except Exception as exc:  # noqa: BLE001
         yield pb.log_warn(f"Could not pin SNMP engine ID: {exc}", host=hostname)
 
@@ -187,7 +203,7 @@ async def simulate_connect(
     pb: BasePlaybook,
     ip: str,
     hostname: str,
-) -> AsyncGenerator[LogEvent, None]:
+) -> AsyncGenerator[LogEvent]:
     """Pretend to open a connection for dev/testing without real devices.
 
     Sleeps a short random interval, occasionally yields a fake timeout
