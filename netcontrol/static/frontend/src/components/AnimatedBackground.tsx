@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 import { initStarfield } from '@/lib/spaceStarfield';
 
 // Mirrors the legacy SPA's `.animated-bg` + `#app-particles` block. All the CSS
-// (.space-depth, .space-nebula, .gradient-orb, .app-particles) lives in the
+// (.space-depth, .space-nebula, .app-particles) lives in the
 // shared stylesheet, so we just need the DOM structure and a starfield init.
 export function AnimatedBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -28,9 +28,6 @@ export function AnimatedBackground() {
           <div className="space-nebula nebula-c" />
           <div className="space-vignette" />
         </div>
-        <div className="gradient-orb orb-1" />
-        <div className="gradient-orb orb-2" />
-        <div className="gradient-orb orb-3" />
       </div>
       <canvas ref={canvasRef} className="app-particles" />
     </>
