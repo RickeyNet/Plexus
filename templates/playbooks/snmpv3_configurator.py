@@ -59,16 +59,29 @@ class Snmpv3Configurator(BasePlaybook):
         dry_run: bool = True,
     ) -> AsyncGenerator[LogEvent]:
         # No template means nothing to push - fail fast with a clear error.
-        if not template_commands:
+        # ``template_commands`` is the generic body; a per-device_type
+        # variant may still exist even if the generic one is empty, so
+        # only bail if there's no body anywhere (checked per host below).
+        per_vendor = self.template_by_device_type or {}
+        if not template_commands and not per_vendor:
             yield self.log_error(
                 "No template selected; this playbook requires SNMPv3 commands."
             )
             return
 
         yield self.log_info(f"SNMPv3 Configurator - targeting {len(hosts)} device(s)")
-        yield self.log_info(f"Template commands ({len(template_commands)}):")
-        for cmd in template_commands:
-            yield self.log_info(f"  {cmd}")
+        if per_vendor:
+            # Vendor-specific bodies in play: show the operator the
+            # whole resolution map so a mixed-vendor run is auditable
+            # up front (which body each platform will receive).
+            yield self.log_info(
+                f"Per-vendor template bodies resolved for: "
+                f"{', '.join(sorted(k or '(generic)' for k in per_vendor))}"
+            )
+        elif template_commands:
+            yield self.log_info(f"Template commands ({len(template_commands)}):")
+            for cmd in template_commands:
+                yield self.log_info(f"  {cmd}")
 
         # Loud banner so dry-run vs live can't be confused at a glance.
         if dry_run:
@@ -98,18 +111,34 @@ class Snmpv3Configurator(BasePlaybook):
                 )
                 continue
 
+            # Resolve the command body for *this* host's platform.  When
+            # the job's template has vendor-specific variants this is the
+            # matching body; otherwise it's the flat generic list.  A
+            # host with no resolvable body (e.g. an unknown vendor that
+            # has no generic sibling) is skipped loudly rather than
+            # pushing another vendor's syntax.
+            host_commands = self.commands_for_host(host, template_commands)
+            if not host_commands:
+                yield self.log_error(
+                    f"No SNMPv3 template body resolved for device_type="
+                    f"{device_type!r}; skipping {hostname} ({ip}). Add a "
+                    f"'{device_type}' variant or a generic template.",
+                    host=hostname,
+                )
+                continue
+
             yield self.log_info(f"Connecting to {hostname} ({ip}) ...", host=hostname)
 
             # Real or simulated execution path; identical event shape either way.
             if NETMIKO_AVAILABLE:
                 async for event in self._process_real_device(
                     ip, hostname, device_type, driver, credentials,
-                    template_commands, dry_run,
+                    host_commands, dry_run,
                 ):
                     yield event
             else:
                 async for event in self._process_simulated_device(
-                    ip, hostname, driver, template_commands, dry_run,
+                    ip, hostname, driver, host_commands, dry_run,
                 ):
                     yield event
 

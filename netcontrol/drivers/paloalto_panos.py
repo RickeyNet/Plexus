@@ -1,31 +1,38 @@
-"""Palo Alto PAN-OS driver — monitoring-only firewall surface.
+"""Palo Alto PAN-OS driver — monitoring-only firewall surface + SNMPv3.
 
 PAN-OS firewalls are part of the Plexus inventory but the deployment
-does not push config changes, NetFlow, SNMPv3, or software upgrades to
-them through Plexus — those are owned by the firewall team's own
-tooling.  What Plexus *does* need is monitoring: SNMP polling for CPU
-/ memory / uptime (handled vendor-agnostically by ``metrics_engine``
-via the ``paloalto`` OID preset) and the inventory "fetch serial"
-flow, which is what this driver exists to support.
+does not push config changes, NetFlow, or software upgrades to them
+through Plexus — those are owned by the firewall team's own tooling.
+What Plexus *does* own is monitoring, and SNMPv3 is part of that: it's
+the credential the metrics poller authenticates with, so Phase 12
+lights up the SNMPv3 capability surface on the firewall drivers while
+NetFlow / save / running-config / upgrade verbs stay unimplemented.
 
-Only the two health-check methods are implemented:
+Implemented:
 
-  - ``serial_number_show_command()`` returns ``show system info | match
-    serial`` — PAN-OS supports the ``| match`` pipe filter and prints
-    one line of the form ``serial: 015351000123`` (all-lowercase label,
-    colon + single space + value).
-  - ``parse_serial_number()`` anchors on the lowercase ``serial:``
-    prefix.  PAN-OS prints several keys whose names *contain* the word
-    "serial" (e.g. ``serial-number-status``, ``cloud-serial-id``);
-    anchoring on the colon position avoids those by requiring the key
-    to be exactly ``serial`` followed by ``:``.
+  - The two health-check methods (``serial_number_show_command`` /
+    ``parse_serial_number``) — ``show system info | match serial``;
+    parser anchors on the exact lowercase ``serial:`` prefix so the
+    neighbouring ``serial-number-status`` / ``cloud-serial-id`` keys
+    the ``| match`` filter also returns can't be mistaken for the
+    chassis serial.
+  - The four SNMPv3 methods.  PAN-OS stores SNMP under the
+    ``deviceconfig system snmp-setting`` config path (not Cisco
+    ``snmp-server`` lines) and has no ``| include`` filter, so the
+    show/verify commands scope by config path instead.  The engine ID
+    is *platform-managed* (auto-derived from the chassis serial when
+    blank, no operational ``show snmp engineID``), so the engine-ID
+    show and pin commands return empty strings — the same contract
+    NX-OS / Junos use, which makes the playbook's shared
+    ``pin_snmp_engine_id`` helper emit its "platform-managed; skipping
+    pin" info event instead of running a Cisco-shaped command at the
+    firewall.
 
-All other Driver capabilities (NetFlow build, SNMPv3 surface, save,
-running-config capture, upgrade verbs) intentionally remain at the
-base ``DriverCapabilityError`` — Plexus does not drive those flows for
-firewalls, and a clear capability error is the right thing to surface
-if a future caller accidentally points a Cisco-only route at a PAN-OS
-host.
+NetFlow build, save, running-config capture, and the upgrade verbs
+intentionally remain at the base ``DriverCapabilityError`` — Plexus
+does not drive those flows for firewalls, and a clear capability error
+is the right thing to surface if a future caller accidentally points a
+Cisco-only route at a PAN-OS host.
 """
 
 from __future__ import annotations
@@ -59,3 +66,36 @@ class PaloAltoPANOSDriver(Driver):
                 if len(parts) == 2 and parts[1].strip():
                     return parts[1].strip()
         return None
+
+    # ── SNMPv3 capability surface ──────────────────────────────────────────
+
+    def snmpv3_show_existing_command(self) -> str:
+        # Read the SNMP config subtree.  Cisco's ``show running-config
+        # | include snmp-server`` parse-errors on PAN-OS; scoping by
+        # the config path is the idiomatic "filter to SNMP only" form.
+        return (
+            "show config running xpath "
+            "devices/entry/deviceconfig/system/snmp-setting"
+        )
+
+    def snmpv3_engine_id_show_command(self) -> str:
+        # Platform-managed: PAN-OS auto-derives the engine ID from the
+        # chassis serial and exposes no operational show-engine-ID
+        # command.  Empty string short-circuits the playbook's pin
+        # step — same contract as NX-OS / Junos.
+        return ""
+
+    def snmpv3_engine_id_pin_command(self, engine_id: str) -> str:
+        # Counterpart to the empty show command: pinning is a no-op
+        # because the engine ID is already stable across reboots (it
+        # tracks the serial).
+        return ""
+
+    def snmpv3_verify_users_command(self) -> str:
+        # The v3 subtree of the same snmp-setting path is the "after"
+        # verification view.  Cisco's ``show snmp user`` does not exist
+        # on PAN-OS.
+        return (
+            "show config running xpath "
+            "devices/entry/deviceconfig/system/snmp-setting/access-setting/version/v3"
+        )

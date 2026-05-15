@@ -22,6 +22,7 @@ export function TemplatesTab() {
     return items.filter((t) =>
       t.name.toLowerCase().includes(q) ||
       (t.description ?? '').toLowerCase().includes(q) ||
+      (t.device_type ?? '').toLowerCase().includes(q) ||
       t.content.toLowerCase().includes(q),
     );
   }, [query.data, search]);
@@ -102,7 +103,17 @@ function TemplateRow({
     <div className="card" style={{ padding: '0.75rem 1rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600 }}>{template.name}</div>
+          <div style={{ fontWeight: 600 }}>
+            {template.name}
+            {template.device_type ? (
+              <span
+                className="badge"
+                style={{ marginLeft: '0.5rem', fontSize: '0.7rem', fontWeight: 500 }}
+              >
+                {template.device_type}
+              </span>
+            ) : null}
+          </div>
           {template.description && <div className="text-muted" style={{ fontSize: '0.85rem' }}>{template.description}</div>}
         </div>
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>

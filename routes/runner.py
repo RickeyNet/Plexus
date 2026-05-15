@@ -107,6 +107,37 @@ class BasePlaybook:
     # Populated by the executor right before run() — never read directly here.
     parameters: dict | None = None
 
+    # Per-device_type resolved template command bodies, keyed by the
+    # host's Netmiko device_type string.  Populated by the executor when
+    # the job's template has vendor-specific variants (Phase 12 of the
+    # driver framework).  Empty for legacy single-body templates; in
+    # that case playbooks use the flat ``template_commands`` argument as
+    # before.  Vendor-aware playbooks (e.g. snmpv3_configurator) consult
+    # this map so a mixed-vendor inventory group runs the right command
+    # body per host without the operator picking N templates.
+    template_by_device_type: dict[str, list[str]] | None = None
+
+    def commands_for_host(
+        self, host: dict, template_commands: list[str] | None
+    ) -> list[str] | None:
+        """Return the template body to push to a single host.
+
+        Prefers the vendor-specific body resolved into
+        ``template_by_device_type`` for this host's device_type; falls
+        back to the flat ``template_commands`` (the generic body / the
+        legacy single-template path) so playbooks that don't care about
+        per-vendor templates keep working unchanged.
+        """
+        by_dt = self.template_by_device_type or {}
+        dt = host.get("device_type") or ""
+        if dt in by_dt:
+            return by_dt[dt]
+        # The empty-string key is the generic body when at least one
+        # vendor variant exists but this host's vendor isn't one of them.
+        if "" in by_dt:
+            return by_dt[""]
+        return template_commands
+
     async def run(
         self,
         hosts: list[dict],
@@ -145,6 +176,7 @@ async def execute_playbook(
     dry_run: bool = True,
     event_callback=None,
     parameters: dict | None = None,
+    template_by_device_type: dict[str, list[str]] | None = None,
 ) -> PlaybookResult:
     """
     Run a playbook and collect results.
@@ -153,6 +185,7 @@ async def execute_playbook(
     """
     pb = playbook_cls()
     pb.parameters = parameters or {}
+    pb.template_by_device_type = template_by_device_type or {}
     hosts_ok = 0
     hosts_failed = 0
     hosts_skipped = 0

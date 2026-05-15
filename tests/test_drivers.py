@@ -1290,11 +1290,17 @@ def test_paloalto_panos_parse_serial_returns_none_when_missing() -> None:
 
 
 def test_paloalto_panos_unsupported_capabilities_raise() -> None:
-    # Plexus does not push NetFlow, save, capture, SNMPv3, or upgrades
-    # to firewalls.  Each of those capabilities must therefore raise
+    # Plexus does not push NetFlow, save, capture, or upgrades to
+    # firewalls.  Each of those capabilities must therefore raise
     # ``DriverCapabilityError`` so a future caller that accidentally
     # points a switch route at a PAN-OS host fails loudly instead of
     # silently shipping Cisco syntax over SSH to the firewall.
+    #
+    # SNMPv3 is deliberately NOT in this list as of Phase 12: SNMPv3 is
+    # the credential the metrics poller authenticates with, so it is
+    # part of monitoring (the one reason Plexus touches a firewall) and
+    # the four SNMPv3 methods are now implemented - see
+    # test_paloalto_panos_snmpv3_capability_surface.
     drv = get_driver("paloalto_panos")
     with pytest.raises(DriverCapabilityError):
         drv.build_netflow_config(_cfg())
@@ -1305,19 +1311,37 @@ def test_paloalto_panos_unsupported_capabilities_raise() -> None:
     with pytest.raises(DriverCapabilityError):
         drv.save_config_commands()
     with pytest.raises(DriverCapabilityError):
-        drv.snmpv3_show_existing_command()
-    with pytest.raises(DriverCapabilityError):
-        drv.snmpv3_engine_id_show_command()
-    with pytest.raises(DriverCapabilityError):
-        drv.snmpv3_engine_id_pin_command("0x80")
-    with pytest.raises(DriverCapabilityError):
-        drv.snmpv3_verify_users_command()
-    with pytest.raises(DriverCapabilityError):
         drv.upgrade_install_add_command("path")
     with pytest.raises(DriverCapabilityError):
         drv.upgrade_activate_commands("path")
     with pytest.raises(DriverCapabilityError):
         drv.upgrade_commit_command()
+
+
+def test_paloalto_panos_snmpv3_capability_surface() -> None:
+    # PAN-OS stores SNMP under the ``deviceconfig system snmp-setting``
+    # config path - not Cisco ``snmp-server`` lines - and has no
+    # ``| include`` filter, so the show/verify commands scope by the
+    # config path.  Engine ID is platform-managed (auto-derived from
+    # the chassis serial), so - like NX-OS / Junos - both engine-ID
+    # methods return empty strings to short-circuit the playbook's pin
+    # step.  This locks in that PAN-OS does NOT get a Cisco-shaped pin
+    # command (which would parse-error at the firewall).
+    drv = get_driver("paloalto_panos")
+    assert drv.snmpv3_show_existing_command() == (
+        "show config running xpath "
+        "devices/entry/deviceconfig/system/snmp-setting"
+    )
+    assert drv.snmpv3_engine_id_show_command() == ""
+    assert drv.snmpv3_engine_id_pin_command("8000304404ABCD") == ""
+    assert drv.snmpv3_verify_users_command() == (
+        "show config running xpath "
+        "devices/entry/deviceconfig/system/snmp-setting/access-setting/version/v3"
+    )
+    # Defensive guard: the Cisco include-filter form must never leak
+    # into the PAN-OS show command via a copy-paste from cisco_ios.py.
+    assert "| include" not in drv.snmpv3_show_existing_command()
+    assert "snmp-server" not in drv.snmpv3_show_existing_command()
 
 
 def test_paloalto_panos_upgrade_has_discrete_prestage_default() -> None:
@@ -1426,9 +1450,10 @@ def test_fortinet_fortios_parse_serial_returns_none_when_missing() -> None:
 
 def test_fortinet_fortios_unsupported_capabilities_raise() -> None:
     # Mirror of the PAN-OS capability-error test: firewalls are
-    # monitoring-only in Plexus, so every non-serial method must raise
-    # ``DriverCapabilityError``.  Locking these in catches the failure
-    # mode where a switch-only route accidentally targets a FortiGate.
+    # monitoring-only in Plexus for NetFlow / save / capture / upgrade,
+    # so each of those must raise ``DriverCapabilityError``.  SNMPv3 is
+    # excluded as of Phase 12 (it's part of monitoring) - see
+    # test_fortinet_fortios_snmpv3_capability_surface.
     drv = get_driver("fortinet")
     with pytest.raises(DriverCapabilityError):
         drv.build_netflow_config(_cfg())
@@ -1439,19 +1464,35 @@ def test_fortinet_fortios_unsupported_capabilities_raise() -> None:
     with pytest.raises(DriverCapabilityError):
         drv.save_config_commands()
     with pytest.raises(DriverCapabilityError):
-        drv.snmpv3_show_existing_command()
-    with pytest.raises(DriverCapabilityError):
-        drv.snmpv3_engine_id_show_command()
-    with pytest.raises(DriverCapabilityError):
-        drv.snmpv3_engine_id_pin_command("0x80")
-    with pytest.raises(DriverCapabilityError):
-        drv.snmpv3_verify_users_command()
-    with pytest.raises(DriverCapabilityError):
         drv.upgrade_install_add_command("path")
     with pytest.raises(DriverCapabilityError):
         drv.upgrade_activate_commands("path")
     with pytest.raises(DriverCapabilityError):
         drv.upgrade_commit_command()
+
+
+def test_fortinet_fortios_snmpv3_capability_surface() -> None:
+    # FortiOS keeps SNMPv3 users in their own table; the "existing"
+    # snapshot and the "after" verification are both ``get system snmp
+    # user`` (``get`` not ``show`` so defaults render).  Engine ID is
+    # platform-managed: with ``engine-id`` at its default FortiOS
+    # derives it deterministically from the hardware serial, so it is
+    # stable across reboots and SNMP user changes - there is no
+    # Cisco-IOS-style regenerate-on-config-change behaviour the pin
+    # step exists to defend against.  So both engine-ID methods return
+    # empty strings (NX-OS / Junos / PAN-OS contract).  This locks in
+    # that FortiOS is NOT treated as a pinnable platform - a future
+    # change that returned a real pin command here would run an
+    # unnecessary (and Cisco-shaped) command at the FortiGate.
+    drv = get_driver("fortinet")
+    assert drv.snmpv3_show_existing_command() == "get system snmp user"
+    assert drv.snmpv3_engine_id_show_command() == ""
+    assert drv.snmpv3_engine_id_pin_command("8000304404ABCD") == ""
+    assert drv.snmpv3_verify_users_command() == "get system snmp user"
+    # Defensive guards: neither the Cisco include filter nor the Cisco
+    # ``show snmp user`` wording may leak into the FortiOS commands.
+    assert "| include" not in drv.snmpv3_show_existing_command()
+    assert drv.snmpv3_verify_users_command() != "show snmp user"
 
 
 def test_fortinet_fortios_upgrade_has_discrete_prestage_default() -> None:

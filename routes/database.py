@@ -289,11 +289,13 @@ CREATE TABLE IF NOT EXISTS playbooks (
 
 CREATE TABLE IF NOT EXISTS templates (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL UNIQUE,
+    name        TEXT    NOT NULL,
+    device_type TEXT    NOT NULL DEFAULT '',
     content     TEXT    NOT NULL DEFAULT '',
     description TEXT    DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(name, device_type)
 );
 
 CREATE TABLE IF NOT EXISTS credentials (
@@ -3453,12 +3455,14 @@ async def get_template(template_id: int) -> dict | None:
         await db.close()
 
 
-async def create_template(name: str, content: str, description: str = "") -> int:
+async def create_template(name: str, content: str, description: str = "",
+                          device_type: str = "") -> int:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO templates (name, content, description) VALUES (?,?,?)",
-            (name, content, description),
+            "INSERT INTO templates (name, device_type, content, description) "
+            "VALUES (?,?,?,?)",
+            (name, device_type, content, description),
         )
         await db.commit()
         return cursor.lastrowid
@@ -3467,17 +3471,85 @@ async def create_template(name: str, content: str, description: str = "") -> int
 
 
 async def update_template(template_id: int, name: str, content: str,
-                          description: str = ""):
+                          description: str = "", device_type: str = ""):
     db = await get_db()
     try:
         await db.execute(
-            """UPDATE templates SET name=?, content=?, description=?,
-               updated_at=datetime('now') WHERE id=?""",
-            (name, content, description, template_id),
+            """UPDATE templates SET name=?, device_type=?, content=?,
+               description=?, updated_at=datetime('now') WHERE id=?""",
+            (name, device_type, content, description, template_id),
         )
         await db.commit()
     finally:
         await db.close()
+
+
+async def get_template_variants(name: str) -> list[dict]:
+    """Return every template row sharing ``name`` (all device_type variants).
+
+    Used by the job pre-launch validation path so a secret referenced
+    only by a vendor-specific variant is still caught before the job is
+    queued, not mid-run.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM templates WHERE name = ? ORDER BY device_type", (name,)
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def resolve_template_for_device_type(
+    template_id: int, device_type: str
+) -> dict | None:
+    """Resolve the right template body for a host's device_type.
+
+    Phase 12 lets one logical template (keyed by ``name``) carry
+    vendor-specific command bodies (keyed by ``device_type``).  A job
+    binds a single ``template_id``; at run time each host needs the
+    variant matching *its* platform.
+
+    Resolution order, given the job's selected template:
+
+      1. the ``(name, device_type)`` row whose device_type exactly
+         matches this host - the vendor-specific body, or
+      2. the ``(name, '')`` generic row - the default body, or
+      3. the originally-selected row itself (covers the case where the
+         operator picked a vendor-specific template directly and there
+         is no generic sibling).
+
+    Returns ``None`` only if ``template_id`` doesn't exist at all, so
+    the caller can surface a clean "template not found" error.
+    """
+    base = await get_template(template_id)
+    if base is None:
+        return None
+    name = base["name"]
+    db = await get_db()
+    try:
+        # Exact vendor match wins.
+        cursor = await db.execute(
+            "SELECT * FROM templates WHERE name = ? AND device_type = ?",
+            (name, device_type or ""),
+        )
+        row = row_to_dict(await cursor.fetchone())
+        if row is not None:
+            return row
+        # Fall back to the generic ('' device_type) sibling.
+        cursor = await db.execute(
+            "SELECT * FROM templates WHERE name = ? AND device_type = ''",
+            (name,),
+        )
+        row = row_to_dict(await cursor.fetchone())
+        if row is not None:
+            return row
+    finally:
+        await db.close()
+    # No generic sibling and no vendor match - the operator picked a
+    # vendor-specific template directly; use it as-is.
+    return base
 
 
 async def delete_template(template_id: int):
