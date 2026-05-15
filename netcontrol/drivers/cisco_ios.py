@@ -32,3 +32,9 @@ class CiscoIOSDriver(Driver):
 
     def netflow_verify_command(self) -> str:
         return "show ip flow export"
+
+    def capture_running_config_command(self) -> str:
+        return "show running-config"
+
+    def save_config_commands(self) -> list[str]:
+        return ["write memory"]
