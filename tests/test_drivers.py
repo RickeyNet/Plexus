@@ -76,6 +76,17 @@ def test_generic_driver_raises_on_netflow_capabilities() -> None:
         drv.netflow_verify_command()
 
 
+def test_generic_driver_raises_on_config_capabilities() -> None:
+    # The shared.py refactor depends on this: unknown vendors must raise
+    # so the caller can fall back to a safe default instead of getting an
+    # empty string and silently doing nothing.
+    drv = get_driver("frobozz_os")
+    with pytest.raises(DriverCapabilityError):
+        drv.capture_running_config_command()
+    with pytest.raises(DriverCapabilityError):
+        drv.save_config_commands()
+
+
 def test_register_driver_rejects_duplicate_device_type() -> None:
     # Define a competing driver for an already-registered type; the
     # decorator should refuse to shadow CiscoIOSDriver.
@@ -115,6 +126,12 @@ def test_cisco_ios_build_netflow_config_classic_shape() -> None:
 
 def test_cisco_ios_verify_command() -> None:
     assert get_driver("cisco_ios").netflow_verify_command() == "show ip flow export"
+
+
+def test_cisco_ios_config_capture_and_save() -> None:
+    drv = get_driver("cisco_ios")
+    assert drv.capture_running_config_command() == "show running-config"
+    assert drv.save_config_commands() == ["write memory"]
 
 
 def test_cisco_ios_ignores_sampling_rate() -> None:
@@ -160,6 +177,12 @@ def test_cisco_xe_verify_command() -> None:
     )
 
 
+def test_cisco_xe_config_capture_and_save() -> None:
+    drv = get_driver("cisco_xe")
+    assert drv.capture_running_config_command() == "show running-config"
+    assert drv.save_config_commands() == ["write memory"]
+
+
 # ── cisco_nxos output ───────────────────────────────────────────────────────
 
 
@@ -194,6 +217,15 @@ def test_cisco_nxos_verify_command() -> None:
         get_driver("cisco_nxos").netflow_verify_command()
         == "show flow exporter PLEXUS-EXPORT"
     )
+
+
+def test_cisco_nxos_config_capture_and_save() -> None:
+    # NX-OS does not accept ``write memory`` - the driver must emit the
+    # explicit copy command instead.  Regression-guards against someone
+    # copy-pasting the IOS save in here.
+    drv = get_driver("cisco_nxos")
+    assert drv.capture_running_config_command() == "show running-config"
+    assert drv.save_config_commands() == ["copy running-config startup-config"]
 
 
 # ── parity with the existing netflow_enable playbook ─────────────────────────
