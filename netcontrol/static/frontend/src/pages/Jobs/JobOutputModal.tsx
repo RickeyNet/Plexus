@@ -41,14 +41,16 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   const wsRef = useRef<WebSocket | null>(null);
   const outputRef = useRef<HTMLDivElement | null>(null);
 
-  // reset on open or jobId change
+  // reset on jobId change. (isOpen is derived from jobId, so depending
+  // on both would run this twice per open and clear freshly-arrived
+  // live events.)
   useEffect(() => {
     setLiveEvents([]);
     setLiveStatus(null);
     setWsState('idle');
     setConfirmRunLive(false);
     setConfirmCancel(false);
-  }, [jobId, isOpen]);
+  }, [jobId]);
 
   const job = jobQuery.data;
   const isLive = job && (job.status === 'running' || job.status === 'queued');
@@ -100,7 +102,16 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [liveEvents.length, eventsQuery.data]);
 
+  // Single source of truth for the output area.  The WebSocket handler
+  // replays the entire persisted backlog on connect and then streams
+  // new events, so once any live event has arrived `liveEvents` is the
+  // complete log (including for a job that finished while the modal was
+  // open).  Fall back to the REST history only when no WS delivered
+  // anything - i.e. the modal opened on an already-finished job, where
+  // the WS effect (gated on isLive) never connects.  Rendering both
+  // concatenated is what produced the duplicated/tripled output.
   const historicalEvents: JobEvent[] = eventsQuery.data ?? [];
+  const showLive = liveEvents.length > 0 || wsState === 'open' || wsState === 'connecting';
   const effectiveStatus = liveStatus || job?.status || '';
   const isFinished = effectiveStatus && !['running', 'queued'].includes(effectiveStatus);
   const isDry = Boolean(job?.dry_run);
@@ -140,10 +151,12 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   }
 
   function handleCopyOutput() {
-    const lines = [
-      ...historicalEvents.map((e) => `[${formatTime(e.timestamp)}] ${e.host ? e.host + ': ' : ''}${e.message}`),
-      ...liveEvents.map((e) => `[${formatTime(e.timestamp)}] ${e.host ? e.host + ': ' : ''}${e.message}`),
-    ].join('\n');
+    // Mirror the single-source render so the clipboard doesn't get the
+    // duplicated history+live concatenation either.
+    const src = showLive ? liveEvents : historicalEvents;
+    const lines = src
+      .map((e) => `[${formatTime(e.timestamp)}] ${e.host ? e.host + ': ' : ''}${e.message}`)
+      .join('\n');
     navigator.clipboard.writeText(lines).catch(() => alert('Copy failed'));
   }
 
@@ -182,22 +195,23 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
               border: '1px solid var(--border)',
             }}
           >
-            {historicalEvents.map((e, i) => (
-              <div key={`h-${i}`} className={`job-output-line ${e.level || 'info'}`}>
-                [{formatTime(e.timestamp)}] {e.host ? `${e.host}: ` : ''}{e.message}
-              </div>
-            ))}
-            {liveEvents.map((e, i) => (
-              <div key={`l-${i}`} className={`job-output-line ${e.level || 'info'}`}>
-                [{formatTime(e.timestamp)}] {e.host ? `${e.host}: ` : ''}{e.message}
-              </div>
-            ))}
+            {showLive
+              ? liveEvents.map((e, i) => (
+                  <div key={`l-${i}`} className={`job-output-line ${e.level || 'info'}`}>
+                    [{formatTime(e.timestamp)}] {e.host ? `${e.host}: ` : ''}{e.message}
+                  </div>
+                ))
+              : historicalEvents.map((e, i) => (
+                  <div key={`h-${i}`} className={`job-output-line ${e.level || 'info'}`}>
+                    [{formatTime(e.timestamp)}] {e.host ? `${e.host}: ` : ''}{e.message}
+                  </div>
+                ))}
             {liveStatus && (
               <div className="job-output-line success" style={{ marginTop: '0.5rem', fontWeight: 600 }}>
                 [Job Complete] Status: {liveStatus}
               </div>
             )}
-            {historicalEvents.length === 0 && liveEvents.length === 0 && (
+            {(showLive ? liveEvents.length === 0 : historicalEvents.length === 0) && (
               <div className="text-muted">No output yet…</div>
             )}
           </div>
