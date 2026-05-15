@@ -97,6 +97,20 @@ def _validate_ad_hoc_ip(ip_str: str) -> str:
     return ip_str
 
 
+def _template_lines(content: str) -> list[str]:
+    """Parse a template body into runnable command lines.
+
+    Strips blank lines and ``#`` comments.  Factored out so the flat
+    body and every per-device_type variant are parsed identically (the
+    three former copies of this comprehension could drift).
+    """
+    return [
+        line.rstrip()
+        for line in (content or "").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
 # ── Pydantic Models ──────────────────────────────────────────────────────────
 
 class JobLaunch(BaseModel):
@@ -312,22 +326,49 @@ async def _process_job_queue_inner():
         await db.add_job_event(job_id, "error", "No credential configured - set a default credential in Settings or select one when launching the job")
         return
 
-    # Get template commands
+    # Get template commands.  ``template_commands`` is the flat generic
+    # body used by every legacy playbook.  ``template_by_device_type``
+    # maps each distinct host device_type in this job to the body that
+    # resolve_template_for_device_type() picked for it (vendor-specific
+    # variant, else the generic sibling) - so a mixed-vendor group runs
+    # the right SNMPv3 syntax per host from one selected template.
     template_commands = []
+    template_by_device_type: dict[str, list[str]] = {}
     if next_job.get("template_id"):
         tpl = await db.get_template(next_job["template_id"])
         if tpl:
-            template_commands = [
-                line.rstrip() for line in tpl["content"].splitlines()
-                if line.strip() and not line.strip().startswith("#")
-            ]
+            template_commands = _template_lines(tpl["content"])
+        # Resolve the per-device_type bodies.  Iterate the distinct
+        # device_types actually present in this job's host set so we
+        # don't query for vendors that aren't targeted.
+        seen_dts = {h.get("device_type") or "" for h in hosts}
+        for dt in seen_dts:
+            resolved = await db.resolve_template_for_device_type(
+                next_job["template_id"], dt
+            )
+            if resolved:
+                template_by_device_type[dt] = _template_lines(resolved["content"])
 
-    # Resolve {{secret.NAME}} placeholders in template commands
+    # Resolve {{secret.NAME}} placeholders in every command body (the
+    # flat one and each per-device_type variant).  Secrets are resolved
+    # before any device is touched; a single missing secret fails the
+    # whole job rather than silently shipping an unresolved placeholder
+    # to a subset of hosts.
     _secret_redact_values: set[str] = set()
-    if template_commands and has_secret_references("\n".join(template_commands)):
+    _all_bodies = [template_commands, *template_by_device_type.values()]
+    _needs_secrets = any(
+        b and has_secret_references("\n".join(b)) for b in _all_bodies
+    )
+    if _needs_secrets:
         try:
-            _secret_redact_values = await build_redaction_set(template_commands)
-            template_commands = await resolve_secrets(template_commands)
+            for body in _all_bodies:
+                if body and has_secret_references("\n".join(body)):
+                    _secret_redact_values |= await build_redaction_set(body)
+            if template_commands:
+                template_commands = await resolve_secrets(template_commands)
+            for dt, body in list(template_by_device_type.items()):
+                if body:
+                    template_by_device_type[dt] = await resolve_secrets(body)
             await db.add_job_event(job_id, "info", "Secret variables resolved successfully")
         except SecretResolutionError as exc:
             await db.finish_job(job_id, status="failed")
@@ -385,7 +426,7 @@ async def _process_job_queue_inner():
             job_parameters = params_raw
         else:
             job_parameters = {}
-        task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run, _secret_redact_values, job_parameters))
+        task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run, _secret_redact_values, job_parameters, template_by_device_type))
     async with _running_tasks_lock:
         _running_job_tasks[job_id] = task
 
@@ -478,6 +519,7 @@ async def _run_job(
     dry_run: bool,
     secret_redact_values: set[str] | None = None,
     parameters: dict | None = None,
+    template_by_device_type: dict[str, list[str]] | None = None,
 ):
     """Background task: execute playbook, store events, broadcast via WebSocket."""
     hosts_ok = 0
@@ -527,6 +569,7 @@ async def _run_job(
         result = await execute_playbook(
             pb_class, hosts, credentials, template_commands, dry_run, on_event,
             parameters=parameters,
+            template_by_device_type=template_by_device_type,
         )
         await db.finish_job(
             job_id,
@@ -667,15 +710,19 @@ async def launch_job(body: JobLaunch, request: Request):
         "secret": decrypt(cred["secret"]) if cred["secret"] else "",
     }
 
-    # Get template commands
+    # Get template commands.  This is the pre-launch validation path:
+    # it only checks that secret references resolve before the job is
+    # queued.  Per-device_type variants are resolved at execution time
+    # in _run_job, but a vendor-specific body can reference its own
+    # secrets, so validate across every variant of the selected
+    # template (by name) - not just the row the operator clicked.
     template_commands = []
     if body.template_id:
         tpl = await db.get_template(body.template_id)
         if tpl:
-            template_commands = [
-                line.rstrip() for line in tpl["content"].splitlines()
-                if line.strip() and not line.strip().startswith("#")
-            ]
+            template_commands = _template_lines(tpl["content"])
+            for variant in await db.get_template_variants(tpl["name"]):
+                template_commands += _template_lines(variant["content"])
 
     # Validate that all {{secret.NAME}} references can be resolved
     if template_commands and has_secret_references("\n".join(template_commands)):

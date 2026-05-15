@@ -15,11 +15,16 @@ class TemplateCreate(BaseModel):
     name: str
     content: str
     description: str = ""
+    # Empty = generic body (any vendor).  A Netmiko device_type string
+    # (e.g. "paloalto_panos") makes this a vendor-specific variant of
+    # the same name; see migration 0040 / resolve_template_for_device_type.
+    device_type: str = ""
 
 class TemplateUpdate(BaseModel):
     name: str
     content: str
     description: str = ""
+    device_type: str = ""
 
 
 @router.get("/api/templates")
@@ -29,9 +34,12 @@ async def list_templates():
 
 @router.post("/api/templates", status_code=201)
 async def create_template(body: TemplateCreate, request: Request = None):
-    tid = await db.create_template(body.name, body.content, body.description)
+    tid = await db.create_template(
+        body.name, body.content, body.description, body.device_type
+    )
     session = _get_session(request) if request else None
-    await _audit("config", "template.create", user=session["user"] if session else "", detail=f"created template '{body.name}'", correlation_id=_corr_id(request))
+    _dt = f" [{body.device_type}]" if body.device_type else ""
+    await _audit("config", "template.create", user=session["user"] if session else "", detail=f"created template '{body.name}'{_dt}", correlation_id=_corr_id(request))
     return {"id": tid}
 
 
@@ -45,7 +53,9 @@ async def get_template(template_id: int):
 
 @router.put("/api/templates/{template_id}")
 async def update_template(template_id: int, body: TemplateUpdate, request: Request = None):
-    await db.update_template(template_id, body.name, body.content, body.description)
+    await db.update_template(
+        template_id, body.name, body.content, body.description, body.device_type
+    )
     session = _get_session(request) if request else None
     await _audit("config", "template.update", user=session["user"] if session else "", detail=f"updated template {template_id}", correlation_id=_corr_id(request))
     return {"ok": True}
