@@ -29,6 +29,7 @@ from netcontrol.drivers.arista_eos import AristaEOSDriver
 from netcontrol.drivers.cisco_ios import CiscoIOSDriver
 from netcontrol.drivers.cisco_nxos import CiscoNXOSDriver
 from netcontrol.drivers.cisco_xe import CiscoXEDriver
+from netcontrol.drivers.cisco_xr import CiscoXRDriver
 from netcontrol.drivers.juniper_junos import JuniperJunosDriver
 
 
@@ -67,8 +68,20 @@ def test_registered_device_types_includes_cisco_set() -> None:
     assert "cisco_xe" in types
     assert "cisco_nxos" in types
     assert "cisco_nxos_ssh" in types
+    assert "cisco_xr" in types
     assert "juniper_junos" in types
     assert "arista_eos" in types
+
+
+def test_registry_resolves_cisco_xr() -> None:
+    # Third Cisco driver after IOS / IOS-XE / NX-OS.  The Netmiko
+    # device_type string for IOS-XR is ``cisco_xr``, which is what
+    # routes/inventory.py and routes/snmp.py infer from XR device
+    # banners + sysDescr.  Vendor tag stays ``cisco`` (XR is a Cisco
+    # NOS), which groups XR with the other Cisco platforms when
+    # filtering by vendor.
+    assert isinstance(get_driver("cisco_xr"), CiscoXRDriver)
+    assert get_driver("cisco_xr").vendor == "cisco"
 
 
 def test_registry_resolves_arista_eos() -> None:
@@ -972,3 +985,226 @@ def test_arista_eos_commit_is_no_op() -> None:
     # commit knob analogous to IOS-XE's ``install commit``.  Empty
     # string signals "skip commit" to the route.
     assert get_driver("arista_eos").upgrade_commit_command() == ""
+
+
+# ── cisco_xr output ─────────────────────────────────────────────────────────
+
+
+def test_cisco_xr_build_netflow_config_uses_xr_nouns() -> None:
+    # XR NetFlow uses ``flow exporter-map`` / ``flow monitor-map`` /
+    # ``sampler-map`` nouns, not IOS-XE's ``flow exporter`` / ``flow
+    # monitor`` / ``sampler``.  Feeding XE Flexible NetFlow config at
+    # an XR session would parse-error on the very first ``flow record``
+    # line - XR has no such command.  The regression guard is that the
+    # output uses the XR ``-map`` suffixes and never contains XE's
+    # path-less keywords.
+    drv = get_driver("cisco_xr")
+    cmds = drv.build_netflow_config(_cfg())
+    joined = "\n".join(cmds)
+    assert "flow exporter-map PLEXUS-EXPORT" in joined
+    assert "flow monitor-map PLEXUS-MON" in joined
+    # XR's exporter destination + transport are inside the exporter-map
+    # stanza, same shape as XE but the parent keyword differs.
+    assert " destination 10.0.0.5" in cmds
+    assert " transport udp 2055" in cmds
+    # XE's flat noun set must not leak in.
+    assert "\nflow exporter PLEXUS-EXPORT" not in "\n" + joined
+    assert "\nflow monitor PLEXUS-MON" not in "\n" + joined
+    assert "flow record" not in joined
+    # Per-interface attachment uses ``flow ipv4 monitor ... ingress``,
+    # not XE's ``ip flow monitor ... input``.
+    assert " flow ipv4 monitor PLEXUS-MON ingress" in cmds
+    assert "ip flow monitor" not in joined
+
+
+def test_cisco_xr_netflow_includes_each_interface() -> None:
+    # Each requested interface must get its own per-interface stanza.
+    # A regression where only the first interface is bound would
+    # silently lose visibility on every other monitored port.
+    drv = get_driver("cisco_xr")
+    cmds = drv.build_netflow_config(
+        _cfg(interfaces=["GigabitEthernet0/0/0/0", "GigabitEthernet0/0/0/1"])
+    )
+    joined = "\n".join(cmds)
+    assert "interface GigabitEthernet0/0/0/0" in joined
+    assert "interface GigabitEthernet0/0/0/1" in joined
+
+
+def test_cisco_xr_emits_sampler_when_sampling_gt_1() -> None:
+    # XR's sampler-map is only emitted when sampling > 1, mirroring the
+    # XE driver's pattern.  Sampling rate of 1 means "every packet" and
+    # would produce a no-op sampler stanza, so the driver skips it.
+    drv = get_driver("cisco_xr")
+    low = drv.build_netflow_config(_cfg(sampling_rate=1))
+    high = drv.build_netflow_config(_cfg(sampling_rate=1024))
+    assert "sampler-map PLEXUS-SAMPLER" not in low
+    assert "sampler-map PLEXUS-SAMPLER" in high
+    # When sampling fires, the rate flows into ``random 1 out-of N``.
+    assert " random 1 out-of 1024" in high
+    # And the per-interface attachment picks up the sampler reference.
+    assert any("sampler PLEXUS-SAMPLER ingress" in c for c in high)
+
+
+def test_cisco_xr_verify_command() -> None:
+    # ``show flow exporter-map`` is the XR analogue to XE's ``show
+    # flow exporter``.  The XE wording (no ``-map`` suffix) does not
+    # exist on XR and parse-errors.
+    assert (
+        get_driver("cisco_xr").netflow_verify_command()
+        == "show flow exporter-map PLEXUS-EXPORT"
+    )
+
+
+def test_cisco_xr_config_capture_and_save() -> None:
+    # XR is commit-based: ``show running-config`` dumps the active
+    # committed config, but pushing config requires ``commit`` for it
+    # to take effect.  Without commit, candidate edits sit pending
+    # forever - an empty save_config_commands list would silently
+    # leave SNMPv3 / NetFlow changes uncommitted.
+    drv = get_driver("cisco_xr")
+    assert drv.capture_running_config_command() == "show running-config"
+    assert drv.save_config_commands() == ["commit"]
+    # Regression guard: XR must not emit IOS / IOS-XE's ``write memory``
+    # or NX-OS's ``copy running-config startup-config`` - those are not
+    # XR commands and would parse-error.
+    assert drv.save_config_commands() != ["write memory"]
+    assert drv.save_config_commands() != ["copy running-config startup-config"]
+
+
+def test_cisco_xr_snmpv3_capability_surface() -> None:
+    # XR mirrors IOS-XE's ``snmp-server`` config noun and supports
+    # ``snmp-server engineID local`` pinning - unlike NX-OS / Junos,
+    # which return empty strings because their engine ID is platform-
+    # managed.  This test locks in that XR gets the real pin command
+    # (matching IOS / IOS-XE / EOS).  Without pinning, an engine-ID
+    # regen on XR would localize-invalidate every existing SNMPv3
+    # user, same risk as on IOS-XE.
+    drv = get_driver("cisco_xr")
+    assert drv.snmpv3_show_existing_command() == "show running-config | include snmp-server"
+    # XR's show form uses lowercase ``engineid`` (XR's CLI completion
+    # shows the lowercase form), different from XE's ``engineID``.
+    assert drv.snmpv3_engine_id_show_command() == "show snmp engineid"
+    assert (
+        drv.snmpv3_engine_id_pin_command("80000009030022FFEE11AABB")
+        == "snmp-server engineID local 80000009030022FFEE11AABB"
+    )
+    assert drv.snmpv3_verify_users_command() == "show snmp user"
+
+
+def test_cisco_xr_health_check_capability_surface() -> None:
+    drv = get_driver("cisco_xr")
+    assert drv.show_version_command() == "show version"
+    # XR labels the serial ``Serial Number`` (capital N) with a colon -
+    # different from EOS's lowercase-n ``Serial number:`` and from
+    # IOS / IOS-XE's ``System Serial Number``.  The quoted phrase
+    # matters because XR's include filter is case-sensitive by default.
+    assert drv.serial_number_show_command() == 'show version | include "Serial Number"'
+    # Typical XR show-version line:
+    #   ``Serial Number   : FOX2436A0XX``
+    # (label + variable whitespace + colon + variable whitespace +
+    # value, same general shape as IOS-XE but with the different label
+    # casing).
+    sample = (
+        "Cisco IOS XR Software, Version 7.5.2\n"
+        "ROM: System Bootstrap, Version 1.10\n"
+        "Serial Number   : FOX2436A0XX\n"
+        "Chassis : ASR-9006-AC-V2\n"
+    )
+    assert drv.parse_serial_number(sample) == "FOX2436A0XX"
+
+
+def test_cisco_xr_parse_serial_is_case_sensitive_vs_eos() -> None:
+    # The case-sensitivity is the explicit boundary between the XR
+    # parser and the EOS parser - both platforms label the same field
+    # but differ only in the capitalisation of "Number" / "number".
+    # A future refactor that switches to ``.lower()`` would silently
+    # start accepting EOS-shaped lines, and cross-vendor parser mixups
+    # are exactly the bug class the driver framework exists to prevent.
+    drv = get_driver("cisco_xr")
+    # EOS-shaped line (lowercase ``number``) must NOT match the XR
+    # parser even though the value looks valid - if it matched, an
+    # XR fetch-serial against a mis-classified EOS device would return
+    # bogus data instead of None.
+    assert drv.parse_serial_number("Serial number: ABC123XYZ\n") is None
+    # IOS / IOS-XE wording must also not match XR.
+    assert drv.parse_serial_number("System Serial Number : FCW2346L0AJ") is None
+
+
+def test_cisco_xr_parse_serial_rejects_unrelated_lines() -> None:
+    # XR's ``show version`` includes lines like ``System image file is``
+    # and ``Cisco IOS XR Software, Version`` that do not contain the
+    # ``Serial Number`` phrase.  The parser must anchor on the leading
+    # phrase so those lines don't accidentally produce a serial.
+    drv = get_driver("cisco_xr")
+    noise = (
+        "Cisco IOS XR Software, Version 7.5.2\n"
+        "System image file is harddisk:asr9k-mini-x64-7.5.2.iso\n"
+        "Configuration register is 0x2102\n"
+    )
+    assert drv.parse_serial_number(noise) is None
+
+
+def test_cisco_xr_upgrade_has_discrete_prestage() -> None:
+    # XR install mode has a real two-phase workflow: ``install add
+    # source`` pre-stages packages into the install repository, then
+    # ``install activate`` later flips to them and reboots.  The route
+    # uses this to keep transfer / add distinct from activate-and-reboot
+    # so the operator can approve activate in a maintenance window
+    # after the slow upload finishes (same shape as IOS-XE install
+    # mode).  Flipping this to False would collapse the two phases
+    # into one and remove the approval gate from the XR upgrade flow.
+    assert get_driver("cisco_xr").upgrade_has_discrete_prestage() is True
+
+
+def test_cisco_xr_install_add_command_uses_source_keyword() -> None:
+    # The ``source`` keyword is required - without it XR interprets
+    # the command as ``install add`` with a missing argument and
+    # prompts interactively.  Regression guard against dropping the
+    # keyword and hanging every XR upgrade at a prompt.  ``image_path``
+    # is the device-side full path (e.g. ``harddisk:asr9k-...iso``);
+    # the driver doesn't second-guess the caller's path format.
+    drv = get_driver("cisco_xr")
+    assert (
+        drv.upgrade_install_add_command("harddisk:asr9k-mini-x64-7.5.2.iso")
+        == "install add source harddisk:asr9k-mini-x64-7.5.2.iso"
+    )
+
+
+def test_cisco_xr_install_add_preserves_caller_path_format() -> None:
+    # XR's filesystem is ``harddisk:`` or ``disk0:`` rather than
+    # IOS-XE's ``flash:``, but the driver does not normalize the
+    # caller's prefix.  Regression guard against silently rewriting
+    # the path - if the caller picked ``disk0:`` for a reason (e.g.
+    # the active boot disk on this chassis differs from the default),
+    # the driver must not change it to ``harddisk:``.
+    drv = get_driver("cisco_xr")
+    assert (
+        drv.upgrade_install_add_command("disk0:asr9k-mini-x64-7.5.2.iso")
+        == "install add source disk0:asr9k-mini-x64-7.5.2.iso"
+    )
+
+
+def test_cisco_xr_activate_uses_synchronous_keyword() -> None:
+    # Bare ``install activate`` activates all newly-added inactive
+    # packages - no op-ID argument needed when stage and activate run
+    # back-to-back in the route.  ``synchronous`` makes the command
+    # block until activate completes (or the reload drops the SSH
+    # session), which is the XR equivalent of XE's ``prompt-level
+    # none`` - both suppress the interactive prompt that would
+    # otherwise hang the route.  Image path is not interpolated
+    # because the activate operates on whatever was just added.
+    drv = get_driver("cisco_xr")
+    cmds = drv.upgrade_activate_commands("harddisk:asr9k-mini-x64-7.5.2.iso")
+    assert cmds == ["install activate synchronous"]
+    # XE's ``prompt-level none`` noun must not leak into XR - it's
+    # not a valid XR keyword and would parse-error.
+    assert "prompt-level" not in cmds[0]
+
+
+def test_cisco_xr_commit_command() -> None:
+    # Without ``install commit`` an XR box auto-rolls-back to the
+    # prior image on the *next* reload, silently undoing the upgrade.
+    # Same risk and same fix as IOS-XE install mode.  Regression guard
+    # against returning an empty string here (which would short-circuit
+    # the commit step in the route and leave XR pending auto-rollback).
+    assert get_driver("cisco_xr").upgrade_commit_command() == "install commit"

@@ -28,6 +28,7 @@ from netcontrol.drivers import (  # noqa: F401
     cisco_ios,
     cisco_nxos,
     cisco_xe,
+    cisco_xr,
     juniper_junos,
 )
 from netcontrol.drivers.base import (
