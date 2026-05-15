@@ -3,7 +3,6 @@ inventory.py -- Inventory group/host CRUD, discovery, and SNMP profile routes.
 """
 from __future__ import annotations
 
-
 import asyncio
 import csv
 import io
@@ -18,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 import netcontrol.routes.state as state
+from netcontrol.drivers import GenericDriver, get_driver
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _run_show_command
 from netcontrol.routes.snmp import (
@@ -516,7 +516,7 @@ async def admin_list_snmp_profiles():
 
 async def _validate_snmp_profile_secrets(profile: dict):
     """Check that any {{secret.NAME}} references in v3 passwords exist."""
-    from routes.secret_resolver import has_secret_references, extract_secret_names
+    from routes.secret_resolver import extract_secret_names, has_secret_references
     v3 = profile.get("v3", {})
     for field_name in ("auth_password", "priv_password"):
         value = v3.get(field_name, "")
@@ -789,10 +789,14 @@ async def remove_host(host_id: int):
 
 @router.post("/api/hosts/{host_id}/fetch-serial")
 async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Request):
-    """SSH to the device and run 'show version | include System Serial Number'.
+    """SSH to the device and pull its chassis serial via the vendor driver.
 
     Stores the parsed serial in the DB and returns it.  Requires a stored
     credential ID so the caller selects which credential set to use.
+    The show command and the parser both come from the device's driver,
+    so NX-OS hosts (which print "Processor Board ID" instead of "System
+    Serial Number") and future non-Cisco vendors work without branching
+    here.
     """
     host = await db.get_host(host_id)
     if not host:
@@ -801,22 +805,23 @@ async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Req
     if not cred:
         raise HTTPException(404, "Credential not found")
 
+    driver = get_driver(host.get("device_type"))
+    if isinstance(driver, GenericDriver):
+        raise HTTPException(
+            422,
+            f"No driver registered for device_type={host.get('device_type')!r}; "
+            "cannot fetch serial number for this vendor.",
+        )
+
     try:
         output = await _run_show_command(
-            host, cred, "show version | include System Serial Number"
+            host, cred, driver.serial_number_show_command()
         )
     except Exception:
         LOGGER.warning("fetch-serial SSH failed for host_id=%s ip=%s", host_id, host.get("ip_address"))
         raise HTTPException(502, "Could not connect to device")
 
-    # Output example: "System Serial Number: FCW2346L0AJ"
-    serial = ""
-    for line in output.splitlines():
-        if "System Serial Number" in line:
-            parts = line.split(":", 1)
-            if len(parts) == 2:
-                serial = parts[1].strip()
-                break
+    serial = driver.parse_serial_number(output) or ""
 
     if not serial:
         raise HTTPException(422, "Serial number not found in command output")
@@ -849,17 +854,24 @@ async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, requ
 
     async def _fetch_one(host: dict) -> dict:
         async with sem:
+            # Per-host driver lookup keeps the bulk-fetch generic across
+            # mixed-vendor groups - an IOS host and an NX-OS host in the
+            # same group both work, with each getting its own show command
+            # and parser.  Unknown vendors are surfaced as a per-row error
+            # rather than aborting the whole batch.
+            driver = get_driver(host.get("device_type"))
+            if isinstance(driver, GenericDriver):
+                return {
+                    "host_id": host["id"],
+                    "hostname": host["hostname"],
+                    "error": f"No driver for device_type={host.get('device_type')!r}",
+                    "ok": False,
+                }
             try:
                 output = await _run_show_command(
-                    host, cred, "show version | include System Serial Number"
+                    host, cred, driver.serial_number_show_command()
                 )
-                serial = ""
-                for line in output.splitlines():
-                    if "System Serial Number" in line:
-                        parts = line.split(":", 1)
-                        if len(parts) == 2:
-                            serial = parts[1].strip()
-                            break
+                serial = driver.parse_serial_number(output) or ""
                 if serial:
                     await db.update_host_serial(host["id"], serial)
                     return {"host_id": host["id"], "hostname": host["hostname"], "serial_number": serial, "ok": True}

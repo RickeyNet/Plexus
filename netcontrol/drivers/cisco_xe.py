@@ -77,3 +77,18 @@ class CiscoXEDriver(Driver):
 
     def snmpv3_verify_users_command(self) -> str:
         return "show snmp user"
+
+    def show_version_command(self) -> str:
+        return "show version"
+
+    def serial_number_show_command(self) -> str:
+        return "show version | include System Serial Number"
+
+    def parse_serial_number(self, output: str) -> str | None:
+        # IOS-XE prints the same "System Serial Number" line as IOS.
+        for line in output.splitlines():
+            if "System Serial Number" in line:
+                parts = line.split(":", 1)
+                if len(parts) == 2 and parts[1].strip():
+                    return parts[1].strip()
+        return None
