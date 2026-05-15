@@ -28,6 +28,7 @@ import { Inventory } from '@/pages/Inventory/Inventory';
 import { Ipam } from '@/pages/Ipam/Ipam';
 import { Jobs } from '@/pages/Jobs/Jobs';
 import { Lab } from '@/pages/Lab';
+import { MaintenanceWindows } from '@/pages/MaintenanceWindows/MaintenanceWindows';
 import { Monitoring } from '@/pages/Monitoring/Monitoring';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
@@ -52,6 +53,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/change-management': 'Changes',
   '/risk-analysis': 'Risk Analysis',
   '/deployments': 'Deployments',
+  '/maintenance-windows': 'Maintenance Windows',
   '/upgrades': 'Delegator · Upgrades',
   '/reports': 'Reports',
   '/graph-templates': 'Graph Templates',
@@ -198,6 +200,7 @@ export function App() {
           <Route path="/change-management" element={<ChangeManagement />} />
           <Route path="/risk-analysis" element={<RiskAnalysis />} />
           <Route path="/deployments" element={<Deployments />} />
+          <Route path="/maintenance-windows" element={<MaintenanceWindows />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/graph-templates" element={<GraphTemplates />} />
           {/* Delegator: one page renders all five tabs. The legacy paths
