@@ -7,8 +7,8 @@ import {
   type InventoryGroupFull,
   type ScanStreamEvent,
   streamScanInventoryGroup,
+  streamSyncInventoryGroup,
   useOnboardDiscoveredHosts,
-  useSyncInventoryGroup,
   useTestGroupSnmpProfile,
 } from '@/api/inventory';
 
@@ -36,12 +36,13 @@ interface ScanState {
   currentIp: string;
   feed: { ip: string; hostname?: string; deviceType?: string }[];
   startedAt: number;
+  // Sync only: probing finished, now reconciling with the database.
+  syncing: boolean;
 }
 
 export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const isSync = mode === 'sync';
   const isGlobal = mode === 'global';
-  const sync = useSyncInventoryGroup();
   const onboard = useOnboardDiscoveredHosts();
   const testSnmp = useTestGroupSnmpProfile();
 
@@ -132,28 +133,8 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
       return;
     }
 
-    if (isSync) {
-      try {
-        const targetGroupId = group?.id ?? groupId;
-        const r = await sync.mutateAsync({
-          groupId: targetGroupId,
-          cidrs: parsedCidrs,
-          opts: buildOpts(),
-        });
-        const s = r.sync || {};
-        setSyncResult({
-          added: s.added || 0,
-          updated: s.updated || 0,
-          removed: s.removed || 0,
-        });
-        setPhase('sync-result');
-      } catch (err) {
-        setError(`Sync failed: ${(err as Error).message}`);
-      }
-      return;
-    }
-
-    // Per-group scan or global scan: stream live progress.
+    // Scan and sync both stream live per-host progress; sync ends with a
+    // reconcile phase and a result card, scan ends with a results picker.
     setPhase('scanning');
     setScanState({
       total: null,
@@ -162,10 +143,71 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
       currentIp: '',
       feed: [],
       startedAt: Date.now(),
+      syncing: false,
     });
 
     const abort = new AbortController();
     scanAbortRef.current = abort;
+
+    if (isSync) {
+      try {
+        const targetGroupId = group?.id ?? groupId;
+        let finalSync: SyncResult | null = null;
+        await streamSyncInventoryGroup(
+          targetGroupId,
+          parsedCidrs,
+          buildOpts(),
+          (event: ScanStreamEvent) => {
+            if (event.type === 'start') {
+              setScanState((prev) =>
+                prev ? { ...prev, total: event.total ?? prev.total } : prev,
+              );
+            } else if (event.type === 'progress') {
+              setScanState((prev) => {
+                if (!prev) return prev;
+                const next = {
+                  ...prev,
+                  scanned: event.scanned ?? prev.scanned,
+                  currentIp: event.ip ?? prev.currentIp,
+                };
+                if (event.found && event.host) {
+                  next.found = prev.found + 1;
+                  next.feed = [
+                    ...prev.feed,
+                    {
+                      ip: event.host.ip_address,
+                      hostname: event.host.hostname,
+                      deviceType: event.host.device_type,
+                    },
+                  ];
+                }
+                return next;
+              });
+            } else if (event.type === 'syncing') {
+              setScanState((prev) => (prev ? { ...prev, syncing: true } : prev));
+            } else if (event.type === 'done') {
+              const s = event.sync || {};
+              finalSync = {
+                added: s.added || 0,
+                updated: s.updated || 0,
+                removed: s.removed || 0,
+              };
+            }
+          },
+          abort.signal,
+        );
+
+        setSyncResult(finalSync ?? { added: 0, updated: 0, removed: 0 });
+        setPhase('sync-result');
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+        setError(`Sync failed: ${(err as Error).message}`);
+        setPhase('form');
+      } finally {
+        scanAbortRef.current = null;
+      }
+      return;
+    }
 
     try {
       let finalDiscovered: DiscoveredHost[] = [];
@@ -355,14 +397,25 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     const elapsed = Math.floor((tickNow - scanState.startedAt) / 1000);
     const elapsedLabel =
       elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
-    const pct = scanState.total ? (scanState.scanned / scanState.total) * 100 : 0;
+    const pct = scanState.syncing
+      ? 100
+      : scanState.total
+        ? (scanState.scanned / scanState.total) * 100
+        : 0;
     return (
-      <Modal isOpen onClose={onClose} title="Scanning Network" size="large">
+      <Modal
+        isOpen
+        onClose={onClose}
+        title={isSync ? title : 'Scanning Network'}
+        size="large"
+      >
         <div style={{ padding: '1rem 0.5rem' }}>
           <div style={{ marginBottom: '0.75rem', fontWeight: 600 }}>
-            {scanState.total
-              ? `Scanning ${scanState.total} host(s)…`
-              : 'Initializing scan…'}
+            {scanState.syncing
+              ? 'Saving inventory changes…'
+              : scanState.total
+                ? `${isSync ? 'Syncing' : 'Scanning'} ${scanState.total} host(s)…`
+                : `Initializing ${isSync ? 'sync' : 'scan'}…`}
           </div>
           <div
             style={{
@@ -406,8 +459,10 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
               marginBottom: '0.5rem',
             }}
           >
-            Elapsed: {elapsedLabel} · Currently scanning:{' '}
-            {scanState.currentIp || '…'}
+            Elapsed: {elapsedLabel} ·{' '}
+            {scanState.syncing
+              ? 'Reconciling with inventory…'
+              : `Currently scanning: ${scanState.currentIp || '…'}`}
           </div>
           <div
             style={{
@@ -748,12 +803,10 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={sync.isPending || testSnmp.isPending}
+            disabled={testSnmp.isPending}
           >
             {isSync
-              ? sync.isPending
-                ? 'Syncing…'
-                : 'Run Sync'
+              ? 'Run Sync'
               : testOnly
                 ? testSnmp.isPending
                   ? 'Testing…'
