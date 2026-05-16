@@ -1,8 +1,10 @@
 import { useMemo } from 'react';
 
 import {
+  type Annotation,
   type DashboardPanel,
   type MetricSample,
+  useAnnotations,
   useMetricsQuery,
 } from '@/api/dashboard';
 import { BarChart, GaugeChart, HeatmapChart, TimeSeriesChart } from '@/lib/echart';
@@ -55,6 +57,14 @@ export function Panel({ panel, variables, range, editing, onEdit, onDelete }: Pa
     group: groupNum != null && Number.isFinite(groupNum) ? groupNum : null,
   });
 
+  // Legacy parity: deployment/config/alert markers only overlay line charts.
+  const isLine = !['gauge', 'bar', 'heatmap', 'table'].includes(panel.chart_type);
+  const annotationsQuery = useAnnotations({
+    host,
+    range: queryRange,
+    enabled: isLine,
+  });
+
   const items = query.data?.data ?? [];
 
   const gridStyle: React.CSSProperties = {
@@ -92,6 +102,7 @@ export function Panel({ panel, variables, range, editing, onEdit, onDelete }: Pa
           items={items}
           isPending={query.isPending}
           error={query.error}
+          annotations={annotationsQuery.data}
         />
       </div>
     </div>
@@ -104,9 +115,10 @@ interface PanelBodyProps {
   items: MetricSample[];
   isPending: boolean;
   error: unknown;
+  annotations?: Annotation[];
 }
 
-function PanelBody({ chartType, metric, items, isPending, error }: PanelBodyProps) {
+function PanelBody({ chartType, metric, items, isPending, error, annotations }: PanelBodyProps) {
   if (isPending) {
     return <div className="skeleton skeleton-card" style={{ height: '100%' }} />;
   }
@@ -157,6 +169,7 @@ function PanelBody({ chartType, metric, items, isPending, error }: PanelBodyProp
     <TimeSeriesChart
       series={series.length ? series : [{ name: metric, data: [] }]}
       area
+      annotations={annotations}
     />
   );
 }
