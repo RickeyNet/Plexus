@@ -216,7 +216,7 @@
     --topo-dim-edge-hi: rgba(75, 105, 145, 0.34);
 }
 
-/* Astral: use space-scene image instead of floating orbs.
+/* Astral: use space-scene image as background.
    Image lives on .animated-bg (already position:fixed) - avoids
    background-attachment:fixed which kills GPU compositing on scroll. */
 [data-theme="astral"] .animated-bg {
@@ -229,17 +229,8 @@
     background: transparent;
 }
 
-[data-theme="astral"] .gradient-orb {
-    display: none;
-}
-
 [data-theme="astral"] .login-screen {
     background: transparent;
-}
-
-[data-theme="astral"] .login-screen::before,
-[data-theme="astral"] .login-screen::after {
-    display: none;
 }
 
 [data-theme="astral"] .space-nebula,
@@ -493,7 +484,7 @@
 
 /* ─── Sandstone depth & immersion overrides ─── */
 
-/* Sandstone: use desert painting as background, hide orbs/stars.
+/* Sandstone: use desert painting as background, hide stars.
    Image lives on .animated-bg (already position:fixed) - avoids
    background-attachment:fixed which kills GPU compositing on scroll. */
 [data-theme="sandstone"] .animated-bg {
@@ -502,17 +493,8 @@
         url('../img/sandstone-bg.webp') center/cover no-repeat;
 }
 
-[data-theme="sandstone"] .gradient-orb {
-    display: none;
-}
-
 [data-theme="sandstone"] .login-particles,
 [data-theme="sandstone"] .app-particles {
-    display: none;
-}
-
-[data-theme="sandstone"] .login-screen::before,
-[data-theme="sandstone"] .login-screen::after {
     display: none;
 }
 
@@ -1100,34 +1082,6 @@ body {
     z-index: 1;
 }
 
-.login-screen::before,
-.login-screen::after {
-    content: '';
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(60px);
-    opacity: calc(0.2 + var(--space-intensity) * 0.15);
-    pointer-events: none;
-    z-index: 0;
-}
-
-.login-screen::before {
-    width: 500px;
-    height: 500px;
-    background: var(--primary);
-    top: -15%;
-    left: -10%;
-    animation: orb-drift-1 25s ease-in-out infinite alternate;
-}
-
-.login-screen::after {
-    width: 400px;
-    height: 400px;
-    background: var(--primary-dark);
-    bottom: -15%;
-    right: -10%;
-    animation: orb-drift-2 30s ease-in-out infinite alternate;
-}
 
 .login-card {
     background: rgba(from var(--card-bg) r g b / 0.6);
@@ -1256,41 +1210,6 @@ body {
         linear-gradient(150deg, color-mix(in srgb, var(--space-bg-1) 70%, var(--bg)) 0%, transparent 72%);
 }
 
-.gradient-orb {
-    position: absolute;
-    border-radius: 50%;
-    opacity: calc(0.28 + var(--space-intensity) * 0.22);
-    will-change: transform;
-    mix-blend-mode: screen;
-}
-
-.orb-1 {
-    width: 600px;
-    height: 600px;
-    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 72%, transparent) 0%, transparent 72%);
-    top: -10%;
-    left: -5%;
-    animation: orb-drift-1 25s ease-in-out infinite alternate;
-}
-
-.orb-2 {
-    width: 500px;
-    height: 500px;
-    background: radial-gradient(circle, color-mix(in srgb, var(--primary-dark) 72%, transparent) 0%, transparent 74%);
-    bottom: -15%;
-    right: -10%;
-    animation: orb-drift-2 30s ease-in-out infinite alternate;
-}
-
-.orb-3 {
-    width: 350px;
-    height: 350px;
-    background: radial-gradient(circle, color-mix(in srgb, var(--primary-light) 70%, transparent) 0%, transparent 73%);
-    top: 50%;
-    left: 40%;
-    animation: orb-drift-3 20s ease-in-out infinite alternate;
-}
-
 @keyframes nebula-drift-a {
     0%   { transform: translate3d(0, 0, 0) scale(1); }
     100% { transform: translate3d(5vw, 4vh, 0) scale(1.12); }
@@ -1304,24 +1223,6 @@ body {
 @keyframes nebula-drift-c {
     0%   { transform: translate3d(0, 0, 0) scale(1); }
     100% { transform: translate3d(4vw, -4vh, 0) scale(1.1); }
-}
-
-@keyframes orb-drift-1 {
-    0%   { transform: translate3d(0, 0, 0) scale(1); }
-    50%  { transform: translate3d(15vw, 20vh, 0) scale(1.15); }
-    100% { transform: translate3d(5vw, 35vh, 0) scale(0.95); }
-}
-
-@keyframes orb-drift-2 {
-    0%   { transform: translate3d(0, 0, 0) scale(1); }
-    50%  { transform: translate3d(-20vw, -15vh, 0) scale(1.1); }
-    100% { transform: translate3d(-10vw, -25vh, 0) scale(0.9); }
-}
-
-@keyframes orb-drift-3 {
-    0%   { transform: translate3d(0, 0, 0) scale(1); }
-    50%  { transform: translate3d(10vw, -10vh, 0) scale(1.2); }
-    100% { transform: translate3d(-5vw, 5vh, 0) scale(0.85); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -3749,10 +3650,6 @@ code {
     transition-duration: 0.1s !important;
 }
 
-.reduced-motion .gradient-orb,
-.reduced-motion .orb-1,
-.reduced-motion .orb-2,
-.reduced-motion .orb-3,
 .reduced-motion .space-nebula {
     display: none !important;
 }
@@ -3815,10 +3712,6 @@ code {
         transition-duration: 0.1s !important;
     }
 
-    .gradient-orb,
-    .orb-1,
-    .orb-2,
-    .orb-3,
     .space-nebula {
         display: none !important;
     }
