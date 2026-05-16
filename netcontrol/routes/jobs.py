@@ -338,16 +338,21 @@ async def _process_job_queue_inner():
         tpl = await db.get_template(next_job["template_id"])
         if tpl:
             template_commands = _template_lines(tpl["content"])
-        # Resolve the per-device_type bodies.  Iterate the distinct
-        # device_types actually present in this job's host set so we
-        # don't query for vendors that aren't targeted.
-        seen_dts = {h.get("device_type") or "" for h in hosts}
-        for dt in seen_dts:
-            resolved = await db.resolve_template_for_device_type(
-                next_job["template_id"], dt
-            )
-            if resolved:
-                template_by_device_type[dt] = _template_lines(resolved["content"])
+            # Resolve the per-device_type bodies.  This runs on the
+            # queued→running critical path, so do it off exactly two
+            # queries: the selected row (above) plus every row sharing
+            # its name, then resolve each device_type in memory with
+            # the same rule as resolve_template_for_device_type().
+            # (Looping that DB call once per device_type instead would
+            # open ~3 fresh aiosqlite connections each - the launch
+            # latency the operator reported.)
+            variants = await db.get_template_variants(tpl["name"])
+            seen_dts = {h.get("device_type") or "" for h in hosts}
+            for dt in seen_dts:
+                resolved = db.resolve_variant_in_memory(tpl, variants, dt)
+                template_by_device_type[dt] = _template_lines(
+                    resolved["content"]
+                )
 
     # Resolve {{secret.NAME}} placeholders in every command body (the
     # flat one and each per-device_type variant).  Secrets are resolved
