@@ -11196,6 +11196,167 @@ BUILT_IN_GRAPH_TEMPLATES = [
              "legend_format": "Avg: {avg}ms Max: {max}ms"},
         ],
     },
+    # ── Get-started pack ───────────────────────────────────────────────────
+    # The templates below reference metric names the monitoring poller
+    # actually emits into metric_samples (see metrics_engine
+    # .emit_metric_samples_from_poll), so they plot real data on a fresh
+    # install with zero manual setup.
+    {
+        "name": "Response Time",
+        "description": "Polled round-trip response time (SNMP/ICMP) over time",
+        "graph_type": "line",
+        "category": "availability",
+        "scope": "device",
+        "title_format": "Response Time",
+        "y_axis_label": "ms",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"metric_name": "response_time_ms", "label": "Response Time",
+             "color": "#06B6D4", "line_type": "area", "consolidation": "avg",
+             "legend_format": "Avg: {avg}ms Max: {max}ms"},
+        ],
+    },
+    {
+        "name": "Packet Loss",
+        "description": "Percentage of probe packets lost over time",
+        "graph_type": "line",
+        "category": "availability",
+        "scope": "device",
+        "title_format": "Packet Loss",
+        "y_axis_label": "Percent",
+        "y_min": 0,
+        "y_max": 100,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"metric_name": "packet_loss_pct", "label": "Loss %",
+             "color": "#EF4444", "line_type": "area", "consolidation": "avg",
+             "legend_format": "Avg: {avg}% Max: {max}%"},
+        ],
+    },
+    {
+        "name": "System Overview",
+        "description": "CPU and memory utilization on one chart for an at-a-glance health view",
+        "graph_type": "line",
+        "category": "system",
+        "scope": "device",
+        "title_format": "System Overview",
+        "y_axis_label": "Percent",
+        "y_min": 0,
+        "y_max": 100,
+        "stacked": False,
+        "area_fill": False,
+        "items": [
+            {"sort_order": 0, "metric_name": "cpu_percent", "label": "CPU %",
+             "color": "#3B82F6", "line_type": "line", "consolidation": "avg",
+             "legend_format": "CPU avg: {avg}% peak: {max}%"},
+            {"sort_order": 1, "metric_name": "memory_percent", "label": "Memory %",
+             "color": "#8B5CF6", "line_type": "line", "consolidation": "avg",
+             "legend_format": "Mem avg: {avg}% peak: {max}%"},
+        ],
+    },
+    {
+        "name": "Memory (MB)",
+        "description": "Absolute memory used versus total in megabytes",
+        "graph_type": "line",
+        "category": "system",
+        "scope": "device",
+        "title_format": "Memory (MB)",
+        "y_axis_label": "MB",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"sort_order": 0, "metric_name": "memory_used_mb", "label": "Used",
+             "color": "#8B5CF6", "line_type": "area", "consolidation": "avg",
+             "legend_format": "Used avg: {avg} MB"},
+            {"sort_order": 1, "metric_name": "memory_total_mb", "label": "Total",
+             "color": "#64748B", "line_type": "line", "consolidation": "last",
+             "legend_format": "Total: {last} MB"},
+        ],
+    },
+    {
+        "name": "Interface Up/Down Count",
+        "description": "Number of interfaces operationally up vs down on the device",
+        "graph_type": "line",
+        "category": "availability",
+        "scope": "device",
+        "title_format": "Interfaces Up / Down",
+        "y_axis_label": "Interfaces",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": False,
+        "items": [
+            {"sort_order": 0, "metric_name": "if_up_count", "label": "Up",
+             "color": "#10B981", "line_type": "line", "consolidation": "avg",
+             "legend_format": "Up: {last}"},
+            {"sort_order": 1, "metric_name": "if_down_count", "label": "Down",
+             "color": "#EF4444", "line_type": "line", "consolidation": "avg",
+             "legend_format": "Down: {last}"},
+        ],
+    },
+    {
+        "name": "Routing Table Size",
+        "description": "Number of routes in the device routing table over time",
+        "graph_type": "line",
+        "category": "system",
+        "scope": "device",
+        "title_format": "Routing Table Size",
+        "y_axis_label": "Routes",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"metric_name": "route_count", "label": "Routes",
+             "color": "#0EA5E9", "line_type": "area", "consolidation": "avg",
+             "legend_format": "Avg: {avg} Max: {max}"},
+        ],
+    },
+    {
+        "name": "VPN Tunnels",
+        "description": "Count of VPN tunnels up vs down (firewalls / VPN gateways)",
+        "graph_type": "line",
+        "category": "availability",
+        "scope": "device",
+        "title_format": "VPN Tunnels",
+        "y_axis_label": "Tunnels",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": False,
+        "items": [
+            {"sort_order": 0, "metric_name": "vpn_tunnels_up", "label": "Up",
+             "color": "#10B981", "line_type": "line", "consolidation": "avg",
+             "legend_format": "Up: {last}"},
+            {"sort_order": 1, "metric_name": "vpn_tunnels_down", "label": "Down",
+             "color": "#EF4444", "line_type": "line", "consolidation": "avg",
+             "legend_format": "Down: {last}"},
+        ],
+    },
+    {
+        "name": "Device Uptime (Days)",
+        "description": "Device uptime trend in days",
+        "graph_type": "line",
+        "category": "system",
+        "scope": "device",
+        "title_format": "Uptime (Days)",
+        "y_axis_label": "Days",
+        "y_min": 0,
+        "y_max": None,
+        "stacked": False,
+        "area_fill": True,
+        "items": [
+            {"metric_name": "uptime_seconds", "label": "Uptime",
+             "color": "#10B981", "line_type": "area", "consolidation": "last",
+             "transform": "div,86400", "legend_format": "{last} days"},
+        ],
+    },
 ]
 
 
@@ -11245,11 +11406,18 @@ async def seed_built_in_graph_templates() -> int:
             created += 1
             _LOGGER.info("Seeded built-in graph template: %s (id=%s)", tpl_def["name"], tpl_id)
 
-        # Seed a default host template that links all device-scope built-in templates
+        # Ensure the default host template exists, then (re)link every
+        # built-in device-scope graph template into it.  The link backfill
+        # runs every startup -- not just on first creation -- so newly
+        # added built-ins auto-apply on upgrade, not only on fresh installs.
+        # INSERT OR IGNORE keeps it idempotent.
         cursor_ht = await db.execute(
             "SELECT id FROM host_templates WHERE name = 'Default (All Devices)'"
         )
-        if not await cursor_ht.fetchone():
+        ht_row = await cursor_ht.fetchone()
+        if ht_row:
+            ht_id = ht_row[0] if isinstance(ht_row, tuple) else dict(ht_row)["id"]
+        else:
             cursor_ht2 = await db.execute(
                 """INSERT INTO host_templates (name, description, device_types, auto_apply, created_by)
                    VALUES ('Default (All Devices)', 'Auto-applies system graphs to all discovered devices',
@@ -11257,16 +11425,25 @@ async def seed_built_in_graph_templates() -> int:
             )
             await db.commit()
             ht_id = cursor_ht2.lastrowid
-            cursor_device_tpls = await db.execute(
-                "SELECT id FROM graph_templates WHERE built_in = 1 AND scope = 'device'"
-            )
-            for row in await cursor_device_tpls.fetchall():
-                await db.execute(
-                    "INSERT OR IGNORE INTO host_template_graph_links (host_template_id, graph_template_id) VALUES (?, ?)",
-                    (ht_id, row[0] if isinstance(row, tuple) else dict(row)["id"]),
-                )
-            await db.commit()
             _LOGGER.info("Seeded default host template (id=%s)", ht_id)
+
+        cursor_device_tpls = await db.execute(
+            "SELECT id FROM graph_templates WHERE built_in = 1 AND scope = 'device'"
+        )
+        linked = 0
+        for row in await cursor_device_tpls.fetchall():
+            gt_id = row[0] if isinstance(row, tuple) else dict(row)["id"]
+            link_cur = await db.execute(
+                "INSERT OR IGNORE INTO host_template_graph_links (host_template_id, graph_template_id) VALUES (?, ?)",
+                (ht_id, gt_id),
+            )
+            linked += link_cur.rowcount if link_cur.rowcount and link_cur.rowcount > 0 else 0
+        await db.commit()
+        if linked:
+            _LOGGER.info(
+                "Linked %s built-in device graph template(s) into the default host template",
+                linked,
+            )
 
         return created
     finally:
