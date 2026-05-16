@@ -39,6 +39,7 @@ Tables:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import ipaddress
 import json
@@ -2379,32 +2380,176 @@ class _PostgresConnectionCompat:
         await self._conn.close()
 
 
+# ── Connection reuse (singleton SQLite conn / asyncpg pool) ──────────────────
+#
+# Every callsite follows the same shape:  ``db = await get_db()`` then a
+# ``try/finally: await db.close()``.  Historically get_db() opened a *brand
+# new* backend connection each call - for SQLite that means an os.makedirs
+# syscall, a fresh file handle, and four sequential PRAGMA round-trips; for
+# Postgres a full TCP+auth handshake - and close() tore it down.  A single
+# job launch makes ~8-12 of these serially before the job flips
+# queued->running, which is the "sitting in the queue too long" latency.
+#
+# We keep all ~500 callsites untouched by changing only what get_db()
+# returns and what .close() does:
+#
+#   * SQLite: one process-lifetime aiosqlite connection (PRAGMAs applied
+#     once).  aiosqlite already funnels every operation through a single
+#     worker thread, so concurrent coroutines sharing it can't run SQL in
+#     parallel anyway; an async lock makes each get_db()->...->close()
+#     critical section exclusive so transactions never interleave -
+#     identical isolation to the old connection-per-call model.
+#   * Postgres: a real asyncpg pool; get_db() acquires, close() releases.
+#
+# Re-entrancy: ~21 callsites hold a connection and, still holding it,
+# await another get_db()-using function (all read-only ``get_*`` helpers
+# - verified none commit or write).  With a shared connection + lock a
+# naive singleton would self-deadlock there.  A contextvar tracks the
+# connection + acquisition depth for the current asyncio task: a nested
+# get_db() in the same task reuses the held connection and just bumps the
+# depth (no lock, no new connection); the matching close() decrements,
+# and only the depth-0 close() releases the lock / pool slot.  The real
+# connection is never closed during normal operation.
+
+_sqlite_conn = None
+_sqlite_conn_path = None                # DB_PATH the singleton is bound to
+_sqlite_conn_lock = asyncio.Lock()      # guards lazy creation of _sqlite_conn
+_sqlite_access_lock = asyncio.Lock()    # serializes each critical section
+_pg_pool = None
+_pg_pool_lock = asyncio.Lock()
+
+# Per-task held connection + depth, so nested get_db() is re-entrant.
+_held: contextvars.ContextVar = contextvars.ContextVar("_db_held", default=None)
+
+
+class _ConnProxy:
+    """Delegates everything to the real connection except ``close()``.
+
+    ``close()`` decrements this task's acquisition depth; the real
+    connection is only released (lock unlocked / pooled conn returned)
+    when depth hits zero, and is never actually closed while the
+    process runs.
+    """
+
+    __slots__ = ("_real", "_closed")
+
+    def __init__(self, real):
+        object.__setattr__(self, "_real", real)
+        object.__setattr__(self, "_closed", False)
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_real"), name)
+
+    def __setattr__(self, name, value):
+        # e.g. ``db.row_factory = ...`` - forward to the real connection.
+        setattr(object.__getattribute__(self, "_real"), name, value)
+
+    async def close(self):
+        # Idempotent per proxy: a callsite's finally: close() must not
+        # double-decrement if it somehow runs twice.
+        if object.__getattribute__(self, "_closed"):
+            return
+        object.__setattr__(self, "_closed", True)
+        await _release_db()
+
+
+async def _get_sqlite_singleton():
+    # Bind the singleton to DB_PATH.  In production DB_PATH is constant
+    # for the process so this is created once.  Tests monkeypatch
+    # DB_PATH to a fresh temp file per case; detecting the change here
+    # rebuilds the connection (and closes the stale one) so each test
+    # still gets an isolated database.
+    global _sqlite_conn, _sqlite_conn_path
+    if _sqlite_conn is not None and _sqlite_conn_path == DB_PATH:
+        return _sqlite_conn
+    async with _sqlite_conn_lock:
+        if _sqlite_conn is not None and _sqlite_conn_path == DB_PATH:
+            return _sqlite_conn
+        if _sqlite_conn is not None:
+            try:
+                await _sqlite_conn.close()
+            except Exception:
+                pass
+            _sqlite_conn = None
+        db_dir = os.path.dirname(DB_PATH)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        conn = await aiosqlite.connect(DB_PATH, timeout=SQLITE_CONNECT_TIMEOUT)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        await conn.execute("PRAGMA synchronous=NORMAL")
+        await conn.execute("PRAGMA foreign_keys=ON")
+        _sqlite_conn = conn
+        _sqlite_conn_path = DB_PATH
+        return _sqlite_conn
+
+
+async def _get_pg_pool():
+    global _pg_pool
+    if _pg_pool is not None:
+        return _pg_pool
+    async with _pg_pool_lock:
+        if _pg_pool is not None:
+            return _pg_pool
+        _pg_pool = await asyncpg.create_pool(
+            APP_DATABASE_URL, min_size=1, max_size=10
+        )
+        return _pg_pool
+
+
 async def get_db():
-    """Open a backend connection using APP_DB_ENGINE."""
+    """Return a backend connection (reused, not opened per call).
+
+    The returned object behaves exactly like the old per-call
+    connection: ``execute``/``executemany``/``executescript``/``commit``/
+    ``rollback``/``row_factory`` all work, and the mandatory
+    ``await db.close()`` in each caller's ``finally`` releases it.
+    """
     if DB_ENGINE not in _VALID_DB_ENGINES:
         raise RuntimeError(
             f"Unsupported APP_DB_ENGINE '{DB_ENGINE}'. Supported values: {', '.join(sorted(_VALID_DB_ENGINES))}"
         )
+
+    state = _held.get()
+    if state is not None:
+        # Nested acquisition in the same task: reuse, bump depth.
+        state["depth"] += 1
+        return _ConnProxy(state["conn"])
 
     if DB_ENGINE == "postgres":
         if asyncpg is None:
             raise RuntimeError("APP_DB_ENGINE=postgres requires the 'asyncpg' package")
         if not APP_DATABASE_URL:
             raise RuntimeError("APP_DB_ENGINE=postgres requires APP_DATABASE_URL")
-        conn = await asyncpg.connect(APP_DATABASE_URL)
-        return _PostgresConnectionCompat(conn)
+        pool = await _get_pg_pool()
+        raw = await pool.acquire()
+        conn = _PostgresConnectionCompat(raw)
+        _held.set({"conn": conn, "depth": 1, "engine": "postgres",
+                   "pool": pool, "raw": raw})
+        return _ConnProxy(conn)
 
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
+    # SQLite: acquire the exclusive access lock for this critical section,
+    # then hand back the shared singleton.
+    conn = await _get_sqlite_singleton()
+    await _sqlite_access_lock.acquire()
+    _held.set({"conn": conn, "depth": 1, "engine": "sqlite"})
+    return _ConnProxy(conn)
 
-    db = await aiosqlite.connect(DB_PATH, timeout=SQLITE_CONNECT_TIMEOUT)
-    db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA journal_mode=WAL")
-    await db.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
-    await db.execute("PRAGMA synchronous=NORMAL")
-    await db.execute("PRAGMA foreign_keys=ON")
-    return db
+
+async def _release_db():
+    """Counterpart to get_db(): decrement depth, release at depth 0."""
+    state = _held.get()
+    if state is None:
+        return
+    state["depth"] -= 1
+    if state["depth"] > 0:
+        return
+    _held.set(None)
+    if state["engine"] == "postgres":
+        await state["pool"].release(state["raw"])
+    else:
+        _sqlite_access_lock.release()
 
 
 async def _init_postgres(db) -> None:
