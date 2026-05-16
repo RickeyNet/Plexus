@@ -21,7 +21,13 @@ interface Props {
   onClose: () => void;
 }
 
-type Phase = 'form' | 'scanning' | 'results' | 'snmp-result';
+type Phase = 'form' | 'scanning' | 'results' | 'snmp-result' | 'sync-result';
+
+interface SyncResult {
+  added: number;
+  updated: number;
+  removed: number;
+}
 
 interface ScanState {
   total: number | null;
@@ -63,6 +69,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     | { ok: true; data: NonNullable<ReturnType<typeof useTestGroupSnmpProfile>['data']>['result'] }
     | { ok: false; error: string }
   >(null);
+  const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tickNow, setTickNow] = useState(Date.now());
 
@@ -134,10 +141,12 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           opts: buildOpts(),
         });
         const s = r.sync || {};
-        onClose();
-        alert(
-          `Sync complete. Added ${s.added || 0}, updated ${s.updated || 0}, removed ${s.removed || 0}.`,
-        );
+        setSyncResult({
+          added: s.added || 0,
+          updated: s.updated || 0,
+          removed: s.removed || 0,
+        });
+        setPhase('sync-result');
       } catch (err) {
         setError(`Sync failed: ${(err as Error).message}`);
       }
@@ -240,6 +249,42 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
       ? 'Discover Devices'
       : 'Discovery Scan';
   const title = group ? `${titlePrefix}: ${group.name}` : titlePrefix;
+
+  if (phase === 'sync-result' && syncResult) {
+    return (
+      <Modal isOpen onClose={onClose} title={title}>
+        <div
+          className="card"
+          style={{ borderLeft: '3px solid var(--success)', padding: '0.75rem' }}
+        >
+          <strong>Sync complete</strong>
+          <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
+            <tbody>
+              <tr>
+                <td style={{ opacity: 0.7 }}>Added</td>
+                <td>{syncResult.added}</td>
+              </tr>
+              <tr>
+                <td style={{ opacity: 0.7 }}>Updated</td>
+                <td>{syncResult.updated}</td>
+              </tr>
+              <tr>
+                <td style={{ opacity: 0.7 }}>Removed</td>
+                <td>{syncResult.removed}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}
+        >
+          <button type="button" className="btn btn-primary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </Modal>
+    );
+  }
 
   if (phase === 'snmp-result' && snmpResult) {
     return (
