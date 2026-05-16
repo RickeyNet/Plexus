@@ -12,6 +12,21 @@ export interface TimeSeries {
   color?: string;
 }
 
+export interface ChartAnnotation {
+  timestamp: string;
+  category?: string;
+  title?: string;
+  action?: string;
+}
+
+// Matches the legacy PlexusChart.addAnnotations() palette (app.js).
+const ANNOTATION_COLORS: Record<string, string> = {
+  deployment: '#3b82f6',
+  config: '#f59e0b',
+  alert: '#ef4444',
+  default: '#8b5cf6',
+};
+
 interface TimeSeriesChartProps {
   series: TimeSeries[];
   area?: boolean;
@@ -19,6 +34,7 @@ interface TimeSeriesChartProps {
   yMin?: number;
   yMax?: number;
   height?: number;
+  annotations?: ChartAnnotation[];
 }
 
 const DEFAULT_HEIGHT = 240;
@@ -43,6 +59,7 @@ export function TimeSeriesChart({
   yMin,
   yMax,
   height = DEFAULT_HEIGHT,
+  annotations,
 }: TimeSeriesChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
@@ -53,6 +70,24 @@ export function TimeSeriesChart({
     chartRef.current = chart;
 
     const isBpsAxis = yAxisName === 'bps';
+
+    // Legacy parity: overlay deployment/config/alert markers on series[0]
+    // as a silent dashed markLine (PlexusChart.addAnnotations).
+    const markLineData = (annotations ?? [])
+      .filter((e) => e.timestamp)
+      .map((e) => {
+        const color = ANNOTATION_COLORS[e.category ?? 'default'] ?? ANNOTATION_COLORS.default;
+        return {
+          xAxis: new Date(e.timestamp).getTime(),
+          label: {
+            formatter: e.title || e.action || '',
+            position: 'start' as const,
+            fontSize: 9,
+            color,
+          },
+          lineStyle: { color, type: 'dashed' as const, width: 1 },
+        };
+      });
 
     chart.setOption({
       animation: false,
@@ -89,7 +124,7 @@ export function TimeSeriesChart({
         },
         splitLine: { lineStyle: { color: SPLIT_COLOR } },
       },
-      series: series.map((s) => ({
+      series: series.map((s, i) => ({
         name: s.name,
         type: 'line',
         showSymbol: false,
@@ -99,6 +134,10 @@ export function TimeSeriesChart({
         lineStyle: { width: 1.5 },
         areaStyle: area ? { opacity: 0.2 } : undefined,
         data: s.data.map((p) => [p.time, p.value]),
+        markLine:
+          i === 0 && markLineData.length
+            ? { silent: true, symbol: 'none', data: markLineData }
+            : undefined,
       })),
     });
 
@@ -109,7 +148,7 @@ export function TimeSeriesChart({
       chart.dispose();
       chartRef.current = null;
     };
-  }, [series, area, yAxisName, yMin, yMax]);
+  }, [series, area, yAxisName, yMin, yMax, annotations]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
