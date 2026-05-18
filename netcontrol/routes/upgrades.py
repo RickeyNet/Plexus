@@ -1872,21 +1872,78 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                 commit_output = await asyncio.to_thread(
                                     new_conn.send_command, commit_cmd, read_timeout=300,
                                 )
-                                await _emit(campaign_id, dev_id, "success", "Install committed - new version is permanent", host=ip)
+                                await _emit(campaign_id, dev_id, "success", "Install committed", host=ip)
                                 if commit_output:
                                     await _emit(campaign_id, dev_id, "info", commit_output[-500:], host=ip)
                             except Exception as e:
-                                await _emit(campaign_id, dev_id, "warn", f"{commit_cmd} failed: {e} - switch may rollback on next reload!", host=ip)
+                                # A failed commit means the activated image is
+                                # uncommitted and the device's auto-rollback
+                                # timer will revert it to the old version. This
+                                # is a hard failure, not a warning - do NOT mark
+                                # the device verified.
+                                msg = f"Commit failed: {e} - device will roll back to the old version"
+                                await _emit(campaign_id, dev_id, "error",
+                                            f"{commit_cmd} failed: {e} - switch will roll back!", host=ip)
+                                await db.update_upgrade_device(
+                                    dev_id, verify_status="failed",
+                                    current_version=running_version,
+                                    error_message=msg)
+                                await _emit_device_status(
+                                    campaign_id, dev_id, verify_status="failed",
+                                    error_message=msg)
+                                try:
+                                    await asyncio.to_thread(new_conn.disconnect)
+                                except Exception:
+                                    pass
+                                return
 
+                            # Re-verify AFTER commit: a "successful" commit
+                            # command can still leave the device on the old
+                            # version (rollback already fired, partial commit).
+                            # Trust nothing - re-read the running version.
+                            await _emit(campaign_id, dev_id, "info",
+                                        "Confirming version after commit...", host=ip)
+                            _, post_commit_version = await _detect_model(new_conn, ip)
+                            if not (post_commit_version
+                                    and expected_version in post_commit_version):
+                                msg = (f"Post-commit version mismatch: running "
+                                       f"{post_commit_version}, expected {expected_version}")
+                                await _emit(campaign_id, dev_id, "error", msg, host=ip)
+                                await db.update_upgrade_device(
+                                    dev_id, verify_status="failed",
+                                    current_version=post_commit_version or running_version,
+                                    error_message=msg)
+                                await _emit_device_status(
+                                    campaign_id, dev_id, verify_status="failed",
+                                    error_message=msg)
+                                try:
+                                    await asyncio.to_thread(new_conn.disconnect)
+                                except Exception:
+                                    pass
+                                return
+                            running_version = post_commit_version
+
+                        await _emit(campaign_id, dev_id, "success",
+                                    f"Upgrade verified and committed - running {running_version}", host=ip)
                         await db.update_upgrade_device(dev_id, verify_status="completed",
-                                                       current_version=running_version)
-                        await _emit_device_status(campaign_id, dev_id, verify_status="completed")
+                                                       phase="verified",
+                                                       current_version=running_version,
+                                                       error_message="")
+                        await _emit_device_status(campaign_id, dev_id,
+                                                  verify_status="completed",
+                                                  error_message="")
                     else:
                         await _emit(campaign_id, dev_id, "error",
                                     f"Version mismatch! Running: {running_version}, Expected: {expected_version}", host=ip)
                         await db.update_upgrade_device(dev_id, verify_status="failed",
+                                                       current_version=running_version or "",
                                                        error_message=f"Version mismatch: {running_version}")
                         await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message=f"Version mismatch: {running_version}")
+                        try:
+                            await asyncio.to_thread(new_conn.disconnect)
+                        except Exception:
+                            pass
+                        return
 
                 try:
                     await asyncio.to_thread(new_conn.disconnect)
