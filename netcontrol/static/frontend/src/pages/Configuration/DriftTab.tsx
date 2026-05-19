@@ -31,12 +31,16 @@ interface Props {
 }
 
 export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
-  const [statusFilter, setStatusFilter] = useState<DriftStatusFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<DriftStatusFilter>('open');
   const [query, setQuery] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('grouped');
 
   const summary = useConfigDriftSummary();
-  const events = useConfigDriftEvents(statusFilter);
+  // "All statuses" means all *unresolved* drift — once a drift is accepted or
+  // resolved it's handled and shouldn't clutter the working list. Accepted and
+  // Resolved are still reachable via their explicit filter options.
+  const fetchStatus = statusFilter === 'all' ? 'open' : statusFilter;
+  const events = useConfigDriftEvents(fetchStatus);
   const updateStatus = useUpdateDriftEventStatus();
   const bulkAccept = useBulkAcceptDriftEvents();
 
@@ -77,7 +81,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as DriftStatusFilter)}
         >
-          <option value="all">All statuses</option>
+          <option value="all">All open</option>
           <option value="open">Open</option>
           <option value="accepted">Accepted</option>
           <option value="resolved">Resolved</option>
