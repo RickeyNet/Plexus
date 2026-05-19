@@ -230,12 +230,6 @@ const ic = {
       <circle cx="12" cy="7" r="4" />
     </svg>
   ),
-  classic: (
-    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="19" y1="12" x2="5" y2="12" />
-      <polyline points="12 19 5 12 12 5" />
-    </svg>
-  ),
   chevron: (
     <svg className="nav-group-chevron nav-label" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="6 9 12 15 18 9" />
@@ -433,15 +427,6 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
         >
           {ic.user}
           <span className="nav-label nav-user-label">{username}</span>
-        </a>
-        <a
-          href="/legacy/"
-          className="nav-link"
-          title="Open the classic UI"
-          style={{ color: 'var(--text-muted)' }}
-        >
-          {ic.classic}
-          <span className="nav-label">Classic UI</span>
         </a>
       </div>
     </nav>
