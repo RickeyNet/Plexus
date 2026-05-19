@@ -50,9 +50,15 @@ describe('statusColor', () => {
 });
 
 describe('normalizeDiffForGrouping', () => {
-  it('strips diff headers and hunks', () => {
+  it('keeps only changed lines, dropping headers, hunks, and context', () => {
     const diff = `--- a/host1\n+++ b/host1\n@@ -1,3 +1,3 @@\n context\n-old\n+new`;
-    expect(normalizeDiffForGrouping(diff)).toBe('context\n-old\n+new');
+    expect(normalizeDiffForGrouping(diff)).toBe('-old\n+new');
+  });
+
+  it('produces the same key when only surrounding context differs', () => {
+    const h1 = `--- a/h1\n+++ b/h1\n@@ -1,3 +1,3 @@\n interface Gi0/1\n-old\n+new\n description host1`;
+    const h2 = `--- a/h2\n+++ b/h2\n@@ -4,3 +4,3 @@\n interface Gi0/9\n-old\n+new\n description host2`;
+    expect(normalizeDiffForGrouping(h1)).toBe(normalizeDiffForGrouping(h2));
   });
 
   it('handles empty input', () => {

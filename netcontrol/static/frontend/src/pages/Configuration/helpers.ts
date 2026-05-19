@@ -35,17 +35,21 @@ export function statusColor(status: string | null | undefined): string {
   return 'var(--success)';
 }
 
-// Strip diff headers/hunk lines so events with the same logical change
-// group together regardless of host-specific paths/positions.
+// Key a drift on only its changed lines so events with the same logical
+// change group together regardless of host-specific surrounding config.
+// A unified diff carries 3 lines of context around each hunk; that context
+// contains per-host text (interface names, IPs, hostnames), so keying on the
+// full diff splits identical changes apart. Keep only the added/removed lines
+// (excluding the `---`/`+++` file headers, which also start with -/+).
 export function normalizeDiffForGrouping(diffText: string | null | undefined): string {
   if (!diffText) return '';
   return diffText
     .split('\n')
     .filter(
       (line) =>
+        (line.startsWith('+') || line.startsWith('-')) &&
         !line.startsWith('---') &&
-        !line.startsWith('+++') &&
-        !line.startsWith('@@'),
+        !line.startsWith('+++'),
     )
     .join('\n')
     .trim();
