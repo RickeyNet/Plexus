@@ -325,7 +325,15 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     "secret": decrypt(cred.get("secret", "")),
                     "conn_timeout": 15,
                     "timeout": 30,
+                    # Cap the whole SSH session. asyncio.wait_for can't kill the
+                    # worker thread this runs in, so a wedged command must be
+                    # bounded here too or it leaks a thread past the poll.
+                    "session_timeout": 45,
                 }
+                # Per-command read ceiling: a command that connects but never
+                # returns a prompt fails fast instead of burning the full
+                # netmiko retry cycle.
+                read_timeout = 20
                 net_connect = netmiko.ConnectHandler(**device)
                 if device["secret"]:
                     net_connect.enable()
@@ -335,14 +343,14 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 if state.MONITORING_CONFIG.get("collect_vpn", True):
                     dtype = host.get("device_type", "cisco_ios")
                     if dtype.startswith("cisco_asa") or dtype == "asa":
-                        outputs["vpn"] = net_connect.send_command("show vpn-sessiondb summary")
+                        outputs["vpn"] = net_connect.send_command("show vpn-sessiondb summary", read_timeout=read_timeout)
                     else:
-                        outputs["vpn"] = net_connect.send_command("show crypto isakmp sa")
+                        outputs["vpn"] = net_connect.send_command("show crypto isakmp sa", read_timeout=read_timeout)
 
                 # Route table
                 if state.MONITORING_CONFIG.get("collect_routes", True):
-                    outputs["routes"] = net_connect.send_command("show ip route summary")
-                    outputs["routes_full"] = net_connect.send_command("show ip route")
+                    outputs["routes"] = net_connect.send_command("show ip route summary", read_timeout=read_timeout)
+                    outputs["routes_full"] = net_connect.send_command("show ip route", read_timeout=read_timeout)
 
                 net_connect.disconnect()
                 return outputs
@@ -607,9 +615,15 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
 
         cred = default_cred
 
+        poll_timeout = float(state.MONITORING_CONFIG.get("per_host_timeout_seconds", 90))
+
         async def _poll_one(h, c, s):
             async with sem:
-                return await _poll_host_monitoring(h, c, s)
+                # Bound each device so one unresponsive host can't stall the
+                # whole scheduled cycle (see streaming poll for details).
+                return await asyncio.wait_for(
+                    _poll_host_monitoring(h, c, s), timeout=poll_timeout
+                )
 
         tasks = [asyncio.create_task(_poll_one(h, cred, snmp_cfg)) for h in hosts]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -914,22 +928,53 @@ async def monitoring_poll_now_stream(request: Request):
         completed = 0
         sem = asyncio.Semaphore(4)
 
+        poll_timeout = float(state.MONITORING_CONFIG.get("per_host_timeout_seconds", 90))
+
         async def _poll_one(h, cred, snmp_cfg):
             async with sem:
-                res = await _poll_host_monitoring(h, cred, snmp_cfg)
-                return h, res
+                # Hard ceiling per device. Without this a host whose SNMP agent
+                # stalls mid-walk or whose SSH session connects but never
+                # returns a prompt blocks forever, pinning a semaphore slot and
+                # freezing the progress bar. Return the host with the result (or
+                # the exception) so the caller can name a timed-out device.
+                try:
+                    res = await asyncio.wait_for(
+                        _poll_host_monitoring(h, cred, snmp_cfg),
+                        timeout=poll_timeout,
+                    )
+                    return h, res, None
+                except asyncio.TimeoutError:
+                    return h, None, TimeoutError(
+                        f"poll exceeded {poll_timeout:.0f}s"
+                    )
+                except Exception as exc:  # noqa: BLE001 — surfaced to client
+                    return h, None, exc
 
         tasks = [asyncio.create_task(_poll_one(h, cred, snmp_cfg))
                  for h, snmp_cfg, cred in all_hosts]
 
         for coro in asyncio.as_completed(tasks):
             try:
-                h, res = await coro
-            except Exception as exc:
+                h, res, err = await coro
+            except Exception as exc:  # task itself crashed (no host context)
                 errors += 1
                 completed += 1
                 LOGGER.warning("monitoring: poll exception: %s", redact_value(str(exc)))
                 yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': '(unknown)', 'error': 'Poll failed for host.'})}\n\n"
+                continue
+
+            if err is not None:
+                hostname = h.get("hostname", h.get("ip_address", "unknown"))
+                errors += 1
+                completed += 1
+                LOGGER.warning("monitoring: poll failed for %s: %s",
+                               hostname, redact_value(str(err)))
+                detail = (
+                    "Timed out — device unresponsive."
+                    if isinstance(err, TimeoutError)
+                    else "Poll failed for host."
+                )
+                yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': hostname, 'error': detail})}\n\n"
                 continue
 
             hostname = h.get("hostname", h.get("ip_address", "unknown"))
