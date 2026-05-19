@@ -337,16 +337,22 @@ def _snmp_cfg_for_vlan(snmp_cfg: dict, vlan_id: int) -> dict:
     """Return an SNMP config adjusted for Cisco per-VLAN polling when possible."""
     cfg = dict(snmp_cfg or {})
     version = str(cfg.get("version", "2c")).strip().lower()
-    if version != "2c" or vlan_id <= 1:
+    if vlan_id <= 1:
         return cfg
 
-    community = str(cfg.get("community", "")).strip()
-    if not community:
+    if version == "2c":
+        community = str(cfg.get("community", "")).strip()
+        if not community:
+            return cfg
+        base_community = community.split("@", 1)[0].strip()
+        if not base_community:
+            return cfg
+        cfg["community"] = f"{base_community}@{vlan_id}"
         return cfg
-    base_community = community.split("@", 1)[0].strip()
-    if not base_community:
-        return cfg
-    cfg["community"] = f"{base_community}@{vlan_id}"
+
+    # SNMPv3: Cisco IOS/IOS-XE serves the per-VLAN bridge/Q-BRIDGE FDB under
+    # the context "vlan-<id>" (the v3 analogue of "<community>@<vlan>").
+    cfg["snmp_context"] = f"vlan-{vlan_id}"
     return cfg
 
 
@@ -357,11 +363,13 @@ async def _discover_vlan_ids_for_host(
     timeout_seconds: float = 5.0,
     max_vlans: int = STP_SCAN_DEFAULT_MAX_VLANS,
 ) -> list[int]:
-    """Discover candidate VLAN IDs using Q-BRIDGE-MIB dot1qVlanStaticName."""
-    version = str(snmp_cfg.get("version", "2c")).strip().lower()
-    if version != "2c":
-        return [1]
+    """Discover candidate VLAN IDs using Q-BRIDGE-MIB dot1qVlanStaticName.
 
+    dot1qVlanStaticName lives in the default SNMP context, so it is walkable
+    over SNMPv3 as well as v2c. We attempt it for any version and fall back
+    to [1] only when the walk yields nothing -- previously v3 always returned
+    [1], which made every MAC collect under VLAN 0.
+    """
     base_oid = "1.3.6.1.2.1.17.7.1.4.3.1.1"
     vlan_ids: set[int] = {1}
     try:
