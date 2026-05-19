@@ -7597,7 +7597,13 @@ async def create_alert_suppression(
 async def get_alert_suppressions(active_only: bool = False) -> list[dict]:
     db = await get_db()
     try:
-        where = "WHERE s.ends_at > datetime('now')" if active_only else ""
+        # CAST for postgres: s.ends_at is TEXT but datetime('now') becomes
+        # NOW() (timestamptz), and `text > timestamptz` errors on postgres.
+        # Portable no-op on SQLite. See is_alert_suppressed for the rationale.
+        where = (
+            "WHERE CAST(s.ends_at AS TIMESTAMP) > datetime('now')"
+            if active_only else ""
+        )
         cursor = await db.execute(
             f"""SELECT s.*, h.hostname, h.ip_address, g.name as group_name
                 FROM alert_suppressions s
@@ -7617,9 +7623,17 @@ async def is_alert_suppressed(
     """Check if alerts for this host+metric are currently suppressed."""
     db = await get_db()
     try:
+        # starts_at/ends_at are TEXT (ISO-8601) per the SQLite-shaped
+        # schema, but datetime('now') is rewritten to NOW() (timestamptz)
+        # on postgres - and `text <= timestamptz` is a hard error there
+        # (the bare-comparison case the datetime() auto-cast doesn't
+        # cover). CAST(... AS TIMESTAMP) is portable: a lexical no-op on
+        # SQLite (correct for ISO strings) and a real timestamp on
+        # postgres so the comparison type-checks.
         cursor = await db.execute(
             """SELECT COUNT(*) FROM alert_suppressions
-               WHERE starts_at <= datetime('now') AND ends_at > datetime('now')
+               WHERE CAST(starts_at AS TIMESTAMP) <= datetime('now')
+                 AND CAST(ends_at AS TIMESTAMP) > datetime('now')
                  AND (
                      (host_id IS NULL AND group_id IS NULL AND metric = '')
                      OR (host_id = ? AND (metric = '' OR metric = ?))
