@@ -1989,6 +1989,8 @@ app.include_router(
 # ═════════════════════════════════════════════════════════════════════════════
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+# Legacy vanilla-JS SPA shell. No longer served (Phase 2 migration complete);
+# kept only as a marker until the file itself is deleted in Phase 3 cleanup.
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 FRONTEND_DIST = os.path.join(STATIC_DIR, "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
@@ -2027,24 +2029,12 @@ if os.path.isdir(FRONTEND_DIST):
 
 @app.get("/")
 async def serve_frontend():
-    """Serve the React UI by default. Falls back to the legacy SPA if the
-    React bundle is not built, and finally to /docs if no frontend is
-    deployed."""
+    """Serve the React UI. The legacy vanilla-JS SPA was retired after the
+    Phase 2 migration completed (FRONTEND_MIGRATION.md); React is now the
+    only frontend. Falls back to /docs only when no bundle is deployed."""
     if os.path.isfile(FRONTEND_INDEX):
         return RedirectResponse(url="/frontend/")
-    if os.path.isfile(INDEX_FILE):
-        return FileResponse(INDEX_FILE)
     return RedirectResponse(url="/docs")
-
-
-@app.get("/legacy", include_in_schema=False)
-@app.get("/legacy/", include_in_schema=False)
-async def serve_legacy_frontend():
-    """Optional access path to the classic SPA after cutover to React.
-    Sidebar's "Classic UI" link points here."""
-    if os.path.isfile(INDEX_FILE):
-        return FileResponse(INDEX_FILE)
-    raise HTTPException(status_code=404, detail="Legacy frontend not available")
 
 @app.get("/favicon.ico")
 async def favicon():
