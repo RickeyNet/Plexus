@@ -297,6 +297,15 @@ async def _sync_group_hosts(
         ip = str(host.get("ip_address", "")).strip()
         if not ip:
             continue
+        # Preserve the probe protocol ("snmpv2c"/"snmpv3" vs "ssh"/"https").
+        # The device_type merge below needs it to tell an authoritative
+        # SNMP classification from a low-confidence SSH-banner guess.  A
+        # missing/blank protocol is treated as authoritative so callers
+        # that build discovered dicts by hand (and existing SNMP-shaped
+        # flows) keep their previous update behaviour.
+        probe_protocol = str(
+            host.get("discovery", {}).get("protocol", "")
+        ).strip()
         normalized_discovered[ip] = {
             "hostname": str(host.get("hostname") or "").strip() or f"host-{ip.replace('.', '-')}",
             "ip_address": ip,
@@ -304,6 +313,7 @@ async def _sync_group_hosts(
             "status": str(host.get("status") or "online").strip() or "online",
             "model": str(host.get("model") or "").strip(),
             "software_version": str(host.get("software_version") or "").strip(),
+            "probe_protocol": probe_protocol,
         }
 
     added = 0
@@ -347,12 +357,40 @@ async def _sync_group_hosts(
         is_fallback_name = new_hostname.startswith("snmp-") or new_hostname.startswith("host-")
         effective_hostname = existing.get("hostname") if is_fallback_name else new_hostname
 
-        # Don't downgrade device_type from a specific type (e.g. "cisco_xe")
-        # to "unknown" when SNMP is temporarily unreachable and the SSH
-        # fallback can't determine the platform precisely.
+        # Don't let a low-confidence re-classification clobber a known
+        # device_type.  Two cases:
+        #
+        #  1. SNMP unreachable -> SSH-banner fallback.  The banner reveals
+        #     vendor ("cisco") but almost never the OS variant, so the
+        #     fallback confidently mislabels an IOS-XE Catalyst as
+        #     "cisco_ios" (it hits the else-branch in
+        #     _probe_discovery_target).  That wrong-but-specific value
+        #     would otherwise overwrite an SNMP-confirmed "cisco_xe" and
+        #     break upgrades (CiscoIOSDriver has no activate command).
+        #  2. SNMP unreachable and even SSH can't classify -> "unknown".
+        #
+        # Rule: a non-SNMP probe may only *fill in* an unknown existing
+        # type, never *change* an already-specific one.  SNMP probes are
+        # authoritative and always apply.
         new_device_type = discovered["device_type"]
         existing_device_type = existing.get("device_type", "unknown")
-        if new_device_type == "unknown" and existing_device_type != "unknown":
+        probe_protocol = str(discovered.get("probe_protocol", ""))
+        # Only an *explicit* SSH/HTTPS probe is low-confidence.  A blank
+        # protocol is treated as authoritative so hand-built discovered
+        # dicts and SNMP-shaped flows keep updating device_type as before.
+        low_confidence_probe = probe_protocol in ("ssh", "https")
+        if (
+            low_confidence_probe
+            and existing_device_type != "unknown"
+            and new_device_type != existing_device_type
+        ):
+            # SNMP is down; the SSH banner only reveals vendor, not OS
+            # variant, so it confidently mislabels an IOS-XE Catalyst as
+            # "cisco_ios".  Don't let that overwrite an SNMP-confirmed
+            # "cisco_xe" (CiscoIOSDriver has no activate command, which
+            # breaks upgrades).  Keep the established classification.
+            new_device_type = existing_device_type
+        elif new_device_type == "unknown" and existing_device_type != "unknown":
             new_device_type = existing_device_type
 
         if (

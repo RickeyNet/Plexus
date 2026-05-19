@@ -98,6 +98,75 @@ async def test_sync_group_hosts_adds_updates_and_removes(monkeypatch):
     assert calls["status"] == [(1, "online"), (42, "online")]
 
 
+@pytest.mark.asyncio
+async def test_ssh_fallback_does_not_clobber_snmp_confirmed_device_type(monkeypatch):
+    """SNMP-loss regression guard.
+
+    When SNMP goes unreachable, discovery falls back to an SSH-banner
+    probe.  The banner reveals vendor ("cisco") but not the OS variant,
+    so _probe_discovery_target confidently mislabels an IOS-XE Catalyst
+    as "cisco_ios".  That wrong-but-specific value must NOT overwrite an
+    already-stored, SNMP-confirmed "cisco_xe" - if it did, the upgrade
+    route would pick CiscoIOSDriver (no activate command) and every
+    upgrade on that box would fail with "Activate not supported".
+
+    Three hosts pin the full contract:
+      * .1  established cisco_xe, re-probed via *ssh* as cisco_ios
+             -> keep cisco_xe (the bug being fixed)
+      * .2  established unknown, re-probed via *ssh* as cisco_ios
+             -> accept cisco_ios (ssh may still *fill in* an unknown)
+      * .3  established cisco_ios, re-probed via *snmp* as cisco_xe
+             -> accept cisco_xe (SNMP is authoritative; real upgrades)
+    """
+    existing_hosts = [
+        {"id": 1, "group_id": 5, "hostname": "cat9k-1", "ip_address": "10.2.2.1",
+         "device_type": "cisco_xe", "status": "online"},
+        {"id": 2, "group_id": 5, "hostname": "edge-2", "ip_address": "10.2.2.2",
+         "device_type": "unknown", "status": "online"},
+        {"id": 3, "group_id": 5, "hostname": "cat9k-3", "ip_address": "10.2.2.3",
+         "device_type": "cisco_ios", "status": "online"},
+    ]
+    discovered_hosts = [
+        # SNMP down -> SSH banner guessed cisco_ios. Must be ignored.
+        {"hostname": "cat9k-1", "ip_address": "10.2.2.1", "device_type": "cisco_ios",
+         "status": "online", "discovery": {"protocol": "ssh"}},
+        # SSH guess is allowed to resolve a previously-unknown host.
+        {"hostname": "edge-2", "ip_address": "10.2.2.2", "device_type": "cisco_ios",
+         "status": "online", "discovery": {"protocol": "ssh"}},
+        # SNMP came back and authoritatively says XE - must apply.
+        {"hostname": "cat9k-3", "ip_address": "10.2.2.3", "device_type": "cisco_xe",
+         "status": "online", "discovery": {"protocol": "snmpv2c"}},
+    ]
+
+    updates: list[tuple] = []
+
+    async def fake_get_hosts_for_group(group_id):
+        return existing_hosts
+
+    async def fake_update_host(host_id, hostname, ip_address, device_type):
+        updates.append((host_id, device_type))
+
+    async def fake_noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(inventory_module.db, "get_hosts_for_group", fake_get_hosts_for_group)
+    monkeypatch.setattr(inventory_module.db, "update_host", fake_update_host)
+    monkeypatch.setattr(inventory_module.db, "update_host_status", fake_noop)
+    monkeypatch.setattr(inventory_module.db, "update_host_device_info", fake_noop)
+    monkeypatch.setattr(inventory_module, "push_inventory_host_allocation", fake_noop)
+
+    await inventory_module._sync_group_hosts(5, discovered_hosts, remove_absent=False)
+
+    by_id = dict(updates)
+    # The bug: .1 must stay cisco_xe (no downgrade to the ssh guess).
+    assert by_id.get(1, "cisco_xe") == "cisco_xe", (
+        "SSH-banner cisco_ios guess clobbered an SNMP-confirmed cisco_xe")
+    # .2 was unknown - ssh is allowed to fill it in.
+    assert by_id.get(2) == "cisco_ios"
+    # .3 - authoritative SNMP reclassification still applies.
+    assert by_id.get(3) == "cisco_xe"
+
+
 def test_sanitize_discovery_sync_config_filters_invalid_profiles():
     config = app_module._sanitize_discovery_sync_config(
         {
