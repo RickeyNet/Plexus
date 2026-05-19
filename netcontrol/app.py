@@ -113,6 +113,7 @@ from netcontrol.routes.dashboards import router as dashboards_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
 from netcontrol.routes.cdef_engine import router as cdef_router
 from netcontrol.routes.mac_tracking import router as mac_tracking_router
+from netcontrol.routes.mac_tracking import _mac_move_retention_loop
 from netcontrol.routes.flow_collector import (
     FLOW_COLLECTOR_CONFIG,
     _cancel_aggregation_task as _cancel_flow_aggregation_task,
@@ -1249,6 +1250,7 @@ async def lifespan(app: FastAPI):
     topology_discovery_task = asyncio.create_task(_topology_discovery_loop())
     stp_discovery_task = asyncio.create_task(_stp_discovery_loop())
     config_drift_task = asyncio.create_task(_config_drift_check_loop())
+    mac_move_retention_task = asyncio.create_task(_mac_move_retention_loop())
     config_backup_task = asyncio.create_task(_config_backup_loop())
     compliance_check_task = asyncio.create_task(_compliance_check_loop())
     monitoring_task = asyncio.create_task(_monitoring_poll_loop())
@@ -1297,6 +1299,7 @@ async def lifespan(app: FastAPI):
         topology_discovery_task.cancel()
         stp_discovery_task.cancel()
         config_drift_task.cancel()
+        mac_move_retention_task.cancel()
         config_backup_task.cancel()
         compliance_check_task.cancel()
         monitoring_task.cancel()
@@ -1330,6 +1333,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await config_drift_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await mac_move_retention_task
         except asyncio.CancelledError:
             pass
         try:

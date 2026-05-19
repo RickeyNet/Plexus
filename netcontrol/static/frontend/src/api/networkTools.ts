@@ -55,6 +55,112 @@ export function useMacHistory(macAddress: string | null) {
   });
 }
 
+// ── MAC move events (drift-style change tracking) ───────────────────────────
+
+export interface MacMoveEvent {
+  id: number;
+  mac_address: string;
+  status: string;
+  change_kind: string;
+  from_host_id: number | null;
+  from_hostname: string | null;
+  from_port: string;
+  from_vlan: number;
+  from_ip: string;
+  to_host_id: number | null;
+  to_hostname: string | null;
+  to_port: string;
+  to_vlan: number;
+  to_ip: string;
+  detected_at: string | null;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+}
+
+export interface MacMoveSummary {
+  open: number;
+  acknowledged: number;
+  total: number;
+}
+
+export interface MacMoveEventHistoryEntry {
+  id: number;
+  event_id: number;
+  mac_address: string;
+  action: string;
+  from_status: string;
+  to_status: string;
+  actor: string;
+  details: string;
+  created_at: string | null;
+}
+
+export function useMacMoveEvents(
+  status: string,
+  limit = 200,
+  hostId?: number | null,
+) {
+  const params = new URLSearchParams();
+  if (status && status !== 'all') params.set('status', status);
+  if (hostId != null) params.set('host_id', String(hostId));
+  params.set('limit', String(limit));
+  return useQuery({
+    queryKey: ['mac-tracking', 'moves', status, limit, hostId ?? null],
+    queryFn: () =>
+      apiRequest<MacMoveEvent[]>(`/mac-tracking/moves?${params}`),
+  });
+}
+
+export function useMacMoveSummary() {
+  return useQuery({
+    queryKey: ['mac-tracking', 'moves-summary'],
+    queryFn: () => apiRequest<MacMoveSummary>('/mac-tracking/moves/summary'),
+  });
+}
+
+export function useMacMoveEventHistory(eventId: number | null, limit = 500) {
+  return useQuery({
+    queryKey: ['mac-tracking', 'move-history', eventId, limit],
+    queryFn: () =>
+      apiRequest<MacMoveEventHistoryEntry[]>(
+        `/mac-tracking/moves/${eventId}/history?limit=${limit}`,
+      ),
+    enabled: eventId != null,
+  });
+}
+
+export function useAcknowledgeMacMove() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (eventId: number) =>
+      apiRequest<{ ok: boolean }>(
+        `/mac-tracking/moves/${eventId}/acknowledge`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mac-tracking', 'moves'] });
+      qc.invalidateQueries({ queryKey: ['mac-tracking', 'moves-summary'] });
+      qc.invalidateQueries({ queryKey: ['mac-tracking', 'move-history'] });
+    },
+  });
+}
+
+export function useAcknowledgeAllMacMoves() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<{ ok: boolean; acknowledged: number }>(
+        '/mac-tracking/moves/acknowledge-all',
+        { method: 'POST', body: { event_ids: [] } },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mac-tracking', 'moves'] });
+      qc.invalidateQueries({ queryKey: ['mac-tracking', 'moves-summary'] });
+      qc.invalidateQueries({ queryKey: ['mac-tracking', 'move-history'] });
+    },
+  });
+}
+
 export function useTriggerMacCollection() {
   const qc = useQueryClient();
   return useMutation({

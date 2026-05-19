@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.routes.shared import _get_session
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_walk, _snmp_str
 from netcontrol.routes.topology import _discover_vlan_ids_for_host, _snmp_cfg_for_vlan
 from netcontrol.telemetry import configure_logging
@@ -225,6 +226,10 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                     port_name=port_name, port_index=port_index,
                     entry_type="dynamic",
                 )
+                # record_mac_history is now change-detecting: it only writes a
+                # history row + opens a mac_move_event when the MAC's
+                # switch/port/vlan/ip actually changed, so this is safe to call
+                # every poll without flooding the history table.
                 await db.record_mac_history(mac, host_id, port_name, vlan=vlan)
                 seen_mac_vlan.add((mac, vlan))
                 result["macs_found"] += 1
@@ -318,10 +323,13 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
 
 
 @router.get("/api/mac-tracking/search")
-async def search_mac(query: str = Query(""), limit: int = Query(100, le=500)):
+async def search_mac(query: str = Query(""), limit: int = Query(5000, le=50000)):
     """Search across MAC/ARP tables by MAC address, IP, or port name.
 
-    A blank query returns the most recently collected entries.
+    A blank query returns the most recently collected entries. The default
+    limit is high enough to show the full table for typical deployments so
+    the list doesn't silently truncate; the cap only guards pathological
+    sizes.
     """
     return await db.search_mac_tracking(query, limit)
 
@@ -399,3 +407,103 @@ async def cleanup_stale_entries(days: int = Query(30, ge=1)):
     """Remove MAC entries not seen in the specified number of days."""
     removed = await db.cleanup_stale_mac_entries(days)
     return {"removed": removed}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MAC move events (drift-style change tracking)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class MacMoveBulkAckRequest(BaseModel):
+    event_ids: list[int] = []
+
+
+@router.get("/api/mac-tracking/moves")
+async def list_mac_move_events(
+    status: str = Query("", pattern="^(open|acknowledged)?$"),
+    host_id: int | None = Query(None),
+    limit: int = Query(200, le=1000),
+):
+    """List MAC move events (newest first).
+
+    Optionally filter by status, and by a switch "involved" in the move
+    (matches either the from- or to-side host).
+    """
+    return await db.get_mac_move_events(status, limit, host_id=host_id)
+
+
+@router.get("/api/mac-tracking/moves/summary")
+async def mac_move_event_summary():
+    """Open / acknowledged / total counts for the summary cards."""
+    return await db.get_mac_move_event_summary()
+
+
+@router.get("/api/mac-tracking/moves/{event_id}/history")
+async def mac_move_event_history(event_id: int, limit: int = Query(500, le=1000)):
+    """Lifecycle timeline (detected, acknowledged) for one move event."""
+    return await db.get_mac_move_event_history(event_id, limit)
+
+
+@router.post("/api/mac-tracking/moves/{event_id}/acknowledge")
+async def acknowledge_mac_move_event(event_id: int, request: Request):
+    """Acknowledge a single open move event."""
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    ok = await db.acknowledge_mac_move_event(event_id, actor=user)
+    if not ok:
+        raise HTTPException(404, "Move event not found")
+    return {"ok": True}
+
+
+@router.post("/api/mac-tracking/moves/acknowledge-all")
+async def acknowledge_all_mac_move_events(
+    body: MacMoveBulkAckRequest, request: Request
+):
+    """Acknowledge every open move event (or a specific list of ids)."""
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    if body.event_ids:
+        acked = 0
+        for eid in body.event_ids:
+            if await db.acknowledge_mac_move_event(eid, actor=user):
+                acked += 1
+        return {"ok": True, "acknowledged": acked}
+    acked = await db.acknowledge_open_mac_move_events(actor=user)
+    return {"ok": True, "acknowledged": acked}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Scheduled retention
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def _run_mac_move_retention_once() -> dict:
+    """Prune MAC move events past the retention window."""
+    days = int(state.MAC_MOVE_RETENTION_CONFIG.get(
+        "event_retention_days",
+        state.MAC_MOVE_RETENTION_DEFAULTS["event_retention_days"]))
+    removed = 0
+    try:
+        removed = await db.delete_old_mac_move_events(days)
+    except Exception as exc:
+        LOGGER.warning("mac move retention failed: %s", exc)
+    if removed:
+        LOGGER.info("mac move retention: pruned %d events older than %d days",
+                    removed, days)
+    return {"removed": removed, "retention_days": days}
+
+
+async def _mac_move_retention_loop() -> None:
+    """Infinite loop that prunes old MAC move events at a fixed interval."""
+    while True:
+        try:
+            await asyncio.sleep(int(state.MAC_MOVE_RETENTION_CONFIG.get(
+                "interval_seconds",
+                state.MAC_MOVE_RETENTION_DEFAULTS["interval_seconds"])))
+            await _run_mac_move_retention_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("mac move retention loop failure: %s", exc)
+            await asyncio.sleep(
+                state.MAC_MOVE_RETENTION_DEFAULTS["interval_seconds"])
