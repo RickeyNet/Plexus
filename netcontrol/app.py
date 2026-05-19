@@ -1655,9 +1655,11 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     # CSP: restrict resource origins while allowing the SPA to function.
-    # 'unsafe-inline' is needed for both styles (dynamic style= attrs) and
-    # scripts (onclick= attrs in index.html).  Migrating onclick handlers to
-    # addEventListener would allow dropping 'unsafe-inline' from script-src.
+    # 'unsafe-inline' is kept for style-src (dynamic style= attrs from the
+    # React app and ECharts). script-src 'unsafe-inline' is now a candidate
+    # for removal - the legacy index.html onclick= handlers it covered are
+    # gone after the React migration; verify no inline <script> remains in
+    # the Vite bundle before tightening.
     # The CDN entry is for graph export embed pages (ECharts).
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
@@ -1989,9 +1991,6 @@ app.include_router(
 # ═════════════════════════════════════════════════════════════════════════════
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-# Legacy vanilla-JS SPA shell. No longer served (Phase 2 migration complete);
-# kept only as a marker until the file itself is deleted in Phase 3 cleanup.
-INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 FRONTEND_DIST = os.path.join(STATIC_DIR, "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
 
