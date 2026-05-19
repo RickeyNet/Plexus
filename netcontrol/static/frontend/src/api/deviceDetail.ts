@@ -183,18 +183,33 @@ export function useMonitoringAlerts(hostId: number | null, limit = 50) {
   });
 }
 
+// The /monitoring/polls* endpoints return a bare JSON array, not an
+// object. Consumers (and the declared types) expect { polls: [...] },
+// so normalize at the boundary. Without this latestPoll is always null
+// and the interface/VLAN tables render empty.
 export function useMonitoringPollHistory(hostId: number | null, limit = 1) {
   return useQuery<PollHistoryResult>({
     queryKey: ['monitoring-poll-history', hostId, limit],
-    queryFn: () => apiRequest(`/monitoring/polls/${hostId}/history?limit=${limit}`),
+    queryFn: async () => {
+      const data = await apiRequest<MonitoringPoll[] | PollHistoryResult>(
+        `/monitoring/polls/${hostId}/history?limit=${limit}`,
+      );
+      return Array.isArray(data) ? { polls: data } : data;
+    },
     enabled: hostId != null,
   });
 }
 
 export function useMonitoringPolls(limit = 100) {
-  return useQuery<{ polls?: (MonitoringPoll & { host_id?: number })[] }>({
+  type PollsResult = { polls?: (MonitoringPoll & { host_id?: number })[] };
+  return useQuery<PollsResult>({
     queryKey: ['monitoring-polls', limit],
-    queryFn: () => apiRequest(`/monitoring/polls?limit=${limit}`),
+    queryFn: async () => {
+      const data = await apiRequest<
+        (MonitoringPoll & { host_id?: number })[] | PollsResult
+      >(`/monitoring/polls?limit=${limit}`);
+      return Array.isArray(data) ? { polls: data } : data;
+    },
   });
 }
 
