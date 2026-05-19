@@ -85,42 +85,38 @@ export function MacTracking() {
         </button>
       </form>
 
-      {!submitted && (
-        <div className="empty-state">
-          <p>
-            Search for a MAC address, IP address, or port name to see endpoint
-            locations.
-          </p>
-          <p style={{ fontSize: '0.85em', opacity: 0.7 }}>
-            MAC/ARP tables are collected automatically during topology discovery.
-          </p>
-        </div>
-      )}
-
-      {submitted && search.isPending && (
+      {search.isPending && (
         <div className="skeleton-loader" style={{ height: '200px' }} />
       )}
 
-      {submitted && search.error && (
+      {search.error && (
         <div className="glass-card card" style={{ color: 'var(--danger)' }}>
           Search error: {search.error.message}
         </div>
       )}
 
-      {submitted && search.data && search.data.length === 0 && (
+      {search.data && search.data.length === 0 && (
         <div
           className="glass-card card"
           style={{ textAlign: 'center', padding: '2rem', opacity: 0.7 }}
         >
-          No results found for &ldquo;{submitted}&rdquo;
+          {submitted ? (
+            <>No results found for &ldquo;{submitted}&rdquo;</>
+          ) : (
+            <>
+              No MAC/ARP entries collected yet. Click &ldquo;Collect Now&rdquo;
+              to gather them from your SNMP-enabled devices.
+            </>
+          )}
         </div>
       )}
 
-      {submitted && search.data && search.data.length > 0 && (
+      {search.data && search.data.length > 0 && (
         <div className="glass-card card" style={{ overflowX: 'auto' }}>
           <ResultsTable rows={search.data} onShowHistory={setHistoryMac} />
           <div style={{ marginTop: '0.5rem', fontSize: '0.85em', opacity: 0.6 }}>
             {search.data.length} result{search.data.length === 1 ? '' : 's'}
+            {!submitted && ' (most recently seen)'}
           </div>
         </div>
       )}

@@ -318,8 +318,11 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
 
 
 @router.get("/api/mac-tracking/search")
-async def search_mac(query: str = Query("", min_length=1), limit: int = Query(100, le=500)):
-    """Search across MAC/ARP tables by MAC address, IP, or port name."""
+async def search_mac(query: str = Query(""), limit: int = Query(100, le=500)):
+    """Search across MAC/ARP tables by MAC address, IP, or port name.
+
+    A blank query returns the most recently collected entries.
+    """
     return await db.search_mac_tracking(query, limit)
 
 
@@ -359,6 +362,7 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         if not snmp_cfg.get("enabled"):
             raise HTTPException(400, "SNMP not enabled for this host's group")
         result = await collect_mac_arp_tables(host_id, host["ip_address"], snmp_cfg)
+        result.setdefault("hosts_collected", 1)
         return result
 
     # Collect from all groups
