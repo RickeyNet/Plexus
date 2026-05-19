@@ -1193,10 +1193,10 @@ CREATE TABLE IF NOT EXISTS mac_tracking_history (
 CREATE INDEX IF NOT EXISTS idx_mac_history_mac ON mac_tracking_history(mac_address, seen_at);
 
 -- ── MAC move events (drift-style change tracking) ────────────────────────
--- One row per detected MAC relocation: the switch, port, VLAN or IP binding
--- changed from the MAC's last-known location. Only written on change, not
--- every poll. Operators acknowledge events; the timeline lives in
--- mac_move_event_history.
+-- One row per detected MAC relocation -- the switch, port, VLAN or IP
+-- binding changed from the MAC's last-known location. Only written on
+-- change, not every poll. Operators acknowledge events and the lifecycle
+-- timeline lives in mac_move_event_history.
 
 CREATE TABLE IF NOT EXISTS mac_move_events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
