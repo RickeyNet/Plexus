@@ -261,14 +261,19 @@ asking first.
 
 After the last module migrates:
 
-- [ ] Delete `netcontrol/static/js/app.js` shared utilities (each one removed when its last consumer migrates)
-- [ ] Delete `netcontrol/static/js/modules/` entirely
-- [ ] Delete `netcontrol/static/js/page-templates.js` (1,804 lines)
-- [ ] Remove the legacy `index.html` shell; React app becomes the only frontend
+- [x] Delete `netcontrol/static/js/app.js` shared utilities (each one removed when its last consumer migrates)
+- [x] Delete `netcontrol/static/js/modules/` entirely
+- [x] Delete `netcontrol/static/js/page-templates.js` (1,804 lines)
+- [x] Delete `netcontrol/static/js/api.js` and `js/virtual-list.js` (Appendix B)
+- [x] Remove the legacy `index.html` shell; React app becomes the only frontend
 - [ ] Consolidate any AI drift across modules (audit for inconsistent patterns)
 - [ ] Final Playwright pass over every page
-- [ ] Update `AGENTS.md` and `CLAUDE.md` to reflect the new frontend stack
-- [ ] Update `README.md` architecture diagram
+- [x] Update `AGENTS.md` to reflect the new frontend stack (no `CLAUDE.md` in repo)
+- [x] Update `README.md` architecture diagram (already React-accurate; verified)
+- Note: `js/websocket.js` kept per Appendix A (still listed as "evaluate"); now
+  unreferenced and a candidate for removal once the jobs WS path is confirmed.
+- Note: `script-src 'unsafe-inline'` in app.py CSP is now removable (legacy
+  inline onclick= handlers gone) — tracked as a follow-up security tightening.
 
 ---
 
