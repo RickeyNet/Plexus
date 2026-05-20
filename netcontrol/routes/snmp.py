@@ -476,9 +476,15 @@ async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
     transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
     results: dict[str, str] = {}
     row_count = 0
+    # Cisco IOS/IOS-XE exposes the per-VLAN bridge/Q-BRIDGE FDB under an
+    # SNMPv3 context named "vlan-<id>" -- the v3 equivalent of the v2c
+    # "<community>@<vlan>" trick. Honour an optional context name so per-VLAN
+    # FDB walks work over SNMPv3 (otherwise every MAC lands in VLAN 0).
+    context_name = str(snmp_config.get("snmp_context", "") or "").strip()
+    context_data = ContextData(contextName=context_name) if context_name else ContextData()
     try:
         async for error_indication, error_status, _error_index, var_binds in walk_cmd(
-            engine, auth_data, transport, ContextData(),
+            engine, auth_data, transport, context_data,
             ObjectType(ObjectIdentity(base_oid)),
             lexicographicMode=False,
         ):
