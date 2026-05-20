@@ -5,6 +5,7 @@ import { AlertsSection } from './AlertsSection';
 import { BandwidthTrendPanel } from './BandwidthTrendPanel';
 import { DevicesGridPanel } from './DevicesGridPanel';
 import { EventsFeedPanel } from './EventsFeedPanel';
+import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
 import { OverviewPanels } from './OverviewPanels';
 import { ResponseTimePanel } from './ResponseTimePanel';
@@ -57,6 +58,7 @@ export function Dashboard() {
         text="View device status, recent alerts, backup summaries, and quick stats. Scroll down to manage custom dashboards with your own metric panels."
       />
       <OverviewPanels devices={devices} />
+      <GroupHealthPanel groups={groups} devices={devices} />
       <ResponseTimePanel />
       <BandwidthTrendPanel />
       <TopTalkersPanel />
