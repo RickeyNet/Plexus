@@ -153,6 +153,69 @@ async def delete_panel_api(dashboard_id: int, panel_id: int):
     return {"status": "deleted"}
 
 
+# ── Dashboard: bandwidth trend ───────────────────────────────────────────────
+
+_BW_RANGE_MAP = {
+    "1h": ("-1 hours", 720),
+    "6h": ("-6 hours", 1500),
+    "24h": ("-1 days", 2000),
+    "7d": ("-7 days", 3000),
+}
+
+
+@router.get("/api/dashboard/top-interfaces")
+async def dashboard_top_interfaces_api(
+    range: str = Query(default="6h"),
+    limit: int = Query(default=5, ge=1, le=20),
+):
+    """Top-N interfaces network-wide by peak bandwidth over `range`, with
+    their bandwidth time-series so the dashboard can plot one line per
+    interface. Picks the busiest (host, if_index) pairs by peak in/out bps,
+    then fans out per-interface to fetch the series."""
+    cutoff_sql, series_limit = _BW_RANGE_MAP.get(range, _BW_RANGE_MAP["6h"])
+    from datetime import datetime, timedelta, UTC
+
+    range_to_delta = {
+        "1h": timedelta(hours=1),
+        "6h": timedelta(hours=6),
+        "24h": timedelta(days=1),
+        "7d": timedelta(days=7),
+    }
+    start_dt = datetime.now(UTC) - range_to_delta.get(range, timedelta(hours=6))
+    start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    tops = await db.get_top_interfaces_by_bandwidth(start=start_str, limit=limit)
+
+    interfaces = []
+    for t in tops:
+        series = await db.query_interface_ts(
+            host_id=t["host_id"],
+            if_index=t["if_index"],
+            start=start_str,
+            limit=series_limit,
+        )
+        # query_interface_ts returns DESC; flip to ascending for time-axis plotting
+        series.reverse()
+        interfaces.append({
+            "host_id": t["host_id"],
+            "hostname": t.get("hostname") or "",
+            "if_index": t["if_index"],
+            "if_name": t.get("if_name") or "",
+            "if_speed_mbps": t.get("if_speed_mbps") or 0,
+            "peak_bps": t.get("peak_bps") or 0,
+            "samples": [
+                {
+                    "ts": s.get("sampled_at"),
+                    "in_bps": s.get("in_rate_bps"),
+                    "out_bps": s.get("out_rate_bps"),
+                }
+                for s in series
+            ],
+        })
+
+    return {"range": range, "interfaces": interfaces}
+
+
 # ── Annotations ──────────────────────────────────────────────────────────────
 
 @router.get("/api/annotations")

@@ -8343,6 +8343,38 @@ async def create_interface_ts_batch(rows: list[tuple]) -> int:
         await db.close()
 
 
+async def get_top_interfaces_by_bandwidth(
+    start: str,
+    limit: int = 5,
+) -> list[dict]:
+    """Return top-N interfaces network-wide by peak bandwidth over [start, now).
+
+    Used by the dashboard bandwidth-trend panel to pick which interfaces to chart.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT t.host_id,
+                      t.if_index,
+                      MAX(t.if_name) AS if_name,
+                      MAX(t.if_speed_mbps) AS if_speed_mbps,
+                      h.hostname AS hostname,
+                      MAX(MAX(COALESCE(t.in_rate_bps, 0),
+                              COALESCE(t.out_rate_bps, 0))) AS peak_bps
+               FROM interface_ts t
+               JOIN hosts h ON h.id = t.host_id
+               WHERE t.sampled_at >= ?
+                 AND (t.in_rate_bps IS NOT NULL OR t.out_rate_bps IS NOT NULL)
+               GROUP BY t.host_id, t.if_index
+               ORDER BY peak_bps DESC
+               LIMIT ?""",
+            (start, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def query_interface_ts(
     host_id: int,
     if_index: int | None = None,
