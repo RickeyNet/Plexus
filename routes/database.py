@@ -1192,6 +1192,46 @@ CREATE TABLE IF NOT EXISTS mac_tracking_history (
 );
 CREATE INDEX IF NOT EXISTS idx_mac_history_mac ON mac_tracking_history(mac_address, seen_at);
 
+-- ── MAC move events (drift-style change tracking) ────────────────────────
+-- One row per detected MAC relocation: the switch, port, VLAN or IP binding
+-- changed from the MAC's last-known location. Only written on change, not
+-- every poll. Operators acknowledge events; the timeline lives in
+-- mac_move_event_history.
+
+CREATE TABLE IF NOT EXISTS mac_move_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    mac_address     TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'open',
+    change_kind     TEXT    NOT NULL DEFAULT '',
+    from_host_id    INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    from_port       TEXT    NOT NULL DEFAULT '',
+    from_vlan       INTEGER DEFAULT 0,
+    from_ip         TEXT    NOT NULL DEFAULT '',
+    to_host_id      INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    to_port         TEXT    NOT NULL DEFAULT '',
+    to_vlan         INTEGER DEFAULT 0,
+    to_ip           TEXT    NOT NULL DEFAULT '',
+    detected_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+    acknowledged_at TEXT,
+    acknowledged_by TEXT    DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_mac_move_events_mac ON mac_move_events(mac_address, detected_at);
+CREATE INDEX IF NOT EXISTS idx_mac_move_events_status ON mac_move_events(status, detected_at);
+
+CREATE TABLE IF NOT EXISTS mac_move_event_history (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id        INTEGER NOT NULL REFERENCES mac_move_events(id) ON DELETE CASCADE,
+    mac_address     TEXT    NOT NULL,
+    action          TEXT    NOT NULL DEFAULT '',
+    from_status     TEXT    NOT NULL DEFAULT '',
+    to_status       TEXT    NOT NULL DEFAULT '',
+    actor           TEXT    NOT NULL DEFAULT '',
+    details         TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mac_move_event_history_event_created
+ON mac_move_event_history(event_id, created_at DESC);
+
 -- ── NetFlow / sFlow / IPFIX ──────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS flow_records (
@@ -11782,9 +11822,81 @@ async def upsert_arp_entry(host_id: int, ip_address: str, mac_address: str,
 
 
 async def record_mac_history(mac_address: str, host_id: int, port_name: str,
-                              vlan: int = 0, ip_address: str = "") -> int:
+                              vlan: int = 0, ip_address: str = "") -> int | None:
+    """Record a MAC sighting, but only when its location actually changed.
+
+    Mirrors config-drift change detection: the most recent history row for
+    this MAC is the "last known location". If the switch (host_id), port,
+    VLAN, or IP binding differs, we append a history row AND open a
+    mac_move_event. If nothing changed, this is a no-op so the history table
+    stays a true movement log rather than a per-poll firehose.
+
+    Returns the new history row id, or None when there was no change.
+    """
     db = await get_db()
     try:
+        cursor = await db.execute(
+            """SELECT host_id, port_name, vlan, ip_address
+               FROM mac_tracking_history
+               WHERE mac_address = ?
+               ORDER BY seen_at DESC, id DESC LIMIT 1""",
+            (mac_address,),
+        )
+        prev = await cursor.fetchone()
+
+        if prev is not None:
+            p = prev if isinstance(prev, tuple) else (
+                prev["host_id"], prev["port_name"], prev["vlan"], prev["ip_address"])
+            prev_host, prev_port, prev_vlan, prev_ip = p[0], p[1] or "", p[2] or 0, p[3] or ""
+
+            changed = []
+            if prev_host != host_id:
+                changed.append("switch")
+            if (prev_port or "") != (port_name or ""):
+                changed.append("port")
+            if (prev_vlan or 0) != (vlan or 0):
+                changed.append("vlan")
+            # Only treat an IP change as a move once a binding exists on both
+            # sides — going from "" to a freshly-learned IP is enrichment of
+            # the same location, not a move.
+            if prev_ip and ip_address and prev_ip != ip_address:
+                changed.append("ip")
+
+            if not changed:
+                return None
+
+            await db.execute(
+                """INSERT INTO mac_tracking_history
+                   (mac_address, ip_address, host_id, port_name, vlan)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (mac_address, ip_address, host_id, port_name, vlan),
+            )
+            cursor = await db.execute(
+                """INSERT INTO mac_move_events
+                   (mac_address, status, change_kind,
+                    from_host_id, from_port, from_vlan, from_ip,
+                    to_host_id, to_port, to_vlan, to_ip)
+                   VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (mac_address, ",".join(changed),
+                 prev_host, prev_port, prev_vlan, prev_ip,
+                 host_id, port_name, vlan, ip_address),
+            )
+            event_id = cursor.lastrowid
+            await db.execute(
+                """INSERT INTO mac_move_event_history
+                   (event_id, mac_address, action, from_status, to_status,
+                    actor, details)
+                   VALUES (?, ?, 'detected', '', 'open', 'system', ?)""",
+                (event_id, mac_address,
+                 f"{'+'.join(changed)} changed: "
+                 f"host {prev_host}->{host_id}, "
+                 f"port {prev_port or '-'}->{port_name or '-'}, "
+                 f"vlan {prev_vlan}->{vlan}"),
+            )
+            await db.commit()
+            return event_id
+
+        # First time we've ever seen this MAC — record the baseline sighting.
         cursor = await db.execute(
             """INSERT INTO mac_tracking_history
                (mac_address, ip_address, host_id, port_name, vlan)
@@ -11793,6 +11905,166 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
         )
         await db.commit()
         return cursor.lastrowid
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+# ── MAC move events (drift-style) ───────────────────────────────────────────
+
+async def get_mac_move_events(status: str = "", limit: int = 200,
+                               host_id: int | None = None) -> list[dict]:
+    """List MAC move events, newest first.
+
+    Optionally filter by status, and by a switch "involved" in the move —
+    host_id matches when the device is on either the from- or to-side, since
+    a move is inherently a between-devices event.
+    """
+    db = await get_db()
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if status:
+            clauses.append("e.status = ?")
+            params.append(status)
+        if host_id is not None:
+            clauses.append("(e.from_host_id = ? OR e.to_host_id = ?)")
+            params.extend([host_id, host_id])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT e.*, fh.hostname AS from_hostname,
+                       th.hostname AS to_hostname
+                FROM mac_move_events e
+                LEFT JOIN hosts fh ON fh.id = e.from_host_id
+                LEFT JOIN hosts th ON th.id = e.to_host_id
+                {where}
+                ORDER BY e.detected_at DESC, e.id DESC LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_mac_move_event_summary() -> dict:
+    """Counts by status for the summary cards."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT status, COUNT(*) AS n FROM mac_move_events GROUP BY status"
+        )
+        rows = rows_to_list(await cursor.fetchall())
+        by_status = {r["status"]: r["n"] for r in rows}
+        return {
+            "open": by_status.get("open", 0),
+            "acknowledged": by_status.get("acknowledged", 0),
+            "total": sum(by_status.values()),
+        }
+    finally:
+        await db.close()
+
+
+async def get_mac_move_event_history(event_id: int, limit: int = 500) -> list[dict]:
+    """Lifecycle timeline for a single move event, newest first."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT * FROM mac_move_event_history
+               WHERE event_id = ?
+               ORDER BY created_at DESC, id DESC LIMIT ?""",
+            (event_id, limit),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def acknowledge_mac_move_event(event_id: int, actor: str = "") -> bool:
+    """Move an open event to acknowledged and append a history row."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT mac_address, status FROM mac_move_events WHERE id = ?",
+            (event_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        r = row if isinstance(row, tuple) else (row["mac_address"], row["status"])
+        mac_address, cur_status = r[0], r[1]
+        if cur_status == "acknowledged":
+            return True
+        await db.execute(
+            """UPDATE mac_move_events
+               SET status = 'acknowledged',
+                   acknowledged_at = datetime('now'),
+                   acknowledged_by = ?
+               WHERE id = ?""",
+            (actor, event_id),
+        )
+        await db.execute(
+            """INSERT INTO mac_move_event_history
+               (event_id, mac_address, action, from_status, to_status,
+                actor, details)
+               VALUES (?, ?, 'acknowledged', ?, 'acknowledged', ?, '')""",
+            (event_id, mac_address, cur_status, actor or "operator"),
+        )
+        await db.commit()
+        return True
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+async def acknowledge_open_mac_move_events(actor: str = "") -> int:
+    """Bulk-acknowledge every open event. Returns the number acknowledged."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, mac_address FROM mac_move_events WHERE status = 'open'"
+        )
+        open_rows = rows_to_list(await cursor.fetchall())
+        for ev in open_rows:
+            await db.execute(
+                """UPDATE mac_move_events
+                   SET status = 'acknowledged',
+                       acknowledged_at = datetime('now'),
+                       acknowledged_by = ?
+                   WHERE id = ?""",
+                (actor, ev["id"]),
+            )
+            await db.execute(
+                """INSERT INTO mac_move_event_history
+                   (event_id, mac_address, action, from_status, to_status,
+                    actor, details)
+                   VALUES (?, ?, 'acknowledged', 'open', 'acknowledged', ?, 'bulk')""",
+                (ev["id"], ev["mac_address"], actor or "operator"),
+            )
+        await db.commit()
+        return len(open_rows)
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+async def delete_old_mac_move_events(retention_days: int) -> int:
+    """Prune move events older than retention_days. Cascades to history."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM mac_move_events "
+            "WHERE detected_at < datetime('now', ? || ' days')",
+            (f"-{int(retention_days)}",),
+        )
+        await db.commit()
+        return cursor.rowcount if cursor.rowcount is not None else 0
     finally:
         await db.close()
 
