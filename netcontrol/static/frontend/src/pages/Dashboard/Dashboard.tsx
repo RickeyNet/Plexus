@@ -4,6 +4,7 @@ import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
 import { HealthSection } from './HealthSection';
 import { OverviewPanels } from './OverviewPanels';
+import { ResponseTimePanel } from './ResponseTimePanel';
 import { StatRings } from './StatRings';
 
 export function Dashboard() {
@@ -52,6 +53,7 @@ export function Dashboard() {
         text="View device status, recent alerts, backup summaries, and quick stats. Scroll down to manage custom dashboards with your own metric panels."
       />
       <OverviewPanels devices={devices} />
+      <ResponseTimePanel />
       <StatRings
         hosts={stats.total_hosts ?? 0}
         playbooks={stats.total_playbooks ?? 0}

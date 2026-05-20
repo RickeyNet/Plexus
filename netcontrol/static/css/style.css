@@ -4886,6 +4886,71 @@ code {
     display: inline-block;
 }
 
+.dashboard-range-tabs {
+    display: inline-flex;
+    gap: 0.15rem;
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    padding: 2px;
+    background: var(--bg-secondary, transparent);
+}
+
+.dashboard-range-tab {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 0.2rem 0.6rem;
+    font-size: 0.75rem;
+    border-radius: 0.3rem;
+    cursor: pointer;
+}
+
+.dashboard-range-tab:hover {
+    color: var(--text);
+}
+
+.dashboard-range-tab.active {
+    background: var(--accent, #3b82f6);
+    color: #fff;
+}
+
+.dashboard-response-summary {
+    display: flex;
+    gap: 1.5rem;
+    margin: 0.25rem 0 0.5rem;
+}
+
+.dashboard-response-stat {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+}
+
+.dashboard-response-stat-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+.dashboard-response-stat-value {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.dashboard-response-empty {
+    height: 220px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dashboard-overview-card + .dashboard-overview-card,
+.dashboard-overview-grid + .dashboard-overview-card {
+    margin-top: 1rem;
+}
+
 .health-tile {
     background: var(--card-bg, var(--bg-secondary));
     border: 1px solid var(--border);
