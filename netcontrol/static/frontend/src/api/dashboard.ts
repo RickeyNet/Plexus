@@ -18,6 +18,7 @@ export interface DashboardMonitoring {
 }
 
 export interface DeviceHealth {
+  host_id?: number;
   hostname?: string;
   ip_address?: string;
   group_id?: number;

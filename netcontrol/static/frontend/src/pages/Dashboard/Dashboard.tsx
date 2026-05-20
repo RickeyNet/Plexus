@@ -2,10 +2,12 @@ import { useDashboard } from '@/api/dashboard';
 
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
+import { DevicesGridPanel } from './DevicesGridPanel';
 import { HealthSection } from './HealthSection';
 import { OverviewPanels } from './OverviewPanels';
 import { ResponseTimePanel } from './ResponseTimePanel';
 import { StatRings } from './StatRings';
+import { TopTalkersPanel } from './TopTalkersPanel';
 
 export function Dashboard() {
   const { data, isPending, error } = useDashboard();
@@ -54,6 +56,8 @@ export function Dashboard() {
       />
       <OverviewPanels devices={devices} />
       <ResponseTimePanel />
+      <TopTalkersPanel />
+      <DevicesGridPanel devices={devices} />
       <StatRings
         hosts={stats.total_hosts ?? 0}
         playbooks={stats.total_playbooks ?? 0}
