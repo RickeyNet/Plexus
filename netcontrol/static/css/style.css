@@ -4988,6 +4988,73 @@ code {
     box-shadow: 0 0 0 2px var(--border-light, rgba(255, 255, 255, 0.5));
 }
 
+.dashboard-events-feed {
+    max-height: 280px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.dashboard-events-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+        "badge title time"
+        "badge desc  desc";
+    column-gap: 0.6rem;
+    row-gap: 0.1rem;
+    align-items: center;
+    padding: 0.4rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.dashboard-events-item:last-child {
+    border-bottom: none;
+}
+
+.dashboard-events-badge {
+    grid-area: badge;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #fff;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+    align-self: start;
+    margin-top: 0.1rem;
+    min-width: 52px;
+    text-align: center;
+}
+
+.dashboard-events-title {
+    grid-area: title;
+    color: var(--text);
+    font-weight: 500;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-events-desc {
+    grid-area: desc;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-events-time {
+    grid-area: time;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
 .health-tile {
     background: var(--card-bg, var(--bg-secondary));
     border: 1px solid var(--border);
