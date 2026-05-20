@@ -3,6 +3,7 @@ import { useDashboard } from '@/api/dashboard';
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
 import { HealthSection } from './HealthSection';
+import { OverviewPanels } from './OverviewPanels';
 import { StatRings } from './StatRings';
 
 export function Dashboard() {
@@ -50,6 +51,7 @@ export function Dashboard() {
         title="Your Network at a Glance"
         text="View device status, recent alerts, backup summaries, and quick stats. Scroll down to manage custom dashboards with your own metric panels."
       />
+      <OverviewPanels devices={devices} />
       <StatRings
         hosts={stats.total_hosts ?? 0}
         playbooks={stats.total_playbooks ?? 0}
