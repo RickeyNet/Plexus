@@ -11798,18 +11798,31 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
 
 
 async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
-    """Search MAC/ARP tables by MAC address, IP address, or port name."""
+    """Search MAC/ARP tables by MAC address, IP address, or port name.
+
+    An empty/blank query returns the most recently seen entries so the UI can
+    show what was just collected without requiring a search term.
+    """
     db = await get_db()
     try:
-        pattern = f"%{query}%"
-        cursor = await db.execute(
-            """SELECT m.*, h.hostname, h.ip_address as host_ip
-               FROM mac_address_table m
-               LEFT JOIN hosts h ON h.id = m.host_id
-               WHERE m.mac_address LIKE ? OR m.ip_address LIKE ? OR m.port_name LIKE ?
-               ORDER BY m.last_seen DESC LIMIT ?""",
-            (pattern, pattern, pattern, limit),
-        )
+        if query.strip():
+            pattern = f"%{query}%"
+            cursor = await db.execute(
+                """SELECT m.*, h.hostname, h.ip_address as host_ip
+                   FROM mac_address_table m
+                   LEFT JOIN hosts h ON h.id = m.host_id
+                   WHERE m.mac_address LIKE ? OR m.ip_address LIKE ? OR m.port_name LIKE ?
+                   ORDER BY m.last_seen DESC LIMIT ?""",
+                (pattern, pattern, pattern, limit),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT m.*, h.hostname, h.ip_address as host_ip
+                   FROM mac_address_table m
+                   LEFT JOIN hosts h ON h.id = m.host_id
+                   ORDER BY m.last_seen DESC LIMIT ?""",
+                (limit,),
+            )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
