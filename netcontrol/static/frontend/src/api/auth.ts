@@ -112,9 +112,21 @@ export function useSessionHeartbeat() {
   return useMutation({
     mutationFn: () =>
       apiRequest<HeartbeatResponse>('/auth/heartbeat', { method: 'POST' }),
-    onSuccess: () => {
-      // Pull a fresh status so idle_timeout_seconds / session_last_activity
-      // in the cache match what the server now believes.
+    onSuccess: (res) => {
+      // Apply the new activity timestamp synchronously so the idle countdown
+      // resets the moment the heartbeat returns - waiting for the /auth/status
+      // refetch leaves a window where the countdown can hit zero and trigger
+      // auto-logout even though the server just renewed the session.
+      qc.setQueryData<AuthStatus>(['auth', 'status'], (prev) =>
+        prev
+          ? {
+              ...prev,
+              session_last_activity: res.session_last_activity,
+              idle_timeout_seconds: res.idle_timeout_seconds,
+              server_time: res.server_time,
+            }
+          : prev,
+      );
       qc.invalidateQueries({ queryKey: ['auth', 'status'] });
     },
   });
