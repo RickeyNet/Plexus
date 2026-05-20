@@ -133,9 +133,14 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             if_index_to_name[idx] = _snmp_str(val)
 
     # ── Pass 2: discover candidate VLANs for per-VLAN FDB walks ──
+    # Both v2c (community "<c>@<vlan>") and v3 (context "vlan-<id>") support
+    # per-VLAN FDB polling on Cisco IOS/IOS-XE, so discover real VLANs in
+    # either case. Only fall back to a single context-less walk when there's
+    # no usable credential at all (which would otherwise tag every MAC VLAN 0).
     version = str(snmp_config.get("version", "2c")).strip().lower()
     community = str(snmp_config.get("community", "")).strip()
-    if version == "2c" and community:
+    has_credential = (version == "2c" and community) or version.startswith("3")
+    if has_credential:
         try:
             vlan_ids = await _discover_vlan_ids_for_host(
                 ip_address, snmp_config, timeout_seconds=timeout_seconds,
@@ -143,7 +148,6 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         except Exception:
             vlan_ids = [1]
     else:
-        # SNMPv3 / no community - community-string indexing doesn't apply.
         vlan_ids = [0]
 
     if not vlan_ids:
