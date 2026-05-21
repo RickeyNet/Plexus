@@ -54,6 +54,9 @@ export function IdleTimeoutWatcher() {
   useEffect(() => {
     if (!data?.authenticated || loggedOutRef.current) return;
     if (remaining === Infinity) return;
+    // Don't auto-logout while a heartbeat is in flight - the server is about
+    // to renew the session and racing it would sign the user out anyway.
+    if (heartbeat.isPending) return;
     if (remaining <= 0) {
       loggedOutRef.current = true;
       logout.mutate(undefined, {
@@ -62,7 +65,7 @@ export function IdleTimeoutWatcher() {
         },
       });
     }
-  }, [remaining, data?.authenticated, logout]);
+  }, [remaining, data?.authenticated, logout, heartbeat.isPending]);
 
   useEffect(() => {
     loggedOutRef.current = false;
