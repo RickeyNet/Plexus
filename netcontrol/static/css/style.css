@@ -4812,6 +4812,80 @@ code {
     gap: 0.75rem;
 }
 
+.dashboard-overview-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+@media (max-width: 900px) {
+    .dashboard-overview-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.dashboard-overview-card {
+    padding: 1rem 1.25rem;
+}
+
+.dashboard-overview-title {
+    margin: 0 0 0.5rem 0;
+    font-size: 1rem;
+}
+
+.dashboard-overview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.5rem;
+}
+
+.dashboard-overview-link {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-decoration: none;
+}
+
+.dashboard-overview-link:hover {
+    color: var(--text);
+}
+
+.dashboard-topology-mini {
+    position: relative;
+}
+
+.dashboard-topology-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.dashboard-topology-legend {
+    display: flex;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.dashboard-topology-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.dashboard-topology-legend-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
 .health-tile {
     background: var(--card-bg, var(--bg-secondary));
     border: 1px solid var(--border);
