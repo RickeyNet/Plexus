@@ -2,6 +2,7 @@ import { useDashboard } from '@/api/dashboard';
 
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
+import { BackupStatusPanel } from './BackupStatusPanel';
 import { BandwidthTrendPanel } from './BandwidthTrendPanel';
 import { DevicesGridPanel } from './DevicesGridPanel';
 import { EventsFeedPanel } from './EventsFeedPanel';
@@ -63,6 +64,7 @@ export function Dashboard() {
       <BandwidthTrendPanel />
       <TopTalkersPanel />
       <DevicesGridPanel devices={devices} />
+      <BackupStatusPanel devices={devices} />
       <EventsFeedPanel />
       <StatRings
         hosts={stats.total_hosts ?? 0}
