@@ -172,10 +172,300 @@ class ConfigDriftRule(Rule):
         return findings
 
 
+# ── Rule pack: port hygiene ─────────────────────────────────────────────────
+#
+# Three sub-rules grouped into one class so they share the interface
+# walk: (a) admin-up but oper-down for >= UNUSED_PORT_DAYS days,
+# (b) connected port without a description, (c) speed/duplex mismatch
+# against the resolved topology peer.
+
+PORT_HYGIENE_UNUSED_DAYS = max(1, int(
+    os.getenv("APP_AUDIT_UNUSED_PORT_DAYS", "30")
+))
+
+
+def _ticks_to_days(ticks_str: str) -> float | None:
+    """ifLastChange is TimeTicks (hundredths of a second) since sysUpTime.
+    We store the raw value at collection time and the rule converts that
+    to a "days since last transition" approximation. Without the device's
+    boot time we can't be exact, but a port that's been admin-up + oper-
+    down for thirty days will have a tick value that, when divided into
+    days, is essentially the device's uptime minus 30 -- still a useful
+    floor for the hygiene check. The rule treats a missing/zero value
+    as "unknown" and skips it rather than flagging false positives.
+    """
+    try:
+        ticks = int(ticks_str)
+    except (ValueError, TypeError):
+        return None
+    if ticks <= 0:
+        return None
+    # 100 ticks/sec * 60 * 60 * 24 = 8_640_000 ticks/day
+    return ticks / 8_640_000.0
+
+
+class PortHygieneRule(Rule):
+    rule_id = "port.hygiene"
+    category = "port"
+    default_severity = "low"
+    cis_control = "CIS Controls v8 12.2"
+    title = "Port hygiene issues"
+
+    async def evaluate(self, ctx: AuditContext) -> list[Finding]:
+        findings: list[Finding] = []
+        # Resolve which ports are connected (per topology) so we can scope
+        # the missing-description and speed/duplex checks to live links.
+        links = await db.get_topology_links()
+        connected_ports: dict[tuple[int, str], dict] = {}
+        for ln in links:
+            src_id = ln.get("source_host_id")
+            src_if = ln.get("source_interface") or ""
+            if src_id and src_if:
+                connected_ports[(int(src_id), src_if)] = ln
+            tgt_id = ln.get("target_host_id")
+            tgt_if = ln.get("target_interface") or ""
+            if tgt_id and tgt_if:
+                connected_ports[(int(tgt_id), tgt_if)] = ln
+
+        for host in ctx.hosts:
+            host_id = int(host["id"])
+            hostname = host.get("hostname", "")
+            ports = await db.get_interface_inventory_for_host(host_id)
+            if not ports:
+                continue
+
+            for p in ports:
+                name = p.get("name", "") or ""
+                admin = (p.get("admin_state") or "").lower()
+                oper = (p.get("oper_state") or "").lower()
+                description = (p.get("description") or "").strip()
+                duplex = (p.get("duplex") or "").lower()
+                speed = int(p.get("speed_mbps") or 0)
+
+                is_connected = (host_id, name) in connected_ports
+
+                # (a) Admin-up + oper-down >= threshold days
+                if admin == "up" and oper == "down":
+                    age_days = _ticks_to_days(p.get("last_change") or "")
+                    if age_days is not None and age_days >= PORT_HYGIENE_UNUSED_DAYS:
+                        findings.append(Finding(
+                            rule_id="port.unused",
+                            category=self.category,
+                            severity="low",
+                            title="Port admin-up but oper-down",
+                            detail=(
+                                f"{hostname} {name}: admin-up but oper-down for "
+                                f"~{int(age_days)} days. Disable unused ports per "
+                                f"hardening guidance."
+                            ),
+                            host_id=host_id,
+                            cis_control=self.cis_control,
+                            evidence={
+                                "hostname": hostname,
+                                "port": name,
+                                "approx_days_inactive": int(age_days),
+                                "threshold_days": PORT_HYGIENE_UNUSED_DAYS,
+                            },
+                        ))
+
+                # (b) Connected port with no description
+                if is_connected and not description:
+                    findings.append(Finding(
+                        rule_id="port.missing_description",
+                        category=self.category,
+                        severity="info",
+                        title="Connected port missing description",
+                        detail=(
+                            f"{hostname} {name}: port is connected (per "
+                            f"topology) but has no interface description."
+                        ),
+                        host_id=host_id,
+                        cis_control=self.cis_control,
+                        evidence={"hostname": hostname, "port": name},
+                    ))
+
+                # (c) Speed/duplex mismatch with peer (only on connected ports
+                #     with a resolved peer ifIndex we have inventory for)
+                if is_connected:
+                    ln = connected_ports[(host_id, name)]
+                    peer_host_id = (
+                        ln.get("target_host_id")
+                        if ln.get("source_host_id") == host_id
+                        else ln.get("source_host_id")
+                    )
+                    peer_if = (
+                        ln.get("target_interface")
+                        if ln.get("source_host_id") == host_id
+                        else ln.get("source_interface")
+                    )
+                    if peer_host_id and peer_if:
+                        peer = await db.get_interface_inventory_by_name(
+                            int(peer_host_id), peer_if
+                        )
+                        if peer:
+                            peer_speed = int(peer.get("speed_mbps") or 0)
+                            peer_duplex = (peer.get("duplex") or "").lower()
+                            # Only flag when both sides report a value; a 0
+                            # speed or empty duplex means the device didn't
+                            # answer that OID and shouldn't masquerade as a
+                            # mismatch.
+                            if (speed and peer_speed and speed != peer_speed) or (
+                                duplex and peer_duplex
+                                and duplex not in ("unknown", "")
+                                and peer_duplex not in ("unknown", "")
+                                and duplex != peer_duplex
+                            ):
+                                findings.append(Finding(
+                                    rule_id="port.speed_duplex_mismatch",
+                                    category=self.category,
+                                    severity="medium",
+                                    title="Speed/duplex mismatch with peer",
+                                    detail=(
+                                        f"{hostname} {name} "
+                                        f"({speed}Mbps/{duplex or '?'}) "
+                                        f"vs peer {peer_if} "
+                                        f"({peer_speed}Mbps/{peer_duplex or '?'})."
+                                    ),
+                                    host_id=host_id,
+                                    cis_control=self.cis_control,
+                                    evidence={
+                                        "hostname": hostname,
+                                        "port": name,
+                                        "local_speed_mbps": speed,
+                                        "local_duplex": duplex,
+                                        "peer_host_id": int(peer_host_id),
+                                        "peer_port": peer_if,
+                                        "peer_speed_mbps": peer_speed,
+                                        "peer_duplex": peer_duplex,
+                                    },
+                                ))
+        return findings
+
+
+# ── Rule pack: VLAN consistency ─────────────────────────────────────────────
+#
+# For each resolved trunk in the topology, both endpoints should define
+# the VLANs they're allowed to carry. Missing definitions on one side
+# show up as "VLAN X allowed on trunk but not defined on peer", which is
+# a common cause of black-holed traffic across switch boundaries.
+
+class VlanConsistencyRule(Rule):
+    rule_id = "vlan.consistency"
+    category = "vlan"
+    default_severity = "medium"
+    cis_control = "CIS Controls v8 12.4"
+    title = "VLAN consistency across trunks"
+
+    async def evaluate(self, ctx: AuditContext) -> list[Finding]:
+        findings: list[Finding] = []
+        links = await db.get_topology_links()
+        # Pre-load each host's defined VLANs once
+        defined_by_host: dict[int, set[int]] = {}
+        for host in ctx.hosts:
+            host_id = int(host["id"])
+            defs = await db.get_vlan_definitions_for_host(host_id)
+            defined_by_host[host_id] = {
+                int(d["vlan_id"]) for d in defs if d.get("vlan_id") is not None
+            }
+
+        host_by_id = {int(h["id"]): h for h in ctx.hosts}
+
+        for ln in links:
+            src_id = ln.get("source_host_id")
+            tgt_id = ln.get("target_host_id")
+            if not (src_id and tgt_id):
+                continue  # unresolved peer -- can't compare
+            src_if = ln.get("source_interface") or ""
+            tgt_if = ln.get("target_interface") or ""
+            src_port = await db.get_interface_inventory_by_name(int(src_id), src_if)
+            tgt_port = await db.get_interface_inventory_by_name(int(tgt_id), tgt_if)
+            if not src_port or not tgt_port:
+                continue
+
+            src_trunks = _parse_vlan_csv(src_port.get("trunk_vlans") or "")
+            tgt_trunks = _parse_vlan_csv(tgt_port.get("trunk_vlans") or "")
+            if not src_trunks and not tgt_trunks:
+                continue  # neither side is a trunk
+
+            src_defined = defined_by_host.get(int(src_id), set())
+            tgt_defined = defined_by_host.get(int(tgt_id), set())
+
+            # VLANs allowed on this trunk that the *peer* doesn't define
+            # are the actionable findings -- the local side is willing
+            # to forward them but the peer can't terminate them.
+            src_orphans = sorted(src_trunks - tgt_defined) if tgt_defined else []
+            tgt_orphans = sorted(tgt_trunks - src_defined) if src_defined else []
+
+            if src_orphans:
+                src_host = host_by_id.get(int(src_id), {})
+                findings.append(Finding(
+                    rule_id=self.rule_id,
+                    category=self.category,
+                    severity=self.default_severity,
+                    title="Trunk carries VLANs not defined on peer",
+                    detail=(
+                        f"{src_host.get('hostname', '')} {src_if} -> peer "
+                        f"{tgt_if}: VLAN(s) "
+                        f"{','.join(str(v) for v in src_orphans[:20])}"
+                        f"{'...' if len(src_orphans) > 20 else ''} "
+                        f"allowed on trunk but not defined on peer."
+                    ),
+                    host_id=int(src_id),
+                    cis_control=self.cis_control,
+                    evidence={
+                        "hostname": src_host.get("hostname", ""),
+                        "port": src_if,
+                        "peer_host_id": int(tgt_id),
+                        "peer_port": tgt_if,
+                        "orphan_vlans": src_orphans,
+                    },
+                ))
+            if tgt_orphans:
+                tgt_host = host_by_id.get(int(tgt_id), {})
+                findings.append(Finding(
+                    rule_id=self.rule_id,
+                    category=self.category,
+                    severity=self.default_severity,
+                    title="Trunk carries VLANs not defined on peer",
+                    detail=(
+                        f"{tgt_host.get('hostname', '')} {tgt_if} -> peer "
+                        f"{src_if}: VLAN(s) "
+                        f"{','.join(str(v) for v in tgt_orphans[:20])}"
+                        f"{'...' if len(tgt_orphans) > 20 else ''} "
+                        f"allowed on trunk but not defined on peer."
+                    ),
+                    host_id=int(tgt_id),
+                    cis_control=self.cis_control,
+                    evidence={
+                        "hostname": tgt_host.get("hostname", ""),
+                        "port": tgt_if,
+                        "peer_host_id": int(src_id),
+                        "peer_port": src_if,
+                        "orphan_vlans": tgt_orphans,
+                    },
+                ))
+        return findings
+
+
+def _parse_vlan_csv(csv_value: str) -> set[int]:
+    out: set[int] = set()
+    for part in (csv_value or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.add(int(part))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
 # Rule registry. New rule classes are appended here once their
 # collectors land.
 _RULE_REGISTRY: list[type[Rule]] = [
     ConfigDriftRule,
+    PortHygieneRule,
+    VlanConsistencyRule,
 ]
 
 

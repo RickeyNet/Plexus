@@ -1001,6 +1001,12 @@ async def _run_topology_discovery_once() -> dict:
                     await collect_mac_arp_tables(host["id"], host["ip_address"], snmp_cfg)
                 except Exception:
                     pass
+                # Per-port inventory + VLAN definitions (feeds audit rules)
+                try:
+                    from netcontrol.routes.mac_tracking import collect_interface_inventory
+                    await collect_interface_inventory(host["id"], host["ip_address"], snmp_cfg)
+                except Exception:
+                    pass
                 # Record topology changes (only if there were previous links)
                 if old_link_keys:
                     await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
