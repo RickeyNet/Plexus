@@ -867,6 +867,12 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
         "1.3.6.1.2.1.2.2.1.7",        # ifAdminStatus
         "1.3.6.1.2.1.2.2.1.8",        # ifOperStatus
         "1.3.6.1.2.1.2.2.1.6",        # ifPhysAddress (MAC)
+        # Per-port VLAN membership. Walked here so MAC tracking can tag every
+        # learned MAC with the port's access VLAN (or PVID for trunks) instead
+        # of relying on per-VLAN Q-BRIDGE walks, which require SNMPv3 contexts
+        # the user often isn't authorised for.
+        "1.3.6.1.4.1.9.9.68.1.2.2.1.2",  # vmVlan (Cisco access-port VLAN; harmless on non-Cisco)
+        "1.3.6.1.2.1.17.7.1.4.5.1.1",    # dot1qPvid (standard PVID, indexed by dot1dBasePort)
     ]
 
     # OIDs for storage discovery (HOST-RESOURCES-MIB)
@@ -901,6 +907,28 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
     if_admin_data = if_tables.get("1.3.6.1.2.1.2.2.1.7", {})
     if_oper_data = if_tables.get("1.3.6.1.2.1.2.2.1.8", {})
     if_mac_data = if_tables.get("1.3.6.1.2.1.2.2.1.6", {})
+    if_vmvlan_data = if_tables.get("1.3.6.1.4.1.9.9.68.1.2.2.1.2", {})  # ifIndex -> access vlan
+    pvid_by_bridge_port = if_tables.get("1.3.6.1.2.1.17.7.1.4.5.1.1", {})  # dot1dBasePort -> pvid
+
+    # Translate dot1qPvid (indexed by dot1dBasePort) to ifIndex via a quick
+    # supplementary walk. Skip on failure -- vmVlan alone covers Cisco access
+    # ports, which is the common case here.
+    if_pvid_data: dict[str, str] = {}
+    if pvid_by_bridge_port:
+        try:
+            bp_map = await _snmp_walk(ip_address, timeout_seconds, snmp_config,
+                                       "1.3.6.1.2.1.17.1.4.1.2", max_rows=2000)
+            bp_to_ifindex: dict[str, str] = {}
+            for oid, val in bp_map.items():
+                bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
+                if bp:
+                    bp_to_ifindex[bp] = str(val).strip()
+            for bp, pvid in pvid_by_bridge_port.items():
+                if_idx = bp_to_ifindex.get(bp)
+                if if_idx:
+                    if_pvid_data[if_idx] = pvid
+        except Exception:
+            pass
 
     # Collect all known if_indexes
     all_indexes = set()
@@ -927,12 +955,22 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
         oper_status = if_oper_data.get(idx, "")
         mac = if_mac_data.get(idx, "")
 
+        # Resolve per-port VLAN: prefer Cisco vmVlan (access ports), fall back
+        # to the standard dot1qPvid for non-Cisco bridges. Stored as int when
+        # parseable, otherwise omitted -- MAC tracking treats "no VLAN" as 0.
+        port_vlan_raw = if_vmvlan_data.get(idx, "") or if_pvid_data.get(idx, "")
+        try:
+            port_vlan = int(str(port_vlan_raw).strip()) if port_vlan_raw else 0
+        except (ValueError, TypeError):
+            port_vlan = 0
+
         oids_info = {
             "if_type": if_type,
             "speed_mbps": speed_mbps,
             "admin_status": admin_status,
             "oper_status": oper_status,
             "mac": mac,
+            "vlan": port_vlan,
         }
 
         try:

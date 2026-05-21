@@ -21,7 +21,6 @@ from pydantic import BaseModel
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import _get_session
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_walk, _snmp_str
-from netcontrol.routes.topology import _discover_vlan_ids_for_host, _snmp_cfg_for_vlan
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -42,6 +41,10 @@ DOT1Q_TP_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2"  # dot1qTpFdbPort
 
 # Bridge port to ifIndex mapping
 DOT1D_BASE_PORT_IF_INDEX = "1.3.6.1.2.1.17.1.4.1.2"  # dot1dBasePortIfIndex
+
+# Per-port VLAN membership (used to tag MACs without per-VLAN context walks)
+VM_VLAN_OID = "1.3.6.1.4.1.9.9.68.1.2.2.1.2"          # Cisco vmVlan (access port VLAN), indexed by ifIndex
+DOT1Q_PVID_OID = "1.3.6.1.2.1.17.7.1.4.5.1.1"         # dot1qPvid, indexed by dot1dBasePort
 
 # ARP table
 IP_NET_TO_MEDIA_PHYS = "1.3.6.1.2.1.4.22.1.2"     # ipNetToMediaPhysAddress
@@ -99,31 +102,39 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                                   timeout_seconds: float = 5.0) -> dict:
     """Walk MAC and ARP tables from a device via SNMP.
 
-    Cisco IOS exposes the bridge/Q-BRIDGE FDB per-VLAN via community-string
-    indexing (`<community>@<vlan_id>`). A single walk with the base community
-    only returns VLAN 1 (or nothing on some releases), so we discover the
-    device's VLANs and walk the FDB once per VLAN. ARP and ifName tables are
-    global and only need a single walk.
+    Per-port VLAN membership (Cisco vmVlan / standard dot1qPvid) is walked in
+    the default SNMP context, so we get real VLAN IDs over SNMPv3 without
+    needing per-VLAN contexts the user may not be authorised for. Q-BRIDGE
+    entries that carry the VLAN in their OID are honoured directly; the rest
+    fall back to the learning port's VLAN from that map.
 
     Returns {"macs_found": int, "arps_found": int, "errors": [str]}.
     """
     result = {"macs_found": 0, "arps_found": 0, "errors": []}
 
-    def _walk_with(cfg: dict, oid: str, max_rows: int = 2000):
-        return _snmp_walk(ip_address, timeout_seconds, cfg, oid, max_rows=max_rows)
+    def _walk(oid: str, max_rows: int = 2000):
+        return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
 
-    # ── Pass 1: global tables (ARP, ifName) using the base community ──
+    # ── Single global pass: everything lives in the default context ──
     try:
         (arp_phys, arp_net, arp_type_rows,
-         if_names,
+         if_names, vm_vlan, dot1q_pvid,
+         fdb_addr, fdb_port, fdb_status, q_fdb_port, bridge_port_map,
         ) = await asyncio.gather(
-            _walk_with(snmp_config, IP_NET_TO_MEDIA_PHYS),
-            _walk_with(snmp_config, IP_NET_TO_MEDIA_NET),
-            _walk_with(snmp_config, IP_NET_TO_MEDIA_TYPE),
-            _walk_with(snmp_config, IF_NAME_OID),
+            _walk(IP_NET_TO_MEDIA_PHYS),
+            _walk(IP_NET_TO_MEDIA_NET),
+            _walk(IP_NET_TO_MEDIA_TYPE),
+            _walk(IF_NAME_OID),
+            _walk(VM_VLAN_OID),
+            _walk(DOT1Q_PVID_OID),
+            _walk(DOT1D_TP_FDB_ADDRESS),
+            _walk(DOT1D_TP_FDB_PORT),
+            _walk(DOT1D_TP_FDB_STATUS),
+            _walk(DOT1Q_TP_FDB_PORT),
+            _walk(DOT1D_BASE_PORT_IF_INDEX),
         )
     except Exception as exc:
-        result["errors"].append(f"SNMP walk failed (global): {str(exc)}")
+        result["errors"].append(f"SNMP walk failed: {str(exc)}")
         return result
 
     if_index_to_name: dict[str, str] = {}
@@ -132,145 +143,123 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         if idx:
             if_index_to_name[idx] = _snmp_str(val)
 
-    # ── Pass 2: discover candidate VLANs for per-VLAN FDB walks ──
-    # Both v2c (community "<c>@<vlan>") and v3 (context "vlan-<id>") support
-    # per-VLAN FDB polling on Cisco IOS/IOS-XE, so discover real VLANs in
-    # either case. Only fall back to a single context-less walk when there's
-    # no usable credential at all (which would otherwise tag every MAC VLAN 0).
-    version = str(snmp_config.get("version", "2c")).strip().lower()
-    community = str(snmp_config.get("community", "")).strip()
-    has_credential = (version == "2c" and community) or version.startswith("3")
-    if has_credential:
+    bp_to_if_index: dict[str, str] = {}
+    for oid, val in bridge_port_map.items():
+        bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
+        if bp:
+            bp_to_if_index[bp] = str(val).strip()
+
+    # ── Build if_index → vlan map ──
+    # vmVlan (Cisco) is indexed directly by ifIndex; dot1qPvid is indexed by
+    # dot1dBasePort and needs translating. vmVlan wins when both are present
+    # because trunk ports report a vacuous PVID that would mislabel learned
+    # MACs.
+    if_index_to_vlan: dict[str, int] = {}
+    for oid, val in dot1q_pvid.items():
+        bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
+        if_idx = bp_to_if_index.get(bp)
+        if not if_idx:
+            continue
         try:
-            vlan_ids = await _discover_vlan_ids_for_host(
-                ip_address, snmp_config, timeout_seconds=timeout_seconds,
-            )
-        except Exception:
-            vlan_ids = [1]
-    else:
-        vlan_ids = [0]
-
-    if not vlan_ids:
-        vlan_ids = [1]
-
-    # ── Pass 3: per-VLAN FDB walks ──
-    async def _collect_vlan_fdb(vid: int) -> dict:
-        cfg = _snmp_cfg_for_vlan(snmp_config, vid) if vid > 0 else snmp_config
+            vid = int(str(val).strip())
+        except (ValueError, TypeError):
+            continue
+        if 1 <= vid <= 4094:
+            if_index_to_vlan[if_idx] = vid
+    for oid, val in vm_vlan.items():
+        if_idx = oid.rsplit(".", 1)[-1] if "." in oid else ""
+        if not if_idx:
+            continue
         try:
-            fdb_addr, fdb_port, fdb_status, q_fdb_port, bridge_port_map = await asyncio.gather(
-                _walk_with(cfg, DOT1D_TP_FDB_ADDRESS),
-                _walk_with(cfg, DOT1D_TP_FDB_PORT),
-                _walk_with(cfg, DOT1D_TP_FDB_STATUS),
-                _walk_with(cfg, DOT1Q_TP_FDB_PORT),
-                _walk_with(cfg, DOT1D_BASE_PORT_IF_INDEX),
-            )
-        except Exception as exc:
-            return {"vlan": vid, "error": str(exc)}
-        return {
-            "vlan": vid,
-            "fdb_addr": fdb_addr, "fdb_port": fdb_port, "fdb_status": fdb_status,
-            "q_fdb_port": q_fdb_port, "bridge_port_map": bridge_port_map,
-        }
+            vid = int(str(val).strip())
+        except (ValueError, TypeError):
+            continue
+        if 1 <= vid <= 4094:
+            if_index_to_vlan[if_idx] = vid
 
-    vlan_walks = await asyncio.gather(*[_collect_vlan_fdb(v) for v in vlan_ids])
+    def _resolve_port(bridge_port: str) -> tuple[str, int, int]:
+        if_idx = bp_to_if_index.get(bridge_port, bridge_port)
+        port_name = if_index_to_name.get(if_idx, f"port-{bridge_port}")
+        try:
+            port_index = int(if_idx)
+        except (ValueError, TypeError):
+            port_index = 0
+        port_vlan = if_index_to_vlan.get(if_idx, 0)
+        return port_name, port_index, port_vlan
 
     # Track (mac, vlan) we've already upserted this run so the standard FDB
     # walk doesn't double-count entries the Q-BRIDGE walk already recorded.
     seen_mac_vlan: set[tuple[str, int]] = set()
 
-    for walk in vlan_walks:
-        if "error" in walk:
-            result["errors"].append(f"vlan {walk['vlan']}: {walk['error']}")
+    # ── Q-BRIDGE VLAN-aware FDB (dot1qTpFdbTable) - has VLAN in OID ──
+    # When the device populates this table (most modern bridges do via the
+    # default context), the VLAN comes straight from the OID and is correct
+    # for both access and trunk traffic.
+    for oid, port_val in q_fdb_port.items():
+        suffix = oid[len(DOT1Q_TP_FDB_PORT):].lstrip(".")
+        parts = suffix.split(".")
+        bridge_port = str(port_val)
+        port_name, port_index, port_vlan = _resolve_port(bridge_port)
+
+        if len(parts) >= 7:
+            try:
+                vlan = int(parts[0])
+            except (ValueError, TypeError):
+                vlan = port_vlan
+            mac = _extract_mac_from_oid_suffix(".".join(parts[1:7]))
+        else:
+            vlan = port_vlan
+            mac = _extract_mac_from_oid_suffix(suffix)
+
+        if not mac:
             continue
 
-        vlan_ctx = int(walk["vlan"])
-        fdb_addr = walk["fdb_addr"]
-        fdb_port = walk["fdb_port"]
-        fdb_status = walk["fdb_status"]
-        q_fdb_port = walk["q_fdb_port"]
-        bridge_port_map = walk["bridge_port_map"]
+        try:
+            await db.upsert_mac_entry(
+                host_id=host_id, mac_address=mac, vlan=vlan,
+                port_name=port_name, port_index=port_index,
+                entry_type="dynamic",
+            )
+            # record_mac_history is change-detecting: it only writes a history
+            # row + opens a mac_move_event when the MAC's switch/port/vlan/ip
+            # actually changed, so calling it every poll is safe.
+            await db.record_mac_history(mac, host_id, port_name, vlan=vlan)
+            seen_mac_vlan.add((mac, vlan))
+            result["macs_found"] += 1
+        except Exception:
+            pass
 
-        bp_to_if_index: dict[str, str] = {}
-        for oid, val in bridge_port_map.items():
-            bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
-            if bp:
-                bp_to_if_index[bp] = str(val)
+    # ── Standard bridge FDB (dot1dTpFdbTable) - no VLAN in OID ──
+    # Tag with the learning port's VLAN from vmVlan/dot1qPvid; falls back to
+    # 0 only when the port has no resolvable VLAN.
+    for oid, mac_val in fdb_addr.items():
+        suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
+        mac = _format_mac(mac_val)
+        if not mac or len(mac) < 12:
+            mac = _extract_mac_from_oid_suffix(suffix)
+        if not mac:
+            continue
 
-        def _resolve_port(bridge_port: str) -> tuple[str, int]:
-            if_idx = bp_to_if_index.get(bridge_port, bridge_port)
-            port_name = if_index_to_name.get(if_idx, f"port-{bridge_port}")
-            try:
-                return port_name, int(if_idx)
-            except (ValueError, TypeError):
-                return port_name, 0
+        port_oid = DOT1D_TP_FDB_PORT + "." + suffix
+        status_oid = DOT1D_TP_FDB_STATUS + "." + suffix
+        bridge_port = str(fdb_port.get(port_oid, "0"))
+        status = FDB_STATUS_MAP.get(str(fdb_status.get(status_oid, "")), "dynamic")
 
-        # ── Q-BRIDGE VLAN-aware FDB (dot1qTpFdbTable) - has VLAN in OID ──
-        for oid, port_val in q_fdb_port.items():
-            suffix = oid[len(DOT1Q_TP_FDB_PORT):].lstrip(".")
-            parts = suffix.split(".")
-            if len(parts) >= 7:
-                try:
-                    vlan = int(parts[0])
-                except (ValueError, TypeError):
-                    vlan = vlan_ctx
-                mac = _extract_mac_from_oid_suffix(".".join(parts[1:7]))
-            else:
-                vlan = vlan_ctx
-                mac = _extract_mac_from_oid_suffix(suffix)
+        port_name, port_index, port_vlan = _resolve_port(bridge_port)
+        if (mac, port_vlan) in seen_mac_vlan:
+            continue
 
-            if not mac:
-                continue
-
-            bridge_port = str(port_val)
-            port_name, port_index = _resolve_port(bridge_port)
-
-            try:
-                await db.upsert_mac_entry(
-                    host_id=host_id, mac_address=mac, vlan=vlan,
-                    port_name=port_name, port_index=port_index,
-                    entry_type="dynamic",
-                )
-                # record_mac_history is now change-detecting: it only writes a
-                # history row + opens a mac_move_event when the MAC's
-                # switch/port/vlan/ip actually changed, so this is safe to call
-                # every poll without flooding the history table.
-                await db.record_mac_history(mac, host_id, port_name, vlan=vlan)
-                seen_mac_vlan.add((mac, vlan))
-                result["macs_found"] += 1
-            except Exception:
-                pass
-
-        # ── Standard bridge FDB (dot1dTpFdbTable) - no VLAN in OID ──
-        # Tag with vlan_ctx (the community-string VLAN we polled under).
-        for oid, mac_val in fdb_addr.items():
-            suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
-            mac = _format_mac(mac_val)
-            if not mac or len(mac) < 12:
-                mac = _extract_mac_from_oid_suffix(suffix)
-            if not mac:
-                continue
-
-            if (mac, vlan_ctx) in seen_mac_vlan:
-                continue
-
-            port_oid = DOT1D_TP_FDB_PORT + "." + suffix
-            status_oid = DOT1D_TP_FDB_STATUS + "." + suffix
-            bridge_port = str(fdb_port.get(port_oid, "0"))
-            status = FDB_STATUS_MAP.get(str(fdb_status.get(status_oid, "")), "dynamic")
-
-            port_name, port_index = _resolve_port(bridge_port)
-
-            try:
-                await db.upsert_mac_entry(
-                    host_id=host_id, mac_address=mac, vlan=vlan_ctx,
-                    port_name=port_name, port_index=port_index,
-                    entry_type=status,
-                )
-                await db.record_mac_history(mac, host_id, port_name, vlan=vlan_ctx)
-                seen_mac_vlan.add((mac, vlan_ctx))
-                result["macs_found"] += 1
-            except Exception:
-                pass
+        try:
+            await db.upsert_mac_entry(
+                host_id=host_id, mac_address=mac, vlan=port_vlan,
+                port_name=port_name, port_index=port_index,
+                entry_type=status,
+            )
+            await db.record_mac_history(mac, host_id, port_name, vlan=port_vlan)
+            seen_mac_vlan.add((mac, port_vlan))
+            result["macs_found"] += 1
+        except Exception:
+            pass
 
     # ── ARP table (global, ipNetToMediaTable) ──
     for oid, mac_val in arp_phys.items():
@@ -314,8 +303,8 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             pass
 
     LOGGER.info(
-        "mac_tracking: host %s (%s) vlans=%s - %d MACs, %d ARPs collected",
-        host_id, ip_address, vlan_ids,
+        "mac_tracking: host %s (%s) ports=%d port_vlans=%d - %d MACs, %d ARPs collected",
+        host_id, ip_address, len(if_index_to_name), len(if_index_to_vlan),
         result["macs_found"], result["arps_found"],
     )
     return result
