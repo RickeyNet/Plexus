@@ -1077,3 +1077,91 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
         return {"vlan_id": vlan_id, "hosts": list(roles.values())}
     finally:
         await conn.close()
+
+
+# ── Topology status overlay (Phase D) ───────────────────────────────────────
+#
+# One aggregate call powers the topology "Status Overlay" toggle: it returns
+# per-host counts for the three status sources we already track separately
+# (drift events, audit findings, interface error events). Bundling avoids
+# N+1 round-trips when the graph has 50+ nodes.
+
+@router.get("/api/topology/overlay/status")
+async def topology_overlay_status():
+    """Return per-host status badges for the topology status overlay.
+
+    For every host with at least one open finding/event/drift, returns:
+      * `drift_open`:  count of open config_drift_events
+      * `audit_worst`: worst severity in audit_findings (from the latest run only)
+      * `audit_counts`: dict of severity -> count for that latest run
+      * `errors_open`: count of unresolved interface_error_events
+      * `errors_worst`: worst severity among unresolved interface_error_events
+    """
+    conn = await db.get_db()
+    try:
+        # Latest audit run -- findings from earlier runs are stale for badge
+        # purposes (a fix in a later run should clear the badge).
+        cursor = await conn.execute(
+            "SELECT id FROM audit_runs WHERE status = 'completed' "
+            "ORDER BY id DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        latest_run_id = row[0] if row else None
+
+        out: dict[int, dict] = {}
+
+        def slot(hid: int) -> dict:
+            return out.setdefault(
+                hid,
+                {
+                    "host_id": hid,
+                    "drift_open": 0,
+                    "audit_worst": None,
+                    "audit_counts": {},
+                    "errors_open": 0,
+                    "errors_worst": None,
+                },
+            )
+
+        cursor = await conn.execute(
+            "SELECT host_id, COUNT(*) FROM config_drift_events "
+            "WHERE status = 'open' GROUP BY host_id"
+        )
+        for hid, n in await cursor.fetchall():
+            slot(hid)["drift_open"] = n
+
+        if latest_run_id is not None:
+            cursor = await conn.execute(
+                "SELECT host_id, severity, COUNT(*) FROM audit_findings "
+                "WHERE run_id = ? AND host_id IS NOT NULL "
+                "GROUP BY host_id, severity",
+                (latest_run_id,),
+            )
+            severity_rank = {
+                "critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4,
+            }
+            for hid, sev, n in await cursor.fetchall():
+                entry = slot(hid)
+                entry["audit_counts"][sev] = n
+                cur = entry["audit_worst"]
+                if cur is None or severity_rank.get(sev, 99) < severity_rank.get(cur, 99):
+                    entry["audit_worst"] = sev
+
+        cursor = await conn.execute(
+            "SELECT host_id, severity, COUNT(*) FROM interface_error_events "
+            "WHERE resolved_at IS NULL GROUP BY host_id, severity"
+        )
+        err_rank = {"critical": 0, "high": 1, "warning": 2, "info": 3}
+        for hid, sev, n in await cursor.fetchall():
+            entry = slot(hid)
+            entry["errors_open"] += n
+            cur = entry["errors_worst"]
+            if cur is None or err_rank.get(sev, 99) < err_rank.get(cur, 99):
+                entry["errors_worst"] = sev
+
+        return {
+            "latest_audit_run_id": latest_run_id,
+            "hosts": list(out.values()),
+        }
+    finally:
+        await conn.close()

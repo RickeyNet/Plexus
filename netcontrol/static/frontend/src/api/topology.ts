@@ -407,3 +407,31 @@ export function useInventoryGroupsLite() {
     queryFn: () => apiRequest('/inventory'),
   });
 }
+
+// ── Topology Status Overlay (Phase D) ──────────────────────────────────────
+
+export type AuditSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type ErrorSeverity = 'critical' | 'high' | 'warning' | 'info';
+
+export interface TopologyHostStatus {
+  host_id: number;
+  drift_open: number;
+  audit_worst: AuditSeverity | null;
+  audit_counts: Partial<Record<AuditSeverity, number>>;
+  errors_open: number;
+  errors_worst: ErrorSeverity | null;
+}
+
+export interface TopologyOverlayStatus {
+  latest_audit_run_id: number | null;
+  hosts: TopologyHostStatus[];
+}
+
+export function useTopologyOverlayStatus(enabled = true) {
+  return useQuery<TopologyOverlayStatus>({
+    queryKey: ['topology', 'overlay', 'status'],
+    queryFn: () => apiRequest('/topology/overlay/status'),
+    enabled,
+    refetchInterval: enabled ? 60_000 : false,
+  });
+}

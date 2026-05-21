@@ -13,9 +13,13 @@ import {
   useInventoryGroupsLite,
   useSaveTopologyPositions,
   useTopology,
+  useTopologyOverlayStatus,
   useTopologyPositions,
+  type AuditSeverity,
+  type ErrorSeverity,
   type StpState,
   type TopologyEdge,
+  type TopologyHostStatus,
   type TopologyNode,
   type UtilizationStreamEdge,
 } from '@/api/topology';
@@ -89,6 +93,7 @@ export function Topology() {
   const [changeBadge, setChangeBadge] = useState(0);
   const [stpBadge, setStpBadge] = useState(0);
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
+  const [statusOverlay, setStatusOverlay] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const networkRef = useRef<Network | null>(null);
@@ -122,9 +127,11 @@ export function Topology() {
   const savePositions = useSaveTopologyPositions();
   const deletePositions = useDeleteTopologyPositions();
   const stpScan = useDiscoverTopologyStp();
+  const overlayStatusQuery = useTopologyOverlayStatus(statusOverlay);
 
   const data = topologyQuery.data;
   const positions = positionsQuery.data;
+  const statusByHostRef = useRef<Map<number, TopologyHostStatus>>(new Map());
 
   // Hook up theme colors once on mount.
   useEffect(() => {
@@ -224,6 +231,25 @@ export function Topology() {
     refreshEdgeStyles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [labelsVisible]);
+
+  // Status overlay: rebuild the per-host map and restyle when toggle flips
+  // or fresh data arrives. The map keys on host_id (number), but topology
+  // node ids include external neighbors with string ids -- those have no
+  // status data and are skipped during apply.
+  useEffect(() => {
+    if (!statusOverlay) {
+      statusByHostRef.current = new Map();
+      refreshNodeStyles();
+      refreshEdgeStyles();
+      return;
+    }
+    const next = new Map<number, TopologyHostStatus>();
+    for (const h of overlayStatusQuery.data?.hosts ?? []) next.set(h.host_id, h);
+    statusByHostRef.current = next;
+    refreshNodeStyles();
+    refreshEdgeStyles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusOverlay, overlayStatusQuery.data]);
 
   // Apply settings tweaks live.
   useEffect(() => {
@@ -341,27 +367,87 @@ export function Topology() {
     const baseBorder = n.in_inventory ? 2.5 : 1.5;
     const pctRaw = n.ipam_utilization_pct;
     const hasIpamUtil = utilOverlay && pctRaw != null && !Number.isNaN(Number(pctRaw));
-    if (!hasIpamUtil) {
+
+    // Util overlay wins over status overlay because util is a live metric
+    // and the borders/shadows already encode the same dimension.
+    if (hasIpamUtil) {
+      const pct = Math.max(0, Math.min(100, Number(pctRaw)));
+      const utilHex = utilColor(pct).color;
       return {
-        color: baseColor,
-        borderWidth: baseBorder,
-        shadowColor: baseColor.border,
-        shadowSize: n.in_inventory ? 18 : 8,
+        color: {
+          ...baseColor,
+          border: utilHex,
+          highlight: { ...baseColor.highlight, border: utilHex },
+          hover: { ...baseColor.hover, border: utilHex },
+        },
+        borderWidth: n.in_inventory ? 5 : 3,
+        shadowColor: utilShadow(pct),
+        shadowSize: n.in_inventory ? 22 : 12,
       };
     }
-    const pct = Math.max(0, Math.min(100, Number(pctRaw)));
-    const utilHex = utilColor(pct).color;
+
+    if (statusOverlay && typeof n.id === 'number') {
+      const status = statusByHostRef.current.get(n.id);
+      const badge = statusBadge(status);
+      if (badge) {
+        return {
+          color: {
+            ...baseColor,
+            border: badge.color,
+            highlight: { ...baseColor.highlight, border: badge.color },
+            hover: { ...baseColor.hover, border: badge.color },
+          },
+          borderWidth: n.in_inventory ? 5 : 3,
+          shadowColor: badge.shadow,
+          shadowSize: n.in_inventory ? 22 : 12,
+        };
+      }
+    }
+
     return {
-      color: {
-        ...baseColor,
-        border: utilHex,
-        highlight: { ...baseColor.highlight, border: utilHex },
-        hover: { ...baseColor.hover, border: utilHex },
-      },
-      borderWidth: n.in_inventory ? 5 : 3,
-      shadowColor: utilShadow(pct),
-      shadowSize: n.in_inventory ? 22 : 12,
+      color: baseColor,
+      borderWidth: baseBorder,
+      shadowColor: baseColor.border,
+      shadowSize: n.in_inventory ? 18 : 8,
     };
+  }
+
+  // Pick a single worst-severity color for a host. critical/high/audit-critical
+  // dominate; medium and warning give a softer amber; low/info still light up
+  // so operators can see the device "has something" without it screaming.
+  function statusBadge(s: TopologyHostStatus | undefined) {
+    if (!s) return null;
+    const audit: AuditSeverity | null = s.audit_worst;
+    const err: ErrorSeverity | null = s.errors_worst;
+    const hasDrift = s.drift_open > 0;
+    if (audit === 'critical' || err === 'critical') {
+      return { color: '#f44336', shadow: 'rgba(244,67,54,0.5)', tier: 'critical' as const };
+    }
+    if (audit === 'high' || err === 'high') {
+      return { color: '#ff7043', shadow: 'rgba(255,112,67,0.45)', tier: 'high' as const };
+    }
+    if (audit === 'medium' || err === 'warning' || hasDrift) {
+      return { color: '#ffc107', shadow: 'rgba(255,193,7,0.4)', tier: 'medium' as const };
+    }
+    if (audit === 'low' || audit === 'info' || err === 'info') {
+      return { color: '#29b6f6', shadow: 'rgba(41,182,246,0.35)', tier: 'low' as const };
+    }
+    return null;
+  }
+
+  // Worst-of-endpoints status color for an edge -- so a link to/from a
+  // device with active errors lights up too.
+  function edgeStatusColor(e: TopologyEdge): string | null {
+    if (!statusOverlay) return null;
+    const fromId = typeof e.from === 'number' ? e.from : null;
+    const toId = typeof e.to === 'number' ? e.to : null;
+    const fromBadge = fromId != null ? statusBadge(statusByHostRef.current.get(fromId)) : null;
+    const toBadge = toId != null ? statusBadge(statusByHostRef.current.get(toId)) : null;
+    const rank = { critical: 0, high: 1, medium: 2, low: 3 } as const;
+    const candidates = [fromBadge, toBadge].filter(Boolean) as NonNullable<typeof fromBadge>[];
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => rank[a.tier] - rank[b.tier]);
+    return candidates[0].color;
   }
 
   function edgeOverlayProps(edge: TopologyEdge) {
@@ -396,13 +482,30 @@ export function Topology() {
       : edge.protocol === 'bgp' ? [4, 4]
       : edge.protocol === 'inferred-fdb' ? [2, 4]
       : false;
+    // Status overlay paints the edge with the worst-endpoint badge color
+    // *only* when neither STP nor live-util is overriding (those are more
+    // semantically loaded and the operator is already getting a heatmap
+    // signal on the endpoints).
+    const statusHex = !stpStl && !hasUtil ? edgeStatusColor(edge) : null;
+    const statusShadow = statusHex ? hexToRgba(statusHex, 0.4) : null;
+
     return {
       label,
-      color: stpStl ? stpStl.color : (utilColorOverride || edgeProtocolColor(edge.protocol, tc)),
-      width: stpStl ? Math.max(utilWidth, stpStl.width) : utilWidth,
+      color: stpStl
+        ? stpStl.color
+        : (utilColorOverride || (statusHex ? { color: statusHex, highlight: statusHex, hover: statusHex, opacity: 0.9 } : edgeProtocolColor(edge.protocol, tc))),
+      width: stpStl ? Math.max(utilWidth, stpStl.width) : (statusHex ? Math.max(utilWidth, 3) : utilWidth),
       dashes: protoDash,
-      shadowColor: stpStl ? stpStl.shadow : (hasUtil ? utilShadow(utilPct) : baseProtocolShadow),
+      shadowColor: stpStl
+        ? stpStl.shadow
+        : (hasUtil ? utilShadow(utilPct) : (statusShadow ?? baseProtocolShadow)),
     };
+  }
+
+  function hexToRgba(hex: string, alpha: number): string {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    if (!m) return hex;
+    return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${alpha})`;
   }
 
   function buildVisEdge(e: TopologyEdge, roundness: number): VisEdge {
@@ -635,16 +738,39 @@ export function Topology() {
     const tc = themeRef.current ?? getTopoThemeColors();
     const updates = data.nodes.map((n) => {
       const overlay = nodeOverlayProps(n, tc);
+      const baseTitle = nodeTitle(n);
+      const statusTitle =
+        statusOverlay && typeof n.id === 'number'
+          ? formatStatusTooltip(statusByHostRef.current.get(n.id))
+          : '';
       return {
         id: n.id,
         color: overlay.color,
         borderWidth: overlay.borderWidth,
         shadow: { enabled: true, color: overlay.shadowColor, size: overlay.shadowSize, x: 0, y: 0 },
-        title: nodeTitle(n),
+        title: statusTitle ? `${baseTitle}\n\n${statusTitle}` : baseTitle,
       } as VisNode;
     });
     nodesDS.update(updates);
     network.redraw();
+  }
+
+  function formatStatusTooltip(s: TopologyHostStatus | undefined): string {
+    if (!s) return '';
+    const parts: string[] = [];
+    if (s.audit_worst) {
+      const counts = Object.entries(s.audit_counts)
+        .map(([sev, n]) => `${sev}:${n}`)
+        .join(' ');
+      parts.push(`Audit: ${s.audit_worst.toUpperCase()} (${counts})`);
+    }
+    if (s.errors_open > 0) {
+      parts.push(`Errors: ${s.errors_open} open${s.errors_worst ? ` (worst: ${s.errors_worst})` : ''}`);
+    }
+    if (s.drift_open > 0) {
+      parts.push(`Drift: ${s.drift_open} open`);
+    }
+    return parts.join('\n');
   }
 
   function applyUtilizationUpdate(streamEdges: UtilizationStreamEdge[]) {
@@ -1088,6 +1214,7 @@ export function Topology() {
         <button className={`btn btn-sm ${labelsVisible ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setLabelsVisible((v) => !v)}>Labels</button>
         <button className={`btn btn-sm ${utilOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setUtilOverlay((v) => !v)}>Util Overlay</button>
         <button className={`btn btn-sm ${stpOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStpOverlay((v) => !v)}>STP Overlay</button>
+        <button className={`btn btn-sm ${statusOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStatusOverlay((v) => !v)}>Status Overlay</button>
         <button className="btn btn-secondary btn-sm" onClick={handleScanStp} disabled={stpScan.isPending}>{stpScan.isPending ? 'Scanning…' : 'Scan STP'}</button>
         <button className="btn btn-secondary btn-sm" onClick={() => setStpEventsOpen(true)}>
           STP Events {stpBadge > 0 && <span className="badge badge-danger" style={{ marginLeft: '0.25rem' }}>{stpBadge > 99 ? '99+' : stpBadge}</span>}
@@ -1221,6 +1348,24 @@ export function Topology() {
               <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-fwd" /> STP Forwarding</span>
               <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-learn" /> STP Learning</span>
               <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-block" /> STP Blocked</span>
+            </>
+          )}
+          {statusOverlay && (
+            <>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#f44336' }} /> Critical</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ff7043' }} /> High</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ffc107' }} /> Medium / Drift</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#29b6f6' }} /> Low / Info</span>
+              {overlayStatusQuery.isPending && (
+                <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>
+                  Loading status…
+                </span>
+              )}
+              {overlayStatusQuery.data && overlayStatusQuery.data.hosts.length === 0 && (
+                <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>
+                  All devices clean — no open findings, drift, or errors.
+                </span>
+              )}
             </>
           )}
           {utilOverlay && data.edges.length > 0 && data.edges.every((e) => e.utilization == null) && (
