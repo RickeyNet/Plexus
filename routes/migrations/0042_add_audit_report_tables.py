@@ -175,7 +175,7 @@ async def _up_postgres(db) -> None:
             last_change     TEXT    NOT NULL DEFAULT '',
             access_vlan     INTEGER NOT NULL DEFAULT 0,
             trunk_vlans     TEXT    NOT NULL DEFAULT '',
-            collected_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            collected_at    TEXT NOT NULL DEFAULT (NOW()::text),
             UNIQUE (host_id, if_index)
         )
         """
@@ -193,7 +193,7 @@ async def _up_postgres(db) -> None:
             vlan_id         INTEGER NOT NULL,
             name            TEXT    NOT NULL DEFAULT '',
             state           TEXT    NOT NULL DEFAULT '',
-            collected_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            collected_at    TEXT NOT NULL DEFAULT (NOW()::text),
             UNIQUE (host_id, vlan_id)
         )
         """
@@ -209,8 +209,8 @@ async def _up_postgres(db) -> None:
             id                BIGSERIAL PRIMARY KEY,
             status            TEXT NOT NULL DEFAULT 'pending',
             trigger           TEXT NOT NULL DEFAULT 'manual',
-            started_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            finished_at       TIMESTAMPTZ,
+            started_at        TEXT NOT NULL DEFAULT (NOW()::text),
+            finished_at       TEXT,
             host_count        INTEGER NOT NULL DEFAULT 0,
             findings_total    INTEGER NOT NULL DEFAULT 0,
             findings_critical INTEGER NOT NULL DEFAULT 0,
@@ -241,7 +241,7 @@ async def _up_postgres(db) -> None:
             title           TEXT    NOT NULL DEFAULT '',
             detail          TEXT    NOT NULL DEFAULT '',
             evidence_json   TEXT    NOT NULL DEFAULT '{}',
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            created_at      TEXT NOT NULL DEFAULT (NOW()::text)
         )
         """
     )
@@ -263,8 +263,8 @@ async def _up_postgres(db) -> None:
             mode            TEXT    NOT NULL DEFAULT 'mute',
             reason          TEXT    NOT NULL DEFAULT '',
             created_by      TEXT    NOT NULL DEFAULT '',
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            expires_at      TIMESTAMPTZ,
+            created_at      TEXT NOT NULL DEFAULT (NOW()::text),
+            expires_at      TEXT,
             UNIQUE (rule_id, host_id)
         )
         """
@@ -278,8 +278,8 @@ async def _up_postgres(db) -> None:
             device_type     TEXT NOT NULL DEFAULT '',
             template_text   TEXT NOT NULL DEFAULT '',
             description     TEXT NOT NULL DEFAULT '',
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_at      TEXT NOT NULL DEFAULT (NOW()::text),
+            updated_at      TEXT NOT NULL DEFAULT (NOW()::text),
             UNIQUE (name, device_type)
         )
         """
