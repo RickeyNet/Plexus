@@ -513,49 +513,15 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     }
 
 
-# ── Admin Config Backup Schedule ─────────────────────────────────────────────
-
-
-@router.get("/api/admin/config-backups")
-async def admin_get_config_backup_config():
-    return state.CONFIG_BACKUP_CONFIG
-
-
-@router.put("/api/admin/config-backups")
-async def admin_update_config_backup_config(body: dict, request: Request):
-    state.CONFIG_BACKUP_CONFIG = state._sanitize_config_backup_config(body)
-    await db.set_auth_setting("config_backup", state.CONFIG_BACKUP_CONFIG)
-    session = _get_session(request)
-    await _audit(
-        "config-backups", "config.updated",
-        user=session["user"] if session else "",
-        detail=f"enabled={state.CONFIG_BACKUP_CONFIG['enabled']} interval={state.CONFIG_BACKUP_CONFIG['interval_seconds']}s",
-        correlation_id=_corr_id(request),
-    )
-    return state.CONFIG_BACKUP_CONFIG
-
-
-@router.post("/api/admin/config-backups/run-now")
-async def admin_run_config_backups_now(request: Request):
-    result = await _run_config_backups_once()
-    session = _get_session(request)
-    await _audit(
-        "config-backups", "scheduled.manual",
-        user=session["user"] if session else "",
-        detail=f"policies_run={result.get('policies_run', 0)} hosts_backed_up={result.get('hosts_backed_up', 0)}",
-        correlation_id=_corr_id(request),
-    )
-    return {"ok": True, "result": result}
-
-
 # ── Background Loop ──────────────────────────────────────────────────────────
+
+# How often the scheduler wakes to check for due policies. Actual backup cadence
+# is driven by each policy's interval_seconds via get_config_backup_policies_due().
+_POLL_INTERVAL_SECONDS = 60
 
 
 async def _run_config_backups_once() -> dict:
     """Run backups for all due policies."""
-    if not state.CONFIG_BACKUP_CONFIG.get("enabled"):
-        return {"enabled": False, "policies_run": 0, "hosts_backed_up": 0, "errors": 0}
-
     due_policies = await db.get_config_backup_policies_due()
     policies_run = 0
     hosts_backed_up = 0
@@ -623,7 +589,6 @@ async def _run_config_backups_once() -> dict:
         increment_metric("config_backup.scheduled.success")
 
     return {
-        "enabled": True,
         "policies_run": policies_run,
         "hosts_backed_up": hosts_backed_up,
         "errors": errors,
@@ -634,8 +599,7 @@ async def _config_backup_loop() -> None:
     """Infinite loop that checks for due backup policies."""
     while True:
         try:
-            await asyncio.sleep(int(state.CONFIG_BACKUP_CONFIG.get(
-                "interval_seconds", state.CONFIG_BACKUP_DEFAULTS["interval_seconds"])))
+            await asyncio.sleep(_POLL_INTERVAL_SECONDS)
             await _run_config_backups_once()
         except asyncio.CancelledError:
             raise

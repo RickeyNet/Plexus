@@ -135,14 +135,8 @@ MAC_MOVE_RETENTION_DEFAULTS = {
 }
 
 
-# ── Config backup defaults ──────────────────────────────────────────────────
+# ── Config backup policy bounds ─────────────────────────────────────────────
 
-CONFIG_BACKUP_DEFAULTS = {
-    "enabled": False,
-    "interval_seconds": 300,
-}
-CONFIG_BACKUP_MIN_INTERVAL = 60
-CONFIG_BACKUP_MAX_INTERVAL = 86400
 CONFIG_BACKUP_POLICY_MIN_INTERVAL = 3600
 CONFIG_BACKUP_POLICY_MAX_INTERVAL = 604800
 CONFIG_BACKUP_POLICY_MIN_RETENTION = 1
@@ -353,7 +347,6 @@ TOPOLOGY_DISCOVERY_CONFIG = dict(TOPOLOGY_DISCOVERY_DEFAULTS)
 STP_DISCOVERY_CONFIG = dict(STP_DISCOVERY_DEFAULTS)
 CONFIG_DRIFT_CHECK_CONFIG = dict(CONFIG_DRIFT_CHECK_DEFAULTS)
 MAC_MOVE_RETENTION_CONFIG = dict(MAC_MOVE_RETENTION_DEFAULTS)
-CONFIG_BACKUP_CONFIG = dict(CONFIG_BACKUP_DEFAULTS)
 COMPLIANCE_CHECK_CONFIG = dict(COMPLIANCE_CHECK_DEFAULTS)
 MONITORING_CONFIG = dict(MONITORING_DEFAULTS)
 SYSLOG_CONFIG = dict(SYSLOG_DEFAULTS)
@@ -712,21 +705,6 @@ def _sanitize_config_drift_check_config(data: dict | None) -> dict:
         )
         cfg["snapshot_retention_days"] = max(
             1, min(365, int(data.get("snapshot_retention_days", cfg["snapshot_retention_days"])))
-        )
-    return cfg
-
-
-def _sanitize_config_backup_config(data: dict | None) -> dict:
-    cfg = {
-        "enabled": bool(CONFIG_BACKUP_DEFAULTS["enabled"]),
-        "interval_seconds": int(CONFIG_BACKUP_DEFAULTS["interval_seconds"]),
-    }
-    if isinstance(data, dict):
-        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
-        cfg["interval_seconds"] = int(data.get("interval_seconds", cfg["interval_seconds"]))
-        cfg["interval_seconds"] = max(
-            CONFIG_BACKUP_MIN_INTERVAL,
-            min(CONFIG_BACKUP_MAX_INTERVAL, cfg["interval_seconds"]),
         )
     return cfg
 
