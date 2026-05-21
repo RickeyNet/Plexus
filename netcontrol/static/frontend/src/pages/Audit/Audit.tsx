@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import {
   useAuditRuns,
@@ -15,6 +15,31 @@ const SEVERITY_BADGE: Record<AuditSeverity, string> = {
   medium: 'badge-warning',
   low: 'badge-info',
   info: 'badge-muted',
+};
+
+// Display order for severities (critical first). Used to sort within a
+// category group and to render the filter chips in a stable order.
+const SEVERITY_ORDER: AuditSeverity[] = [
+  'critical',
+  'high',
+  'medium',
+  'low',
+  'info',
+];
+
+const SEVERITY_RANK: Record<AuditSeverity, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+  info: 4,
+};
+
+const CATEGORY_LABEL: Record<string, string> = {
+  config: 'Configuration drift',
+  port: 'Port hygiene',
+  vlan: 'VLAN consistency',
+  security: 'Security posture',
 };
 
 function statusBadge(status?: string) {
@@ -152,10 +177,282 @@ export function Audit() {
             <p className="text-muted">No findings for this run.</p>
           )}
           {findings.data && findings.data.findings.length > 0 && (
-            <FindingsTable findings={findings.data.findings} />
+            <FindingsView findings={findings.data.findings} />
           )}
         </section>
       )}
+    </div>
+  );
+}
+
+// ── Findings view with filtering + per-category grouping ─────────────────
+
+function FindingsView({ findings }: { findings: AuditFinding[] }) {
+  const [severityFilter, setSeverityFilter] = useState<AuditSeverity | null>(
+    null,
+  );
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // Severity totals across all findings (drive filter chip labels)
+  const severityTotals = useMemo(() => {
+    const counts: Record<AuditSeverity, number> = {
+      critical: 0, high: 0, medium: 0, low: 0, info: 0,
+    };
+    for (const f of findings) counts[f.severity]++;
+    return counts;
+  }, [findings]);
+
+  // Available categories in stable order: known categories first, then
+  // any unknown ones the backend introduces, sorted alphabetically.
+  const categories = useMemo(() => {
+    const seen = new Set<string>();
+    for (const f of findings) seen.add(f.category || 'other');
+    const known = Object.keys(CATEGORY_LABEL).filter((c) => seen.has(c));
+    const extras = [...seen]
+      .filter((c) => !(c in CATEGORY_LABEL))
+      .sort();
+    return [...known, ...extras];
+  }, [findings]);
+
+  // Apply filters
+  const filtered = useMemo(() => {
+    return findings.filter((f) => {
+      if (severityFilter && f.severity !== severityFilter) return false;
+      if (categoryFilter && (f.category || 'other') !== categoryFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [findings, severityFilter, categoryFilter]);
+
+  // Bucket filtered findings by category, sorted by severity within each
+  const byCategory = useMemo(() => {
+    const buckets = new Map<string, AuditFinding[]>();
+    for (const f of filtered) {
+      const cat = f.category || 'other';
+      const arr = buckets.get(cat) ?? [];
+      arr.push(f);
+      buckets.set(cat, arr);
+    }
+    for (const arr of buckets.values()) {
+      arr.sort((a, b) => {
+        const sev = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+        if (sev !== 0) return sev;
+        return (a.rule_id || '').localeCompare(b.rule_id || '');
+      });
+    }
+    return buckets;
+  }, [filtered]);
+
+  const toggleCategory = (cat: string) =>
+    setCollapsed((prev) => ({ ...prev, [cat]: !prev[cat] }));
+
+  return (
+    <div style={{ display: 'grid', gap: '1rem' }}>
+      <FilterBar
+        severityTotals={severityTotals}
+        severityFilter={severityFilter}
+        onSeverityChange={setSeverityFilter}
+        categories={categories}
+        categoryFilter={categoryFilter}
+        onCategoryChange={setCategoryFilter}
+        shown={filtered.length}
+        total={findings.length}
+      />
+
+      {filtered.length === 0 ? (
+        <p className="text-muted">No findings match the current filters.</p>
+      ) : (
+        categories
+          .filter((cat) => byCategory.has(cat))
+          .map((cat) => {
+            const rows = byCategory.get(cat) ?? [];
+            const isCollapsed = collapsed[cat] ?? false;
+            return (
+              <CategorySection
+                key={cat}
+                category={cat}
+                findings={rows}
+                collapsed={isCollapsed}
+                onToggle={() => toggleCategory(cat)}
+              />
+            );
+          })
+      )}
+    </div>
+  );
+}
+
+function FilterBar(props: {
+  severityTotals: Record<AuditSeverity, number>;
+  severityFilter: AuditSeverity | null;
+  onSeverityChange: (s: AuditSeverity | null) => void;
+  categories: string[];
+  categoryFilter: string | null;
+  onCategoryChange: (c: string | null) => void;
+  shown: number;
+  total: number;
+}) {
+  const {
+    severityTotals,
+    severityFilter,
+    onSeverityChange,
+    categories,
+    categoryFilter,
+    onCategoryChange,
+    shown,
+    total,
+  } = props;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '1rem',
+        alignItems: 'center',
+      }}
+    >
+      <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+        <FilterChip
+          label="All"
+          active={severityFilter === null}
+          onClick={() => onSeverityChange(null)}
+        />
+        {SEVERITY_ORDER.filter((s) => severityTotals[s] > 0).map((s) => (
+          <FilterChip
+            key={s}
+            label={`${s} (${severityTotals[s]})`}
+            badgeClass={SEVERITY_BADGE[s]}
+            active={severityFilter === s}
+            onClick={() =>
+              onSeverityChange(severityFilter === s ? null : s)
+            }
+          />
+        ))}
+      </div>
+
+      {categories.length > 1 && (
+        <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+          <FilterChip
+            label="All categories"
+            active={categoryFilter === null}
+            onClick={() => onCategoryChange(null)}
+          />
+          {categories.map((cat) => (
+            <FilterChip
+              key={cat}
+              label={CATEGORY_LABEL[cat] ?? cat}
+              active={categoryFilter === cat}
+              onClick={() =>
+                onCategoryChange(categoryFilter === cat ? null : cat)
+              }
+            />
+          ))}
+        </div>
+      )}
+
+      <span
+        className="text-muted"
+        style={{ marginLeft: 'auto', fontSize: '0.85rem' }}
+      >
+        Showing {shown} of {total}
+      </span>
+    </div>
+  );
+}
+
+function FilterChip(props: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  badgeClass?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      className={`badge ${props.badgeClass ?? 'badge-muted'}`}
+      style={{
+        cursor: 'pointer',
+        border: props.active
+          ? '1px solid var(--accent, #4d9bff)'
+          : '1px solid transparent',
+        opacity: props.active ? 1 : 0.7,
+        textTransform: 'capitalize',
+      }}
+    >
+      {props.label}
+    </button>
+  );
+}
+
+function CategorySection(props: {
+  category: string;
+  findings: AuditFinding[];
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const { category, findings, collapsed, onToggle } = props;
+  const label = CATEGORY_LABEL[category] ?? category;
+
+  // Per-category severity summary
+  const sevSummary = useMemo(() => {
+    const counts: Record<AuditSeverity, number> = {
+      critical: 0, high: 0, medium: 0, low: 0, info: 0,
+    };
+    for (const f of findings) counts[f.severity]++;
+    return SEVERITY_ORDER.filter((s) => counts[s] > 0).map((s) => ({
+      sev: s,
+      count: counts[s],
+    }));
+  }, [findings]);
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border, rgba(255,255,255,0.1))',
+        borderRadius: '4px',
+      }}
+    >
+      <div
+        onClick={onToggle}
+        style={{
+          padding: '0.6rem 0.75rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          cursor: 'pointer',
+          background: 'var(--surface-hover, rgba(255,255,255,0.03))',
+          borderBottom: collapsed
+            ? 'none'
+            : '1px solid var(--border, rgba(255,255,255,0.1))',
+        }}
+      >
+        <span style={{ fontFamily: 'monospace', width: '1rem' }}>
+          {collapsed ? '▶' : '▼'}
+        </span>
+        <strong style={{ flex: '0 0 auto' }}>{label}</strong>
+        <span className="text-muted" style={{ fontSize: '0.85rem' }}>
+          {findings.length} finding{findings.length === 1 ? '' : 's'}
+        </span>
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.25rem',
+            flexWrap: 'wrap',
+            marginLeft: 'auto',
+          }}
+        >
+          {sevSummary.map(({ sev, count }) => (
+            <span key={sev} className={`badge ${SEVERITY_BADGE[sev]}`}>
+              {sev}: {count}
+            </span>
+          ))}
+        </div>
+      </div>
+      {!collapsed && <FindingsTable findings={findings} />}
     </div>
   );
 }
@@ -182,7 +479,7 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
               </span>
             </td>
             <td><code>{f.rule_id}</code></td>
-            <td>{f.evidence?.hostname as string | undefined ?? f.host_id ?? '-'}</td>
+            <td>{(f.evidence?.hostname as string | undefined) ?? f.host_id ?? '-'}</td>
             <td>{f.title}</td>
             <td style={{ maxWidth: 360, whiteSpace: 'pre-wrap' }}>
               {f.detail}
