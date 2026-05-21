@@ -39,6 +39,7 @@ import {
   utilShadow,
   type TopoThemeColors,
 } from './helpers';
+import { EdgeDetails } from './EdgeDetails';
 import { NodeDetails } from './NodeDetails';
 import { StpEventsModal } from './StpEventsModal';
 
@@ -75,6 +76,7 @@ export function Topology() {
   const [searchResultsVisible, setSearchResultsVisible] = useState(false);
   const [searchHighlightIdx, setSearchHighlightIdx] = useState(-1);
   const [detailsNode, setDetailsNode] = useState<TopologyNode | null>(null);
+  const [detailsEdge, setDetailsEdge] = useState<TopologyEdge | null>(null);
   const [addInvTarget, setAddInvTarget] = useState<TopologyNode | null>(null);
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
@@ -498,8 +500,16 @@ export function Topology() {
       if (params.nodes.length > 0) {
         const meta = nodeMetaRef.current.get(params.nodes[0]);
         if (meta) setDetailsNode(meta.raw);
+        setDetailsEdge(null);
+      } else if (params.edges.length > 0) {
+        // Edge-only click: open the edge details panel.
+        const edgeId = params.edges[0];
+        const meta = edgeMetaRef.current.get(edgeId);
+        if (meta) setDetailsEdge(meta.raw);
+        setDetailsNode(null);
       } else {
         setDetailsNode(null);
+        setDetailsEdge(null);
       }
     });
 
@@ -679,6 +689,7 @@ export function Topology() {
     setPathSource(null);
     setPathStatus('Click a source node...');
     setDetailsNode(null);
+    setDetailsEdge(null);
   }
 
   function clearPathMode() {
@@ -1027,6 +1038,14 @@ export function Topology() {
 
       <div style={{ position: 'relative', height: 'calc(100vh - 240px)', minHeight: 500, border: '1px solid var(--border)', borderRadius: '0.5rem', overflow: 'hidden', display: data && data.nodes.length ? 'block' : 'none' }}>
         <div ref={containerRef} id="topology-canvas" style={{ width: '100%', height: '100%' }} />
+        {detailsEdge && data && !detailsNode && (
+          <EdgeDetails
+            edge={detailsEdge}
+            fromNode={data.nodes.find((n) => n.id === detailsEdge.from)}
+            toNode={data.nodes.find((n) => n.id === detailsEdge.to)}
+            onClose={() => setDetailsEdge(null)}
+          />
+        )}
         {detailsNode && data && (
           <NodeDetails
             node={detailsNode}
