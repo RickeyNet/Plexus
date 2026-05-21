@@ -238,7 +238,8 @@ export interface Annotation {
   timestamp: string;
   category?: string;
   title?: string;
-  action?: string;
+  description?: string;
+  user?: string;
 }
 
 interface AnnotationsResponse {
