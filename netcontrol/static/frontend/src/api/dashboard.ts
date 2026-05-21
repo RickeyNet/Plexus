@@ -280,6 +280,53 @@ export function useAnnotations({ host = '*', range = '24h', enabled = true }: An
   });
 }
 
+// ── Top interfaces by bandwidth (dashboard panel) ─────────────────────────
+
+export interface BandwidthSample {
+  ts?: string;
+  in_bps?: number | null;
+  out_bps?: number | null;
+}
+
+export interface TopInterface {
+  host_id: number;
+  hostname: string;
+  if_index: number;
+  if_name: string;
+  if_speed_mbps?: number;
+  peak_bps: number;
+  samples: BandwidthSample[];
+}
+
+interface TopInterfacesResponse {
+  range: string;
+  interfaces: TopInterface[];
+}
+
+export interface TopInterfacesArgs {
+  range?: '1h' | '6h' | '24h' | '7d';
+  limit?: number;
+  enabled?: boolean;
+}
+
+export function useTopInterfaces({
+  range = '6h',
+  limit = 5,
+  enabled = true,
+}: TopInterfacesArgs) {
+  return useQuery<TopInterface[]>({
+    queryKey: ['top-interfaces', range, limit],
+    queryFn: async () => {
+      const params = new URLSearchParams({ range, limit: String(limit) });
+      const res = await apiRequest<TopInterfacesResponse>(
+        `/dashboard/top-interfaces?${params.toString()}`,
+      );
+      return res?.interfaces ?? [];
+    },
+    enabled,
+  });
+}
+
 // ── Inventory groups (with optional hosts) ────────────────────────────────
 
 export interface InventoryHostBrief {
