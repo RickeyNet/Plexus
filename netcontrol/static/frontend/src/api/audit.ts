@@ -145,3 +145,63 @@ export function useRunScheduleNow() {
     },
   });
 }
+
+// ── Overrides (Phase 6) ───────────────────────────────────────────────────
+//
+// An override suppresses a (rule_id, host_id?) pair from future runs. The
+// mute/accept_risk distinction is recorded for the audit trail but both
+// modes hide the finding from the persisted set.
+
+export type AuditOverrideMode = 'mute' | 'accept_risk';
+
+export interface AuditOverride {
+  id: number;
+  rule_id: string;
+  host_id: number | null;
+  mode: AuditOverrideMode;
+  reason: string;
+  created_by: string;
+  created_at?: string;
+  expires_at?: string | null;
+}
+
+export interface AuditOverridePayload {
+  rule_id: string;
+  host_id?: number | null;
+  mode?: AuditOverrideMode;
+  reason?: string;
+  created_by?: string;
+  expires_at?: string | null;
+}
+
+export function useAuditOverrides() {
+  return useQuery<{ overrides: AuditOverride[] }>({
+    queryKey: ['audit', 'overrides'],
+    queryFn: () => apiRequest('/audit/overrides'),
+  });
+}
+
+export function useCreateAuditOverride() {
+  const qc = useQueryClient();
+  return useMutation<AuditOverride, Error, AuditOverridePayload>({
+    mutationFn: (payload) =>
+      apiRequest('/audit/overrides', {
+        method: 'POST',
+        body: payload,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['audit', 'overrides'] });
+    },
+  });
+}
+
+export function useDeleteAuditOverride() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, number>({
+    mutationFn: (id) =>
+      apiRequest(`/audit/overrides/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['audit', 'overrides'] });
+    },
+  });
+}
