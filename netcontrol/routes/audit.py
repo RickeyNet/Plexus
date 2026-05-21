@@ -1005,3 +1005,75 @@ async def list_host_audit_findings(host_id: int, limit: int = Query(default=50, 
         return {"host_id": host_id, "findings": findings}
     finally:
         await conn.close()
+
+
+@router.get("/api/topology/search/hosts-by-vlan")
+async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
+    """Return every host that carries a given VLAN, with how it carries it.
+
+    Powers the topology search panel's VLAN-highlight mode. A host is
+    considered to "carry" a VLAN if any of:
+      * `vlan_definitions` has a row for that vlan_id on the host
+      * any `interface_inventory` row has `access_vlan = vlan_id`
+      * any `interface_inventory.trunk_vlans` CSV contains the vlan_id
+
+    The same host can appear in multiple buckets; the response collapses
+    them into one row per host with a `roles` list (definition/access/trunk).
+    """
+    conn = await db.get_db()
+    try:
+        roles: dict[int, dict] = {}
+
+        cursor = await conn.execute(
+            "SELECT v.host_id, v.name, h.hostname "
+            "FROM vlan_definitions v LEFT JOIN hosts h ON h.id = v.host_id "
+            "WHERE v.vlan_id = ?",
+            (vlan_id,),
+        )
+        for row in await cursor.fetchall():
+            hid = row[0]
+            entry = roles.setdefault(
+                hid, {"host_id": hid, "hostname": row[2], "roles": [], "ports": []}
+            )
+            if "definition" not in entry["roles"]:
+                entry["roles"].append("definition")
+            if row[1]:
+                entry["vlan_name"] = row[1]
+
+        cursor = await conn.execute(
+            "SELECT i.host_id, i.name, h.hostname "
+            "FROM interface_inventory i LEFT JOIN hosts h ON h.id = i.host_id "
+            "WHERE i.access_vlan = ?",
+            (vlan_id,),
+        )
+        for row in await cursor.fetchall():
+            hid = row[0]
+            entry = roles.setdefault(
+                hid, {"host_id": hid, "hostname": row[2], "roles": [], "ports": []}
+            )
+            if "access" not in entry["roles"]:
+                entry["roles"].append("access")
+            entry["ports"].append({"name": row[1], "kind": "access"})
+
+        cursor = await conn.execute(
+            "SELECT i.host_id, i.name, i.trunk_vlans, h.hostname "
+            "FROM interface_inventory i LEFT JOIN hosts h ON h.id = i.host_id "
+            "WHERE i.trunk_vlans IS NOT NULL AND i.trunk_vlans != ''",
+        )
+        target = str(vlan_id)
+        for row in await cursor.fetchall():
+            csv_val = row[2] or ""
+            members = {p.strip() for p in csv_val.split(",") if p.strip()}
+            if target not in members:
+                continue
+            hid = row[0]
+            entry = roles.setdefault(
+                hid, {"host_id": hid, "hostname": row[3], "roles": [], "ports": []}
+            )
+            if "trunk" not in entry["roles"]:
+                entry["roles"].append("trunk")
+            entry["ports"].append({"name": row[1], "kind": "trunk"})
+
+        return {"vlan_id": vlan_id, "hosts": list(roles.values())}
+    finally:
+        await conn.close()

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { DataSet, Network } from 'vis-network/standalone';
 import type { Edge as VisEdge, Node as VisNode } from 'vis-network';
@@ -42,6 +42,10 @@ import {
 import { EdgeDetails } from './EdgeDetails';
 import { NodeDetails } from './NodeDetails';
 import { StpEventsModal } from './StpEventsModal';
+import {
+  TopologySearchPanel,
+  type HighlightTarget,
+} from './TopologySearchPanel';
 
 type LayoutMode = 'physics' | 'circular' | 'hierarchical-UD' | 'hierarchical-DU' | 'hierarchical-LR' | 'hierarchical-RL';
 
@@ -84,6 +88,7 @@ export function Topology() {
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [changeBadge, setChangeBadge] = useState(0);
   const [stpBadge, setStpBadge] = useState(0);
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const networkRef = useRef<Network | null>(null);
@@ -574,6 +579,18 @@ export function Topology() {
   useEffect(() => { pathModeRef.current = pathMode; }, [pathMode]);
   useEffect(() => { pathSourceRef.current = pathSource; }, [pathSource]);
 
+  // The search panel keeps `onHighlight` in a useEffect dep array, so the
+  // callback identity must be stable across parent re-renders. Stash the
+  // latest impl in a ref and expose a thin caller with a frozen identity.
+  const applySearchHighlightRef = useRef<(t: HighlightTarget | null) => void>(
+    () => {},
+  );
+  applySearchHighlightRef.current = applySearchHighlight;
+  const stableApplySearchHighlight = useCallback(
+    (t: HighlightTarget | null) => applySearchHighlightRef.current(t),
+    [],
+  );
+
   function schedulePositionSave(updates: Record<string, { x: number; y: number } | null>) {
     if (savePosTimerRef.current) clearTimeout(savePosTimerRef.current);
     savePosTimerRef.current = setTimeout(() => {
@@ -690,6 +707,19 @@ export function Topology() {
     setPathStatus('Click a source node...');
     setDetailsNode(null);
     setDetailsEdge(null);
+    // Search-highlight and path-mode share originalColorsRef; close the
+    // search panel so we don't try to restore stale colors twice.
+    if (searchPanelOpen) setSearchPanelOpen(false);
+    restoreOriginalColors();
+  }
+
+  function toggleSearchPanel() {
+    if (searchPanelOpen) {
+      setSearchPanelOpen(false);
+      return;
+    }
+    if (pathMode) clearPathMode();
+    setSearchPanelOpen(true);
   }
 
   function clearPathMode() {
@@ -737,6 +767,96 @@ export function Topology() {
     const tgtLabel = nodeMetaRef.current.get(targetId)?.raw.label ?? '';
     setPathStatus(`Path: ${srcLabel} → ${tgtLabel}  (${path.length - 1} hop${path.length - 1 !== 1 ? 's' : ''})`);
     setPathMode(false);
+  }
+
+  function applySearchHighlight(target: HighlightTarget | null) {
+    const nodesDS = nodesDSRef.current;
+    const edgesDS = edgesDSRef.current;
+    if (!nodesDS || !edgesDS || !data) return;
+
+    // Always reset to baseline first so successive searches don't accumulate
+    // dimming, and entering search mode also clears any path-mode overlay.
+    restoreOriginalColors();
+
+    if (!target || target.nodeIds.length === 0) return;
+
+    const hostSet = new Set<number | string>(target.nodeIds);
+    // Build the (host,port) match set so we can light up the specific edge
+    // the MAC/ARP entry was learned on -- not just the device.
+    const portSet = new Set<string>();
+    for (const p of target.ports) portSet.add(`${p.hostId}|${p.portName.toLowerCase()}`);
+
+    const matchedEdges = new Set<number | string>();
+    for (const e of data.edges) {
+      // Edge counts as matched if either endpoint+port pair was in the
+      // search hit set; falls back to either endpoint host being matched
+      // (so VLAN highlights show all inter-device links between members).
+      const fromHit = e.from_host_id != null && e.source_interface
+        ? portSet.has(`${e.from_host_id}|${e.source_interface.toLowerCase()}`)
+        : false;
+      const toHit = e.to_host_id != null && e.target_interface
+        ? portSet.has(`${e.to_host_id}|${e.target_interface.toLowerCase()}`)
+        : false;
+      const endpointHit =
+        hostSet.has(e.from) && hostSet.has(e.to);
+      if (fromHit || toHit || endpointHit) matchedEdges.add(e.id);
+    }
+
+    const tc = themeRef.current ?? getTopoThemeColors();
+    originalColorsRef.current = { nodes: [], edges: [] };
+    for (const node of nodesDS.get()) {
+      const nid = node.id as number | string;
+      originalColorsRef.current.nodes.push([nid, (node as never as { color: unknown }).color]);
+      if (!hostSet.has(nid)) {
+        nodesDS.update({ id: nid, color: tc.dimColor, opacity: 0.25 } as never);
+      } else {
+        nodesDS.update({
+          id: nid,
+          borderWidth: 4,
+          shadow: { enabled: true, color: tc.pathGlow, size: 20, x: 0, y: 0 },
+        } as never);
+      }
+    }
+    for (const edge of edgesDS.get()) {
+      const eid = edge.id as number | string;
+      originalColorsRef.current.edges.push([eid, (edge as never as { color: unknown }).color]);
+      if (!matchedEdges.has(eid)) {
+        edgesDS.update({ id: eid, color: tc.dimEdge, opacity: 0.15 } as never);
+      } else {
+        edgesDS.update({
+          id: eid,
+          width: 4,
+          shadow: { enabled: true, color: tc.pathGlow, size: 12, x: 0, y: 0 },
+        } as never);
+      }
+    }
+
+    // Fit viewport to matching nodes so the operator's eye lands on them.
+    const network = networkRef.current;
+    if (network) {
+      network.fit({
+        nodes: target.nodeIds as never[],
+        animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+      });
+    }
+  }
+
+  function restoreOriginalColors() {
+    const nodesDS = nodesDSRef.current;
+    const edgesDS = edgesDSRef.current;
+    const orig = originalColorsRef.current;
+    if (!orig || !nodesDS || !edgesDS) return;
+    for (const [id, color] of orig.nodes) {
+      nodesDS.update({ id, color, opacity: 1, borderWidth: 2.5 } as never);
+    }
+    for (const [id, color] of orig.edges) {
+      edgesDS.update({ id, color, opacity: 1 } as never);
+    }
+    originalColorsRef.current = null;
+    // Re-apply styled overlays (util / STP) so refresh restores any overlay
+    // state that the dim pass blew away.
+    refreshEdgeStyles();
+    refreshNodeStyles();
   }
 
   function highlightPath(path: (number | string)[]) {
@@ -964,6 +1084,7 @@ export function Topology() {
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
         <button className="btn btn-secondary btn-sm" onClick={handleFit}>Fit</button>
         <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode}>{pathMode ? 'Cancel Path' : 'Path Mode'}</button>
+        <button className={`btn btn-sm ${searchPanelOpen ? 'btn-primary' : 'btn-secondary'}`} onClick={toggleSearchPanel}>{searchPanelOpen ? 'Close Search' : 'Find MAC/IP/VLAN'}</button>
         <button className={`btn btn-sm ${labelsVisible ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setLabelsVisible((v) => !v)}>Labels</button>
         <button className={`btn btn-sm ${utilOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setUtilOverlay((v) => !v)}>Util Overlay</button>
         <button className={`btn btn-sm ${stpOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStpOverlay((v) => !v)}>STP Overlay</button>
@@ -1038,6 +1159,12 @@ export function Topology() {
 
       <div style={{ position: 'relative', height: 'calc(100vh - 240px)', minHeight: 500, border: '1px solid var(--border)', borderRadius: '0.5rem', overflow: 'hidden', display: data && data.nodes.length ? 'block' : 'none' }}>
         <div ref={containerRef} id="topology-canvas" style={{ width: '100%', height: '100%' }} />
+        {searchPanelOpen && (
+          <TopologySearchPanel
+            onHighlight={stableApplySearchHighlight}
+            onClose={() => setSearchPanelOpen(false)}
+          />
+        )}
         {detailsEdge && data && !detailsNode && (
           <EdgeDetails
             edge={detailsEdge}
