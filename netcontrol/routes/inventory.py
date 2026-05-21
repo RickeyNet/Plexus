@@ -220,6 +220,10 @@ async def _probe_discovery_target(
                 inferred_device_type = "cisco_nxos"
             elif "ios-xr" in lower_banner or "iosxr" in lower_banner or "ios xr" in lower_banner:
                 inferred_device_type = "cisco_xr"
+            elif "firepower" in lower_banner or "ftd" in lower_banner:
+                inferred_device_type = "cisco_ftd"
+            elif "adaptive security" in lower_banner or "asa" in lower_banner:
+                inferred_device_type = "cisco_asa"
             else:
                 inferred_device_type = "cisco_ios"
         elif "juniper" in lower_banner or "junos" in lower_banner:

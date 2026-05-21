@@ -25,6 +25,7 @@ Public surface::
 # Importing the concrete drivers registers them as a side-effect.
 from netcontrol.drivers import (  # noqa: F401
     arista_eos,
+    cisco_ftd,
     cisco_ios,
     cisco_nxos,
     cisco_xe,

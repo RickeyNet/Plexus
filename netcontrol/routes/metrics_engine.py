@@ -100,6 +100,30 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
         "mem_total_oid": "1.3.6.1.2.1.25.2.3.1.5",
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
+    # ASA and FTD share the same LINA datapath/MIBs.  CPU comes from
+    # CISCO-PROCESS-MIB (cpmCPUTotal5secRev, walked because there is
+    # one entry per CPU); memory from CISCO-ENHANCED-MEMPOOL-MIB
+    # (cempMemPoolHCUsed/Free, walked across the "processor" pool).
+    # Substring match in resolve_oids_for_device() picks the longest
+    # key, so "cisco_ftd" wins over "cisco_ios" / "cisco" automatically.
+    "cisco_asa": {
+        "vendor": "Cisco", "device_type": "cisco_asa",
+        "cpu_oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7",      # cpmCPUTotal5secRev
+        "cpu_walk": 1,
+        "mem_used_oid": "1.3.6.1.4.1.9.9.221.1.1.1.1.18",  # cempMemPoolHCUsed
+        "mem_free_oid": "1.3.6.1.4.1.9.9.221.1.1.1.1.20",  # cempMemPoolHCFree
+        "mem_total_oid": "",
+        "uptime_oid": "1.3.6.1.2.1.1.3",
+    },
+    "cisco_ftd": {
+        "vendor": "Cisco", "device_type": "cisco_ftd",
+        "cpu_oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7",      # cpmCPUTotal5secRev
+        "cpu_walk": 1,
+        "mem_used_oid": "1.3.6.1.4.1.9.9.221.1.1.1.1.18",  # cempMemPoolHCUsed
+        "mem_free_oid": "1.3.6.1.4.1.9.9.221.1.1.1.1.20",  # cempMemPoolHCFree
+        "mem_total_oid": "",
+        "uptime_oid": "1.3.6.1.2.1.1.3",
+    },
     # Universal fallback - HOST-RESOURCES-MIB works on most Linux/SNMP agents
     "_fallback": {
         "vendor": "Generic", "device_type": "",
