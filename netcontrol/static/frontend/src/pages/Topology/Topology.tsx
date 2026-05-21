@@ -1157,7 +1157,7 @@ export function Topology() {
         </div>
       )}
 
-      <div style={{ position: 'relative', height: 'calc(100vh - 240px)', minHeight: 500, border: '1px solid var(--border)', borderRadius: '0.5rem', overflow: 'hidden', display: data && data.nodes.length ? 'block' : 'none' }}>
+      <div style={{ position: 'relative', height: 'calc(100vh - 280px)', minHeight: 460, border: '1px solid var(--border)', borderRadius: '0.5rem', overflow: 'hidden', display: data && data.nodes.length ? 'block' : 'none' }}>
         <div ref={containerRef} id="topology-canvas" style={{ width: '100%', height: '100%' }} />
         {searchPanelOpen && (
           <TopologySearchPanel
@@ -1202,6 +1202,34 @@ export function Topology() {
           />
         )}
       </div>
+
+      {data && data.nodes.length > 0 && (
+        <div className="topology-legend">
+          <span className="topology-legend-item"><span className="topology-legend-dot topology-legend-dot-inventory" /> Inventory Device</span>
+          <span className="topology-legend-item"><span className="topology-legend-dot topology-legend-dot-dashed" /> External Neighbor</span>
+          <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-cdp" /> CDP</span>
+          <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-lldp" /> LLDP</span>
+          <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-ospf" /> OSPF</span>
+          <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
+          {utilOverlay && (
+            <span className="topology-legend-item">
+              <span className="topology-legend-gradient" /> Utilization (links + IPAM nodes, 0–100%)
+            </span>
+          )}
+          {stpOverlay && (
+            <>
+              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-fwd" /> STP Forwarding</span>
+              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-learn" /> STP Learning</span>
+              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-block" /> STP Blocked</span>
+            </>
+          )}
+          {utilOverlay && data.edges.length > 0 && data.edges.every((e) => e.utilization == null) && (
+            <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>
+              No utilization data — needs SNMP interface polling with two counter samples and if_speed_mbps set.
+            </span>
+          )}
+        </div>
+      )}
 
       {addInvTarget && (
         <AddToInventoryModal
