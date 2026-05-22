@@ -955,3 +955,53 @@ async def list_audit_findings(
         return {"findings": findings}
     finally:
         await conn.close()
+
+
+# ── Per-host read endpoints (powers topology NodeDetails tabs) ──────────────
+#
+# `interface_inventory` and `vlan_definitions` are written by the audit
+# collector (folded into the topology discovery loop). The data is general-
+# purpose -- exposing it via thin GETs lets the topology view's NodeDetails
+# pane render the same data without joining through a rule run.
+
+@router.get("/api/hosts/{host_id}/interface-inventory")
+async def list_host_interface_inventory(host_id: int):
+    rows = await db.get_interface_inventory_for_host(host_id)
+    return {"host_id": host_id, "interfaces": rows}
+
+
+@router.get("/api/hosts/{host_id}/vlans")
+async def list_host_vlans(host_id: int):
+    rows = await db.get_vlan_definitions_for_host(host_id)
+    return {"host_id": host_id, "vlans": rows}
+
+
+@router.get("/api/hosts/{host_id}/audit-findings")
+async def list_host_audit_findings(host_id: int, limit: int = Query(default=50, le=500)):
+    """Latest findings across all runs for one host (most recent first).
+
+    Powers the NodeDetails Audit tab so the topology pane can surface
+    every open issue for a device without needing to know a run_id.
+    """
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            "SELECT id, run_id, host_id, rule_id, category, severity, "
+            "cis_control, title, detail, evidence_json, created_at "
+            "FROM audit_findings WHERE host_id = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (host_id, limit),
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        findings = []
+        for r in rows:
+            f = dict(zip(cols, r))
+            try:
+                f["evidence"] = json.loads(f.pop("evidence_json") or "{}")
+            except Exception:
+                f["evidence"] = {}
+            findings.append(f)
+        return {"host_id": host_id, "findings": findings}
+    finally:
+        await conn.close()
