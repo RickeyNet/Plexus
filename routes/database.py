@@ -12246,19 +12246,46 @@ async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
 
     An empty/blank query returns the most recently seen entries so the UI can
     show what was just collected without requiring a search term.
+
+    MAC queries are normalized: ``aabb.ccdd.eeff``, ``AA-BB-CC-DD-EE-FF`` and
+    ``aabbccddeeff`` all match the canonical ``aa:bb:cc:dd:ee:ff`` storage
+    form. Pure-hex fragments of 6+ characters also match — handy for paging
+    through an OUI prefix or a tail like ``deadbeef``.
     """
     db = await get_db()
     try:
-        if query.strip():
-            pattern = f"%{query}%"
-            cursor = await db.execute(
-                """SELECT m.*, h.hostname, h.ip_address as host_ip
-                   FROM mac_address_table m
-                   LEFT JOIN hosts h ON h.id = m.host_id
-                   WHERE m.mac_address LIKE ? OR m.ip_address LIKE ? OR m.port_name LIKE ?
-                   ORDER BY m.last_seen DESC LIMIT ?""",
-                (pattern, pattern, pattern, limit),
+        raw = query.strip()
+        if raw:
+            ip_port_pattern = f"%{raw}%"
+            normalized = (
+                raw.lower()
+                .replace(":", "")
+                .replace("-", "")
+                .replace(".", "")
+                .replace(" ", "")
             )
+            hex_only = normalized and all(c in "0123456789abcdef" for c in normalized)
+            if hex_only and len(normalized) >= 6:
+                mac_pattern = f"%{normalized}%"
+                cursor = await db.execute(
+                    """SELECT m.*, h.hostname, h.ip_address as host_ip
+                       FROM mac_address_table m
+                       LEFT JOIN hosts h ON h.id = m.host_id
+                       WHERE REPLACE(LOWER(m.mac_address), ':', '') LIKE ?
+                          OR m.ip_address LIKE ?
+                          OR m.port_name LIKE ?
+                       ORDER BY m.last_seen DESC LIMIT ?""",
+                    (mac_pattern, ip_port_pattern, ip_port_pattern, limit),
+                )
+            else:
+                cursor = await db.execute(
+                    """SELECT m.*, h.hostname, h.ip_address as host_ip
+                       FROM mac_address_table m
+                       LEFT JOIN hosts h ON h.id = m.host_id
+                       WHERE m.mac_address LIKE ? OR m.ip_address LIKE ? OR m.port_name LIKE ?
+                       ORDER BY m.last_seen DESC LIMIT ?""",
+                    (ip_port_pattern, ip_port_pattern, ip_port_pattern, limit),
+                )
         else:
             cursor = await db.execute(
                 """SELECT m.*, h.hostname, h.ip_address as host_ip
@@ -12268,6 +12295,42 @@ async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
                 (limit,),
             )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_mac_tracking_stats() -> dict:
+    """Summary counts for the MAC tracking header.
+
+    Returns total rows (one per host/MAC/VLAN), unique MAC addresses across
+    all switches, the number of switches that contributed any entry, and the
+    most recent ``last_seen`` timestamp (interpreted by the UI as the freshest
+    collection time).
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT COUNT(*)                          AS total_entries,
+                      COUNT(DISTINCT mac_address)       AS unique_macs,
+                      COUNT(DISTINCT host_id)           AS switches_reporting,
+                      MAX(last_seen)                    AS last_collected_at
+               FROM mac_address_table"""
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {
+                "total_entries": 0,
+                "unique_macs": 0,
+                "switches_reporting": 0,
+                "last_collected_at": None,
+            }
+        as_dict = dict(row)
+        return {
+            "total_entries": int(as_dict.get("total_entries") or 0),
+            "unique_macs": int(as_dict.get("unique_macs") or 0),
+            "switches_reporting": int(as_dict.get("switches_reporting") or 0),
+            "last_collected_at": as_dict.get("last_collected_at"),
+        }
     finally:
         await db.close()
 

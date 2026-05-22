@@ -31,6 +31,20 @@ export interface MacCollectResult {
   hosts_collected: number;
 }
 
+export interface MacTrackingStats {
+  total_entries: number;
+  unique_macs: number;
+  switches_reporting: number;
+  last_collected_at: string | null;
+}
+
+export function useMacTrackingStats() {
+  return useQuery({
+    queryKey: ['mac-tracking', 'stats'],
+    queryFn: () => apiRequest<MacTrackingStats>('/mac-tracking/stats'),
+  });
+}
+
 export function useMacSearch(query: string) {
   // A blank query returns the most recently collected entries, so this query
   // is always enabled - that's what lets newly-collected MACs show up without
