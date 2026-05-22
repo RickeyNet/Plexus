@@ -31,6 +31,7 @@ import { MaintenanceWindows } from '@/pages/MaintenanceWindows/MaintenanceWindow
 import { Monitoring } from '@/pages/Monitoring/Monitoring';
 import { MacTracking } from '@/pages/NetworkTools/MacTracking';
 import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
+import { Audit } from '@/pages/Audit/Audit';
 import { Reports } from '@/pages/Reports/Reports';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 import { Settings } from '@/pages/Settings/Settings';
@@ -54,6 +55,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/maintenance-windows': 'Maintenance Windows',
   '/upgrades': 'Delegator · Upgrades',
   '/reports': 'Reports',
+  '/audit': 'Audit',
   '/graph-templates': 'Graph Templates',
   '/assignments': 'Delegator · Assignments',
   '/tasks': 'Delegator · Tasks',
@@ -199,6 +201,7 @@ export function App() {
           <Route path="/deployments" element={<Deployments />} />
           <Route path="/maintenance-windows" element={<MaintenanceWindows />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="/audit" element={<Audit />} />
           <Route path="/graph-templates" element={<GraphTemplates />} />
           {/* Delegator: one page renders all five tabs. The legacy paths
               (/jobs, /playbooks, /templates) point at Jobs too so old deep
