@@ -676,7 +676,7 @@ def verify_session_token(token: str) -> dict | None:
 # Initialize shared module with session verifier
 shared.init_shared(verify_session_token)
 
-PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/api/health", "/favicon.ico"}
+PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/api/health", "/api/version", "/favicon.ico"}
 
 # Paths that remain accessible even when must_change_password is true
 PASSWORD_CHANGE_ALLOWED_PATHS = {
@@ -1761,6 +1761,14 @@ async def health():
         "uptime_seconds": int(time.time() - APP_START_TIME),
         "metrics": snapshot_metrics(),
     }
+
+
+@app.get("/api/version")
+async def version():
+    # Public on purpose so deploy/upgrade.sh and external monitoring can
+    # read it without holding a session.  Mirrors how /api/health is exposed.
+    from netcontrol.version import APP_GIT_SHA, APP_VERSION
+    return {"version": APP_VERSION, "git_sha": APP_GIT_SHA}
 
 
 @app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
