@@ -710,10 +710,16 @@ async def run_audit(trigger: str = "manual", schedule_id: int | None = None) -> 
     severity_counts: dict[str, int] = {s: 0 for s in SEVERITY_ORDER}
     rules_executed: list[str] = []
     rules_failed: dict[str, str] = {}
+    suppressed_by_rule: dict[str, int] = {}
+    suppressed_by_mode: dict[str, int] = {"mute": 0, "accept_risk": 0}
 
     try:
         hosts = await db.get_all_hosts()
         ctx = AuditContext(run_id=run_id, hosts=hosts)
+        # Snapshot overrides once at the start of the run so a mid-run
+        # change can't make the suppression set inconsistent across rules.
+        overrides = await _list_overrides()
+        now_utc = datetime.now(UTC)
 
         for rule_cls in _RULE_REGISTRY:
             rule = rule_cls()
@@ -721,6 +727,16 @@ async def run_audit(trigger: str = "manual", schedule_id: int | None = None) -> 
                 findings = await rule.evaluate(ctx)
                 rules_executed.append(rule.rule_id)
                 for f in findings:
+                    ovr = _finding_is_overridden(f, overrides, now_utc)
+                    if ovr is not None:
+                        suppressed_by_rule[f.rule_id] = (
+                            suppressed_by_rule.get(f.rule_id, 0) + 1
+                        )
+                        mode = str(ovr.get("mode") or "mute")
+                        suppressed_by_mode[mode] = (
+                            suppressed_by_mode.get(mode, 0) + 1
+                        )
+                        continue
                     severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
                     await _persist_finding(run_id, f)
             except Exception as exc:
@@ -732,10 +748,16 @@ async def run_audit(trigger: str = "manual", schedule_id: int | None = None) -> 
                 increment_metric("audit.rule.failed")
                 rules_failed[rule.rule_id] = str(exc)[:500]
 
+        suppressed_total = sum(suppressed_by_rule.values())
+        if suppressed_total:
+            increment_metric("audit.finding.suppressed")
         summary = {
             "rules_executed": rules_executed,
             "rules_failed": rules_failed,
             "trigger": trigger,
+            "suppressed_total": suppressed_total,
+            "suppressed_by_rule": suppressed_by_rule,
+            "suppressed_by_mode": suppressed_by_mode,
         }
         await _finalize_run(
             run_id,
@@ -755,7 +777,13 @@ async def run_audit(trigger: str = "manual", schedule_id: int | None = None) -> 
             status="failed",
             host_count=0,
             severity_counts=severity_counts,
-            summary={"rules_executed": rules_executed, "rules_failed": rules_failed},
+            summary={
+                "rules_executed": rules_executed,
+                "rules_failed": rules_failed,
+                "suppressed_total": sum(suppressed_by_rule.values()),
+                "suppressed_by_rule": suppressed_by_rule,
+                "suppressed_by_mode": suppressed_by_mode,
+            },
             error_text=str(exc)[:1000],
         )
         return run_id
@@ -1004,15 +1032,29 @@ async def _execute_existing_run(run_id: int, trigger: str) -> None:
     severity_counts: dict[str, int] = {s: 0 for s in SEVERITY_ORDER}
     rules_executed: list[str] = []
     rules_failed: dict[str, str] = {}
+    suppressed_by_rule: dict[str, int] = {}
+    suppressed_by_mode: dict[str, int] = {"mute": 0, "accept_risk": 0}
     try:
         hosts = await db.get_all_hosts()
         ctx = AuditContext(run_id=run_id, hosts=hosts)
+        overrides = await _list_overrides()
+        now_utc = datetime.now(UTC)
         for rule_cls in _RULE_REGISTRY:
             rule = rule_cls()
             try:
                 findings = await rule.evaluate(ctx)
                 rules_executed.append(rule.rule_id)
                 for f in findings:
+                    ovr = _finding_is_overridden(f, overrides, now_utc)
+                    if ovr is not None:
+                        suppressed_by_rule[f.rule_id] = (
+                            suppressed_by_rule.get(f.rule_id, 0) + 1
+                        )
+                        mode = str(ovr.get("mode") or "mute")
+                        suppressed_by_mode[mode] = (
+                            suppressed_by_mode.get(mode, 0) + 1
+                        )
+                        continue
                     severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
                     await _persist_finding(run_id, f)
             except Exception as exc:
@@ -1021,6 +1063,9 @@ async def _execute_existing_run(run_id: int, trigger: str) -> None:
                     rule.rule_id, run_id, redact_value(str(exc)),
                 )
                 rules_failed[rule.rule_id] = str(exc)[:500]
+        suppressed_total = sum(suppressed_by_rule.values())
+        if suppressed_total:
+            increment_metric("audit.finding.suppressed")
         await _finalize_run(
             run_id,
             status="success" if not rules_failed else "partial",
@@ -1030,6 +1075,9 @@ async def _execute_existing_run(run_id: int, trigger: str) -> None:
                 "rules_executed": rules_executed,
                 "rules_failed": rules_failed,
                 "trigger": trigger,
+                "suppressed_total": suppressed_total,
+                "suppressed_by_rule": suppressed_by_rule,
+                "suppressed_by_mode": suppressed_by_mode,
             },
         )
     except Exception as exc:
@@ -1039,7 +1087,13 @@ async def _execute_existing_run(run_id: int, trigger: str) -> None:
             status="failed",
             host_count=0,
             severity_counts=severity_counts,
-            summary={"rules_executed": rules_executed, "rules_failed": rules_failed},
+            summary={
+                "rules_executed": rules_executed,
+                "rules_failed": rules_failed,
+                "suppressed_total": sum(suppressed_by_rule.values()),
+                "suppressed_by_rule": suppressed_by_rule,
+                "suppressed_by_mode": suppressed_by_mode,
+            },
             error_text=str(exc)[:1000],
         )
 
@@ -1234,6 +1288,200 @@ async def run_schedule_now(schedule_id: int):
         raise HTTPException(status_code=404, detail="schedule not found")
     run_id = await _enqueue_scheduled_run(schedule_id)
     return {"run_id": run_id, "schedule_id": schedule_id, "status": "queued"}
+
+
+# ── Finding overrides (Phase 6) ─────────────────────────────────────────────
+#
+# An override suppresses findings emitted by `rule_id` against `host_id`
+# (or globally when host_id is NULL). `mode` is purely semantic -- both
+# 'mute' and 'accept_risk' filter the finding out of the persisted set,
+# but 'accept_risk' signals a deliberate compensating-control decision
+# while 'mute' signals "known false positive, leave me alone". An override
+# with a non-null `expires_at` in the past is treated as inactive.
+
+_OVERRIDE_MODES = ("mute", "accept_risk")
+
+_OVERRIDE_COLS = (
+    "id", "rule_id", "host_id", "mode", "reason",
+    "created_by", "created_at", "expires_at",
+)
+
+
+def _row_to_override(row, cols: list[str]) -> dict:
+    return dict(zip(cols, row))
+
+
+def _override_is_active(ovr: dict, now_utc: datetime) -> bool:
+    """An override is inactive once `expires_at` has elapsed; null = forever."""
+    expires_raw = ovr.get("expires_at")
+    if not expires_raw:
+        return True
+    expires = _parse_db_datetime_utc(expires_raw)
+    if expires is None:
+        # Unparseable expiry -> safer to treat as inactive so a corrupt
+        # row doesn't silently keep suppressing findings forever.
+        return False
+    return expires > now_utc
+
+
+def _finding_is_overridden(
+    finding: Finding, overrides: list[dict], now_utc: datetime,
+) -> dict | None:
+    """Return the active override matching this finding, if any.
+
+    Host-specific overrides (host_id == finding.host_id) and global
+    overrides (host_id IS NULL) both match. Picks the first hit; a rule
+    can only have one override per (rule_id, host_id) thanks to the UNIQUE
+    constraint, so the order isn't ambiguous.
+    """
+    for o in overrides:
+        if o.get("rule_id") != finding.rule_id:
+            continue
+        ohost = o.get("host_id")
+        if ohost is not None and ohost != finding.host_id:
+            continue
+        if not _override_is_active(o, now_utc):
+            continue
+        return o
+    return None
+
+
+async def _list_overrides() -> list[dict]:
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            f"SELECT {', '.join(_OVERRIDE_COLS)} FROM audit_rule_overrides "
+            "ORDER BY id DESC"
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [_row_to_override(r, cols) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def _get_override(override_id: int) -> dict | None:
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            f"SELECT {', '.join(_OVERRIDE_COLS)} FROM audit_rule_overrides "
+            "WHERE id = ?",
+            (override_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        cols = [d[0] for d in cursor.description]
+        return _row_to_override(row, cols)
+    finally:
+        await conn.close()
+
+
+async def _create_override(
+    rule_id: str,
+    host_id: int | None,
+    mode: str,
+    reason: str,
+    created_by: str,
+    expires_at: str | None,
+) -> dict:
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            """INSERT INTO audit_rule_overrides
+                 (rule_id, host_id, mode, reason, created_by, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (rule_id, host_id, mode, reason, created_by, expires_at),
+        )
+        await conn.commit()
+        new_id = int(cursor.lastrowid)
+    finally:
+        await conn.close()
+    return await _get_override(new_id)  # type: ignore[return-value]
+
+
+async def _delete_override(override_id: int) -> bool:
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            "DELETE FROM audit_rule_overrides WHERE id = ?", (override_id,)
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        await conn.close()
+
+
+def _validate_override_payload(
+    rule_id: str, mode: str, expires_at: str | None,
+) -> None:
+    if not rule_id or len(rule_id) > 200:
+        raise HTTPException(
+            status_code=400, detail="rule_id must be 1-200 chars",
+        )
+    if mode not in _OVERRIDE_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"mode must be one of {list(_OVERRIDE_MODES)}",
+        )
+    if expires_at:
+        if _parse_db_datetime_utc(expires_at) is None:
+            raise HTTPException(
+                status_code=400,
+                detail="expires_at must be ISO-8601 ('YYYY-MM-DD HH:MM:SS' or "
+                       "'YYYY-MM-DDTHH:MM:SSZ')",
+            )
+
+
+@router.get("/api/audit/overrides")
+async def list_audit_overrides():
+    return {"overrides": await _list_overrides()}
+
+
+@router.get("/api/audit/overrides/{override_id}")
+async def get_audit_override(override_id: int):
+    ovr = await _get_override(override_id)
+    if ovr is None:
+        raise HTTPException(status_code=404, detail="override not found")
+    return ovr
+
+
+@router.post("/api/audit/overrides", status_code=201)
+async def create_audit_override(payload: dict = Body(...)):
+    rule_id = str(payload.get("rule_id") or "").strip()
+    host_id_raw = payload.get("host_id")
+    host_id = int(host_id_raw) if host_id_raw not in (None, "") else None
+    mode = str(payload.get("mode") or "mute").strip()
+    reason = str(payload.get("reason") or "").strip()[:1000]
+    created_by = str(payload.get("created_by") or "").strip()[:200]
+    expires_raw = payload.get("expires_at")
+    expires_at = str(expires_raw).strip() if expires_raw else None
+    _validate_override_payload(rule_id, mode, expires_at)
+    try:
+        return await _create_override(
+            rule_id=rule_id,
+            host_id=host_id,
+            mode=mode,
+            reason=reason,
+            created_by=created_by,
+            expires_at=expires_at,
+        )
+    except Exception as exc:
+        # UNIQUE(rule_id, host_id) -> friendly 409 instead of a generic 500.
+        if "UNIQUE" in str(exc).upper() or "duplicate" in str(exc).lower():
+            raise HTTPException(
+                status_code=409,
+                detail="an override for this (rule_id, host_id) already exists",
+            ) from exc
+        raise
+
+
+@router.delete("/api/audit/overrides/{override_id}", status_code=204)
+async def delete_audit_override(override_id: int):
+    ok = await _delete_override(override_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="override not found")
+    return None
 
 
 # ── Per-host read endpoints (powers topology NodeDetails tabs) ──────────────
