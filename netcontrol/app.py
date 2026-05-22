@@ -240,6 +240,7 @@ from netcontrol.routes.playbooks import (
     write_playbook_file,
 )
 from netcontrol.routes.reporting import _report_scheduler_loop, router as reporting_router
+from netcontrol.routes.audit import _audit_run_loop, router as audit_router
 from netcontrol.routes.maintenance_windows import (
     init_maintenance_windows,
     router as maintenance_windows_router,
@@ -1259,6 +1260,7 @@ async def lifespan(app: FastAPI):
     downsampling_task = asyncio.create_task(_downsampling_loop())
     rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
     report_scheduler_task = asyncio.create_task(_report_scheduler_loop())
+    audit_task = asyncio.create_task(_audit_run_loop())
     cloud_flow_sync_task = asyncio.create_task(_cloud_flow_sync_loop())
     cloud_traffic_sync_task = asyncio.create_task(_cloud_traffic_metric_sync_loop())
     federation_task = asyncio.create_task(federation_sync_loop())
@@ -1906,6 +1908,11 @@ app.include_router(
 
 app.include_router(
     reporting_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
+)
+# Audit Report Engine
+app.include_router(
+    audit_router,
     dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
 )
 # CDEF Engine (calculated data sources)
