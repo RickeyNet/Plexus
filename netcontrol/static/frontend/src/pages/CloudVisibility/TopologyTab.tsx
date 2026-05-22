@@ -260,9 +260,9 @@ export function TopologyTab({ filter }: Props) {
   });
   const [routeFilter, setRouteFilter] = useState<RouteFilter>('all');
 
-  const resources = data?.resources ?? [];
-  const connections = data?.connections ?? [];
-  const hybridLinks = data?.hybrid_links ?? [];
+  const resources = useMemo(() => data?.resources ?? [], [data?.resources]);
+  const connections = useMemo(() => data?.connections ?? [], [data?.connections]);
+  const hybridLinks = useMemo(() => data?.hybrid_links ?? [], [data?.hybrid_links]);
   const summary = data?.summary ?? {};
 
   const lookup = useMemo(() => {

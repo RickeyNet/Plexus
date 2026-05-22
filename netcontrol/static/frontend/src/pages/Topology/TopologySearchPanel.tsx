@@ -25,7 +25,7 @@ interface Props {
   onClose: () => void;
 }
 
-const MAC_RE = /^[0-9a-f]{2}([:.\-]?[0-9a-f]{2}){5}$/i;
+const MAC_RE = /^[0-9a-f]{2}([:.-]?[0-9a-f]{2}){5}$/i;
 const IPV4_RE = /^(\d{1,3}\.){1,3}\d{0,3}$/;
 
 function detectKind(q: string): Exclude<SearchKind, 'auto'> {

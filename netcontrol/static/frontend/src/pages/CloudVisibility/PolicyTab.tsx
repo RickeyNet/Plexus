@@ -37,8 +37,8 @@ export function PolicyTab({ filter }: Props) {
   const effective = useCloudPolicyEffective(params);
   const rulesQuery = useCloudPolicyRules({ ...params, limit: 200 });
 
-  const allViews = effective.data?.resources ?? [];
-  const allRules = rulesQuery.data?.rules ?? [];
+  const allViews = useMemo(() => effective.data?.resources ?? [], [effective.data?.resources]);
+  const allRules = useMemo(() => rulesQuery.data?.rules ?? [], [rulesQuery.data?.rules]);
 
   const views = useMemo(() => {
     if (exposure !== 'public') return allViews;

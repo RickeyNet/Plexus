@@ -33,7 +33,7 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
     }
   }, [result.data]);
 
-  const credList = credentials.data || [];
+  const credList = useMemo(() => credentials.data || [], [credentials.data]);
   useEffect(() => {
     if (credentialId == null && credList.length > 0) setCredentialId(credList[0].id);
   }, [credentialId, credList]);

@@ -1,26 +1,11 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
-
-export type TimeRangePreset = '1h' | '6h' | '24h' | '7d' | '30d' | 'custom';
-
-export interface TimeRangeState {
-  range: TimeRangePreset;
-  customStart: string | null;
-  customEnd: string | null;
-}
-
-export interface TimeRangeParams {
-  range: TimeRangePreset;
-  start?: string;
-  end?: string;
-}
-
-interface TimeRangeContextValue extends TimeRangeState {
-  setRange: (range: TimeRangePreset) => void;
-  setCustomRange: (start: string, end: string) => void;
-  params: TimeRangeParams;
-}
-
-const TimeRangeContext = createContext<TimeRangeContextValue | null>(null);
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import {
+  TimeRangeContext,
+  type TimeRangeContextValue,
+  type TimeRangeParams,
+  type TimeRangePreset,
+  type TimeRangeState,
+} from './timeRange-context';
 
 export function TimeRangeProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<TimeRangeState>({
@@ -50,10 +35,4 @@ export function TimeRangeProvider({ children }: { children: ReactNode }) {
   );
 
   return <TimeRangeContext.Provider value={value}>{children}</TimeRangeContext.Provider>;
-}
-
-export function useTimeRange(): TimeRangeContextValue {
-  const ctx = useContext(TimeRangeContext);
-  if (!ctx) throw new Error('useTimeRange must be used inside <TimeRangeProvider>');
-  return ctx;
 }
