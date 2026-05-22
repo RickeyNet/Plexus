@@ -114,27 +114,66 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     def _walk(oid: str, max_rows: int = 2000):
         return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
 
+    def _walk_with_errors(oid: str, max_rows: int = 2000):
+        return _snmp_walk(
+            ip_address, timeout_seconds, snmp_config, oid,
+            max_rows=max_rows, return_errors=True,
+        )
+
     # ── Single global pass: everything lives in the default context ──
+    # The "critical" OIDs (FDB tables + ARP) ask for error-aware results so
+    # we can tell silent-but-responsive devices from outright SNMP failures.
+    # The supporting OIDs (vlan map, ifName, etc.) stay in the plain mode —
+    # they're allowed to be empty without it counting as a failure.
     try:
-        (arp_phys, arp_net, arp_type_rows,
+        (arp_phys_pair,
+         arp_net, arp_type_rows,
          if_names, vm_vlan, dot1q_pvid,
-         fdb_addr, fdb_port, fdb_status, q_fdb_port, bridge_port_map,
+         fdb_addr_pair, fdb_port, fdb_status, q_fdb_port_pair, bridge_port_map,
         ) = await asyncio.gather(
-            _walk(IP_NET_TO_MEDIA_PHYS),
+            _walk_with_errors(IP_NET_TO_MEDIA_PHYS),
             _walk(IP_NET_TO_MEDIA_NET),
             _walk(IP_NET_TO_MEDIA_TYPE),
             _walk(IF_NAME_OID),
             _walk(VM_VLAN_OID),
             _walk(DOT1Q_PVID_OID),
-            _walk(DOT1D_TP_FDB_ADDRESS),
+            _walk_with_errors(DOT1D_TP_FDB_ADDRESS),
             _walk(DOT1D_TP_FDB_PORT),
             _walk(DOT1D_TP_FDB_STATUS),
-            _walk(DOT1Q_TP_FDB_PORT),
+            _walk_with_errors(DOT1Q_TP_FDB_PORT),
             _walk(DOT1D_BASE_PORT_IF_INDEX),
         )
     except Exception as exc:
         result["errors"].append(f"SNMP walk failed: {str(exc)}")
         return result
+
+    arp_phys, arp_phys_err = arp_phys_pair
+    fdb_addr, fdb_addr_err = fdb_addr_pair
+    q_fdb_port, q_fdb_port_err = q_fdb_port_pair
+
+    # Record critical-walk errors verbatim. If *both* FDB walks failed with
+    # the same error (almost always: timeout / auth fail / closed port), say
+    # it once instead of three times.
+    fdb_errors = {e for e in (fdb_addr_err, q_fdb_port_err) if e}
+    if fdb_errors:
+        if len(fdb_errors) == 1:
+            result["errors"].append(f"FDB walk failed: {next(iter(fdb_errors))}")
+        else:
+            for tag, err in (("dot1dTpFdb", fdb_addr_err),
+                              ("dot1qTpFdb", q_fdb_port_err)):
+                if err:
+                    result["errors"].append(f"{tag} walk failed: {err}")
+    if arp_phys_err:
+        result["errors"].append(f"ARP walk failed: {arp_phys_err}")
+
+    # Surface "no FDB rows + no error" as a non-fatal advisory so an L3-only
+    # device or a router that just doesn't bridge is distinguishable from a
+    # silent failure.
+    if not fdb_errors and not fdb_addr and not q_fdb_port:
+        result["errors"].append(
+            "Device responded but returned no FDB entries "
+            "(likely a router / L3-only device, or FDB hidden behind a non-default SNMPv3 context)."
+        )
 
     if_index_to_name: dict[str, str] = {}
     for oid, val in if_names.items():

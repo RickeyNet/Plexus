@@ -461,13 +461,22 @@ def _build_snmp_auth(snmp_config: dict):
 
 
 async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
-                     base_oid: str, max_rows: int = 500) -> dict[str, str]:
-    """Walk an SNMP OID subtree and return {oid: value} dict."""
+                     base_oid: str, max_rows: int = 500,
+                     return_errors: bool = False):
+    """Walk an SNMP OID subtree and return {oid: value} dict.
+
+    Default return is the bare dict (back-compat for many callers). When
+    ``return_errors=True`` returns ``(results, error_text_or_None)`` so the
+    caller can distinguish "device responded with an empty table" from
+    "timeout / authentication failure / no SNMP agent" — those used to look
+    identical to callers, which made silent collection failures effectively
+    invisible.
+    """
     # Resolve {{secret.NAME}} references in v3 passwords before building auth
     snmp_config = await _resolve_snmp_secrets(snmp_config)
     auth_tuple = _build_snmp_auth(snmp_config)
     if auth_tuple is None:
-        return {}
+        return ({}, "SNMP not configured") if return_errors else {}
     auth_data, _version, port, timeout, retries = auth_tuple
     timeout = max(timeout, timeout_seconds)
 
@@ -475,6 +484,7 @@ async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
     transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
     results: dict[str, str] = {}
     row_count = 0
+    error_text: str | None = None
     # Cisco IOS/IOS-XE exposes the per-VLAN bridge/Q-BRIDGE FDB under an
     # SNMPv3 context named "vlan-<id>" -- the v3 equivalent of the v2c
     # "<community>@<vlan>" trick. Honour an optional context name so per-VLAN
@@ -487,7 +497,17 @@ async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
             ObjectType(ObjectIdentity(base_oid)),
             lexicographicMode=False,
         ):
-            if error_indication or error_status:
+            if error_indication:
+                error_text = str(error_indication)
+                break
+            if error_status:
+                # error_status is a pysnmp PDU status — prettyPrint() gives the
+                # MIB name (noSuchName, authorizationError, etc.), which is
+                # what an operator wants to see.
+                try:
+                    error_text = error_status.prettyPrint()
+                except Exception:
+                    error_text = str(error_status)
                 break
             for name, value in var_binds:
                 oid_str = str(name)
@@ -495,8 +515,12 @@ async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
             row_count += 1
             if row_count >= max_rows:
                 break
+    except Exception as exc:
+        error_text = f"{type(exc).__name__}: {exc}"
     finally:
         engine.close_dispatcher()
+    if return_errors:
+        return results, error_text
     return results
 
 
