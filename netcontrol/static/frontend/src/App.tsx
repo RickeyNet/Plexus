@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
@@ -11,31 +11,36 @@ import { Sidebar } from '@/components/Sidebar';
 import { TimeRangeBar } from '@/components/TimeRangeBar';
 import { UserMenu } from '@/components/UserMenu';
 import { Login } from '@/pages/Login/Login';
-import { Compliance } from '@/pages/Compliance/Compliance';
-import { Configuration } from '@/pages/Configuration/Configuration';
-import { CustomDashboards } from '@/pages/Dashboard/CustomDashboards';
-import { Dashboard } from '@/pages/Dashboard/Dashboard';
-import { DashboardViewer } from '@/pages/Dashboard/DashboardViewer';
-import { Deployments } from '@/pages/Deployments/Deployments';
-import { DeviceDetail } from '@/pages/DeviceDetail/DeviceDetail';
-import { Federation } from '@/pages/Federation/Federation';
-import { FloorPlan } from '@/pages/FloorPlan/FloorPlan';
-import { GraphTemplates } from '@/pages/GraphTemplates/GraphTemplates';
-import { ChangeManagement } from '@/pages/ChangeManagement/ChangeManagement';
-import { CloudVisibility } from '@/pages/CloudVisibility/CloudVisibility';
-import { Inventory } from '@/pages/Inventory/Inventory';
-import { Ipam } from '@/pages/Ipam/Ipam';
-import { Jobs } from '@/pages/Jobs/Jobs';
-import { Lab } from '@/pages/Lab';
-import { MaintenanceWindows } from '@/pages/MaintenanceWindows/MaintenanceWindows';
-import { Monitoring } from '@/pages/Monitoring/Monitoring';
-import { MacTracking } from '@/pages/NetworkTools/MacTracking';
-import { TrafficAnalysis } from '@/pages/NetworkTools/TrafficAnalysis';
-import { Audit } from '@/pages/Audit/Audit';
-import { Reports } from '@/pages/Reports/Reports';
-import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
-import { Settings } from '@/pages/Settings/Settings';
-import { Topology } from '@/pages/Topology/Topology';
+
+// Route-level code splitting: each page becomes its own chunk so the initial
+// bundle no longer pulls in vis-network (Topology), echarts (Dashboard tiles),
+// and codemirror (Jobs/Configuration editors) up front. Pages use named
+// exports, so the import() result is reshaped into { default } for React.lazy.
+const Compliance = lazy(() => import('@/pages/Compliance/Compliance').then(m => ({ default: m.Compliance })));
+const Configuration = lazy(() => import('@/pages/Configuration/Configuration').then(m => ({ default: m.Configuration })));
+const CustomDashboards = lazy(() => import('@/pages/Dashboard/CustomDashboards').then(m => ({ default: m.CustomDashboards })));
+const Dashboard = lazy(() => import('@/pages/Dashboard/Dashboard').then(m => ({ default: m.Dashboard })));
+const DashboardViewer = lazy(() => import('@/pages/Dashboard/DashboardViewer').then(m => ({ default: m.DashboardViewer })));
+const Deployments = lazy(() => import('@/pages/Deployments/Deployments').then(m => ({ default: m.Deployments })));
+const DeviceDetail = lazy(() => import('@/pages/DeviceDetail/DeviceDetail').then(m => ({ default: m.DeviceDetail })));
+const Federation = lazy(() => import('@/pages/Federation/Federation').then(m => ({ default: m.Federation })));
+const FloorPlan = lazy(() => import('@/pages/FloorPlan/FloorPlan').then(m => ({ default: m.FloorPlan })));
+const GraphTemplates = lazy(() => import('@/pages/GraphTemplates/GraphTemplates').then(m => ({ default: m.GraphTemplates })));
+const ChangeManagement = lazy(() => import('@/pages/ChangeManagement/ChangeManagement').then(m => ({ default: m.ChangeManagement })));
+const CloudVisibility = lazy(() => import('@/pages/CloudVisibility/CloudVisibility').then(m => ({ default: m.CloudVisibility })));
+const Inventory = lazy(() => import('@/pages/Inventory/Inventory').then(m => ({ default: m.Inventory })));
+const Ipam = lazy(() => import('@/pages/Ipam/Ipam').then(m => ({ default: m.Ipam })));
+const Jobs = lazy(() => import('@/pages/Jobs/Jobs').then(m => ({ default: m.Jobs })));
+const Lab = lazy(() => import('@/pages/Lab').then(m => ({ default: m.Lab })));
+const MaintenanceWindows = lazy(() => import('@/pages/MaintenanceWindows/MaintenanceWindows').then(m => ({ default: m.MaintenanceWindows })));
+const Monitoring = lazy(() => import('@/pages/Monitoring/Monitoring').then(m => ({ default: m.Monitoring })));
+const MacTracking = lazy(() => import('@/pages/NetworkTools/MacTracking').then(m => ({ default: m.MacTracking })));
+const TrafficAnalysis = lazy(() => import('@/pages/NetworkTools/TrafficAnalysis').then(m => ({ default: m.TrafficAnalysis })));
+const Audit = lazy(() => import('@/pages/Audit/Audit').then(m => ({ default: m.Audit })));
+const Reports = lazy(() => import('@/pages/Reports/Reports').then(m => ({ default: m.Reports })));
+const RiskAnalysis = lazy(() => import('@/pages/RiskAnalysis/RiskAnalysis').then(m => ({ default: m.RiskAnalysis })));
+const Settings = lazy(() => import('@/pages/Settings/Settings').then(m => ({ default: m.Settings })));
+const Topology = lazy(() => import('@/pages/Topology/Topology').then(m => ({ default: m.Topology })));
 
 const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
@@ -182,6 +187,7 @@ export function App() {
       <main className="main-content" aria-live="polite">
         <Breadcrumb />
         <MetricTimeRangeBar />
+        <Suspense fallback={null}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/dashboards" element={<CustomDashboards />} />
@@ -232,6 +238,7 @@ export function App() {
           <Route path="/network-tools" element={<MacTracking />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </main>
 
       <UserMenu isOpen={userMenuOpen} onClose={() => setUserMenuOpen(false)} />
