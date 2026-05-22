@@ -5,9 +5,9 @@ Runs a set of pluggable :class:`Rule` checks against the live inventory and
 config baselines, producing :class:`Finding` rows that are persisted into
 ``audit_findings`` and surfaced through ``/api/audit/...`` endpoints.
 
-Vertical slice (v1): config-drift rule pack only. VLAN / port-hygiene /
-security packs are intentionally not wired here yet -- they slot in by
-adding a class to ``_RULE_REGISTRY`` once their collectors are ready.
+Rule packs wired in ``_RULE_REGISTRY``: config drift, port hygiene,
+VLAN consistency across trunks, and management-plane security posture.
+New packs slot in by appending a class to the registry.
 
 The orchestrator is patterned on ``reporting._report_scheduler_loop``:
 a single background task polls for due runs (cron-style schedule) and
@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass, field
 
 import routes.database as db
@@ -460,12 +461,151 @@ def _parse_vlan_csv(csv_value: str) -> set[int]:
     return out
 
 
+# ── Rule pack: security posture ─────────────────────────────────────────────
+#
+# Reads each host's most recent running-config snapshot (same source as
+# ConfigDriftRule) and pattern-matches well-known weak-posture indicators.
+# Six sub-findings grouped under one rule_id so a host that's missing
+# multiple controls still surfaces every gap on the report:
+#
+#   - security.snmp_v2:        SNMPv1/v2c community present (no SNMPv3)
+#   - security.default_community: community string is "public" or "private"
+#   - security.telnet_enabled: vty allows telnet (transport input telnet)
+#   - security.http_enabled:   ip http server (cleartext mgmt) enabled
+#   - security.weak_password:  enable/username "password" (type 0 or type 7)
+#                              found instead of "secret" (type 5/8/9)
+#   - security.no_aaa:         no `aaa new-model` line (local-only auth)
+#
+# All map to CIS Controls v8 4.1/4.6 (secure configuration of management
+# protocols and accounts). The rule deliberately doesn't try to *parse*
+# the config -- regex on stripped lines is good enough for posture flags
+# and keeps the rule trivially portable across IOS/IOS-XE/NX-OS.
+
+_SECURITY_PATTERNS = {
+    # (rule_id_suffix, severity, title, regex, requires_absence)
+    # requires_absence=True means a finding fires when the regex does NOT match.
+    "snmp_v2": (
+        "high",
+        "SNMPv1/v2c community in use",
+        re.compile(r"^\s*snmp-server\s+community\s+", re.MULTILINE | re.IGNORECASE),
+        False,
+    ),
+    "default_community": (
+        "critical",
+        "Default SNMP community string",
+        re.compile(
+            r"^\s*snmp-server\s+community\s+(public|private)\b",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+        False,
+    ),
+    "telnet_enabled": (
+        "high",
+        "Telnet enabled on VTY lines",
+        re.compile(
+            r"^\s*transport\s+input\s+.*\btelnet\b",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+        False,
+    ),
+    "http_enabled": (
+        "medium",
+        "Cleartext HTTP management enabled",
+        re.compile(
+            r"^\s*ip\s+http\s+server\b(?!\s+secure)",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+        False,
+    ),
+    "weak_password": (
+        "high",
+        "Weak password storage (type 0 or type 7)",
+        # Matches `password 0 ...`, `password 7 ...`, `enable password ...`
+        # (without `secret`), or `username X password ...`. Skips `secret`
+        # forms (type 5/8/9) which are properly hashed.
+        re.compile(
+            r"^\s*(?:enable\s+password|"
+            r"username\s+\S+\s+(?:privilege\s+\d+\s+)?password|"
+            r"password\s+[07])\b",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+        False,
+    ),
+    "no_aaa": (
+        "medium",
+        "AAA not enabled (no `aaa new-model`)",
+        re.compile(r"^\s*aaa\s+new-model\b", re.MULTILINE | re.IGNORECASE),
+        True,  # finding fires when this is absent
+    ),
+}
+
+
+class SecurityPostureRule(Rule):
+    rule_id = "security.posture"
+    category = "security"
+    default_severity = "high"
+    cis_control = "CIS Controls v8 4.1/4.6"
+    title = "Insecure management-plane configuration"
+
+    async def evaluate(self, ctx: AuditContext) -> list[Finding]:
+        findings: list[Finding] = []
+        for host in ctx.hosts:
+            host_id = int(host["id"])
+            snapshot = await db.get_latest_config_snapshot(host_id)
+            config_text = (snapshot or {}).get("config_text") or ""
+            if not config_text.strip():
+                # ConfigDriftRule already surfaces "no snapshot" -- don't
+                # double-report. Just skip posture checks for this host.
+                continue
+
+            for suffix, (severity, title, pattern, requires_absence) in (
+                _SECURITY_PATTERNS.items()
+            ):
+                match = pattern.search(config_text)
+                hit = (match is None) if requires_absence else (match is not None)
+                if not hit:
+                    continue
+
+                # Pull the matching line (or, for absence checks, leave empty)
+                # for the evidence body so the operator can see context.
+                evidence_line = ""
+                if match is not None:
+                    line_start = config_text.rfind("\n", 0, match.start()) + 1
+                    line_end = config_text.find("\n", match.end())
+                    if line_end == -1:
+                        line_end = len(config_text)
+                    # Redact the matched line so credentials/community
+                    # strings don't leak into the findings table.
+                    evidence_line = redact_value(
+                        config_text[line_start:line_end].strip()
+                    )
+
+                findings.append(Finding(
+                    rule_id=f"{self.rule_id}.{suffix}",
+                    category=self.category,
+                    severity=severity,
+                    title=title,
+                    detail=(
+                        f"{host.get('hostname', '')}: {title.lower()}."
+                        + (f" Example: `{evidence_line}`" if evidence_line else "")
+                    ),
+                    host_id=host_id,
+                    cis_control=self.cis_control,
+                    evidence={
+                        "hostname": host.get("hostname", ""),
+                        "match_line": evidence_line,
+                    },
+                ))
+        return findings
+
+
 # Rule registry. New rule classes are appended here once their
 # collectors land.
 _RULE_REGISTRY: list[type[Rule]] = [
     ConfigDriftRule,
     PortHygieneRule,
     VlanConsistencyRule,
+    SecurityPostureRule,
 ]
 
 
