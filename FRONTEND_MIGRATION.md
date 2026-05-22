@@ -273,7 +273,7 @@ After the last module migrates:
 - Note: `js/websocket.js` kept per Appendix A (still listed as "evaluate"); now
   unreferenced and a candidate for removal once the jobs WS path is confirmed.
 - Note: `script-src 'unsafe-inline'` in app.py CSP is now removable (legacy
-  inline onclick= handlers gone) — tracked as a follow-up security tightening.
+  inline onclick= handlers gone) - tracked as a follow-up security tightening.
 
 ---
 

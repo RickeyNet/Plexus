@@ -1,4 +1,4 @@
-"""Cisco IOS-XR driver — service-provider / core platform.
+"""Cisco IOS-XR driver - service-provider / core platform.
 
 IOS-XR is the third Cisco driver, after IOS and IOS-XE, and the second
 driver overall to expose ``upgrade_has_discrete_prestage() == True``.

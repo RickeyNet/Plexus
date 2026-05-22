@@ -1,4 +1,4 @@
-"""Arista EOS driver — second non-Cisco vendor after Juniper Junos.
+"""Arista EOS driver - second non-Cisco vendor after Juniper Junos.
 
 Arista's CLI is deliberately Cisco-IOS-flavoured (Arista marketed early
 on around "looks like IOS, runs like Linux") so syntactically most of

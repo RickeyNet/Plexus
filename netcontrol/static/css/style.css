@@ -2072,7 +2072,7 @@ input[type="search"].form-input::-webkit-search-results-decoration {
 }
 
 /* React playbook editor (CodeMirror 6): grow with content so the modal
-   body / window handles scrolling instead of a nested scrollbar — matches
+   body / window handles scrolling instead of a nested scrollbar - matches
    the classic SPA's viewportMargin: Infinity behavior. */
 .playbook-code-editor .cm-editor {
     height: auto;

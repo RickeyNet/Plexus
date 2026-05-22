@@ -33,7 +33,7 @@ export interface MacCollectResult {
 
 export function useMacSearch(query: string) {
   // A blank query returns the most recently collected entries, so this query
-  // is always enabled — that's what lets newly-collected MACs show up without
+  // is always enabled - that's what lets newly-collected MACs show up without
   // the user having to type a search term.
   return useQuery({
     queryKey: ['mac-tracking', 'search', query],

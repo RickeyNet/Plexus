@@ -31,10 +31,16 @@ jobs:
         id: release
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+            raw="${{ github.event.inputs.release_tag }}"
           else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            raw="${GITHUB_REF_NAME}"
           fi
+          # Strip leading 'v' so PLEXUS_VERSION matches _FALLBACK_VERSION format
+          # (1.2.3, not v1.2.3) - the tag itself is kept for image tagging.
+          version="${raw#v}"
+          echo "tag=${raw}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Validate version and changelog consistency
         run: python tools/check_release_consistency.py "${{ steps.release.outputs.tag }}"
@@ -75,3 +81,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PLEXUS_VERSION=${{ steps.release.outputs.version }}
+            PLEXUS_GIT_SHA=${{ steps.release.outputs.sha }}

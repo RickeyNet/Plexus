@@ -147,7 +147,7 @@ def window_is_active(window: dict, now: datetime | None = None) -> bool:
 
 
 def _weekday_bit_set(mask: int, weekday: int) -> bool:
-    """weekday is Python's Mon=0..Sun=6 — same as our bit layout."""
+    """weekday is Python's Mon=0..Sun=6 - same as our bit layout."""
     return bool(mask & (1 << weekday))
 
 
@@ -171,7 +171,7 @@ async def evaluate_change_gate(group_ids: list[int]) -> dict:
     1. If any *active* window with policy ``allow_changes`` applies,
        allow.
     2. Else if any *active* window with policy ``block_outside_window``
-       applies, allow. (We are inside a maintenance window — the right
+       applies, allow. (We are inside a maintenance window - the right
        time to change.)
     3. Else if any *inactive-but-relevant* window with policy
        ``block_outside_window`` applies, **block**.

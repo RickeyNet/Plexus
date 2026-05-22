@@ -36,7 +36,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('grouped');
 
   const summary = useConfigDriftSummary();
-  // "All statuses" means all *unresolved* drift — once a drift is accepted or
+  // "All statuses" means all *unresolved* drift - once a drift is accepted or
   // resolved it's handled and shouldn't clutter the working list. Accepted and
   // Resolved are still reachable via their explicit filter options.
   const fetchStatus = statusFilter === 'all' ? 'open' : statusFilter;

@@ -74,7 +74,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
         "poll_error": "",
         "response_time_ms": None,
         "packet_loss_pct": None,
-        # ICMP is an independent liveness probe — it never gates SNMP or
+        # ICMP is an independent liveness probe - it never gates SNMP or
         # SSH polling.  Recording icmp_alive separately lets the UI show
         # "pings fine but SNMP broken" as a distinct state, which is the
         # exact signal an operator needs when triaging a misconfigured
@@ -440,7 +440,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
         result["response_time_ms"] = icmp_result["rtt_ms"]
         result["packet_loss_pct"] = icmp_result["packet_loss_pct"]
         # ICMP-only hosts (no SNMP/SSH credentials) rely on ping alone for
-        # liveness — promote ICMP failure to a real poll error so the
+        # liveness - promote ICMP failure to a real poll error so the
         # availability state machine flips them to "down".
         is_icmp_only = host.get("device_type") == "icmp_only"
         if is_icmp_only:
@@ -448,7 +448,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 result["poll_status"] = "error"
                 result["poll_error"] = icmp_result["error"] or "host did not respond to ICMP"
     else:
-        # ICMP disabled or icmplib missing — fall back to the prior wall-clock
+        # ICMP disabled or icmplib missing - fall back to the prior wall-clock
         # signal so dashboards built on response_time_ms keep working.
         poll_elapsed = (time.monotonic() - poll_start) * 1000  # ms
         result["response_time_ms"] = round(poll_elapsed, 2)
@@ -994,7 +994,7 @@ async def monitoring_poll_now_stream(request: Request):
                     return h, None, TimeoutError(
                         f"poll exceeded {poll_timeout:.0f}s"
                     )
-                except Exception as exc:  # noqa: BLE001 — surfaced to client
+                except Exception as exc:  # noqa: BLE001 - surfaced to client
                     return h, None, exc
 
         tasks = [asyncio.create_task(_poll_one(h, cred, snmp_cfg))
@@ -1017,7 +1017,7 @@ async def monitoring_poll_now_stream(request: Request):
                 LOGGER.warning("monitoring: poll failed for %s: %s",
                                hostname, redact_value(str(err)))
                 detail = (
-                    "Timed out — device unresponsive."
+                    "Timed out - device unresponsive."
                     if isinstance(err, TimeoutError)
                     else "Poll failed for host."
                 )

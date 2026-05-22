@@ -277,7 +277,7 @@ function DeviceInfoBar({ poll, hostId }: { poll: MonitoringPoll | null; hostId: 
 
 function LivenessPill({ poll }: { poll: MonitoringPoll }) {
   // icmp_alive arrives as 0/1 from SQLite or true/false from a JSON-clean
-  // Postgres path — normalise both. `null/undefined` means ICMP didn't run
+  // Postgres path - normalise both. `null/undefined` means ICMP didn't run
   // (icmplib missing, or icmp_enabled=false), so we say nothing rather
   // than imply the host is down.
   const icmpRan = poll.icmp_alive !== undefined && poll.icmp_alive !== null;
@@ -297,7 +297,7 @@ function LivenessPill({ poll }: { poll: MonitoringPoll }) {
     return (
       <span
         className="badge badge-warning"
-        title="Host responds to ICMP but the SNMP/SSH poll did not return data — credentials, ACL, or engine-ID problem."
+        title="Host responds to ICMP but the SNMP/SSH poll did not return data - credentials, ACL, or engine-ID problem."
       >
         ICMP up, SNMP/SSH not responding
       </span>

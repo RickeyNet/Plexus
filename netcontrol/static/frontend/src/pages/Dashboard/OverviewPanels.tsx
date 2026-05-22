@@ -155,7 +155,7 @@ function TopologyMiniMap({ devices }: { devices: DeviceHealth[] }) {
       return {
         id: n.id as never,
         label: n.label,
-        title: `${n.label}${n.ip ? ` (${n.ip})` : ''} — ${HEALTH_LABELS[status]}`,
+        title: `${n.label}${n.ip ? ` (${n.ip})` : ''} - ${HEALTH_LABELS[status]}`,
         shape: 'dot',
         size: 12,
         color: { background: color, border: color, highlight: { background: color, border: '#fff' } },

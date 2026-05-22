@@ -93,7 +93,7 @@ preflight() {
     docker info >/dev/null 2>&1 || die "docker daemon not reachable (need sudo?)"
 
     if [[ "${MODE}" == "git" ]]; then
-        [[ -d .git ]] || die "not a git repo — use --image mode for registry deploys"
+        [[ -d .git ]] || die "not a git repo - use --image mode for registry deploys"
     fi
 
     mkdir -p "${BACKUP_DIR}"
@@ -102,7 +102,7 @@ preflight() {
 
 # ── Rollback flow ─────────────────────────────────────────────────────
 do_rollback() {
-    [[ -f "${ROLLBACK_FILE}" ]] || die "no previous upgrade recorded — nothing to roll back to"
+    [[ -f "${ROLLBACK_FILE}" ]] || die "no previous upgrade recorded - nothing to roll back to"
     log "Rolling back using ${ROLLBACK_FILE}"
     # shellcheck disable=SC1090
     source "${ROLLBACK_FILE}"
@@ -191,7 +191,7 @@ EOF
         local prev_image
         prev_image="$(docker inspect --format='{{.Config.Image}}' plexus-app 2>/dev/null || true)"
         if [[ -z "${prev_image}" ]]; then
-            log "WARN: could not determine current image — rollback will not work"
+            log "WARN: could not determine current image - rollback will not work"
             return
         fi
         cat > "${ROLLBACK_FILE}" <<EOF
@@ -213,7 +213,7 @@ apply_git() {
         local branch
         branch="$(git rev-parse --abbrev-ref HEAD)"
         target="origin/${branch}"
-        log "No --ref given — pulling latest of ${branch}"
+        log "No --ref given - pulling latest of ${branch}"
     fi
 
     run "git checkout '${target}'"
@@ -261,7 +261,7 @@ wait_healthy() {
         sleep 3
         elapsed=$((elapsed + 3))
     done
-    die "plexus did not report healthy within ${HEALTHCHECK_TIMEOUT}s — check 'docker compose logs plexus'"
+    die "plexus did not report healthy within ${HEALTHCHECK_TIMEOUT}s - check 'docker compose logs plexus'"
 }
 
 # ── Failure handler ───────────────────────────────────────────────────

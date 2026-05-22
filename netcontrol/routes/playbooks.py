@@ -133,7 +133,7 @@ def _attach_parameters_schema(playbook: dict) -> dict:
     """Decorate a playbook dict with parameters_schema from the registered class.
 
     The schema lives on the Python class (BasePlaybook subclass), not in the
-    DB — it's a code-level contract, not user-editable data. Attach it on the
+    DB - it's a code-level contract, not user-editable data. Attach it on the
     way out so the frontend can render a launch form without a second round-trip.
     """
     from routes.runner import get_playbook_class
