@@ -4709,6 +4709,122 @@ async def get_interface_stats_by_hosts(host_ids: list[int]) -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Interface inventory (audit: port-hygiene rule)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def upsert_interface_inventory(
+    host_id: int,
+    if_index: int,
+    name: str,
+    description: str,
+    admin_state: str,
+    oper_state: str,
+    speed_mbps: int,
+    duplex: str,
+    last_change: str,
+    access_vlan: int,
+    trunk_vlans: str,
+) -> int:
+    """Insert or update one per-port inventory row. The (host_id, if_index)
+    pair is unique so re-poll just refreshes the snapshot."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO interface_inventory
+               (host_id, if_index, name, description, admin_state, oper_state,
+                speed_mbps, duplex, last_change, access_vlan, trunk_vlans,
+                collected_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(host_id, if_index) DO UPDATE SET
+                   name = excluded.name,
+                   description = excluded.description,
+                   admin_state = excluded.admin_state,
+                   oper_state = excluded.oper_state,
+                   speed_mbps = excluded.speed_mbps,
+                   duplex = excluded.duplex,
+                   last_change = excluded.last_change,
+                   access_vlan = excluded.access_vlan,
+                   trunk_vlans = excluded.trunk_vlans,
+                   collected_at = excluded.collected_at""",
+            (host_id, if_index, name, description, admin_state, oper_state,
+             speed_mbps, duplex, last_change, access_vlan, trunk_vlans),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_interface_inventory_for_host(host_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM interface_inventory WHERE host_id = ? ORDER BY if_index",
+            (host_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_interface_inventory_by_name(host_id: int, name: str) -> dict | None:
+    """Look up one port by host + interface name (used by VLAN-consistency
+    and port-hygiene rules to cross-reference topology edges)."""
+    if not name:
+        return None
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM interface_inventory WHERE host_id = ? AND name = ? LIMIT 1",
+            (host_id, name),
+        )
+        row = await cursor.fetchone()
+        return rows_to_list([row])[0] if row else None
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# VLAN definitions (audit: vlan-consistency rule)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def upsert_vlan_definition(
+    host_id: int,
+    vlan_id: int,
+    name: str,
+    state: str,
+) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO vlan_definitions
+               (host_id, vlan_id, name, state, collected_at)
+               VALUES (?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(host_id, vlan_id) DO UPDATE SET
+                   name = excluded.name,
+                   state = excluded.state,
+                   collected_at = excluded.collected_at""",
+            (host_id, vlan_id, name, state),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_vlan_definitions_for_host(host_id: int) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM vlan_definitions WHERE host_id = ? ORDER BY vlan_id",
+            (host_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Topology Changes (diff detection)
 # ═════════════════════════════════════════════════════════════════════════════
 

@@ -311,6 +311,264 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Interface inventory + VLAN definitions (audit collector)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Walks the standard IF-MIB + VTP MIB to feed the audit subsystem's
+# port-hygiene and VLAN-consistency rules. Folded into the mac_tracking
+# module (and called from the same topology-discovery hot path) so we
+# don't spin up another background loop just for these tables. The OIDs
+# are read-only and the writes go through the normal sqlite upsert path,
+# so calling it every discovery cycle is cheap and idempotent.
+
+# IF-MIB OIDs reused for the inventory snapshot
+IF_DESCR_OID = "1.3.6.1.2.1.2.2.1.2"               # ifDescr (fallback name)
+IF_ALIAS_OID = "1.3.6.1.2.1.31.1.1.1.18"           # ifAlias (description)
+IF_ADMIN_STATUS_OID = "1.3.6.1.2.1.2.2.1.7"         # 1=up 2=down 3=testing
+IF_OPER_STATUS_OID = "1.3.6.1.2.1.2.2.1.8"          # 1=up 2=down ...
+IF_HIGH_SPEED_OID = "1.3.6.1.2.1.31.1.1.1.15"       # Mbps
+IF_SPEED_OID = "1.3.6.1.2.1.2.2.1.5"                # bps fallback
+IF_LAST_CHANGE_OID = "1.3.6.1.2.1.2.2.1.9"          # sysUptime ticks at last admin/oper transition
+DOT3_STATS_DUPLEX_OID = "1.3.6.1.2.1.10.7.2.1.19"   # 1=unknown 2=half 3=full
+
+# Cisco VTP VLAN names (state.id under vtpVlanTable)
+VTP_VLAN_NAME_OID = "1.3.6.1.4.1.9.9.46.1.3.1.1.4"   # vtpVlanName
+VTP_VLAN_STATE_OID = "1.3.6.1.4.1.9.9.46.1.3.1.1.2"  # vtpVlanState (1=operational ...)
+
+# Cisco VTP trunk allowed-VLAN bitmaps (1k/2k/3k/4k slices, 128 bytes each)
+VTP_TRUNK_VLANS_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.4"      # vlans 0..1023
+VTP_TRUNK_VLANS_2K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.17"   # 1024..2047
+VTP_TRUNK_VLANS_3K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.18"   # 2048..3071
+VTP_TRUNK_VLANS_4K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.19"   # 3072..4094
+
+ADMIN_STATE_MAP = {"1": "up", "2": "down", "3": "testing"}
+OPER_STATE_MAP = {
+    "1": "up", "2": "down", "3": "testing", "4": "unknown",
+    "5": "dormant", "6": "notPresent", "7": "lowerLayerDown",
+}
+DUPLEX_MAP = {"1": "unknown", "2": "half", "3": "full"}
+VTP_STATE_MAP = {"1": "operational", "2": "suspended"}
+
+
+def _bitmap_to_vlan_list(raw_value, base_vlan: int) -> list[int]:
+    """Convert a VTP allowed-VLAN bitmap octet string into a list of VLAN IDs.
+
+    The bitmap is big-endian: byte 0 bit 7 represents ``base_vlan + 0``, byte 0
+    bit 6 ``base_vlan + 1`` and so on. Unknown/short bitmaps return [].
+    """
+    try:
+        raw_bytes = bytes(raw_value)
+    except Exception:
+        return []
+    vlans: list[int] = []
+    for byte_idx, byte_val in enumerate(raw_bytes):
+        for bit_idx in range(8):
+            if byte_val & (0x80 >> bit_idx):
+                vid = base_vlan + (byte_idx * 8) + bit_idx
+                if 1 <= vid <= 4094:
+                    vlans.append(vid)
+    return vlans
+
+
+def _format_ticks_to_iso_offset(ticks_raw) -> str:
+    """ifLastChange is reported as TimeTicks since sysUpTime. Without the
+    device's current sysUpTime + boot timestamp we can't convert to an
+    absolute datetime here -- callers store the raw tick value and the
+    audit rule does the relative-age math against a freshly walked
+    sysUpTime. So we just normalise to a clean string."""
+    try:
+        return str(int(str(ticks_raw).strip()))
+    except (ValueError, TypeError):
+        return ""
+
+
+async def collect_interface_inventory(host_id: int, ip_address: str,
+                                       snmp_config: dict,
+                                       timeout_seconds: float = 5.0) -> dict:
+    """Walk per-port + VLAN-definition data for a single host.
+
+    Writes to ``interface_inventory`` (one row per ifIndex) and
+    ``vlan_definitions`` (one row per VLAN). Returns counts.
+    """
+    result = {"ports_written": 0, "vlans_written": 0, "errors": []}
+
+    def _walk(oid: str, max_rows: int = 2500):
+        return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
+
+    try:
+        (if_names, if_descr, if_alias,
+         admin_status, oper_status,
+         high_speed, low_speed, last_change, duplex,
+         vm_vlan, dot1q_pvid, bridge_port_map,
+         vtp_names, vtp_states,
+         trunk_vlans_1k, trunk_vlans_2k, trunk_vlans_3k, trunk_vlans_4k,
+        ) = await asyncio.gather(
+            _walk(IF_NAME_OID), _walk(IF_DESCR_OID), _walk(IF_ALIAS_OID),
+            _walk(IF_ADMIN_STATUS_OID), _walk(IF_OPER_STATUS_OID),
+            _walk(IF_HIGH_SPEED_OID), _walk(IF_SPEED_OID),
+            _walk(IF_LAST_CHANGE_OID), _walk(DOT3_STATS_DUPLEX_OID),
+            _walk(VM_VLAN_OID), _walk(DOT1Q_PVID_OID), _walk(DOT1D_BASE_PORT_IF_INDEX),
+            _walk(VTP_VLAN_NAME_OID), _walk(VTP_VLAN_STATE_OID),
+            _walk(VTP_TRUNK_VLANS_OID), _walk(VTP_TRUNK_VLANS_2K_OID),
+            _walk(VTP_TRUNK_VLANS_3K_OID), _walk(VTP_TRUNK_VLANS_4K_OID),
+        )
+    except Exception as exc:
+        result["errors"].append(f"SNMP walk failed: {str(exc)}")
+        return result
+
+    # ── Build ifIndex-keyed lookups ────────────────────────────────────
+    def _idx_map(walk: dict[str, str]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for oid, val in walk.items():
+            idx = oid.rsplit(".", 1)[-1] if "." in oid else ""
+            if idx:
+                out[idx] = _snmp_str(val)
+        return out
+
+    name_by_idx = _idx_map(if_names) or _idx_map(if_descr)
+    descr_by_idx = _idx_map(if_descr)
+    alias_by_idx = _idx_map(if_alias)
+    admin_by_idx = _idx_map(admin_status)
+    oper_by_idx = _idx_map(oper_status)
+    hi_speed_by_idx = _idx_map(high_speed)
+    lo_speed_by_idx = _idx_map(low_speed)
+    last_change_by_idx = _idx_map(last_change)
+    duplex_by_idx = _idx_map(duplex)
+    vm_vlan_by_idx = _idx_map(vm_vlan)
+
+    # dot1qPvid is indexed by dot1dBasePort -> translate to ifIndex
+    bp_to_if_index: dict[str, str] = {}
+    for oid, val in bridge_port_map.items():
+        bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
+        if bp:
+            bp_to_if_index[bp] = str(val).strip()
+
+    pvid_by_if_index: dict[str, str] = {}
+    for oid, val in dot1q_pvid.items():
+        bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
+        if_idx = bp_to_if_index.get(bp)
+        if if_idx:
+            pvid_by_if_index[if_idx] = str(val).strip()
+
+    # Trunk allowed-VLAN bitmaps: indexed by ifIndex. Stored as a comma-
+    # delimited string for the audit rule -- compact and easy to diff.
+    def _trunk_vlans_for_idx(if_idx: str) -> str:
+        vlans: list[int] = []
+        for walk, base in (
+            (trunk_vlans_1k, 0),
+            (trunk_vlans_2k, 1024),
+            (trunk_vlans_3k, 2048),
+            (trunk_vlans_4k, 3072),
+        ):
+            raw = None
+            for oid, val in walk.items():
+                if oid.rsplit(".", 1)[-1] == if_idx:
+                    raw = val
+                    break
+            if raw is not None:
+                vlans.extend(_bitmap_to_vlan_list(raw, base))
+        # Deduplicate + sort. Trunk bitmaps frequently span all four
+        # slices for fully-open trunks; keeping order stable makes diffs
+        # of the inventory row readable.
+        return ",".join(str(v) for v in sorted(set(vlans))) if vlans else ""
+
+    # ── Resolve speed (Mbps) per ifIndex ──
+    def _speed_mbps(if_idx: str) -> int:
+        s = hi_speed_by_idx.get(if_idx, "")
+        if s:
+            try:
+                return int(s)
+            except (ValueError, TypeError):
+                pass
+        s2 = lo_speed_by_idx.get(if_idx, "")
+        if s2:
+            try:
+                return max(0, int(s2) // 1_000_000)
+            except (ValueError, TypeError):
+                pass
+        return 0
+
+    # ── Decide which VLAN to report for an access port ──
+    def _access_vlan(if_idx: str) -> int:
+        # vmVlan (Cisco) wins; dot1qPvid is a fallback. Trunks report a
+        # vacuous PVID that we want to ignore, so an empty access_vlan
+        # here is correct for them and the trunk_vlans column carries
+        # the real info.
+        for src in (vm_vlan_by_idx.get(if_idx, ""),
+                    pvid_by_if_index.get(if_idx, "")):
+            try:
+                vid = int(src)
+            except (ValueError, TypeError):
+                continue
+            if 1 <= vid <= 4094:
+                return vid
+        return 0
+
+    # ── Write port rows ──
+    all_if_indexes = set(name_by_idx) | set(admin_by_idx) | set(oper_by_idx)
+    for if_idx in all_if_indexes:
+        try:
+            ifindex_int = int(if_idx)
+        except (ValueError, TypeError):
+            continue
+        name = name_by_idx.get(if_idx) or descr_by_idx.get(if_idx) or f"ifIndex-{if_idx}"
+        try:
+            await db.upsert_interface_inventory(
+                host_id=host_id,
+                if_index=ifindex_int,
+                name=name,
+                description=alias_by_idx.get(if_idx, ""),
+                admin_state=ADMIN_STATE_MAP.get(admin_by_idx.get(if_idx, ""), ""),
+                oper_state=OPER_STATE_MAP.get(oper_by_idx.get(if_idx, ""), ""),
+                speed_mbps=_speed_mbps(if_idx),
+                duplex=DUPLEX_MAP.get(duplex_by_idx.get(if_idx, ""), ""),
+                last_change=_format_ticks_to_iso_offset(last_change_by_idx.get(if_idx, "")),
+                access_vlan=_access_vlan(if_idx),
+                trunk_vlans=_trunk_vlans_for_idx(if_idx),
+            )
+            result["ports_written"] += 1
+        except Exception:
+            pass
+
+    # ── Write VLAN definitions ──
+    # vtpVlanName is indexed by <management-domain>.<vlan-id>; the trailing
+    # numeric is the VLAN id. State map: 1=operational, 2=suspended, ...
+    vlan_state_by_id: dict[int, str] = {}
+    for oid, val in vtp_states.items():
+        suffix = oid.rsplit(".", 1)[-1]
+        try:
+            vid = int(suffix)
+        except (ValueError, TypeError):
+            continue
+        vlan_state_by_id[vid] = VTP_STATE_MAP.get(str(val).strip(), str(val).strip())
+
+    for oid, val in vtp_names.items():
+        suffix = oid.rsplit(".", 1)[-1]
+        try:
+            vid = int(suffix)
+        except (ValueError, TypeError):
+            continue
+        if not (1 <= vid <= 4094):
+            continue
+        try:
+            await db.upsert_vlan_definition(
+                host_id=host_id,
+                vlan_id=vid,
+                name=_snmp_str(val),
+                state=vlan_state_by_id.get(vid, "operational"),
+            )
+            result["vlans_written"] += 1
+        except Exception:
+            pass
+
+    LOGGER.info(
+        "interface_inventory: host %s (%s) - %d ports, %d VLANs collected",
+        host_id, ip_address, result["ports_written"], result["vlans_written"],
+    )
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # API Endpoints
 # ═════════════════════════════════════════════════════════════════════════════
 
