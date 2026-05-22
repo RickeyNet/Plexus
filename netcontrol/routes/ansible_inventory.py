@@ -38,6 +38,7 @@ _DEVICE_TYPE_MAP = {
     "cisco_nxos":       "cisco.nxos.nxos",
     "cisco_nxos_ssh":   "cisco.nxos.nxos",
     "cisco_asa":        "cisco.asa.asa",
+    "cisco_ftd":        "cisco.asa.asa",
     "cisco_xr":         "cisco.iosxr.iosxr",
     "arista_eos":       "arista.eos.eos",
     "juniper_junos":    "junipernetworks.junos.junos",
