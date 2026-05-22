@@ -20,10 +20,15 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import routes.database as db
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
+from netcontrol.routes.reporting import (
+    _parse_db_datetime_utc,
+    _parse_schedule_interval_seconds,
+)
 from netcontrol.routes.shared import _compute_config_diff
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -637,13 +642,13 @@ async def _persist_finding(run_id: int, finding: Finding) -> None:
         await conn.close()
 
 
-async def _create_run(trigger: str) -> int:
+async def _create_run(trigger: str, schedule_id: int | None = None) -> int:
     conn = await db.get_db()
     try:
         cursor = await conn.execute(
-            """INSERT INTO audit_runs (status, trigger)
-               VALUES ('running', ?)""",
-            (trigger,),
+            """INSERT INTO audit_runs (status, trigger, schedule_id)
+               VALUES ('running', ?, ?)""",
+            (trigger, schedule_id),
         )
         await conn.commit()
         return int(cursor.lastrowid)
@@ -694,14 +699,14 @@ async def _finalize_run(
         await conn.close()
 
 
-async def run_audit(trigger: str = "manual") -> int:
+async def run_audit(trigger: str = "manual", schedule_id: int | None = None) -> int:
     """Execute one full audit run end-to-end. Returns the run_id.
 
     Each rule's exceptions are caught individually so one broken rule
     doesn't tank the whole run -- it lands a finding instead and the
     run continues.
     """
-    run_id = await _create_run(trigger)
+    run_id = await _create_run(trigger, schedule_id=schedule_id)
     severity_counts: dict[str, int] = {s: 0 for s in SEVERITY_ORDER}
     rules_executed: list[str] = []
     rules_failed: dict[str, str] = {}
@@ -759,16 +764,28 @@ async def run_audit(trigger: str = "manual") -> int:
 # ── Background loop ─────────────────────────────────────────────────────────
 
 async def _audit_run_loop() -> None:
-    """Background polling loop for on-demand / scheduled audit runs.
+    """Background polling loop for on-demand and scheduled audit runs.
 
-    v1 only handles the on-demand queue (rows inserted with status
-    ``queued`` by the API). Cron-style scheduling reuses the existing
-    report scheduler pattern but is wired in a follow-up PR alongside
-    the schedule UI.
+    Each tick:
+      1. Scan ``audit_schedules`` for enabled rows whose configured
+         interval has elapsed since ``last_run_at`` and enqueue a fresh
+         ``audit_runs`` row (status='queued', trigger='scheduled') for
+         each one, advancing ``last_run_at`` immediately so a slow run
+         can't double-fire the next tick.
+      2. Claim the oldest queued row and execute it. The queue is shared
+         between scheduled and on-demand triggers so one execution path
+         handles both.
     """
     while True:
         try:
             await asyncio.sleep(AUDIT_POLL_SECONDS)
+            try:
+                await _enqueue_due_scheduled_runs()
+            except Exception as exc:
+                LOGGER.warning(
+                    "audit schedule sweep failed: %s", redact_value(str(exc))
+                )
+                increment_metric("audit.schedule.failed")
             queued = await _claim_queued_run()
             if queued is not None:
                 LOGGER.info("audit: starting queued run id=%d", queued)
@@ -803,6 +820,183 @@ async def _claim_queued_run() -> int | None:
         return run_id
     finally:
         await conn.close()
+
+
+# ── Schedule helpers ────────────────────────────────────────────────────────
+
+_SCHEDULE_COLS = (
+    "id", "name", "schedule", "enabled",
+    "last_run_at", "created_by", "created_at", "updated_at",
+)
+
+
+def _row_to_schedule(row, cols: list[str]) -> dict:
+    d = dict(zip(cols, row))
+    d["enabled"] = bool(d.get("enabled"))
+    return d
+
+
+def _is_schedule_due(schedule_row: dict, now_utc: datetime) -> bool:
+    """A schedule is due when enabled, has a parseable interval, and the
+    interval has elapsed since ``last_run_at`` (or never ran)."""
+    if not schedule_row.get("enabled"):
+        return False
+    interval = _parse_schedule_interval_seconds(str(schedule_row.get("schedule") or ""))
+    if not interval:
+        return False
+    last_run = _parse_db_datetime_utc(schedule_row.get("last_run_at"))
+    if last_run is None:
+        return True
+    elapsed = (now_utc - last_run).total_seconds()
+    return elapsed >= interval
+
+
+async def _list_schedules() -> list[dict]:
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            f"SELECT {', '.join(_SCHEDULE_COLS)} FROM audit_schedules "
+            "ORDER BY id DESC"
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [_row_to_schedule(r, cols) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def _get_schedule(schedule_id: int) -> dict | None:
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            f"SELECT {', '.join(_SCHEDULE_COLS)} FROM audit_schedules "
+            "WHERE id = ?",
+            (schedule_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        cols = [d[0] for d in cursor.description]
+        return _row_to_schedule(row, cols)
+    finally:
+        await conn.close()
+
+
+async def _create_schedule(
+    name: str, schedule: str, enabled: bool, created_by: str
+) -> dict:
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            """INSERT INTO audit_schedules (name, schedule, enabled, created_by)
+               VALUES (?, ?, ?, ?)""",
+            (name, schedule, 1 if enabled else 0, created_by),
+        )
+        await conn.commit()
+        new_id = int(cursor.lastrowid)
+    finally:
+        await conn.close()
+    return await _get_schedule(new_id)  # type: ignore[return-value]
+
+
+async def _update_schedule(
+    schedule_id: int,
+    name: str | None,
+    schedule: str | None,
+    enabled: bool | None,
+) -> dict | None:
+    sets: list[str] = []
+    params: list = []
+    if name is not None:
+        sets.append("name = ?")
+        params.append(name)
+    if schedule is not None:
+        sets.append("schedule = ?")
+        params.append(schedule)
+    if enabled is not None:
+        sets.append("enabled = ?")
+        params.append(1 if enabled else 0)
+    if not sets:
+        return await _get_schedule(schedule_id)
+    sets.append("updated_at = datetime('now')")
+    params.append(schedule_id)
+    conn = await db.get_db()
+    try:
+        await conn.execute(
+            f"UPDATE audit_schedules SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
+        )
+        await conn.commit()
+    finally:
+        await conn.close()
+    return await _get_schedule(schedule_id)
+
+
+async def _delete_schedule(schedule_id: int) -> bool:
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            "DELETE FROM audit_schedules WHERE id = ?", (schedule_id,)
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        await conn.close()
+
+
+async def _mark_schedule_ran(schedule_id: int, when: datetime) -> None:
+    conn = await db.get_db()
+    try:
+        await conn.execute(
+            "UPDATE audit_schedules SET last_run_at = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (when.strftime("%Y-%m-%d %H:%M:%S"), schedule_id),
+        )
+        await conn.commit()
+    finally:
+        await conn.close()
+
+
+async def _enqueue_scheduled_run(schedule_id: int) -> int:
+    """Insert a queued audit_runs row stamped with the schedule's id."""
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            """INSERT INTO audit_runs (status, trigger, schedule_id)
+               VALUES ('queued', 'scheduled', ?)""",
+            (schedule_id,),
+        )
+        await conn.commit()
+        return int(cursor.lastrowid)
+    finally:
+        await conn.close()
+
+
+async def _enqueue_due_scheduled_runs() -> int:
+    """Enqueue one audit_runs row per due schedule; return the count.
+
+    ``last_run_at`` advances before the run executes so a backed-up
+    queue or a slow execution can't double-fire the same schedule.
+    """
+    schedules = await _list_schedules()
+    if not schedules:
+        return 0
+    now_utc = datetime.now(UTC)
+    enqueued = 0
+    for sched in schedules:
+        if not _is_schedule_due(sched, now_utc):
+            continue
+        sid = int(sched["id"])
+        await _mark_schedule_ran(sid, now_utc)
+        await _enqueue_scheduled_run(sid)
+        enqueued += 1
+        LOGGER.info(
+            "audit schedule %d (%s) due; enqueued run",
+            sid, sched.get("name") or "",
+        )
+    if enqueued:
+        increment_metric("audit.schedule.enqueued")
+    return enqueued
 
 
 async def _execute_existing_run(run_id: int, trigger: str) -> None:
@@ -875,9 +1069,10 @@ async def list_audit_runs(
     conn = await db.get_db()
     try:
         cursor = await conn.execute(
-            """SELECT id, status, trigger, started_at, finished_at, host_count,
-                      findings_total, findings_critical, findings_high,
-                      findings_medium, findings_low, findings_info
+            """SELECT id, status, trigger, schedule_id, started_at, finished_at,
+                      host_count, findings_total, findings_critical,
+                      findings_high, findings_medium, findings_low,
+                      findings_info
                FROM audit_runs
                ORDER BY id DESC
                LIMIT ?""",
@@ -885,7 +1080,8 @@ async def list_audit_runs(
         )
         rows = await cursor.fetchall()
         cols = [
-            "id", "status", "trigger", "started_at", "finished_at", "host_count",
+            "id", "status", "trigger", "schedule_id", "started_at",
+            "finished_at", "host_count",
             "findings_total", "findings_critical", "findings_high",
             "findings_medium", "findings_low", "findings_info",
         ]
@@ -955,6 +1151,89 @@ async def list_audit_findings(
         return {"findings": findings}
     finally:
         await conn.close()
+
+
+# ── Schedule endpoints (Phase 5) ────────────────────────────────────────────
+
+
+def _validate_schedule_payload(name: str, schedule: str) -> None:
+    n = (name or "").strip()
+    if not n or len(n) > 200:
+        raise HTTPException(status_code=400, detail="name must be 1-200 chars")
+    sch = (schedule or "").strip()
+    # An empty schedule is allowed (paused / draft) but a non-empty one
+    # must parse via the same grammar reporting uses ("@daily", "5m", ...).
+    if sch and _parse_schedule_interval_seconds(sch) is None:
+        raise HTTPException(
+            status_code=400,
+            detail="schedule must be one of @hourly|@daily|@weekly|@monthly "
+                   "or '<N><s|m|h|d|w>' (e.g. 30m, 6h, 1d)",
+        )
+
+
+@router.get("/api/audit/schedules")
+async def list_audit_schedules():
+    return {"schedules": await _list_schedules()}
+
+
+@router.get("/api/audit/schedules/{schedule_id}")
+async def get_audit_schedule(schedule_id: int):
+    sched = await _get_schedule(schedule_id)
+    if sched is None:
+        raise HTTPException(status_code=404, detail="schedule not found")
+    return sched
+
+
+@router.post("/api/audit/schedules", status_code=201)
+async def create_audit_schedule(payload: dict = Body(...)):
+    name = str(payload.get("name") or "").strip()
+    schedule = str(payload.get("schedule") or "").strip()
+    enabled = bool(payload.get("enabled", True))
+    created_by = str(payload.get("created_by") or "").strip()[:200]
+    _validate_schedule_payload(name, schedule)
+    return await _create_schedule(name, schedule, enabled, created_by)
+
+
+@router.put("/api/audit/schedules/{schedule_id}")
+async def update_audit_schedule(schedule_id: int, payload: dict = Body(...)):
+    existing = await _get_schedule(schedule_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="schedule not found")
+    new_name = payload.get("name")
+    new_schedule = payload.get("schedule")
+    new_enabled = payload.get("enabled")
+    # Validate the resulting state (use existing values for fields the
+    # client didn't send).
+    eff_name = str(new_name if new_name is not None else existing["name"])
+    eff_schedule = str(
+        new_schedule if new_schedule is not None else existing["schedule"]
+    )
+    _validate_schedule_payload(eff_name, eff_schedule)
+    return await _update_schedule(
+        schedule_id,
+        name=eff_name if new_name is not None else None,
+        schedule=eff_schedule if new_schedule is not None else None,
+        enabled=bool(new_enabled) if new_enabled is not None else None,
+    )
+
+
+@router.delete("/api/audit/schedules/{schedule_id}", status_code=204)
+async def delete_audit_schedule(schedule_id: int):
+    ok = await _delete_schedule(schedule_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="schedule not found")
+    return None
+
+
+@router.post("/api/audit/schedules/{schedule_id}/run-now", status_code=202)
+async def run_schedule_now(schedule_id: int):
+    """Enqueue an immediate run tagged with this schedule. The background
+    loop picks it up on the next tick."""
+    sched = await _get_schedule(schedule_id)
+    if sched is None:
+        raise HTTPException(status_code=404, detail="schedule not found")
+    run_id = await _enqueue_scheduled_run(schedule_id)
+    return {"run_id": run_id, "schedule_id": schedule_id, "status": "queued"}
 
 
 # ── Per-host read endpoints (powers topology NodeDetails tabs) ──────────────

@@ -4,8 +4,14 @@ import {
   useAuditRuns,
   useAuditFindings,
   useTriggerAuditRun,
+  useAuditSchedules,
+  useCreateAuditSchedule,
+  useUpdateAuditSchedule,
+  useDeleteAuditSchedule,
+  useRunScheduleNow,
   type AuditRunSummary,
   type AuditFinding,
+  type AuditSchedule,
   type AuditSeverity,
 } from '@/api/audit';
 
@@ -96,6 +102,8 @@ export function Audit() {
           Run failed: {(trigger.error as Error).message}
         </div>
       )}
+
+      <SchedulesCard />
 
       <section className="card" style={{ padding: '1rem' }}>
         <h3 style={{ marginTop: 0 }}>Recent runs</h3>
@@ -453,6 +461,301 @@ function CategorySection(props: {
         </div>
       </div>
       {!collapsed && <FindingsTable findings={findings} />}
+    </div>
+  );
+}
+
+// ── Schedules card (Phase 5) ───────────────────────────────────────────────
+//
+// Schedule cadence strings reuse the reporting grammar -- if you change one
+// here, change `reporting._parse_schedule_interval_seconds` too.
+const SCHEDULE_PRESETS: { label: string; value: string }[] = [
+  { label: 'Hourly', value: '@hourly' },
+  { label: 'Every 6 hours', value: '6h' },
+  { label: 'Daily', value: '@daily' },
+  { label: 'Weekly', value: '@weekly' },
+];
+
+function SchedulesCard() {
+  const schedules = useAuditSchedules();
+  const update = useUpdateAuditSchedule();
+  const remove = useDeleteAuditSchedule();
+  const runNow = useRunScheduleNow();
+  const [editing, setEditing] = useState<AuditSchedule | 'new' | null>(null);
+
+  const rows = schedules.data?.schedules ?? [];
+
+  return (
+    <section className="card" style={{ padding: '1rem' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '0.5rem',
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Schedules</h3>
+        <button
+          className="btn btn-secondary"
+          onClick={() => setEditing('new')}
+        >
+          Add schedule
+        </button>
+      </div>
+
+      {schedules.isPending && <p className="text-muted">Loading…</p>}
+      {schedules.error && (
+        <p style={{ color: 'var(--danger)' }}>
+          Error: {(schedules.error as Error).message}
+        </p>
+      )}
+      {!schedules.isPending && rows.length === 0 && (
+        <p className="text-muted">
+          No schedules configured. Schedules enqueue an audit run on a
+          recurring cadence (e.g., daily, every 6 hours).
+        </p>
+      )}
+
+      {rows.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Cadence</th>
+              <th>Enabled</th>
+              <th>Last run</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((s) => (
+              <tr key={s.id}>
+                <td>{s.name}</td>
+                <td><code>{s.schedule || '-'}</code></td>
+                <td>
+                  <span
+                    className={`badge ${
+                      s.enabled ? 'badge-success' : 'badge-muted'
+                    }`}
+                  >
+                    {s.enabled ? 'enabled' : 'paused'}
+                  </span>
+                </td>
+                <td>
+                  {s.last_run_at
+                    ? new Date(s.last_run_at).toLocaleString()
+                    : 'never'}
+                </td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    className="btn btn-sm"
+                    disabled={runNow.isPending}
+                    onClick={() => runNow.mutate(s.id)}
+                  >
+                    Run now
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    style={{ marginLeft: '0.25rem' }}
+                    disabled={update.isPending}
+                    onClick={() =>
+                      update.mutate({
+                        id: s.id,
+                        payload: { enabled: !s.enabled },
+                      })
+                    }
+                  >
+                    {s.enabled ? 'Pause' : 'Resume'}
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    style={{ marginLeft: '0.25rem' }}
+                    onClick={() => setEditing(s)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="btn btn-sm btn-danger"
+                    style={{ marginLeft: '0.25rem' }}
+                    disabled={remove.isPending}
+                    onClick={() => {
+                      if (
+                        confirm(`Delete schedule "${s.name}"?`)
+                      ) {
+                        remove.mutate(s.id);
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {editing !== null && (
+        <ScheduleEditor
+          schedule={editing === 'new' ? null : editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </section>
+  );
+}
+
+function ScheduleEditor({
+  schedule,
+  onClose,
+}: {
+  schedule: AuditSchedule | null;
+  onClose: () => void;
+}) {
+  const create = useCreateAuditSchedule();
+  const update = useUpdateAuditSchedule();
+  const [name, setName] = useState(schedule?.name ?? '');
+  const [cadence, setCadence] = useState(schedule?.schedule ?? '@daily');
+  const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
+  const [error, setError] = useState<string | null>(null);
+
+  const isNew = schedule === null;
+  const pending = create.isPending || update.isPending;
+
+  const submit = async () => {
+    setError(null);
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError('Name is required');
+      return;
+    }
+    try {
+      if (isNew) {
+        await create.mutateAsync({
+          name: trimmedName,
+          schedule: cadence.trim(),
+          enabled,
+        });
+      } else {
+        await update.mutateAsync({
+          id: schedule!.id,
+          payload: {
+            name: trimmedName,
+            schedule: cadence.trim(),
+            enabled,
+          },
+        });
+      }
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="card"
+        style={{ width: 420, padding: '1rem', display: 'grid', gap: '0.75rem' }}
+      >
+        <h3 style={{ margin: 0 }}>
+          {isNew ? 'New schedule' : `Edit "${schedule!.name}"`}
+        </h3>
+
+        <label style={{ display: 'grid', gap: '0.25rem' }}>
+          <span>Name</span>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Nightly compliance sweep"
+          />
+        </label>
+
+        <label style={{ display: 'grid', gap: '0.25rem' }}>
+          <span>Cadence</span>
+          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+            {SCHEDULE_PRESETS.map((p) => (
+              <button
+                type="button"
+                key={p.value}
+                className={`badge ${
+                  cadence === p.value ? 'badge-info' : 'badge-muted'
+                }`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => setCadence(p.value)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <input
+            type="text"
+            value={cadence}
+            onChange={(e) => setCadence(e.target.value)}
+            placeholder="@daily, 6h, 30m, ..."
+          />
+          <small className="text-muted">
+            Accepts @hourly / @daily / @weekly / @monthly, or N[s|m|h|d|w].
+          </small>
+        </label>
+
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+        >
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+          <span>Enabled</span>
+        </label>
+
+        {error && (
+          <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>
+        )}
+
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '0.5rem',
+          }}
+        >
+          <button
+            type="button"
+            className="btn"
+            onClick={onClose}
+            disabled={pending}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={pending}
+          >
+            {pending ? 'Saving…' : isNew ? 'Create' : 'Save'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
