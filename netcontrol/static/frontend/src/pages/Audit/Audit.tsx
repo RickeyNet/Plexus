@@ -9,9 +9,13 @@ import {
   useUpdateAuditSchedule,
   useDeleteAuditSchedule,
   useRunScheduleNow,
+  useAuditOverrides,
+  useCreateAuditOverride,
+  useDeleteAuditOverride,
   type AuditRunSummary,
   type AuditFinding,
   type AuditSchedule,
+  type AuditOverrideMode,
   type AuditSeverity,
 } from '@/api/audit';
 
@@ -104,6 +108,8 @@ export function Audit() {
       )}
 
       <SchedulesCard />
+
+      <OverridesCard />
 
       <section className="card" style={{ padding: '1rem' }}>
         <h3 style={{ marginTop: 0 }}>Recent runs</h3>
@@ -761,7 +767,9 @@ function ScheduleEditor({
 }
 
 function FindingsTable({ findings }: { findings: AuditFinding[] }) {
+  const [muting, setMuting] = useState<AuditFinding | null>(null);
   return (
+    <>
     <table className="data-table">
       <thead>
         <tr>
@@ -771,6 +779,7 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
           <th>Title</th>
           <th>Detail</th>
           <th>CIS</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -788,9 +797,260 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
               {f.detail}
             </td>
             <td>{f.cis_control || '-'}</td>
+            <td style={{ textAlign: 'right' }}>
+              <button
+                className="btn btn-sm"
+                title="Suppress this rule from future runs"
+                onClick={() => setMuting(f)}
+              >
+                Mute
+              </button>
+            </td>
           </tr>
         ))}
       </tbody>
     </table>
+    {muting && (
+      <MuteFindingDialog
+        finding={muting}
+        onClose={() => setMuting(null)}
+      />
+    )}
+    </>
   );
 }
+
+// ── Overrides card + Mute dialog (Phase 6) ─────────────────────────────────
+
+function OverridesCard() {
+  const overrides = useAuditOverrides();
+  const remove = useDeleteAuditOverride();
+  const rows = overrides.data?.overrides ?? [];
+
+  return (
+    <section className="card" style={{ padding: '1rem' }}>
+      <h3 style={{ marginTop: 0 }}>Suppressed findings</h3>
+      {overrides.isPending && <p className="text-muted">Loading…</p>}
+      {overrides.error && (
+        <p style={{ color: 'var(--danger)' }}>
+          Error: {(overrides.error as Error).message}
+        </p>
+      )}
+      {!overrides.isPending && rows.length === 0 && (
+        <p className="text-muted">
+          No active overrides. Mute a finding from a run to silence a chronic
+          false positive; muted findings still log to the summary so the count
+          stays auditable.
+        </p>
+      )}
+      {rows.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Rule</th>
+              <th>Host</th>
+              <th>Mode</th>
+              <th>Reason</th>
+              <th>Expires</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((o) => (
+              <tr key={o.id}>
+                <td><code>{o.rule_id}</code></td>
+                <td>{o.host_id ?? <span className="text-muted">(all)</span>}</td>
+                <td>
+                  <span
+                    className={`badge ${
+                      o.mode === 'accept_risk'
+                        ? 'badge-warning'
+                        : 'badge-muted'
+                    }`}
+                  >
+                    {o.mode}
+                  </span>
+                </td>
+                <td style={{ maxWidth: 320, whiteSpace: 'pre-wrap' }}>
+                  {o.reason || '-'}
+                </td>
+                <td>
+                  {o.expires_at
+                    ? new Date(o.expires_at).toLocaleString()
+                    : <span className="text-muted">never</span>}
+                </td>
+                <td>
+                  {o.created_at
+                    ? new Date(o.created_at).toLocaleString()
+                    : '-'}
+                </td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    className="btn btn-sm btn-danger"
+                    disabled={remove.isPending}
+                    onClick={() => {
+                      if (confirm('Remove this override?')) {
+                        remove.mutate(o.id);
+                      }
+                    }}
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function MuteFindingDialog({
+  finding,
+  onClose,
+}: {
+  finding: AuditFinding;
+  onClose: () => void;
+}) {
+  const create = useCreateAuditOverride();
+  const [mode, setMode] = useState<AuditOverrideMode>('mute');
+  const [scope, setScope] = useState<'host' | 'global'>('host');
+  const [reason, setReason] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+
+  const hostId = finding.host_id ?? null;
+
+  function submit() {
+    const payload = {
+      rule_id: finding.rule_id,
+      host_id: scope === 'host' ? hostId : null,
+      mode,
+      reason: reason.trim(),
+      expires_at: expiresAt ? expiresAt.replace('T', ' ') + ':00' : null,
+    };
+    create.mutate(payload, { onSuccess: onClose });
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+        zIndex: 1000, display: 'flex', alignItems: 'center',
+        justifyContent: 'center', padding: '1rem',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="card"
+        style={{ padding: '1.25rem', minWidth: 420, maxWidth: 560 }}
+      >
+        <h3 style={{ marginTop: 0 }}>Mute finding</h3>
+        <p className="text-muted" style={{ marginTop: 0 }}>
+          <code>{finding.rule_id}</code> — {finding.title}
+        </p>
+
+        <div style={{ display: 'grid', gap: '0.75rem' }}>
+          <label style={{ display: 'grid', gap: '0.25rem' }}>
+            <span>Scope</span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  scope === 'host' ? 'btn-primary' : ''
+                }`}
+                disabled={hostId == null}
+                onClick={() => setScope('host')}
+              >
+                This host{hostId != null ? ` (#${hostId})` : ''}
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  scope === 'global' ? 'btn-primary' : ''
+                }`}
+                onClick={() => setScope('global')}
+              >
+                All hosts
+              </button>
+            </div>
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.25rem' }}>
+            <span>Mode</span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  mode === 'mute' ? 'btn-primary' : ''
+                }`}
+                onClick={() => setMode('mute')}
+              >
+                Mute (false positive)
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  mode === 'accept_risk' ? 'btn-primary' : ''
+                }`}
+                onClick={() => setMode('accept_risk')}
+              >
+                Accept risk
+              </button>
+            </div>
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.25rem' }}>
+            <span>Reason</span>
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={3}
+              placeholder="Why is this finding being suppressed?"
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.25rem' }}>
+            <span>Expires (optional)</span>
+            <input
+              type="datetime-local"
+              value={expiresAt}
+              onChange={(e) => setExpiresAt(e.target.value)}
+            />
+            <span className="text-muted" style={{ fontSize: '0.8rem' }}>
+              Leave blank for a permanent override.
+            </span>
+          </label>
+        </div>
+
+        {create.error && (
+          <p style={{ color: 'var(--danger)' }}>
+            {(create.error as Error).message}
+          </p>
+        )}
+
+        <div
+          style={{
+            display: 'flex', gap: '0.5rem', justifyContent: 'flex-end',
+            marginTop: '1rem',
+          }}
+        >
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={create.isPending}
+          >
+            {create.isPending ? 'Saving…' : 'Mute'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
