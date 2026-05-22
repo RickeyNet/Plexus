@@ -58,6 +58,10 @@ from netcontrol.routes.admin import (
     init_admin,
     router as admin_router,
 )
+from netcontrol.routes.admin_updates import (
+    init_admin_updates,
+    router as admin_updates_router,
+)
 from netcontrol.routes.ansible_inventory import (
     init_ansible_inventory,
     router as ansible_inventory_router,
@@ -1811,6 +1815,7 @@ init_interface_errors(require_auth, require_admin)
 init_billing(require_auth, require_admin)
 init_cloud_visibility(require_admin)
 init_ipam(require_admin)
+init_admin_updates(require_admin)
 init_dhcp(require_admin)
 init_federation(require_admin)
 init_lab(require_auth, require_feature)
@@ -1892,6 +1897,11 @@ app.include_router(
 )
 app.include_router(
     monitoring_admin_router,
+    dependencies=[Depends(require_admin)],
+)
+# Admin self-update routes (Layer 3, v1: read-only check + channel config).
+app.include_router(
+    admin_updates_router,
     dependencies=[Depends(require_admin)],
 )
 # Metrics Engine (Prometheus-style)

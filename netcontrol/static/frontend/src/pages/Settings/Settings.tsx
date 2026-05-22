@@ -14,6 +14,7 @@ import { LoggingTab } from './LoggingTab';
 import { MonitoringTab } from './MonitoringTab';
 import { NetFlowTab } from './NetFlowTab';
 import { SiemTab } from './SiemTab';
+import { SystemTab } from './SystemTab';
 import { UsersTab } from './UsersTab';
 
 type Tab =
@@ -26,7 +27,8 @@ type Tab =
   | 'discovery'
   | 'monitoring'
   | 'netflow'
-  | 'features';
+  | 'features'
+  | 'system';
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   appearance: {
@@ -69,6 +71,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Feature Visibility',
     text: 'Hide or show features for the entire instance. Use this to declutter the UI for operators who only need a subset of Plexus, or to stage rollouts.',
   },
+  system: {
+    title: 'System & Updates',
+    text: 'View the running Plexus version and check for newer releases. Choose an update channel (GitHub releases, a tracked git branch, or air-gapped). Applying an update is still done via deploy/upgrade.sh on the host.',
+  },
 };
 
 const ADMIN_TABS: { id: Tab; label: string }[] = [
@@ -82,6 +88,7 @@ const ADMIN_TABS: { id: Tab; label: string }[] = [
   { id: 'monitoring', label: 'Monitoring' },
   { id: 'netflow', label: 'NetFlow' },
   { id: 'features', label: 'Features' },
+  { id: 'system', label: 'System' },
 ];
 
 const NON_ADMIN_TABS: { id: Tab; label: string }[] = [
@@ -236,6 +243,7 @@ export function Settings() {
           {tab === 'monitoring' && <MonitoringTab />}
           {tab === 'netflow' && <NetFlowTab />}
           {tab === 'features' && <FeaturesTab capabilities={caps} />}
+          {tab === 'system' && <SystemTab />}
         </div>
       </div>
     </div>
