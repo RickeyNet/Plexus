@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import * as echarts from 'echarts';
+import { echarts } from '@/lib/echart-core';
 import { DataSet, Network } from 'vis-network/standalone';
 import type { Edge as VisEdge, Node as VisNode } from 'vis-network';
 
