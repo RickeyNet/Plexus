@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import GenericDriver, get_driver
+from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _run_show_command
 from netcontrol.routes.snmp import (
@@ -118,6 +119,7 @@ class DiscoveryScanRequest(BaseModel):
     device_type: str = "unknown"
     hostname_prefix: str = "discovered"
     use_snmp: bool = True
+    use_icmp: bool = True
 
     model_config = ConfigDict(extra="forbid")
 
@@ -164,6 +166,7 @@ async def _probe_discovery_target(
     hostname_prefix: str,
     use_snmp: bool,
     snmp_config: dict,
+    use_icmp: bool = True,
 ) -> dict | None:
     if use_snmp:
         snmp_hit = await _probe_discovery_target_snmp(ip_address, timeout_seconds, snmp_config)
@@ -196,6 +199,16 @@ async def _probe_discovery_target(
                 except Exception:
                     pass
     if not detected_port:
+        # Last-resort ICMP probe so hosts that block SNMP/22/443 but still
+        # answer ping (firewalls with locked-down mgmt planes, appliances
+        # without an SSH surface) surface in the discovery sweep.  The
+        # caller can disable this for pure-SNMP networks.
+        if use_icmp:
+            icmp_hit = await _probe_discovery_target_icmp(
+                ip_address, timeout_seconds, hostname_prefix,
+            )
+            if icmp_hit is not None:
+                return icmp_hit
         return None
 
     try:
@@ -280,6 +293,7 @@ async def _discover_hosts(request: DiscoveryScanRequest, group_id: int | None = 
                 hostname_prefix=request.hostname_prefix,
                 use_snmp=request.use_snmp,
                 snmp_config=snmp_cfg,
+                use_icmp=request.use_icmp,
             )
 
     discovered_raw = await asyncio.gather(*[_scan_one(ip) for ip in targets])

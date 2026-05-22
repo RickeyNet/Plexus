@@ -170,6 +170,10 @@ MONITORING_DEFAULTS = {
     "escalation_after_minutes": 30,
     "escalation_check_interval": 60,
     "default_cooldown_minutes": 15,
+    "icmp_enabled": True,
+    "icmp_count": 3,
+    "icmp_timeout_seconds": 2.0,
+    "icmp_privileged": False,
 }
 MONITORING_MIN_INTERVAL = 60
 MONITORING_MAX_INTERVAL = 86400

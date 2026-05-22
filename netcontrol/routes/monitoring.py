@@ -24,6 +24,7 @@ from netcontrol.routes.metrics_engine import (
     store_interface_ts_from_poll,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.snmp import PYSMNP_AVAILABLE, _snmp_walk
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -73,13 +74,34 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
         "poll_error": "",
         "response_time_ms": None,
         "packet_loss_pct": None,
+        # ICMP is an independent liveness probe — it never gates SNMP or
+        # SSH polling.  Recording icmp_alive separately lets the UI show
+        # "pings fine but SNMP broken" as a distinct state, which is the
+        # exact signal an operator needs when triaging a misconfigured
+        # SNMPv3 setup on (eg) a Cisco FTD.
+        "icmp_alive": None,
+        "icmp_rtt_ms": None,
     }
 
-    # ── Measure response time via ICMP-like TCP connect ──
     poll_start = time.monotonic()
 
+    # ── ICMP liveness probe (runs in parallel with SNMP/SSH) ──
+    icmp_cfg = state.MONITORING_CONFIG
+    icmp_task = None
+    if ICMP_AVAILABLE and icmp_cfg.get("icmp_enabled", True):
+        icmp_task = asyncio.create_task(ping_host(
+            host["ip_address"],
+            count=int(icmp_cfg.get("icmp_count", 3)),
+            timeout=float(icmp_cfg.get("icmp_timeout_seconds", 2.0)),
+            privileged=bool(icmp_cfg.get("icmp_privileged", False)),
+        ))
+
     # ── SNMP polling for CPU, memory, interfaces ──
-    if PYSMNP_AVAILABLE and snmp_cfg.get("enabled"):
+    # Skip SNMP entirely for icmp_only hosts: they're declared at onboarding
+    # as ping-only, so issuing v3 walks against them would just produce a
+    # cycle of timeouts and noisy log lines.
+    is_icmp_only_host = host.get("device_type") == "icmp_only"
+    if PYSMNP_AVAILABLE and snmp_cfg.get("enabled") and not is_icmp_only_host:
         try:
             from netcontrol.routes.metrics_engine import resolve_oids_for_device
             def _walk(oid):
@@ -314,7 +336,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                            host.get("hostname", host["ip_address"]), redact_value(str(exc)))
 
     # ── SSH polling for VPN and routes ──
-    if cred:
+    if cred and not is_icmp_only_host:
         try:
             def _ssh_poll():
                 device = {
@@ -403,11 +425,34 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 result["poll_status"] = "error"
                 result["poll_error"] = str(exc)[:500]
 
-    # Record response time
-    poll_elapsed = (time.monotonic() - poll_start) * 1000  # ms
-    result["response_time_ms"] = round(poll_elapsed, 2)
-    # Packet loss: 100% if error, 0% if ok
-    result["packet_loss_pct"] = 100.0 if result["poll_status"] == "error" else 0.0
+    # ── ICMP results: real RTT + loss override the wall-clock placeholder ──
+    icmp_result = None
+    if icmp_task is not None:
+        try:
+            icmp_result = await icmp_task
+        except Exception as exc:
+            LOGGER.warning("monitoring: ICMP probe failed for %s: %s",
+                           host.get("hostname", host["ip_address"]), redact_value(str(exc)))
+
+    if icmp_result is not None:
+        result["icmp_alive"] = icmp_result["alive"]
+        result["icmp_rtt_ms"] = icmp_result["rtt_ms"]
+        result["response_time_ms"] = icmp_result["rtt_ms"]
+        result["packet_loss_pct"] = icmp_result["packet_loss_pct"]
+        # ICMP-only hosts (no SNMP/SSH credentials) rely on ping alone for
+        # liveness — promote ICMP failure to a real poll error so the
+        # availability state machine flips them to "down".
+        is_icmp_only = host.get("device_type") == "icmp_only"
+        if is_icmp_only:
+            if not icmp_result["alive"]:
+                result["poll_status"] = "error"
+                result["poll_error"] = icmp_result["error"] or "host did not respond to ICMP"
+    else:
+        # ICMP disabled or icmplib missing — fall back to the prior wall-clock
+        # signal so dashboards built on response_time_ms keep working.
+        poll_elapsed = (time.monotonic() - poll_start) * 1000  # ms
+        result["response_time_ms"] = round(poll_elapsed, 2)
+        result["packet_loss_pct"] = 100.0 if result["poll_status"] == "error" else 0.0
 
     return result
 
@@ -658,6 +703,8 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
                 poll_error=res["poll_error"],
                 response_time_ms=res.get("response_time_ms"),
                 packet_loss_pct=res.get("packet_loss_pct"),
+                icmp_alive=res.get("icmp_alive"),
+                icmp_rtt_ms=res.get("icmp_rtt_ms"),
             )
 
             # ── Availability Tracking: detect state transitions ──
@@ -1002,6 +1049,8 @@ async def monitoring_poll_now_stream(request: Request):
                 poll_error=res["poll_error"],
                 response_time_ms=res.get("response_time_ms"),
                 packet_loss_pct=res.get("packet_loss_pct"),
+                icmp_alive=res.get("icmp_alive"),
+                icmp_rtt_ms=res.get("icmp_rtt_ms"),
             )
 
             # Availability tracking

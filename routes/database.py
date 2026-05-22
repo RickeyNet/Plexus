@@ -708,6 +708,8 @@ CREATE TABLE IF NOT EXISTS monitoring_polls (
     poll_error      TEXT    DEFAULT '',
     response_time_ms REAL   DEFAULT NULL,
     packet_loss_pct  REAL   DEFAULT NULL,
+    icmp_alive       INTEGER DEFAULT NULL,
+    icmp_rtt_ms      REAL    DEFAULT NULL,
     polled_at       TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -7244,6 +7246,8 @@ async def create_monitoring_poll(
     poll_error: str = "",
     response_time_ms: float | None = None,
     packet_loss_pct: float | None = None,
+    icmp_alive: bool | None = None,
+    icmp_rtt_ms: float | None = None,
 ) -> int:
     db = await get_db()
     try:
@@ -7253,13 +7257,15 @@ async def create_monitoring_poll(
                 uptime_seconds, if_up_count, if_down_count, if_admin_down, if_details,
                 vpn_tunnels_up, vpn_tunnels_down, vpn_details,
                 route_count, route_snapshot, poll_status, poll_error,
-                response_time_ms, packet_loss_pct, polled_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                response_time_ms, packet_loss_pct, icmp_alive, icmp_rtt_ms, polled_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
             (host_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
              uptime_seconds, if_up_count, if_down_count, if_admin_down, if_details,
              vpn_tunnels_up, vpn_tunnels_down, vpn_details,
              route_count, route_snapshot, poll_status, poll_error,
-             response_time_ms, packet_loss_pct),
+             response_time_ms, packet_loss_pct,
+             None if icmp_alive is None else int(bool(icmp_alive)),
+             icmp_rtt_ms),
         )
         await db.commit()
         return cursor.lastrowid

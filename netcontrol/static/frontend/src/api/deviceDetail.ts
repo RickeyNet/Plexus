@@ -53,6 +53,11 @@ export interface MonitoringPoll {
   if_admin_down?: number;
   polled_at?: string;
   if_details?: string | PollIfDetail[];
+  // Populated when ICMP monitoring is enabled. Drives the Liveness pill
+  // that surfaces "pings but SNMP broken" as a distinct state.
+  icmp_alive?: boolean | number | null;
+  icmp_rtt_ms?: number | null;
+  poll_status?: string;
 }
 
 export interface PollHistoryResult {

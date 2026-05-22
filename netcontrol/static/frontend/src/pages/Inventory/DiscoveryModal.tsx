@@ -58,6 +58,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const [deviceType, setDeviceType] = useState('unknown');
   const [hostnamePrefix, setHostnamePrefix] = useState('discovered');
   const [useSnmp, setUseSnmp] = useState(true);
+  const [useIcmp, setUseIcmp] = useState(true);
   const [removeAbsent, setRemoveAbsent] = useState(false);
   const [testOnly, setTestOnly] = useState(false);
   const [testTargetIp, setTestTargetIp] = useState('');
@@ -96,6 +97,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     deviceType: deviceType.trim() || 'unknown',
     hostnamePrefix: hostnamePrefix.trim() || 'discovered',
     useSnmp,
+    useIcmp,
     removeAbsent,
   });
 
@@ -723,6 +725,21 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             onChange={(e) => setUseSnmp(e.target.checked)}
           />{' '}
           Use SNMP discovery first (falls back to TCP probe)
+        </label>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            marginTop: '0.5rem',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={useIcmp}
+            onChange={(e) => setUseIcmp(e.target.checked)}
+          />{' '}
+          Fall back to ICMP ping (catches firewalls / appliances with locked-down management)
         </label>
         {isSync && (
           <label

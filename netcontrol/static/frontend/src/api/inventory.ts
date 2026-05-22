@@ -83,6 +83,7 @@ export interface DiscoveryOptions {
   deviceType?: string;
   hostnamePrefix?: string;
   useSnmp?: boolean;
+  useIcmp?: boolean;
   removeAbsent?: boolean;
 }
 
@@ -371,6 +372,7 @@ function discoveryBody(
     device_type: opts.deviceType,
     hostname_prefix: opts.hostnamePrefix,
     use_snmp: opts.useSnmp !== false,
+    use_icmp: opts.useIcmp !== false,
     ...(includeRemoveAbsent ? { remove_absent: !!opts.removeAbsent } : {}),
   };
 }
