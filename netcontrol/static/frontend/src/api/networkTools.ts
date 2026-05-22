@@ -45,6 +45,28 @@ export function useMacTrackingStats() {
   });
 }
 
+export interface MacHostRollup {
+  host_id: number;
+  hostname: string;
+  ip_address: string;
+  device_type: string;
+  group_id: number | null;
+  group_name: string | null;
+  snmp_enabled: boolean;
+  mac_count: number;
+  unique_macs: number;
+  last_mac_seen: string | null;
+  arp_count: number;
+  last_arp_seen: string | null;
+}
+
+export function useMacTrackingByHost() {
+  return useQuery({
+    queryKey: ['mac-tracking', 'by-host'],
+    queryFn: () => apiRequest<MacHostRollup[]>('/mac-tracking/by-host'),
+  });
+}
+
 export function useMacSearch(query: string) {
   // A blank query returns the most recently collected entries, so this query
   // is always enabled - that's what lets newly-collected MACs show up without

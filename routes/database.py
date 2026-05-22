@@ -12299,6 +12299,53 @@ async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
         await db.close()
 
 
+async def get_mac_collection_by_host() -> list[dict]:
+    """Per-host MAC/ARP collection rollup, including silent hosts.
+
+    Returns one row for every host (hostname, ip_address, group name) with
+    counts joined in from ``mac_address_table`` and ``arp_table``. Hosts that
+    never returned anything still appear with zero counts so the UI can call
+    out which devices aren't contributing — this is the diagnostic for
+    "Switches Reporting (23/27)".
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT h.id              AS host_id,
+                      h.hostname        AS hostname,
+                      h.ip_address      AS ip_address,
+                      h.device_type     AS device_type,
+                      h.group_id        AS group_id,
+                      g.name            AS group_name,
+                      COALESCE(m.mac_count, 0)        AS mac_count,
+                      COALESCE(m.unique_macs, 0)      AS unique_macs,
+                      m.last_mac_seen                 AS last_mac_seen,
+                      COALESCE(a.arp_count, 0)        AS arp_count,
+                      a.last_arp_seen                 AS last_arp_seen
+               FROM hosts h
+               LEFT JOIN inventory_groups g ON g.id = h.group_id
+               LEFT JOIN (
+                   SELECT host_id,
+                          COUNT(*)                    AS mac_count,
+                          COUNT(DISTINCT mac_address) AS unique_macs,
+                          MAX(last_seen)              AS last_mac_seen
+                   FROM mac_address_table
+                   GROUP BY host_id
+               ) m ON m.host_id = h.id
+               LEFT JOIN (
+                   SELECT host_id,
+                          COUNT(*)       AS arp_count,
+                          MAX(last_seen) AS last_arp_seen
+                   FROM arp_table
+                   GROUP BY host_id
+               ) a ON a.host_id = h.id
+               ORDER BY mac_count ASC, h.hostname ASC"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def get_mac_tracking_stats() -> dict:
     """Summary counts for the MAC tracking header.
 
