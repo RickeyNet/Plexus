@@ -179,3 +179,22 @@ export function useHostAuditFindings(
     enabled: enabled && hostId != null,
   });
 }
+
+// ── Topology search: hosts carrying a given VLAN ────────────────────────────
+
+export interface VlanHostRole {
+  host_id: number;
+  hostname: string | null;
+  vlan_name?: string;
+  roles: ('definition' | 'access' | 'trunk')[];
+  ports: { name: string; kind: 'access' | 'trunk' }[];
+}
+
+export function useHostsByVlan(vlanId: number | null, enabled = true) {
+  return useQuery<{ vlan_id: number; hosts: VlanHostRole[] }>({
+    queryKey: ['topology-search', 'hosts-by-vlan', vlanId],
+    queryFn: () =>
+      apiRequest(`/topology/search/hosts-by-vlan?vlan_id=${vlanId}`),
+    enabled: enabled && vlanId != null,
+  });
+}
