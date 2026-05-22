@@ -131,16 +131,23 @@ const ICON_MAP: Record<string, string> = {
   unknown: '/static/img/topo/unknown.svg',
 };
 
+const FIREWALL_DEVICE_TYPES = new Set([
+  'fortinet',
+  'paloalto_panos',
+  'cisco_asa',
+  'cisco_ftd',
+]);
+
 export function nodeIconUrl(node: TopologyNode): string | undefined {
   const cat = (node.device_category || '').toLowerCase();
   if (cat && ICON_MAP[cat]) return ICON_MAP[cat];
-  if (node.device_type === 'fortinet') return ICON_MAP.firewall;
+  if (node.device_type && FIREWALL_DEVICE_TYPES.has(node.device_type)) return ICON_MAP.firewall;
   if (!node.in_inventory) return ICON_MAP.unknown;
   return undefined;
 }
 
 export function nodeShape(deviceType?: string | null): string {
-  if (deviceType === 'fortinet') return 'triangle';
+  if (deviceType && FIREWALL_DEVICE_TYPES.has(deviceType)) return 'triangle';
   if (deviceType && ['cisco_ios', 'juniper_junos', 'arista_eos'].includes(deviceType)) {
     return 'diamond';
   }
@@ -158,6 +165,8 @@ export function nodeColor(node: TopologyNode, tc: TopoThemeColors): VendorColor 
   }
   const map: Record<string, VendorColor> = {
     cisco_ios: tc.cisco,
+    cisco_asa: tc.cisco,
+    cisco_ftd: tc.cisco,
     juniper_junos: tc.juniper,
     arista_eos: tc.arista,
     fortinet: tc.fortinet,
