@@ -215,8 +215,7 @@ function ProblemRow({ rollup }: { rollup: HostRollup }) {
   );
 }
 
-// Exported for testability - pure rollup from raw backups + device list.
-export function rollUpBackups(
+function rollUpBackups(
   backups: ConfigBackup[],
   devices: DeviceHealth[],
 ): HostRollup[] {

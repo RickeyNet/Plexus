@@ -35,7 +35,8 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   // Cache-bust the image URL when the floor changes so a fresh upload is
   // visible without forcing the browser to disregard cache for unrelated
-  // requests.
+  // requests. floor.id / floor.image_filename are intentional triggers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const cacheKey = useMemo(() => Date.now(), [floor.id, floor.image_filename]);
   const upsert = useUpsertFloorPlacement();
   const [draggedHostId, setDraggedHostId] = useState<number | null>(null);

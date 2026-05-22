@@ -34,7 +34,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
 
   const profileList = useMemo(() => profiles.data || [], [profiles.data]);
   const credList = credentials.data || [];
-  const groupList = groups.data || [];
+  const groupList = useMemo(() => groups.data || [], [groups.data]);
 
   // Auto-select defaults once data loads.
   useEffect(() => {
