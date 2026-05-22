@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import netcontrol.routes.config_backups as config_backups_module
 import pytest
 from fastapi import HTTPException
-
-import netcontrol.routes.config_backups as config_backups_module
 
 
 @pytest.mark.asyncio

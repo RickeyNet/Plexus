@@ -17,7 +17,6 @@ from netcontrol.routes.dhcp_adapters import (
     normalize_dhcp_provider,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure-function / adapter tests
 # ─────────────────────────────────────────────────────────────────────────────
@@ -88,7 +87,7 @@ def test_kea_adapter_normalizes_scopes_and_leases():
     assert scope["range_start"] == "10.0.0.10"
     assert scope["range_end"] == "10.0.0.200"
 
-    leases_by_addr = {l["address"]: l for l in snapshot["leases"]}
+    leases_by_addr = {lease["address"]: lease for lease in snapshot["leases"]}
     assert leases_by_addr["10.0.0.10"]["mac_address"] == "aa:bb:cc:dd:ee:01"
     # MAC normalized from compact form
     assert leases_by_addr["10.0.0.11"]["mac_address"] == "aa:bb:cc:dd:ee:02"

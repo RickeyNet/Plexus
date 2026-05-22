@@ -461,7 +461,8 @@ def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
     if sink.tls_ca_pem.strip():
         ctx.load_verify_locations(cadata=sink.tls_ca_pem)
     if sink.tls_client_cert_pem.strip() and sink.tls_client_key_pem.strip():
-        import tempfile, os as _os
+        import os as _os
+        import tempfile
         # SSLContext.load_cert_chain demands paths. Materialize PEMs into
         # temp files for the duration of context construction, then unlink.
         cert_fd, cert_path = tempfile.mkstemp(suffix=".pem")
@@ -473,10 +474,14 @@ def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
                 f.write(sink.tls_client_key_pem)
             ctx.load_cert_chain(cert_path, key_path)
         finally:
-            try: _os.unlink(cert_path)
-            except OSError: pass
-            try: _os.unlink(key_path)
-            except OSError: pass
+            try:
+                _os.unlink(cert_path)
+            except OSError:
+                pass
+            try:
+                _os.unlink(key_path)
+            except OSError:
+                pass
     return ctx
 
 

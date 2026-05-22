@@ -9,7 +9,6 @@ Provides:
 """
 from __future__ import annotations
 
-
 import asyncio
 import json
 import socket
@@ -20,7 +19,7 @@ from pydantic import BaseModel
 
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import _get_session
-from netcontrol.routes.snmp import _build_snmp_auth, _snmp_walk, _snmp_str
+from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()

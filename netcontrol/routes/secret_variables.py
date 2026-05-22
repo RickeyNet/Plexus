@@ -7,7 +7,6 @@ Only admins can create/update/delete secret variables.
 """
 from __future__ import annotations
 
-
 import re
 
 import routes.database as db

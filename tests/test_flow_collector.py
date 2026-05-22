@@ -15,11 +15,10 @@ from __future__ import annotations
 
 import socket
 import struct
-import pytest
 
+import pytest
 import routes.database as db_module
 from netcontrol.routes import flow_collector
-
 
 # ── shared fixture helpers ──────────────────────────────────────────────────
 

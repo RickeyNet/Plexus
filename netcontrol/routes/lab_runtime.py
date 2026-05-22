@@ -47,16 +47,16 @@ from netcontrol.routes.lab import (
     _resolve_session_user,
     _user_can_access_env,
 )
+from netcontrol.routes.risk_analysis import (
+    _classify_change_areas,
+    _compute_risk_score,
+)
 from netcontrol.routes.shared import (
     _audit,
     _capture_running_config,
     _compute_config_diff,
     _corr_id,
     _push_config_to_device,
-)
-from netcontrol.routes.risk_analysis import (
-    _classify_change_areas,
-    _compute_risk_score,
 )
 from netcontrol.telemetry import configure_logging
 

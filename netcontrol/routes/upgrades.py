@@ -926,7 +926,7 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
         while True:
             try:
                 await asyncio.wait_for(ws.receive_text(), timeout=120)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send ping to detect dead connections
                 try:
                     await ws.send_json({"type": "ping"})
@@ -2340,7 +2340,7 @@ async def _transfer_image(conn, image_path, image_name, dest_path, options):
     return False, last_error or "File not found on flash after transfer"
 
 
-async def _wait_for_down(ip, timeout=300, check_interval=10, campaign_id=None, dev_id=None):
+async def _wait_for_down(ip, timeout=300, check_interval=10, campaign_id=None, dev_id=None):  # noqa: ASYNC109 - polling-loop deadline, not a wait-for budget
     """Wait for switch to become unreachable, confirming reboot has started."""
     start = time.time()
     while (time.time() - start) < timeout:

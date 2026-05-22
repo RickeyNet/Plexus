@@ -2074,12 +2074,11 @@ async def trigger_cloud_traffic_sync_api(
     account_id: int | None = Query(default=None),
 ):
     """Manually trigger cloud traffic-metric pull for one or all accounts."""
+    import netcontrol.routes.state as state
     from netcontrol.routes.cloud_metric_pullers import (
         pull_traffic_metrics_all_accounts,
         pull_traffic_metrics_for_account,
     )
-
-    import netcontrol.routes.state as state
 
     lookback = int(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG.get("lookback_minutes", 15))
 

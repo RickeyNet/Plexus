@@ -4,7 +4,6 @@ admin scheduling, and background compliance check loop.
 """
 from __future__ import annotations
 
-
 import json
 
 import routes.database as db
@@ -157,7 +156,7 @@ async def _evaluate_host_compliance(host: dict, profile: dict, credentials: dict
             _capture_running_config(host, credentials),
             timeout=_SCAN_TIMEOUT_SECONDS,
         )
-    except _aio.TimeoutError:
+    except TimeoutError:
         return {
             "status": "error",
             "total_rules": 0,
@@ -830,7 +829,7 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
             _push_config_to_device(host, cred, remediation_cmds),
             timeout=_SCAN_TIMEOUT_SECONDS,
         )
-    except _aio.TimeoutError as exc:
+    except TimeoutError as exc:
         await _audit(
             "compliance", "remediate.failed",
             user=session["user"] if session else "",

@@ -18,7 +18,6 @@ from netcontrol.routes.maintenance_windows import (
     window_is_active,
 )
 
-
 # ── Pure time logic (no DB) ──────────────────────────────────────────────────
 
 

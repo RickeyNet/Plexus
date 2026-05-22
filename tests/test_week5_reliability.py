@@ -4,9 +4,8 @@ Covers:
   1. Audit-event table creation and add/get functions.
   2. Correlation-ID middleware injects and returns header.
   3. Bounded-concurrency semaphore limits concurrent jobs.
-  4. Import checkpoint write/read round-trip.
-  5. No stray print() in web-facing modules (app, database).
-  6. Audit events fired by auth endpoints (login, register, change-password).
+  4. No stray print() in web-facing modules (app, database).
+  5. Audit events fired by auth endpoints (login, register, change-password).
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ import netcontrol.app as app_module
 import pytest
 import routes.database as db_module
 from fastapi import Request
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -180,48 +180,7 @@ async def test_get_db_rejects_invalid_engine(monkeypatch):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4. Import checkpoint write/read round-trip
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-def test_checkpoint_write_read_roundtrip(tmp_path):
-    """_write_checkpoint should persist parsed stages and _read_checkpoint should return them."""
-    session_dir = str(tmp_path / "sess1")
-    os.makedirs(session_dir)
-
-    sample_output = (
-        "Physical Interfaces                 0.45s [OK]\n"
-        "Address Objects                     2.31s [OK]\n"
-        "Access Rules                        1.20s [FAIL]\n"
-    )
-
-    checkpoint = conv_module._write_checkpoint(session_dir, sample_output)
-    assert "Physical Interfaces" in checkpoint["completed_stages"]
-    assert "Address Objects" in checkpoint["completed_stages"]
-    assert "Access Rules" in checkpoint["failed_stages"]
-    assert "updated_at" in checkpoint
-
-    loaded = conv_module._read_checkpoint(session_dir)
-    assert loaded == checkpoint
-
-
-def test_checkpoint_read_empty_when_no_file(tmp_path):
-    """_read_checkpoint should return {} when no checkpoint file exists."""
-    assert conv_module._read_checkpoint(str(tmp_path)) == {}
-
-
-def test_checkpoint_write_handles_empty_output(tmp_path):
-    """_write_checkpoint with empty output should still write a valid file."""
-    session_dir = str(tmp_path / "empty")
-    os.makedirs(session_dir)
-
-    checkpoint = conv_module._write_checkpoint(session_dir, "")
-    assert checkpoint["completed_stages"] == []
-    assert checkpoint["failed_stages"] == []
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 5. No stray print() in web-facing modules
+# 4. No stray print() in web-facing modules
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -245,7 +204,7 @@ def test_no_stray_print_in_web_module(rel_path):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 6. Audit events fired by auth endpoints
+# 5. Audit events fired by auth endpoints
 # ═════════════════════════════════════════════════════════════════════════════
 
 

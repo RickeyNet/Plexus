@@ -21,7 +21,6 @@ import netcontrol.routes.federation as federation_module
 import pytest
 import routes.database as db_module
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -443,8 +442,8 @@ async def test_sync_peer_with_mocked_remote(tmp_path, monkeypatch):
 def test_federation_module_imports():
     """The federation module should import without errors."""
     from netcontrol.routes.federation import (
-        init_federation,
         federation_sync_loop,
+        init_federation,
         router,
     )
     assert router is not None

@@ -24,10 +24,10 @@ Environment variables:
 import argparse
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
-import ssl
 
 
 def _build_url(base: str, host: str | None = None) -> str:

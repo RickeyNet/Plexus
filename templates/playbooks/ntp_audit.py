@@ -19,7 +19,6 @@ from collections.abc import AsyncGenerator
 
 from routes.runner import BasePlaybook, LogEvent, register_playbook
 
-
 # Servers every device is expected to use.  In a real deployment this
 # would come from config / a settings table rather than being hard-coded.
 EXPECTED_NTP_SERVERS = ["10.0.0.50", "10.0.0.51"]
@@ -59,7 +58,7 @@ class NtpAudit(BasePlaybook):
 
     async def _run_simulated(
         self, hosts, credentials, template_commands, dry_run
-    ) -> AsyncGenerator[LogEvent, None]:
+    ) -> AsyncGenerator[LogEvent]:
         yield self.log_info(f"NTP Compliance Audit - checking {len(hosts)} host(s)")
         yield self.log_info(f"Expected NTP servers: {', '.join(EXPECTED_NTP_SERVERS)}")
 

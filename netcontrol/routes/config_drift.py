@@ -3,7 +3,6 @@ config_drift.py -- Config drift detection routes: baselines, snapshots, drift ev
 """
 from __future__ import annotations
 
-
 import asyncio
 import uuid
 from datetime import UTC, datetime
@@ -867,7 +866,7 @@ async def websocket_config_capture(websocket: WebSocket, job_id: str):
         while True:
             try:
                 await asyncio.wait_for(websocket.receive_text(), timeout=120)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 try:
                     await websocket.send_json({"type": "ping"})
                 except Exception:
@@ -1107,7 +1106,7 @@ async def ws_config_revert(websocket: WebSocket, job_id: str):
         while True:
             try:
                 await asyncio.wait_for(websocket.receive_text(), timeout=120)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 try:
                     await websocket.send_json({"type": "ping"})
                 except Exception:

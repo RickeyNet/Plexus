@@ -19,8 +19,8 @@ import httpx
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-
 from routes.crypto import decrypt, encrypt
+
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 

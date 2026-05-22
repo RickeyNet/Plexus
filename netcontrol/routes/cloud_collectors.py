@@ -859,6 +859,7 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
 
     resources: list[dict] = []
     connections: list[dict] = []
+    subnet_to_vnet: dict[str, str] = {}
 
     try:
         for vnet in network_client.virtual_networks.list_all():

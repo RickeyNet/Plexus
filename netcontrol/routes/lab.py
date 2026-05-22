@@ -34,16 +34,16 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from netcontrol.routes.risk_analysis import (
+    _classify_change_areas,
+    _compute_risk_score,
+    _simulate_config_change,
+)
 from netcontrol.routes.shared import (
     _audit,
     _compute_config_diff,
     _corr_id,
     _get_session,
-)
-from netcontrol.routes.risk_analysis import (
-    _classify_change_areas,
-    _compute_risk_score,
-    _simulate_config_change,
 )
 from netcontrol.telemetry import configure_logging
 

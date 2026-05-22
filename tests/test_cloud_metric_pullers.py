@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
-import pytest
-import routes.database as db_module
-
-import sys
-
 import netcontrol.routes.cloud_metric_pullers as pullers_mod
 import netcontrol.routes.cloud_visibility as cloud_visibility_module
+import pytest
+import routes.database as db_module
 
 
 async def _init(tmp_path, monkeypatch):

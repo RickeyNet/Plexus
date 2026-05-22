@@ -3,12 +3,11 @@ config_backups.py -- Config backup routes: policies, backup records, restore, ad
 """
 from __future__ import annotations
 
-
 import asyncio
 import io
 import re as _re
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -264,10 +263,10 @@ def _backup_filename(backup: dict) -> str:
     captured_raw = backup.get("captured_at") or ""
     try:
         # captured_at is stored without a tz suffix; treat as UTC.
-        dt = datetime.fromisoformat(str(captured_raw).replace("Z", "")).replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(str(captured_raw).replace("Z", "")).replace(tzinfo=UTC)
         date_part = dt.strftime("%Y%m%d_%H%M%S")
     except Exception:  # noqa: BLE001 - fall back to a wall-clock stamp
-        date_part = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        date_part = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     parts = [p for p in (host_part, ip_part, date_part) if p]
     return "_".join(parts) + ".txt"
 
@@ -310,7 +309,7 @@ async def download_config_backups_bulk(
             zf.writestr(name, full["config_text"])
 
     buf.seek(0)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     fname = f"config_backups_{stamp}.zip"
 
     session = _get_session(request)
