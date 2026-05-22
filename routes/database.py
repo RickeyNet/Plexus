@@ -187,6 +187,14 @@ _INSERT_ID_TABLES = {
     "lab_topologies",
     "lab_topology_links",
     "lab_drift_runs",
+    "mac_move_events",
+    "mac_move_event_history",
+    "interface_error_events",
+    "maintenance_windows",
+    "audit_runs",
+    "audit_findings",
+    "audit_rule_overrides",
+    "audit_schedules",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
@@ -2385,13 +2393,22 @@ class _PostgresCursorCompat:
         return list(self._rows)
 
 
+def _strip_nuls_from_params(params: tuple) -> tuple:
+    # Postgres rejects 0x00 in TEXT values ("invalid byte sequence for
+    # encoding UTF8: 0x00") while SQLite accepts them. SNMP-returned device
+    # strings, syslog bodies, and some config payloads occasionally carry a
+    # trailing NUL. Strip them here so callers can keep treating the
+    # backends identically.
+    return tuple(v.replace("\x00", "") if isinstance(v, str) else v for v in params)
+
+
 class _PostgresConnectionCompat:
     def __init__(self, conn):
         self._conn = conn
         self.row_factory = None
 
     async def execute(self, query: str, params=()):
-        params = tuple(params or ())
+        params = _strip_nuls_from_params(tuple(params or ()))
         query_stripped = query.strip()
         query_upper = query_stripped.upper()
 
@@ -8475,9 +8492,9 @@ async def get_top_interfaces_by_bandwidth(
                       t.if_index,
                       MAX(t.if_name) AS if_name,
                       MAX(t.if_speed_mbps) AS if_speed_mbps,
-                      h.hostname AS hostname,
-                      MAX(MAX(COALESCE(t.in_rate_bps, 0),
-                              COALESCE(t.out_rate_bps, 0))) AS peak_bps
+                      MAX(h.hostname) AS hostname,
+                      MAX(GREATEST(COALESCE(t.in_rate_bps, 0),
+                                   COALESCE(t.out_rate_bps, 0))) AS peak_bps
                FROM interface_ts t
                JOIN hosts h ON h.id = t.host_id
                WHERE t.sampled_at >= ?
@@ -8726,7 +8743,7 @@ async def get_interface_error_summary(
                  AND ms.metric_name IN ('if_in_errors', 'if_out_errors',
                                         'if_in_discards', 'if_out_discards')
                  AND ms.sampled_at >= datetime('now', '-' || ? || ' days')
-               GROUP BY ms.metric_name, ms.labels_json
+               GROUP BY ms.host_id, ms.metric_name, ms.labels_json
                ORDER BY ms.metric_name, ms.labels_json""",
             (host_id, days),
         )
