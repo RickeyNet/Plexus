@@ -67,10 +67,10 @@ async def _up_postgres(db) -> None:
             name         TEXT NOT NULL,
             schedule     TEXT NOT NULL DEFAULT '',
             enabled      INTEGER NOT NULL DEFAULT 1,
-            last_run_at  TIMESTAMPTZ,
+            last_run_at  TEXT,
             created_by   TEXT NOT NULL DEFAULT '',
-            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            created_at   TEXT NOT NULL DEFAULT (NOW()::text),
+            updated_at   TEXT NOT NULL DEFAULT (NOW()::text)
         )
         """
     )
