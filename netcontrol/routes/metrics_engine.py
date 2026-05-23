@@ -9,7 +9,6 @@ metrics_engine.py -- Prometheus-style metrics infrastructure:
 """
 from __future__ import annotations
 
-
 import asyncio
 import json
 import logging

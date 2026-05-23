@@ -10,12 +10,11 @@ Provides:
 """
 from __future__ import annotations
 
-
 import csv
 import io
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -113,7 +112,7 @@ def _get_billing_period_range(
     if target_start and target_end:
         return target_start, target_end
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
 
     if billing_cycle == "weekly":
         # End of last week

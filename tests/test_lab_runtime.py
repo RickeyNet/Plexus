@@ -611,6 +611,7 @@ def test_reap_idle_runtimes_disabled_when_ttl_zero(tmp_path, monkeypatch):
 def _seed_compliance_profile_blocking_snmp_public(group_id: int):
     """Helper: create a compliance profile that fails when 'snmp-server community public' appears."""
     import json as _json
+
     from routes.crypto import encrypt as _encrypt
 
     async def _do():

@@ -9,7 +9,6 @@ Provides API endpoints for:
 """
 from __future__ import annotations
 
-
 import json
 
 import routes.database as db

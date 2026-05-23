@@ -11,13 +11,11 @@ import netcontrol.routes.state as state_module
 import pytest
 import routes.database as db_module
 from fastapi.testclient import TestClient
-
 from netcontrol.routes.ansible_inventory import (
     _ansible_connection,
     _map_network_os,
     _sanitize_group_name,
 )
-
 
 # ── Unit tests for helper functions ──────────────────────────────────────────
 

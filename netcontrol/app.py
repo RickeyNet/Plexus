@@ -7,7 +7,6 @@ Session-based authentication with signed cookies.
 """
 from __future__ import annotations
 
-
 import asyncio
 import difflib
 import hashlib
@@ -37,6 +36,7 @@ import time
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
+from netcontrol.routes import siem_forwarder
 from netcontrol.routes.admin import (
     AdminAccessGroupCreateRequest,
     AdminAccessGroupUpdateRequest,
@@ -58,6 +58,11 @@ from netcontrol.routes.admin import (
     init_admin,
     router as admin_router,
 )
+from netcontrol.routes.ansible_inventory import (
+    init_ansible_inventory,
+    router as ansible_inventory_router,
+)
+from netcontrol.routes.audit import _audit_run_loop, router as audit_router
 from netcontrol.routes.auth import (
     PYRAD_AVAILABLE,
     ChangePasswordRequest,
@@ -75,6 +80,21 @@ from netcontrol.routes.auth import (
     router as auth_router,
     upsert_radius_user,
     verify_radius_user,
+)
+from netcontrol.routes.baseline_alerting import router as baseline_alerting_router
+from netcontrol.routes.billing import (
+    init_billing,
+    router as billing_router,
+)
+from netcontrol.routes.cdef_engine import router as cdef_router
+from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
+from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
+from netcontrol.routes.cloud_visibility import (
+    build_cloud_sync_status,
+    init_cloud_visibility,
+    persist_cloud_flow_sync_status,
+    persist_cloud_traffic_sync_status,
+    router as cloud_visibility_router,
 )
 from netcontrol.routes.compliance import (
     ComplianceAssignmentCreate,
@@ -108,64 +128,7 @@ from netcontrol.routes.config_drift import (
     ws_router as config_drift_ws_router,
 )
 from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate, router as credentials_router
-from netcontrol.routes.secret_variables import init_secret_variables, router as secret_variables_router
 from netcontrol.routes.dashboards import router as dashboards_router
-from netcontrol.routes.graph_templates import router as graph_templates_router
-from netcontrol.routes.cdef_engine import router as cdef_router
-from netcontrol.routes.mac_tracking import router as mac_tracking_router
-from netcontrol.routes.mac_tracking import _mac_move_retention_loop
-from netcontrol.routes.flow_collector import (
-    FLOW_COLLECTOR_CONFIG,
-    _cancel_aggregation_task as _cancel_flow_aggregation_task,
-    _ensure_aggregation_task as _ensure_flow_aggregation_task,
-    router as flow_collector_router,
-    start_flow_collector,
-    stop_flow_collector,
-)
-from netcontrol.routes import siem_forwarder
-from netcontrol.routes.baseline_alerting import router as baseline_alerting_router
-from netcontrol.routes.graph_export import router as graph_export_router
-from netcontrol.routes.interface_errors import (
-    init_interface_errors,
-    router as interface_errors_router,
-)
-from netcontrol.routes.billing import (
-    init_billing,
-    router as billing_router,
-)
-from netcontrol.routes.cloud_visibility import (
-    build_cloud_sync_status,
-    init_cloud_visibility,
-    persist_cloud_flow_sync_status,
-    persist_cloud_traffic_sync_status,
-    router as cloud_visibility_router,
-)
-from netcontrol.routes.ipam import init_ipam, router as ipam_router
-from netcontrol.routes.ipam_adapters import IpamAdapterError, collect_ipam_snapshot
-from netcontrol.routes.dhcp import init_dhcp, router as dhcp_router, sync_dhcp_server
-from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot
-from netcontrol.routes.geolocation import router as geolocation_router
-from netcontrol.routes.federation import (
-    init_federation,
-    federation_sync_loop,
-    router as federation_router,
-)
-from netcontrol.routes.lab import (
-    init_lab,
-    router as lab_router,
-)
-from netcontrol.routes.lab_runtime import (
-    lab_runtime_ttl_loop,
-    reconcile_running_labs,
-    router as lab_runtime_router,
-)
-from netcontrol.routes.lab_topology import router as lab_topology_router
-from netcontrol.routes.lab_drift import (
-    lab_drift_scheduler_loop,
-    router as lab_drift_router,
-)
-from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
-from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.deployments import (
     DeploymentCreate,
     DeploymentExecute,
@@ -181,9 +144,27 @@ from netcontrol.routes.deployments import (
     router as deployments_router,
     ws_router as deployments_ws_router,
 )
-from netcontrol.routes.ansible_inventory import (
-    init_ansible_inventory,
-    router as ansible_inventory_router,
+from netcontrol.routes.dhcp import init_dhcp, router as dhcp_router, sync_dhcp_server
+from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot
+from netcontrol.routes.federation import (
+    federation_sync_loop,
+    init_federation,
+    router as federation_router,
+)
+from netcontrol.routes.flow_collector import (
+    FLOW_COLLECTOR_CONFIG,
+    _cancel_aggregation_task as _cancel_flow_aggregation_task,
+    _ensure_aggregation_task as _ensure_flow_aggregation_task,
+    router as flow_collector_router,
+    start_flow_collector,
+    stop_flow_collector,
+)
+from netcontrol.routes.geolocation import router as geolocation_router
+from netcontrol.routes.graph_export import router as graph_export_router
+from netcontrol.routes.graph_templates import router as graph_templates_router
+from netcontrol.routes.interface_errors import (
+    init_interface_errors,
+    router as interface_errors_router,
 )
 from netcontrol.routes.inventory import (
     DiscoveryOnboardRequest,
@@ -202,6 +183,8 @@ from netcontrol.routes.inventory import (
     admin_router as inventory_admin_router,
     router as inventory_router,
 )
+from netcontrol.routes.ipam import init_ipam, router as ipam_router
+from netcontrol.routes.ipam_adapters import IpamAdapterError, collect_ipam_snapshot
 from netcontrol.routes.jobs import (
     _MAX_CONCURRENT_JOBS as _jobs_MAX_CONCURRENT_JOBS,
     _job_semaphore as _jobs_job_semaphore,
@@ -209,6 +192,25 @@ from netcontrol.routes.jobs import (
     init_jobs,
     router as jobs_router,
     ws_router as jobs_ws_router,
+)
+from netcontrol.routes.lab import (
+    init_lab,
+    router as lab_router,
+)
+from netcontrol.routes.lab_drift import (
+    lab_drift_scheduler_loop,
+    router as lab_drift_router,
+)
+from netcontrol.routes.lab_runtime import (
+    lab_runtime_ttl_loop,
+    reconcile_running_labs,
+    router as lab_runtime_router,
+)
+from netcontrol.routes.lab_topology import router as lab_topology_router
+from netcontrol.routes.mac_tracking import _mac_move_retention_loop, router as mac_tracking_router
+from netcontrol.routes.maintenance_windows import (
+    init_maintenance_windows,
+    router as maintenance_windows_router,
 )
 from netcontrol.routes.metrics_engine import (
     _downsampling_loop,
@@ -240,11 +242,6 @@ from netcontrol.routes.playbooks import (
     write_playbook_file,
 )
 from netcontrol.routes.reporting import _report_scheduler_loop, router as reporting_router
-from netcontrol.routes.audit import _audit_run_loop, router as audit_router
-from netcontrol.routes.maintenance_windows import (
-    init_maintenance_windows,
-    router as maintenance_windows_router,
-)
 from netcontrol.routes.risk_analysis import (
     _CRITICAL_PATTERNS,
     RiskAnalysisRequest,
@@ -255,6 +252,7 @@ from netcontrol.routes.risk_analysis import (
     init_risk_analysis,
     router as risk_analysis_router,
 )
+from netcontrol.routes.secret_variables import init_secret_variables, router as secret_variables_router
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
     _build_snmp_auth,
@@ -266,20 +264,20 @@ from netcontrol.routes.snmp import (
     _snmp_walk,
 )
 from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
+from netcontrol.routes.topology import (
+    _calc_interface_utilization,
+    _record_topology_changes,
+    _run_topology_discovery_once,
+    _stp_discovery_loop,
+    _topology_discovery_loop,
+    admin_router as topology_admin_router,
+    router as topology_router,
+)
 from netcontrol.routes.upgrades import (
     init_upgrades,
     rehydrate_scheduled_upgrades,
     router as upgrades_router,
     ws_router as upgrades_ws_router,
-)
-from netcontrol.routes.topology import (
-    _calc_interface_utilization,
-    _record_topology_changes,
-    _stp_discovery_loop,
-    _run_topology_discovery_once,
-    _topology_discovery_loop,
-    admin_router as topology_admin_router,
-    router as topology_router,
 )
 
 # Ensure project root is on path for imports
@@ -301,7 +299,14 @@ except ImportError:
 # Auto-register all playbooks
 from templates import playbooks  # noqa: F401
 
-from netcontrol.telemetry import configure_logging, configure_syslog_logging, increment_metric, observe_timing, redact_value, snapshot_metrics
+from netcontrol.telemetry import (
+    configure_logging,
+    configure_syslog_logging,
+    increment_metric,
+    observe_timing,
+    redact_value,
+    snapshot_metrics,
+)
 from netcontrol.version import APP_VERSION
 
 LOGGER = configure_logging("plexus.app")

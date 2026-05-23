@@ -6,7 +6,6 @@ rollback via pre-deployment snapshots, and WebSocket streaming.
 """
 from __future__ import annotations
 
-
 import asyncio
 import json
 import uuid
@@ -17,6 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel
 from routes.crypto import decrypt
 
+from netcontrol.routes.config_drift import _analyze_drift_for_host
+from netcontrol.routes.maintenance_windows import evaluate_change_gate
 from netcontrol.routes.shared import (
     _audit,
     _capture_running_config,
@@ -25,8 +26,6 @@ from netcontrol.routes.shared import (
     _get_session,
     _push_config_to_device,
 )
-from netcontrol.routes.config_drift import _analyze_drift_for_host
-from netcontrol.routes.maintenance_windows import evaluate_change_gate
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -1071,7 +1070,7 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
         while True:
             try:
                 await asyncio.wait_for(websocket.receive_text(), timeout=120)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 try:
                     await websocket.send_json({"type": "ping"})
                 except Exception:

@@ -18,10 +18,8 @@ import json
 import socket
 
 import pytest
-
 import routes.database as db_module
 from netcontrol.routes import siem_forwarder as sf
-
 
 # ── Validation ───────────────────────────────────────────────────────────────
 
@@ -184,7 +182,7 @@ async def test_tcp_sink_uses_octet_counting_frame():
         await sf.deliver(sink, _EVENT)
         try:
             await asyncio.wait_for(ready.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail("TCP server did not receive frame in time")
         raw = received[0].decode("utf-8")
         # RFC 6587 octet-counting frame: "<len> <message>"

@@ -25,15 +25,15 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from netcontrol.routes import lab_runtime
 from netcontrol.routes.lab import (
     _resolve_session_user,
     _user_can_access_env,
 )
-from netcontrol.routes import lab_runtime
 from netcontrol.routes.lab_runtime import (
-    ALLOWED_NODE_KINDS,
     _IMAGE_RE,
     _NAME_RE,
+    ALLOWED_NODE_KINDS,
     _default_workdir_root,
     _slug,
 )
@@ -305,7 +305,7 @@ async def destroy_topology(topology: dict, *, actor: str = "") -> dict:
             await db.add_lab_runtime_event(
                 d["id"], action="topology-destroy", status="error",
                 actor=actor,
-                detail=f"containerlab unavailable; manual cleanup required",
+                detail="containerlab unavailable; manual cleanup required",
             )
         return {"status": "destroyed", "reason": "containerlab_unavailable"}
 

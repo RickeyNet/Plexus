@@ -3,7 +3,6 @@ dashboards.py -- User-defined dashboards with configurable panels
 """
 from __future__ import annotations
 
-
 import logging
 
 import routes.database as db
@@ -173,7 +172,7 @@ async def dashboard_top_interfaces_api(
     interface. Picks the busiest (host, if_index) pairs by peak in/out bps,
     then fans out per-interface to fetch the series."""
     cutoff_sql, series_limit = _BW_RANGE_MAP.get(range, _BW_RANGE_MAP["6h"])
-    from datetime import datetime, timedelta, UTC
+    from datetime import UTC, datetime, timedelta
 
     range_to_delta = {
         "1h": timedelta(hours=1),

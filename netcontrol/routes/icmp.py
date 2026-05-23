@@ -30,7 +30,7 @@ async def ping_host(
     ip_address: str,
     *,
     count: int = 3,
-    timeout: float = 2.0,
+    timeout: float = 2.0,  # noqa: ASYNC109 - forwarded to icmplib's own timeout
     privileged: bool = False,
 ) -> dict:
     """Send ICMP echo requests and return a normalized result dict.

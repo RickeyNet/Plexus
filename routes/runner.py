@@ -144,7 +144,7 @@ class BasePlaybook:
         credentials: dict,
         template_commands: list[str] | None = None,
         dry_run: bool = True,
-    ) -> AsyncGenerator[LogEvent, None]:
+    ) -> AsyncGenerator[LogEvent]:
         raise NotImplementedError("Subclasses must implement run()")
         yield  # make it a generator
 

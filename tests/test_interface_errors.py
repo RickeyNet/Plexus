@@ -3,10 +3,8 @@
 import json
 
 import pytest
-
 import routes.database as db_module
 from netcontrol.routes.metrics_engine import _classify_root_cause
-
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
