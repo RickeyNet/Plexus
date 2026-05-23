@@ -104,7 +104,7 @@ class BasePlaybook:
     # Supported types: "string", "int", "bool", "list" (comma-separated input).
     parameters_schema: list[dict] = []
 
-    # Populated by the executor right before run() — never read directly here.
+    # Populated by the executor right before run() - never read directly here.
     parameters: dict | None = None
 
     # Per-device_type resolved template command bodies, keyed by the

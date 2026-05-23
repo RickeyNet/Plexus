@@ -117,7 +117,7 @@ export function BackupStatusPanel({ devices }: Props) {
                   }}
                 >
                   +{rollups.length - counts.success - problems.length} more
-                  problem hosts — open the Backups page for the full list.
+                  problem hosts - open the Backups page for the full list.
                 </p>
               )}
             </div>
@@ -215,7 +215,7 @@ function ProblemRow({ rollup }: { rollup: HostRollup }) {
   );
 }
 
-// Exported for testability — pure rollup from raw backups + device list.
+// Exported for testability - pure rollup from raw backups + device list.
 export function rollUpBackups(
   backups: ConfigBackup[],
   devices: DeviceHealth[],

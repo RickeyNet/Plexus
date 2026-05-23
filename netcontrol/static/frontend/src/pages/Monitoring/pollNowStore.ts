@@ -41,14 +41,14 @@ function loadFromStorage(): PollProgress {
       return initial;
     }
     // A run marked "active" but with no live stream attached is a stale
-    // page-reload artifact — the backend kept polling, but we can't reattach
+    // page-reload artifact - the backend kept polling, but we can't reattach
     // to its SSE stream. Surface it as finished-unknown so the user sees
     // *something* instead of a spinner that never advances.
     if (saved.active) {
       return {
         ...saved,
         active: false,
-        title: saved.title || 'Poll status unknown after reload — click Refresh',
+        title: saved.title || 'Poll status unknown after reload - click Refresh',
       };
     }
     return saved;
@@ -69,7 +69,7 @@ export function bindQueryClient(qc: QueryClient) {
 function persist() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch { /* quota / disabled storage — ignore */ }
+  } catch { /* quota / disabled storage - ignore */ }
 }
 
 function emit() {

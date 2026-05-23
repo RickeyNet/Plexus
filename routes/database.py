@@ -12029,7 +12029,7 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
             if (prev_vlan or 0) != (vlan or 0):
                 changed.append("vlan")
             # Only treat an IP change as a move once a binding exists on both
-            # sides — going from "" to a freshly-learned IP is enrichment of
+            # sides - going from "" to a freshly-learned IP is enrichment of
             # the same location, not a move.
             if prev_ip and ip_address and prev_ip != ip_address:
                 changed.append("ip")
@@ -12068,7 +12068,7 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
             await db.commit()
             return event_id
 
-        # First time we've ever seen this MAC — record the baseline sighting.
+        # First time we've ever seen this MAC - record the baseline sighting.
         cursor = await db.execute(
             """INSERT INTO mac_tracking_history
                (mac_address, ip_address, host_id, port_name, vlan)
@@ -12090,7 +12090,7 @@ async def get_mac_move_events(status: str = "", limit: int = 200,
                                host_id: int | None = None) -> list[dict]:
     """List MAC move events, newest first.
 
-    Optionally filter by status, and by a switch "involved" in the move —
+    Optionally filter by status, and by a switch "involved" in the move -
     host_id matches when the device is on either the from- or to-side, since
     a move is inherently a between-devices event.
     """

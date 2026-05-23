@@ -49,7 +49,7 @@ async def ping_host(
         }
 
     A host that responds to at least one echo is "alive" even if some
-    packets were lost — partial loss is reflected in packet_loss_pct.
+    packets were lost - partial loss is reflected in packet_loss_pct.
     """
     out = {
         "alive": False,

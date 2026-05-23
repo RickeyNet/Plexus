@@ -1,10 +1,10 @@
 """Project version metadata.
 
 The version is sourced in priority order:
-  1. PLEXUS_VERSION environment variable — set by Docker builds via
+  1. PLEXUS_VERSION environment variable - set by Docker builds via
      ARG/ENV so release images self-identify without source edits.
-  2. A VERSION file at the repo root — written by the release pipeline.
-  3. The hardcoded fallback below — used in development checkouts.
+  2. A VERSION file at the repo root - written by the release pipeline.
+  3. The hardcoded fallback below - used in development checkouts.
 
 The git SHA (when available) is captured separately so the upgrade UI
 can distinguish "v1.2.3 release build" from "v1.2.3 + 4 local commits".

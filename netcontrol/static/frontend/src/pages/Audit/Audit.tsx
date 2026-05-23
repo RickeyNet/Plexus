@@ -180,7 +180,7 @@ export function Audit() {
 
       {selectedRunId != null && (
         <section className="card" style={{ padding: '1rem' }}>
-          <h3 style={{ marginTop: 0 }}>Findings — run #{selectedRunId}</h3>
+          <h3 style={{ marginTop: 0 }}>Findings - run #{selectedRunId}</h3>
           {findings.isPending && <p className="text-muted">Loading findings…</p>}
           {findings.error && (
             <p style={{ color: 'var(--danger)' }}>
@@ -949,7 +949,7 @@ function MuteFindingDialog({
       >
         <h3 style={{ marginTop: 0 }}>Mute finding</h3>
         <p className="text-muted" style={{ marginTop: 0 }}>
-          <code>{finding.rule_id}</code> — {finding.title}
+          <code>{finding.rule_id}</code> - {finding.title}
         </p>
 
         <div style={{ display: 'grid', gap: '0.75rem' }}>

@@ -105,7 +105,7 @@ export function EdgeDetails({ edge, fromNode, toNode, onClose }: Props) {
                 : 'rgba(76,175,80,0.12)',
           }}
         >
-          Utilization {util.utilization_pct}% — {formatBps(util.in_bps)} in /{' '}
+          Utilization {util.utilization_pct}% - {formatBps(util.in_bps)} in /{' '}
           {formatBps(util.out_bps)} out
         </div>
       )}
@@ -173,7 +173,7 @@ function PortColumn(props: {
 
       {!hasHost ? (
         <p className="text-muted" style={{ fontSize: '0.72rem' }}>
-          External node — no inventory data.
+          External node - no inventory data.
         </p>
       ) : loading ? (
         <p className="text-muted" style={{ fontSize: '0.72rem' }}>
