@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import * as echarts from 'echarts';
+import { echarts, type ECharts } from './echart-core';
 
 export interface TimeSeriesPoint {
   time: string;
@@ -62,7 +62,7 @@ export function TimeSeriesChart({
   annotations,
 }: TimeSeriesChartProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<echarts.ECharts | null>(null);
+  const chartRef = useRef<ECharts | null>(null);
 
   useEffect(() => {
     if (!ref.current) return;
