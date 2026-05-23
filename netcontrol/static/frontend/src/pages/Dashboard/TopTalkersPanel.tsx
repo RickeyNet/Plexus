@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import * as echarts from 'echarts';
+import { echarts } from '@/lib/echart-core';
 
 import { useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
 import { formatBytes } from '@/pages/NetworkTools/formatting';
