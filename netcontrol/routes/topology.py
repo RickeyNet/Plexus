@@ -882,7 +882,10 @@ async def _apply_inferred_topology(
 
         refresh_tasks = []
         for h in walked_hosts:
-            refresh_tasks.append(collect_mac_arp_tables(h["id"], h["ip_address"], snmp_cfg))
+            refresh_tasks.append(collect_mac_arp_tables(
+                h["id"], h["ip_address"], snmp_cfg,
+                device_type=h.get("device_type", ""),
+            ))
             refresh_tasks.append(auto_discover_data_sources(h["id"], h["ip_address"], snmp_cfg))
         await asyncio.gather(*refresh_tasks, return_exceptions=True)
 
@@ -996,7 +999,10 @@ async def _run_topology_discovery_once() -> dict:
                 # Collect MAC/ARP tables during topology discovery
                 try:
                     from netcontrol.routes.mac_tracking import collect_mac_arp_tables
-                    await collect_mac_arp_tables(host["id"], host["ip_address"], snmp_cfg)
+                    await collect_mac_arp_tables(
+                        host["id"], host["ip_address"], snmp_cfg,
+                        device_type=host.get("device_type", ""),
+                    )
                 except Exception:
                     pass
                 # Per-port inventory + VLAN definitions (feeds audit rules)

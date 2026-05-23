@@ -98,14 +98,24 @@ def _extract_mac_from_oid_suffix(suffix: str) -> str:
 
 async def collect_mac_arp_tables(host_id: int, ip_address: str,
                                   snmp_config: dict,
-                                  timeout_seconds: float = 5.0) -> dict:
+                                  timeout_seconds: float = 5.0,
+                                  device_type: str = "") -> dict:
     """Walk MAC and ARP tables from a device via SNMP.
 
     Per-port VLAN membership (Cisco vmVlan / standard dot1qPvid) is walked in
-    the default SNMP context, so we get real VLAN IDs over SNMPv3 without
-    needing per-VLAN contexts the user may not be authorised for. Q-BRIDGE
-    entries that carry the VLAN in their OID are honoured directly; the rest
-    fall back to the learning port's VLAN from that map.
+    the default SNMP context. Q-BRIDGE entries that carry the VLAN in their
+    OID are honoured directly; the rest fall back to the learning port's
+    VLAN from that map.
+
+    On Cisco IOS/IOS-XE the default-context FDB walk only returns VLAN 1
+    entries — every other VLAN's FDB is exposed under SNMPv3 context
+    ``vlan-<id>``. When ``device_type`` indicates a Cisco platform and SNMPv3
+    is in use, this function discovers the in-use VLAN list from the access
+    port map and re-walks the FDB once per VLAN with the matching context
+    name. Walks that fail (operator not authorised for a given VLAN view,
+    VLAN administratively suspended, etc.) are recorded but don't abort the
+    rest. The fallback to the default-context FDB walk is kept for non-Cisco
+    devices and for the rare case where no VLANs are discoverable.
 
     Returns {"macs_found": int, "arps_found": int, "errors": [str]}.
     """
@@ -166,14 +176,11 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     if arp_phys_err:
         result["errors"].append(f"ARP walk failed: {arp_phys_err}")
 
-    # Surface "no FDB rows + no error" as a non-fatal advisory so an L3-only
-    # device or a router that just doesn't bridge is distinguishable from a
-    # silent failure.
-    if not fdb_errors and not fdb_addr and not q_fdb_port:
-        result["errors"].append(
-            "Device responded but returned no FDB entries "
-            "(likely a router / L3-only device, or FDB hidden behind a non-default SNMPv3 context)."
-        )
+    # NB: the "device responded but returned no FDB entries" advisory used to
+    # live here, but on Cisco the default-context walk is *expected* to be
+    # near-empty — the real FDB lives in per-VLAN contexts and is collected
+    # below. The advisory now runs after the per-VLAN merge so it only fires
+    # when the merged result is genuinely empty.
 
     if_index_to_name: dict[str, str] = {}
     for oid, val in if_names.items():
@@ -225,9 +232,106 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         port_vlan = if_index_to_vlan.get(if_idx, 0)
         return port_name, port_index, port_vlan
 
+    # ── Cisco SNMPv3 per-VLAN FDB walks ────────────────────────────────
+    # The default-context FDB only returns VLAN 1 on IOS/IOS-XE, so without
+    # this re-walk we'd see uplink-only MACs (exactly the symptom that
+    # prompted this code path). Per-VLAN context is a Cisco-specific trick;
+    # other vendors put VLAN-in-OID into the default-context dot1qTpFdbTable
+    # already, so we skip them.
+    version = str(snmp_config.get("version", "")).strip().lower()
+    is_cisco = device_type.lower().startswith("cisco")
+    vlans_in_use = sorted({v for v in if_index_to_vlan.values() if 1 <= v <= 4094})
+    per_vlan_errors: list[str] = []
+    per_vlan_attempts = 0
+    per_vlan_successes = 0
+    # Maps MAC → VLAN learnt during per-VLAN context walks. Used to tag
+    # dot1dTpFdb entries (which carry no VLAN in their OID) with the right
+    # VLAN when the Q-BRIDGE walk didn't already cover that MAC.
+    dot1d_mac_context_vlan: dict[str, int] = {}
+    if is_cisco and version in ("v3", "3") and vlans_in_use:
+        # Walk each VLAN context sequentially. Hosts are already collected in
+        # parallel at the outer layer; piling more parallelism on a single
+        # Catalyst CPU has been observed to cause SNMP timeouts.
+        for vid in vlans_in_use:
+            per_vlan_attempts += 1
+            ctx_cfg = dict(snmp_config)
+            ctx_cfg["snmp_context"] = f"vlan-{vid}"
+            try:
+                q_rows, q_err = await _snmp_walk(
+                    ip_address, timeout_seconds, ctx_cfg, DOT1Q_TP_FDB_PORT,
+                    max_rows=2000, return_errors=True,
+                )
+                d_addr_rows, d_addr_err = await _snmp_walk(
+                    ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_ADDRESS,
+                    max_rows=2000, return_errors=True,
+                )
+                d_port_rows = await _snmp_walk(
+                    ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_PORT,
+                    max_rows=2000,
+                )
+                d_status_rows = await _snmp_walk(
+                    ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_STATUS,
+                    max_rows=2000,
+                )
+            except Exception as exc:
+                per_vlan_errors.append(f"vlan-{vid}: {type(exc).__name__}: {exc}")
+                continue
+            # An auth/timeout error on one VLAN context is recorded but
+            # doesn't poison the run — the operator's v3 user may simply
+            # lack a view on that VLAN.
+            ctx_err = q_err or d_addr_err
+            if ctx_err and not q_rows and not d_addr_rows:
+                per_vlan_errors.append(f"vlan-{vid}: {ctx_err}")
+                continue
+            if q_rows or d_addr_rows:
+                per_vlan_successes += 1
+            # Merge into the dicts the downstream parsers already read from.
+            # The dot1qTpFdbPort OID encodes the VLAN in its OID suffix, so
+            # entries from different VLAN contexts coexist without colliding.
+            # dot1dTpFdb* entries are bridge-scoped (no VLAN in OID), so we
+            # remember which VLAN context produced each MAC so the parser
+            # below can tag it with that VLAN instead of the port's PVID.
+            q_fdb_port.update(q_rows)
+            fdb_addr.update(d_addr_rows)
+            fdb_port.update(d_port_rows)
+            fdb_status.update(d_status_rows)
+            for oid, mac_val in d_addr_rows.items():
+                mac = _format_mac(mac_val)
+                if not mac or len(mac) < 12:
+                    suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
+                    mac = _extract_mac_from_oid_suffix(suffix)
+                if mac:
+                    dot1d_mac_context_vlan[mac] = vid
+        if per_vlan_attempts and per_vlan_successes == 0:
+            # Every VLAN context failed — the device is reachable (we got the
+            # vmVlan map) but the operator can't see any FDB view. That's a
+            # configuration problem on the device, surface it loudly.
+            result["errors"].append(
+                f"All {per_vlan_attempts} per-VLAN FDB walks failed "
+                f"(SNMPv3 user likely lacks 'snmp-server group ... read' on the per-VLAN views)."
+            )
+        elif per_vlan_errors:
+            # Some succeeded, some didn't — informational rather than fatal.
+            # Cap the list so we don't dump 50 lines for a chatty device.
+            preview = "; ".join(per_vlan_errors[:5])
+            suffix = f" (+{len(per_vlan_errors) - 5} more)" if len(per_vlan_errors) > 5 else ""
+            result["errors"].append(
+                f"Per-VLAN FDB walks partially failed: {preview}{suffix}"
+            )
+
     # Track (mac, vlan) we've already upserted this run so the standard FDB
     # walk doesn't double-count entries the Q-BRIDGE walk already recorded.
     seen_mac_vlan: set[tuple[str, int]] = set()
+
+    # Final empty-FDB advisory — runs once the default-context AND any
+    # per-VLAN context walks have all completed. Only fires when we got no
+    # protocol errors but still have nothing to parse: that's the genuine
+    # "this device isn't a bridge" case worth telling the operator about.
+    if not fdb_errors and not per_vlan_errors and not fdb_addr and not q_fdb_port:
+        result["errors"].append(
+            "Device responded but returned no FDB entries "
+            "(likely a router / L3-only device, or FDB hidden behind a non-default SNMPv3 context)."
+        )
 
     # ── Q-BRIDGE VLAN-aware FDB (dot1qTpFdbTable) - has VLAN in OID ──
     # When the device populates this table (most modern bridges do via the
@@ -268,8 +372,9 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             pass
 
     # ── Standard bridge FDB (dot1dTpFdbTable) - no VLAN in OID ──
-    # Tag with the learning port's VLAN from vmVlan/dot1qPvid; falls back to
-    # 0 only when the port has no resolvable VLAN.
+    # On Cisco we walked this per-VLAN context, so prefer the context-recorded
+    # VLAN; that's the authoritative source. Otherwise fall back to the
+    # learning port's PVID — incorrect for trunks but it's all we have.
     for oid, mac_val in fdb_addr.items():
         suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
         mac = _format_mac(mac_val)
@@ -284,17 +389,18 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         status = FDB_STATUS_MAP.get(str(fdb_status.get(status_oid, "")), "dynamic")
 
         port_name, port_index, port_vlan = _resolve_port(bridge_port)
-        if (mac, port_vlan) in seen_mac_vlan:
+        vlan_for_mac = dot1d_mac_context_vlan.get(mac, port_vlan)
+        if (mac, vlan_for_mac) in seen_mac_vlan:
             continue
 
         try:
             await db.upsert_mac_entry(
-                host_id=host_id, mac_address=mac, vlan=port_vlan,
+                host_id=host_id, mac_address=mac, vlan=vlan_for_mac,
                 port_name=port_name, port_index=port_index,
                 entry_type=status,
             )
-            await db.record_mac_history(mac, host_id, port_name, vlan=port_vlan)
-            seen_mac_vlan.add((mac, port_vlan))
+            await db.record_mac_history(mac, host_id, port_name, vlan=vlan_for_mac)
+            seen_mac_vlan.add((mac, vlan_for_mac))
             result["macs_found"] += 1
         except Exception:
             pass
@@ -341,8 +447,9 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             pass
 
     LOGGER.info(
-        "mac_tracking: host %s (%s) ports=%d port_vlans=%d - %d MACs, %d ARPs collected",
+        "mac_tracking: host %s (%s) ports=%d port_vlans=%d vlan_ctx=%d/%d - %d MACs, %d ARPs collected",
         host_id, ip_address, len(if_index_to_name), len(if_index_to_vlan),
+        per_vlan_successes, per_vlan_attempts,
         result["macs_found"], result["arps_found"],
     )
     return result
@@ -691,7 +798,10 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         snmp_cfg = _resolve_snmp_discovery_config(host.get("group_id"))
         if not snmp_cfg.get("enabled"):
             raise HTTPException(400, "SNMP not enabled for this host's group")
-        result = await collect_mac_arp_tables(host_id, host["ip_address"], snmp_cfg)
+        result = await collect_mac_arp_tables(
+            host_id, host["ip_address"], snmp_cfg,
+            device_type=host.get("device_type", ""),
+        )
         result.setdefault("hosts_collected", 1)
         return result
 
@@ -708,7 +818,10 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
 
         async def _collect_one(h, cfg):
             async with sem:
-                return await collect_mac_arp_tables(h["id"], h["ip_address"], cfg)
+                return await collect_mac_arp_tables(
+                    h["id"], h["ip_address"], cfg,
+                    device_type=h.get("device_type", ""),
+                )
 
         tasks = [asyncio.create_task(_collect_one(h, snmp_cfg)) for h in hosts]
         results = await asyncio.gather(*tasks, return_exceptions=True)
