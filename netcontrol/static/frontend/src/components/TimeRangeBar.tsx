@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
-import { useTimeRange, type TimeRangePreset } from '@/lib/timeRange';
+import { useTimeRange, type TimeRangePreset } from '@/lib/timeRange-context';
 
 const PRESETS: TimeRangePreset[] = ['1h', '6h', '24h', '7d', '30d', 'custom'];
 const PRESET_LABELS: Record<TimeRangePreset, string> = {
