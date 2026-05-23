@@ -39,6 +39,15 @@ RUN mkdir -p /app/state /app/certs
 RUN useradd -m -u 1000 plexus && chown -R plexus:plexus /app
 USER plexus
 
+# Release builds set these so the running container can self-identify via
+# /api/version without git on PATH.  The bootstrap.sh / setup.sh flow does
+# not pass them, so dev builds fall through to the netcontrol/version.py
+# fallback ("1.0.0", no SHA).
+ARG PLEXUS_VERSION=""
+ARG PLEXUS_GIT_SHA=""
+ENV PLEXUS_VERSION=${PLEXUS_VERSION}
+ENV PLEXUS_GIT_SHA=${PLEXUS_GIT_SHA}
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD \
