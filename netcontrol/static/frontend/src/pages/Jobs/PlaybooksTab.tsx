@@ -1,9 +1,14 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 
 import { useDeletePlaybook, usePlaybooks, type Playbook } from '@/api/jobs';
 
 import { parseTags } from './helpers';
-import { PlaybookFormModal } from './PlaybookFormModal';
+
+// CodeMirror + python/yaml language grammars + dracula theme together weigh
+// ~400 KB. Defer loading them until the user actually opens the editor.
+const PlaybookFormModal = lazy(() =>
+  import('./PlaybookFormModal').then((m) => ({ default: m.PlaybookFormModal })),
+);
 
 export function PlaybooksTab() {
   const query = usePlaybooks();
@@ -61,11 +66,15 @@ export function PlaybooksTab() {
         </div>
       ))}
 
-      <PlaybookFormModal
-        mode={editing?.mode ?? null}
-        playbookId={editing?.mode === 'edit' ? editing.id : null}
-        onClose={() => setEditing(null)}
-      />
+      {editing && (
+        <Suspense fallback={null}>
+          <PlaybookFormModal
+            mode={editing.mode}
+            playbookId={editing.mode === 'edit' ? editing.id : null}
+            onClose={() => setEditing(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
