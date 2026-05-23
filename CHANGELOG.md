@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 1.0.1 - 2026-05-22
+
+### Deployment & upgrades
+- Add `deploy/upgrade.sh` for one-command upgrades on deployed VMs: auto-detects SQLite vs Postgres for pre-upgrade DB snapshots, captures rollback target, supports `--ref` (git mode), `--image` (prebuilt image mode), `--dry-run`, and `--rollback`, and health-checks the new container before declaring success.
+- Add `/api/version` endpoint and rework `netcontrol/version.py` to source version identity from `PLEXUS_VERSION` env > root `VERSION` file > hardcoded fallback, so containers self-identify without needing git on PATH.
+- Add `PLEXUS_VERSION` and `PLEXUS_GIT_SHA` build args to the Dockerfile and thread them through the release workflow so GHCR-published images carry their real version and commit SHA.
+
+### Monitoring & onboarding
+- Add ICMP liveness probing via `icmplib`: every poll runs an unprivileged async ping in parallel with SNMP/SSH, and `icmp_alive` + `icmp_rtt_ms` are persisted alongside each poll record (migration 0045).
+- Add ICMP-only onboarding: new `icmp_only` device type skips SNMP and SSH and gates host health on ping alone, useful for endpoints, printers, and gear without management protocols.
+- Discovery scans now fall back to ICMP when SNMP and TCP banner probes both fail, so ping-only hosts surface during sweeps.
+- Replace the placeholder `response_time_ms` (previously wall-clock poll duration) with the real ICMP RTT.
+
+### Drivers
+- Add Cisco FTD/ASA driver covering LINA-datapath polling via `CISCO-PROCESS-MIB` and `CISCO-ENHANCED-MEMPOOL-MIB`, with documented SNMPv3 engine-ID pinning guidance for ASA/FTD reboot drift.
+
+### Audit
+- Add port-hygiene and VLAN-consistency rule packs to the network audit engine.
+
+### Dashboard
+- Add Backup Status panel showing last-success-per-device and stale-backup alerts.
+
+### Bug fixes
+- Drop the dead master-switch gate in the config-backups scheduler that was silently blocking every scheduled run.
+
 ## 1.0.0 - 2026-05-06
 
 First public release on GitHub. Earlier `0.x` versions in this changelog
