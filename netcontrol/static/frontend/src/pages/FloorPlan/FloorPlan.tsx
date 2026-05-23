@@ -19,9 +19,9 @@ import {
   AddSiteModal,
   EditFloorModal,
   UploadImageModal,
-  useConfirmDeleteFloor,
 } from './modals';
 import { statusColor } from './statusColor';
+import { useConfirmDeleteFloor } from './useConfirmDeleteFloor';
 
 type ModalKind = 'add-site' | 'add-floor' | 'edit-floor' | 'upload-image' | null;
 
