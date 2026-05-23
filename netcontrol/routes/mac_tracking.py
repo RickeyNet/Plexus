@@ -585,6 +585,12 @@ async def search_mac(query: str = Query(""), limit: int = Query(5000, le=50000))
     return await db.search_mac_tracking(query, limit)
 
 
+@router.get("/api/mac-tracking/stats")
+async def mac_tracking_stats():
+    """Header counts: total rows, unique MACs, switches reporting, freshness."""
+    return await db.get_mac_tracking_stats()
+
+
 @router.get("/api/mac-tracking/host/{host_id}")
 async def get_host_mac_arp(host_id: int):
     """Get MAC and ARP tables for a specific device."""
