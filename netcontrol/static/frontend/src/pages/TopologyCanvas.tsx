@@ -30,11 +30,7 @@ interface NodePos {
   y: number;
 }
 
-/**
- * Place N nodes evenly around a circle inset from the canvas edges.
- * Exposed for unit tests; the parent never calls it directly.
- */
-export function circularLayout(
+function circularLayout(
   ids: number[],
   width = CANVAS_W,
   height = CANVAS_H,

@@ -176,7 +176,6 @@ export function Topology() {
       if (savePosTimerRef.current) clearTimeout(savePosTimerRef.current);
       destroyNetwork();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Util overlay stream.
@@ -224,6 +223,7 @@ export function Topology() {
         flash(`Failed to load STP overlay: ${e.message}`);
       });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stpOverlay, stpVlan, stpAllVlans, groupFilter]);
 
   // Refresh edge labels in-place when toggled.
