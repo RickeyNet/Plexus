@@ -29,6 +29,7 @@ export interface MacCollectResult {
   macs_found: number;
   arps_found: number;
   hosts_collected: number;
+  errors?: string[];
 }
 
 export interface MacTrackingStats {

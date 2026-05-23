@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { Fragment, FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { PageHelp } from '@/components/PageHelp';
@@ -387,12 +387,51 @@ function MovesTab() {
   );
 }
 
+type CollectAttempt = {
+  status: 'running' | 'ok' | 'error';
+  macs?: number;
+  arps?: number;
+  errors?: string[];
+  errorMessage?: string;
+  ranAt: number;
+};
+
 function HostsTab() {
   // Filter state: by default show only hosts that should be returning data
   // but aren't, since that's what the diagnostic is for.
   const [filter, setFilter] = useState<'silent' | 'reporting' | 'all'>('silent');
+  const [attempts, setAttempts] = useState<Record<number, CollectAttempt>>({});
   const rollup = useMacTrackingByHost();
   const collect = useTriggerMacCollection();
+
+  const runCollect = async (hostId: number) => {
+    setAttempts((prev) => ({
+      ...prev,
+      [hostId]: { status: 'running', ranAt: Date.now() },
+    }));
+    try {
+      const result = await collect.mutateAsync(hostId);
+      setAttempts((prev) => ({
+        ...prev,
+        [hostId]: {
+          status: 'ok',
+          macs: result.macs_found,
+          arps: result.arps_found,
+          errors: result.errors,
+          ranAt: Date.now(),
+        },
+      }));
+    } catch (err) {
+      setAttempts((prev) => ({
+        ...prev,
+        [hostId]: {
+          status: 'error',
+          errorMessage: err instanceof Error ? err.message : String(err),
+          ranAt: Date.now(),
+        },
+      }));
+    }
+  };
 
   const rows = rollup.data ?? [];
   const reporting = rows.filter((r) => r.mac_count > 0);
@@ -494,12 +533,8 @@ function HostsTab() {
         <div className="glass-card card" style={{ overflowX: 'auto' }}>
           <HostRollupTable
             rows={visible}
-            onCollect={(hostId) => collect.mutate(hostId)}
-            collectPendingId={
-              collect.isPending && typeof collect.variables === 'number'
-                ? collect.variables
-                : null
-            }
+            attempts={attempts}
+            onCollect={runCollect}
           />
         </div>
       )}
@@ -509,12 +544,12 @@ function HostsTab() {
 
 function HostRollupTable({
   rows,
+  attempts,
   onCollect,
-  collectPendingId,
 }: {
   rows: MacHostRollup[];
+  attempts: Record<number, CollectAttempt>;
   onCollect: (hostId: number) => void;
-  collectPendingId: number | null;
 }) {
   return (
     <table className="data-table" style={{ width: '100%' }}>
@@ -534,57 +569,128 @@ function HostRollupTable({
       <tbody>
         {rows.map((r) => {
           const isSilent = r.snmp_enabled && r.mac_count === 0;
+          const attempt = attempts[r.host_id];
+          const isRunning = attempt?.status === 'running';
           return (
-            <tr key={r.host_id}>
-              <td>
-                {r.hostname || `host-${r.host_id}`}
-                {isSilent && (
+            <Fragment key={r.host_id}>
+              <tr>
+                <td>
+                  {r.hostname || `host-${r.host_id}`}
+                  {isSilent && (
+                    <span
+                      className="badge badge-sm badge-warning"
+                      style={{ marginLeft: '0.5rem' }}
+                      title="SNMP is configured for this host's group but the FDB walk returned nothing. Likely causes: not an L2 bridging device, SNMP creds wrong, ACL blocking the poller, or device requires per-VLAN v3 contexts."
+                    >
+                      silent
+                    </span>
+                  )}
+                </td>
+                <td>{r.ip_address}</td>
+                <td>{r.group_name || '-'}</td>
+                <td>
                   <span
-                    className="badge badge-sm badge-warning"
-                    style={{ marginLeft: '0.5rem' }}
-                    title="SNMP is configured for this host's group but the FDB walk returned nothing. Likely causes: not an L2 bridging device, SNMP creds wrong, ACL blocking the poller, or device requires per-VLAN v3 contexts."
+                    className={`badge badge-sm ${
+                      r.snmp_enabled ? 'badge-success' : ''
+                    }`}
                   >
-                    silent
+                    {r.snmp_enabled ? 'enabled' : 'off'}
                   </span>
-                )}
-              </td>
-              <td>{r.ip_address}</td>
-              <td>{r.group_name || '-'}</td>
-              <td>
-                <span
-                  className={`badge badge-sm ${
-                    r.snmp_enabled ? 'badge-success' : ''
-                  }`}
-                >
-                  {r.snmp_enabled ? 'enabled' : 'off'}
-                </span>
-              </td>
-              <td>{r.mac_count.toLocaleString()}</td>
-              <td>{r.unique_macs.toLocaleString()}</td>
-              <td>{r.arp_count.toLocaleString()}</td>
-              <td style={{ fontSize: '0.85em' }}>
-                {formatTimestamp(r.last_mac_seen)}
-              </td>
-              <td style={{ whiteSpace: 'nowrap' }}>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => onCollect(r.host_id)}
-                  disabled={!r.snmp_enabled || collectPendingId === r.host_id}
-                  title={
-                    r.snmp_enabled
-                      ? 'Trigger an immediate MAC/ARP walk against this host'
-                      : 'SNMP is not enabled for this host’s group'
-                  }
-                >
-                  {collectPendingId === r.host_id ? '…' : 'Collect'}
-                </button>
-              </td>
-            </tr>
+                </td>
+                <td>{r.mac_count.toLocaleString()}</td>
+                <td>{r.unique_macs.toLocaleString()}</td>
+                <td>{r.arp_count.toLocaleString()}</td>
+                <td style={{ fontSize: '0.85em' }}>
+                  {formatTimestamp(r.last_mac_seen)}
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => onCollect(r.host_id)}
+                    disabled={!r.snmp_enabled || isRunning}
+                    title={
+                      r.snmp_enabled
+                        ? 'Trigger an immediate MAC/ARP walk against this host'
+                        : 'SNMP is not enabled for this host’s group'
+                    }
+                  >
+                    {isRunning ? 'Walking…' : 'Collect'}
+                  </button>
+                </td>
+              </tr>
+              {attempt && (
+                <tr>
+                  <td colSpan={9} style={{ padding: '0.5rem 1rem' }}>
+                    <CollectAttemptDetail attempt={attempt} />
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           );
         })}
       </tbody>
     </table>
+  );
+}
+
+function CollectAttemptDetail({ attempt }: { attempt: CollectAttempt }) {
+  if (attempt.status === 'running') {
+    return (
+      <div style={{ fontSize: '0.85em', opacity: 0.75 }}>
+        Walking SNMP… (this can take several seconds per OID on a slow device)
+      </div>
+    );
+  }
+  if (attempt.status === 'error') {
+    return (
+      <div
+        style={{
+          fontSize: '0.85em',
+          color: 'var(--danger)',
+          padding: '0.5rem',
+          border: '1px solid var(--danger)',
+          borderRadius: '4px',
+        }}
+      >
+        <strong>Request failed:</strong> {attempt.errorMessage || 'Unknown error'}
+      </div>
+    );
+  }
+  const had = (attempt.macs ?? 0) > 0 || (attempt.arps ?? 0) > 0;
+  const hasErrors = !!attempt.errors?.length;
+  // Result with no rows AND no error rows is the worst-case silent failure —
+  // give it a distinct treatment so the user knows the walk completed but
+  // produced literally nothing actionable.
+  return (
+    <div
+      style={{
+        fontSize: '0.85em',
+        padding: '0.5rem',
+        border: `1px solid var(--${hasErrors ? 'warning' : had ? 'success' : 'border'})`,
+        borderRadius: '4px',
+      }}
+    >
+      <div>
+        <strong>Collected:</strong> {attempt.macs ?? 0} MACs,{' '}
+        {attempt.arps ?? 0} ARPs
+      </div>
+      {hasErrors && (
+        <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.25rem' }}>
+          {attempt.errors!.map((err, idx) => (
+            <li key={idx} style={{ color: 'var(--warning)' }}>
+              {err}
+            </li>
+          ))}
+        </ul>
+      )}
+      {!had && !hasErrors && (
+        <div style={{ marginTop: '0.25rem', opacity: 0.7 }}>
+          Walk completed but returned nothing. Device may not bridge / may not
+          expose the FDB to this credential.
+        </div>
+      )}
+    </div>
   );
 }
 
