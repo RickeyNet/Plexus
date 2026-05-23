@@ -240,6 +240,7 @@ function DeviceInfoBar({ poll, hostId }: { poll: MonitoringPoll | null; hostId: 
         <Item label="Hostname" value={poll.hostname || 'Unknown'} />
         <Item label="IP" value={poll.ip_address || 'N/A'} />
         <Item label="Type" value={poll.device_type || 'N/A'} />
+        <ItemNode label="Liveness" node={<LivenessPill poll={poll} />} />
         <Item
           label="CPU"
           value={poll.cpu_percent != null ? poll.cpu_percent.toFixed(1) + '%' : 'N/A'}
@@ -272,6 +273,37 @@ function DeviceInfoBar({ poll, hostId }: { poll: MonitoringPoll | null; hostId: 
       </div>
     </div>
   );
+}
+
+function LivenessPill({ poll }: { poll: MonitoringPoll }) {
+  // icmp_alive arrives as 0/1 from SQLite or true/false from a JSON-clean
+  // Postgres path — normalise both. `null/undefined` means ICMP didn't run
+  // (icmplib missing, or icmp_enabled=false), so we say nothing rather
+  // than imply the host is down.
+  const icmpRan = poll.icmp_alive !== undefined && poll.icmp_alive !== null;
+  const icmpUp = icmpRan && Boolean(poll.icmp_alive);
+  const snmpOk = poll.poll_status === 'ok' && poll.cpu_percent != null;
+  if (!icmpRan) {
+    return <span className="text-muted">ICMP disabled</span>;
+  }
+  if (icmpUp && snmpOk) {
+    return (
+      <span className="badge badge-success">
+        Healthy{poll.icmp_rtt_ms != null ? ` (${poll.icmp_rtt_ms.toFixed(1)}ms)` : ''}
+      </span>
+    );
+  }
+  if (icmpUp && !snmpOk) {
+    return (
+      <span
+        className="badge badge-warning"
+        title="Host responds to ICMP but the SNMP/SSH poll did not return data — credentials, ACL, or engine-ID problem."
+      >
+        ICMP up, SNMP/SSH not responding
+      </span>
+    );
+  }
+  return <span className="badge badge-danger">Unreachable (no ICMP reply)</span>;
 }
 
 function Item({ label, value }: { label: string; value: string }) {

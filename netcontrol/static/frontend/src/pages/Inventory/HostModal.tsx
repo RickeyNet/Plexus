@@ -12,6 +12,8 @@ const DEVICE_TYPES = [
   { value: 'cisco_ios', label: 'Cisco IOS' },
   { value: 'cisco_nxos', label: 'Cisco NX-OS' },
   { value: 'cisco_asa', label: 'Cisco ASA' },
+  { value: 'cisco_ftd', label: 'Cisco FTD / Firepower' },
+  { value: 'icmp_only', label: 'ICMP-only (ping liveness, no SNMP/SSH)' },
 ];
 
 interface Props {
