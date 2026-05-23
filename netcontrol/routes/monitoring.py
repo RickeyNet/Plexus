@@ -4,7 +4,6 @@ and background poll/escalation loops.
 """
 from __future__ import annotations
 
-
 import asyncio
 import hashlib
 import json
@@ -17,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.metrics_engine import (
     emit_metric_samples_from_poll,
     run_retention_cleanup as metrics_retention_cleanup,
@@ -24,7 +24,6 @@ from netcontrol.routes.metrics_engine import (
     store_interface_ts_from_poll,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
-from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.snmp import PYSMNP_AVAILABLE, _snmp_walk
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -990,7 +989,7 @@ async def monitoring_poll_now_stream(request: Request):
                         timeout=poll_timeout,
                     )
                     return h, res, None
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     return h, None, TimeoutError(
                         f"poll exceeded {poll_timeout:.0f}s"
                     )

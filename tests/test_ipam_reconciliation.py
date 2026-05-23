@@ -16,7 +16,6 @@ from netcontrol.routes.ipam_reconciliation import (
     compute_drifts,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure-function tests for compute_drifts
 # ─────────────────────────────────────────────────────────────────────────────

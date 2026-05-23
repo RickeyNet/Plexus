@@ -1,15 +1,13 @@
 """Tests for bandwidth billing and 95th percentile reports."""
 
 import pytest
-
 import routes.database as db_module
 from netcontrol.routes.billing import (
+    _format_bps,
+    _get_billing_period_range,
     calculate_95th_percentile,
     generate_billing_for_circuit,
-    _get_billing_period_range,
-    _format_bps,
 )
-
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

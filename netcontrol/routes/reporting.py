@@ -4,7 +4,6 @@ compliance, and interface utilization data.
 """
 from __future__ import annotations
 
-
 import asyncio
 import csv
 import io
@@ -1115,7 +1114,7 @@ def _render_tabular_pdf(title: str, rows: list[dict]) -> bytes:
     for r in rows:
         for c in columns:
             v = r.get(c)
-            widths[c] = max(widths[c], len(("" if v is None else str(v))))
+            widths[c] = max(widths[c], len("" if v is None else str(v)))
     for c in columns:
         widths[c] = min(widths[c], 24)
     header = "  ".join(c[: widths[c]].ljust(widths[c]) for c in columns)

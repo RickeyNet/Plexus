@@ -9,8 +9,8 @@ Provides:
 """
 from __future__ import annotations
 
-
 import math
+
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -277,8 +277,8 @@ async def list_data_sources(host_id: int, ds_type: str | None = None):
 @router.post("/api/hosts/{host_id}/data-sources/discover")
 async def discover_data_sources(host_id: int):
     """Trigger SNMP table walk to discover interfaces and storage as data sources."""
-    from netcontrol.routes.snmp import auto_discover_data_sources
     import netcontrol.routes.state as state
+    from netcontrol.routes.snmp import auto_discover_data_sources
 
     host = await db.get_host(host_id)
     if not host:

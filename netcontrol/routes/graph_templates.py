@@ -11,7 +11,6 @@ Provides API endpoints for:
 """
 from __future__ import annotations
 
-
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
