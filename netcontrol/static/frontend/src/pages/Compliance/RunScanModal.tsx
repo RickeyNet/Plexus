@@ -32,7 +32,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
     return list.sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
   }, [groups.data]);
 
-  const profileList = profiles.data || [];
+  const profileList = useMemo(() => profiles.data || [], [profiles.data]);
   const credList = credentials.data || [];
   const groupList = groups.data || [];
 

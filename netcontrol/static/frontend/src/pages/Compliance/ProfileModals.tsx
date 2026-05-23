@@ -179,7 +179,7 @@ export function AssignProfileModal({
   );
 
   const groupList = groups.data || [];
-  const credList = credentials.data || [];
+  const credList = useMemo(() => credentials.data || [], [credentials.data]);
 
   // Default to first credential when loaded.
   useEffect(() => {
