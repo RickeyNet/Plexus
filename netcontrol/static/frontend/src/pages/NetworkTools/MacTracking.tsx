@@ -12,6 +12,7 @@ import {
   useMacMoveEvents,
   useMacMoveSummary,
   useMacSearch,
+  useMacTrackingStats,
   useTriggerMacCollection,
 } from '@/api/networkTools';
 
@@ -96,6 +97,7 @@ function SearchTab() {
   const [historyMac, setHistoryMac] = useState<string | null>(null);
 
   const search = useMacSearch(submitted);
+  const stats = useMacTrackingStats();
 
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
@@ -104,21 +106,93 @@ function SearchTab() {
     setSubmitted(trimmed);
   };
 
+  const clear = () => {
+    setDraft('');
+    setSubmitted('');
+  };
+
   return (
     <>
-      <form onSubmit={submit} className="page-header" style={{ marginTop: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+          marginBottom: '1rem',
+        }}
+      >
+        <SummaryCard label="Total Entries" value={stats.data?.total_entries} />
+        <SummaryCard
+          label="Unique MACs"
+          value={stats.data?.unique_macs}
+          accent="success"
+        />
+        <SummaryCard
+          label="Switches Reporting"
+          value={stats.data?.switches_reporting}
+        />
+        <SummaryCard
+          label="Last Collected"
+          textValue={formatTimestamp(stats.data?.last_collected_at ?? null) || '-'}
+        />
+      </div>
+
+      <form
+        onSubmit={submit}
+        className="page-header"
+        style={{
+          marginTop: 0,
+          alignItems: 'center',
+          gap: '0.5rem',
+          flexWrap: 'wrap',
+        }}
+      >
         <input
           id="mac-tracking-search"
           className="form-input list-control-search"
           type="search"
-          placeholder="Search by MAC, IP, or port name…"
+          placeholder="Search by MAC (any format), IP, or port name…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          style={{ flex: '1 1 22rem' }}
         />
         <button type="submit" className="btn btn-sm btn-primary">
           Search
         </button>
+        {submitted && (
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={clear}
+          >
+            Clear
+          </button>
+        )}
+        <span
+          className="badge badge-sm"
+          title="Unique MAC addresses tracked across all switches"
+          style={{ marginLeft: 'auto' }}
+        >
+          {stats.data
+            ? `${stats.data.unique_macs.toLocaleString()} unique MAC${stats.data.unique_macs === 1 ? '' : 's'} tracked`
+            : '…'}
+        </span>
       </form>
+
+      {submitted && (
+        <div
+          style={{
+            fontSize: '0.8em',
+            opacity: 0.65,
+            margin: '-0.5rem 0 0.75rem',
+          }}
+        >
+          Showing matches for &ldquo;{submitted}&rdquo;. MAC formats (with or
+          without <code>:</code> <code>-</code> <code>.</code>) all match.
+          A missing MAC usually means the host&apos;s switch hasn&apos;t been
+          polled yet — try &ldquo;Collect Now&rdquo;.
+        </div>
+      )}
 
       {search.isPending && (
         <div className="skeleton-loader" style={{ height: '200px' }} />
@@ -305,10 +379,12 @@ function MovesTab() {
 function SummaryCard({
   label,
   value,
+  textValue,
   accent,
 }: {
   label: string;
-  value: number | undefined;
+  value?: number | undefined;
+  textValue?: string;
   accent?: 'warning' | 'success';
 }) {
   const color =
@@ -317,14 +393,21 @@ function SummaryCard({
       : accent === 'success'
         ? 'var(--success)'
         : 'var(--text)';
+  const display =
+    textValue !== undefined
+      ? textValue
+      : value !== undefined
+        ? value.toLocaleString()
+        : '-';
+  // Timestamps need a smaller font so they fit in the tile next to the
+  // numeric cards without wrapping awkwardly.
+  const fontSize = textValue !== undefined ? '0.95rem' : '1.75rem';
   return (
     <div
       className="glass-card card"
       style={{ minWidth: '8rem', textAlign: 'center', padding: '1rem' }}
     >
-      <div style={{ fontSize: '1.75rem', fontWeight: 600, color }}>
-        {value ?? '-'}
-      </div>
+      <div style={{ fontSize, fontWeight: 600, color }}>{display}</div>
       <div style={{ fontSize: '0.85em', opacity: 0.7 }}>{label}</div>
     </div>
   );
