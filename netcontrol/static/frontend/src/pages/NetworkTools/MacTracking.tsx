@@ -4,6 +4,7 @@ import { Modal } from '@/components/Modal';
 import { PageHelp } from '@/components/PageHelp';
 import {
   MacEntry,
+  MacHostRollup,
   MacMoveEvent,
   useAcknowledgeAllMacMoves,
   useAcknowledgeMacMove,
@@ -12,13 +13,14 @@ import {
   useMacMoveEvents,
   useMacMoveSummary,
   useMacSearch,
+  useMacTrackingByHost,
   useMacTrackingStats,
   useTriggerMacCollection,
 } from '@/api/networkTools';
 
 import { formatTimestamp } from './formatting';
 
-type Tab = 'search' | 'moves';
+type Tab = 'search' | 'moves' | 'hosts';
 
 export function MacTracking() {
   const [tab, setTab] = useState<Tab>('search');
@@ -81,9 +83,18 @@ export function MacTracking() {
         >
           Moves
         </button>
+        <button
+          type="button"
+          className={`btn btn-sm btn-secondary upgrade-tab-btn${tab === 'hosts' ? ' active' : ''}`}
+          onClick={() => setTab('hosts')}
+        >
+          By Host
+        </button>
       </div>
 
-      {tab === 'search' ? <SearchTab /> : <MovesTab />}
+      {tab === 'search' && <SearchTab />}
+      {tab === 'moves' && <MovesTab />}
+      {tab === 'hosts' && <HostsTab />}
     </>
   );
 }
@@ -373,6 +384,207 @@ function MovesTab() {
         <MoveEventLogBody eventId={logEvent} />
       </Modal>
     </>
+  );
+}
+
+function HostsTab() {
+  // Filter state: by default show only hosts that should be returning data
+  // but aren't, since that's what the diagnostic is for.
+  const [filter, setFilter] = useState<'silent' | 'reporting' | 'all'>('silent');
+  const rollup = useMacTrackingByHost();
+  const collect = useTriggerMacCollection();
+
+  const rows = rollup.data ?? [];
+  const reporting = rows.filter((r) => r.mac_count > 0);
+  // A "silent" host is one that *should* be returning data: SNMP is configured
+  // for its group, but the FDB walk produced nothing. Hosts without SNMP
+  // enabled aren't broken — they're just not in scope, so they don't count.
+  const silent = rows.filter((r) => r.snmp_enabled && r.mac_count === 0);
+  const noSnmp = rows.filter((r) => !r.snmp_enabled);
+
+  const visible =
+    filter === 'silent' ? silent : filter === 'reporting' ? reporting : rows;
+
+  const filterPill = (
+    id: 'silent' | 'reporting' | 'all',
+    label: string,
+    count: number,
+    accent?: 'warning' | 'success',
+  ) => {
+    const isActive = filter === id;
+    const tone =
+      accent === 'warning'
+        ? 'var(--warning)'
+        : accent === 'success'
+          ? 'var(--success)'
+          : 'var(--text)';
+    return (
+      <button
+        key={id}
+        type="button"
+        className={`btn btn-sm${isActive ? ' btn-primary' : ' btn-secondary'}`}
+        onClick={() => setFilter(id)}
+        style={isActive ? undefined : { color: tone }}
+      >
+        {label} ({count})
+      </button>
+    );
+  };
+
+  return (
+    <>
+      <div
+        style={{
+          display: 'flex',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+          marginBottom: '1rem',
+        }}
+      >
+        <SummaryCard
+          label="Reporting"
+          value={reporting.length}
+          accent="success"
+        />
+        <SummaryCard
+          label="Silent (SNMP on, no MACs)"
+          value={silent.length}
+          accent={silent.length > 0 ? 'warning' : undefined}
+        />
+        <SummaryCard label="SNMP disabled" value={noSnmp.length} />
+        <SummaryCard label="Hosts total" value={rows.length} />
+      </div>
+
+      <div
+        className="page-header"
+        style={{ marginTop: 0, alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}
+      >
+        {filterPill('silent', 'Silent', silent.length, 'warning')}
+        {filterPill('reporting', 'Reporting', reporting.length, 'success')}
+        {filterPill('all', 'All hosts', rows.length)}
+        <span style={{ marginLeft: 'auto', fontSize: '0.85em', opacity: 0.7 }}>
+          {visible.length} host{visible.length === 1 ? '' : 's'} shown
+        </span>
+      </div>
+
+      {rollup.isPending && (
+        <div className="skeleton-loader" style={{ height: '200px' }} />
+      )}
+
+      {rollup.error && (
+        <div className="glass-card card" style={{ color: 'var(--danger)' }}>
+          Failed to load host rollup: {rollup.error.message}
+        </div>
+      )}
+
+      {rollup.data && visible.length === 0 && (
+        <div
+          className="glass-card card"
+          style={{ textAlign: 'center', padding: '2rem', opacity: 0.7 }}
+        >
+          {filter === 'silent'
+            ? 'No silent hosts — every SNMP-enabled host is returning MAC entries.'
+            : filter === 'reporting'
+              ? 'No host has returned any MAC entries yet. Try Collect Now.'
+              : 'No hosts found.'}
+        </div>
+      )}
+
+      {rollup.data && visible.length > 0 && (
+        <div className="glass-card card" style={{ overflowX: 'auto' }}>
+          <HostRollupTable
+            rows={visible}
+            onCollect={(hostId) => collect.mutate(hostId)}
+            collectPendingId={
+              collect.isPending && typeof collect.variables === 'number'
+                ? collect.variables
+                : null
+            }
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+function HostRollupTable({
+  rows,
+  onCollect,
+  collectPendingId,
+}: {
+  rows: MacHostRollup[];
+  onCollect: (hostId: number) => void;
+  collectPendingId: number | null;
+}) {
+  return (
+    <table className="data-table" style={{ width: '100%' }}>
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>IP</th>
+          <th>Group</th>
+          <th>SNMP</th>
+          <th>MAC rows</th>
+          <th>Unique MACs</th>
+          <th>ARP rows</th>
+          <th>Last MAC seen</th>
+          <th />
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => {
+          const isSilent = r.snmp_enabled && r.mac_count === 0;
+          return (
+            <tr key={r.host_id}>
+              <td>
+                {r.hostname || `host-${r.host_id}`}
+                {isSilent && (
+                  <span
+                    className="badge badge-sm badge-warning"
+                    style={{ marginLeft: '0.5rem' }}
+                    title="SNMP is configured for this host's group but the FDB walk returned nothing. Likely causes: not an L2 bridging device, SNMP creds wrong, ACL blocking the poller, or device requires per-VLAN v3 contexts."
+                  >
+                    silent
+                  </span>
+                )}
+              </td>
+              <td>{r.ip_address}</td>
+              <td>{r.group_name || '-'}</td>
+              <td>
+                <span
+                  className={`badge badge-sm ${
+                    r.snmp_enabled ? 'badge-success' : ''
+                  }`}
+                >
+                  {r.snmp_enabled ? 'enabled' : 'off'}
+                </span>
+              </td>
+              <td>{r.mac_count.toLocaleString()}</td>
+              <td>{r.unique_macs.toLocaleString()}</td>
+              <td>{r.arp_count.toLocaleString()}</td>
+              <td style={{ fontSize: '0.85em' }}>
+                {formatTimestamp(r.last_mac_seen)}
+              </td>
+              <td style={{ whiteSpace: 'nowrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => onCollect(r.host_id)}
+                  disabled={!r.snmp_enabled || collectPendingId === r.host_id}
+                  title={
+                    r.snmp_enabled
+                      ? 'Trigger an immediate MAC/ARP walk against this host'
+                      : 'SNMP is not enabled for this host’s group'
+                  }
+                >
+                  {collectPendingId === r.host_id ? '…' : 'Collect'}
+                </button>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 

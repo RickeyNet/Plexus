@@ -590,6 +590,33 @@ async def mac_tracking_stats():
     return await db.get_mac_tracking_stats()
 
 
+@router.get("/api/mac-tracking/by-host")
+async def mac_tracking_by_host():
+    """Per-host collection rollup. Silent hosts (mac_count == 0) sort first.
+
+    Each row is enriched with ``snmp_enabled`` resolved from the host's group
+    so the UI can tell the difference between "host has no SNMP configured"
+    and "host has SNMP configured but isn't returning FDB rows" — those are
+    very different debugging paths.
+    """
+    from netcontrol.routes.state import _resolve_snmp_discovery_config
+
+    rows = await db.get_mac_collection_by_host()
+    # Cache the SNMP-enabled decision per group_id so we don't re-resolve for
+    # every host in the same group.
+    snmp_by_group: dict[int | None, bool] = {}
+    for row in rows:
+        gid = row.get("group_id")
+        if gid not in snmp_by_group:
+            try:
+                cfg = _resolve_snmp_discovery_config(gid)
+                snmp_by_group[gid] = bool(cfg.get("enabled"))
+            except Exception:
+                snmp_by_group[gid] = False
+        row["snmp_enabled"] = snmp_by_group[gid]
+    return rows
+
+
 @router.get("/api/mac-tracking/host/{host_id}")
 async def get_host_mac_arp(host_id: int):
     """Get MAC and ARP tables for a specific device."""
