@@ -1363,14 +1363,14 @@ export function Topology() {
               )}
               {overlayStatusQuery.data && overlayStatusQuery.data.hosts.length === 0 && (
                 <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>
-                  All devices clean — no open findings, drift, or errors.
+                  All devices clean - no open findings, drift, or errors.
                 </span>
               )}
             </>
           )}
           {utilOverlay && data.edges.length > 0 && data.edges.every((e) => e.utilization == null) && (
             <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>
-              No utilization data — needs SNMP interface polling with two counter samples and if_speed_mbps set.
+              No utilization data - needs SNMP interface polling with two counter samples and if_speed_mbps set.
             </span>
           )}
         </div>

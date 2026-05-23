@@ -504,7 +504,7 @@ def test_juniper_junos_build_netflow_config_uses_set_syntax() -> None:
     # is configured as "set ..." statements, not config-mode stanzas.
     drv = get_driver("juniper_junos")
     cmds = drv.build_netflow_config(_cfg())
-    # Every line should start with "set " — no Cisco-style stanza lines
+    # Every line should start with "set " - no Cisco-style stanza lines
     # (those start with bare keywords like "flow record" or "interface").
     assert all(c.startswith("set ") for c in cmds), cmds
     # Collector + port are baked into the flow-server line.
@@ -527,7 +527,7 @@ def test_juniper_junos_netflow_respects_sampling_rate() -> None:
     assert any("input rate 1" in c for c in base)
     assert any("input rate 1024" in c for c in sampled)
     # No-sampling and high-sampling configs differ only in the rate line
-    # — the rest of the surface area is identical, which guards against
+    # - the rest of the surface area is identical, which guards against
     # accidentally tying other knobs (template, instance) to the rate.
     base_norm = [c for c in base if "input rate" not in c]
     sampled_norm = [c for c in sampled if "input rate" not in c]
@@ -551,7 +551,7 @@ def test_juniper_junos_config_capture_and_save() -> None:
     # not the curly-brace tree).
     assert drv.capture_running_config_command() == "show configuration | display set"
     # Junos persists via ``commit`` (handled by Netmiko's save_config()),
-    # so there is no extra save step here.  Empty list — not None —
+    # so there is no extra save step here.  Empty list - not None -
     # because the playbook's iter-over-save-commands loop must work.
     assert drv.save_config_commands() == []
 
@@ -582,7 +582,7 @@ def test_juniper_junos_health_check_capability_surface() -> None:
     # show version is unmodified on Junos.
     assert drv.show_version_command() == "show version"
     # Serial filter anchors on the "Chassis" row of ``show chassis
-    # hardware`` — that's the row that carries the chassis-level serial.
+    # hardware`` - that's the row that carries the chassis-level serial.
     assert drv.serial_number_show_command() == "show chassis hardware | match Chassis"
 
     # Real Junos ``show chassis hardware`` rows are whitespace-aligned.
@@ -625,7 +625,7 @@ def test_juniper_junos_parse_serial_ignores_engine_chassis_lines() -> None:
 def test_cisco_xe_install_add_command_uses_full_path() -> None:
     # IOS-XE install-mode add takes the device-side full path; the
     # driver shouldn't second-guess the caller's path format (flash:
-    # vs bootflash:/ vs slot0:) — it just stitches it into the command.
+    # vs bootflash:/ vs slot0:) - it just stitches it into the command.
     drv = get_driver("cisco_xe")
     assert (
         drv.upgrade_install_add_command("flash:cat9k_iosxe.17.09.04a.SPA.bin")

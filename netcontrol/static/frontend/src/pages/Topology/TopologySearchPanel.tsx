@@ -1,5 +1,5 @@
 /**
- * Phase C — search-from-the-map panel.
+ * Phase C - search-from-the-map panel.
  *
  * Lets an operator type a MAC, IP, or VLAN id and highlights every host
  * (and, for MAC/IP results, the specific port) on the topology graph.

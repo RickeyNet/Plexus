@@ -231,7 +231,7 @@ export function useMetricsQuery({
 }
 
 // ── Chart annotations ──────────────────────────────────────────────────────
-// Mirrors legacy api.js getAnnotations() — deployment/config/alert event
+// Mirrors legacy api.js getAnnotations() - deployment/config/alert event
 // markers overlaid on custom-dashboard time-series charts.
 
 export interface Annotation {

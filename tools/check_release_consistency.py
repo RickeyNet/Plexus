@@ -2,8 +2,12 @@
 """Validate release consistency between version constant, changelog, and tag.
 
 Checks:
-- netcontrol/version.py APP_VERSION matches latest CHANGELOG entry version.
-- Optional tag (for example v0.2.0) matches APP_VERSION.
+- netcontrol/version.py _FALLBACK_VERSION matches latest CHANGELOG entry version.
+- Optional tag (for example v0.2.0) matches _FALLBACK_VERSION.
+
+APP_VERSION itself is now computed at runtime (env > VERSION file > fallback),
+so the static literal we validate against is _FALLBACK_VERSION - the value a
+plain source checkout reports when no build-time identity is baked in.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from pathlib import Path
 VERSION_FILE = Path("netcontrol/version.py")
 CHANGELOG_FILE = Path("CHANGELOG.md")
 
-VERSION_RE = re.compile(r'APP_VERSION\s*=\s*"(?P<version>\d+\.\d+\.\d+)"')
+VERSION_RE = re.compile(r'_FALLBACK_VERSION\s*=\s*"(?P<version>\d+\.\d+\.\d+)"')
 CHANGELOG_RE = re.compile(r"^##\s+(?P<version>\d+\.\d+\.\d+)\b", re.MULTILINE)
 
 
@@ -23,7 +27,7 @@ def _read_app_version() -> str:
     text = VERSION_FILE.read_text(encoding="utf-8")
     match = VERSION_RE.search(text)
     if not match:
-        raise ValueError("Could not find APP_VERSION in netcontrol/version.py")
+        raise ValueError("Could not find _FALLBACK_VERSION in netcontrol/version.py")
     return match.group("version")
 
 

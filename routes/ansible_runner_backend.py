@@ -28,7 +28,7 @@ _DEVICE_TYPE_MAP = {
     "cisco_nxos":       "cisco.nxos.nxos",
     "cisco_nxos_ssh":   "cisco.nxos.nxos",
     "cisco_asa":        "cisco.asa.asa",
-    # FTD's LINA CLI is ASA-shaped — the cisco.asa.asa collection
+    # FTD's LINA CLI is ASA-shaped - the cisco.asa.asa collection
     # speaks the right show/configure dialect for FMC-managed and
     # FDM-managed FTDs alike.  Native FTD collections exist but
     # target FMC, not the device itself.

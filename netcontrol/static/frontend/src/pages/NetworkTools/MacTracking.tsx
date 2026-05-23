@@ -174,7 +174,7 @@ function MovesTab() {
 
   const summary = useMacMoveSummary();
   // Two queries: `events` is what we display (status + switch filtered).
-  // `allForOptions` is status-filtered only — it feeds the switch dropdown so
+  // `allForOptions` is status-filtered only - it feeds the switch dropdown so
   // the available switches don't disappear when one is selected.
   const events = useMacMoveEvents(statusFilter, 500, hostFilter);
   const allForOptions = useMacMoveEvents(statusFilter, 500);
@@ -323,7 +323,7 @@ function SummaryCard({
       style={{ minWidth: '8rem', textAlign: 'center', padding: '1rem' }}
     >
       <div style={{ fontSize: '1.75rem', fontWeight: 600, color }}>
-        {value ?? '—'}
+        {value ?? '-'}
       </div>
       <div style={{ fontSize: '0.85em', opacity: 0.7 }}>{label}</div>
     </div>

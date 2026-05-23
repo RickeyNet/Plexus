@@ -1,4 +1,4 @@
-"""Juniper Junos driver — the first non-Cisco driver in the framework.
+"""Juniper Junos driver - the first non-Cisco driver in the framework.
 
 Junos diverges from Cisco IOS / IOS-XE / NX-OS in nearly every capability:
 
@@ -96,7 +96,7 @@ class JuniperJunosDriver(Driver):
         # expose a routinely-configurable pin knob (the ``set snmp
         # engine-id`` form exists but is rarely used outside high-
         # security templates).  Returning an empty string short-circuits
-        # the engine-ID pin step in the playbook — same pattern NX-OS
+        # the engine-ID pin step in the playbook - same pattern NX-OS
         # uses.  Sites that *do* pin engine IDs on Junos can subclass.
         return ""
 

@@ -95,7 +95,7 @@ function Stat({ label, value }: { label: string; value: number | null }) {
     <div className="dashboard-response-stat">
       <span className="dashboard-response-stat-label">{label}</span>
       <span className="dashboard-response-stat-value">
-        {value == null ? '—' : `${Math.round(value)} ms`}
+        {value == null ? '-' : `${Math.round(value)} ms`}
       </span>
     </div>
   );
