@@ -13,7 +13,6 @@ import {
   type VlanDefinitionRow,
   type MacAddressRow,
   type ArpRow,
-  type ConfigBackupRow,
   useHostAuditFindings,
   useHostConfigBackups,
   useHostInterfaceErrors,
@@ -21,6 +20,8 @@ import {
   useHostMacArp,
   useHostVlans,
 } from '@/api/host-details';
+import { useConfigBackupDetail } from '@/api/configuration';
+import { Modal } from '@/components/Modal';
 import { abbreviateInterface, formatBps, stpPortKey } from './helpers';
 
 interface Props {
@@ -491,22 +492,101 @@ function MacArpTab({ hostId }: { hostId: number }) {
 // ── Tab content: Config backups ────────────────────────────────────────────
 
 function ConfigTab({ hostId }: { hostId: number }) {
-  const q = useHostConfigBackups(hostId, 10);
-  if (q.isPending) return <Loading />;
-  if (q.error) return <ErrorRow error={q.error} />;
-  const rows = q.data ?? [];
-  if (rows.length === 0) return <Empty msg="No config backups for this device." />;
+  const list = useHostConfigBackups(hostId, 1);
+  const latest = list.data?.[0];
+  const detail = useConfigBackupDetail(latest?.id ?? null);
+  const [expanded, setExpanded] = useState(false);
+
+  if (list.isPending) return <Loading />;
+  if (list.error) return <ErrorRow error={list.error} />;
+  if (!latest) return <Empty msg="No config backups for this device." />;
+
+  const configText = detail.data?.config_text ?? '';
+  const capturedLabel = latest.captured_at
+    ? new Date(latest.captured_at).toLocaleString()
+    : '-';
 
   return (
-    <CompactTable
-      columns={['Captured', 'Status', 'Size', 'Method']}
-      rows={rows.map((b: ConfigBackupRow) => [
-        b.captured_at ? new Date(b.captured_at).toLocaleString() : '-',
-        <StatusBadge status={b.status} />,
-        b.config_length != null ? `${b.config_length} B` : '-',
-        b.capture_method || '-',
-      ])}
-    />
+    <>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '0.5rem',
+          marginBottom: '0.4rem',
+          fontSize: '0.72rem',
+          color: 'var(--text-muted)',
+        }}
+      >
+        <span>
+          Captured {capturedLabel}
+          {latest.config_length != null ? ` · ${latest.config_length} B` : ''}
+          {latest.capture_method ? ` · ${latest.capture_method}` : ''}
+        </span>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => setExpanded(true)}
+          disabled={!configText}
+        >
+          Expand
+        </button>
+      </div>
+
+      {detail.isPending ? (
+        <Loading />
+      ) : detail.error ? (
+        <ErrorRow error={detail.error} />
+      ) : !configText ? (
+        <Empty msg="Backup has no config text." />
+      ) : (
+        <pre
+          style={{
+            background: 'var(--bg, #0d1117)',
+            border: '1px solid var(--border)',
+            borderRadius: '0.35rem',
+            padding: '0.5rem',
+            fontFamily:
+              'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            fontSize: '0.72rem',
+            lineHeight: 1.4,
+            maxHeight: 280,
+            overflow: 'auto',
+            whiteSpace: 'pre',
+            margin: 0,
+          }}
+        >
+          {configText}
+        </pre>
+      )}
+
+      <Modal
+        isOpen={expanded}
+        onClose={() => setExpanded(false)}
+        title={`Running config — captured ${capturedLabel}`}
+        size="large"
+      >
+        <pre
+          style={{
+            background: 'var(--bg, #0d1117)',
+            border: '1px solid var(--border)',
+            borderRadius: '0.35rem',
+            padding: '0.75rem',
+            fontFamily:
+              'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            fontSize: '0.8rem',
+            lineHeight: 1.45,
+            maxHeight: '75vh',
+            overflow: 'auto',
+            whiteSpace: 'pre',
+            margin: 0,
+          }}
+        >
+          {configText}
+        </pre>
+      </Modal>
+    </>
   );
 }
 
