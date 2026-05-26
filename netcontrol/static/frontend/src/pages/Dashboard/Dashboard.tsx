@@ -1,17 +1,33 @@
+import { Suspense, lazy } from 'react';
+
 import { useDashboard } from '@/api/dashboard';
 
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
 import { BackupStatusPanel } from './BackupStatusPanel';
-import { BandwidthTrendPanel } from './BandwidthTrendPanel';
 import { DevicesGridPanel } from './DevicesGridPanel';
 import { EventsFeedPanel } from './EventsFeedPanel';
 import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
-import { OverviewPanels } from './OverviewPanels';
-import { ResponseTimePanel } from './ResponseTimePanel';
 import { StatRings } from './StatRings';
-import { TopTalkersPanel } from './TopTalkersPanel';
+
+// Heavy chart/topology panels pull in vis-network (~633 KB) and echarts (~606 KB).
+// Deferring them keeps the home page first paint light; each shows a skeleton
+// until its chunk resolves.
+const OverviewPanels = lazy(() =>
+  import('./OverviewPanels').then((m) => ({ default: m.OverviewPanels })),
+);
+const BandwidthTrendPanel = lazy(() =>
+  import('./BandwidthTrendPanel').then((m) => ({ default: m.BandwidthTrendPanel })),
+);
+const ResponseTimePanel = lazy(() =>
+  import('./ResponseTimePanel').then((m) => ({ default: m.ResponseTimePanel })),
+);
+const TopTalkersPanel = lazy(() =>
+  import('./TopTalkersPanel').then((m) => ({ default: m.TopTalkersPanel })),
+);
+
+const PanelSkeleton = () => <div className="skeleton skeleton-card" />;
 
 export function Dashboard() {
   const { data, isPending, error } = useDashboard();
@@ -58,11 +74,19 @@ export function Dashboard() {
         title="Your Network at a Glance"
         text="View device status, recent alerts, backup summaries, and quick stats. Scroll down to manage custom dashboards with your own metric panels."
       />
-      <OverviewPanels devices={devices} />
+      <Suspense fallback={<PanelSkeleton />}>
+        <OverviewPanels devices={devices} />
+      </Suspense>
       <GroupHealthPanel groups={groups} devices={devices} />
-      <ResponseTimePanel />
-      <BandwidthTrendPanel />
-      <TopTalkersPanel />
+      <Suspense fallback={<PanelSkeleton />}>
+        <ResponseTimePanel />
+      </Suspense>
+      <Suspense fallback={<PanelSkeleton />}>
+        <BandwidthTrendPanel />
+      </Suspense>
+      <Suspense fallback={<PanelSkeleton />}>
+        <TopTalkersPanel />
+      </Suspense>
       <DevicesGridPanel devices={devices} />
       <BackupStatusPanel devices={devices} />
       <EventsFeedPanel />
