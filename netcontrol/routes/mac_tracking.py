@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import time
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -283,42 +284,98 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     per_vlan_errors: list[str] = []
     per_vlan_attempts = 0
     per_vlan_successes = 0
+    per_vlan_skipped = 0
     # Maps MAC → VLAN learnt during per-VLAN context walks. Used to tag
     # dot1dTpFdb entries (which carry no VLAN in their OID) with the right
     # VLAN when the Q-BRIDGE walk didn't already cover that MAC.
     dot1d_mac_context_vlan: dict[str, int] = {}
     if is_cisco and version in ("v3", "3") and vlans_in_use:
-        # Walk each VLAN context sequentially. Hosts are already collected in
-        # parallel at the outer layer; piling more parallelism on a single
-        # Catalyst CPU has been observed to cause SNMP timeouts.
-        for vid in vlans_in_use:
-            per_vlan_attempts += 1
-            ctx_cfg = dict(snmp_config)
-            ctx_cfg["snmp_context"] = f"vlan-{vid}"
-            try:
-                q_rows, q_err = await _snmp_walk(
-                    ip_address, timeout_seconds, ctx_cfg, DOT1Q_TP_FDB_PORT,
-                    max_rows=2000, return_errors=True,
-                )
-                d_addr_rows, d_addr_err = await _snmp_walk(
-                    ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_ADDRESS,
-                    max_rows=2000, return_errors=True,
-                )
-                d_port_rows = await _snmp_walk(
-                    ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_PORT,
-                    max_rows=2000,
-                )
-                d_status_rows = await _snmp_walk(
-                    ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_STATUS,
-                    max_rows=2000,
-                )
-            except Exception as exc:
-                per_vlan_errors.append(f"vlan-{vid}: {type(exc).__name__}: {exc}")
+        # Walk per-VLAN contexts with bounded concurrency. The old loop ran
+        # strictly sequentially with 4 walks per VLAN (q-bridge + three
+        # dot1d) — at ~3s/walk that's >20 minutes on a switch carrying a
+        # full VTP table. Two changes here:
+        #   1. Fast path: dot1qTpFdbPort exposes the same FDB rows as the
+        #      three dot1d* tables (with the VLAN in the OID suffix, even),
+        #      so when it returns rows we skip the dot1d walks entirely.
+        #      Empty q-bridge → fall back to dot1d for the rare device that
+        #      only populates the standard bridge MIB per-context.
+        #   2. Bounded parallelism: cap concurrent VLAN contexts at 4. The
+        #      original "single Catalyst CPU melts under unbounded parallel
+        #      SNMPv3" comment still applies, but 4 is well under that
+        #      threshold on every device class we've tested.
+        # A wall-clock deadline guards against pathological cases (huge VTP
+        # domain on a slow agent) so the collector never hangs forever.
+        per_vlan_sem = asyncio.Semaphore(4)
+        deadline = time.monotonic() + 60.0
+
+        async def _walk_one_vlan(vid: int) -> dict:
+            if time.monotonic() > deadline:
+                return {"vid": vid, "skipped": True}
+            async with per_vlan_sem:
+                if time.monotonic() > deadline:
+                    return {"vid": vid, "skipped": True}
+                ctx_cfg = dict(snmp_config)
+                ctx_cfg["snmp_context"] = f"vlan-{vid}"
+                try:
+                    q_rows, q_err = await _snmp_walk(
+                        ip_address, timeout_seconds, ctx_cfg, DOT1Q_TP_FDB_PORT,
+                        max_rows=2000, return_errors=True,
+                    )
+                except Exception as exc:
+                    return {"vid": vid, "error": f"vlan-{vid}: {type(exc).__name__}: {exc}"}
+
+                # Fast path: q-bridge had data, skip dot1d entirely.
+                if q_rows:
+                    return {"vid": vid, "q_rows": q_rows, "q_err": q_err}
+
+                # Fallback: walk the three dot1d tables in parallel — same
+                # context, no reason to serialise them against each other.
+                try:
+                    d_addr_pair, d_port_rows, d_status_rows = await asyncio.gather(
+                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg,
+                                   DOT1D_TP_FDB_ADDRESS, max_rows=2000,
+                                   return_errors=True),
+                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg,
+                                   DOT1D_TP_FDB_PORT, max_rows=2000),
+                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg,
+                                   DOT1D_TP_FDB_STATUS, max_rows=2000),
+                    )
+                except Exception as exc:
+                    return {"vid": vid, "error": f"vlan-{vid}: {type(exc).__name__}: {exc}"}
+                d_addr_rows, d_addr_err = d_addr_pair
+                return {
+                    "vid": vid,
+                    "q_rows": q_rows, "q_err": q_err,
+                    "d_addr_rows": d_addr_rows, "d_addr_err": d_addr_err,
+                    "d_port_rows": d_port_rows,
+                    "d_status_rows": d_status_rows,
+                }
+
+        per_vlan_attempts = len(vlans_in_use)
+        vlan_results = await asyncio.gather(
+            *(_walk_one_vlan(vid) for vid in vlans_in_use),
+            return_exceptions=True,
+        )
+
+        for r in vlan_results:
+            if isinstance(r, Exception):
+                per_vlan_errors.append(f"unexpected: {type(r).__name__}: {r}")
                 continue
+            if r.get("skipped"):
+                per_vlan_skipped += 1
+                continue
+            if "error" in r:
+                per_vlan_errors.append(r["error"])
+                continue
+            vid = r["vid"]
+            q_rows = r.get("q_rows", {})
+            d_addr_rows = r.get("d_addr_rows", {})
+            d_port_rows = r.get("d_port_rows", {})
+            d_status_rows = r.get("d_status_rows", {})
             # An auth/timeout error on one VLAN context is recorded but
             # doesn't poison the run — the operator's v3 user may simply
             # lack a view on that VLAN.
-            ctx_err = q_err or d_addr_err
+            ctx_err = r.get("q_err") or r.get("d_addr_err")
             if ctx_err and not q_rows and not d_addr_rows:
                 per_vlan_errors.append(f"vlan-{vid}: {ctx_err}")
                 continue
@@ -334,6 +391,16 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             fdb_addr.update(d_addr_rows)
             fdb_port.update(d_port_rows)
             fdb_status.update(d_status_rows)
+            # Tag every MAC observed in this context with this VLAN, so the
+            # default-context dot1d parser below can resolve VLAN correctly
+            # even when the q-bridge fast path skipped the dot1d walks.
+            for oid in q_rows.keys():
+                suffix = oid[len(DOT1Q_TP_FDB_PORT):].lstrip(".")
+                parts = suffix.split(".")
+                if len(parts) >= 7:
+                    mac = _extract_mac_from_oid_suffix(".".join(parts[1:7]))
+                    if mac:
+                        dot1d_mac_context_vlan[mac] = vid
             for oid, mac_val in d_addr_rows.items():
                 mac = _format_mac(mac_val)
                 if not mac or len(mac) < 12:
@@ -341,7 +408,14 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                     mac = _extract_mac_from_oid_suffix(suffix)
                 if mac:
                     dot1d_mac_context_vlan[mac] = vid
-        if per_vlan_attempts and per_vlan_successes == 0:
+
+        if per_vlan_skipped:
+            result["errors"].append(
+                f"Per-VLAN walks hit 60s budget — skipped {per_vlan_skipped} "
+                f"of {per_vlan_attempts} VLAN contexts. Increase budget or "
+                f"reduce VTP scope if MACs on those VLANs are missing."
+            )
+        if per_vlan_attempts and per_vlan_successes == 0 and not per_vlan_skipped:
             # Every VLAN context failed — the device is reachable (we got the
             # vmVlan map) but the operator can't see any FDB view. That's a
             # configuration problem on the device, surface it loudly.
@@ -487,10 +561,11 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
 
     LOGGER.info(
         "mac_tracking: host %s (%s) ports=%d port_vlans=%d "
-        "vlans_discovered=%d vlan_ctx=%d/%d - %d MACs, %d ARPs collected",
+        "vlans_discovered=%d vlan_ctx=%d/%d (skipped=%d) - "
+        "%d MACs, %d ARPs collected",
         host_id, ip_address, len(if_index_to_name), len(if_index_to_vlan),
         len(vlans_in_use),
-        per_vlan_successes, per_vlan_attempts,
+        per_vlan_successes, per_vlan_attempts, per_vlan_skipped,
         result["macs_found"], result["arps_found"],
     )
     return result
