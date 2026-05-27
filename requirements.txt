@@ -1,24 +1,24 @@
-fastapi==0.136.1
-uvicorn[standard]==0.46.0
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
 aiosqlite==0.22.1
 aiofiles==25.1.0
-cryptography==47.0.0
+cryptography==48.0.0
 pyyaml==6.0.3
 itsdangerous==2.2.0
-python-multipart==0.0.27
-requests==2.33.1
-urllib3==2.6.3
-netmiko==4.6.0
+python-multipart==0.0.29
+requests==2.34.2
+urllib3==2.7.0
+netmiko==4.7.0
 # ntc-templates is a transitive dep of netmiko but used directly via
 # send_command(..., use_textfsm=True) in the mac_tracking CLI collector.
 # Pinning here keeps the dependency intentional rather than coincidental.
-ntc-templates>=7,<10
+ntc-templates>=9.1.0,<10
 pyrad==2.5.4
 # python-ldap requires OpenLDAP headers (libldap/lber.h) which Windows does
 # not ship. Skip on Windows; the LDAP auth backend in netcontrol/routes/auth.py
 # is wrapped in a try/except and degrades to LDAP_AVAILABLE=False there.
 python-ldap>=3.4,<3.5; sys_platform != "win32"
-pysnmp>=7.1.26,<7.2
+pysnmp>=7.1.27,<7.2
 # ICMP liveness probes for the monitoring poll and ICMP-only host onboarding.
 # icmplib runs unprivileged on both Linux (SOCK_DGRAM) and Windows, so the
 # Plexus process does not need to be elevated.
@@ -27,7 +27,7 @@ ansible-runner>=2.4.3,<2.5
 # Floor pydantic so resolvers can't pick 2.9.x (paired with pydantic-core
 # 2.23.4 which uses a PyO3 that doesn't support Python 3.14). 2.11+ ships
 # pydantic-core ≥2.33 with current PyO3.
-pydantic>=2.13.3,<3
+pydantic>=2.13.4,<3
 # httpx is used at runtime by netcontrol/routes/ipam_adapters.py, so it
 # belongs in the runtime requirements (was previously dev-only).
 httpx>=0.28.1,<1
