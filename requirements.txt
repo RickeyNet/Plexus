@@ -9,6 +9,10 @@ python-multipart==0.0.27
 requests==2.33.1
 urllib3==2.6.3
 netmiko==4.6.0
+# ntc-templates is a transitive dep of netmiko but used directly via
+# send_command(..., use_textfsm=True) in the mac_tracking CLI collector.
+# Pinning here keeps the dependency intentional rather than coincidental.
+ntc-templates>=7,<10
 pyrad==2.5.4
 # python-ldap requires OpenLDAP headers (libldap/lber.h) which Windows does
 # not ship. Skip on Windows; the LDAP auth backend in netcontrol/routes/auth.py

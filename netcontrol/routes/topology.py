@@ -885,6 +885,7 @@ async def _apply_inferred_topology(
             refresh_tasks.append(collect_mac_arp_tables(
                 h["id"], h["ip_address"], snmp_cfg,
                 device_type=h.get("device_type", ""),
+                host=h,
             ))
             refresh_tasks.append(auto_discover_data_sources(h["id"], h["ip_address"], snmp_cfg))
         await asyncio.gather(*refresh_tasks, return_exceptions=True)
@@ -1002,6 +1003,7 @@ async def _run_topology_discovery_once() -> dict:
                     await collect_mac_arp_tables(
                         host["id"], host["ip_address"], snmp_cfg,
                         device_type=host.get("device_type", ""),
+                        host=host,
                     )
                 except Exception:
                     pass

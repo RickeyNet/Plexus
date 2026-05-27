@@ -107,27 +107,98 @@ def _extract_mac_from_oid_suffix(suffix: str) -> str:
 async def collect_mac_arp_tables(host_id: int, ip_address: str,
                                   snmp_config: dict,
                                   timeout_seconds: float = 5.0,
-                                  device_type: str = "") -> dict:
-    """Walk MAC and ARP tables from a device via SNMP.
+                                  device_type: str = "",
+                                  host: dict | None = None) -> dict:
+    """Collect MAC and ARP tables from a device.
 
-    Per-port VLAN membership (Cisco vmVlan / standard dot1qPvid) is walked in
-    the default SNMP context. Q-BRIDGE entries that carry the VLAN in their
-    OID are honoured directly; the rest fall back to the learning port's
-    VLAN from that map.
+    MACs are pulled via SSH + ``show mac address-table`` parsed by
+    ntc-templates when the host has a usable SSH credential and a driver
+    that implements the capability. That path returns every MAC on every
+    VLAN in one round-trip and sidesteps the Cisco "default-context FDB
+    only shows VLAN 1" problem entirely. If the CLI path is unavailable
+    (no driver, no SSH creds, SSH failure) the function falls back to
+    SNMP collection of dot1dTpFdb / dot1qTpFdb plus the per-VLAN SNMPv3
+    context dance on Cisco.
 
-    On Cisco IOS/IOS-XE the default-context FDB walk only returns VLAN 1
-    entries — every other VLAN's FDB is exposed under SNMPv3 context
-    ``vlan-<id>``. When ``device_type`` indicates a Cisco platform and SNMPv3
-    is in use, this function discovers the in-use VLAN list from the access
-    port map and re-walks the FDB once per VLAN with the matching context
-    name. Walks that fail (operator not authorised for a given VLAN view,
-    VLAN administratively suspended, etc.) are recorded but don't abort the
-    rest. The fallback to the default-context FDB walk is kept for non-Cisco
-    devices and for the rare case where no VLANs are discoverable.
+    ARP is always collected via SNMP (ipNetToMediaTable) — ARP isn't
+    VLAN-scoped so the SNMP path works reliably for it.
 
-    Returns {"macs_found": int, "arps_found": int, "errors": [str]}.
+    Pass the ``host`` dict to enable CLI MAC collection. When omitted the
+    function is SNMP-only (preserves the legacy call signature for any
+    caller that hasn't been updated yet).
+
+    Returns {"macs_found", "arps_found", "errors", "diag"}.
     """
-    result = {"macs_found": 0, "arps_found": 0, "errors": []}
+    # `diag` is surfaced to the API caller (see /api/mac-tracking/collect) so
+    # operators can tell "per-VLAN block never ran" apart from "per-VLAN
+    # block ran but every walk failed" without needing shell access to the
+    # app server's logs.
+    result = {
+        "macs_found": 0, "arps_found": 0, "errors": [],
+        "diag": {
+            "device_type": device_type,
+            "snmp_version": str(snmp_config.get("version", "")),
+            "ports": 0,
+            "port_vlans": 0,
+            "vlans_discovered": 0,
+            "vlan_ctx_attempted": 0,
+            "vlan_ctx_succeeded": 0,
+            "vlan_ctx_skipped": 0,
+            "per_vlan_block_ran": False,
+            "cli_attempted": False,
+            "cli_succeeded": False,
+            "cli_mac_count": 0,
+        },
+    }
+
+    # ── Preferred path: collect MACs via CLI (SSH + ntc-templates) ──
+    # SNMP MAC collection is a quagmire on Cisco (per-VLAN SNMPv3 context
+    # required, view permissions, VTP enumeration) — we keep the SNMP
+    # path as a fallback but try CLI first when we have what we need.
+    cli_macs: list[dict] | None = None
+    if host is not None:
+        try:
+            from netcontrol.drivers import DriverCapabilityError, get_driver
+            from netcontrol.routes.shared import _collect_mac_table_via_cli
+
+            # The driver registry only knows how to scrape MACs from L2
+            # switch CLIs; bail out early for firewalls / routers / etc.
+            # so we don't waste an SSH login on a definite no-op.
+            try:
+                get_driver(device_type).mac_table_show_command()
+                driver_supports_cli = True
+            except DriverCapabilityError:
+                driver_supports_cli = False
+
+            if driver_supports_cli:
+                # get_credentials_for_group ignores its argument today
+                # (no per-group mapping yet) and returns every credential
+                # in the system; first match wins. Good enough until
+                # someone wires per-group SSH creds.
+                creds_list = await db.get_credentials_for_group(
+                    host.get("group_id") or 0
+                )
+                if creds_list:
+                    result["diag"]["cli_attempted"] = True
+                    try:
+                        cli_macs = await _collect_mac_table_via_cli(
+                            host, creds_list[0]
+                        )
+                        result["diag"]["cli_succeeded"] = True
+                        result["diag"]["cli_mac_count"] = len(cli_macs)
+                    except Exception as exc:
+                        # SSH/auth/timeout errors land here. Don't abort —
+                        # the SNMP fallback below may still produce useful
+                        # data. The operator sees the failure in the
+                        # returned errors array.
+                        result["errors"].append(
+                            f"CLI MAC collection failed ({type(exc).__name__}): "
+                            f"{exc}; falling back to SNMP"
+                        )
+        except Exception as exc:
+            # Defensive: anything that goes wrong in the CLI setup path
+            # (e.g. import error, db lookup) shouldn't break SNMP.
+            result["errors"].append(f"CLI MAC setup failed: {exc}")
 
     def _walk(oid: str, max_rows: int = 2000):
         return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
@@ -289,7 +360,16 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     # dot1dTpFdb entries (which carry no VLAN in their OID) with the right
     # VLAN when the Q-BRIDGE walk didn't already cover that MAC.
     dot1d_mac_context_vlan: dict[str, int] = {}
-    if is_cisco and version in ("v3", "3") and vlans_in_use:
+    result["diag"]["vlans_discovered"] = len(vlans_in_use)
+    # When the CLI already gave us the full MAC table, skip the per-VLAN
+    # SNMP block entirely — it's the slow, fragile part and CLI is
+    # authoritative. The default-context SNMP FDB processing further down
+    # still runs, but it'll be a no-op for any (mac, vlan) we already
+    # upserted from CLI because seen_mac_vlan dedups it.
+    if cli_macs is not None and cli_macs:
+        pass  # CLI succeeded; skip per-VLAN block
+    elif is_cisco and version in ("v3", "3") and vlans_in_use:
+        result["diag"]["per_vlan_block_ran"] = True
         # Walk per-VLAN contexts with bounded concurrency. The old loop ran
         # strictly sequentially with 4 walks per VLAN (q-bridge + three
         # dot1d) — at ~3s/walk that's >20 minutes on a switch carrying a
@@ -433,14 +513,35 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             )
 
     # Track (mac, vlan) we've already upserted this run so the standard FDB
-    # walk doesn't double-count entries the Q-BRIDGE walk already recorded.
+    # walk doesn't double-count entries the Q-BRIDGE / CLI passes recorded.
     seen_mac_vlan: set[tuple[str, int]] = set()
+
+    # ── Upsert CLI-collected MACs (preferred source) ─────────────────────
+    # When the CLI scrape succeeded, treat those rows as authoritative and
+    # write them first. seen_mac_vlan dedups any (mac, vlan) the SNMP FDB
+    # parser below would otherwise also try to insert.
+    if cli_macs:
+        for row in cli_macs:
+            mac = row["mac"]
+            vlan = row["vlan"]
+            try:
+                await db.upsert_mac_entry(
+                    host_id=host_id, mac_address=mac, vlan=vlan,
+                    port_name=row["port"], port_index=0,
+                    entry_type=row["type"],
+                )
+                await db.record_mac_history(mac, host_id, row["port"], vlan=vlan)
+                seen_mac_vlan.add((mac, vlan))
+                result["macs_found"] += 1
+            except Exception:
+                pass
 
     # Final empty-FDB advisory — runs once the default-context AND any
     # per-VLAN context walks have all completed. Only fires when we got no
-    # protocol errors but still have nothing to parse: that's the genuine
+    # protocol errors AND CLI didn't bail us out: that's the genuine
     # "this device isn't a bridge" case worth telling the operator about.
-    if not fdb_errors and not per_vlan_errors and not fdb_addr and not q_fdb_port:
+    if (not fdb_errors and not per_vlan_errors and not fdb_addr
+            and not q_fdb_port and not cli_macs):
         result["errors"].append(
             "Device responded but returned no FDB entries "
             "(likely a router / L3-only device, or FDB hidden behind a non-default SNMPv3 context)."
@@ -559,13 +660,21 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         except Exception:
             pass
 
+    result["diag"]["ports"] = len(if_index_to_name)
+    result["diag"]["port_vlans"] = len(if_index_to_vlan)
+    result["diag"]["vlan_ctx_attempted"] = per_vlan_attempts
+    result["diag"]["vlan_ctx_succeeded"] = per_vlan_successes
+    result["diag"]["vlan_ctx_skipped"] = per_vlan_skipped
     LOGGER.info(
         "mac_tracking: host %s (%s) ports=%d port_vlans=%d "
-        "vlans_discovered=%d vlan_ctx=%d/%d (skipped=%d) - "
-        "%d MACs, %d ARPs collected",
+        "vlans_discovered=%d vlan_ctx=%d/%d (skipped=%d) "
+        "cli=%s(%d) - %d MACs, %d ARPs collected",
         host_id, ip_address, len(if_index_to_name), len(if_index_to_vlan),
         len(vlans_in_use),
         per_vlan_successes, per_vlan_attempts, per_vlan_skipped,
+        "ok" if result["diag"]["cli_succeeded"]
+        else ("fail" if result["diag"]["cli_attempted"] else "skip"),
+        result["diag"]["cli_mac_count"],
         result["macs_found"], result["arps_found"],
     )
     return result
@@ -917,6 +1026,7 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         result = await collect_mac_arp_tables(
             host_id, host["ip_address"], snmp_cfg,
             device_type=host.get("device_type", ""),
+            host=host,
         )
         result.setdefault("hosts_collected", 1)
         return result
@@ -937,6 +1047,7 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
                 return await collect_mac_arp_tables(
                     h["id"], h["ip_address"], cfg,
                     device_type=h.get("device_type", ""),
+                    host=h,
                 )
 
         tasks = [asyncio.create_task(_collect_one(h, snmp_cfg)) for h in hosts]
