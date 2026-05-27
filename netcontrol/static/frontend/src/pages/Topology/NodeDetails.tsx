@@ -711,15 +711,6 @@ function StateBadge({ value }: { value: string }) {
   return <span className={`badge ${cls}`}>{value || '-'}</span>;
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const v = (status || '').toLowerCase();
-  let cls = 'badge-muted';
-  if (v === 'success' || v === 'ok') cls = 'badge-success';
-  else if (v === 'failed' || v === 'error') cls = 'badge-danger';
-  else if (v === 'running' || v === 'pending') cls = 'badge-info';
-  return <span className={`badge ${cls}`}>{status || '-'}</span>;
-}
-
 function CompactTable(props: {
   columns: string[];
   rows: React.ReactNode[][];
