@@ -45,6 +45,13 @@ DOT1D_BASE_PORT_IF_INDEX = "1.3.6.1.2.1.17.1.4.1.2"  # dot1dBasePortIfIndex
 VM_VLAN_OID = "1.3.6.1.4.1.9.9.68.1.2.2.1.2"          # Cisco vmVlan (access port VLAN), indexed by ifIndex
 DOT1Q_PVID_OID = "1.3.6.1.2.1.17.7.1.4.5.1.1"         # dot1qPvid, indexed by dot1dBasePort
 
+# Switch-wide VLAN inventory (used to seed per-VLAN context walks even when no
+# access ports report the VLAN — e.g. trunk-only VLANs or VLANs whose access
+# ports are admin-down). VTP is Cisco-specific; dot1qVlanStaticName is the
+# standard Q-BRIDGE counterpart.
+VTP_VLAN_NAME_OID = "1.3.6.1.4.1.9.9.46.1.3.1.1.4"        # vtpVlanName (per management domain + vlan id)
+DOT1Q_VLAN_STATIC_NAME_OID = "1.3.6.1.2.1.17.7.1.4.3.1.1"  # dot1qVlanStaticName
+
 # ARP table
 IP_NET_TO_MEDIA_PHYS = "1.3.6.1.2.1.4.22.1.2"     # ipNetToMediaPhysAddress
 IP_NET_TO_MEDIA_NET = "1.3.6.1.2.1.4.22.1.3"       # ipNetToMediaNetAddress
@@ -140,6 +147,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
          arp_net, arp_type_rows,
          if_names, vm_vlan, dot1q_pvid,
          fdb_addr_pair, fdb_port, fdb_status, q_fdb_port_pair, bridge_port_map,
+         vtp_vlan_names, dot1q_static_vlan_names,
         ) = await asyncio.gather(
             _walk_with_errors(IP_NET_TO_MEDIA_PHYS),
             _walk(IP_NET_TO_MEDIA_NET),
@@ -152,6 +160,8 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             _walk(DOT1D_TP_FDB_STATUS),
             _walk_with_errors(DOT1Q_TP_FDB_PORT),
             _walk(DOT1D_BASE_PORT_IF_INDEX),
+            _walk(VTP_VLAN_NAME_OID),
+            _walk(DOT1Q_VLAN_STATIC_NAME_OID),
         )
     except Exception as exc:
         result["errors"].append(f"SNMP walk failed: {str(exc)}")
@@ -240,7 +250,36 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     # already, so we skip them.
     version = str(snmp_config.get("version", "")).strip().lower()
     is_cisco = device_type.lower().startswith("cisco")
-    vlans_in_use = sorted({v for v in if_index_to_vlan.values() if 1 <= v <= 4094})
+
+    # ── Enumerate every VLAN configured on the switch ───────────────────
+    # Access-port PVIDs only cover VLANs that have access ports assigned to
+    # them. A trunk-only VLAN (or one whose access ports are admin-down)
+    # would never appear there, so its FDB never got walked and every MAC
+    # learnt on a trunk for that VLAN was missed. Adding the VTP table
+    # (Cisco) and dot1qVlanStaticTable (standard) catches them. Both walks
+    # are indexed by VLAN id in their last OID component.
+    def _vids_from_walk(walk: dict[str, str]) -> set[int]:
+        out: set[int] = set()
+        for oid in walk.keys():
+            suffix = oid.rsplit(".", 1)[-1] if "." in oid else ""
+            try:
+                vid = int(suffix)
+            except (ValueError, TypeError):
+                continue
+            if 1 <= vid <= 4094:
+                out.add(vid)
+        return out
+
+    # 1002-1005 are the legacy FDDI/Token Ring default VLANs Cisco still
+    # ships in the VTP table; they exist on every IOS switch but never
+    # carry traffic, so we skip them to avoid pointless context walks.
+    RESERVED_VLAN_IDS = {1002, 1003, 1004, 1005}
+    discovered_vlans = (
+        {v for v in if_index_to_vlan.values() if 1 <= v <= 4094}
+        | _vids_from_walk(vtp_vlan_names)
+        | _vids_from_walk(dot1q_static_vlan_names)
+    ) - RESERVED_VLAN_IDS
+    vlans_in_use = sorted(discovered_vlans)
     per_vlan_errors: list[str] = []
     per_vlan_attempts = 0
     per_vlan_successes = 0
@@ -447,8 +486,10 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             pass
 
     LOGGER.info(
-        "mac_tracking: host %s (%s) ports=%d port_vlans=%d vlan_ctx=%d/%d - %d MACs, %d ARPs collected",
+        "mac_tracking: host %s (%s) ports=%d port_vlans=%d "
+        "vlans_discovered=%d vlan_ctx=%d/%d - %d MACs, %d ARPs collected",
         host_id, ip_address, len(if_index_to_name), len(if_index_to_vlan),
+        len(vlans_in_use),
         per_vlan_successes, per_vlan_attempts,
         result["macs_found"], result["arps_found"],
     )
@@ -476,8 +517,8 @@ IF_SPEED_OID = "1.3.6.1.2.1.2.2.1.5"                # bps fallback
 IF_LAST_CHANGE_OID = "1.3.6.1.2.1.2.2.1.9"          # sysUptime ticks at last admin/oper transition
 DOT3_STATS_DUPLEX_OID = "1.3.6.1.2.1.10.7.2.1.19"   # 1=unknown 2=half 3=full
 
-# Cisco VTP VLAN names (state.id under vtpVlanTable)
-VTP_VLAN_NAME_OID = "1.3.6.1.4.1.9.9.46.1.3.1.1.4"   # vtpVlanName
+# Cisco VTP VLAN states (vtpVlanName itself is declared above; the FDB
+# collector seeds per-VLAN context walks from it, so it lives at module top).
 VTP_VLAN_STATE_OID = "1.3.6.1.4.1.9.9.46.1.3.1.1.2"  # vtpVlanState (1=operational ...)
 
 # Cisco VTP trunk allowed-VLAN bitmaps (1k/2k/3k/4k slices, 128 bytes each)
