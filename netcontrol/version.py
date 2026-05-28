@@ -16,7 +16,7 @@ import os
 import subprocess
 from pathlib import Path
 
-_FALLBACK_VERSION = "1.0.1"
+_FALLBACK_VERSION = "1.0.2"
 
 
 def _read_version() -> str:

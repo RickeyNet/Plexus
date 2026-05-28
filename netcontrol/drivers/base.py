@@ -28,6 +28,20 @@ class DriverCapabilityError(NotImplementedError):
     """
 
 
+def _normalise_mac(raw: str) -> str:
+    """Convert any common MAC representation to lower-case colon-separated hex.
+
+    Cisco show output uses Cisco-style ``aabb.ccdd.eeff``; Arista / Junos
+    print ``aa:bb:cc:dd:ee:ff``; some platforms print hyphen-separated.
+    The downstream sqlite/postgres rows store the colon form, so we
+    canonicalise here once.
+    """
+    hex_only = "".join(c for c in raw.lower() if c in "0123456789abcdef")
+    if len(hex_only) != 12:
+        return raw.strip().lower()
+    return ":".join(hex_only[i:i + 2] for i in range(0, 12, 2))
+
+
 @dataclass(frozen=True, slots=True)
 class NetflowConfig:
     """Inputs to ``Driver.build_netflow_config``.
@@ -101,6 +115,86 @@ class Driver:
         raise DriverCapabilityError(
             f"{type(self).__name__} does not implement save_config_commands()"
         )
+
+    # ── MAC address-table capability surface ───────────────────────────────
+    #
+    # The mac_tracking collector historically polled the bridge / Q-BRIDGE
+    # MIB over SNMP, which on Cisco needs a per-VLAN SNMPv3 context dance
+    # to see anything beyond VLAN 1.  CLI scraping with ntc-templates
+    # parses the same data from one ``show mac address-table`` command
+    # without any of that ceremony.  The driver owns the command and the
+    # row-normalisation so the collector stays vendor-neutral.
+    #
+    # The default implementation here covers every CLI that ships
+    # Cisco-style output (``show mac address-table`` returning a vlan /
+    # mac / type / port-name table parseable by the bundled ntc-template
+    # ``cisco_ios_show_mac_address-table``).  That's IOS, IOS-XE, NX-OS,
+    # and Arista EOS — all four can rely on the base implementation.
+    # Junos, Palo Alto, Fortinet, Cisco XR all need overrides if/when MAC
+    # tracking is wanted there.
+
+    def mac_table_show_command(self) -> str:
+        """Return the show command that dumps the device's MAC address table.
+
+        Raises ``DriverCapabilityError`` by default so a firewall driver
+        (which has no L2 forwarding table) doesn't accidentally get a
+        switch-only command shipped to its SSH session.  Switch / bridge
+        drivers override.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement mac_table_show_command()"
+        )
+
+    def parse_mac_table(self, parsed_rows: list[dict]) -> list[dict]:
+        """Normalise textfsm-parsed rows into the collector's schema.
+
+        Input is what Netmiko returns from ``send_command(...,
+        use_textfsm=True)`` — a list of dicts whose keys come from the
+        ntc-template column names (vendor-specific).  Output is a list of
+        ``{"mac", "vlan", "port", "type"}`` dicts the collector can hand
+        straight to ``upsert_mac_entry``.
+
+        Default raises ``DriverCapabilityError`` to match the show-command
+        contract above; switch drivers override with vendor-appropriate
+        column names.
+        """
+        raise DriverCapabilityError(
+            f"{type(self).__name__} does not implement parse_mac_table()"
+        )
+
+    @staticmethod
+    def _parse_cisco_style_mac_rows(parsed_rows: list[dict]) -> list[dict]:
+        """Shared helper for drivers whose textfsm template matches the
+        cisco_ios ``show mac address-table`` schema (vlan / destination_address
+        / type / destination_port).  IOS, IOS-XE, NX-OS and Arista EOS all
+        use this layout, so they call into this helper rather than duplicating
+        the row-normalisation logic.
+        """
+        out: list[dict] = []
+        for row in parsed_rows or []:
+            mac_raw = (row.get("destination_address")
+                       or row.get("mac") or row.get("mac_address") or "").strip()
+            if not mac_raw:
+                continue
+            vlan_raw = str(row.get("vlan", "")).strip()
+            try:
+                vlan = int(vlan_raw)
+            except (ValueError, TypeError):
+                # Cisco prints "All" for system / multicast entries — skip
+                # them, they're not learnt MACs.
+                continue
+            port = (row.get("destination_port") or row.get("ports")
+                    or row.get("port") or "").strip()
+            if not port or port.lower() in ("cpu", "router", "switch"):
+                continue
+            type_raw = str(row.get("type", "dynamic")).strip().lower()
+            out.append({
+                "mac": _normalise_mac(mac_raw),
+                "vlan": vlan,
+                "port": port,
+                "type": type_raw if type_raw in ("dynamic", "static") else "dynamic",
+            })
+        return out
 
     # ── SNMPv3 capability surface ──────────────────────────────────────────
     #
