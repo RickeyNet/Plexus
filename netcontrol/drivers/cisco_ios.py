@@ -39,6 +39,12 @@ class CiscoIOSDriver(Driver):
     def save_config_commands(self) -> list[str]:
         return ["write memory"]
 
+    def mac_table_show_command(self) -> str:
+        return "show mac address-table"
+
+    def parse_mac_table(self, parsed_rows: list[dict]) -> list[dict]:
+        return self._parse_cisco_style_mac_rows(parsed_rows)
+
     def snmpv3_show_existing_command(self) -> str:
         return "show running-config | include snmp-server"
 

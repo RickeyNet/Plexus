@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.0.2 - 2026-05-27
+
+### MAC tracking
+- Switch MAC address-table collection to a CLI-first path: `show mac address-table` parsed via ntc-templates on Cisco IOS / IOS-XE / NX-OS and Arista EOS returns every MAC on every VLAN in one round-trip, sidestepping the Cisco "default-context FDB only shows VLAN 1" problem that previously left non-uplink ports invisible. SNMP remains as the automatic fallback when no SSH credential is available or the driver doesn't implement the capability.
+- Add `mac_table_show_command()` / `parse_mac_table()` to the `Driver` base class with a shared cisco-style row normaliser so additional vendors can plug in their own MAC scrapers without touching the collector.
+- Harden the SNMP fallback: VLAN enumeration now folds in the VTP table (Cisco) and `dot1qVlanStaticName` (standard) so trunk-only VLANs aren't skipped; per-VLAN SNMPv3 context walks run with bounded parallelism (semaphore=4) and a q-bridge fast path that skips the redundant dot1d walks when q-bridge returned rows; a 60s wall-clock budget guarantees the collector can never hang on a switch with a large VTP domain.
+- Expose a `diag` block on `/api/mac-tracking/collect` responses (device_type, snmp_version, ports, port_vlans, vlans_discovered, vlan_ctx attempts/successes/skips, CLI attempted/succeeded/mac_count) so operators can diagnose collection problems without shell or log access. The structured log line gains the same fields.
+
+### Dependencies
+- Pin `ntc-templates>=7,<10` explicitly. It was already transitive via netmiko, but the new CLI collector uses `send_command(..., use_textfsm=True)` directly so the dependency is now intentional.
+
 ## 1.0.1 - 2026-05-22
 
 ### Deployment & upgrades

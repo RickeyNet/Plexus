@@ -294,6 +294,47 @@ async def _run_show_command(host: dict, credentials: dict, command: str) -> str:
     return await asyncio.to_thread(_do_run)
 
 
+async def _collect_mac_table_via_cli(host: dict, credentials: dict) -> list[dict]:
+    """SSH to a device and pull the MAC address-table via Netmiko + ntc-templates.
+
+    Returns a normalised list of ``{"mac", "vlan", "port", "type"}`` rows.
+
+    The mac_tracking collector uses this in preference to the SNMP
+    bridge/Q-BRIDGE MIB walks because the CLI returns every VLAN's FDB
+    in one round-trip - on Cisco, SNMP only exposes VLAN 1's bridge MIB
+    in the default context and needs a per-VLAN SNMPv3 context dance to
+    see anything else, which is unreliable in the wild.
+
+    Raises ``DriverCapabilityError`` when the resolved driver doesn't
+    implement ``mac_table_show_command()`` (firewalls, routers without
+    L2 forwarding, etc.) - the caller is expected to fall back to SNMP
+    in that case.
+    """
+    from netcontrol.drivers import get_driver
+
+    def _do_collect() -> list[dict]:
+        conn, resolved_type = _open_netmiko_session(host, credentials)
+        try:
+            driver = get_driver(resolved_type)
+            # mac_table_show_command() may raise DriverCapabilityError for
+            # platforms with no L2 table; let it propagate so the caller
+            # knows to fall back rather than silently returning an empty
+            # list (which would look the same as "device has no MACs").
+            cmd = driver.mac_table_show_command()
+            # use_textfsm pulls ntc-templates' parsed output (a list of
+            # dicts).  When no template matches, Netmiko returns the raw
+            # string instead - guard against that so we don't crash with
+            # AttributeError downstream.
+            parsed = conn.send_command(cmd, use_textfsm=True)
+            if not isinstance(parsed, list):
+                return []
+            return driver.parse_mac_table(parsed)
+        finally:
+            conn.disconnect()
+
+    return await asyncio.to_thread(_do_collect)
+
+
 async def _push_config_to_device(host: dict, credentials: dict, config_lines: list[str]) -> str:
     """SSH to a device and push config lines via Netmiko, then save."""
     def _do_push():

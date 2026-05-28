@@ -90,6 +90,15 @@ class AristaEOSDriver(Driver):
         # is consistent across the two datacenter platforms.
         return ["copy running-config startup-config"]
 
+    def mac_table_show_command(self) -> str:
+        # Arista's EOS CLI is deliberately IOS-flavoured (see module
+        # docstring); ``show mac address-table`` returns the same column
+        # layout the cisco-style normaliser already handles.
+        return "show mac address-table"
+
+    def parse_mac_table(self, parsed_rows: list[dict]) -> list[dict]:
+        return self._parse_cisco_style_mac_rows(parsed_rows)
+
     def snmpv3_show_existing_command(self) -> str:
         # EOS mirrors IOS-XE's ``snmp-server`` config noun, so the same
         # include filter works.

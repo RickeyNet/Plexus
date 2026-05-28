@@ -65,6 +65,15 @@ class CiscoNXOSDriver(Driver):
         # is the explicit copy form.
         return ["copy running-config startup-config"]
 
+    def mac_table_show_command(self) -> str:
+        # NX-OS uses the same verb as IOS/IOS-XE; the textfsm template
+        # ``cisco_nxos_show_mac_address-table`` returns the same columns
+        # the cisco-style normaliser expects.
+        return "show mac address-table"
+
+    def parse_mac_table(self, parsed_rows: list[dict]) -> list[dict]:
+        return self._parse_cisco_style_mac_rows(parsed_rows)
+
     def snmpv3_show_existing_command(self) -> str:
         # NX-OS accepts the same include-style filter as IOS/XE.
         return "show running-config | include snmp-server"
