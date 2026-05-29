@@ -148,19 +148,18 @@ export function useSnmpProfiles() {
 
 export function useGroupSnmpAssignments(groupIds: number[]) {
   return useQuery<Record<number, string>>({
-    queryKey: ['snmp-profile-assignments', groupIds.slice().sort().join(',')],
+    queryKey: ['snmp-profile-assignments'],
     queryFn: async () => {
-      const results = await Promise.all(
-        groupIds.map((gid) =>
-          apiRequest<SnmpProfileAssignment>(
-            `/inventory/${gid}/snmp-profile-assignment`,
-          ).catch(() => ({ group_id: gid, snmp_profile_id: '' })),
-        ),
+      const data = await apiRequest<{ assignments: SnmpProfileAssignment[] }>(
+        '/inventory/snmp-profile-assignments',
       );
       const map: Record<number, string> = {};
-      results.forEach((r) => {
-        map[r.group_id] = r.snmp_profile_id || '';
-      });
+      for (const a of data.assignments ?? []) {
+        map[a.group_id] = a.snmp_profile_id || '';
+      }
+      for (const gid of groupIds) {
+        if (!(gid in map)) map[gid] = '';
+      }
       return map;
     },
     enabled: groupIds.length > 0,

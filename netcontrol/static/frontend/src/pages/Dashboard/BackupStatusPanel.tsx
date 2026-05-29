@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 
 import {
   type ConfigBackup,
-  useConfigBackups,
   useConfigBackupSummary,
+  useLatestConfigBackupsPerHost,
 } from '@/api/configuration';
 import type { DeviceHealth } from '@/api/dashboard';
 
@@ -45,7 +45,7 @@ interface Props {
 
 export function BackupStatusPanel({ devices }: Props) {
   const summary = useConfigBackupSummary();
-  const backups = useConfigBackups(500);
+  const backups = useLatestConfigBackupsPerHost();
 
   const rollups = useMemo<HostRollup[]>(() => {
     return rollUpBackups(backups.data ?? [], devices);

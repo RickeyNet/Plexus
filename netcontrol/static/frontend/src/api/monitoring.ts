@@ -230,7 +230,7 @@ export function useMonitoringSummary(groupId: number | null = null) {
   return useQuery<MonitoringSummary>({
     queryKey: ['monitoring-summary', groupId],
     queryFn: () => apiRequest(`/monitoring/summary${qs}`),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
   });
 }
 
@@ -241,7 +241,7 @@ export function useMonitoringPolls(groupId: number | null = null, limit = 200) {
   return useQuery<MonitoringPoll[]>({
     queryKey: ['monitoring-polls', groupId, limit],
     queryFn: () => apiRequest(`/monitoring/polls?${params}`),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
   });
 }
 
@@ -262,7 +262,7 @@ export function useMonitoringAlerts(params: { acknowledged?: boolean | null; sev
   return useQuery<MonitoringAlert[]>({
     queryKey: ['monitoring-alerts', params.acknowledged ?? null, params.severity ?? '', params.limit ?? 200],
     queryFn: () => apiRequest(`/monitoring/alerts?${qs}`),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
   });
 }
 

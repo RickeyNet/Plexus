@@ -87,15 +87,21 @@ export function DeviceDetail() {
     if (flowHidden && tab === 'flow') setTab('overview');
   }, [flowHidden, tab]);
 
+  const loadOverview = tab === 'overview';
+  const loadInterfaces = tab === 'interfaces';
+  const loadAlerts = tab === 'alerts';
+  const loadCompliance = tab === 'compliance';
+  const loadSyslog = tab === 'syslog';
+
   const polls = useMonitoringPollHistory(hostId, 1);
-  const cpu = useMetricQuery('cpu_percent', hostId, range);
-  const mem = useMetricQuery('memory_percent', hostId, range);
-  const rt = useMetricQuery('response_time_ms', hostId, range);
-  const pl = useMetricQuery('packet_loss_pct', hostId, range);
-  const ifData = useInterfaceTimeSeries(hostId, range);
-  const alerts = useMonitoringAlerts(hostId, 50);
-  const compliance = useComplianceResults(hostId, 20);
-  const syslog = useSyslogEvents(hostId, 100);
+  const cpu = useMetricQuery('cpu_percent', hostId, range, loadOverview);
+  const mem = useMetricQuery('memory_percent', hostId, range, loadOverview);
+  const rt = useMetricQuery('response_time_ms', hostId, range, loadOverview);
+  const pl = useMetricQuery('packet_loss_pct', hostId, range, loadOverview);
+  const ifData = useInterfaceTimeSeries(hostId, range, loadInterfaces);
+  const alerts = useMonitoringAlerts(hostId, 50, loadAlerts);
+  const compliance = useComplianceResults(hostId, 20, loadCompliance);
+  const syslog = useSyslogEvents(hostId, 100, loadSyslog);
 
   const latestPoll: MonitoringPoll | null =
     (polls.data?.polls && polls.data.polls[0]) || null;

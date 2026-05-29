@@ -634,6 +634,20 @@ async def admin_delete_snmp_profile(profile_id: str):
 # ── Group SNMP Profile Assignment ────────────────────────────────────────────
 
 
+@router.get("/api/inventory/snmp-profile-assignments")
+async def list_snmp_profile_assignments():
+    """Return SNMP profile assignments for all inventory groups in one call."""
+    assignments = []
+    for group_id, profile_id in state.GROUP_SNMP_ASSIGNMENTS.items():
+        profile = state.SNMP_PROFILES.get(profile_id) if profile_id else None
+        assignments.append({
+            "group_id": group_id,
+            "snmp_profile_id": profile_id,
+            "profile_name": profile["name"] if profile else "",
+        })
+    return {"assignments": assignments}
+
+
 @router.get("/api/inventory/{group_id}/snmp-profile-assignment")
 async def get_group_snmp_profile_assignment(group_id: int):
     group = await db.get_group(group_id)

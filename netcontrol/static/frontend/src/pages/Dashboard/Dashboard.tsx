@@ -4,9 +4,7 @@ import { useDashboard } from '@/api/dashboard';
 
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
-import { BackupStatusPanel } from './BackupStatusPanel';
 import { DevicesGridPanel } from './DevicesGridPanel';
-import { EventsFeedPanel } from './EventsFeedPanel';
 import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
 import { StatRings } from './StatRings';
@@ -24,6 +22,12 @@ const ResponseTimePanel = lazy(() =>
 );
 const TopTalkersPanel = lazy(() =>
   import('./TopTalkersPanel').then((m) => ({ default: m.TopTalkersPanel })),
+);
+const BackupStatusPanel = lazy(() =>
+  import('./BackupStatusPanel').then((m) => ({ default: m.BackupStatusPanel })),
+);
+const EventsFeedPanel = lazy(() =>
+  import('./EventsFeedPanel').then((m) => ({ default: m.EventsFeedPanel })),
 );
 
 const PanelSkeleton = () => <div className="skeleton skeleton-card" />;
@@ -87,8 +91,12 @@ export function Dashboard() {
         <TopTalkersPanel />
       </Suspense>
       <DevicesGridPanel devices={devices} />
-      <BackupStatusPanel devices={devices} />
-      <EventsFeedPanel />
+      <Suspense fallback={<PanelSkeleton />}>
+        <BackupStatusPanel devices={devices} />
+      </Suspense>
+      <Suspense fallback={<PanelSkeleton />}>
+        <EventsFeedPanel />
+      </Suspense>
       <StatRings
         hosts={stats.total_hosts ?? 0}
         playbooks={stats.total_playbooks ?? 0}

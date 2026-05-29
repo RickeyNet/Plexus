@@ -214,6 +214,13 @@ export function useConfigBackups(limit = 100) {
   });
 }
 
+export function useLatestConfigBackupsPerHost() {
+  return useQuery<ConfigBackup[]>({
+    queryKey: ['config-backups', 'latest-per-host'],
+    queryFn: () => apiRequest('/config-backups/latest-per-host'),
+  });
+}
+
 export function useConfigBackupDetail(id: number | null) {
   return useQuery<ConfigBackupDetail>({
     queryKey: ['config-backup', id],

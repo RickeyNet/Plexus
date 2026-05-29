@@ -156,7 +156,12 @@ export interface AnnotationsResult {
 
 // ── Hooks ──────────────────────────────────────────────────────────────────
 
-export function useMetricQuery(metric: string, hostId: number | null, range: string) {
+export function useMetricQuery(
+  metric: string,
+  hostId: number | null,
+  range: string,
+  enabled = true,
+) {
   return useQuery<MetricQueryResult>({
     queryKey: ['metrics', metric, hostId, range],
     queryFn: () => {
@@ -168,23 +173,27 @@ export function useMetricQuery(metric: string, hostId: number | null, range: str
       });
       return apiRequest(`/metrics/query?${p}`);
     },
-    enabled: hostId != null,
+    enabled: hostId != null && enabled,
   });
 }
 
-export function useInterfaceTimeSeries(hostId: number | null, range: string) {
+export function useInterfaceTimeSeries(
+  hostId: number | null,
+  range: string,
+  enabled = true,
+) {
   return useQuery<InterfaceTimeSeriesResult>({
     queryKey: ['interface-timeseries', hostId, range],
     queryFn: () => apiRequest(`/metrics/interfaces/${hostId}?range=${range}`),
-    enabled: hostId != null,
+    enabled: hostId != null && enabled,
   });
 }
 
-export function useMonitoringAlerts(hostId: number | null, limit = 50) {
+export function useMonitoringAlerts(hostId: number | null, limit = 50, enabled = true) {
   return useQuery<MonitoringAlertsResult>({
     queryKey: ['monitoring-alerts', hostId, limit],
     queryFn: () => apiRequest(`/monitoring/alerts?host_id=${hostId}&limit=${limit}`),
-    enabled: hostId != null,
+    enabled: hostId != null && enabled,
   });
 }
 
@@ -218,20 +227,20 @@ export function useMonitoringPolls(limit = 100) {
   });
 }
 
-export function useComplianceResults(hostId: number | null, limit = 20) {
+export function useComplianceResults(hostId: number | null, limit = 20, enabled = true) {
   return useQuery<{ results?: ComplianceResult[] }>({
     queryKey: ['compliance-results', hostId, limit],
     queryFn: () => apiRequest(`/compliance/results?host_id=${hostId}&limit=${limit}`),
-    enabled: hostId != null,
+    enabled: hostId != null && enabled,
   });
 }
 
-export function useSyslogEvents(hostId: number | null, limit = 100) {
+export function useSyslogEvents(hostId: number | null, limit = 100, enabled = true) {
   return useQuery<{ events?: SyslogEvent[] }>({
     queryKey: ['syslog-events', hostId, limit],
     queryFn: () =>
       apiRequest(`/metrics/events?host_id=${hostId}&limit=${limit}&event_type=syslog`),
-    enabled: hostId != null,
+    enabled: hostId != null && enabled,
   });
 }
 

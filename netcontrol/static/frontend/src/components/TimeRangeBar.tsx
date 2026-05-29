@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
+import { invalidateMetricQueries } from '@/lib/invalidateMetricQueries';
 import { useTimeRange, type TimeRangePreset } from '@/lib/timeRange-context';
 
 const PRESETS: TimeRangePreset[] = ['1h', '6h', '24h', '7d', '30d', 'custom'];
@@ -28,7 +29,7 @@ export function TimeRangeBar() {
   }
 
   function refresh() {
-    qc.invalidateQueries();
+    invalidateMetricQueries(qc);
   }
 
   return (

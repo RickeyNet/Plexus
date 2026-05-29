@@ -200,7 +200,7 @@ export function useJobs(limit = 100) {
   return useQuery<Job[]>({
     queryKey: ['jobs', limit],
     queryFn: () => apiRequest<Job[]>(`/jobs?limit=${limit}`),
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -224,7 +224,7 @@ export function useJobQueue() {
   return useQuery<JobQueueData>({
     queryKey: ['job-queue'],
     queryFn: () => apiRequest<JobQueueData>('/jobs/queue'),
-    refetchInterval: 5_000,
+    refetchInterval: 15_000,
   });
 }
 
