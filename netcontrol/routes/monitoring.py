@@ -31,6 +31,53 @@ router = APIRouter()
 admin_router = APIRouter()
 LOGGER = configure_logging("plexus.monitoring")
 
+
+async def _track_availability_from_poll(
+    res: dict,
+    poll_id: int,
+    *,
+    hostname: str | None = None,
+    ip_address: str | None = None,
+) -> None:
+    """Record host/interface up-down transitions using batched DB writes."""
+    host_id = res["host_id"]
+    transitions: list[tuple] = []
+
+    new_host_state = "up" if res["poll_status"] == "ok" else "down"
+    host_states = await db.get_last_availability_states(host_id, "host")
+    prev_host = host_states.get("", "unknown")
+    if prev_host != new_host_state:
+        transitions.append(
+            (host_id, "host", "", prev_host, new_host_state, poll_id),
+        )
+
+    if_states = await db.get_last_availability_states(host_id, "interface")
+    for iface in res.get("if_details", []):
+        if_idx = str(iface.get("if_index", ""))
+        if not if_idx:
+            continue
+        if_state = "up" if iface.get("status") == "up" else "down"
+        prev_if = if_states.get(if_idx, "unknown")
+        if prev_if != if_state:
+            transitions.append(
+                (host_id, "interface", if_idx, prev_if, if_state, poll_id),
+            )
+
+    if not transitions:
+        return
+
+    await db.record_availability_transitions_batch(transitions)
+    for _host_id, entity_type, entity_id, old_state, new_state, _poll_id in transitions:
+        if entity_type == "host":
+            LOGGER.info(
+                "availability: host %s (%s) %s → %s",
+                hostname or "?",
+                ip_address or "?",
+                old_state,
+                new_state,
+            )
+            break
+
 # ── Late-binding auth dependencies (injected by app.py) ──────────────────────
 
 _require_auth = None
@@ -708,41 +755,11 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
 
             # ── Availability Tracking: detect state transitions ──
             try:
-                new_host_state = "up" if res["poll_status"] == "ok" else "down"
-                last_transition = await db.get_last_availability_state(
-                    res["host_id"], "host", "")
-                prev_state = last_transition["new_state"] if last_transition else "unknown"
-                if prev_state != new_host_state:
-                    await db.record_availability_transition(
-                        host_id=res["host_id"],
-                        entity_type="host",
-                        entity_id="",
-                        old_state=prev_state,
-                        new_state=new_host_state,
-                        poll_id=poll_id,
-                    )
-                    LOGGER.info("availability: host %s (%s) %s → %s",
-                                h.get("hostname", "?"), h.get("ip_address", "?"),
-                                prev_state, new_host_state)
-
-                # Track interface state transitions
-                for iface in res.get("if_details", []):
-                    if_idx = str(iface.get("if_index", ""))
-                    if not if_idx:
-                        continue
-                    if_state = "up" if iface.get("status") == "up" else "down"
-                    last_if = await db.get_last_availability_state(
-                        res["host_id"], "interface", if_idx)
-                    prev_if_state = last_if["new_state"] if last_if else "unknown"
-                    if prev_if_state != if_state:
-                        await db.record_availability_transition(
-                            host_id=res["host_id"],
-                            entity_type="interface",
-                            entity_id=if_idx,
-                            old_state=prev_if_state,
-                            new_state=if_state,
-                            poll_id=poll_id,
-                        )
+                await _track_availability_from_poll(
+                    res, poll_id,
+                    hostname=h.get("hostname"),
+                    ip_address=h.get("ip_address"),
+                )
             except Exception as exc:
                 LOGGER.debug("availability: tracking error for host %s: %s",
                              res["host_id"], str(exc))
@@ -865,8 +882,12 @@ async def monitoring_summary(group_id: int | None = Query(default=None)):
 
 
 @router.get("/api/monitoring/polls")
-async def monitoring_polls(group_id: int | None = Query(default=None), limit: int = Query(default=200, ge=1, le=10000)):
-    return await db.get_latest_monitoring_polls(group_id, limit)
+async def monitoring_polls(
+    group_id: int | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=10000),
+    include_details: bool = Query(default=False),
+):
+    return await db.get_latest_monitoring_polls(group_id, limit, include_details)
 
 
 @router.get("/api/monitoring/polls/{host_id}/history")
@@ -1054,27 +1075,11 @@ async def monitoring_poll_now_stream(request: Request):
 
             # Availability tracking
             try:
-                new_host_state = "up" if res["poll_status"] == "ok" else "down"
-                last_transition = await db.get_last_availability_state(
-                    res["host_id"], "host", "")
-                prev_state = last_transition["new_state"] if last_transition else "unknown"
-                if prev_state != new_host_state:
-                    await db.record_availability_transition(
-                        host_id=res["host_id"], entity_type="host", entity_id="",
-                        old_state=prev_state, new_state=new_host_state, poll_id=poll_id)
-                for iface in res.get("if_details", []):
-                    if_idx = str(iface.get("if_index", ""))
-                    if not if_idx:
-                        continue
-                    if_state = "up" if iface.get("status") == "up" else "down"
-                    last_if = await db.get_last_availability_state(
-                        res["host_id"], "interface", if_idx)
-                    prev_if_state = last_if["new_state"] if last_if else "unknown"
-                    if prev_if_state != if_state:
-                        await db.record_availability_transition(
-                            host_id=res["host_id"], entity_type="interface",
-                            entity_id=if_idx, old_state=prev_if_state,
-                            new_state=if_state, poll_id=poll_id)
+                await _track_availability_from_poll(
+                    res, poll_id,
+                    hostname=h.get("hostname"),
+                    ip_address=h.get("ip_address"),
+                )
             except Exception:
                 pass
 
