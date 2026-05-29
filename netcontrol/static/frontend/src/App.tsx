@@ -4,8 +4,8 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
 import { useAuthStatus } from '@/api/auth';
 import { resetSessionExpiryFlag, setSessionExpiredHandler } from '@/api/client';
-import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
+import { StarfieldCanvas } from '@/components/StarfieldCanvas';
 import { IdleTimeoutWatcher } from '@/components/IdleTimeoutWatcher';
 import { Sidebar } from '@/components/Sidebar';
 import { TimeRangeBar } from '@/components/TimeRangeBar';
@@ -145,7 +145,7 @@ export function App() {
   if (isLoading) {
     return (
       <div className="app-container">
-        <AnimatedBackground />
+        <AppBackground />
       </div>
     );
   }
@@ -159,7 +159,7 @@ export function App() {
 
   return (
     <div className="app-container">
-      <AnimatedBackground />
+      <AppBackground />
 
       <button
         className="hamburger-btn"
@@ -250,5 +250,21 @@ export function App() {
         onSuccess={() => qc.invalidateQueries({ queryKey: ['auth', 'status'] })}
       />
     </div>
+  );
+}
+
+function AppBackground() {
+  return (
+    <>
+      <div className="animated-bg" aria-hidden="true">
+        <div className="space-depth space-depth-app">
+          <div className="space-nebula nebula-a" />
+          <div className="space-nebula nebula-b" />
+          <div className="space-nebula nebula-c" />
+          <div className="space-vignette" />
+        </div>
+      </div>
+      <StarfieldCanvas className="app-particles" />
+    </>
   );
 }
