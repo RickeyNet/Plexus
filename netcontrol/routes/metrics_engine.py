@@ -218,18 +218,21 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
     # Update interface_stats with current counters so the *next* poll
     # can calculate deltas.  Without this, rates stay null because
     # interface_stats was only written by topology discovery.
+    stat_rows: list[tuple] = []
     for iface in if_details:
         if_index = iface.get("if_index")
         if not if_index:
             continue
-        await db.upsert_interface_stat(
-            host_id=host_id,
-            if_index=if_index,
-            if_name=iface.get("name", ""),
-            if_speed_mbps=iface.get("speed_mbps", 0) or 0,
-            in_octets=iface.get("in_octets", 0) or 0,
-            out_octets=iface.get("out_octets", 0) or 0,
-        )
+        stat_rows.append((
+            host_id,
+            if_index,
+            iface.get("name", ""),
+            iface.get("speed_mbps", 0) or 0,
+            iface.get("in_octets", 0) or 0,
+            iface.get("out_octets", 0) or 0,
+        ))
+    if stat_rows:
+        await db.upsert_interface_stats_batch(stat_rows)
 
     return await db.create_interface_ts_batch(rows)
 
@@ -265,6 +268,7 @@ async def store_interface_error_metrics_from_poll(
         prev_map[str(s["if_index"])] = s
 
     metric_rows: list[tuple] = []
+    error_stat_rows: list[tuple] = []
     counter_fields = [
         ("in_errors", "if_in_errors"),
         ("out_errors", "if_out_errors"),
@@ -344,16 +348,17 @@ async def store_interface_error_metrics_from_poll(
                 except (ValueError, TypeError):
                     pass
 
-        # Update interface_error_stats with current counters
-        await db.upsert_interface_error_stat(
-            host_id=host_id,
-            if_index=if_index,
-            if_name=if_name,
-            in_errors=iface.get("in_errors", 0) or 0,
-            out_errors=iface.get("out_errors", 0) or 0,
-            in_discards=iface.get("in_discards", 0) or 0,
-            out_discards=iface.get("out_discards", 0) or 0,
-        )
+        error_stat_rows.append((
+            if_index,
+            if_name,
+            iface.get("in_errors", 0) or 0,
+            iface.get("out_errors", 0) or 0,
+            iface.get("in_discards", 0) or 0,
+            iface.get("out_discards", 0) or 0,
+        ))
+
+    if error_stat_rows:
+        await db.upsert_interface_error_stats_batch(host_id, error_stat_rows)
 
     stored = await db.create_metric_samples_batch(metric_rows) if metric_rows else 0
     return stored
