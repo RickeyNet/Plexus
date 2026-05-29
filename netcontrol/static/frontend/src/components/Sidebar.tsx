@@ -2,7 +2,6 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 
 import { useAuthStatus } from '@/api/auth';
-import { usePerformanceMode } from '@/lib/usePerformanceMode';
 
 // Navigation mirrors the legacy SPA sidebar (netcontrol/static/index.html). Each
 // item is either an internal React route (`to`) or a link back to the legacy UI
@@ -219,11 +218,6 @@ const ic = {
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   ),
-  perf: (
-    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-    </svg>
-  ),
   user: (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -333,7 +327,6 @@ interface SidebarProps {
 export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const { pathname } = useLocation();
-  const { enabled: perfEnabled, toggle: togglePerf } = usePerformanceMode();
   const { data: auth } = useAuthStatus();
 
   const visibleNav = useMemo(() => {
@@ -406,18 +399,6 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
         )}
       </div>
       <div className="sidebar-bottom">
-        <a
-          href="#"
-          className={`nav-link perf-toggle${perfEnabled ? ' active' : ''}`}
-          title={perfEnabled ? 'Performance Mode ON - click to disable' : 'Performance Mode - reduce animations and blur'}
-          onClick={(e) => {
-            e.preventDefault();
-            togglePerf();
-          }}
-        >
-          {ic.perf}
-          <span className="nav-label">Performance</span>
-        </a>
         <a
           href="#"
           className="nav-link nav-user"

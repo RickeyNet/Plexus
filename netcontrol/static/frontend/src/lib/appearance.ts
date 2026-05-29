@@ -88,7 +88,12 @@ export function applySpaceIntensity(intensity: SpaceIntensity): void {
   safeSet(SPACE_INTENSITY_KEY, intensity);
 }
 
+export function initPerformanceMode(): void {
+  document.body.classList.add('reduced-motion');
+}
+
 export function initAppearance(): void {
+  initPerformanceMode();
   applyTheme(readSavedTheme());
   applySpaceIntensity(readSavedSpaceIntensity());
 }

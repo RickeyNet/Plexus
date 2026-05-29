@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useLogin, useRegister } from '@/api/auth';
 import { ApiError } from '@/api/client';
-import { initStarfield } from '@/lib/spaceStarfield';
+import { StarfieldCanvas } from '@/components/StarfieldCanvas';
 
 function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
@@ -27,27 +27,12 @@ export function Login({ allowRegister = true }: Props) {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const screenRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
   const login = useLogin();
   const register = useRegister();
 
   useEffect(() => {
     setError(null);
   }, [mode]);
-
-  // Mirrors the legacy `#login-particles` starfield. Mounts a few hundred
-  // drifting points over the .login-screen container.
-  useEffect(() => {
-    if (!screenRef.current || !canvasRef.current) return;
-    return initStarfield({
-      canvas: canvasRef.current,
-      host: screenRef.current,
-      baseCount: 110,
-      linkDistance: 0,
-    });
-  }, []);
 
   async function onLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -80,14 +65,14 @@ export function Login({ allowRegister = true }: Props) {
   const pending = login.isPending || register.isPending;
 
   return (
-    <div className="login-screen" ref={screenRef}>
+    <div className="login-screen">
       <div className="space-depth space-depth-login" aria-hidden="true">
         <div className="space-nebula nebula-a"></div>
         <div className="space-nebula nebula-b"></div>
         <div className="space-nebula nebula-c"></div>
         <div className="space-vignette"></div>
       </div>
-      <canvas ref={canvasRef} className="login-particles" aria-hidden="true" />
+      <StarfieldCanvas className="login-particles" baseCount={110} />
       <div className="login-card">
         <div className="login-orb" aria-hidden="true" />
         <h1 className="login-title">Plexus</h1>
