@@ -11,9 +11,8 @@ import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
 import { StatRings } from './StatRings';
 
-// Heavy chart/topology panels pull in vis-network (~633 KB) and echarts (~606 KB).
-// Deferring them keeps the home page first paint light; each shows a skeleton
-// until its chunk resolves.
+// Chart panels pull in echarts (~606 KB). Deferring them keeps the home page
+// first paint light; each shows a skeleton until its chunk resolves.
 const OverviewPanels = lazy(() =>
   import('./OverviewPanels').then((m) => ({ default: m.OverviewPanels })),
 );
