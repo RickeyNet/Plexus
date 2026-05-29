@@ -4686,28 +4686,39 @@ async def upsert_interface_stat(
     out_octets: int,
 ) -> int:
     """Insert or update interface counters, shifting current values to prev_*."""
+    return await upsert_interface_stats_batch([
+        (host_id, if_index, if_name, if_speed_mbps, in_octets, out_octets),
+    ])
+
+
+_UPSERT_INTERFACE_STAT_SQL = """
+    INSERT INTO interface_stats
+       (host_id, if_index, if_name, if_speed_mbps, in_octets, out_octets, polled_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(host_id, if_index)
+       DO UPDATE SET
+           if_name = excluded.if_name,
+           if_speed_mbps = CASE WHEN excluded.if_speed_mbps > 0
+                                THEN excluded.if_speed_mbps
+                                ELSE interface_stats.if_speed_mbps END,
+           prev_in_octets = interface_stats.in_octets,
+           prev_out_octets = interface_stats.out_octets,
+           prev_polled_at = interface_stats.polled_at,
+           in_octets = excluded.in_octets,
+           out_octets = excluded.out_octets,
+           polled_at = excluded.polled_at
+"""
+
+
+async def upsert_interface_stats_batch(rows: list[tuple]) -> int:
+    """Batch upsert interface counters for one or more interfaces."""
+    if not rows:
+        return 0
     db = await get_db()
     try:
-        cursor = await db.execute(
-            """INSERT INTO interface_stats
-               (host_id, if_index, if_name, if_speed_mbps, in_octets, out_octets, polled_at)
-               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-               ON CONFLICT(host_id, if_index)
-               DO UPDATE SET
-                   if_name = excluded.if_name,
-                   if_speed_mbps = CASE WHEN excluded.if_speed_mbps > 0
-                                        THEN excluded.if_speed_mbps
-                                        ELSE interface_stats.if_speed_mbps END,
-                   prev_in_octets = interface_stats.in_octets,
-                   prev_out_octets = interface_stats.out_octets,
-                   prev_polled_at = interface_stats.polled_at,
-                   in_octets = excluded.in_octets,
-                   out_octets = excluded.out_octets,
-                   polled_at = excluded.polled_at""",
-            (host_id, if_index, if_name, if_speed_mbps, in_octets, out_octets),
-        )
+        await db.executemany(_UPSERT_INTERFACE_STAT_SQL, rows)
         await db.commit()
-        return cursor.lastrowid
+        return len(rows)
     finally:
         await db.close()
 
@@ -7298,37 +7309,42 @@ async def create_monitoring_poll(
 
 async def get_latest_monitoring_polls(
     group_id: int | None = None, limit: int = 200,
+    include_details: bool = False,
 ) -> list[dict]:
     """Return the most recent poll per host, with host info joined."""
+    detail_cols = ", p.if_details, p.vpn_details, p.route_snapshot" if include_details else ""
     db = await get_db()
     try:
+        group_filter = ""
+        params: list = []
         if group_id is not None:
-            cursor = await db.execute(
-                """SELECT p.*, h.hostname, h.ip_address, h.device_type, h.group_id,
-                          h.model, h.software_version, h.status AS host_status,
-                          h.last_seen, g.name AS group_name
-                   FROM monitoring_polls p
-                   JOIN hosts h ON h.id = p.host_id
-                   LEFT JOIN inventory_groups g ON g.id = h.group_id
-                   WHERE h.group_id = ?
-                     AND p.id = (SELECT MAX(p2.id) FROM monitoring_polls p2 WHERE p2.host_id = p.host_id)
-                   ORDER BY h.hostname
-                   LIMIT ?""",
-                (group_id, limit),
-            )
-        else:
-            cursor = await db.execute(
-                """SELECT p.*, h.hostname, h.ip_address, h.device_type, h.group_id,
-                          h.model, h.software_version, h.status AS host_status,
-                          h.last_seen, g.name AS group_name
-                   FROM monitoring_polls p
-                   JOIN hosts h ON h.id = p.host_id
-                   LEFT JOIN inventory_groups g ON g.id = h.group_id
-                   WHERE p.id = (SELECT MAX(p2.id) FROM monitoring_polls p2 WHERE p2.host_id = p.host_id)
-                   ORDER BY h.hostname
-                   LIMIT ?""",
-                (limit,),
-            )
+            group_filter = "AND h.group_id = ?"
+            params.append(group_id)
+        params.append(limit)
+        cursor = await db.execute(
+            f"""SELECT p.id, p.host_id, p.cpu_percent, p.memory_percent,
+                       p.memory_used_mb, p.memory_total_mb, p.uptime_seconds,
+                       p.if_up_count, p.if_down_count, p.if_admin_down,
+                       p.vpn_tunnels_up, p.vpn_tunnels_down, p.route_count,
+                       p.poll_status, p.poll_error, p.response_time_ms,
+                       p.packet_loss_pct, p.icmp_alive, p.icmp_rtt_ms, p.polled_at
+                       {detail_cols},
+                       h.hostname, h.ip_address, h.device_type, h.group_id,
+                       h.model, h.software_version, h.status AS host_status,
+                       h.last_seen, g.name AS group_name
+                FROM monitoring_polls p
+                INNER JOIN (
+                    SELECT host_id, MAX(id) AS max_id
+                    FROM monitoring_polls
+                    GROUP BY host_id
+                ) latest ON p.id = latest.max_id
+                JOIN hosts h ON h.id = p.host_id
+                LEFT JOIN inventory_groups g ON g.id = h.group_id
+                WHERE 1=1 {group_filter}
+                ORDER BY h.hostname
+                LIMIT ?""",
+            tuple(params),
+        )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -7383,10 +7399,20 @@ async def get_monitoring_summary(group_id: int | None = None) -> dict:
         monitored_hosts = (await cursor.fetchone())[0]
 
         cursor = await db.execute(
-            f"""SELECT p.* FROM monitoring_polls p
+            f"""SELECT p.id, p.host_id, p.cpu_percent, p.memory_percent,
+                       p.memory_used_mb, p.memory_total_mb, p.uptime_seconds,
+                       p.if_up_count, p.if_down_count, p.if_admin_down,
+                       p.vpn_tunnels_up, p.vpn_tunnels_down, p.route_count,
+                       p.poll_status, p.poll_error, p.response_time_ms,
+                       p.packet_loss_pct, p.icmp_alive, p.icmp_rtt_ms, p.polled_at
+                FROM monitoring_polls p
+                INNER JOIN (
+                    SELECT host_id, MAX(id) AS max_id
+                    FROM monitoring_polls
+                    GROUP BY host_id
+                ) latest ON p.id = latest.max_id
                 JOIN hosts h ON h.id = p.host_id
-                WHERE p.id = (SELECT MAX(p2.id) FROM monitoring_polls p2 WHERE p2.host_id = p.host_id)
-                {group_filter}""",
+                WHERE 1=1 {group_filter}""",
             tuple(params),
         )
         latest_polls = rows_to_list(await cursor.fetchall())
@@ -8610,39 +8636,55 @@ async def upsert_interface_error_stat(
     out_discards: int,
 ) -> int:
     """Update or insert interface error counters, shifting current to prev."""
+    return await upsert_interface_error_stats_batch(host_id, [
+        (if_index, if_name, in_errors, out_errors, in_discards, out_discards),
+    ])
+
+
+async def upsert_interface_error_stats_batch(
+    host_id: int,
+    rows: list[tuple],
+) -> int:
+    """Batch upsert interface error counters for one host."""
+    if not rows:
+        return 0
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, in_errors, out_errors, in_discards, out_discards, polled_at "
-            "FROM interface_error_stats WHERE host_id = ? AND if_index = ?",
-            (host_id, if_index),
+            "SELECT if_index FROM interface_error_stats WHERE host_id = ?",
+            (host_id,),
         )
-        existing = await cursor.fetchone()
-        if existing:
-            await db.execute(
-                """UPDATE interface_error_stats
-                   SET if_name = ?,
-                       prev_in_errors = in_errors, prev_out_errors = out_errors,
-                       prev_in_discards = in_discards, prev_out_discards = out_discards,
-                       prev_polled_at = polled_at,
-                       in_errors = ?, out_errors = ?,
-                       in_discards = ?, out_discards = ?,
-                       polled_at = datetime('now')
-                   WHERE host_id = ? AND if_index = ?""",
-                (if_name, in_errors, out_errors, in_discards, out_discards,
-                 host_id, if_index),
-            )
-        else:
-            await db.execute(
-                """INSERT INTO interface_error_stats
-                   (host_id, if_index, if_name, in_errors, out_errors,
-                    in_discards, out_discards)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (host_id, if_index, if_name, in_errors, out_errors,
-                 in_discards, out_discards),
-            )
+        existing = {
+            row_to_dict(row)["if_index"]
+            for row in await cursor.fetchall()
+        }
+        for if_index, if_name, in_errors, out_errors, in_discards, out_discards in rows:
+            if if_index in existing:
+                await db.execute(
+                    """UPDATE interface_error_stats
+                       SET if_name = ?,
+                           prev_in_errors = in_errors, prev_out_errors = out_errors,
+                           prev_in_discards = in_discards, prev_out_discards = out_discards,
+                           prev_polled_at = polled_at,
+                           in_errors = ?, out_errors = ?,
+                           in_discards = ?, out_discards = ?,
+                           polled_at = datetime('now')
+                       WHERE host_id = ? AND if_index = ?""",
+                    (if_name, in_errors, out_errors, in_discards, out_discards,
+                     host_id, if_index),
+                )
+            else:
+                await db.execute(
+                    """INSERT INTO interface_error_stats
+                       (host_id, if_index, if_name, in_errors, out_errors,
+                        in_discards, out_discards)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (host_id, if_index, if_name, in_errors, out_errors,
+                     in_discards, out_discards),
+                )
+                existing.add(if_index)
         await db.commit()
-        return 1
+        return len(rows)
     finally:
         await db.close()
 
@@ -9381,16 +9423,54 @@ async def get_last_availability_state(
     host_id: int, entity_type: str = "host", entity_id: str = "",
 ) -> dict | None:
     """Get the most recent availability transition for an entity."""
+    states = await get_last_availability_states(host_id, entity_type)
+    if entity_id not in states:
+        return None
+    return {"entity_id": entity_id, "new_state": states[entity_id]}
+
+
+async def get_last_availability_states(
+    host_id: int, entity_type: str,
+) -> dict[str, str]:
+    """Return the latest new_state keyed by entity_id for one host + type."""
     db = await get_db()
     try:
         cursor = await db.execute(
-            """SELECT * FROM availability_transitions
-               WHERE host_id = ? AND entity_type = ? AND entity_id = ?
-               ORDER BY transition_at DESC LIMIT 1""",
-            (host_id, entity_type, entity_id),
+            """SELECT a.entity_id, a.new_state
+               FROM availability_transitions a
+               INNER JOIN (
+                   SELECT entity_id, MAX(id) AS max_id
+                   FROM availability_transitions
+                   WHERE host_id = ? AND entity_type = ?
+                   GROUP BY entity_id
+               ) latest ON a.id = latest.max_id
+               WHERE a.host_id = ? AND a.entity_type = ?""",
+            (host_id, entity_type, host_id, entity_type),
         )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
+        return {
+            row["entity_id"]: row["new_state"]
+            for row in rows_to_list(await cursor.fetchall())
+        }
+    finally:
+        await db.close()
+
+
+async def record_availability_transitions_batch(
+    transitions: list[tuple],
+) -> int:
+    """Insert multiple availability transitions in one transaction."""
+    if not transitions:
+        return 0
+    db = await get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO availability_transitions
+               (host_id, entity_type, entity_id, old_state, new_state, poll_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            transitions,
+        )
+        await db.commit()
+        return len(transitions)
     finally:
         await db.close()
 
