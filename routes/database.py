@@ -6148,6 +6148,29 @@ async def get_config_backups(
         await db.close()
 
 
+async def get_latest_config_backups_per_host() -> list[dict]:
+    """Return the most recent backup row for each host (dashboard rollup)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT b.id, b.policy_id, b.host_id, b.capture_method, b.status,
+                      b.error_message, b.captured_at, LENGTH(b.config_text) as config_length,
+                      h.hostname, h.ip_address, h.device_type
+               FROM config_backups b
+               INNER JOIN (
+                   SELECT host_id, MAX(id) AS max_id
+                   FROM config_backups
+                   WHERE host_id IS NOT NULL
+                   GROUP BY host_id
+               ) latest ON b.id = latest.max_id
+               LEFT JOIN hosts h ON h.id = b.host_id
+               ORDER BY h.hostname"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def get_config_backup(backup_id: int) -> dict | None:
     """Get a single backup record including config text."""
     db = await get_db()

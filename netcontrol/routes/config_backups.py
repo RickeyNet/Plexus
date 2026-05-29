@@ -182,6 +182,11 @@ async def get_config_backup_summary():
     return await db.get_config_backup_summary()
 
 
+@router.get("/api/config-backups/latest-per-host")
+async def list_latest_config_backups_per_host():
+    return await db.get_latest_config_backups_per_host()
+
+
 @router.get("/api/config-backups/search")
 async def search_config_backup_records(
     q: str = Query(..., min_length=1, max_length=400),
