@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 
 import { useDeleteUpgradeCampaign, useUpgradeCampaigns } from '@/api/upgrades';
+import { AlertDialog } from '@/components/AlertDialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 import { CampaignFormModal } from './CampaignFormModal';
 import { CampaignViewerModal } from './CampaignViewerModal';
@@ -13,6 +15,12 @@ export function CampaignsTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [viewingId, setViewingId] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(
+    null,
+  );
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(
+    null,
+  );
 
   const campaigns = useMemo(() => query.data || [], [query.data]);
 
@@ -27,15 +35,17 @@ export function CampaignsTab() {
     );
   }, [campaigns, search]);
 
-  const handleDelete = (id: number, name: string) => {
-    if (
-      !confirm(
-        `Delete campaign "${name}"? This permanently removes it and its events.`,
-      )
-    )
-      return;
-    remove.mutate(id, {
-      onError: (e) => alert(`Delete failed: ${(e as Error).message}`),
+  const handleDeleteConfirm = () => {
+    if (!deleteTarget) return;
+    remove.mutate(deleteTarget.id, {
+      onSuccess: () => setDeleteTarget(null),
+      onError: (e) => {
+        setDeleteTarget(null);
+        setAlert({
+          title: 'Delete failed',
+          message: (e as Error).message,
+        });
+      },
     });
   };
 
@@ -194,7 +204,7 @@ export function CampaignsTab() {
                       className="btn btn-sm btn-danger"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleDelete(c.id, c.name);
+                        setDeleteTarget({ id: c.id, name: c.name });
                       }}
                       disabled={c.is_actively_running || remove.isPending}
                     >
@@ -227,6 +237,29 @@ export function CampaignsTab() {
           onClose={() => setViewingId(null)}
         />
       )}
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        title="Delete campaign?"
+        message={
+          <>
+            Delete campaign <strong>{deleteTarget?.name}</strong>? This
+            permanently removes it and its events.
+          </>
+        }
+        confirmLabel="Delete"
+        loading={remove.isPending}
+        onCancel={() => {
+          if (!remove.isPending) setDeleteTarget(null);
+        }}
+        onConfirm={handleDeleteConfirm}
+      />
+      <AlertDialog
+        isOpen={alert !== null}
+        title={alert?.title ?? ''}
+        message={alert?.message ?? ''}
+        variant="error"
+        onClose={() => setAlert(null)}
+      />
     </div>
   );
 }

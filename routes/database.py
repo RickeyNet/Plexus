@@ -13171,6 +13171,19 @@ async def get_upgrade_image(image_id):
         await db.close()
 
 
+async def get_upgrade_image_by_filename(filename):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM upgrade_images WHERE filename = ?",
+            (filename,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
 async def update_upgrade_image(image_id, **kwargs):
     db = await get_db()
     try:

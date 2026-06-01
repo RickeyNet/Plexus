@@ -12,11 +12,13 @@ export function NewImageModal({ isOpen, onClose }: Props) {
   const upload = useUploadUpgradeImage();
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
       setFile(null);
       setError(null);
+      setProgress(null);
       upload.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -26,10 +28,20 @@ export function NewImageModal({ isOpen, onClose }: Props) {
     e.preventDefault();
     if (!file) return;
     setError(null);
-    upload.mutate(file, {
-      onSuccess: () => onClose(),
-      onError: (err) => setError((err as Error).message),
-    });
+    setProgress(0);
+    upload.mutate(
+      {
+        file,
+        onProgress: setProgress,
+      },
+      {
+        onSuccess: () => onClose(),
+        onError: (err) => {
+          setProgress(null);
+          setError((err as Error).message);
+        },
+      },
+    );
   };
 
   return (
@@ -50,6 +62,30 @@ export function NewImageModal({ isOpen, onClose }: Props) {
           automatically. Model pattern and version will be auto-detected from
           the filename.
         </p>
+        {progress !== null && (
+          <div style={{ marginTop: '0.75rem' }}>
+            <div
+              style={{
+                height: '6px',
+                borderRadius: '3px',
+                background: 'var(--border)',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  height: '100%',
+                  width: `${progress}%`,
+                  background: 'var(--accent)',
+                  transition: 'width 0.2s ease',
+                }}
+              />
+            </div>
+            <p style={{ fontSize: '0.85em', marginTop: '0.35rem', opacity: 0.8 }}>
+              Uploading… {progress}%
+            </p>
+          </div>
+        )}
         {error && (
           <p style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{error}</p>
         )}

@@ -8,6 +8,8 @@ import {
   useUpgradeCampaign,
 } from '@/api/upgrades';
 import { Modal } from '@/components/Modal';
+import { AlertDialog } from '@/components/AlertDialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 import { DeviceUpgradeLogModal } from './DeviceUpgradeLogModal';
 import { PhaseConfirmModal } from './PhaseConfirmModal';
@@ -104,6 +106,10 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
   >({});
   const [wsState, setWsState] = useState<'connecting' | 'open' | 'closed' | 'error'>(
     'connecting',
+  );
+  const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(
+    null,
   );
   const outputRef = useRef<HTMLPreElement | null>(null);
 
@@ -259,10 +265,16 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     setPhaseReq({ phase, schedule, explicitDeviceIds });
   };
 
-  const handleCancel = () => {
-    if (!confirm('Cancel the running phase?')) return;
+  const handleCancelConfirm = () => {
     cancel.mutate(campaignId, {
-      onError: (e) => alert(`Cancel failed: ${(e as Error).message}`),
+      onSuccess: () => setConfirmCancelOpen(false),
+      onError: (e) => {
+        setConfirmCancelOpen(false);
+        setAlert({
+          title: 'Cancel failed',
+          message: (e as Error).message,
+        });
+      },
     });
   };
 
@@ -411,7 +423,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               {isRunning && (
                 <button
                   className="btn btn-secondary"
-                  onClick={handleCancel}
+                  onClick={() => setConfirmCancelOpen(true)}
                   disabled={cancel.isPending}
                 >
                   Cancel
@@ -575,6 +587,24 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
           onClose={() => setDeviceLog(null)}
         />
       )}
+      <ConfirmDialog
+        isOpen={confirmCancelOpen}
+        title="Cancel running phase?"
+        message="Cancel the running phase? Devices may be left in a partial state."
+        confirmLabel="Cancel phase"
+        loading={cancel.isPending}
+        onCancel={() => {
+          if (!cancel.isPending) setConfirmCancelOpen(false);
+        }}
+        onConfirm={handleCancelConfirm}
+      />
+      <AlertDialog
+        isOpen={alert !== null}
+        title={alert?.title ?? ''}
+        message={alert?.message ?? ''}
+        variant="error"
+        onClose={() => setAlert(null)}
+      />
     </>
   );
 }

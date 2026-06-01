@@ -1,15 +1,23 @@
+import { useState } from 'react';
+
 import {
   type ConfigBackup,
   upgradeBackupDownloadUrl,
   useDeleteUpgradeBackup,
   useUpgradeBackups,
 } from '@/api/upgrades';
+import { AlertDialog } from '@/components/AlertDialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 import { formatBackupTimestamp, formatBytes } from './helpers';
 
 export function BackupsTab() {
   const query = useUpgradeBackups();
   const remove = useDeleteUpgradeBackup();
+  const [deleteTarget, setDeleteTarget] = useState<ConfigBackup | null>(null);
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(
+    null,
+  );
 
   if (query.isPending) return <p className="text-muted">Loading…</p>;
   if (query.error) {
@@ -30,14 +38,22 @@ export function BackupsTab() {
     );
   }
 
-  const handleDelete = (b: ConfigBackup) => {
-    if (!confirm(`Delete backup file "${b.filename}"? This cannot be undone.`)) return;
-    remove.mutate(b.filename, {
-      onError: (e) => alert(`Delete failed: ${(e as Error).message}`),
+  const handleDeleteConfirm = () => {
+    if (!deleteTarget) return;
+    remove.mutate(deleteTarget.filename, {
+      onSuccess: () => setDeleteTarget(null),
+      onError: (e) => {
+        setDeleteTarget(null);
+        setAlert({
+          title: 'Delete failed',
+          message: (e as Error).message,
+        });
+      },
     });
   };
 
   return (
+    <>
     <table className="data-table" style={{ width: '100%' }}>
       <thead>
         <tr>
@@ -68,7 +84,7 @@ export function BackupsTab() {
               <button
                 type="button"
                 className="btn btn-sm btn-danger"
-                onClick={() => handleDelete(b)}
+                onClick={() => setDeleteTarget(b)}
                 disabled={remove.isPending}
               >
                 Delete
@@ -78,5 +94,28 @@ export function BackupsTab() {
         ))}
       </tbody>
     </table>
+    <ConfirmDialog
+      isOpen={deleteTarget !== null}
+      title="Delete backup file?"
+      message={
+        <>
+          Delete <code>{deleteTarget?.filename}</code>? This cannot be undone.
+        </>
+      }
+      confirmLabel="Delete"
+      loading={remove.isPending}
+      onCancel={() => {
+        if (!remove.isPending) setDeleteTarget(null);
+      }}
+      onConfirm={handleDeleteConfirm}
+    />
+    <AlertDialog
+      isOpen={alert !== null}
+      title={alert?.title ?? ''}
+      message={alert?.message ?? ''}
+      variant="error"
+      onClose={() => setAlert(null)}
+    />
+    </>
   );
 }

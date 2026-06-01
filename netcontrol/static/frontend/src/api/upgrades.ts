@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { apiRequest } from './client';
+import { ApiError, apiRequest, getCsrfToken } from './client';
 
 export interface ConfigBackup {
   filename: string;
@@ -73,17 +73,68 @@ export function useUpgradeImages() {
   });
 }
 
+export function uploadUpgradeImage(
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<UploadImageResult> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upgrades/images');
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Accept', 'application/json');
+    const token = getCsrfToken();
+    if (token) {
+      xhr.setRequestHeader('X-CSRF-Token', token);
+    }
+
+    if (onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(Math.round((event.loaded / event.total) * 100));
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      const text = xhr.responseText;
+      let parsed: unknown = text;
+      if (text) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = text;
+        }
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(parsed as UploadImageResult);
+        return;
+      }
+      const detail =
+        parsed && typeof parsed === 'object' && 'detail' in parsed
+          ? String((parsed as { detail: unknown }).detail)
+          : xhr.statusText;
+      reject(new ApiError(xhr.status, parsed, `${xhr.status} ${detail}`));
+    };
+
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.onabort = () => reject(new Error('Upload cancelled'));
+
+    const fd = new FormData();
+    fd.append('file', file);
+    xhr.send(fd);
+  });
+}
+
 export function useUploadUpgradeImage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (file: File) => {
-      const fd = new FormData();
-      fd.append('file', file);
-      return apiRequest<UploadImageResult>('/upgrades/images', {
-        method: 'POST',
-        body: fd,
-      });
-    },
+    mutationFn: ({
+      file,
+      onProgress,
+    }: {
+      file: File;
+      onProgress?: (percent: number) => void;
+    }) => uploadUpgradeImage(file, onProgress),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['upgrade-images'] });
     },
