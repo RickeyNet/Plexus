@@ -39,15 +39,57 @@ router = APIRouter()
 ws_router = APIRouter()
 LOGGER = configure_logging("plexus.upgrades")
 
-SOFTWARE_IMAGES_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "software_images",
-)
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _resolve_state_root() -> str | None:
+    explicit = os.getenv("PLEXUS_STATE_DIR", "").strip()
+    if explicit:
+        return explicit
+    key_file = os.getenv("APP_SESSION_KEY_FILE", "").strip()
+    if key_file:
+        return os.path.dirname(key_file)
+    return None
+
+
+def _resolve_software_images_dir() -> str:
+    override = os.getenv("PLEXUS_SOFTWARE_IMAGES_DIR", "").strip()
+    if override:
+        return override
+    state_root = _resolve_state_root()
+    if state_root:
+        return os.path.join(state_root, "software_images")
+    return os.path.join(_REPO_ROOT, "software_images")
+
+
+SOFTWARE_IMAGES_DIR = _resolve_software_images_dir()
 
 BACKUPS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    _REPO_ROOT,
     "backups", "upgrades",
 )
+
+# Stored filenames must stay safe for IOS-XE CLI interpolation (_SAFE_IMAGE_NAME_RE).
+_UPLOAD_FILENAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$')
+
+
+def _software_images_root() -> str:
+    return os.path.realpath(SOFTWARE_IMAGES_DIR)
+
+
+def _image_file_path(filename: str) -> str:
+    """Resolve a stored image filename to an absolute path under SOFTWARE_IMAGES_DIR."""
+    safe_name = os.path.basename(filename)
+    root = _software_images_root()
+    fpath = os.path.realpath(os.path.join(SOFTWARE_IMAGES_DIR, safe_name))
+    prefix = root if root.endswith(os.sep) else root + os.sep
+    if fpath != root and not fpath.startswith(prefix):
+        raise HTTPException(400, "Invalid image filename")
+    return fpath
+
+
+def _ensure_software_images_dir() -> None:
+    os.makedirs(SOFTWARE_IMAGES_DIR, exist_ok=True)
 
 # Validation patterns for values interpolated into device CLI commands
 _SAFE_IMAGE_NAME_RE = re.compile(r'^[A-Za-z0-9._\-]+$')
@@ -82,6 +124,14 @@ def init_upgrades(require_auth, require_feature, verify_session_token=None, get_
     _require_feature = require_feature
     _verify_session_token = verify_session_token
     _get_user_features = get_user_features
+    try:
+        _ensure_software_images_dir()
+    except OSError:
+        LOGGER.warning(
+            "Software images directory is not writable: %s",
+            SOFTWARE_IMAGES_DIR,
+            exc_info=True,
+        )
 
 
 async def rehydrate_scheduled_upgrades():
@@ -397,12 +447,26 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
-    os.makedirs(SOFTWARE_IMAGES_DIR, exist_ok=True)
+    try:
+        _ensure_software_images_dir()
+    except OSError:
+        LOGGER.exception("Software images directory is not writable: %s", SOFTWARE_IMAGES_DIR)
+        raise HTTPException(503, "Image storage is not available. Check server permissions and disk space.")
 
     filename = os.path.basename(file.filename or "unknown.bin")
-    # Validate filename: only allow safe characters
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,254}', filename):
-        raise HTTPException(400, "Invalid image filename - use only alphanumeric, dot, hyphen, underscore")
+    if not _UPLOAD_FILENAME_RE.fullmatch(filename):
+        raise HTTPException(
+            400,
+            "Invalid image filename - use only letters, numbers, dot, hyphen, and underscore",
+        )
+
+    existing = await db.get_upgrade_image_by_filename(filename)
+    if existing:
+        raise HTTPException(
+            409,
+            f'An image named "{filename}" already exists. Delete it first or rename the file.',
+        )
+
     dest = os.path.join(SOFTWARE_IMAGES_DIR, filename)
 
     # Stream to disk and compute MD5, enforcing size limit
@@ -417,15 +481,26 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
                 size += len(chunk)
                 if size > _MAX_IMAGE_UPLOAD_BYTES:
                     raise HTTPException(
-                        413, f"Image exceeds maximum upload size of {_MAX_IMAGE_UPLOAD_BYTES // (1024*1024)} MB"
+                        413,
+                        f"Image exceeds maximum upload size of {_MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)} MB",
                     )
                 f.write(chunk)
                 md5.update(chunk)
     except HTTPException:
-        # Clean up partial file on size limit exceeded
         if os.path.isfile(dest):
-            os.remove(dest)
+            try:
+                os.remove(dest)
+            except OSError:
+                LOGGER.warning("Failed to remove partial upload %s", dest, exc_info=True)
         raise
+    except OSError:
+        if os.path.isfile(dest):
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+        LOGGER.exception("Failed to write image file %s", filename)
+        raise HTTPException(503, "Unable to store image on server. Check disk space and permissions.")
 
     md5_hash = md5.hexdigest()
 
@@ -440,17 +515,31 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     elif "cat9k" in filename.lower():
         model_pattern = "9300"
 
-    image_id = await db.create_upgrade_image(
-        filename=filename,
-        original_name=filename,
-        file_size=size,
-        md5_hash=md5_hash,
-        model_pattern=model_pattern,
-        version=version,
-        platform="iosxe",
-        notes="",
-        uploaded_by=user,
-    )
+    try:
+        image_id = await db.create_upgrade_image(
+            filename=filename,
+            original_name=filename,
+            file_size=size,
+            md5_hash=md5_hash,
+            model_pattern=model_pattern,
+            version=version,
+            platform="iosxe",
+            notes="",
+            uploaded_by=user,
+        )
+    except Exception as exc:
+        if os.path.isfile(dest):
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+        if db._is_unique_violation(exc):
+            raise HTTPException(
+                409,
+                f'An image named "{filename}" already exists. Delete it first or rename the file.',
+            )
+        LOGGER.exception("Failed to record uploaded image %s", filename)
+        raise HTTPException(500, "Image upload failed")
 
     await _audit("upgrades", "image_upload", user=user, detail=f"Uploaded {filename} ({size} bytes, md5={md5_hash})")
     LOGGER.info("Image uploaded: %s (%s bytes) by %s", filename, size, user)
@@ -499,13 +588,13 @@ async def delete_image(image_id: int, request: Request):
     if not img:
         raise HTTPException(404, "Image not found")
 
-    # Remove file from disk (sanitize filename to prevent path traversal)
-    safe_name = os.path.basename(img["filename"])
-    fpath = os.path.realpath(os.path.join(SOFTWARE_IMAGES_DIR, safe_name))
-    if not fpath.startswith(os.path.realpath(SOFTWARE_IMAGES_DIR)):
-        raise HTTPException(400, "Invalid image filename")
+    fpath = _image_file_path(img["filename"])
     if os.path.isfile(fpath):
-        os.remove(fpath)
+        try:
+            os.remove(fpath)
+        except OSError:
+            LOGGER.exception("Failed to delete image file %s", fpath)
+            raise HTTPException(503, "Unable to delete image file from disk. Check server permissions.")
 
     await db.delete_upgrade_image(image_id)
     await _audit("upgrades", "image_delete", user=user, detail=f"Deleted image {img['filename']}")
@@ -1501,8 +1590,9 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                                           error_message="")
                 return
 
-        image_path = os.path.realpath(os.path.join(SOFTWARE_IMAGES_DIR, image_name))
-        if not image_path.startswith(os.path.realpath(SOFTWARE_IMAGES_DIR)):
+        try:
+            image_path = _image_file_path(image_name)
+        except HTTPException:
             await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
                                            error_message="Invalid image path")
             await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message="Invalid image path")
