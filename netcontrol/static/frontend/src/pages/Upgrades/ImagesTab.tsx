@@ -5,6 +5,8 @@ import {
   useDeleteUpgradeImage,
   useUpgradeImages,
 } from '@/api/upgrades';
+import { AlertDialog } from '@/components/AlertDialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 import { EditImageModal } from './EditImageModal';
 import { NewImageModal } from './NewImageModal';
@@ -15,6 +17,10 @@ export function ImagesTab() {
   const remove = useDeleteUpgradeImage();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [editing, setEditing] = useState<UpgradeImage | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<UpgradeImage | null>(null);
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(
+    null,
+  );
 
   if (query.isPending) return <p className="text-muted">Loading…</p>;
   if (query.error) {
@@ -27,15 +33,17 @@ export function ImagesTab() {
 
   const images = query.data || [];
 
-  const handleDelete = (img: UpgradeImage) => {
-    if (
-      !confirm(
-        `Delete image "${img.filename}"? This removes the file from the server.`,
-      )
-    )
-      return;
-    remove.mutate(img.id, {
-      onError: (e) => alert(`Delete failed: ${(e as Error).message}`),
+  const handleDeleteConfirm = () => {
+    if (!deleteTarget) return;
+    remove.mutate(deleteTarget.id, {
+      onSuccess: () => setDeleteTarget(null),
+      onError: (e) => {
+        setDeleteTarget(null);
+        setAlert({
+          title: 'Delete failed',
+          message: (e as Error).message,
+        });
+      },
     });
   };
 
@@ -102,7 +110,7 @@ export function ImagesTab() {
                   <button
                     type="button"
                     className="btn btn-sm btn-danger"
-                    onClick={() => handleDelete(img)}
+                    onClick={() => setDeleteTarget(img)}
                     disabled={remove.isPending}
                   >
                     Delete
@@ -121,6 +129,29 @@ export function ImagesTab() {
       <EditImageModal
         image={editing}
         onClose={() => setEditing(null)}
+      />
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        title="Delete software image?"
+        message={
+          <>
+            Delete <code>{deleteTarget?.filename}</code>? This removes the file
+            from the server.
+          </>
+        }
+        confirmLabel="Delete"
+        loading={remove.isPending}
+        onCancel={() => {
+          if (!remove.isPending) setDeleteTarget(null);
+        }}
+        onConfirm={handleDeleteConfirm}
+      />
+      <AlertDialog
+        isOpen={alert !== null}
+        title={alert?.title ?? ''}
+        message={alert?.message ?? ''}
+        variant="error"
+        onClose={() => setAlert(null)}
       />
     </div>
   );
