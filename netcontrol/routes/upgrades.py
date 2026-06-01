@@ -91,6 +91,24 @@ def _image_file_path(filename: str) -> str:
 def _ensure_software_images_dir() -> None:
     os.makedirs(SOFTWARE_IMAGES_DIR, exist_ok=True)
 
+
+def _storage_unavailable_detail(action: str = "store") -> str:
+    return (
+        f"Unable to {action} image files at {SOFTWARE_IMAGES_DIR}. "
+        "Check disk space and directory permissions. "
+        "On Docker deployments, run: sudo chown -R 1000:1000 ./software_images "
+        "then restart the plexus container."
+    )
+
+
+def _verify_software_images_writable() -> None:
+    """Raise OSError when the image directory cannot be written."""
+    _ensure_software_images_dir()
+    probe = os.path.join(SOFTWARE_IMAGES_DIR, ".write_probe")
+    with open(probe, "wb") as f:
+        f.write(b"")
+    os.remove(probe)
+
 # Validation patterns for values interpolated into device CLI commands
 _SAFE_IMAGE_NAME_RE = re.compile(r'^[A-Za-z0-9._\-]+$')
 _SAFE_DEST_PATH_RE = re.compile(r'^[a-z]+[0-9]*:/?$')   # flash: bootflash:/ slot0: etc.
@@ -128,7 +146,7 @@ def init_upgrades(require_auth, require_feature, verify_session_token=None, get_
         _ensure_software_images_dir()
     except OSError:
         LOGGER.warning(
-            "Software images directory is not writable: %s",
+            "Software images directory is not available: %s",
             SOFTWARE_IMAGES_DIR,
             exc_info=True,
         )
@@ -448,10 +466,10 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     user = session.get("user", "unknown") if session else "unknown"
 
     try:
-        _ensure_software_images_dir()
+        _verify_software_images_writable()
     except OSError:
         LOGGER.exception("Software images directory is not writable: %s", SOFTWARE_IMAGES_DIR)
-        raise HTTPException(503, "Image storage is not available. Check server permissions and disk space.")
+        raise HTTPException(503, _storage_unavailable_detail("store"))
 
     filename = os.path.basename(file.filename or "unknown.bin")
     if not _UPLOAD_FILENAME_RE.fullmatch(filename):
@@ -500,7 +518,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
             except OSError:
                 pass
         LOGGER.exception("Failed to write image file %s", filename)
-        raise HTTPException(503, "Unable to store image on server. Check disk space and permissions.")
+        raise HTTPException(503, _storage_unavailable_detail("store"))
 
     md5_hash = md5.hexdigest()
 
@@ -594,7 +612,7 @@ async def delete_image(image_id: int, request: Request):
             os.remove(fpath)
         except OSError:
             LOGGER.exception("Failed to delete image file %s", fpath)
-            raise HTTPException(503, "Unable to delete image file from disk. Check server permissions.")
+            raise HTTPException(503, _storage_unavailable_detail("delete"))
 
     await db.delete_upgrade_image(image_id)
     await _audit("upgrades", "image_delete", user=user, detail=f"Deleted image {img['filename']}")
