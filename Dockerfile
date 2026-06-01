@@ -21,7 +21,7 @@ WORKDIR /app
 
 # System dependencies for python-ldap and pysnmp
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libldap2-dev libsasl2-dev libssl-dev gcc \
+    libldap2-dev libsasl2-dev libssl-dev gcc gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
