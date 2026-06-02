@@ -23,6 +23,7 @@ services:
       APP_DB_PATH: /app/state/netcontrol.db
       APP_SESSION_KEY_FILE: /app/state/session.key
       APP_ENCRYPTION_KEY_FILE: /app/state/netcontrol.key
+      PLEXUS_SOFTWARE_IMAGES_DIR: /app/state/software_images
     ports:
       - "8080:8080"
       - "2055:2055/udp"    # NetFlow collector
