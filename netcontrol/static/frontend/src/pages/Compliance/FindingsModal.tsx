@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   ComplianceFinding,
   useComplianceScanResult,
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function FindingsModal({ resultId, onClose, onRescan }: Props) {
+  const { confirm, alert } = useDialogs();
   const result = useComplianceScanResult(resultId);
   const credentials = useCredentials();
   const remediate = useRemediateFinding();
@@ -49,9 +51,18 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
       return;
     }
     if (
-      !confirm(
-        `Push fix commands to the device for rule "${rule}"?\n\nThis will modify the running config and save it.`,
-      )
+      !(await confirm({
+        title: 'Apply fix?',
+        message: (
+          <>
+            Push fix commands to the device for rule &ldquo;{rule}&rdquo;?
+            <br />
+            <br />
+            This will modify the running config and save it.
+          </>
+        ),
+        confirmLabel: 'Apply fix',
+      }))
     ) {
       return;
     }
@@ -63,11 +74,16 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
         dry_run: false,
       });
       if (res.rule_now_passes) {
-        alert(`${res.rule} - FIXED. New score: ${res.rescan_passed}/${res.rescan_total}`);
+        await alert({
+          title: 'Remediation applied',
+          message: `${res.rule} - FIXED. New score: ${res.rescan_passed}/${res.rescan_total}`,
+        });
       } else {
-        alert(
-          `Remediation applied but rule still failing. Review device output. New score: ${res.rescan_passed}/${res.rescan_total}`,
-        );
+        await alert({
+          title: 'Remediation applied',
+          message: `Rule still failing. Review device output. New score: ${res.rescan_passed}/${res.rescan_total}`,
+          variant: 'error',
+        });
       }
       onRescan(res.rescan_id);
     } catch (e) {
@@ -86,9 +102,19 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
       return;
     }
     if (
-      !confirm(
-        `Apply remediation for ${fixable.length} failed rule(s) on ${result.data?.hostname || '?'}?\n\nThis will push config changes and save.`,
-      )
+      !(await confirm({
+        title: 'Apply all fixes?',
+        message: (
+          <>
+            Apply remediation for {fixable.length} failed rule(s) on{' '}
+            {result.data?.hostname || '?'}?
+            <br />
+            <br />
+            This will push config changes and save.
+          </>
+        ),
+        confirmLabel: 'Apply fixes',
+      }))
     ) {
       return;
     }
@@ -112,9 +138,16 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
       }
     }
     if (failed === 0) {
-      alert(`All ${fixed} rule(s) remediated successfully.`);
+      await alert({
+        title: 'Remediation complete',
+        message: `All ${fixed} rule(s) remediated successfully.`,
+      });
     } else {
-      alert(`${fixed} rule(s) fixed, ${failed} still failing - review manually.`);
+      await alert({
+        title: 'Remediation complete',
+        message: `${fixed} rule(s) fixed, ${failed} still failing - review manually.`,
+        variant: 'error',
+      });
     }
     onRescan(lastRescanId);
   };

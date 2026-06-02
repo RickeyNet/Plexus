@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useComplianceProfiles,
   useCredentials,
@@ -12,6 +13,7 @@ import {
 type Scope = 'all' | 'group' | 'single';
 
 export function RunScanModal({ onClose }: { onClose: () => void }) {
+  const { alert } = useDialogs();
   const groups = useInventoryGroups(true);
   const profiles = useComplianceProfiles();
   const credentials = useCredentials();
@@ -81,15 +83,21 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
           credential_id: credentialId,
         });
         if (res.status === 'compliant') {
-          alert(
-            `Scan complete - Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`,
-          );
+          await alert({
+            title: 'Scan complete',
+            message: `Host is compliant (${res.passed_rules}/${res.total_rules} rules passed)`,
+          });
         } else if (res.status === 'error') {
-          alert('Scan completed with errors - check findings for details');
+          await alert({
+            title: 'Scan complete',
+            message: 'Scan completed with errors - check findings for details',
+            variant: 'error',
+          });
         } else {
-          alert(
-            `Scan complete - ${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`,
-          );
+          await alert({
+            title: 'Scan complete',
+            message: `${res.failed_rules} violation(s) found (${res.passed_rules}/${res.total_rules} passed)`,
+          });
         }
         onClose();
       } catch (e) {
@@ -119,15 +127,20 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         host_ids: hostIds,
       });
       if (res.violations > 0) {
-        alert(
-          `Scan complete: ${res.hosts_scanned} host(s) scanned, ${res.violations} non-compliant, ${res.errors} error(s)`,
-        );
+        await alert({
+          title: 'Scan complete',
+          message: `${res.hosts_scanned} host(s) scanned, ${res.violations} non-compliant, ${res.errors} error(s)`,
+        });
       } else if (res.errors > 0) {
-        alert(
-          `Scan complete: ${res.hosts_scanned} host(s) scanned, ${res.errors} error(s)`,
-        );
+        await alert({
+          title: 'Scan complete',
+          message: `${res.hosts_scanned} host(s) scanned, ${res.errors} error(s)`,
+        });
       } else {
-        alert(`Scan complete: ${res.hosts_scanned} host(s) scanned - all compliant!`);
+        await alert({
+          title: 'Scan complete',
+          message: `${res.hosts_scanned} host(s) scanned - all compliant!`,
+        });
       }
       onClose();
     } catch (e) {
