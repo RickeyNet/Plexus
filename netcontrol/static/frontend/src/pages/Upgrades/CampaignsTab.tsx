@@ -40,6 +40,26 @@ export function CampaignsTab() {
     );
   }, [campaigns, search]);
 
+  // Every campaign with a pending reload, soonest first, regardless of the
+  // search filter — a system-wide "what's coming" overview. A plain cancel
+  // leaves scheduled_at set, so gate on the scheduled status too.
+  const upcoming = useMemo(
+    () =>
+      campaigns
+        .filter((c) => c.scheduled_at && c.status?.startsWith('scheduled'))
+        .map((c) => ({ c, sched: formatScheduledTime(c.scheduled_at) }))
+        .filter(
+          (x): x is { c: (typeof campaigns)[number]; sched: { absolute: string; relative: string } } =>
+            x.sched !== null,
+        )
+        .sort(
+          (a, b) =>
+            new Date(a.c.scheduled_at as string).getTime() -
+            new Date(b.c.scheduled_at as string).getTime(),
+        ),
+    [campaigns],
+  );
+
   const handleDeleteConfirm = () => {
     if (!deleteTarget) return;
     remove.mutate(deleteTarget.id, {
@@ -90,6 +110,79 @@ export function CampaignsTab() {
           New Campaign
         </button>
       </div>
+
+      {upcoming.length > 0 && (
+        <div
+          className="card"
+          style={{
+            padding: '0.75rem 1rem',
+            marginBottom: '0.75rem',
+            borderLeft: '3px solid var(--warning)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              marginBottom: '0.5rem',
+            }}
+          >
+            <span aria-hidden>⏰</span>
+            <strong>Upcoming reloads</strong>
+            <span className="text-muted" style={{ fontSize: '0.82em' }}>
+              ({upcoming.length})
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+            {upcoming.map(({ c, sched }) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setViewingId(c.id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.6rem',
+                  width: '100%',
+                  textAlign: 'left',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'inherit',
+                  padding: '0.35rem 0.4rem',
+                  borderRadius: 6,
+                }}
+              >
+                <span
+                  style={{
+                    minWidth: 0,
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <strong>{c.name}</strong>
+                  <span
+                    className="text-muted"
+                    style={{ marginLeft: '0.5rem', fontSize: '0.85em' }}
+                  >
+                    {c.device_count} device{c.device_count === 1 ? '' : 's'}
+                  </span>
+                </span>
+                <span style={{ whiteSpace: 'nowrap', fontSize: '0.85em' }}>
+                  <span style={{ color: 'var(--warning)' }}>{sched.absolute}</span>
+                  <span className="text-muted" style={{ marginLeft: '0.4rem' }}>
+                    ({sched.relative})
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {filtered.length === 0 ? (
         <div className="empty-state" style={{ padding: '2rem' }}>
