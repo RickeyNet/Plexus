@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -93,6 +93,92 @@ function shortImageName(image: string | null | undefined): string {
   return image.split('/').pop() || image;
 }
 
+interface PhaseCount {
+  done: number;
+  failed: number;
+  running: number;
+  total: number;
+}
+
+// Compact per-step progress pill shown in each step's header so operators can
+// see where the campaign stands without reading the device table.
+function StepStatus({ c }: { c: PhaseCount }) {
+  if (c.total === 0) return null;
+  if (c.running > 0) return <span className="badge badge-info">Running…</span>;
+  if (c.done === c.total) {
+    return <span className="badge badge-success">All {c.total} done</span>;
+  }
+  return (
+    <span style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center' }}>
+      {c.failed > 0 && (
+        <span className="badge badge-error">{c.failed} failed</span>
+      )}
+      <span className="text-muted" style={{ fontSize: '0.78em' }}>
+        {c.done}/{c.total} done
+      </span>
+    </span>
+  );
+}
+
+// One numbered step in the upgrade sequence: number badge, title, plain-English
+// description, live status, and its action button(s) as children.
+function PhaseStep({
+  n,
+  title,
+  desc,
+  status,
+  children,
+}: {
+  n: number;
+  title: string;
+  desc: string;
+  status: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        flex: '1 1 210px',
+        minWidth: 190,
+        border: '1px solid var(--glass-border)',
+        borderRadius: 8,
+        padding: '0.7rem',
+        background: 'var(--bg-secondary)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.5rem',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <span
+          aria-hidden
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: '50%',
+            background: 'var(--info)',
+            color: '#fff',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '0.78em',
+            fontWeight: 600,
+            flexShrink: 0,
+          }}
+        >
+          {n}
+        </span>
+        <strong style={{ flex: 1 }}>{title}</strong>
+        {status}
+      </div>
+      <div style={{ fontSize: '0.8em', opacity: 0.7, flex: 1 }}>{desc}</div>
+      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function CampaignViewerModal({ campaignId, onClose }: Props) {
   const qc = useQueryClient();
   const query = useUpgradeCampaign(campaignId);
@@ -151,6 +237,33 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
         .map((d) => d.id),
     [devices],
   );
+
+  // Roll up each phase column across devices (preferring live websocket status)
+  // so every step can show its own progress.
+  const phaseCounts = useMemo(() => {
+    const make = (): PhaseCount => ({
+      done: 0,
+      failed: 0,
+      running: 0,
+      total: devices.length,
+    });
+    const counts: Record<ColumnPhase, PhaseCount> = {
+      prestage: make(),
+      transfer: make(),
+      activate: make(),
+      verify: make(),
+    };
+    for (const d of devices) {
+      for (const p of PHASE_COLUMNS) {
+        const key = `${p}_status` as const;
+        const st = (liveStatuses[d.id]?.[key] as string | undefined) ?? d[key];
+        if (st === 'completed') counts[p].done += 1;
+        else if (st === 'failed') counts[p].failed += 1;
+        else if (st === 'running') counts[p].running += 1;
+      }
+    }
+    return counts;
+  }, [devices, liveStatuses]);
 
   // WebSocket for live events
   useEffect(() => {
@@ -307,6 +420,10 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
 
   const title = campaign ? `Campaign: ${campaign.name}` : 'Campaign';
   const selectedCount = selectedIds.size;
+  const targetText =
+    selectedCount > 0
+      ? `${selectedCount} selected device${selectedCount === 1 ? '' : 's'}`
+      : `all ${devices.length} devices`;
 
   return (
     <>
@@ -389,119 +506,162 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               </div>
             )}
 
-            <div
-              style={{
-                display: 'flex',
-                gap: '0.5rem',
-                marginBottom: '0.75rem',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-              }}
-            >
-              <button
-                className="btn btn-sm btn-secondary"
-                onClick={() => selectAll(true)}
-                disabled={isRunning}
-              >
-                Select All
-              </button>
-              <button
-                className="btn btn-sm btn-secondary"
-                onClick={() => selectAll(false)}
-                disabled={isRunning}
-              >
-                Clear
-              </button>
-              <button
-                className="btn btn-sm btn-secondary"
-                onClick={() => selectByFailedPhase('transfer')}
-                disabled={isRunning}
-              >
-                Select Transfer Failed
-              </button>
-              <span
+            <div style={{ marginBottom: '1rem' }}>
+              <div
                 style={{
-                  opacity: 0.75,
-                  fontSize: '0.85em',
-                  marginLeft: 'auto',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem',
+                  flexWrap: 'wrap',
                 }}
               >
-                {selectedCount > 0
-                  ? `${selectedCount} selected`
-                  : 'No selection (runs on all devices)'}
-              </span>
+                <h4 style={{ margin: 0 }}>Upgrade steps</h4>
+                <span className="text-muted" style={{ fontSize: '0.82em' }}>
+                  Run in order. Each step acts on <strong>{targetText}</strong>.
+                </span>
+                {isRunning && !isScheduled && (
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    style={{ marginLeft: 'auto' }}
+                    onClick={() => setConfirmCancelOpen(true)}
+                    disabled={cancel.isPending}
+                  >
+                    Cancel running step
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <PhaseStep
+                  n={1}
+                  title="Prestage"
+                  desc="Copy the firmware image onto each device and verify it. Safe — no reboot."
+                  status={<StepStatus c={phaseCounts.prestage} />}
+                >
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => requestPhase('prestage')}
+                    disabled={isRunning}
+                  >
+                    Run prestage
+                  </button>
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => requestPhase('verify_prestage')}
+                    disabled={isRunning}
+                  >
+                    Re-verify
+                  </button>
+                </PhaseStep>
+
+                <PhaseStep
+                  n={2}
+                  title="Transfer"
+                  desc="Install and expand the image so it is ready to boot. Still no reboot."
+                  status={<StepStatus c={phaseCounts.transfer} />}
+                >
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => requestPhase('transfer')}
+                    disabled={isRunning}
+                  >
+                    Run transfer
+                  </button>
+                  {transferFailedIds.length > 0 && (
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      onClick={() =>
+                        requestPhase('transfer', false, transferFailedIds)
+                      }
+                      disabled={isRunning}
+                    >
+                      Retry failed ({transferFailedIds.length})
+                    </button>
+                  )}
+                </PhaseStep>
+
+                <PhaseStep
+                  n={3}
+                  title="Activate"
+                  desc="Reboot devices into the new image. Causes downtime — run now or schedule it."
+                  status={<StepStatus c={phaseCounts.activate} />}
+                >
+                  <button
+                    className="btn btn-sm btn-danger"
+                    onClick={() => requestPhase('activate')}
+                    disabled={isRunning}
+                  >
+                    Activate now (reload)
+                  </button>
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => requestPhase('activate', true)}
+                    disabled={isRunning}
+                  >
+                    Schedule…
+                  </button>
+                </PhaseStep>
+
+                <PhaseStep
+                  n={4}
+                  title="Verify"
+                  desc="Reconnect and confirm each device is running the target version."
+                  status={<StepStatus c={phaseCounts.verify} />}
+                >
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => requestPhase('verify')}
+                    disabled={isRunning}
+                  >
+                    Verify upgrade
+                  </button>
+                </PhaseStep>
+              </div>
             </div>
 
             <div
               style={{
                 display: 'flex',
                 gap: '0.5rem',
-                marginBottom: '1rem',
+                marginBottom: '0.5rem',
                 flexWrap: 'wrap',
+                alignItems: 'center',
+                fontSize: '0.85em',
               }}
             >
-              <button
-                className="btn btn-secondary"
-                onClick={() => requestPhase('prestage')}
-                disabled={isRunning}
+              <span className="text-muted">Steps apply to:</span>
+              <strong>{targetText}</strong>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  gap: '0.4rem',
+                  flexWrap: 'wrap',
+                  marginLeft: '0.5rem',
+                }}
               >
-                Run Prestage
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => requestPhase('transfer')}
-                disabled={isRunning}
-              >
-                Run Transfer
-              </button>
-              {transferFailedIds.length > 0 && (
                 <button
-                  className="btn btn-secondary"
-                  onClick={() =>
-                    requestPhase('transfer', false, transferFailedIds)
-                  }
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => selectAll(true)}
                   disabled={isRunning}
                 >
-                  Run Transfer On Failed ({transferFailedIds.length})
+                  Select all
                 </button>
-              )}
-              <button
-                className="btn btn-danger"
-                onClick={() => requestPhase('activate')}
-                disabled={isRunning}
-              >
-                Run Activate (Reload!)
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => requestPhase('activate', true)}
-                disabled={isRunning}
-              >
-                Schedule Reload
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => requestPhase('verify_prestage')}
-                disabled={isRunning}
-              >
-                Re-Verify Prestage
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => requestPhase('verify')}
-                disabled={isRunning}
-              >
-                Verify Upgrade
-              </button>
-              {isRunning && !isScheduled && (
                 <button
-                  className="btn btn-secondary"
-                  onClick={() => setConfirmCancelOpen(true)}
-                  disabled={cancel.isPending}
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => selectAll(false)}
+                  disabled={isRunning || selectedCount === 0}
                 >
-                  Cancel
+                  Clear
                 </button>
-              )}
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => selectByFailedPhase('transfer')}
+                  disabled={isRunning}
+                >
+                  Select transfer-failed
+                </button>
+              </span>
             </div>
 
             <div style={{ overflowX: 'auto' }}>
