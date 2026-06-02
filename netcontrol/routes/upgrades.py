@@ -671,14 +671,16 @@ async def create_campaign(body: CampaignCreate, request: Request):
 @router.get("/api/upgrades/campaigns")
 async def list_campaigns():
     campaigns = await db.get_all_upgrade_campaigns()
-    # Enrich with device counts
+    # Enrich with device counts. One grouped query for all campaigns instead of
+    # one get_upgrade_devices() per campaign (the old N+1).
+    counts = await db.get_upgrade_device_counts()
     for c in campaigns:
         c = await _repair_stale_running_campaign(c)
         c["is_actively_running"] = c["id"] in _running_campaigns
-        devices = await db.get_upgrade_devices(c["id"])
-        c["device_count"] = len(devices)
-        c["devices_completed"] = sum(1 for d in devices if d["phase"] == "completed")
-        c["devices_failed"] = sum(1 for d in devices if d["phase"] == "failed")
+        tally = counts.get(c["id"])
+        c["device_count"] = tally["device_count"] if tally else 0
+        c["devices_completed"] = tally["devices_completed"] if tally else 0
+        c["devices_failed"] = tally["devices_failed"] if tally else 0
     return campaigns
 
 
@@ -770,7 +772,7 @@ async def delete_campaign(campaign_id: int, request: Request):
 
 
 @router.get("/api/upgrades/campaigns/{campaign_id}/events")
-async def get_campaign_events(campaign_id: int, device_id: int = None, limit: int = Query(default=10000, ge=1, le=10000)):
+async def get_campaign_events(campaign_id: int, device_id: int = None, limit: int = Query(default=1000, ge=1, le=10000)):
     return await db.get_upgrade_events(campaign_id, device_id=device_id, limit=limit)
 
 
@@ -998,8 +1000,10 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
 
     await ws.accept()
 
-    # Send full historical events as a single batch to avoid keepalive timeouts
-    events = await db.get_upgrade_events(campaign_id, limit=10000)
+    # Send recent historical events as a single batch to avoid keepalive
+    # timeouts. The tail is capped (newest-first internally, returned oldest-
+    # first); live events stream in afterward, so this is just catch-up context.
+    events = await db.get_upgrade_events(campaign_id, limit=1000)
     last_id = events[-1]["id"] if events else 0
     try:
         await ws.send_json({
