@@ -326,6 +326,11 @@ class CampaignPhaseRequest(BaseModel):
     scheduled_at: datetime | None = None  # optional future UTC/offset datetime (activate only)
 
 
+class CampaignDeviceCancelRequest(BaseModel):
+    device_ids: list[int]
+    phase: str | None = None
+
+
 # ── Module-level state ───────────────────────────────────────────────────────
 
 _campaign_sockets: dict[int, list[WebSocket]] = {}
@@ -421,10 +426,12 @@ def _derive_stale_phase_status(phase: str, devices: list[dict]) -> str:
 
     if completed == total:
         return f"{phase}_complete"
-    if completed + failed + cancelled == total and (completed > 0 or failed > 0):
-        return f"{phase}_partial"
     if failed == total:
         return f"{phase}_failed"
+    if cancelled == total:
+        return "cancelled"
+    if completed + failed + cancelled == total and (completed > 0 or failed > 0):
+        return f"{phase}_partial"
     return f"{phase}_partial"
 
 
@@ -982,6 +989,108 @@ async def cancel_campaign(campaign_id: int, request: Request):
     return {"ok": True}
 
 
+@router.post("/api/upgrades/campaigns/{campaign_id}/devices/cancel")
+async def cancel_campaign_devices(
+    campaign_id: int,
+    body: CampaignDeviceCancelRequest,
+    request: Request,
+):
+    """Mark selected campaign devices cancelled for the active/stale phase."""
+    session = _get_session(request)
+    user = session.get("user", "unknown") if session else "unknown"
+
+    campaign = await db.get_upgrade_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+
+    requested_ids = {int(did) for did in body.device_ids}
+    if not requested_ids:
+        raise HTTPException(400, "No devices selected")
+
+    phase = body.phase
+    if phase is None:
+        status = campaign.get("status") or ""
+        if status.startswith("running_"):
+            phase = status.split("running_", 1)[1].strip()
+        elif status.startswith("scheduled_"):
+            phase = status.split("scheduled_", 1)[1].strip()
+    if phase not in _SUPPORTED_PHASES:
+        raise HTTPException(400, "Cannot determine phase to cancel")
+
+    status_key = _phase_status_key(phase)
+    devices = await db.get_upgrade_devices(campaign_id)
+    by_id = {d["id"]: d for d in devices}
+    missing = sorted(requested_ids - set(by_id))
+    if missing:
+        raise HTTPException(404, "One or more devices were not found in this campaign")
+
+    cancelled = 0
+    skipped_completed = 0
+    for device_id in sorted(requested_ids):
+        dev = by_id[device_id]
+        if dev.get(status_key) == "completed":
+            skipped_completed += 1
+            continue
+        await db.update_upgrade_device(
+            device_id,
+            **{
+                status_key: "cancelled",
+                "phase": "cancelled",
+                "error_message": f"Cancelled by {user} during {phase} phase",
+            },
+        )
+        await _emit_device_status(
+            campaign_id,
+            device_id,
+            **{
+                status_key: "cancelled",
+                "error_message": f"Cancelled by {user} during {phase} phase",
+            },
+        )
+        await _emit(
+            campaign_id,
+            device_id,
+            "warn",
+            f"Device cancelled during {phase} phase by user",
+            host=dev.get("ip_address", ""),
+        )
+        cancelled += 1
+
+    if cancelled == 0:
+        raise HTTPException(400, "Selected devices are already completed")
+
+    updated_devices = await db.get_upgrade_devices(campaign_id)
+    current_status = campaign.get("status") or ""
+    current_phase = None
+    if current_status.startswith("running_"):
+        current_phase = current_status.split("running_", 1)[1].strip()
+    elif current_status.startswith(f"{phase}_"):
+        current_phase = phase
+    same_phase_status = current_phase == phase or current_status == "cancelled"
+    if campaign_id not in _running_campaigns and same_phase_status:
+        await db.update_upgrade_campaign(
+            campaign_id,
+            status=_derive_stale_phase_status(phase, updated_devices),
+        )
+
+    await _audit(
+        "upgrades",
+        "devices_cancel",
+        user=user,
+        detail=(
+            f"Cancelled {cancelled} device(s) in {phase} phase for campaign {campaign_id}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+
+    return {
+        "ok": True,
+        "phase": phase,
+        "cancelled": cancelled,
+        "skipped_completed": skipped_completed,
+    }
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # WEBSOCKET - Real-time upgrade streaming
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1069,8 +1178,27 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
     semaphore = asyncio.Semaphore(max_workers)
 
     async def _process_device(dev):
+        if dev.get(status_key) == "cancelled":
+            await _emit(
+                campaign_id,
+                dev["id"],
+                "warn",
+                f"Skipping {phase_name} phase; device was cancelled",
+                host=dev["ip_address"],
+            )
+            return
         async with semaphore:
             try:
+                latest = await db.get_upgrade_device(dev["id"])
+                if latest and latest.get(status_key) == "cancelled":
+                    await _emit(
+                        campaign_id,
+                        dev["id"],
+                        "warn",
+                        f"Skipping {phase_name} phase; device was cancelled",
+                        host=dev["ip_address"],
+                    )
+                    return
                 if phase == "prestage":
                     await _device_prestage(campaign_id, dev, credentials, image_map, options)
                 elif phase == "transfer":
@@ -1104,19 +1232,16 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
 
     # Update campaign status
     all_devs = await db.get_upgrade_devices(campaign_id)
+    final_status = _derive_stale_phase_status(phase, all_devs)
     failed = sum(1 for d in all_devs if d.get(status_key) == "failed")
+    cancelled = sum(1 for d in all_devs if d.get(status_key) == "cancelled")
+    completed = sum(1 for d in all_devs if d.get(status_key) == "completed")
     total = len(all_devs)
 
-    if failed == total:
-        final_status = f"{phase}_failed"
-    elif failed > 0:
-        final_status = f"{phase}_partial"
-    else:
-        final_status = f"{phase}_complete"
-
     await db.update_upgrade_campaign(campaign_id, status=final_status)
-    await _emit(campaign_id, None, "success" if failed == 0 else "warn",
-                f"{phase_name} phase complete: {total - failed}/{total} succeeded, {failed} failed")
+    level = "success" if failed == 0 and cancelled == 0 else "warn"
+    await _emit(campaign_id, None, level,
+                f"{phase_name} phase complete: {completed}/{total} succeeded, {failed} failed, {cancelled} cancelled")
 
     # Small delay to ensure all _emit() DB writes are flushed before the
     # frontend reloads and replays history
