@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Device upgrades
+- Add per-device cancellation for upgrade activation so operators can cancel selected devices that are stuck or failed in the activate step without reloading them during business hours.
+- Fix Verify Upgrade version-mismatch handling so a device that is not running the expected target image marks both Verify and Activate as failed, clearing stale green Activate checks.
+- Rework upgrade campaigns into a guided step sequence with clearer Prestaging, Transfer, Activate, and Verify controls.
+- Surface scheduled reloads in campaign detail views and add an Upcoming reloads overview to the Campaigns tab so armed activation windows are visible before they fire.
+- Improve upgrade campaign performance by indexing campaign lookups, speeding the campaign list, and bounding WebSocket event replay.
+- Repair upgrade image upload/delete flows and replace browser-native upgrade confirmation/alert dialogs with themed Plexus dialogs.
+
+### Monitoring and performance
+- Speed monitoring poll storage and latest-poll lookups with new indexes and batched post-poll database writes.
+- Reduce dashboard and page-load API churn by consolidating frontend requests and cache invalidation paths.
+- Remove the topology mini-map from the dashboard first paint to reduce initial load cost.
+- Enable performance mode by default and replace the animated starfield with a static rendering path for lower browser overhead.
+
+### Compliance and UI
+- Replace native compliance confirmation and alert dialogs with the shared themed dialog components for a more consistent operator experience.
+
+### Deployment
+- Ensure firmware image storage is writable at container startup and return clearer storage-unavailable guidance when upload/delete cannot access the image directory.
+- Update Docker build context hygiene with `.dockerignore` changes and container startup fixes.
+
 ## 1.0.2 - 2026-05-27
 
 ### MAC tracking
