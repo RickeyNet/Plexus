@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 
 import { App } from '@/App';
+import { DialogProvider } from '@/components/DialogProvider';
 import { initAppearance } from '@/lib/appearance';
 import { bindQueryClient as bindPollNowQueryClient } from '@/pages/Monitoring/pollNowStore';
 import { TimeRangeProvider } from '@/lib/timeRange';
@@ -30,7 +31,9 @@ createRoot(rootEl).render(
     <QueryClientProvider client={queryClient}>
       <TimeRangeProvider>
         <BrowserRouter basename="/frontend">
-          <App />
+          <DialogProvider>
+            <App />
+          </DialogProvider>
         </BrowserRouter>
       </TimeRangeProvider>
     </QueryClientProvider>
