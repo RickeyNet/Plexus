@@ -46,5 +46,6 @@ check_syntax.py
 Thumbs.db
 .DS_Store
 
-# Deploy scripts (not needed inside container)
-deploy/
+# Deploy scripts (not needed inside container; entrypoint is copied at build time)
+deploy/*
+!deploy/docker-entrypoint.sh
