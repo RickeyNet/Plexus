@@ -6,7 +6,12 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 import { CampaignFormModal } from './CampaignFormModal';
 import { CampaignViewerModal } from './CampaignViewerModal';
-import { campaignStatusBadgeClass, formatBackupTimestamp } from './helpers';
+import {
+  campaignStatusBadgeClass,
+  campaignStatusLabel,
+  formatBackupTimestamp,
+  formatScheduledTime,
+} from './helpers';
 
 export function CampaignsTab() {
   const query = useUpgradeCampaigns();
@@ -99,6 +104,9 @@ export function CampaignsTab() {
               c.device_count > 0
                 ? Math.round((c.devices_completed / c.device_count) * 100)
                 : 0;
+            const sched = c.scheduled_at
+              ? formatScheduledTime(c.scheduled_at)
+              : null;
             return (
               <div
                 key={c.id}
@@ -143,7 +151,7 @@ export function CampaignsTab() {
                         c.is_actively_running,
                       )}`}
                     >
-                      {c.status || 'created'}
+                      {campaignStatusLabel(c.status)}
                     </span>
                     <div
                       style={{
@@ -174,6 +182,27 @@ export function CampaignsTab() {
                     }}
                   />
                 </div>
+                {sched && (
+                  <div
+                    style={{
+                      marginTop: '0.5rem',
+                      padding: '0.4rem 0.6rem',
+                      borderRadius: 6,
+                      background: 'rgba(245, 158, 11, 0.12)',
+                      color: 'var(--warning)',
+                      fontSize: '0.85em',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                    }}
+                  >
+                    <span aria-hidden>⏰</span>
+                    <span>
+                      Reload scheduled for <strong>{sched.absolute}</strong>{' '}
+                      <span style={{ opacity: 0.8 }}>({sched.relative})</span>
+                    </span>
+                  </div>
+                )}
                 <div
                   style={{
                     display: 'flex',
