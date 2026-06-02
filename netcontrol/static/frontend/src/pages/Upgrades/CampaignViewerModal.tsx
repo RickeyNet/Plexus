@@ -13,7 +13,11 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 import { DeviceUpgradeLogModal } from './DeviceUpgradeLogModal';
 import { PhaseConfirmModal } from './PhaseConfirmModal';
-import { campaignStatusBadgeClass } from './helpers';
+import {
+  campaignStatusBadgeClass,
+  campaignStatusLabel,
+  formatScheduledTime,
+} from './helpers';
 
 interface Props {
   campaignId: number;
@@ -127,10 +131,18 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     campaign?.is_actively_running ?? campaign?.status?.includes('running'),
   );
   const status = campaign?.status || 'created';
+  const friendlyStatus = campaignStatusLabel(status);
   const statusText =
     !campaign?.is_actively_running && campaign?.status?.includes('running')
-      ? `${status} (stale)`
-      : status;
+      ? `${friendlyStatus} (stale)`
+      : friendlyStatus;
+  // A scheduled (but not yet fired) reload keeps an armed task, so isRunning is
+  // true even though nothing is executing. Detect it so we can show the reload
+  // time and offer reschedule/cancel instead of the generic running controls.
+  const isScheduled = status.startsWith('scheduled');
+  const sched = campaign?.scheduled_at
+    ? formatScheduledTime(campaign.scheduled_at)
+    : null;
 
   const transferFailedIds = useMemo(
     () =>
@@ -278,6 +290,21 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     });
   };
 
+  // Rescheduling means clearing the armed task (cancel) and immediately
+  // reopening the schedule dialog so the operator can pick a new time. The
+  // backend rejects /execute while a task is armed, so the cancel must land
+  // first; we only open the dialog on success.
+  const handleReschedule = () => {
+    cancel.mutate(campaignId, {
+      onSuccess: () => setPhaseReq({ phase: 'activate', schedule: true }),
+      onError: (e) =>
+        setAlert({
+          title: 'Reschedule failed',
+          message: (e as Error).message,
+        }),
+    });
+  };
+
   const title = campaign ? `Campaign: ${campaign.name}` : 'Campaign';
   const selectedCount = selectedIds.size;
 
@@ -315,6 +342,52 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 </span>
               ))}
             </div>
+
+            {isScheduled && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.75rem 1rem',
+                  borderRadius: 8,
+                  background: 'rgba(245, 158, 11, 0.12)',
+                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <span aria-hidden style={{ fontSize: '1.3em' }}>
+                  ⏰
+                </span>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <strong style={{ color: 'var(--warning)' }}>
+                    Reload scheduled
+                  </strong>
+                  <div style={{ fontSize: '0.9em', opacity: 0.85 }}>
+                    {sched
+                      ? `Devices will reload at ${sched.absolute} (${sched.relative}). Nothing runs until then.`
+                      : 'Devices will reload at the scheduled time. Nothing runs until then.'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    onClick={handleReschedule}
+                    disabled={cancel.isPending}
+                  >
+                    Reschedule
+                  </button>
+                  <button
+                    className="btn btn-sm btn-danger"
+                    onClick={() => setConfirmCancelOpen(true)}
+                    disabled={cancel.isPending}
+                  >
+                    Cancel reload
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div
               style={{
@@ -420,7 +493,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               >
                 Verify Upgrade
               </button>
-              {isRunning && (
+              {isRunning && !isScheduled && (
                 <button
                   className="btn btn-secondary"
                   onClick={() => setConfirmCancelOpen(true)}
@@ -589,9 +662,15 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
       )}
       <ConfirmDialog
         isOpen={confirmCancelOpen}
-        title="Cancel running phase?"
-        message="Cancel the running phase? Devices may be left in a partial state."
-        confirmLabel="Cancel phase"
+        title={isScheduled ? 'Cancel scheduled reload?' : 'Cancel running phase?'}
+        message={
+          isScheduled
+            ? sched
+              ? `Cancel the reload scheduled for ${sched.absolute}? Devices will not reload until you schedule it again.`
+              : 'Cancel the scheduled reload? Devices will not reload until you schedule it again.'
+            : 'Cancel the running phase? Devices may be left in a partial state.'
+        }
+        confirmLabel={isScheduled ? 'Cancel reload' : 'Cancel phase'}
         loading={cancel.isPending}
         onCancel={() => {
           if (!cancel.isPending) setConfirmCancelOpen(false);
