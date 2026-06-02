@@ -108,3 +108,19 @@ def test_upload_rejects_invalid_filename(image_client):
     )
     assert resp.status_code == 400, resp.text
     assert images_dir.exists() is False or list(images_dir.iterdir()) == []
+
+
+def test_upload_returns_503_when_storage_not_writable(image_client, monkeypatch):
+    client, _images_dir = image_client
+
+    def _fail_verify() -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(upgrades, "_verify_software_images_writable", _fail_verify)
+    resp = client.post(
+        "/api/upgrades/images",
+        files={"file": ("test.bin", io.BytesIO(b"x"), "application/octet-stream")},
+    )
+    assert resp.status_code == 503, resp.text
+    assert "unable to store" in resp.json()["detail"].lower()
+

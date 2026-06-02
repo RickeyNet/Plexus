@@ -35,9 +35,15 @@ COPY . .
 # runtime - only the dist/ directory.
 COPY --from=frontend-build /frontend/dist /app/netcontrol/static/frontend/dist
 
-RUN mkdir -p /app/state /app/certs
+RUN mkdir -p /app/state /app/certs /app/state/software_images
 RUN useradd -m -u 1000 plexus && chown -R plexus:plexus /app
-USER plexus
+
+COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Entrypoint runs as root to fix volume permissions, then drops to plexus.
+USER root
+ENTRYPOINT ["/docker-entrypoint.sh"]
 
 # Release builds set these so the running container can self-identify via
 # /api/version without git on PATH.  The bootstrap.sh / setup.sh flow does
