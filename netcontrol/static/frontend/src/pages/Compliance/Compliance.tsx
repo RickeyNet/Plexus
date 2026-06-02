@@ -17,6 +17,7 @@ import {
   useUpdateAssignment,
 } from '@/api/compliance';
 import { PageHelp } from '@/components/PageHelp';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import { parseBackendDate } from '@/pages/Dashboard/helpers';
 
@@ -65,6 +66,7 @@ const formatInterval = (seconds: number): string => {
 };
 
 export function Compliance() {
+  const { alert } = useDialogs();
   const [tab, setTab] = useState<Tab>('profiles');
   const [query, setQuery] = useState('');
   const [showNewProfile, setShowNewProfile] = useState(false);
@@ -107,14 +109,23 @@ export function Compliance() {
               loadBuiltin.mutate(undefined, {
                 onSuccess: (res) => {
                   if (res.loaded > 0) {
-                    alert(
-                      `Loaded ${res.loaded} built-in profile(s).${res.skipped > 0 ? ` ${res.skipped} already existed.` : ''}`,
-                    );
+                    void alert({
+                      title: 'Built-in profiles loaded',
+                      message: `Loaded ${res.loaded} built-in profile(s).${res.skipped > 0 ? ` ${res.skipped} already existed.` : ''}`,
+                    });
                   } else {
-                    alert(`All ${res.total_available} built-in profiles already loaded.`);
+                    void alert({
+                      title: 'Built-in profiles loaded',
+                      message: `All ${res.total_available} built-in profiles already loaded.`,
+                    });
                   }
                 },
-                onError: (e) => alert((e as Error).message),
+                onError: (e) =>
+                  void alert({
+                    title: 'Load failed',
+                    message: (e as Error).message,
+                    variant: 'error',
+                  }),
               });
             }}
             disabled={loadBuiltin.isPending}
@@ -264,6 +275,7 @@ function ProfilesTab({
   onEdit: (id: number) => void;
   onAssign: (id: number) => void;
 }) {
+  const { confirm, alert } = useDialogs();
   const remove = useDeleteProfile();
   const filtered = useMemo(() => {
     if (!query.trim()) return profiles;
@@ -336,14 +348,22 @@ function ProfilesTab({
                 <button
                   className="btn btn-sm"
                   style={{ color: 'var(--danger)' }}
-                  onClick={() => {
+                  onClick={async () => {
                     if (
-                      confirm(
-                        'Delete this compliance profile and all its assignments and scan results?',
-                      )
+                      await confirm({
+                        title: 'Delete profile?',
+                        message:
+                          'Delete this compliance profile and all its assignments and scan results?',
+                        confirmLabel: 'Delete',
+                      })
                     ) {
                       remove.mutate(p.id, {
-                        onError: (e) => alert((e as Error).message),
+                        onError: (e) =>
+                          void alert({
+                            title: 'Delete failed',
+                            message: (e as Error).message,
+                            variant: 'error',
+                          }),
                       });
                     }
                   }}
@@ -390,6 +410,7 @@ function AssignmentsTab({
   loading: boolean;
   query: string;
 }) {
+  const { confirm, alert } = useDialogs();
   const toggle = useUpdateAssignment();
   const remove = useDeleteAssignment();
   const scanNow = useScanAssignmentNow();
@@ -448,30 +469,41 @@ function AssignmentsTab({
                 <button
                   className="btn btn-sm btn-primary"
                   title="Scan all hosts in this assignment now"
-                  onClick={() => {
+                  onClick={async () => {
                     if (
-                      confirm(
-                        'Scan all hosts in this assignment immediately? This may take a moment.',
-                      )
+                      await confirm({
+                        title: 'Scan now?',
+                        message:
+                          'Scan all hosts in this assignment immediately? This may take a moment.',
+                        confirmLabel: 'Scan now',
+                        confirmVariant: 'primary',
+                      })
                     ) {
                       scanNow.mutate(a.id, {
                         onSuccess: (res) => {
                           if (res.violations > 0) {
-                            alert(
-                              `Scan complete: ${res.hosts_scanned} hosts scanned, ${res.violations} non-compliant, ${res.errors} errors`,
-                            );
+                            void alert({
+                              title: 'Scan complete',
+                              message: `${res.hosts_scanned} hosts scanned, ${res.violations} non-compliant, ${res.errors} errors`,
+                            });
                           } else if (res.errors > 0) {
-                            alert(
-                              `Scan complete: ${res.hosts_scanned} hosts scanned, ${res.errors} error(s)`,
-                            );
+                            void alert({
+                              title: 'Scan complete',
+                              message: `${res.hosts_scanned} hosts scanned, ${res.errors} error(s)`,
+                            });
                           } else {
-                            alert(
-                              `Scan complete: ${res.hosts_scanned} hosts scanned - all compliant!`,
-                            );
+                            void alert({
+                              title: 'Scan complete',
+                              message: `${res.hosts_scanned} hosts scanned - all compliant!`,
+                            });
                           }
                         },
                         onError: (e) =>
-                          alert(`Assignment scan failed: ${(e as Error).message}`),
+                          void alert({
+                            title: 'Scan failed',
+                            message: `Assignment scan failed: ${(e as Error).message}`,
+                            variant: 'error',
+                          }),
                       });
                     }
                   }}
@@ -484,7 +516,14 @@ function AssignmentsTab({
                   onClick={() =>
                     toggle.mutate(
                       { id: a.id, data: { enabled: !a.enabled } },
-                      { onError: (e) => alert((e as Error).message) },
+                      {
+                        onError: (e) =>
+                          void alert({
+                            title: 'Update failed',
+                            message: (e as Error).message,
+                            variant: 'error',
+                          }),
+                      },
                     )
                   }
                 >
@@ -493,10 +532,21 @@ function AssignmentsTab({
                 <button
                   className="btn btn-sm"
                   style={{ color: 'var(--danger)' }}
-                  onClick={() => {
-                    if (confirm('Delete this compliance assignment?')) {
+                  onClick={async () => {
+                    if (
+                      await confirm({
+                        title: 'Delete assignment?',
+                        message: 'Delete this compliance assignment?',
+                        confirmLabel: 'Delete',
+                      })
+                    ) {
                       remove.mutate(a.id, {
-                        onError: (e) => alert((e as Error).message),
+                        onError: (e) =>
+                          void alert({
+                            title: 'Delete failed',
+                            message: (e as Error).message,
+                            variant: 'error',
+                          }),
                       });
                     }
                   }}

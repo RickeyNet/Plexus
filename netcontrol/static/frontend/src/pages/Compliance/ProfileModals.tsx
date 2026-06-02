@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   ProfilePayload,
   useComplianceAssignments,
@@ -163,6 +164,7 @@ export function AssignProfileModal({
   profileId: number;
   onClose: () => void;
 }) {
+  const { alert } = useDialogs();
   const groups = useInventoryGroups(false);
   const credentials = useCredentials();
   const existing = useComplianceAssignments(profileId);
@@ -319,7 +321,10 @@ export function AssignProfileModal({
             }
           }
           if (failed === 0) {
-            alert(`Profile assigned to ${success} group(s).`);
+            await alert({
+              title: 'Profile assigned',
+              message: `Profile assigned to ${success} group(s).`,
+            });
           } else {
             setError(`Assigned to ${success} group(s), ${failed} failed.`);
             return;
