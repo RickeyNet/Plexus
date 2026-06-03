@@ -13319,6 +13319,36 @@ async def get_upgrade_devices(campaign_id):
         await db.close()
 
 
+async def get_upgrade_device_counts():
+    """Per-campaign device tallies via a single grouped query.
+
+    Lets the campaigns list compute device_count / devices_completed /
+    devices_failed without an N+1 over get_upgrade_devices (which fetched and
+    materialized every device row of every campaign just to count them).
+    Returns ``{campaign_id: {device_count, devices_completed, devices_failed}}``.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT campaign_id, "
+            "COUNT(*) AS device_count, "
+            "SUM(CASE WHEN phase = 'completed' THEN 1 ELSE 0 END) AS devices_completed, "
+            "SUM(CASE WHEN phase = 'failed' THEN 1 ELSE 0 END) AS devices_failed "
+            "FROM upgrade_devices GROUP BY campaign_id"
+        )
+        out = {}
+        for r in await cursor.fetchall():
+            row = dict(r)
+            out[row["campaign_id"]] = {
+                "device_count": row["device_count"] or 0,
+                "devices_completed": row["devices_completed"] or 0,
+                "devices_failed": row["devices_failed"] or 0,
+            }
+        return out
+    finally:
+        await db.close()
+
+
 async def get_upgrade_device(device_id):
     db = await get_db()
     try:
@@ -13366,19 +13396,30 @@ async def add_upgrade_event(campaign_id, device_id, level, message, host=""):
         await db.close()
 
 
-async def get_upgrade_events(campaign_id, device_id=None, limit=10000):
+async def get_upgrade_events(campaign_id, device_id=None, limit=1000):
+    """Return up to ``limit`` of the most recent events, oldest-first.
+
+    Takes the newest ``limit`` rows (tail) then re-sorts ascending for display.
+    Long-running campaigns can emit far more events than any viewer needs, so
+    capping the tail keeps the payload and the DB scan bounded while still
+    showing the latest activity. ``id`` breaks ties on same-second timestamps.
+    """
     db = await get_db()
     try:
         if device_id:
             cursor = await db.execute(
+                "SELECT * FROM ("
                 "SELECT * FROM upgrade_events WHERE campaign_id = ? AND device_id = ? "
-                "ORDER BY timestamp ASC LIMIT ?",
+                "ORDER BY timestamp DESC, id DESC LIMIT ?"
+                ") AS recent ORDER BY timestamp ASC, id ASC",
                 (campaign_id, device_id, limit),
             )
         else:
             cursor = await db.execute(
+                "SELECT * FROM ("
                 "SELECT * FROM upgrade_events WHERE campaign_id = ? "
-                "ORDER BY timestamp ASC LIMIT ?",
+                "ORDER BY timestamp DESC, id DESC LIMIT ?"
+                ") AS recent ORDER BY timestamp ASC, id ASC",
                 (campaign_id, limit),
             )
         return [dict(r) for r in await cursor.fetchall()]
