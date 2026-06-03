@@ -5,6 +5,7 @@ import {
   type UpgradeDevice,
   type UpgradePhase,
   useCancelUpgradeCampaign,
+  useCancelUpgradeDevices,
   useUpgradeCampaign,
 } from '@/api/upgrades';
 import { Modal } from '@/components/Modal';
@@ -183,6 +184,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
   const qc = useQueryClient();
   const query = useUpgradeCampaign(campaignId);
   const cancel = useCancelUpgradeCampaign();
+  const cancelDevices = useCancelUpgradeDevices();
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [phaseReq, setPhaseReq] = useState<PhaseRequest | null>(null);
@@ -198,6 +200,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     'connecting',
   );
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+  const [confirmDeviceCancelOpen, setConfirmDeviceCancelOpen] = useState(false);
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(
     null,
   );
@@ -213,10 +216,11 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     [campaign],
   );
 
-  const isRunning = Boolean(
-    campaign?.is_actively_running ?? campaign?.status?.includes('running'),
-  );
   const status = campaign?.status || 'created';
+  const hasActiveTask = Boolean(campaign?.is_actively_running);
+  const hasRunningStatus = status.startsWith('running_');
+  const isRunning = hasActiveTask || hasRunningStatus;
+  const isActivateRunning = status === 'running_activate';
   const friendlyStatus = campaignStatusLabel(status);
   const statusText =
     !campaign?.is_actively_running && campaign?.status?.includes('running')
@@ -264,6 +268,19 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     }
     return counts;
   }, [devices, liveStatuses]);
+
+  const activateCancelTargetCount = useMemo(
+    () =>
+      devices.filter((d) => {
+        const status =
+          (liveStatuses[d.id]?.activate_status as string | undefined) ??
+          d.activate_status;
+        return status === 'running' || status === 'failed';
+      }).length,
+    [devices, liveStatuses],
+  );
+  const canCancelActivateDevices =
+    isActivateRunning || activateCancelTargetCount > 0;
 
   // WebSocket for live events
   useEffect(() => {
@@ -367,7 +384,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     setSelectedIds(new Set(devices.map((d) => d.id)));
   };
 
-  const selectByFailedPhase = (phase: ColumnPhase) => {
+  const selectByPhaseStatus = (phase: ColumnPhase, wantedStatus: string) => {
     const key = `${phase}_status` as const;
     setSelectedIds(
       new Set(
@@ -375,7 +392,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
           .filter((d) => {
             const live = liveStatuses[d.id];
             const status = (live?.[key] as string | undefined) ?? d[key];
-            return status === 'failed';
+            return status === wantedStatus;
           })
           .map((d) => d.id),
       ),
@@ -401,6 +418,33 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
         });
       },
     });
+  };
+
+  const handleDeviceCancelConfirm = () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    cancelDevices.mutate(
+      {
+        campaignId,
+        payload: {
+          phase: 'activate',
+          device_ids: ids,
+        },
+      },
+      {
+        onSuccess: () => {
+          setConfirmDeviceCancelOpen(false);
+          setSelectedIds(new Set());
+        },
+        onError: (e) => {
+          setConfirmDeviceCancelOpen(false);
+          setAlert({
+            title: 'Device cancel failed',
+            message: (e as Error).message,
+          });
+        },
+      },
+    );
   };
 
   // Rescheduling means clearing the armed task (cancel) and immediately
@@ -520,10 +564,20 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <span className="text-muted" style={{ fontSize: '0.82em' }}>
                   Run in order. Each step acts on <strong>{targetText}</strong>.
                 </span>
-                {isRunning && !isScheduled && (
+                {canCancelActivateDevices && (
+                  <button
+                    className="btn btn-sm btn-danger"
+                    style={{ marginLeft: 'auto' }}
+                    onClick={() => setConfirmDeviceCancelOpen(true)}
+                    disabled={selectedCount === 0 || cancelDevices.isPending}
+                  >
+                    Cancel selected activate
+                  </button>
+                )}
+                {hasActiveTask && !isScheduled && (
                   <button
                     className="btn btn-sm btn-secondary"
-                    style={{ marginLeft: 'auto' }}
+                    style={{ marginLeft: canCancelActivateDevices ? 0 : 'auto' }}
                     onClick={() => setConfirmCancelOpen(true)}
                     disabled={cancel.isPending}
                   >
@@ -643,23 +697,33 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <button
                   className="btn btn-sm btn-secondary"
                   onClick={() => selectAll(true)}
-                  disabled={isRunning}
                 >
                   Select all
                 </button>
                 <button
                   className="btn btn-sm btn-secondary"
                   onClick={() => selectAll(false)}
-                  disabled={isRunning || selectedCount === 0}
+                  disabled={selectedCount === 0}
                 >
                   Clear
                 </button>
                 <button
                   className="btn btn-sm btn-secondary"
-                  onClick={() => selectByFailedPhase('transfer')}
-                  disabled={isRunning}
+                  onClick={() => selectByPhaseStatus('transfer', 'failed')}
                 >
                   Select transfer-failed
+                </button>
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => selectByPhaseStatus('activate', 'running')}
+                >
+                  Select activate-running
+                </button>
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => selectByPhaseStatus('activate', 'failed')}
+                >
+                  Select activate-failed
                 </button>
               </span>
             </div>
@@ -706,7 +770,6 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                           <input
                             type="checkbox"
                             checked={selectedIds.has(d.id)}
-                            disabled={isRunning}
                             onChange={(e) => toggleSelect(d.id, e.target.checked)}
                           />
                         </td>
@@ -836,6 +899,19 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
           if (!cancel.isPending) setConfirmCancelOpen(false);
         }}
         onConfirm={handleCancelConfirm}
+      />
+      <ConfirmDialog
+        isOpen={confirmDeviceCancelOpen}
+        title="Cancel selected activate devices?"
+        message={`Mark ${selectedCount} selected device${
+          selectedCount === 1 ? '' : 's'
+        } cancelled for activate. Queued devices will be skipped; a reload command already sent to a device cannot be withdrawn.`}
+        confirmLabel="Cancel selected"
+        loading={cancelDevices.isPending}
+        onCancel={() => {
+          if (!cancelDevices.isPending) setConfirmDeviceCancelOpen(false);
+        }}
+        onConfirm={handleDeviceCancelConfirm}
       />
       <AlertDialog
         isOpen={alert !== null}

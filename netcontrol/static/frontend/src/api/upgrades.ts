@@ -239,6 +239,11 @@ export interface ExecutePhasePayload {
   scheduled_at?: string | null;
 }
 
+export interface CancelUpgradeDevicesPayload {
+  phase?: UpgradePhase;
+  device_ids: number[];
+}
+
 export function useUpgradeCampaigns() {
   return useQuery({
     queryKey: ['upgrade-campaigns'],
@@ -336,6 +341,34 @@ export function useCancelUpgradeCampaign() {
     onSuccess: (_data, campaignId) => {
       qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
       qc.invalidateQueries({ queryKey: ['upgrade-campaign', campaignId] });
+    },
+  });
+}
+
+export function useCancelUpgradeDevices() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      campaignId,
+      payload,
+    }: {
+      campaignId: number;
+      payload: CancelUpgradeDevicesPayload;
+    }) =>
+      apiRequest<{
+        ok: boolean;
+        phase: string;
+        cancelled: number;
+        skipped_completed: number;
+      }>(`/upgrades/campaigns/${campaignId}/devices/cancel`, {
+        method: 'POST',
+        body: payload,
+      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
+      qc.invalidateQueries({
+        queryKey: ['upgrade-campaign', vars.campaignId],
+      });
     },
   });
 }
