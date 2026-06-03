@@ -2122,11 +2122,15 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                 await _emit(campaign_id, dev_id, "error",
                                             f"{commit_cmd} failed: {e} - switch will roll back!", host=ip)
                                 await db.update_upgrade_device(
-                                    dev_id, verify_status="failed",
+                                    dev_id, activate_status="failed",
+                                    verify_status="failed",
+                                    phase="failed",
                                     current_version=running_version,
                                     error_message=msg)
                                 await _emit_device_status(
-                                    campaign_id, dev_id, verify_status="failed",
+                                    campaign_id, dev_id,
+                                    activate_status="failed",
+                                    verify_status="failed",
                                     error_message=msg)
                                 try:
                                     await asyncio.to_thread(new_conn.disconnect)
@@ -2147,11 +2151,15 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                        f"{post_commit_version}, expected {expected_version}")
                                 await _emit(campaign_id, dev_id, "error", msg, host=ip)
                                 await db.update_upgrade_device(
-                                    dev_id, verify_status="failed",
+                                    dev_id, activate_status="failed",
+                                    verify_status="failed",
+                                    phase="failed",
                                     current_version=post_commit_version or running_version,
                                     error_message=msg)
                                 await _emit_device_status(
-                                    campaign_id, dev_id, verify_status="failed",
+                                    campaign_id, dev_id,
+                                    activate_status="failed",
+                                    verify_status="failed",
                                     error_message=msg)
                                 try:
                                     await asyncio.to_thread(new_conn.disconnect)
@@ -2172,10 +2180,15 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                     else:
                         await _emit(campaign_id, dev_id, "error",
                                     f"Version mismatch! Running: {running_version}, Expected: {expected_version}", host=ip)
-                        await db.update_upgrade_device(dev_id, verify_status="failed",
+                        await db.update_upgrade_device(dev_id, activate_status="failed",
+                                                       verify_status="failed",
+                                                       phase="failed",
                                                        current_version=running_version or "",
                                                        error_message=f"Version mismatch: {running_version}")
-                        await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message=f"Version mismatch: {running_version}")
+                        await _emit_device_status(campaign_id, dev_id,
+                                                  activate_status="failed",
+                                                  verify_status="failed",
+                                                  error_message=f"Version mismatch: {running_version}")
                         try:
                             await asyncio.to_thread(new_conn.disconnect)
                         except Exception:
@@ -2189,9 +2202,15 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             else:
                 await _emit(campaign_id, dev_id, "error",
                             f"Switch did not come back within {verify_wait // 60} minutes", host=ip)
-                await db.update_upgrade_device(dev_id, verify_status="failed",
+                await db.update_upgrade_device(dev_id, activate_status="failed",
+                                               verify_status="failed",
+                                               phase="failed",
                                                error_message="Switch unreachable after reboot")
-                await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message="Switch unreachable after reboot")
+                await _emit_device_status(campaign_id, dev_id,
+                                          activate_status="failed",
+                                          verify_status="failed",
+                                          error_message="Switch unreachable after reboot")
+                return
 
         await db.update_upgrade_device(dev_id, activate_status="completed", phase="completed",
                                        completed_at=datetime.now(UTC).isoformat())
@@ -2297,10 +2316,14 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
             await _emit(campaign_id, dev_id, "success",
                         f"Upgrade verified - running {running_version} (matches {expected_version})", host=ip)
         else:
-            await db.update_upgrade_device(dev_id, verify_status="failed",
+            await db.update_upgrade_device(dev_id, activate_status="failed",
+                                           verify_status="failed",
+                                           phase="failed",
                                            error_message=f"Version mismatch: running {running_version}, expected {expected_version}",
                                            current_version=running_version)
-            await _emit_device_status(campaign_id, dev_id, verify_status="failed",
+            await _emit_device_status(campaign_id, dev_id,
+                                      activate_status="failed",
+                                      verify_status="failed",
                                       error_message=f"Version mismatch: running {running_version}, expected {expected_version}")
             await _emit(campaign_id, dev_id, "error",
                         f"Version mismatch - running {running_version}, expected {expected_version}", host=ip)

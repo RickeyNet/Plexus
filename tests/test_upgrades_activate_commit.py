@@ -120,6 +120,15 @@ def _final_verify_state(db_writes: list[dict]) -> tuple[str | None, str | None]:
     return verify, err
 
 
+def _final_status(db_writes: list[dict], key: str) -> str | None:
+    """Return the last written value for a device status key."""
+    status = None
+    for w in db_writes:
+        if key in w:
+            status = w[key]
+    return status
+
+
 @pytest.mark.asyncio
 async def test_commit_failure_marks_device_failed_not_verified(
     monkeypatch: pytest.MonkeyPatch, _patched
@@ -137,6 +146,7 @@ async def test_commit_failure_marks_device_failed_not_verified(
 
     verify, err = _final_verify_state(_patched["db"])
     assert verify == "failed", f"commit failure must fail verify, got {verify!r}"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
     assert err and "commit failed" in err.lower()
     # It must never have been stamped verified/completed.
     assert all(
@@ -164,6 +174,7 @@ async def test_post_commit_rollback_is_detected(
 
     verify, err = _final_verify_state(_patched["db"])
     assert verify == "failed", f"post-commit rollback must fail verify, got {verify!r}"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
     assert err and "post-commit" in err.lower()
     assert all(w.get("verify_status") != "completed" for w in _patched["db"])
 
@@ -187,3 +198,29 @@ async def test_successful_commit_and_reverify_marks_verified(
     assert verify == "completed", f"clean upgrade must verify, got {verify!r}"
     assert err == "", f"verified device must clear error_message, got {err!r}"
     assert any(w.get("phase") == "verified" for w in _patched["db"])
+
+
+@pytest.mark.asyncio
+async def test_verify_mismatch_marks_activate_failed(
+    monkeypatch: pytest.MonkeyPatch, _patched
+) -> None:
+    """Verify Upgrade must clear the activate green check on version mismatch."""
+    conn = _FakeConn(versions=["17.15.04"])
+    _patched["holder"]["conn"] = conn
+
+    dev = {
+        "id": 42,
+        "ip_address": "10.0.0.1",
+        "target_image": "cat9k_lite_iosxe.17.15.05.SPA.bin",
+    }
+    await upgrades._device_verify(
+        campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
+
+    verify, err = _final_verify_state(_patched["db"])
+    assert verify == "failed"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    assert err and "version mismatch" in err.lower()
+    assert any(
+        w.get("activate_status") == "failed" and w.get("verify_status") == "failed"
+        for w in _patched["status"]
+    )
