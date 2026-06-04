@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
 import { PageHelp } from '@/components/PageHelp';
+import { UntestedBanner } from '@/components/UntestedBanner';
 import { providerLabel } from './helpers';
 import { AccountsTab } from './AccountsTab';
 import { TopologyTab } from './TopologyTab';
@@ -89,6 +90,8 @@ export function CloudVisibility() {
       <div className="page-header">
         <h2>Cloud Visibility</h2>
       </div>
+
+      <UntestedBanner feature="Cloud Visibility" />
 
       <PageHelp
         pageKey="cloud-visibility"
