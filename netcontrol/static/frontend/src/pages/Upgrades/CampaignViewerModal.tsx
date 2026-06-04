@@ -496,6 +496,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
 
   const title = campaign ? `Campaign: ${campaign.name}` : 'Campaign';
   const selectedCount = selectedIds.size;
+  const allSelected = devices.length > 0 && selectedCount === devices.length;
   const targetText =
     selectedCount > 0
       ? `${selectedCount} selected device${selectedCount === 1 ? '' : 's'}`
@@ -728,20 +729,14 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               >
                 <button
                   className="btn btn-sm btn-secondary"
-                  onClick={() => selectAll(true)}
+                  onClick={() => selectAll(!allSelected)}
+                  disabled={devices.length === 0}
                 >
-                  Select all
-                </button>
-                <button
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => selectAll(false)}
-                  disabled={selectedCount === 0}
-                >
-                  Clear
+                  {allSelected ? 'Deselect all' : 'Select all'}
                 </button>
                 <select
-                  className="form-control form-control-sm"
-                  style={{ width: 'auto' }}
+                  className="form-select"
+                  style={{ width: 'auto', padding: '0.25rem 0.5rem', fontSize: '0.85em' }}
                   value=""
                   disabled={selectableGroups.length === 0}
                   onChange={(e) => {
