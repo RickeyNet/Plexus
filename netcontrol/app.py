@@ -964,7 +964,8 @@ async def _load_persisted_security_settings():
     if isinstance(feature_visibility, dict):
         state.FEATURE_VISIBILITY_HIDDEN = state._sanitize_feature_visibility(feature_visibility.get("hidden") or [])
     else:
-        state.FEATURE_VISIBILITY_HIDDEN = []
+        # No admin override stored yet: hide experimental/untested features by default.
+        state.FEATURE_VISIBILITY_HIDDEN = state._sanitize_feature_visibility(state.DEFAULT_HIDDEN_FEATURES)
     flow_collector = await db.get_auth_setting("flow_collector")
     if flow_collector is None:
         # First boot: seed the persisted row from the legacy APP_* env vars
