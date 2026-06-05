@@ -169,14 +169,19 @@ export function useTopologyStpEvents(unacknowledged = true, limit = 200) {
 // ── Mutations ──────────────────────────────────────────────────────────────
 
 export function useSaveTopologyPositions() {
-  const qc = useQueryClient();
+  // Intentionally does NOT invalidate ['topology-positions'] on success. The
+  // Topology component applies each drag/pin to its local savedPositionsRef
+  // immediately, so this mutation is pure persistence. Invalidating would
+  // refetch an identical positions object, and because the topology rebuild
+  // effect depends on `positions`, that refetch would destroy and recreate the
+  // entire vis-network graph (re-running physics stabilization) on every node
+  // drag. The fresh server copy is picked up on the next mount instead.
   return useMutation({
     mutationFn: (positions: Record<string, { x: number; y: number } | null>) =>
       apiRequest('/topology/positions', {
         method: 'PUT',
         body: { positions },
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['topology-positions'] }),
   });
 }
 
