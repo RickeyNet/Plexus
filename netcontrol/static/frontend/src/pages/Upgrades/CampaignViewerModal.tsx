@@ -18,6 +18,7 @@ import {
   campaignStatusBadgeClass,
   campaignStatusLabel,
   formatScheduledTime,
+  phaseLabel,
 } from './helpers';
 
 interface Props {
@@ -87,6 +88,13 @@ function statusIcon(s: string | null | undefined) {
     default:
       return <span style={{ opacity: 0.3 }}>•</span>;
   }
+}
+
+// Capitalised, human-friendly version of a raw per-phase status token
+// ('failed' → 'Failed'). Kept tiny on purpose; the raw tokens are already
+// close to display-ready.
+function statusLabel(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function shortImageName(image: string | null | undefined): string {
@@ -399,6 +407,30 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     );
   };
 
+  // Phase·status combinations that actually exist among the current devices,
+  // each with a live count. Drives the "Select by status" dropdown so it only
+  // ever offers selections that match something (e.g. cancelled devices show
+  // up here automatically) instead of a fixed row of buttons, some of which
+  // would select nothing. 'pending' (the not-yet-started state) is omitted as
+  // there's nothing actionable to select there.
+  const selectableGroups = useMemo(() => {
+    const groups: { phase: ColumnPhase; status: string; count: number }[] = [];
+    for (const phase of PHASE_COLUMNS) {
+      const key = `${phase}_status` as const;
+      const counts = new Map<string, number>();
+      for (const d of devices) {
+        const live = liveStatuses[d.id];
+        const status = (live?.[key] as string | undefined) ?? d[key];
+        if (!status || status === 'pending') continue;
+        counts.set(status, (counts.get(status) ?? 0) + 1);
+      }
+      for (const [status, count] of counts) {
+        groups.push({ phase, status, count });
+      }
+    }
+    return groups;
+  }, [devices, liveStatuses]);
+
   const requestPhase = (
     phase: UpgradePhase,
     schedule = false,
@@ -707,24 +739,31 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 >
                   Clear
                 </button>
-                <button
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => selectByPhaseStatus('transfer', 'failed')}
+                <select
+                  className="form-control form-control-sm"
+                  style={{ width: 'auto' }}
+                  value=""
+                  disabled={selectableGroups.length === 0}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) return;
+                    const [phase, status] = val.split(':') as [
+                      ColumnPhase,
+                      string,
+                    ];
+                    selectByPhaseStatus(phase, status);
+                  }}
                 >
-                  Select transfer-failed
-                </button>
-                <button
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => selectByPhaseStatus('activate', 'running')}
-                >
-                  Select activate-running
-                </button>
-                <button
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => selectByPhaseStatus('activate', 'failed')}
-                >
-                  Select activate-failed
-                </button>
+                  <option value="">Select by status…</option>
+                  {selectableGroups.map((g) => (
+                    <option
+                      key={`${g.phase}:${g.status}`}
+                      value={`${g.phase}:${g.status}`}
+                    >
+                      {phaseLabel(g.phase)} · {statusLabel(g.status)} ({g.count})
+                    </option>
+                  ))}
+                </select>
               </span>
             </div>
 
