@@ -13,8 +13,9 @@ exercised end-to-end.
 
 import asyncio
 import random
+from collections.abc import AsyncGenerator
 
-from routes.runner import BasePlaybook, register_playbook
+from routes.runner import BasePlaybook, LogEvent, register_playbook
 
 # Shared connection / simulation helpers live in _common.py - see that
 # file for the rationale behind each helper.  The leading underscore
@@ -117,8 +118,8 @@ class Vlan1Destroyer(BasePlaybook):
         self._total_remediated = 0
         self._total_ports_found = 0
 
-        # ── Iterate every selected host ────────────────────────────────
-        for host_info in hosts:
+        # ── Process selected hosts with bounded concurrency ────────────
+        async def run_host(host_info: dict) -> AsyncGenerator[LogEvent]:
             ip = host_info["ip_address"]
             hostname = host_info.get("hostname", ip)
             device_type = host_info.get("device_type", "cisco_ios")
@@ -140,6 +141,9 @@ class Vlan1Destroyer(BasePlaybook):
                     ip, hostname, template_commands, dry_run
                 ):
                     yield event
+
+        async for event in self.run_hosts_concurrently(hosts, run_host):
+            yield event
 
         # ── Final summary ──────────────────────────────────────────────
         yield self.log_sep()

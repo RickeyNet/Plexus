@@ -394,7 +394,7 @@ class MyScript(BasePlaybook):
     async def run(self, hosts, credentials, template_commands=None, dry_run=True):
         yield self.log_info(f"Starting on {len(hosts)} hosts")
 
-        for host in hosts:
+        async def run_host(host):
             ip = host["ip_address"]
             yield self.log_info(f"Processing {ip}", host=ip)
 
@@ -403,6 +403,9 @@ class MyScript(BasePlaybook):
             # Use template_commands if requires_template = True
 
             yield self.log_success(f"Finished processing {ip}", host=ip)
+
+        async for event in self.run_hosts_concurrently(hosts, run_host):
+            yield event
 
         yield self.log_success("All done.")
 ```

@@ -68,7 +68,8 @@ class TemplateConfigurator(BasePlaybook):
         succeeded = 0
         failed = 0
 
-        for host in hosts:
+        async def run_host(host: dict) -> AsyncGenerator[LogEvent]:
+            nonlocal succeeded, failed
             # Inventory entries can use either ``ip_address`` or ``host``;
             # accept either so this playbook plays nicely with both shapes.
             ip = host.get("ip_address") or host.get("host")
@@ -102,6 +103,9 @@ class TemplateConfigurator(BasePlaybook):
                 succeeded += 1
             else:
                 failed += 1
+
+        async for event in self.run_hosts_concurrently(hosts, run_host):
+            yield event
 
         # Final summary - coloured warn if anything failed, success otherwise.
         yield self.log_sep()

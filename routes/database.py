@@ -2445,6 +2445,12 @@ class _PostgresConnectionCompat:
         for stmt in _split_sql_statements(script):
             await self._conn.execute(stmt)
 
+    async def executemany(self, query: str, params):
+        converted = _convert_qmark_to_dollar_params(query)
+        cleaned = [_strip_nuls_from_params(tuple(row)) for row in params]
+        await self._conn.executemany(converted, cleaned)
+        return _PostgresCursorCompat(rowcount=len(cleaned))
+
     async def commit(self):
         # asyncpg uses autocommit when no explicit transaction is active.
         return None
@@ -4130,11 +4136,18 @@ async def finish_job(job_id: int, status: str, hosts_ok: int = 0,
 
 
 async def add_job_event(job_id: int, level: str, message: str, host: str = ""):
+    await add_job_events(job_id, [(level, message, host)])
+
+
+async def add_job_events(job_id: int, events: list[tuple[str, str, str]]) -> None:
+    """Persist multiple ordered job events in one transaction."""
+    if not events:
+        return
     db = await get_db()
     try:
-        await db.execute(
+        await db.executemany(
             "INSERT INTO job_events (job_id, level, host, message) VALUES (?,?,?,?)",
-            (job_id, level, host, message),
+            [(job_id, level, host, message) for level, message, host in events],
         )
         await db.commit()
     finally:

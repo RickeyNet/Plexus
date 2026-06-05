@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import os
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -72,6 +73,10 @@ _running_job_tasks: dict[int, asyncio.Task] = {}  # job_id -> asyncio.Task for c
 _running_tasks_lock = asyncio.Lock()
 
 _PRIORITY_LABELS = {0: "low", 1: "below-normal", 2: "normal", 3: "high", 4: "critical"}
+_JOB_EVENT_BATCH_SIZE = max(1, int(os.getenv("APP_JOB_EVENT_BATCH_SIZE", "50")))
+_JOB_EVENT_FLUSH_SECONDS = max(
+    0.01, float(os.getenv("APP_JOB_EVENT_FLUSH_SECONDS", "0.1"))
+)
 
 # Reserved IP ranges that should not be targeted by ad-hoc jobs
 _BLOCKED_NETWORKS = [
@@ -109,6 +114,65 @@ def _template_lines(content: str) -> list[str]:
         for line in (content or "").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+class _JobEventWriter:
+    """Persist job events asynchronously in ordered batches."""
+
+    _STOP = object()
+
+    def __init__(
+        self,
+        job_id: int,
+        *,
+        batch_size: int = _JOB_EVENT_BATCH_SIZE,
+        flush_seconds: float = _JOB_EVENT_FLUSH_SECONDS,
+    ):
+        self.job_id = job_id
+        self.batch_size = max(1, batch_size)
+        self.flush_seconds = max(0.01, flush_seconds)
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self.closed = False
+        self.task = asyncio.create_task(self._run())
+
+    def enqueue(self, event: LogEvent) -> None:
+        if self.closed:
+            raise RuntimeError("job event writer is closed")
+        if self.task.done():
+            self.task.result()
+        self.queue.put_nowait((event.level, event.message, event.host))
+
+    async def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            self.queue.put_nowait(self._STOP)
+        await self.task
+
+    async def _run(self) -> None:
+        batch: list[tuple[str, str, str]] = []
+        stopping = False
+        while not stopping:
+            item = await self.queue.get()
+            if item is self._STOP:
+                stopping = True
+            else:
+                batch.append(item)
+
+            while not stopping and len(batch) < self.batch_size:
+                try:
+                    item = await asyncio.wait_for(
+                        self.queue.get(), timeout=self.flush_seconds
+                    )
+                except TimeoutError:
+                    break
+                if item is self._STOP:
+                    stopping = True
+                else:
+                    batch.append(item)
+
+            if batch:
+                await db.add_job_events(self.job_id, batch)
+                batch = []
 
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
@@ -456,9 +520,10 @@ async def _run_ansible_job(
     dry_run: bool,
 ):
     """Background task: execute Ansible playbook, store events, broadcast via WebSocket."""
+    event_writer = _JobEventWriter(job_id)
 
     async def on_event(event: LogEvent):
-        await db.add_job_event(job_id, event.level, event.message, event.host)
+        event_writer.enqueue(event)
         async with _job_sockets_lock:
             sockets = list(_job_sockets.get(job_id, []))
         dead = []
@@ -485,6 +550,7 @@ async def _run_ansible_job(
             dry_run=dry_run,
             event_callback=on_event,
         )
+        await event_writer.close()
         await db.finish_job(
             job_id,
             status=result.status,
@@ -494,11 +560,28 @@ async def _run_ansible_job(
         )
         job_succeeded = result.status == "success"
     except asyncio.CancelledError:
-        await db.add_job_event(job_id, "warning", "Job cancelled by user")
+        try:
+            event = LogEvent(level="warning", message="Job cancelled by user")
+            if event_writer.closed:
+                await db.add_job_event(job_id, event.level, event.message, event.host)
+            else:
+                await on_event(event)
+            await event_writer.close()
+        except Exception:
+            LOGGER.exception("job %s: failed to persist Ansible cancellation event", job_id)
         await db.cancel_job(job_id, "system")
     except Exception as e:
+        try:
+            await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
+            await event_writer.close()
+        except Exception:
+            LOGGER.exception("job %s: failed to persist final Ansible event batch", job_id)
         await db.finish_job(job_id, status="failed", hosts_failed=len(hosts))
-        await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
+    finally:
+        try:
+            await event_writer.close()
+        except Exception:
+            LOGGER.exception("job %s: failed to close Ansible event writer", job_id)
 
     # Notify WebSocket clients that job is done
     done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
@@ -530,6 +613,7 @@ async def _run_job(
     hosts_ok = 0
     hosts_failed = 0
     _redact = secret_redact_values or set()
+    event_writer = _JobEventWriter(job_id)
 
     async def on_event(event: LogEvent):
         nonlocal hosts_ok, hosts_failed
@@ -543,8 +627,8 @@ async def _run_job(
                 timestamp=event.timestamp,
             )
 
-        # Persist event
-        await db.add_job_event(job_id, event.level, event.message, event.host)
+        # Queue persistence without blocking playbook execution on a commit.
+        event_writer.enqueue(event)
 
         # Track host results
         if event.level == "success" and "Finished processing" in event.message:
@@ -576,6 +660,7 @@ async def _run_job(
             parameters=parameters,
             template_by_device_type=template_by_device_type,
         )
+        await event_writer.close()
         await db.finish_job(
             job_id,
             status=result.status,
@@ -585,11 +670,28 @@ async def _run_job(
         )
         job_succeeded = result.status == "success"
     except asyncio.CancelledError:
-        await db.add_job_event(job_id, "warning", "Job cancelled by user")
+        try:
+            event = LogEvent(level="warning", message="Job cancelled by user")
+            if event_writer.closed:
+                await db.add_job_event(job_id, event.level, event.message, event.host)
+            else:
+                await on_event(event)
+            await event_writer.close()
+        except Exception:
+            LOGGER.exception("job %s: failed to persist cancellation event", job_id)
         await db.cancel_job(job_id, "system")
     except Exception as e:
+        try:
+            await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
+            await event_writer.close()
+        except Exception:
+            LOGGER.exception("job %s: failed to persist final event batch", job_id)
         await db.finish_job(job_id, status="failed", hosts_failed=len(hosts))
-        await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
+    finally:
+        try:
+            await event_writer.close()
+        except Exception:
+            LOGGER.exception("job %s: failed to close event writer", job_id)
 
     # Notify WebSocket clients that job is done
     done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
