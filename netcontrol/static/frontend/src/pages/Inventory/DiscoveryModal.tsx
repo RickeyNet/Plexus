@@ -21,7 +21,13 @@ interface Props {
   onClose: () => void;
 }
 
-type Phase = 'form' | 'scanning' | 'results' | 'snmp-result' | 'sync-result';
+type Phase =
+  | 'form'
+  | 'scanning'
+  | 'results'
+  | 'snmp-result'
+  | 'sync-result'
+  | 'onboard-result';
 
 interface SyncResult {
   added: number;
@@ -72,6 +78,10 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     | { ok: false; error: string }
   >(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [onboardResult, setOnboardResult] = useState<{
+    added: number;
+    updated: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tickNow, setTickNow] = useState(Date.now());
 
@@ -265,9 +275,10 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
 
   const onboardSelected = async () => {
     if (selectedSet.size === 0) {
-      alert('Select at least one host to onboard.');
+      setError('Select at least one host to onboard.');
       return;
     }
+    setError(null);
     const selected = Array.from(selectedSet)
       .map((i) => discovered[i])
       .filter(Boolean);
@@ -278,12 +289,10 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
         hosts: selected,
       });
       const s = r.sync || {};
-      onClose();
-      alert(
-        `Onboard complete. Added ${s.added || 0}, updated ${s.updated || 0}.`,
-      );
+      setOnboardResult({ added: s.added || 0, updated: s.updated || 0 });
+      setPhase('onboard-result');
     } catch (err) {
-      alert(`Onboarding failed: ${(err as Error).message}`);
+      setError(`Onboarding failed: ${(err as Error).message}`);
     }
   };
 
@@ -315,6 +324,38 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
               <tr>
                 <td style={{ opacity: 0.7 }}>Removed</td>
                 <td>{syncResult.removed}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}
+        >
+          <button type="button" className="btn btn-primary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
+  if (phase === 'onboard-result' && onboardResult) {
+    return (
+      <Modal isOpen onClose={onClose} title={title}>
+        <div
+          className="card"
+          style={{ borderLeft: '3px solid var(--success)', padding: '0.75rem' }}
+        >
+          <strong>Onboard complete</strong>
+          <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
+            <tbody>
+              <tr>
+                <td style={{ opacity: 0.7 }}>Added</td>
+                <td>{onboardResult.added}</td>
+              </tr>
+              <tr>
+                <td style={{ opacity: 0.7 }}>Updated</td>
+                <td>{onboardResult.updated}</td>
               </tr>
             </tbody>
           </table>
@@ -576,6 +617,17 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             </div>
           )}
         </div>
+        {error && (
+          <p
+            style={{
+              color: 'var(--danger)',
+              marginTop: '0.5rem',
+              fontSize: '0.85rem',
+            }}
+          >
+            {error}
+          </p>
+        )}
         <div
           style={{
             display: 'flex',
