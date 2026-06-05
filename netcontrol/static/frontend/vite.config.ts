@@ -19,6 +19,37 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        // Pull the heavy viz libraries into their own vendor chunks. echarts is
+        // imported by several lazy pages (Dashboard, DeviceDetail, Reports,
+        // TrafficAnalysis); without this it gets duplicated into each page
+        // chunk. A shared chunk is fetched once and cached across them. Each
+        // chunk stays lazy - it's only requested when a page that uses it
+        // loads - and splitting vendor from page code means editing a page no
+        // longer busts the big library cache.
+        manualChunks(id) {
+          if (id.includes('node_modules/echarts') || id.includes('node_modules/zrender')) {
+            return 'echarts';
+          }
+          if (
+            id.includes('node_modules/vis-network') ||
+            id.includes('node_modules/vis-data') ||
+            id.includes('node_modules/vis-util')
+          ) {
+            return 'vis-network';
+          }
+          if (
+            id.includes('node_modules/@codemirror') ||
+            id.includes('node_modules/@lezer') ||
+            id.includes('node_modules/@uiw') ||
+            id.includes('node_modules/codemirror')
+          ) {
+            return 'codemirror';
+          }
+        },
+      },
+    },
   },
   server: {
     port: 5173,
