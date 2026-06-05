@@ -89,7 +89,7 @@ class Snmpv3Configurator(BasePlaybook):
         else:
             yield self.log_warn("*** LIVE MODE - commands WILL be written ***")
 
-        for host in hosts:
+        async def run_host(host: dict) -> AsyncGenerator[LogEvent]:
             # Accept either inventory shape (``ip_address`` or ``host``).
             ip = host.get("ip_address") or host.get("host")
             hostname = host.get("hostname", ip or "unknown")
@@ -109,7 +109,7 @@ class Snmpv3Configurator(BasePlaybook):
                     "before retrying.",
                     host=hostname,
                 )
-                continue
+                return
 
             # Resolve the command body for *this* host's platform.  When
             # the job's template has vendor-specific variants this is the
@@ -125,7 +125,7 @@ class Snmpv3Configurator(BasePlaybook):
                     f"'{device_type}' variant or a generic template.",
                     host=hostname,
                 )
-                continue
+                return
 
             yield self.log_info(f"Connecting to {hostname} ({ip}) ...", host=hostname)
 
@@ -141,6 +141,9 @@ class Snmpv3Configurator(BasePlaybook):
                     ip, hostname, driver, host_commands, dry_run,
                 ):
                     yield event
+
+        async for event in self.run_hosts_concurrently(hosts, run_host):
+            yield event
 
         yield self.log_sep()
         yield self.log_success("SNMPv3 configuration playbook complete.")
