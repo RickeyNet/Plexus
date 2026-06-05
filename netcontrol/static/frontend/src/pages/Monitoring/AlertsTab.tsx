@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useAcknowledgeAlert,
   useBulkAcknowledgeAlerts,
@@ -9,6 +10,7 @@ import {
 import { formatTimestamp, severityColor } from './helpers';
 
 export function AlertsTab() {
+  const { alert } = useDialogs();
   const [severity, setSeverity] = useState('');
   const [ackFilter, setAckFilter] = useState<'all' | 'open' | 'ack'>('open');
   const [query, setQuery] = useState('');
@@ -54,7 +56,7 @@ export function AlertsTab() {
     if (!ids.length) return;
     bulkMut.mutate(ids, {
       onSuccess: () => setSelected(new Set()),
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 
@@ -119,7 +121,7 @@ export function AlertsTab() {
             alert={a}
             checked={selected.has(a.id)}
             onToggle={(c) => toggleSelect(a.id, c)}
-            onAck={() => ackMut.mutate(a.id, { onError: (e) => alert((e as Error).message) })}
+            onAck={() => ackMut.mutate(a.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } })}
           />
         ))}
       </div>

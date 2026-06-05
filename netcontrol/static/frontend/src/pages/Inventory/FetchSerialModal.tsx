@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useCredentials } from '@/api/compliance';
 import { useFetchHostSerial } from '@/api/inventory';
 
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function FetchSerialModal({ hostId, hostname, onClose }: Props) {
+  const { alert } = useDialogs();
   const credentials = useCredentials();
   const fetch = useFetchHostSerial();
   const [credentialId, setCredentialId] = useState<number | null>(null);
@@ -20,15 +22,15 @@ export function FetchSerialModal({ hostId, hostname, onClose }: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (credentialId == null) {
-      alert('Select a credential.');
+      void alert('Select a credential.');
       return;
     }
     try {
       const r = await fetch.mutateAsync({ hostId, credentialId });
       onClose();
-      alert(`Serial: ${r.serial_number}`);
+      void alert(`Serial: ${r.serial_number}`);
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

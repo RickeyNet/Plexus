@@ -1,4 +1,5 @@
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { reportArtifactUrl, useReportRunArtifacts } from '@/api/reports';
 
 import { downloadReportExport } from './helpers';
@@ -10,12 +11,13 @@ interface Props {
 }
 
 export function ArtifactsModal({ runId, isOpen, onClose }: Props) {
+  const { alert } = useDialogs();
   const query = useReportRunArtifacts(runId);
 
   function handleDownload(id: number) {
-    downloadReportExport(reportArtifactUrl(id), `artifact_${id}`).catch((err) =>
-      alert((err as Error).message),
-    );
+    downloadReportExport(reportArtifactUrl(id), `artifact_${id}`).catch((err) => {
+      void alert({ message: (err as Error).message, variant: 'error' });
+    });
   }
 
   return (

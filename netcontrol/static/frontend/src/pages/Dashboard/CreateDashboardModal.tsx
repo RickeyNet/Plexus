@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { useCreateCustomDashboard, type DashboardVariable } from '@/api/dashboard';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function CreateDashboardModal({ isOpen, onClose }: Props) {
+  const { alert } = useDialogs();
   const create = useCreateCustomDashboard();
   const navigate = useNavigate();
   const [name, setName] = useState('');
@@ -48,7 +50,9 @@ export function CreateDashboardModal({ isOpen, onClose }: Props) {
           onClose();
           if (created?.id) navigate(`/dashboards/${created.id}`);
         },
-        onError: (err) => alert((err as Error).message),
+        onError: (err) => {
+          void alert({ message: (err as Error).message, variant: 'error' });
+        },
       },
     );
   };

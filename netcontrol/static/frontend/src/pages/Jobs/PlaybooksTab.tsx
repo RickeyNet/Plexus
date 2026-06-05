@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useDeletePlaybook, usePlaybooks, type Playbook } from '@/api/jobs';
 
 import { parseTags } from './helpers';
@@ -11,6 +12,7 @@ const PlaybookFormModal = lazy(() =>
 );
 
 export function PlaybooksTab() {
+  const { confirm, alert } = useDialogs();
   const query = usePlaybooks();
   const deleteMut = useDeletePlaybook();
   const [search, setSearch] = useState('');
@@ -31,9 +33,9 @@ export function PlaybooksTab() {
     });
   }, [query.data, search]);
 
-  function handleDelete(id: number) {
-    if (!confirm('Delete this playbook? This cannot be undone.')) return;
-    deleteMut.mutate(id, { onError: (e) => alert((e as Error).message) });
+  async function handleDelete(id: number) {
+    if (!(await confirm('Delete this playbook? This cannot be undone.'))) return;
+    deleteMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   return (

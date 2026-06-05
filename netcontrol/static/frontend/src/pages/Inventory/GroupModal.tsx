@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type InventoryGroupFull,
   useCreateInventoryGroup,
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function GroupModal({ group, isCreate, onClose }: Props) {
+  const { alert } = useDialogs();
   const create = useCreateInventoryGroup();
   const update = useUpdateInventoryGroup();
   const [name, setName] = useState(group?.name ?? '');
@@ -25,7 +27,7 @@ export function GroupModal({ group, isCreate, onClose }: Props) {
     e.preventDefault();
     const trimmedName = name.trim();
     if (!trimmedName) {
-      alert('Group name is required.');
+      void alert('Group name is required.');
       return;
     }
     try {
@@ -40,7 +42,7 @@ export function GroupModal({ group, isCreate, onClose }: Props) {
       }
       onClose();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

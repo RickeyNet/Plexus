@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useDeleteHostTemplate,
   useHostTemplates,
@@ -9,16 +10,17 @@ import {
 import { HostTemplateModal } from './HostTemplateModal';
 
 export function HostTemplatesTab() {
+  const { confirm, alert } = useDialogs();
   const query = useHostTemplates();
   const deleteMut = useDeleteHostTemplate();
   const [modalId, setModalId] = useState<number | 'new' | null>(null);
 
   const items: HostTemplate[] = query.data?.host_templates ?? [];
 
-  function handleDelete(id: number) {
-    if (!confirm('Delete this host template?')) return;
+  async function handleDelete(id: number) {
+    if (!(await confirm('Delete this host template?'))) return;
     deleteMut.mutate(id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 

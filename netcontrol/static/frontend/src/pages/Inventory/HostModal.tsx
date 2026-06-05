@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type InventoryGroupFull,
   type InventoryHost,
@@ -25,6 +26,7 @@ interface Props {
 }
 
 export function HostModal({ host, groupId, groups, onClose }: Props) {
+  const { alert } = useDialogs();
   const isEdit = host != null;
   const add = useAddHost();
   const update = useUpdateHost();
@@ -45,7 +47,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
     const h = hostname.trim();
     const ip = ipAddress.trim();
     if (!h || !ip) {
-      alert('Hostname and IP address are required.');
+      void alert('Hostname and IP address are required.');
       return;
     }
     try {
@@ -67,7 +69,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
       }
       onClose();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

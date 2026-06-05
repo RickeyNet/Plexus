@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { PageHelp } from '@/components/PageHelp';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import {
   type DhcpServer,
@@ -576,13 +577,16 @@ function SourcesCard({
   onEditSource,
   onSchedule,
 }: SourcesCardProps) {
+  const { confirm, alert } = useDialogs();
   const sync = useSyncIpamSource();
   const reconcile = useRunReconcile();
   const remove = useDeleteIpamSource();
 
   const handleSync = (id: number) => {
     sync.mutate(id, {
-      onError: (e) => alert(`Sync failed: ${(e as Error).message}`),
+      onError: (e) => {
+        void alert({ message: `Sync failed: ${(e as Error).message}`, variant: 'error' });
+      },
     });
   };
 
@@ -590,25 +594,32 @@ function SourcesCard({
     reconcile.mutate(id, {
       onSuccess: (result) => {
         const count = Number(result?.summary?.diff_count ?? 0);
-        alert(
+        void alert(
           count
             ? `Reconciliation complete - ${count} drift${count === 1 ? '' : 's'} detected.`
             : 'Reconciliation complete - no drift detected.',
         );
       },
-      onError: (e) => alert(`Reconciliation failed: ${(e as Error).message}`),
+      onError: (e) => {
+        void alert({
+          message: `Reconciliation failed: ${(e as Error).message}`,
+          variant: 'error',
+        });
+      },
     });
   };
 
-  const handleDelete = (id: number, name: string) => {
+  const handleDelete = async (id: number, name: string) => {
     if (
-      !confirm(
+      !(await confirm(
         `Delete IPAM source "${name}"? This also removes all synced prefixes and allocations.`,
-      )
+      ))
     )
       return;
     remove.mutate(id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 
@@ -792,6 +803,7 @@ interface ReconcileCardProps {
 }
 
 function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
+  const { alert } = useDialogs();
   const resolve = useResolveDiff();
   const sourceById = new Map(sources.map((s) => [s.id, s]));
   const recentRuns = runs.slice(0, 5);
@@ -802,7 +814,14 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
   ) => {
     resolve.mutate(
       { diffId, resolution },
-      { onError: (e) => alert(`Failed to resolve drift: ${(e as Error).message}`) },
+      {
+        onError: (e) => {
+          void alert({
+            message: `Failed to resolve drift: ${(e as Error).message}`,
+            variant: 'error',
+          });
+        },
+      },
     );
   };
 
@@ -988,20 +1007,28 @@ function DhcpCard({
   onAdd,
   onEdit,
 }: DhcpCardProps) {
+  const { confirm, alert } = useDialogs();
   const sync = useSyncDhcpServer();
   const remove = useDeleteDhcpServer();
 
   const handleSync = (id: number) => {
     sync.mutate(id, {
-      onError: (e) => alert(`DHCP sync failed: ${(e as Error).message}`),
+      onError: (e) => {
+        void alert({
+          message: `DHCP sync failed: ${(e as Error).message}`,
+          variant: 'error',
+        });
+      },
     });
   };
 
-  const handleDelete = (id: number) => {
-    if (!confirm('Delete this DHCP server and all cached scope/lease data?'))
+  const handleDelete = async (id: number) => {
+    if (!(await confirm('Delete this DHCP server and all cached scope/lease data?')))
       return;
     remove.mutate(id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 

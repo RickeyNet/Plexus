@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   StpDiscoveryConfig,
   TopologyDiscoveryConfig,
@@ -293,6 +294,7 @@ function StpDiscoverySection() {
 }
 
 function StpRootPoliciesSection() {
+  const { confirm, alert } = useDialogs();
   const groups = useInventoryGroupsList();
   const policies = useStpRootPolicies();
   const upsert = useUpsertStpRootPolicy();
@@ -476,11 +478,12 @@ function StpRootPoliciesSection() {
                 <button
                   className="btn btn-sm"
                   style={{ color: 'var(--danger)' }}
-                  onClick={() => {
-                    if (!confirm('Delete this STP root policy?')) return;
+                  onClick={async () => {
+                    if (!(await confirm('Delete this STP root policy?'))) return;
                     remove.mutate(p.id, {
-                      onError: (e) =>
-                        alert(`Failed to delete: ${(e as Error).message}`),
+                      onError: (e) => {
+                        void alert({ message: `Failed to delete: ${(e as Error).message}`, variant: 'error' });
+                      },
                     });
                   }}
                 >

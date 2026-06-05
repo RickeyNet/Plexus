@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useCreateGraphTemplate } from '@/api/graphTemplates';
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
+  const { alert } = useDialogs();
   const createMut = useCreateGraphTemplate();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -34,7 +36,7 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim()) {
-      alert('Name is required');
+      void alert('Name is required');
       return;
     }
     createMut.mutate(
@@ -51,7 +53,7 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
       },
       {
         onSuccess: handleClose,
-        onError: (err) => alert((err as Error).message),
+        onError: (err) => { void alert({ message: (err as Error).message, variant: 'error' }); },
       },
     );
   }

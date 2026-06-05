@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { PageHelp } from '@/components/PageHelp';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   FloorPlacement,
   GeoFloor,
@@ -26,6 +27,7 @@ import { useConfirmDeleteFloor } from './useConfirmDeleteFloor';
 type ModalKind = 'add-site' | 'add-floor' | 'edit-floor' | 'upload-image' | null;
 
 export function FloorPlan() {
+  const { alert } = useDialogs();
   const sites = useGeoOverview();
   const [siteId, setSiteId] = useState<number | null>(null);
   const [floorId, setFloorId] = useState<number | null>(null);
@@ -127,7 +129,10 @@ export function FloorPlan() {
             if (result.confirmed && result.ok) {
               setFloorId(null);
             } else if (result.confirmed && !result.ok) {
-              alert(`Failed to delete floor: ${result.error}`);
+              void alert({
+                message: `Failed to delete floor: ${result.error}`,
+                variant: 'error',
+              });
             }
           }}
           unplaced={unplaced}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCancelJob,
   useJob,
@@ -26,6 +27,7 @@ interface LiveEvent {
 }
 
 export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
+  const { alert } = useDialogs();
   const isOpen = jobId != null;
   const jobQuery = useJob(jobId);
   const eventsQuery = useJobEvents(jobId);
@@ -125,7 +127,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     if (!jobId) return;
     cancelMut.mutate(jobId, {
       onSuccess: () => setConfirmCancel(false),
-      onError: (e) => { setConfirmCancel(false); alert((e as Error).message); },
+      onError: (e) => { setConfirmCancel(false); void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 
@@ -133,7 +135,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     if (!jobId) return;
     retryMut.mutate(jobId, {
       onSuccess: (r) => { onRetried?.(r.job_id); },
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 
@@ -146,7 +148,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     if (!jobId) return;
     rerunMut.mutate(jobId, {
       onSuccess: (r) => { setConfirmRunLive(false); onRetried?.(r.job_id); },
-      onError: (e) => { setConfirmRunLive(false); alert((e as Error).message); },
+      onError: (e) => { setConfirmRunLive(false); void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 
@@ -157,7 +159,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     const lines = src
       .map((e) => `[${formatTime(e.timestamp)}] ${e.host ? e.host + ': ' : ''}${e.message}`)
       .join('\n');
-    navigator.clipboard.writeText(lines).catch(() => alert('Copy failed'));
+    navigator.clipboard.writeText(lines).catch(() => { void alert('Copy failed'); });
   }
 
   return (

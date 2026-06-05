@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useCredentials } from '@/api/compliance';
 import { useRevertDriftEvent } from '@/api/configuration';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   eventId: number | null;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function RevertDriftModal({ eventId, onClose, onJobStarted }: Props) {
+  const { alert } = useDialogs();
   const creds = useCredentials();
   const revert = useRevertDriftEvent();
   const [credentialId, setCredentialId] = useState<number | null>(null);
@@ -71,7 +73,9 @@ export function RevertDriftModal({ eventId, onClose, onJobStarted }: Props) {
                       onClose();
                       onJobStarted(res.job_id);
                     },
-                    onError: (e) => alert((e as Error).message),
+                    onError: (e) => {
+                      void alert({ message: (e as Error).message, variant: 'error' });
+                    },
                   },
                 );
               }}

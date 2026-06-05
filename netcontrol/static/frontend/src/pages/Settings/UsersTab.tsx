@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   AdminUser,
   useAccessGroups,
@@ -21,6 +22,7 @@ const formatDate = (raw?: string): string => {
 };
 
 export function UsersTab() {
+  const { confirm, alert } = useDialogs();
   const users = useAdminUsers();
   const groups = useAccessGroups();
   const remove = useDeleteAdminUser();
@@ -97,11 +99,12 @@ export function UsersTab() {
               <button
                 className="btn btn-sm"
                 style={{ color: 'var(--danger)' }}
-                onClick={() => {
-                  if (!confirm(`Delete @${u.username}?`)) return;
+                onClick={async () => {
+                  if (!(await confirm(`Delete @${u.username}?`))) return;
                   remove.mutate(u.id, {
-                    onError: (e) =>
-                      alert(`Failed to delete user: ${(e as Error).message}`),
+                    onError: (e) => {
+                      void alert({ message: `Failed to delete user: ${(e as Error).message}`, variant: 'error' });
+                    },
                   });
                 }}
               >

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useCreateIpamPrefix } from '@/api/ipam';
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export function DefineSubnetModal({ onClose }: Props) {
+  const { alert } = useDialogs();
   const create = useCreateIpamPrefix();
   const [subnet, setSubnet] = useState('');
   const [description, setDescription] = useState('');
@@ -16,7 +18,7 @@ export function DefineSubnetModal({ onClose }: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!subnet.trim()) {
-      alert('Subnet CIDR is required.');
+      void alert('Subnet CIDR is required.');
       return;
     }
     try {
@@ -27,7 +29,7 @@ export function DefineSubnetModal({ onClose }: Props) {
       });
       onClose();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

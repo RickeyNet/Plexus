@@ -10,6 +10,7 @@ import {
   type BillingCircuit,
   type BillingPeriod,
 } from '@/api/reports';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import { CircuitFormModal } from './CircuitFormModal';
 import { GenerateBillingModal } from './GenerateBillingModal';
@@ -17,6 +18,7 @@ import { BillingPeriodModal } from './BillingPeriodModal';
 import { formatBps } from './helpers';
 
 export function BillingTab() {
+  const { confirm, alert } = useDialogs();
   const [customer, setCustomer] = useState('');
   const [editingId, setEditingId] = useState<number | null | 'new'>(null);
   const [generating, setGenerating] = useState(false);
@@ -32,10 +34,12 @@ export function BillingTab() {
   const circuits: BillingCircuit[] = circuitsQuery.data?.circuits ?? [];
   const periods: BillingPeriod[] = periodsQuery.data?.periods ?? [];
 
-  function handleDelete(id: number) {
-    if (!confirm('Delete this billing circuit and all its periods?')) return;
+  async function handleDelete(id: number) {
+    if (!(await confirm('Delete this billing circuit and all its periods?'))) return;
     deleteMut.mutate(id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   }
 

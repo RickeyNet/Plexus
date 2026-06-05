@@ -6,6 +6,7 @@ import {
   useStartCaptureSingleJob,
 } from '@/api/configuration';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   onClose: () => void;
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
+  const { alert } = useDialogs();
   const groups = useInventoryGroups(true);
   const creds = useCredentials();
   const single = useStartCaptureSingleJob();
@@ -35,14 +37,16 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
     e.preventDefault();
     if (!credId) return;
     if (!hostId && !groupId) {
-      alert('Please select a host or group');
+      void alert('Please select a host or group');
       return;
     }
     const onSuccess = (res: { job_id: string }) => {
       onClose();
       onJobStarted(res.job_id);
     };
-    const onError = (err: unknown) => alert((err as Error).message);
+    const onError = (err: unknown) => {
+      void alert({ message: (err as Error).message, variant: 'error' });
+    };
     if (groupId) {
       group.mutate({ groupId, credentialId: credId }, { onSuccess, onError });
     } else if (hostId) {

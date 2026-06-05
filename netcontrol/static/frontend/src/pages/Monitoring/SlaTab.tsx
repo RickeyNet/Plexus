@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useInventoryGroupsFull } from '@/api/inventory';
 import {
   useCreateSlaTarget,
@@ -370,13 +371,14 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
 }
 
 function SlaTargetsTab({ targets }: { targets: SlaTarget[] }) {
+  const { confirm, alert } = useDialogs();
   const deleteMut = useDeleteSlaTarget();
   const [editing, setEditing] = useState<SlaTarget | null>(null);
   const [creating, setCreating] = useState(false);
 
-  function handleDelete(t: SlaTarget) {
-    if (!confirm(`Delete SLA target '${t.name}'?`)) return;
-    deleteMut.mutate(t.id, { onError: (e) => alert((e as Error).message) });
+  async function handleDelete(t: SlaTarget) {
+    if (!(await confirm(`Delete SLA target '${t.name}'?`))) return;
+    deleteMut.mutate(t.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   return (
@@ -424,6 +426,7 @@ function SlaTargetsTab({ targets }: { targets: SlaTarget[] }) {
 }
 
 function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget | null; isCreate: boolean; onClose: () => void }) {
+  const { alert } = useDialogs();
   const isOpen = isCreate || target != null;
   const createMut = useCreateSlaTarget();
   const updateMut = useUpdateSlaTarget();
@@ -458,7 +461,7 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim()) { alert('Name is required'); return; }
+    if (!name.trim()) { void alert('Name is required'); return; }
     const data: SlaTargetCreate = {
       name: name.trim(),
       metric,
@@ -470,12 +473,12 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
     if (target) {
       updateMut.mutate({ id: target.id, data }, {
         onSuccess: onClose,
-        onError: (e) => alert((e as Error).message),
+        onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
       });
     } else {
       createMut.mutate(data, {
         onSuccess: onClose,
-        onError: (e) => alert((e as Error).message),
+        onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
       });
     }
   }

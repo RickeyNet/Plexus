@@ -4,6 +4,7 @@ import {
   useRiskAnalysis,
 } from '@/api/riskAnalysis';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import {
   formatStamp,
@@ -46,6 +47,7 @@ interface Props {
 }
 
 export function AnalysisDetailModal({ isOpen, onClose, analysisId }: Props) {
+  const { alert } = useDialogs();
   const query = useRiskAnalysis(isOpen ? analysisId : null);
   const approve = useApproveRiskAnalysis();
 
@@ -65,7 +67,9 @@ export function AnalysisDetailModal({ isOpen, onClose, analysisId }: Props) {
             if (!query.data) return;
             approve.mutate(query.data.id, {
               onSuccess: () => onClose(),
-              onError: (e) => alert((e as Error).message),
+              onError: (e) => {
+                void alert({ message: (e as Error).message, variant: 'error' });
+              },
             });
           }}
           onClose={onClose}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 import { PageHelp } from '@/components/PageHelp';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import {
   type InventoryGroupFull,
@@ -56,6 +57,7 @@ type ModalState =
     };
 
 export function Inventory() {
+  const { confirm, alert } = useDialogs();
   const groupsQ = useInventoryGroupsFull(true);
   const profilesQ = useSnmpProfiles();
   const groups = useMemo(() => groupsQ.data ?? [], [groupsQ.data]);
@@ -145,41 +147,50 @@ export function Inventory() {
     ];
     setOrderOverride(next);
     reorder.mutate(next, {
-      onError: (err) => alert(`Failed to save group order: ${(err as Error).message}`),
+      onError: (err) => {
+        void alert({
+          message: `Failed to save group order: ${(err as Error).message}`,
+          variant: 'error',
+        });
+      },
     });
   };
 
-  const handleDeleteGroup = (g: InventoryGroupFull) => {
+  const handleDeleteGroup = async (g: InventoryGroupFull) => {
     if (
-      !confirm(
+      !(await confirm(
         `Delete group "${g.name}"? This will remove the group and all its hosts. This cannot be undone.`,
-      )
+      ))
     )
       return;
     deleteGroup.mutate(g.id, {
-      onError: (err) => alert((err as Error).message),
+      onError: (err) => {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      },
     });
   };
 
-  const handleDeleteHost = (host: InventoryHost) => {
+  const handleDeleteHost = async (host: InventoryHost) => {
     if (
-      !confirm(
+      !(await confirm(
         `Delete host "${host.hostname}"? This will permanently remove this host from the inventory.`,
-      )
+      ))
     )
       return;
     deleteHost.mutate(host.id, {
-      onError: (err) => alert((err as Error).message),
+      onError: (err) => {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      },
     });
   };
 
-  const handleBulkDelete = (groupId: number) => {
+  const handleBulkDelete = async (groupId: number) => {
     const ids = Array.from(selectedHosts.get(groupId) ?? []);
     if (!ids.length) return;
     if (
-      !confirm(
+      !(await confirm(
         `Delete ${ids.length} host(s)? This cannot be undone.`,
-      )
+      ))
     )
       return;
     bulkDelete.mutate(ids, {
@@ -190,7 +201,9 @@ export function Inventory() {
           return next;
         });
       },
-      onError: (err) => alert((err as Error).message),
+      onError: (err) => {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      },
     });
   };
 
@@ -321,7 +334,11 @@ export function Inventory() {
           onAssignProfile={(profileId) =>
             assignProfile.mutate(
               { groupId: group.id, profileId },
-              { onError: (e) => alert((e as Error).message) },
+              {
+                onError: (e) => {
+                  void alert({ message: (e as Error).message, variant: 'error' });
+                },
+              },
             )
           }
           onToggleCollapse={() => toggleCollapsed(group.id)}

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateGraphTreeNode,
   useGraphTree,
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function GraphTreeDetailModal({ treeId, onClose }: Props) {
+  const { alert } = useDialogs();
   const isOpen = treeId != null;
   const query = useGraphTree(treeId);
   const createNodeMut = useCreateGraphTreeNode();
@@ -24,7 +26,7 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
   function handleAddNode(e: FormEvent) {
     e.preventDefault();
     if (!title.trim() || treeId == null) {
-      alert('Title is required');
+      void alert('Title is required');
       return;
     }
     createNodeMut.mutate(
@@ -41,7 +43,7 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
           setAddingNode(false);
           setTitle(''); setNodeType('header'); setSortOrder('0');
         },
-        onError: (err) => alert((err as Error).message),
+        onError: (err) => { void alert({ message: (err as Error).message, variant: 'error' }); },
       },
     );
   }

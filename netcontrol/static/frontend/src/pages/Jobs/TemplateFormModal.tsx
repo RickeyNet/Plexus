@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateTemplate,
   useTemplate,
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export function TemplateFormModal({ mode, templateId, onClose }: Props) {
+  const { alert } = useDialogs();
   const isOpen = mode != null;
   const detailQuery = useTemplate(mode === 'edit' ? templateId : null);
   const createMut = useCreateTemplate();
@@ -55,7 +57,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim() || !content.trim()) {
-      alert('Name and content are required');
+      void alert('Name and content are required');
       return;
     }
     const data = {
@@ -64,7 +66,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
       description: description.trim(),
       device_type: deviceType,
     };
-    const onError = (err: unknown) => alert((err as Error).message);
+    const onError = (err: unknown) => { void alert({ message: (err as Error).message, variant: 'error' }); };
     if (mode === 'edit' && templateId != null) {
       updateMut.mutate({ id: templateId, data }, { onSuccess: onClose, onError });
     } else {

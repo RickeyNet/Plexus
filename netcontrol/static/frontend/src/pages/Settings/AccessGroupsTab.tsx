@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   AccessGroup,
   AdminCapabilities,
@@ -14,6 +15,7 @@ export function AccessGroupsTab({
 }: {
   capabilities: AdminCapabilities;
 }) {
+  const { confirm, alert } = useDialogs();
   const groups = useAccessGroups();
   const remove = useDeleteAccessGroup();
 
@@ -78,11 +80,12 @@ export function AccessGroupsTab({
               <button
                 className="btn btn-sm"
                 style={{ color: 'var(--danger)' }}
-                onClick={() => {
-                  if (!confirm(`Delete group '${g.name}'?`)) return;
+                onClick={async () => {
+                  if (!(await confirm(`Delete group '${g.name}'?`))) return;
                   remove.mutate(g.id, {
-                    onError: (e) =>
-                      alert(`Failed to delete group: ${(e as Error).message}`),
+                    onError: (e) => {
+                      void alert({ message: `Failed to delete group: ${(e as Error).message}`, variant: 'error' });
+                    },
                   });
                 }}
               >

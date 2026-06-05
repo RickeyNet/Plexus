@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type IpamSource,
   type IpamSourcePayload,
@@ -18,6 +19,7 @@ export function IpamSourceModal({ source, onClose }: Props) {
   const providers = useIpamProviders();
   const create = useCreateIpamSource();
   const update = useUpdateIpamSource();
+  const { alert } = useDialogs();
   const isEdit = source != null;
 
   const [provider, setProvider] = useState(source?.provider ?? '');
@@ -37,11 +39,11 @@ export function IpamSourceModal({ source, onClose }: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!provider) {
-      alert('Select a provider.');
+      void alert('Select a provider.');
       return;
     }
     if (!name.trim() || !baseUrl.trim()) {
-      alert('Name and base URL are required.');
+      void alert('Name and base URL are required.');
       return;
     }
     const auth_config: Record<string, string> = {};
@@ -73,7 +75,7 @@ export function IpamSourceModal({ source, onClose }: Props) {
       }
       onClose();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

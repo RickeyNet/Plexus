@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useCredentials } from '@/api/compliance';
 import { useFetchGroupSerials } from '@/api/inventory';
 
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function BulkSerialModal({ groupId, groupName, onClose }: Props) {
+  const { alert } = useDialogs();
   const credentials = useCredentials();
   const fetch = useFetchGroupSerials();
   const [credentialId, setCredentialId] = useState<number | null>(null);
@@ -20,7 +22,7 @@ export function BulkSerialModal({ groupId, groupName, onClose }: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (credentialId == null) {
-      alert('Select a credential.');
+      void alert('Select a credential.');
       return;
     }
     try {
@@ -29,14 +31,14 @@ export function BulkSerialModal({ groupId, groupName, onClose }: Props) {
       const failed = r.results.length - ok;
       onClose();
       if (failed === 0) {
-        alert(`Fetched ${ok} serial number${ok !== 1 ? 's' : ''}.`);
+        void alert(`Fetched ${ok} serial number${ok !== 1 ? 's' : ''}.`);
       } else {
-        alert(
+        void alert(
           `${ok} succeeded, ${failed} failed. Check device connectivity.`,
         );
       }
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

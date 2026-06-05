@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { type IpamSyncConfig, useUpdateIpamSyncConfig } from '@/api/ipam';
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function SyncScheduleModal({ config, onClose }: Props) {
+  const { alert } = useDialogs();
   const update = useUpdateIpamSyncConfig();
   const [enabled, setEnabled] = useState(config.enabled);
   const [intervalMin, setIntervalMin] = useState(
@@ -22,7 +24,7 @@ export function SyncScheduleModal({ config, onClose }: Props) {
       await update.mutateAsync({ enabled, interval_seconds });
       onClose();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

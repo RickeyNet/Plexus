@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type ConfigBackup,
   type ConfigBackupPolicy,
@@ -193,6 +194,7 @@ function PoliciesList({
   query: string;
   onEdit: (p: ConfigBackupPolicy) => void;
 }) {
+  const { confirm, alert } = useDialogs();
   const run = useRunBackupPolicy();
   const remove = useDeleteBackupPolicy();
   const filtered = useMemo(() => {
@@ -270,9 +272,11 @@ function PoliciesList({
                         let msg = `Backup complete: ${res.backed_up} saved, ${res.errors} errors`;
                         if (res.skipped)
                           msg += `, ${res.skipped} unchanged (skipped)`;
-                        alert(msg);
+                        void alert(msg);
                       },
-                      onError: (e) => alert((e as Error).message),
+                      onError: (e) => {
+                        void alert({ message: (e as Error).message, variant: 'error' });
+                      },
                     })
                   }
                 >
@@ -288,15 +292,17 @@ function PoliciesList({
                 <button
                   type="button"
                   className="btn btn-sm btn-danger"
-                  onClick={() => {
+                  onClick={async () => {
                     if (
-                      !confirm(
+                      !(await confirm(
                         `Delete the backup policy "${p.name}"? This cannot be undone.`,
-                      )
+                      ))
                     )
                       return;
                     remove.mutate(p.id, {
-                      onError: (e) => alert((e as Error).message),
+                      onError: (e) => {
+                        void alert({ message: (e as Error).message, variant: 'error' });
+                      },
                     });
                   }}
                 >
@@ -336,6 +342,7 @@ function HistoryList({
   onDiff: (id: number) => void;
   onRestore: (id: number) => void;
 }) {
+  const { confirm, alert } = useDialogs();
   const remove = useDeleteBackup();
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -440,15 +447,17 @@ function HistoryList({
                 <button
                   type="button"
                   className="btn btn-sm btn-danger"
-                  onClick={() => {
+                  onClick={async () => {
                     if (
-                      !confirm(
+                      !(await confirm(
                         'Delete this backup? This cannot be undone.',
-                      )
+                      ))
                     )
                       return;
                     remove.mutate(b.id, {
-                      onError: (e) => alert((e as Error).message),
+                      onError: (e) => {
+                        void alert({ message: (e as Error).message, variant: 'error' });
+                      },
                     });
                   }}
                 >

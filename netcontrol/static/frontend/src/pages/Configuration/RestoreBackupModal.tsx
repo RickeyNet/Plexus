@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useCredentials } from '@/api/compliance';
 import { useRestoreBackup } from '@/api/configuration';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   backupId: number | null;
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function RestoreBackupModal({ backupId, onClose }: Props) {
+  const { alert } = useDialogs();
   const creds = useCredentials();
   const restore = useRestoreBackup();
   const [credId, setCredId] = useState<number | null>(null);
@@ -27,9 +29,11 @@ export function RestoreBackupModal({ backupId, onClose }: Props) {
           const msg = res.validated
             ? `Restore validated successfully for ${res.hostname}. No config differences detected.`
             : `Restore completed for ${res.hostname} but validation found ${res.lines_changed} line(s) changed.\n\n${res.diff_text || ''}`;
-          alert(msg);
+          void alert(msg);
         },
-        onError: (err) => alert((err as Error).message),
+        onError: (err) => {
+          void alert({ message: (err as Error).message, variant: 'error' });
+        },
       },
     );
   };

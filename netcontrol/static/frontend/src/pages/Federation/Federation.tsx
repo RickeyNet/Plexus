@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { PageHelp } from '@/components/PageHelp';
 import { UntestedBanner } from '@/components/UntestedBanner';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   FederationOverview,
   FederationOverviewTotals,
@@ -237,6 +238,7 @@ function PeerTable({
 }
 
 function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void }) {
+  const { confirm, alert } = useDialogs();
   const test = useTestFederationPeer();
   const sync = useSyncFederationPeer();
   const remove = useDeleteFederationPeer();
@@ -274,14 +276,17 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
               try {
                 const result = await test.mutateAsync(peer.id);
                 if (result.status === 'ok') {
-                  alert(
+                  void alert(
                     `Connection OK - remote version: ${result.remote_version || 'unknown'}`,
                   );
                 } else {
-                  alert(`Connection failed: ${result.message || 'Unknown error'}`);
+                  void alert(`Connection failed: ${result.message || 'Unknown error'}`);
                 }
               } catch (err) {
-                alert(`Test failed: ${err instanceof Error ? err.message : String(err)}`);
+                void alert({
+                  message: `Test failed: ${err instanceof Error ? err.message : String(err)}`,
+                  variant: 'error',
+                });
               }
             }}
           >
@@ -296,7 +301,10 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
               try {
                 await sync.mutateAsync(peer.id);
               } catch (err) {
-                alert(`Sync failed: ${err instanceof Error ? err.message : String(err)}`);
+                void alert({
+                  message: `Sync failed: ${err instanceof Error ? err.message : String(err)}`,
+                  variant: 'error',
+                });
               }
             }}
           >
@@ -317,15 +325,18 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
             title="Delete"
             onClick={async () => {
               if (
-                !confirm(
+                !(await confirm(
                   `Delete peer "${peer.name}"?\n\nThis will remove the peer and all cached sync data.`,
-                )
+                ))
               )
                 return;
               try {
                 await remove.mutateAsync(peer.id);
               } catch (err) {
-                alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+                void alert({
+                  message: `Delete failed: ${err instanceof Error ? err.message : String(err)}`,
+                  variant: 'error',
+                });
               }
             }}
           >

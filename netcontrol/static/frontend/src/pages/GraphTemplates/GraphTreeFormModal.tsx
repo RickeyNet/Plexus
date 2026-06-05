@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateGraphTree,
   useGraphTree,
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function GraphTreeFormModal({ mode, treeId, onClose }: Props) {
+  const { alert } = useDialogs();
   const isOpen = mode != null;
   const query = useGraphTree(mode === 'edit' ? treeId : null);
   const createMut = useCreateGraphTree();
@@ -34,11 +36,11 @@ export function GraphTreeFormModal({ mode, treeId, onClose }: Props) {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim()) {
-      alert('Name is required');
+      void alert('Name is required');
       return;
     }
     const data = { name: name.trim(), description: description.trim() };
-    const onError = (err: unknown) => alert((err as Error).message);
+    const onError = (err: unknown) => { void alert({ message: (err as Error).message, variant: 'error' }); };
     if (mode === 'edit' && treeId != null) {
       updateMut.mutate({ id: treeId, data }, { onSuccess: onClose, onError });
     } else {

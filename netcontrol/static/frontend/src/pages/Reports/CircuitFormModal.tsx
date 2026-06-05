@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useInventoryGroupsFull } from '@/api/inventory';
 import {
   useBillingCircuit,
@@ -25,6 +26,7 @@ export function CircuitFormModal({ mode, circuitId, onClose }: Props) {
 }
 
 function CreateMode({ onClose }: { onClose: () => void }) {
+  const { alert } = useDialogs();
   const groupsQuery = useInventoryGroupsFull(true);
   const createMut = useCreateBillingCircuit();
 
@@ -52,7 +54,7 @@ function CreateMode({ onClose }: { onClose: () => void }) {
     const hid = parseInt(hostId, 10);
     const idx = parseInt(ifIndex, 10);
     if (!hid || isNaN(idx)) {
-      alert('Device and interface index are required');
+      void alert('Device and interface index are required');
       return;
     }
     const payload: BillingCircuitCreate = {
@@ -71,7 +73,9 @@ function CreateMode({ onClose }: { onClose: () => void }) {
     };
     createMut.mutate(payload, {
       onSuccess: onClose,
-      onError: (err) => alert((err as Error).message),
+      onError: (err) => {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      },
     });
   }
 
@@ -124,6 +128,7 @@ function CreateMode({ onClose }: { onClose: () => void }) {
 }
 
 function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => void }) {
+  const { alert } = useDialogs();
   const query = useBillingCircuit(circuitId);
   const updateMut = useUpdateBillingCircuit();
 
@@ -161,7 +166,9 @@ function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => vo
     };
     updateMut.mutate({ id: circuitId, data }, {
       onSuccess: onClose,
-      onError: (err) => alert((err as Error).message),
+      onError: (err) => {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      },
     });
   }
 

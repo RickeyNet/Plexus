@@ -5,6 +5,7 @@ import {
   useRunOfflineRiskAnalysis,
 } from '@/api/riskAnalysis';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   isOpen: boolean;
@@ -20,6 +21,7 @@ const CHANGE_TYPES = [
 ];
 
 export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
+  const { alert } = useDialogs();
   const run = useRunOfflineRiskAnalysis();
   const [changeType, setChangeType] = useState('manual');
   const [config, setConfig] = useState('');
@@ -30,11 +32,11 @@ export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
     const c = config.trim();
     const t = commands.trim();
     if (!c) {
-      alert('Current config is required');
+      void alert('Current config is required');
       return;
     }
     if (!t) {
-      alert('Proposed commands are required');
+      void alert('Proposed commands are required');
       return;
     }
     run.mutate(
@@ -50,7 +52,12 @@ export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           onClose();
           onAnalyzed(result);
         },
-        onError: (err) => alert(`Offline analysis failed: ${(err as Error).message}`),
+        onError: (err) => {
+          void alert({
+            message: `Offline analysis failed: ${(err as Error).message}`,
+            variant: 'error',
+          });
+        },
       },
     );
   };

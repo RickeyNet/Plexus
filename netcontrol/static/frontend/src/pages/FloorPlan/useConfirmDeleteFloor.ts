@@ -1,9 +1,11 @@
 import { GeoFloor, useDeleteGeoFloor } from '@/api/floorPlan';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 export function useConfirmDeleteFloor() {
   const remove = useDeleteGeoFloor();
+  const { confirm } = useDialogs();
   return async (floor: GeoFloor) => {
-    if (!confirm(`Delete floor "${floor.name}" and all its device pins?`)) {
+    if (!(await confirm(`Delete floor "${floor.name}" and all its device pins?`))) {
       return { confirmed: false as const };
     }
     try {

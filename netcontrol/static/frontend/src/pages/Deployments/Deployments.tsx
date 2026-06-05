@@ -10,6 +10,7 @@ import {
   useExecuteDeployment,
   useRollbackDeployment,
 } from '@/api/deployments';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import { DeploymentCorrelationModal } from './DeploymentCorrelationModal';
 import { DeploymentDetailModal } from './DeploymentDetailModal';
@@ -269,6 +270,7 @@ function DeploymentRow({
   onExecuted: (r: DeploymentJobStartResult) => void;
   onRolledBack: (r: DeploymentJobStartResult) => void;
 }) {
+  const { confirm, alert } = useDialogs();
   const execute = useExecuteDeployment();
   const rollback = useRollbackDeployment();
   const remove = useDeleteDeployment();
@@ -277,36 +279,42 @@ function DeploymentRow({
   const created = formatStamp(deployment.created_at);
   const finished = formatStamp(deployment.finished_at);
 
-  const handleExecute = () => {
+  const handleExecute = async () => {
     if (
-      !confirm(
+      !(await confirm(
         'Execute this deployment? Pre-deployment snapshots will be captured before pushing config changes.',
-      )
+      ))
     )
       return;
     execute.mutate(deployment.id, {
       onSuccess: onExecuted,
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 
-  const handleRollback = () => {
+  const handleRollback = async () => {
     if (
-      !confirm(
+      !(await confirm(
         'Roll back this deployment? Pre-deployment config snapshots will be restored to all hosts.',
-      )
+      ))
     )
       return;
     rollback.mutate(deployment.id, {
       onSuccess: onRolledBack,
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 
-  const handleDelete = () => {
-    if (!confirm('Delete this deployment and all its checkpoints/snapshots?')) return;
+  const handleDelete = async () => {
+    if (!(await confirm('Delete this deployment and all its checkpoints/snapshots?'))) return;
     remove.mutate(deployment.id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 

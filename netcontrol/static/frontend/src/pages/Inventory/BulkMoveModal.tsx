@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { type InventoryGroupFull, useMoveHosts } from '@/api/inventory';
 
 interface Props {
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props) {
+  const { alert } = useDialogs();
   const move = useMoveHosts();
   const candidates = groups.filter((g) => g.id !== sourceGroupId);
   const [targetGroupId, setTargetGroupId] = useState<number>(
@@ -24,7 +26,7 @@ export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props
       await move.mutateAsync({ hostIds, targetGroupId });
       onClose();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

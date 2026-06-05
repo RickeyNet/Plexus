@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useDeleteOidProfile, useOidProfiles, type OidProfile } from '@/api/reports';
 
 import { OidProfileModal } from './OidProfileModal';
@@ -16,6 +17,7 @@ const VENDOR_DEFAULTS: { vendor: string; metric: string; oid: string }[] = [
 ];
 
 export function OidProfilesTab() {
+  const { confirm, alert } = useDialogs();
   const [vendor, setVendor] = useState('');
   const query = useOidProfiles(vendor || null);
   const del = useDeleteOidProfile();
@@ -34,10 +36,10 @@ export function OidProfilesTab() {
     return [...set];
   }, [profiles]);
 
-  function handleDelete(id: number) {
-    if (!confirm('Delete this OID profile?')) return;
+  async function handleDelete(id: number) {
+    if (!(await confirm('Delete this OID profile?'))) return;
     del.mutate(id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 

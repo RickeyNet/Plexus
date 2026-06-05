@@ -7,6 +7,7 @@ import {
   useUpdateBackupPolicy,
 } from '@/api/configuration';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   policy: ConfigBackupPolicy | null; // null = create mode
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function BackupPolicyModal({ policy, onClose }: Props) {
+  const { alert } = useDialogs();
   const isEdit = policy != null;
   const groups = useInventoryGroups();
   const creds = useCredentials();
@@ -45,7 +47,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
-      alert('Name is required');
+      void alert('Name is required');
       return;
     }
     const interval_seconds = Math.max(1, hours) * 3600;
@@ -64,7 +66,9 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
         },
         {
           onSuccess: () => onClose(),
-          onError: (err) => alert((err as Error).message),
+          onError: (err) => {
+            void alert({ message: (err as Error).message, variant: 'error' });
+          },
         },
       );
     } else {
@@ -79,7 +83,9 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
         },
         {
           onSuccess: () => onClose(),
-          onError: (err) => alert((err as Error).message),
+          onError: (err) => {
+            void alert({ message: (err as Error).message, variant: 'error' });
+          },
         },
       );
     }

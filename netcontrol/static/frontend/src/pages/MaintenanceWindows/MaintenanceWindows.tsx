@@ -10,6 +10,7 @@ import {
   useMaintenanceWindows,
 } from '@/api/maintenanceWindows';
 import { PageHelp } from '@/components/PageHelp';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import { MaintenanceWindowModal } from './MaintenanceWindowModal';
 
@@ -46,6 +47,7 @@ function describeScope(w: MaintenanceWindow): string {
 }
 
 export function MaintenanceWindows() {
+  const { confirm, alert } = useDialogs();
   const windows = useMaintenanceWindows();
   const groups = useInventoryGroupsFull(false);
   const deleteMut = useDeleteMaintenanceWindow();
@@ -61,10 +63,10 @@ export function MaintenanceWindows() {
     });
   }, [windows.data]);
 
-  const handleDelete = (w: MaintenanceWindow) => {
-    if (!confirm(`Delete maintenance window "${w.name}"?`)) return;
+  const handleDelete = async (w: MaintenanceWindow) => {
+    if (!(await confirm(`Delete maintenance window "${w.name}"?`))) return;
     deleteMut.mutate(w.id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => void alert({ message: (e as Error).message, variant: 'error' }),
     });
   };
 

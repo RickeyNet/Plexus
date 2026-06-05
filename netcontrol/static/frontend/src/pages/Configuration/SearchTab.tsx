@@ -4,6 +4,7 @@ import {
   type ConfigBackupSearchResult,
   useSearchConfigBackups,
 } from '@/api/configuration';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import { BackupDetailModal } from './BackupDetailModal';
 import { BackupDiffModal } from './BackupDiffModal';
@@ -27,6 +28,7 @@ const MODE_HINTS: Record<Mode, { placeholder: string; example: string }> = {
 };
 
 export function SearchTab() {
+  const { alert } = useDialogs();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<Mode>('fulltext');
   const [limit, setLimit] = useState(50);
@@ -39,7 +41,7 @@ export function SearchTab() {
   const handleSearch = () => {
     const q = query.trim();
     if (!q) {
-      alert('Enter text to search in configuration backups.');
+      void alert('Enter text to search in configuration backups.');
       return;
     }
     const safeLimit = Math.max(1, Math.min(200, limit));

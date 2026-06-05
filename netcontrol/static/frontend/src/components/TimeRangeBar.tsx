@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import { invalidateMetricQueries } from '@/lib/invalidateMetricQueries';
 import { useTimeRange, type TimeRangePreset } from '@/lib/timeRange-context';
 
@@ -15,6 +16,7 @@ const PRESET_LABELS: Record<TimeRangePreset, string> = {
 };
 
 export function TimeRangeBar() {
+  const { alert } = useDialogs();
   const { range, customStart, customEnd, setRange, setCustomRange } = useTimeRange();
   const qc = useQueryClient();
   const [start, setStart] = useState(customStart ?? '');
@@ -22,7 +24,7 @@ export function TimeRangeBar() {
 
   function applyCustom() {
     if (!start || !end) {
-      alert('Please select both start and end times');
+      void alert('Please select both start and end times');
       return;
     }
     setCustomRange(start, end);

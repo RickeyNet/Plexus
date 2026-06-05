@@ -8,6 +8,7 @@ import {
   useRiskAnalyses,
   useRiskAnalysisSummary,
 } from '@/api/riskAnalysis';
+import { type DialogApi, useDialogs } from '@/components/DialogProvider-context';
 
 import { AnalysisDetailModal } from './AnalysisDetailModal';
 import { NewAnalysisModal } from './NewAnalysisModal';
@@ -31,6 +32,7 @@ const LEVEL_FILTERS = [
 ];
 
 export function RiskAnalysis() {
+  const { confirm } = useDialogs();
   const summary = useRiskAnalysisSummary();
   const analyses = useRiskAnalyses(200);
 
@@ -125,7 +127,7 @@ export function RiskAnalysis() {
       <NewAnalysisModal
         isOpen={showNew}
         onClose={() => setShowNew(false)}
-        onAnalyzed={(result) => showRunResult(result, setDetailId)}
+        onAnalyzed={(result) => showRunResult(result, setDetailId, confirm)}
       />
       <OfflineAnalysisModal
         isOpen={showOffline}
@@ -141,9 +143,10 @@ export function RiskAnalysis() {
   );
 }
 
-function showRunResult(
+async function showRunResult(
   result: RiskAnalysisRunResult,
   setDetailId: (id: number) => void,
+  confirm: DialogApi['confirm'],
 ) {
   const percent = scorePercent(result.risk_score);
   const areas = result.affected_areas?.length ? result.affected_areas.join(', ') : 'None';
@@ -151,7 +154,7 @@ function showRunResult(
     `Hosts analyzed: ${result.hosts_analyzed}\n` +
     `Compliance violations: ${result.total_compliance_violations}\n` +
     `Affected areas: ${areas}\n\nOpen full details?`;
-  if (confirm(msg)) setDetailId(result.id);
+  if (await confirm(msg)) setDetailId(result.id);
 }
 
 function SummaryStrip({ summary }: { summary?: RiskAnalysisSummary }) {
@@ -228,6 +231,7 @@ function AnalysisList({
 }
 
 function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: () => void }) {
+  const { confirm, alert } = useDialogs();
   const remove = useDeleteRiskAnalysis();
   const color = levelColor(analysis.risk_level);
   const percent = scorePercent(analysis.risk_score);
@@ -292,10 +296,12 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
           <button
             className="btn btn-sm"
             style={{ color: 'var(--danger)' }}
-            onClick={() => {
-              if (!confirm('Delete this risk analysis?')) return;
+            onClick={async () => {
+              if (!(await confirm('Delete this risk analysis?'))) return;
               remove.mutate(analysis.id, {
-                onError: (e) => alert((e as Error).message),
+                onError: (e) => {
+                  void alert({ message: (e as Error).message, variant: 'error' });
+                },
               });
             }}
           >

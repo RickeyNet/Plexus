@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type SnmpProfile,
   useCreateSnmpProfile,
@@ -19,6 +20,7 @@ type View =
   | { mode: 'edit'; profile: SnmpProfile };
 
 export function SnmpProfilesModal({ onClose }: Props) {
+  const { confirm, alert } = useDialogs();
   const profiles = useSnmpProfiles();
   const remove = useDeleteSnmpProfile();
   const [view, setView] = useState<View>({ mode: 'list' });
@@ -80,15 +82,17 @@ export function SnmpProfilesModal({ onClose }: Props) {
                 <button
                   type="button"
                   className="btn btn-sm btn-danger"
-                  onClick={() => {
+                  onClick={async () => {
                     if (
-                      !confirm(
+                      !(await confirm(
                         `Delete SNMP profile "${p.name}"? Any groups using it will be unassigned.`,
-                      )
+                      ))
                     )
                       return;
                     remove.mutate(p.id, {
-                      onError: (e) => alert((e as Error).message),
+                      onError: (e) => {
+                        void alert({ message: (e as Error).message, variant: 'error' });
+                      },
                     });
                   }}
                 >
@@ -128,6 +132,7 @@ interface FormProps {
 }
 
 function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
+  const { alert } = useDialogs();
   const create = useCreateSnmpProfile();
   const update = useUpdateSnmpProfile();
   const isEdit = profile != null;
@@ -157,7 +162,7 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) {
-      alert('Profile name is required.');
+      void alert('Profile name is required.');
       return;
     }
     const payload = {
@@ -185,7 +190,7 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
       }
       onBack();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

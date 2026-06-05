@@ -13,6 +13,7 @@ import {
   useRollbackDeployment,
 } from '@/api/deployments';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import {
   canExecute,
@@ -89,6 +90,7 @@ function DetailBody({
   onRolledBack: (r: DeploymentJobStartResult) => void;
   onShowCorrelation: (id: number) => void;
 }) {
+  const { confirm, alert } = useDialogs();
   const execute = useExecuteDeployment();
   const rollback = useRollbackDeployment();
   const approve = useApproveDeployment();
@@ -113,33 +115,37 @@ function DetailBody({
   const preSnaps = snapshots.filter((s) => s.phase === 'pre');
   const postSnaps = snapshots.filter((s) => s.phase === 'post');
 
-  const handleExecute = () => {
+  const handleExecute = async () => {
     if (approvalBlocking) {
-      alert('This deployment is awaiting approval and cannot be executed.');
+      void alert('This deployment is awaiting approval and cannot be executed.');
       return;
     }
     if (
-      !confirm(
+      !(await confirm(
         'Execute this deployment? Pre-deployment snapshots will be captured before pushing config changes.',
-      )
+      ))
     )
       return;
     execute.mutate(deployment.id, {
       onSuccess: onExecuted,
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 
-  const handleRollback = () => {
+  const handleRollback = async () => {
     if (
-      !confirm(
+      !(await confirm(
         'Roll back this deployment? Pre-deployment config snapshots will be restored to all hosts.',
-      )
+      ))
     )
       return;
     rollback.mutate(deployment.id, {
       onSuccess: onRolledBack,
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 
@@ -208,14 +214,23 @@ function DetailBody({
             onApprove={() =>
               approve.mutate(
                 { id: deployment.id, comment: approvalComment },
-                { onError: (e) => alert((e as Error).message) },
+                {
+                  onError: (e) => {
+                    void alert({ message: (e as Error).message, variant: 'error' });
+                  },
+                },
               )
             }
-            onReject={() => {
-              if (!confirm('Reject this deployment? It will need a fresh approval request.')) return;
+            onReject={async () => {
+              if (!(await confirm('Reject this deployment? It will need a fresh approval request.')))
+                return;
               reject.mutate(
                 { id: deployment.id, comment: approvalComment },
-                { onError: (e) => alert((e as Error).message) },
+                {
+                  onError: (e) => {
+                    void alert({ message: (e as Error).message, variant: 'error' });
+                  },
+                },
               );
             }}
           />
@@ -229,7 +244,9 @@ function DetailBody({
               disabled={requestApproval.isPending}
               onClick={() =>
                 requestApproval.mutate(deployment.id, {
-                  onError: (e) => alert((e as Error).message),
+                  onError: (e) => {
+                    void alert({ message: (e as Error).message, variant: 'error' });
+                  },
                 })
               }
             >
