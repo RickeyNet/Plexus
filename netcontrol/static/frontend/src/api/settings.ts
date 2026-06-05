@@ -427,7 +427,10 @@ export function useSiemSinks() {
   return useQuery<SiemSinksResponse>({
     queryKey: ['admin', 'siem-sinks'],
     queryFn: () => apiRequest('/admin/siem-sinks'),
-    refetchInterval: 10_000,
+    // Only polls while the SIEM settings tab is mounted. 15s keeps delivery
+    // stats reasonably live for an admin watching a queue drain without
+    // hammering the endpoint.
+    refetchInterval: 15_000,
   });
 }
 
