@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { PageHelp } from '@/components/PageHelp';
+import { UntestedBanner } from '@/components/UntestedBanner';
 import {
   FederationOverview,
   FederationOverviewTotals,
@@ -33,6 +34,8 @@ export function Federation() {
           Add Peer
         </button>
       </div>
+
+      <UntestedBanner feature="Federation" />
 
       <PageHelp
         pageKey="federation"

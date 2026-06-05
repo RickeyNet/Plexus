@@ -313,6 +313,12 @@ FEATURE_VISIBILITY_CATALOG = [
 
 FEATURE_VISIBILITY_KEYS = {entry["key"] for entry in FEATURE_VISIBILITY_CATALOG}
 
+# Experimental features hidden from the nav on a fresh install (no stored
+# feature_visibility setting yet). They remain fully routable and gateable;
+# the pages carry a "not yet tested" disclaimer. Admins can re-enable them
+# under Settings -> Features, after which the stored setting takes over.
+DEFAULT_HIDDEN_FEATURES = ["cloud-visibility", "federation"]
+
 
 def _sanitize_feature_visibility(hidden: list) -> list[str]:
     """Filter input to only known visibility keys, preserving catalog order."""
@@ -357,7 +363,7 @@ SYSLOG_CONFIG = dict(SYSLOG_DEFAULTS)
 # SIEM audit-event forwarding sinks. List of siem_forwarder.SinkConfig
 # (loaded at startup; mutated by /api/admin/siem-sinks endpoints).
 SIEM_SINKS: list = []
-FEATURE_VISIBILITY_HIDDEN: list[str] = []
+FEATURE_VISIBILITY_HIDDEN: list[str] = list(DEFAULT_HIDDEN_FEATURES)
 
 CLOUD_FLOW_SYNC_DEFAULTS = {
     "enabled": False,
