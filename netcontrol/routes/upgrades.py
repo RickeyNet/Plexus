@@ -157,8 +157,8 @@ async def rehydrate_scheduled_upgrades():
 
     Queries for any campaign with status='scheduled_activate' and a persisted
     scheduled_at time.  If scheduled_at is still in the future the task sleeps
-    until that time; if it has already passed the phase runs immediately so the
-    operator sees it complete rather than being silently lost.
+    until that time; if it has already passed the campaign is marked missed so
+    the operator can reschedule instead of triggering an out-of-window reload.
     """
     try:
         campaigns = await db.get_all_upgrade_campaigns()
@@ -178,6 +178,16 @@ async def rehydrate_scheduled_upgrades():
             )
             try:
                 await db.update_upgrade_campaign(campaign["id"], status="activate_failed")
+                op = await db.get_latest_upgrade_operation(
+                    campaign["id"], phase="activate", statuses=("scheduled", "running")
+                )
+                if op:
+                    await db.update_upgrade_operation(
+                        op["id"],
+                        status="activate_failed",
+                        completed_at=_utc_now_iso(),
+                        error_message="Scheduled activate had no persisted run time; reschedule required.",
+                    )
             except Exception:
                 pass
             continue
@@ -231,6 +241,19 @@ async def rehydrate_scheduled_upgrades():
             LOGGER.exception("Campaign %s rehydration failed resolving credentials/devices", campaign_id)
             try:
                 await db.update_upgrade_campaign(campaign_id, status="activate_failed")
+                op = await db.get_latest_upgrade_operation(
+                    campaign_id, phase="activate", statuses=("scheduled", "running")
+                )
+                if op:
+                    await db.update_upgrade_operation(
+                        op["id"],
+                        status="activate_failed",
+                        completed_at=_utc_now_iso(),
+                        error_message=(
+                            "Scheduled activate could not be rehydrated; "
+                            "check credentials/devices and reschedule."
+                        ),
+                    )
             except Exception:
                 pass
             continue
@@ -249,6 +272,20 @@ async def rehydrate_scheduled_upgrades():
                     status="activate_missed",
                     scheduled_at=None,
                 )
+                op = await db.get_latest_upgrade_operation(
+                    campaign_id, phase="activate", statuses=("scheduled", "running")
+                )
+                if op:
+                    await db.update_upgrade_operation(
+                        op["id"],
+                        status="activate_missed",
+                        scheduled_at=scheduled_at_utc.isoformat(),
+                        completed_at=_utc_now_iso(),
+                        error_message=(
+                            "Scheduled activate window was missed due to a server restart; "
+                            "reschedule required."
+                        ),
+                    )
                 await _emit(
                     campaign_id,
                     None,
@@ -265,6 +302,19 @@ async def rehydrate_scheduled_upgrades():
             campaign_id,
             scheduled_at_utc.isoformat(),
         )
+        op = await db.get_latest_upgrade_operation(
+            campaign_id, phase="activate", statuses=("scheduled", "running")
+        )
+        if op:
+            operation_id = op["id"]
+        else:
+            operation_id = await db.create_upgrade_operation(
+                campaign_id,
+                "activate",
+                "scheduled",
+                device_count=len(devices),
+                scheduled_at=scheduled_at_utc.isoformat(),
+            )
 
         async def _run_rehydrated(
             _cid=campaign_id,
@@ -273,20 +323,28 @@ async def rehydrate_scheduled_upgrades():
             _creds=credentials,
             _imap=image_map,
             _opts=options,
+            _opid=operation_id,
         ):
             delay_seconds = (_sat - datetime.now(UTC)).total_seconds()
             if delay_seconds > 0:
                 await _emit(_cid, None, "info", f"Resuming scheduled activate (rehydrated after restart); fires at {_sat.isoformat()}")
                 await asyncio.sleep(delay_seconds)
             await db.update_upgrade_campaign(_cid, status="running_activate", scheduled_at=None)
+            await db.update_upgrade_operation(
+                _opid,
+                status="running",
+                started_at=_utc_now_iso(),
+            )
             await _emit(_cid, None, "info", "Starting activate phase now")
-            await _run_phase(_cid, "activate", _devs, _creds, _imap, _opts)
+            await _run_phase(_cid, "activate", _devs, _creds, _imap, _opts, operation_id=_opid)
 
         task = asyncio.create_task(_run_rehydrated())
         _running_campaigns[campaign_id] = task
+        _running_campaign_operations[campaign_id] = operation_id
 
         def _on_done(t, _cid=campaign_id):
             _running_campaigns.pop(_cid, None)
+            _running_campaign_operations.pop(_cid, None)
 
         task.add_done_callback(_on_done)
 
@@ -336,6 +394,7 @@ class CampaignDeviceCancelRequest(BaseModel):
 _campaign_sockets: dict[int, list[WebSocket]] = {}
 _campaign_sockets_lock = asyncio.Lock()
 _running_campaigns: dict[int, asyncio.Task] = {}
+_running_campaign_operations: dict[int, int] = {}
 
 _SUPPORTED_PHASES = ("prestage", "transfer", "activate", "verify", "verify_prestage")
 _PHASE_STATUS_KEY = {
@@ -361,6 +420,10 @@ def _phase_status_key(phase: str) -> str:
 
 def _phase_label(phase: str) -> str:
     return _PHASE_LABEL.get(phase, phase.replace("_", " ").title())
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 # ── Helper: broadcast event to WebSocket subscribers ─────────────────────────
@@ -699,6 +762,7 @@ async def get_campaign(campaign_id: int):
     campaign = await _repair_stale_running_campaign(campaign)
     campaign["is_actively_running"] = campaign_id in _running_campaigns
     campaign["devices"] = await db.get_upgrade_devices(campaign_id)
+    campaign["operations"] = await db.get_upgrade_operations(campaign_id)
     return campaign
 
 
@@ -908,6 +972,17 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     # image_map: {"pattern": "image_filename", ...}
     # Sort by pattern length descending for specificity matching
     image_map = sorted(image_map_raw.items(), key=lambda x: len(x[0]), reverse=True)
+    operation_id = await db.create_upgrade_operation(
+        campaign_id,
+        body.phase,
+        "scheduled" if scheduled_at_utc is not None else "running",
+        requested_by=user,
+        device_count=len(devices),
+        scheduled_at=(
+            scheduled_at_utc.isoformat() if scheduled_at_utc is not None else None
+        ),
+        started_at=None if scheduled_at_utc is not None else _utc_now_iso(),
+    )
 
     if scheduled_at_utc is not None:
         await db.update_upgrade_campaign(
@@ -940,8 +1015,21 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
                 status=f"running_{body.phase}",
                 scheduled_at=None,
             )
+            await db.update_upgrade_operation(
+                operation_id,
+                status="running",
+                started_at=_utc_now_iso(),
+            )
             await _emit(campaign_id, None, "info", f"Starting scheduled {body.phase} phase now")
-            await _run_phase(campaign_id, body.phase, devices, credentials, image_map, options)
+            await _run_phase(
+                campaign_id,
+                body.phase,
+                devices,
+                credentials,
+                image_map,
+                options,
+                operation_id=operation_id,
+            )
 
         task = asyncio.create_task(_run_scheduled_phase())
     else:
@@ -949,12 +1037,22 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
         await _audit("upgrades", "phase_execute", user=user,
                      detail=f"Executing {body.phase} on campaign {campaign_id} ({len(devices)} devices)")
         task = asyncio.create_task(
-            _run_phase(campaign_id, body.phase, devices, credentials, image_map, options)
+            _run_phase(
+                campaign_id,
+                body.phase,
+                devices,
+                credentials,
+                image_map,
+                options,
+                operation_id=operation_id,
+            )
         )
     _running_campaigns[campaign_id] = task
+    _running_campaign_operations[campaign_id] = operation_id
 
     def _on_done(t):
         _running_campaigns.pop(campaign_id, None)
+        _running_campaign_operations.pop(campaign_id, None)
 
     task.add_done_callback(_on_done)
 
@@ -976,7 +1074,15 @@ async def cancel_campaign(campaign_id: int, request: Request):
 
     task.cancel()
     _running_campaigns.pop(campaign_id, None)
+    operation_id = _running_campaign_operations.pop(campaign_id, None)
     await db.update_upgrade_campaign(campaign_id, status="cancelled")
+    if operation_id is not None:
+        await db.update_upgrade_operation(
+            operation_id,
+            status="cancelled",
+            completed_at=_utc_now_iso(),
+            error_message="Campaign phase cancelled by user",
+        )
     await _emit(campaign_id, None, "warn", "Campaign phase cancelled by user")
 
     # Notify WebSocket
@@ -1166,7 +1272,15 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def _run_phase(campaign_id, phase, devices, credentials, image_map, options):
+async def _run_phase(
+    campaign_id,
+    phase,
+    devices,
+    credentials,
+    image_map,
+    options,
+    operation_id=None,
+):
     """Orchestrate a phase across all devices with concurrency control."""
     max_workers = min(options.get("parallel", 4), 8)
     status_key = _phase_status_key(phase)
@@ -1228,6 +1342,13 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
     except asyncio.CancelledError:
         for t in tasks:
             t.cancel()
+        if operation_id is not None:
+            await db.update_upgrade_operation(
+                operation_id,
+                status="cancelled",
+                completed_at=_utc_now_iso(),
+                error_message=f"{phase_name} phase cancelled",
+            )
         raise
 
     # Update campaign status
@@ -1239,6 +1360,23 @@ async def _run_phase(campaign_id, phase, devices, credentials, image_map, option
     total = len(all_devs)
 
     await db.update_upgrade_campaign(campaign_id, status=final_status)
+    if operation_id is not None:
+        error_message = ""
+        if failed or cancelled:
+            error_message = (
+                f"{phase_name} phase completed with {failed} failed and "
+                f"{cancelled} cancelled device(s)."
+            )
+        await db.update_upgrade_operation(
+            operation_id,
+            status=final_status,
+            device_count=total,
+            succeeded=completed,
+            failed=failed,
+            cancelled=cancelled,
+            completed_at=_utc_now_iso(),
+            error_message=error_message,
+        )
     level = "success" if failed == 0 and cancelled == 0 else "warn"
     await _emit(campaign_id, None, level,
                 f"{phase_name} phase complete: {completed}/{total} succeeded, {failed} failed, {cancelled} cancelled")

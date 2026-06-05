@@ -132,3 +132,21 @@ export function formatScheduledTime(
   });
   return { absolute, relative: formatRelativeTime(ms, now) };
 }
+
+export function formatOperationTime(
+  value: string | null | undefined,
+): string {
+  if (!value) return '-';
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const when = new Date(normalized);
+  if (Number.isNaN(when.getTime())) {
+    return value.replace('T', ' ').slice(0, 19);
+  }
+  return when.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}

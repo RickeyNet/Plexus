@@ -1398,6 +1398,27 @@ CREATE TABLE IF NOT EXISTS upgrade_events (
     timestamp       TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS upgrade_operations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id     INTEGER NOT NULL REFERENCES upgrade_campaigns(id) ON DELETE CASCADE,
+    phase           TEXT    NOT NULL DEFAULT '',
+    status          TEXT    NOT NULL DEFAULT 'pending',
+    requested_by    TEXT    NOT NULL DEFAULT '',
+    device_count    INTEGER NOT NULL DEFAULT 0,
+    succeeded       INTEGER NOT NULL DEFAULT 0,
+    failed          INTEGER NOT NULL DEFAULT 0,
+    cancelled       INTEGER NOT NULL DEFAULT 0,
+    scheduled_at    TEXT,
+    started_at      TEXT,
+    completed_at    TEXT,
+    error_message   TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_upgrade_operations_campaign_created
+    ON upgrade_operations(campaign_id, created_at DESC);
+
 -- ── Missing FK indexes for join performance ──────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_compliance_assign_profile
     ON compliance_profile_assignments (profile_id);
@@ -13263,7 +13284,7 @@ async def update_upgrade_campaign(campaign_id, **kwargs):
     try:
         sets, vals = [], []
         for k, v in kwargs.items():
-            if k in ("name", "description", "status", "image_map", "options"):
+            if k in ("name", "description", "status", "image_map", "options", "scheduled_at"):
                 if k in ("image_map", "options"):
                     v = json.dumps(v)
                 sets.append(f"{k} = ?")
@@ -13305,6 +13326,111 @@ async def delete_upgrade_devices_by_campaign(campaign_id):
         return True
     finally:
         await db.close()
+
+
+async def create_upgrade_operation(
+    campaign_id,
+    phase,
+    status,
+    requested_by="",
+    device_count=0,
+    scheduled_at=None,
+    started_at=None,
+):
+    db = await get_db()
+    try:
+        now = datetime.now(UTC).isoformat()
+        cursor = await db.execute(
+            "INSERT INTO upgrade_operations "
+            "(campaign_id, phase, status, requested_by, device_count, scheduled_at, started_at, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                campaign_id,
+                phase,
+                status,
+                requested_by,
+                device_count,
+                scheduled_at,
+                started_at,
+                now,
+                now,
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def update_upgrade_operation(operation_id, **kwargs):
+    db = await get_db()
+    try:
+        allowed = {
+            "status",
+            "device_count",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "scheduled_at",
+            "started_at",
+            "completed_at",
+            "error_message",
+        }
+        sets, vals = [], []
+        for k, v in kwargs.items():
+            if k in allowed:
+                sets.append(f"{k} = ?")
+                vals.append(v)
+        if not sets:
+            return False
+        sets.append("updated_at = ?")
+        vals.append(datetime.now(UTC).isoformat())
+        sql, sql_params = _safe_dynamic_update(
+            "upgrade_operations", sets, vals, "id = ?", operation_id
+        )
+        await db.execute(sql, sql_params)
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def get_upgrade_operations(campaign_id, limit=20):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM upgrade_operations WHERE campaign_id = ? "
+            "ORDER BY COALESCE(started_at, scheduled_at, created_at) DESC, id DESC LIMIT ?",
+            (campaign_id, limit),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_latest_upgrade_operation(campaign_id, phase=None, statuses=None):
+    db = await get_db()
+    try:
+        clauses = ["campaign_id = ?"]
+        params = [campaign_id]
+        if phase is not None:
+            clauses.append("phase = ?")
+            params.append(phase)
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            params.extend(statuses)
+        cursor = await db.execute(
+            "SELECT * FROM upgrade_operations WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY COALESCE(started_at, scheduled_at, created_at) DESC, id DESC LIMIT 1",
+            tuple(params),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
 
 async def add_upgrade_device(campaign_id, host_id, ip_address, hostname):
     db = await get_db()
