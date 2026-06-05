@@ -1,5 +1,6 @@
 import { useUpgradeDeviceEvents } from '@/api/upgrades';
 import { Modal } from '@/components/Modal';
+import { formatLogTimestamp } from './helpers';
 
 interface Props {
   campaignId: number;
@@ -44,7 +45,7 @@ export function DeviceUpgradeLogModal({
         >
           {events
             .map((ev) => {
-              const ts = ev.timestamp ? ev.timestamp.slice(11, 19) : '';
+              const ts = formatLogTimestamp(ev.timestamp);
               return `[${ts}] ${ev.message}`;
             })
             .join('\n')}

@@ -18,6 +18,7 @@ import { PhaseConfirmModal } from './PhaseConfirmModal';
 import {
   campaignStatusBadgeClass,
   campaignStatusLabel,
+  formatLogTimestamp,
   formatOperationTime,
   formatScheduledTime,
   phaseLabel,
@@ -412,7 +413,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
         for (const ev of msg.events) {
           if (ev.type !== 'upgrade_event') continue;
           if (typeof ev.message !== 'string' || !ev.message) continue;
-          const ts = ev.timestamp ? ev.timestamp.slice(11, 19) : '';
+          const ts = formatLogTimestamp(ev.timestamp);
           const host = ev.host ? `${ev.host}: ` : '';
           lines.push(`[${ts}] ${host}${ev.message}`);
         }
@@ -441,7 +442,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
       }
 
       if (msg.type === 'upgrade_event' && typeof msg.message === 'string') {
-        const ts = msg.timestamp ? msg.timestamp.slice(11, 19) : '';
+        const ts = formatLogTimestamp(msg.timestamp);
         const host = msg.host ? `${msg.host}: ` : '';
         setLiveLines((prev) => [...prev, `[${ts}] ${host}${msg.message}`]);
       }
