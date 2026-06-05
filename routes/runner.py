@@ -6,8 +6,10 @@ The runner executes playbooks as async background tasks, yielding
 LogEvent objects that get stored in the DB and streamed via WebSocket.
 """
 
+import asyncio
+import os
 import traceback
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
@@ -117,6 +119,11 @@ class BasePlaybook:
     # body per host without the operator picking N templates.
     template_by_device_type: dict[str, list[str]] | None = None
 
+    # Maximum number of hosts this playbook processes at once. Subclasses can
+    # override this for especially sensitive workflows; otherwise the process
+    # wide APP_PLAYBOOK_HOST_CONCURRENCY setting is used.
+    host_concurrency: int | None = None
+
     def commands_for_host(
         self, host: dict, template_commands: list[str] | None
     ) -> list[str] | None:
@@ -147,6 +154,60 @@ class BasePlaybook:
     ) -> AsyncGenerator[LogEvent]:
         raise NotImplementedError("Subclasses must implement run()")
         yield  # make it a generator
+
+    async def run_hosts_concurrently(
+        self,
+        hosts: list[dict],
+        worker: Callable[[dict], AsyncGenerator[LogEvent]],
+    ) -> AsyncGenerator[LogEvent]:
+        """Run a per-host async-generator worker with bounded concurrency.
+
+        Events from different hosts may interleave, but each individual host's
+        event order is preserved. A worker failure cancels the remaining host
+        tasks and propagates so the job is marked failed by the executor.
+        """
+        if not hosts:
+            return
+
+        configured = self.host_concurrency
+        if configured is None:
+            try:
+                configured = int(os.getenv("APP_PLAYBOOK_HOST_CONCURRENCY", "5"))
+            except ValueError:
+                configured = 5
+        limit = max(1, configured)
+
+        semaphore = asyncio.Semaphore(limit)
+        queue: asyncio.Queue[tuple[LogEvent | None, BaseException | None]] = (
+            asyncio.Queue()
+        )
+
+        async def run_one(host: dict) -> None:
+            try:
+                async with semaphore:
+                    async for event in worker(host):
+                        await queue.put((event, None))
+            except BaseException as exc:
+                await queue.put((None, exc))
+            finally:
+                await queue.put((None, None))
+
+        tasks = [asyncio.create_task(run_one(host)) for host in hosts]
+        remaining = len(tasks)
+        try:
+            while remaining:
+                event, error = await queue.get()
+                if event is not None:
+                    yield event
+                elif error is not None:
+                    raise error
+                else:
+                    remaining -= 1
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── Convenience log helpers ──────────────────────────────────────────
 

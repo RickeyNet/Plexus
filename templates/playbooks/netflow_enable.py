@@ -140,7 +140,7 @@ class NetflowEnabler(BasePlaybook):
         else:
             yield self.log_warn("*** LIVE MODE - commands WILL be written ***")
 
-        for host in hosts:
+        async def run_host(host: dict) -> AsyncGenerator[LogEvent]:
             ip = host.get("ip_address") or host.get("host")
             hostname = host.get("hostname", ip or "unknown")
             device_type = host.get("device_type", "cisco_ios")
@@ -172,7 +172,7 @@ class NetflowEnabler(BasePlaybook):
                     f"Skipping {hostname}: {exc}",
                     host=hostname,
                 )
-                continue
+                return
             verify_cmd = driver.netflow_verify_command()
 
             if NETMIKO_AVAILABLE:
@@ -185,6 +185,9 @@ class NetflowEnabler(BasePlaybook):
                     ip, hostname, commands, dry_run,
                 ):
                     yield event
+
+        async for event in self.run_hosts_concurrently(hosts, run_host):
+            yield event
 
         yield self.log_sep()
         yield self.log_success("NetFlow enablement playbook complete.")

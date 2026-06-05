@@ -66,7 +66,8 @@ class NtpAudit(BasePlaybook):
         compliant = 0
         non_compliant = 0
 
-        for host_info in hosts:
+        async def run_host(host_info: dict) -> AsyncGenerator[LogEvent]:
+            nonlocal compliant, non_compliant
             ip = host_info["ip_address"]
             hostname = host_info.get("hostname", f"SW-{ip.split('.')[-1]}")
             yield self.log_sep()
@@ -76,7 +77,7 @@ class NtpAudit(BasePlaybook):
             # 8% fake timeout rate - same shape as ``_common.simulate_connect``.
             if random.random() < 0.08:
                 yield self.log_error(f"TIMEOUT connecting to {ip} - skipping.", host=ip)
-                continue
+                return
 
             yield self.log_success(f"Connected to {hostname} ({ip})", host=ip)
             yield self.log_info("Checking NTP associations ...", host=ip)
@@ -102,6 +103,9 @@ class NtpAudit(BasePlaybook):
                 non_compliant += 1
 
             yield self.log_success(f"Finished processing {hostname} ({ip}).", host=ip)
+
+        async for event in self.run_hosts_concurrently(hosts, run_host):
+            yield event
 
         yield self.log_sep()
         yield self.log_info(
