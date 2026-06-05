@@ -208,10 +208,28 @@ export interface UpgradeDevice {
   error_message?: string | null;
 }
 
+export interface UpgradeOperation {
+  id: number;
+  campaign_id: number;
+  phase: UpgradePhase | string;
+  status: string;
+  requested_by?: string | null;
+  device_count: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  scheduled_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
+  created_at?: string | null;
+}
+
 export interface UpgradeCampaign extends UpgradeCampaignSummary {
   image_map: Record<string, string> | string;
   options: Record<string, unknown> | string;
   devices: UpgradeDevice[];
+  operations?: UpgradeOperation[];
 }
 
 export interface UpgradeCampaignOptions {

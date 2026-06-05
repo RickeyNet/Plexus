@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import {
   type UpgradeDevice,
+  type UpgradeOperation,
   type UpgradePhase,
   useCancelUpgradeCampaign,
   useCancelUpgradeDevices,
@@ -17,6 +18,7 @@ import { PhaseConfirmModal } from './PhaseConfirmModal';
 import {
   campaignStatusBadgeClass,
   campaignStatusLabel,
+  formatOperationTime,
   formatScheduledTime,
   phaseLabel,
 } from './helpers';
@@ -97,9 +99,96 @@ function statusLabel(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+function operationBadgeClass(status: string | null | undefined): string {
+  if (!status) return 'badge-secondary';
+  if (status.includes('failed')) return 'badge-error';
+  if (status.includes('missed') || status === 'scheduled') return 'badge-warning';
+  if (status === 'running' || status.startsWith('running_')) return 'badge-info';
+  if (status === 'cancelled') return 'badge-secondary';
+  if (status.includes('complete')) return 'badge-success';
+  return 'badge-secondary';
+}
+
+function operationStatusLabel(status: string | null | undefined): string {
+  if (!status) return 'Pending';
+  if (status === 'running') return 'Running';
+  if (status === 'scheduled') return 'Scheduled';
+  return campaignStatusLabel(status);
+}
+
 function shortImageName(image: string | null | undefined): string {
   if (!image) return '-';
   return image.split('/').pop() || image;
+}
+
+function OperationHistory({ operations }: { operations: UpgradeOperation[] }) {
+  if (operations.length === 0) {
+    return (
+      <div className="text-muted" style={{ fontSize: '0.85em' }}>
+        No operations have run for this campaign yet.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="data-table" style={{ width: '100%', fontSize: '0.84em' }}>
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>Status</th>
+            <th>Scheduled</th>
+            <th>Started</th>
+            <th>Completed</th>
+            <th>Result</th>
+            <th>Requested By</th>
+          </tr>
+        </thead>
+        <tbody>
+          {operations.map((op) => (
+            <tr key={op.id}>
+              <td>{phaseLabel(op.phase)}</td>
+              <td>
+                <span className={`badge ${operationBadgeClass(op.status)}`}>
+                  {operationStatusLabel(op.status)}
+                </span>
+              </td>
+              <td>{formatOperationTime(op.scheduled_at)}</td>
+              <td>{formatOperationTime(op.started_at)}</td>
+              <td>{formatOperationTime(op.completed_at)}</td>
+              <td>
+                <span style={{ display: 'inline-flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                  <span>{op.succeeded}/{op.device_count} ok</span>
+                  {op.failed > 0 && (
+                    <span style={{ color: 'var(--danger)' }}>{op.failed} failed</span>
+                  )}
+                  {op.cancelled > 0 && (
+                    <span className="text-muted">{op.cancelled} cancelled</span>
+                  )}
+                </span>
+                {op.error_message && (
+                  <div
+                    title={op.error_message}
+                    style={{
+                      color: 'var(--danger)',
+                      marginTop: '0.2rem',
+                      maxWidth: 340,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {op.error_message}
+                  </div>
+                )}
+              </td>
+              <td>{op.requested_by || '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 interface PhaseCount {
@@ -217,6 +306,10 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
   const campaign = query.data;
   const devices = useMemo<UpgradeDevice[]>(
     () => campaign?.devices || [],
+    [campaign],
+  );
+  const operations = useMemo<UpgradeOperation[]>(
+    () => campaign?.operations || [],
     [campaign],
   );
   const imageMap = useMemo(
@@ -582,6 +675,11 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 </div>
               </div>
             )}
+
+            <div style={{ marginBottom: '1rem' }}>
+              <h4 style={{ margin: '0 0 0.5rem' }}>Operation history</h4>
+              <OperationHistory operations={operations} />
+            </div>
 
             <div style={{ marginBottom: '1rem' }}>
               <div
