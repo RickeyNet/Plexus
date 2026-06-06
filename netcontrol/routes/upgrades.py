@@ -325,18 +325,29 @@ async def rehydrate_scheduled_upgrades():
             _opts=options,
             _opid=operation_id,
         ):
-            delay_seconds = (_sat - datetime.now(UTC)).total_seconds()
-            if delay_seconds > 0:
-                await _emit(_cid, None, "info", f"Resuming scheduled activate (rehydrated after restart); fires at {_sat.isoformat()}")
-                await asyncio.sleep(delay_seconds)
-            await db.update_upgrade_campaign(_cid, status="running_activate", scheduled_at=None)
-            await db.update_upgrade_operation(
-                _opid,
-                status="running",
-                started_at=_utc_now_iso(),
-            )
-            await _emit(_cid, None, "info", "Starting activate phase now")
-            await _run_phase(_cid, "activate", _devs, _creds, _imap, _opts, operation_id=_opid)
+            try:
+                delay_seconds = (_sat - datetime.now(UTC)).total_seconds()
+                if delay_seconds > 0:
+                    await _emit(_cid, None, "info", f"Resuming scheduled activate (rehydrated after restart); fires at {_sat.isoformat()}")
+                    await asyncio.sleep(delay_seconds)
+                await db.update_upgrade_campaign(_cid, status="running_activate", scheduled_at=None)
+                await db.update_upgrade_operation(
+                    _opid,
+                    status="running",
+                    started_at=_utc_now_iso(),
+                )
+                await _emit(_cid, None, "info", "Starting activate phase now")
+                await _run_phase(_cid, "activate", _devs, _creds, _imap, _opts, operation_id=_opid)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("Scheduled activate failed for campaign %s", _cid)
+                await _mark_upgrade_operation_failed(
+                    _cid,
+                    _opid,
+                    "activate",
+                    "Scheduled activate failed before completion; check backend logs.",
+                )
 
         task = asyncio.create_task(_run_rehydrated())
         _running_campaigns[campaign_id] = task
@@ -345,6 +356,10 @@ async def rehydrate_scheduled_upgrades():
         def _on_done(t, _cid=campaign_id):
             _running_campaigns.pop(_cid, None)
             _running_campaign_operations.pop(_cid, None)
+            if not t.cancelled():
+                exc = t.exception()
+                if exc is not None:
+                    LOGGER.error("Scheduled activate task crashed for campaign %s", _cid, exc_info=exc)
 
         task.add_done_callback(_on_done)
 
@@ -439,6 +454,27 @@ def _install_commit_output_failed(output: str | None) -> bool:
         "aborted",
     )
     return any(marker in text for marker in failure_markers)
+
+
+async def _mark_upgrade_operation_failed(
+    campaign_id: int,
+    operation_id: int | None,
+    phase: str,
+    message: str,
+) -> None:
+    await db.update_upgrade_campaign(
+        campaign_id,
+        status=f"{phase}_failed",
+        scheduled_at=None,
+    )
+    if operation_id is not None:
+        await db.update_upgrade_operation(
+            operation_id,
+            status=f"{phase}_failed",
+            completed_at=_utc_now_iso(),
+            error_message=message,
+        )
+    await _emit(campaign_id, None, "error", message)
 
 
 # ── Helper: broadcast event to WebSocket subscribers ─────────────────────────
@@ -1016,35 +1052,46 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
         )
 
         async def _run_scheduled_phase():
-            await _emit(
-                campaign_id,
-                None,
-                "info",
-                f"{body.phase.title()} phase scheduled for {scheduled_at_utc.isoformat()} ({len(devices)} devices)",
-            )
-            delay_seconds = (scheduled_at_utc - datetime.now(UTC)).total_seconds()
-            if delay_seconds > 0:
-                await asyncio.sleep(delay_seconds)
-            await db.update_upgrade_campaign(
-                campaign_id,
-                status=f"running_{body.phase}",
-                scheduled_at=None,
-            )
-            await db.update_upgrade_operation(
-                operation_id,
-                status="running",
-                started_at=_utc_now_iso(),
-            )
-            await _emit(campaign_id, None, "info", f"Starting scheduled {body.phase} phase now")
-            await _run_phase(
-                campaign_id,
-                body.phase,
-                devices,
-                credentials,
-                image_map,
-                options,
-                operation_id=operation_id,
-            )
+            try:
+                await _emit(
+                    campaign_id,
+                    None,
+                    "info",
+                    f"{body.phase.title()} phase scheduled for {scheduled_at_utc.isoformat()} ({len(devices)} devices)",
+                )
+                delay_seconds = (scheduled_at_utc - datetime.now(UTC)).total_seconds()
+                if delay_seconds > 0:
+                    await asyncio.sleep(delay_seconds)
+                await db.update_upgrade_campaign(
+                    campaign_id,
+                    status=f"running_{body.phase}",
+                    scheduled_at=None,
+                )
+                await db.update_upgrade_operation(
+                    operation_id,
+                    status="running",
+                    started_at=_utc_now_iso(),
+                )
+                await _emit(campaign_id, None, "info", f"Starting scheduled {body.phase} phase now")
+                await _run_phase(
+                    campaign_id,
+                    body.phase,
+                    devices,
+                    credentials,
+                    image_map,
+                    options,
+                    operation_id=operation_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("Scheduled %s failed for campaign %s", body.phase, campaign_id)
+                await _mark_upgrade_operation_failed(
+                    campaign_id,
+                    operation_id,
+                    body.phase,
+                    f"Scheduled {body.phase} failed before completion; check backend logs.",
+                )
 
         task = asyncio.create_task(_run_scheduled_phase())
     else:
@@ -1068,6 +1115,10 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     def _on_done(t):
         _running_campaigns.pop(campaign_id, None)
         _running_campaign_operations.pop(campaign_id, None)
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                LOGGER.error("Upgrade task crashed for campaign %s", campaign_id, exc_info=exc)
 
     task.add_done_callback(_on_done)
 

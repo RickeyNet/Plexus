@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 import routes.database as db_module
 from netcontrol.routes import upgrades
@@ -168,3 +170,76 @@ async def test_cancel_campaign_marks_running_operation_cancelled(monkeypatch: py
             "error_message": "Campaign phase cancelled by user",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_scheduled_execute_failure_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    campaign_updates: list[dict] = []
+    operation_updates: list[dict] = []
+    emitted: list[tuple] = []
+
+    async def fake_get_upgrade_campaign(_campaign_id):
+        return {
+            "id": 5,
+            "image_map": {"C9200": "cat9k_iosxe.17.15.05.SPA.bin"},
+            "options": {"credential_id": 9},
+        }
+
+    async def fake_get_credential_raw(_credential_id):
+        return {"username": "u", "password": "p", "secret": ""}
+
+    async def fake_get_upgrade_devices(_campaign_id):
+        return [{"id": 10, "ip_address": "10.0.0.10"}]
+
+    async def fake_create_upgrade_operation(*_args, **_kwargs):
+        return 77
+
+    async def fake_update_upgrade_campaign(_campaign_id, **kwargs):
+        campaign_updates.append(kwargs)
+
+    async def fake_update_upgrade_operation(_operation_id, **kwargs):
+        operation_updates.append(kwargs)
+
+    async def fake_run_phase(*_args, **_kwargs):
+        raise RuntimeError("phase fire failed")
+
+    async def fake_emit(*args, **_kwargs):
+        emitted.append(args)
+
+    async def fake_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(upgrades, "NETMIKO_AVAILABLE", True)
+    monkeypatch.setattr(upgrades, "_get_session", lambda _request: {"user": "alice"})
+    monkeypatch.setattr(upgrades, "decrypt", lambda value: value)
+    monkeypatch.setattr(upgrades.db, "get_upgrade_campaign", fake_get_upgrade_campaign)
+    monkeypatch.setattr(upgrades.db, "get_credential_raw", fake_get_credential_raw)
+    monkeypatch.setattr(upgrades.db, "get_upgrade_devices", fake_get_upgrade_devices)
+    monkeypatch.setattr(upgrades.db, "create_upgrade_operation", fake_create_upgrade_operation)
+    monkeypatch.setattr(upgrades.db, "update_upgrade_campaign", fake_update_upgrade_campaign)
+    monkeypatch.setattr(upgrades.db, "update_upgrade_operation", fake_update_upgrade_operation)
+    monkeypatch.setattr(upgrades, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(upgrades, "_emit", fake_emit)
+    monkeypatch.setattr(upgrades, "_audit", fake_audit)
+    monkeypatch.setattr(upgrades, "_running_campaigns", {})
+    monkeypatch.setattr(upgrades, "_running_campaign_operations", {})
+
+    scheduled_at = datetime.now(UTC) + timedelta(milliseconds=5)
+    result = await upgrades.execute_phase(
+        5,
+        upgrades.CampaignPhaseRequest(phase="activate", scheduled_at=scheduled_at),
+        request=None,
+    )
+    assert result["scheduled"] is True
+
+    await __import__("asyncio").sleep(0.05)
+
+    assert campaign_updates[0]["status"] == "scheduled_activate"
+    assert campaign_updates[1]["status"] == "running_activate"
+    assert campaign_updates[-1] == {"status": "activate_failed", "scheduled_at": None}
+    assert operation_updates[-1]["status"] == "activate_failed"
+    assert "Scheduled activate failed" in operation_updates[-1]["error_message"]
+    assert any(
+        args[2] == "error" and "Scheduled activate failed" in args[3]
+        for args in emitted
+    )
