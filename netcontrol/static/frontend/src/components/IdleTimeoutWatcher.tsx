@@ -18,13 +18,6 @@ export function IdleTimeoutWatcher() {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const loggedOutRef = useRef(false);
 
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setNow(Math.floor(Date.now() / 1000));
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, []);
-
   const data = auth.data;
 
   const clockOffset = useMemo(() => {
@@ -45,6 +38,29 @@ export function IdleTimeoutWatcher() {
     data?.idle_timeout_seconds,
     data?.session_last_activity,
   ]);
+
+  // Advance `now` on a self-adjusting timer instead of a fixed 1s interval.
+  // The countdown UI only shows inside the final WARNING_WINDOW_SECONDS, so
+  // ticking every second for an entire (often hours-long) session just
+  // re-renders to null. When the deadline is far off we sleep until we're
+  // about to enter the warning window; only then do we tick per-second so the
+  // countdown stays accurate. When there's no deadline we don't tick at all.
+  useEffect(() => {
+    if (!data?.authenticated || deadline === null) return;
+    let timer = 0;
+    const tick = () => {
+      const nowLocal = Math.floor(Date.now() / 1000);
+      setNow(nowLocal);
+      const remaining = deadline - (nowLocal + clockOffset);
+      const delayMs =
+        remaining > WARNING_WINDOW_SECONDS
+          ? Math.min(Math.max((remaining - WARNING_WINDOW_SECONDS) * 1000, 1000), 60_000)
+          : 1000;
+      timer = window.setTimeout(tick, delayMs);
+    };
+    tick();
+    return () => window.clearTimeout(timer);
+  }, [data?.authenticated, deadline, clockOffset]);
 
   const remaining = useMemo(() => {
     if (deadline === null) return Infinity;
