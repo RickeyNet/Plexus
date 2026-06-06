@@ -174,6 +174,13 @@ MONITORING_DEFAULTS = {
     "icmp_count": 3,
     "icmp_timeout_seconds": 2.0,
     "icmp_privileged": False,
+    # Max devices polled concurrently per cycle. Each in-flight poll borrows one
+    # thread-pool worker for its blocking SSH session, so the IO executor is
+    # sized to match this at startup (see netcontrol/app.py).
+    "poll_concurrency": 16,
+    # Retention cleanup (DELETE of aged polls/alerts/snapshots) is a full-table
+    # scan; run it at most this often rather than every poll cycle.
+    "retention_interval_seconds": 3600,
 }
 MONITORING_MIN_INTERVAL = 60
 MONITORING_MAX_INTERVAL = 86400
