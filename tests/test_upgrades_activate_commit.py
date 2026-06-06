@@ -25,10 +25,16 @@ from netcontrol.routes import upgrades
 class _FakeConn:
     """Netmiko stand-in. ``show version`` returns a scripted version."""
 
-    def __init__(self, versions: list[str], commit_raises: bool = False) -> None:
+    def __init__(
+        self,
+        versions: list[str],
+        commit_raises: bool = False,
+        commit_output: str = "SUCCESS: install_commit",
+    ) -> None:
         # One version string per ``show version`` call, consumed in order.
         self._versions = list(versions)
         self._commit_raises = commit_raises
+        self._commit_output = commit_output
         self.commands: list[str] = []
 
     def send_command(self, command: str, **_: object) -> str:
@@ -47,7 +53,7 @@ class _FakeConn:
                 raise OSError(
                     "The process for the command is not responding "
                     "or is otherwise unavailable")
-            return "SUCCESS: install_commit"
+            return self._commit_output
         return ""
 
     def disconnect(self) -> None:  # pragma: no cover - trivial
@@ -177,6 +183,32 @@ async def test_post_commit_rollback_is_detected(
     assert _final_status(_patched["db"], "activate_status") == "failed"
     assert err and "post-commit" in err.lower()
     assert all(w.get("verify_status") != "completed" for w in _patched["db"])
+
+
+@pytest.mark.asyncio
+async def test_commit_error_text_marks_device_failed(
+    monkeypatch: pytest.MonkeyPatch, _patched
+) -> None:
+    """Netmiko can return commit failure text without raising."""
+    conn = _FakeConn(
+        versions=["17.15.04", "17.15.05"],
+        commit_output=(
+            "The process for the command is not responding "
+            "or is otherwise unavailable"
+        ),
+    )
+    _patched["holder"]["conn"] = conn
+
+    dev = {"id": 42, "ip_address": "10.0.0.1", "target_image": "cat9k_lite_iosxe.17.15.05.SPA.bin"}
+    await upgrades._device_activate(
+        campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
+
+    verify, err = _final_verify_state(_patched["db"])
+    assert verify == "failed"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    assert err and "commit failed" in err.lower()
+    assert "not responding" in err.lower()
+    assert not any(w.get("verify_status") == "completed" for w in _patched["db"])
 
 
 @pytest.mark.asyncio

@@ -426,6 +426,21 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _install_commit_output_failed(output: str | None) -> bool:
+    if not output:
+        return False
+    text = output.lower()
+    failure_markers = (
+        "not responding or is otherwise unavailable",
+        "failed",
+        "failure",
+        "error",
+        "rollback",
+        "aborted",
+    )
+    return any(marker in text for marker in failure_markers)
+
+
 # ── Helper: broadcast event to WebSocket subscribers ─────────────────────────
 
 
@@ -2247,6 +2262,8 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                 commit_output = await asyncio.to_thread(
                                     new_conn.send_command, commit_cmd, read_timeout=300,
                                 )
+                                if _install_commit_output_failed(commit_output):
+                                    raise RuntimeError(commit_output.strip()[:500])
                                 await _emit(campaign_id, dev_id, "success", "Install committed", host=ip)
                                 if commit_output:
                                     await _emit(campaign_id, dev_id, "info", commit_output[-500:], host=ip)
