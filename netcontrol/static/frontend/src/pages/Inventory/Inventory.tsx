@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 import { PageHelp } from '@/components/PageHelp';
 
@@ -492,6 +493,20 @@ function GroupCard({
 }: GroupCardProps) {
   const hosts = group.hosts ?? [];
   const sortedHosts = sortHostsForQuery(hosts, query);
+
+  // Virtualize the host rows so only the rows in view are mounted. Each group
+  // scrolls inside its own max-height container, so a group with thousands of
+  // hosts costs the same handful of <tr> as a group with ten. Small groups
+  // never reach the max height, so no scrollbar appears and they render in
+  // full - visually identical to before.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: sortedHosts.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => (compact ? 37 : 45),
+    overscan: 12,
+  });
+
   const allSelected = hosts.length > 0 && selectedSet.size === hosts.length;
   const indeterminate = selectedSet.size > 0 && !allSelected;
   const singleSelected = selectedSet.size === 1;
@@ -722,9 +737,16 @@ function GroupCard({
               No hosts
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <div ref={scrollRef} style={{ overflow: 'auto', maxHeight: 480 }}>
               <table className="chart-table" style={{ width: '100%' }}>
-                <thead>
+                <thead
+                  style={{
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 1,
+                    background: 'var(--card-bg, var(--bg-secondary))',
+                  }}
+                >
                   <tr>
                     <th style={{ width: 32 }}></th>
                     <th>Hostname</th>
@@ -737,53 +759,77 @@ function GroupCard({
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedHosts.map((host) => {
-                    const isMatch = query && hostMatchesQuery(host, query);
+                  {(() => {
+                    const items = rowVirtualizer.getVirtualItems();
+                    const paddingTop = items.length ? items[0].start : 0;
+                    const paddingBottom = items.length
+                      ? rowVirtualizer.getTotalSize() - items[items.length - 1].end
+                      : 0;
                     return (
-                      <tr
-                        key={host.id}
-                        style={{
-                          background: isMatch
-                            ? 'var(--highlight-bg, rgba(59,130,246,0.08))'
-                            : undefined,
-                        }}
-                      >
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selectedSet.has(host.id)}
-                            onChange={(e) =>
-                              onToggleHost(host.id, e.target.checked)
-                            }
-                          />
-                        </td>
-                        <td>{host.hostname}</td>
-                        <td>{host.ip_address}</td>
-                        <td>{host.device_type || 'cisco_ios'}</td>
-                        <td>{host.model || '-'}</td>
-                        <td>{host.serial_number || '-'}</td>
-                        <td>{host.software_version || '-'}</td>
-                        <td>
-                          <div style={{ display: 'flex', gap: '0.25rem' }}>
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-secondary"
-                              onClick={() => onEditHost(host)}
+                      <>
+                        {paddingTop > 0 && (
+                          <tr aria-hidden style={{ height: paddingTop }}>
+                            <td colSpan={8} style={{ padding: 0, border: 'none' }} />
+                          </tr>
+                        )}
+                        {items.map((vi) => {
+                          const host = sortedHosts[vi.index];
+                          const isMatch = query && hostMatchesQuery(host, query);
+                          return (
+                            <tr
+                              key={host.id}
+                              data-index={vi.index}
+                              ref={rowVirtualizer.measureElement}
+                              style={{
+                                background: isMatch
+                                  ? 'var(--highlight-bg, rgba(59,130,246,0.08))'
+                                  : undefined,
+                              }}
                             >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-danger"
-                              onClick={() => onDeleteHost(host)}
-                            >
-                              Del
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedSet.has(host.id)}
+                                  onChange={(e) =>
+                                    onToggleHost(host.id, e.target.checked)
+                                  }
+                                />
+                              </td>
+                              <td>{host.hostname}</td>
+                              <td>{host.ip_address}</td>
+                              <td>{host.device_type || 'cisco_ios'}</td>
+                              <td>{host.model || '-'}</td>
+                              <td>{host.serial_number || '-'}</td>
+                              <td>{host.software_version || '-'}</td>
+                              <td>
+                                <div style={{ display: 'flex', gap: '0.25rem' }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-secondary"
+                                    onClick={() => onEditHost(host)}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-danger"
+                                    onClick={() => onDeleteHost(host)}
+                                  >
+                                    Del
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {paddingBottom > 0 && (
+                          <tr aria-hidden style={{ height: paddingBottom }}>
+                            <td colSpan={8} style={{ padding: 0, border: 'none' }} />
+                          </tr>
+                        )}
+                      </>
                     );
-                  })}
+                  })()}
                 </tbody>
               </table>
             </div>
