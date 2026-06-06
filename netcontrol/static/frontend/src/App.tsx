@@ -5,42 +5,45 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuthStatus } from '@/api/auth';
 import { resetSessionExpiryFlag, setSessionExpiredHandler } from '@/api/client';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
+import { PageLoader } from '@/components/PageLoader';
 import { StarfieldCanvas } from '@/components/StarfieldCanvas';
 import { IdleTimeoutWatcher } from '@/components/IdleTimeoutWatcher';
 import { Sidebar } from '@/components/Sidebar';
 import { TimeRangeBar } from '@/components/TimeRangeBar';
 import { UserMenu } from '@/components/UserMenu';
+import { pageLoaders } from '@/lib/pageLoaders';
 import { Login } from '@/pages/Login/Login';
 
 // Route-level code splitting: each page becomes its own chunk so the initial
 // bundle no longer pulls in vis-network (Topology), echarts (Dashboard tiles),
-// and codemirror (Jobs/Configuration editors) up front. Pages use named
-// exports, so the import() result is reshaped into { default } for React.lazy.
-const Compliance = lazy(() => import('@/pages/Compliance/Compliance').then(m => ({ default: m.Compliance })));
-const Configuration = lazy(() => import('@/pages/Configuration/Configuration').then(m => ({ default: m.Configuration })));
-const CustomDashboards = lazy(() => import('@/pages/Dashboard/CustomDashboards').then(m => ({ default: m.CustomDashboards })));
-const Dashboard = lazy(() => import('@/pages/Dashboard/Dashboard').then(m => ({ default: m.Dashboard })));
-const DashboardViewer = lazy(() => import('@/pages/Dashboard/DashboardViewer').then(m => ({ default: m.DashboardViewer })));
-const Deployments = lazy(() => import('@/pages/Deployments/Deployments').then(m => ({ default: m.Deployments })));
-const DeviceDetail = lazy(() => import('@/pages/DeviceDetail/DeviceDetail').then(m => ({ default: m.DeviceDetail })));
-const Federation = lazy(() => import('@/pages/Federation/Federation').then(m => ({ default: m.Federation })));
-const FloorPlan = lazy(() => import('@/pages/FloorPlan/FloorPlan').then(m => ({ default: m.FloorPlan })));
-const GraphTemplates = lazy(() => import('@/pages/GraphTemplates/GraphTemplates').then(m => ({ default: m.GraphTemplates })));
-const ChangeManagement = lazy(() => import('@/pages/ChangeManagement/ChangeManagement').then(m => ({ default: m.ChangeManagement })));
-const CloudVisibility = lazy(() => import('@/pages/CloudVisibility/CloudVisibility').then(m => ({ default: m.CloudVisibility })));
-const Inventory = lazy(() => import('@/pages/Inventory/Inventory').then(m => ({ default: m.Inventory })));
-const Ipam = lazy(() => import('@/pages/Ipam/Ipam').then(m => ({ default: m.Ipam })));
-const Jobs = lazy(() => import('@/pages/Jobs/Jobs').then(m => ({ default: m.Jobs })));
-const Lab = lazy(() => import('@/pages/Lab').then(m => ({ default: m.Lab })));
-const MaintenanceWindows = lazy(() => import('@/pages/MaintenanceWindows/MaintenanceWindows').then(m => ({ default: m.MaintenanceWindows })));
-const Monitoring = lazy(() => import('@/pages/Monitoring/Monitoring').then(m => ({ default: m.Monitoring })));
-const MacTracking = lazy(() => import('@/pages/NetworkTools/MacTracking').then(m => ({ default: m.MacTracking })));
-const TrafficAnalysis = lazy(() => import('@/pages/NetworkTools/TrafficAnalysis').then(m => ({ default: m.TrafficAnalysis })));
-const Audit = lazy(() => import('@/pages/Audit/Audit').then(m => ({ default: m.Audit })));
-const Reports = lazy(() => import('@/pages/Reports/Reports').then(m => ({ default: m.Reports })));
-const RiskAnalysis = lazy(() => import('@/pages/RiskAnalysis/RiskAnalysis').then(m => ({ default: m.RiskAnalysis })));
-const Settings = lazy(() => import('@/pages/Settings/Settings').then(m => ({ default: m.Settings })));
-const Topology = lazy(() => import('@/pages/Topology/Topology').then(m => ({ default: m.Topology })));
+// and codemirror (Jobs/Configuration editors) up front. The import() thunks
+// live in pageLoaders so the sidebar can prefetch the exact same chunk on
+// hover; here we just reshape each named export into { default } for lazy().
+const Compliance = lazy(() => pageLoaders.compliance().then(m => ({ default: m.Compliance })));
+const Configuration = lazy(() => pageLoaders.configuration().then(m => ({ default: m.Configuration })));
+const CustomDashboards = lazy(() => pageLoaders.customDashboards().then(m => ({ default: m.CustomDashboards })));
+const Dashboard = lazy(() => pageLoaders.dashboard().then(m => ({ default: m.Dashboard })));
+const DashboardViewer = lazy(() => pageLoaders.dashboardViewer().then(m => ({ default: m.DashboardViewer })));
+const Deployments = lazy(() => pageLoaders.deployments().then(m => ({ default: m.Deployments })));
+const DeviceDetail = lazy(() => pageLoaders.deviceDetail().then(m => ({ default: m.DeviceDetail })));
+const Federation = lazy(() => pageLoaders.federation().then(m => ({ default: m.Federation })));
+const FloorPlan = lazy(() => pageLoaders.floorPlan().then(m => ({ default: m.FloorPlan })));
+const GraphTemplates = lazy(() => pageLoaders.graphTemplates().then(m => ({ default: m.GraphTemplates })));
+const ChangeManagement = lazy(() => pageLoaders.changeManagement().then(m => ({ default: m.ChangeManagement })));
+const CloudVisibility = lazy(() => pageLoaders.cloudVisibility().then(m => ({ default: m.CloudVisibility })));
+const Inventory = lazy(() => pageLoaders.inventory().then(m => ({ default: m.Inventory })));
+const Ipam = lazy(() => pageLoaders.ipam().then(m => ({ default: m.Ipam })));
+const Jobs = lazy(() => pageLoaders.jobs().then(m => ({ default: m.Jobs })));
+const Lab = lazy(() => pageLoaders.lab().then(m => ({ default: m.Lab })));
+const MaintenanceWindows = lazy(() => pageLoaders.maintenanceWindows().then(m => ({ default: m.MaintenanceWindows })));
+const Monitoring = lazy(() => pageLoaders.monitoring().then(m => ({ default: m.Monitoring })));
+const MacTracking = lazy(() => pageLoaders.macTracking().then(m => ({ default: m.MacTracking })));
+const TrafficAnalysis = lazy(() => pageLoaders.trafficAnalysis().then(m => ({ default: m.TrafficAnalysis })));
+const Audit = lazy(() => pageLoaders.audit().then(m => ({ default: m.Audit })));
+const Reports = lazy(() => pageLoaders.reports().then(m => ({ default: m.Reports })));
+const RiskAnalysis = lazy(() => pageLoaders.riskAnalysis().then(m => ({ default: m.RiskAnalysis })));
+const Settings = lazy(() => pageLoaders.settings().then(m => ({ default: m.Settings })));
+const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.Topology })));
 
 const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
@@ -187,7 +190,7 @@ export function App() {
       <main className="main-content" aria-live="polite">
         <Breadcrumb />
         <MetricTimeRangeBar />
-        <Suspense fallback={null}>
+        <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/dashboards" element={<CustomDashboards />} />
