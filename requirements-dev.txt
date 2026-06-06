@@ -10,4 +10,4 @@ pip-audit==2.10.0
 bandit==1.9.4
 # safety 3.5.2 pinned pydantic<2.10, blocking Python 3.14 (which needs
 # pydantic-core ≥2.27 with PyO3 ≥0.23). 3.7.0 dropped that cap.
-safety>=3.7.0,<4
+safety>=3.8.1,<4

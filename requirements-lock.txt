@@ -11,5 +11,5 @@ urllib3==2.7.0
 netmiko==4.7.0
 pyrad==2.5.4
 pysnmp==7.1.27
-pydantic>=2.13.3,<3
+pydantic>=2.13.4,<3
 httpx>=0.28.1,<1
