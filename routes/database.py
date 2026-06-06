@@ -8692,31 +8692,39 @@ async def upsert_interface_error_stats_batch(
             row_to_dict(row)["if_index"]
             for row in await cursor.fetchall()
         }
+        update_params: list[tuple] = []
+        insert_params: list[tuple] = []
         for if_index, if_name, in_errors, out_errors, in_discards, out_discards in rows:
             if if_index in existing:
-                await db.execute(
-                    """UPDATE interface_error_stats
-                       SET if_name = ?,
-                           prev_in_errors = in_errors, prev_out_errors = out_errors,
-                           prev_in_discards = in_discards, prev_out_discards = out_discards,
-                           prev_polled_at = polled_at,
-                           in_errors = ?, out_errors = ?,
-                           in_discards = ?, out_discards = ?,
-                           polled_at = datetime('now')
-                       WHERE host_id = ? AND if_index = ?""",
+                update_params.append(
                     (if_name, in_errors, out_errors, in_discards, out_discards,
-                     host_id, if_index),
-                )
+                     host_id, if_index))
             else:
-                await db.execute(
-                    """INSERT INTO interface_error_stats
-                       (host_id, if_index, if_name, in_errors, out_errors,
-                        in_discards, out_discards)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                insert_params.append(
                     (host_id, if_index, if_name, in_errors, out_errors,
-                     in_discards, out_discards),
-                )
+                     in_discards, out_discards))
                 existing.add(if_index)
+        if update_params:
+            await db.executemany(
+                """UPDATE interface_error_stats
+                   SET if_name = ?,
+                       prev_in_errors = in_errors, prev_out_errors = out_errors,
+                       prev_in_discards = in_discards, prev_out_discards = out_discards,
+                       prev_polled_at = polled_at,
+                       in_errors = ?, out_errors = ?,
+                       in_discards = ?, out_discards = ?,
+                       polled_at = datetime('now')
+                   WHERE host_id = ? AND if_index = ?""",
+                update_params,
+            )
+        if insert_params:
+            await db.executemany(
+                """INSERT INTO interface_error_stats
+                   (host_id, if_index, if_name, in_errors, out_errors,
+                    in_discards, out_discards)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                insert_params,
+            )
         await db.commit()
         return len(rows)
     finally:
