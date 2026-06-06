@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useDeleteTemplate,
   useTemplates,
@@ -9,6 +10,7 @@ import {
 import { TemplateFormModal } from './TemplateFormModal';
 
 export function TemplatesTab() {
+  const { confirm, alert } = useDialogs();
   const query = useTemplates();
   const deleteMut = useDeleteTemplate();
   const [search, setSearch] = useState('');
@@ -27,13 +29,13 @@ export function TemplatesTab() {
     );
   }, [query.data, search]);
 
-  function handleDelete(id: number) {
-    if (!confirm('Delete this template?')) return;
-    deleteMut.mutate(id, { onError: (e) => alert((e as Error).message) });
+  async function handleDelete(id: number) {
+    if (!(await confirm('Delete this template?'))) return;
+    deleteMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   function copyContent(content: string) {
-    navigator.clipboard.writeText(content).catch(() => alert('Copy failed'));
+    navigator.clipboard.writeText(content).catch(() => { void alert('Copy failed'); });
   }
 
   function toggleExpand(id: number) {

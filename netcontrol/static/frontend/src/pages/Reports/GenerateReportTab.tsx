@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useInventoryGroups } from '@/api/compliance';
 import {
   reportArtifactUrl,
@@ -106,6 +107,7 @@ interface ResultBlockProps {
 }
 
 function ResultBlock({ reportType, groupId, result }: ResultBlockProps) {
+  const { alert } = useDialogs();
   const rows = result.rows ?? [];
   if (!rows.length) {
     return (
@@ -136,7 +138,9 @@ function ResultBlock({ reportType, groupId, result }: ResultBlockProps) {
   const csvUrl = result.run_id ? `/api/reports/runs/${result.run_id}/csv` : '';
 
   function tryDownload(url: string, name: string) {
-    downloadReportExport(url, name).catch((err) => alert((err as Error).message));
+    downloadReportExport(url, name).catch((err) => {
+      void alert({ message: (err as Error).message, variant: 'error' });
+    });
   }
 
   return (

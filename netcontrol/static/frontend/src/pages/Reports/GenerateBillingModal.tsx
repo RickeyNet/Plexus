@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useBillingCircuits, useGenerateBilling } from '@/api/reports';
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function GenerateBillingModal({ isOpen, onClose }: Props) {
+  const { alert } = useDialogs();
   const circuitsQuery = useBillingCircuits(undefined, true);
   const generateMut = useGenerateBilling();
 
@@ -26,10 +28,12 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
       onSuccess: (r) => {
         const count = r?.count ?? 0;
         const overages = (r?.periods ?? []).filter((p) => p.status === 'overage').length;
-        alert(`Generated ${count} billing period(s)${overages > 0 ? ` - ${overages} overage(s) detected` : ''}`);
+        void alert(`Generated ${count} billing period(s)${overages > 0 ? ` - ${overages} overage(s) detected` : ''}`);
         onClose();
       },
-      onError: (err) => alert((err as Error).message),
+      onError: (err) => {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      },
     });
   }
 

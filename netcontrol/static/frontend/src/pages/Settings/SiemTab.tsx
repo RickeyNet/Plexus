@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   SiemSink,
   SiemSinkStats,
@@ -36,6 +37,7 @@ const EMPTY_SINK: SiemSink = {
 };
 
 export function SiemTab() {
+  const { confirm } = useDialogs();
   const query = useSiemSinks();
   const createMut = useCreateSiemSink();
   const updateMut = useUpdateSiemSink();
@@ -99,8 +101,8 @@ export function SiemTab() {
     }
   };
 
-  const onDelete = (s: SiemSink) => {
-    if (!confirm(`Delete SIEM sink "${s.name || s.id}"? Audit events will stop being forwarded to this target.`))
+  const onDelete = async (s: SiemSink) => {
+    if (!(await confirm(`Delete SIEM sink "${s.name || s.id}"? Audit events will stop being forwarded to this target.`)))
       return;
     deleteMut.mutate(s.id, {
       onSuccess: () =>

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useInventoryGroupsFull } from '@/api/inventory';
 import {
   useAlertRules,
@@ -13,6 +14,7 @@ import {
 import { severityColor } from './helpers';
 
 export function RulesTab() {
+  const { confirm, alert } = useDialogs();
   const rules = useAlertRules();
   const deleteMut = useDeleteAlertRule();
   const updateMut = useUpdateAlertRule();
@@ -20,13 +22,13 @@ export function RulesTab() {
 
   function toggleEnabled(r: AlertRule) {
     updateMut.mutate({ id: r.id, data: { enabled: !r.enabled } }, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 
-  function handleDelete(r: AlertRule) {
-    if (!confirm(`Delete rule '${r.name}'?`)) return;
-    deleteMut.mutate(r.id, { onError: (e) => alert((e as Error).message) });
+  async function handleDelete(r: AlertRule) {
+    if (!(await confirm(`Delete rule '${r.name}'?`))) return;
+    deleteMut.mutate(r.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   return (
@@ -84,6 +86,7 @@ export function RulesTab() {
 }
 
 function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const { alert } = useDialogs();
   const createMut = useCreateAlertRule();
   const groups = useInventoryGroupsFull(true);
   const [name, setName] = useState('');
@@ -120,7 +123,7 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
         setName(''); setValue('90'); setDescription(''); setHostId(''); setGroupId('');
         onClose();
       },
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 

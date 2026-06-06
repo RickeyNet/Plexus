@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useJobCredentials,
   useLaunchJob,
@@ -17,6 +18,7 @@ interface Props {
 }
 
 export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
+  const { alert } = useDialogs();
   const playbooksQuery = usePlaybooks();
   const groupsQuery = useInventoryGroupsFull(true);
   const credsQuery = useJobCredentials();
@@ -83,14 +85,14 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!playbookId) {
-      alert('Select a playbook');
+      void alert('Select a playbook');
       return;
     }
     const adHocList = adHocIps.trim()
       ? adHocIps.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
       : [];
     if (hostIds.size === 0 && adHocList.length === 0) {
-      alert('Select at least one host or enter an IP address');
+      void alert('Select at least one host or enter an IP address');
       return;
     }
     const depsList = dependsOn.trim()
@@ -122,7 +124,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
           onClose();
           onLaunched?.(r.job_id);
         },
-        onError: (err) => alert((err as Error).message),
+        onError: (err) => { void alert({ message: (err as Error).message, variant: 'error' }); },
       },
     );
   }

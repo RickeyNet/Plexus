@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type IpamSubnetDetail,
   useCreateIpamAllocation,
@@ -163,6 +164,7 @@ function ReservationsSection({
   reservations,
   onChanged,
 }: ReservationsSectionProps) {
+  const { confirm, alert } = useDialogs();
   const create = useCreateIpamReservation();
   const remove = useDeleteIpamReservation();
   const [showForm, setShowForm] = useState(false);
@@ -173,7 +175,7 @@ function ReservationsSection({
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!startIp.trim()) {
-      alert('Start IP is required.');
+      void alert('Start IP is required.');
       return;
     }
     try {
@@ -190,15 +192,17 @@ function ReservationsSection({
       setReason('');
       onChanged();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 
-  const handleDelete = (id: number) => {
-    if (!confirm('Delete this reserved range?')) return;
+  const handleDelete = async (id: number) => {
+    if (!(await confirm('Delete this reserved range?'))) return;
     remove.mutate(id, {
       onSuccess: () => onChanged(),
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 
@@ -354,6 +358,7 @@ function AllocationsSection({
   allocations,
   onChanged,
 }: AllocationsSectionProps) {
+  const { confirm, alert } = useDialogs();
   const create = useCreateIpamAllocation();
   const remove = useDeleteIpamAllocation();
   const [showForm, setShowForm] = useState(false);
@@ -364,7 +369,7 @@ function AllocationsSection({
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!address.trim()) {
-      alert('IP address is required.');
+      void alert('IP address is required.');
       return;
     }
     try {
@@ -381,15 +386,17 @@ function AllocationsSection({
       setDescription('');
       onChanged();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 
-  const handleDelete = (id: number) => {
-    if (!confirm('Remove this local allocation?')) return;
+  const handleDelete = async (id: number) => {
+    if (!(await confirm('Remove this local allocation?'))) return;
     remove.mutate(id, {
       onSuccess: () => onChanged(),
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 

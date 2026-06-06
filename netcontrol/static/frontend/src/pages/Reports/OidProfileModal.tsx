@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateOidProfile,
   useOidProfile,
@@ -16,6 +17,7 @@ interface Props {
 const DEFAULT_OIDS = '[\n  {"oid": "", "metric_name": "", "label": "", "type": "gauge"}\n]';
 
 export function OidProfileModal({ mode, profileId, onClose }: Props) {
+  const { alert } = useDialogs();
   const isOpen = mode != null;
   const profileQuery = useOidProfile(mode === 'edit' ? profileId : null);
   const createMut = useCreateOidProfile();
@@ -43,13 +45,13 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim()) {
-      alert('Profile name is required');
+      void alert('Profile name is required');
       return;
     }
     try {
       JSON.parse(oidsJson);
     } catch {
-      alert('Invalid OID JSON');
+      void alert('Invalid OID JSON');
       return;
     }
     const data = {
@@ -59,7 +61,7 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
       description: description.trim(),
       oids_json: oidsJson.trim(),
     };
-    const onError = (err: unknown) => alert((err as Error).message);
+    const onError = (err: unknown) => { void alert({ message: (err as Error).message, variant: 'error' }); };
     if (mode === 'edit' && profileId != null) {
       updateMut.mutate({ id: profileId, data }, { onSuccess: onClose, onError });
     } else {

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCancelJob,
   useJobQueue,
@@ -24,6 +25,7 @@ type DryRunFilter = 'all' | 'yes' | 'no';
 type DateRange = 'all' | 'today' | '7d' | '30d';
 
 export function JobsTab() {
+  const { confirm, alert } = useDialogs();
   const jobsQuery = useJobs(100);
   const queueQuery = useJobQueue();
   const cancelMut = useCancelJob();
@@ -56,15 +58,15 @@ export function JobsTab() {
       .sort(compareJobsDesc);
   }, [jobsQuery.data, query, status, dryRun, dateRange]);
 
-  function handleCancel(id: number) {
-    if (!confirm('Cancel this job?')) return;
-    cancelMut.mutate(id, { onError: (e) => alert((e as Error).message) });
+  async function handleCancel(id: number) {
+    if (!(await confirm('Cancel this job?'))) return;
+    cancelMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   function handleRetry(id: number) {
     retryMut.mutate(id, {
       onSuccess: (r) => setViewJobId(r.job_id),
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 

@@ -7,12 +7,14 @@ import {
 } from '@/api/configuration';
 import { apiRequest } from '@/api/client';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   onClose: () => void;
 }
 
 export function SetBaselineModal({ onClose }: Props) {
+  const { alert } = useDialogs();
   const groups = useInventoryGroups(true);
   const create = useCreateConfigBaseline();
   const [hostId, setHostId] = useState<number | null>(null);
@@ -32,7 +34,7 @@ export function SetBaselineModal({ onClose }: Props) {
 
   const handleFillSnapshot = async () => {
     if (!hostId) {
-      alert('Please select a host first');
+      await alert('Please select a host first');
       return;
     }
     setFillingSnapshot(true);
@@ -41,7 +43,7 @@ export function SetBaselineModal({ onClose }: Props) {
         `/config-drift/snapshots?host_id=${hostId}&limit=1`,
       );
       if (!snapshots.length) {
-        alert('No snapshots available for this host. Capture a config first.');
+        await alert('No snapshots available for this host. Capture a config first.');
         return;
       }
       const snap = await apiRequest<ConfigSnapshot>(
@@ -49,7 +51,7 @@ export function SetBaselineModal({ onClose }: Props) {
       );
       if (snap.config_text) setConfigText(snap.config_text);
     } catch (e) {
-      alert('Failed to load snapshot: ' + (e as Error).message);
+      void alert({ message: 'Failed to load snapshot: ' + (e as Error).message, variant: 'error' });
     } finally {
       setFillingSnapshot(false);
     }
@@ -62,7 +64,9 @@ export function SetBaselineModal({ onClose }: Props) {
       { host_id: hostId, name, config_text: configText },
       {
         onSuccess: () => onClose(),
-        onError: (err) => alert((err as Error).message),
+        onError: (err) => {
+          void alert({ message: (err as Error).message, variant: 'error' });
+        },
       },
     );
   };

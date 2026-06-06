@@ -6,6 +6,7 @@ import {
   floorImageUrl,
   useUpsertFloorPlacement,
 } from '@/api/floorPlan';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import { statusColor } from './statusColor';
 
@@ -32,6 +33,7 @@ interface Props {
  * Outside placeMode the layer is non-interactive (pointer-events: none).
  */
 export function FloorCanvas({ floor, placements, placeMode }: Props) {
+  const { alert } = useDialogs();
   const imgRef = useRef<HTMLImageElement | null>(null);
   // Cache-bust the image URL when the floor changes so a fresh upload is
   // visible without forcing the browser to disregard cache for unrelated
@@ -70,10 +72,12 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
             y_pct: finalPos.y,
           });
         } catch (err) {
-          alert(
-            'Failed to save pin position: ' +
+          void alert({
+            message:
+              'Failed to save pin position: ' +
               (err instanceof Error ? err.message : String(err)),
-          );
+            variant: 'error',
+          });
         }
       }
     };
@@ -141,10 +145,12 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
               y_pct: y,
             });
           } catch (err) {
-            alert(
-              'Failed to place device: ' +
+            void alert({
+              message:
+                'Failed to place device: ' +
                 (err instanceof Error ? err.message : String(err)),
-            );
+              variant: 'error',
+            });
           }
         }}
       >

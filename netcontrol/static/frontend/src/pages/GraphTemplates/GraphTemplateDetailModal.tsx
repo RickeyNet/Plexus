@@ -1,4 +1,5 @@
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useDeleteGraphTemplate,
   useGraphTemplate,
@@ -10,15 +11,16 @@ interface Props {
 }
 
 export function GraphTemplateDetailModal({ templateId, onClose }: Props) {
+  const { confirm, alert } = useDialogs();
   const isOpen = templateId != null;
   const query = useGraphTemplate(templateId);
   const deleteMut = useDeleteGraphTemplate();
 
-  function handleDelete(id: number) {
-    if (!confirm('Delete this graph template? This will also remove all host graph instances using it.')) return;
+  async function handleDelete(id: number) {
+    if (!(await confirm('Delete this graph template? This will also remove all host graph instances using it.'))) return;
     deleteMut.mutate(id, {
       onSuccess: onClose,
-      onError: (err) => alert((err as Error).message),
+      onError: (err) => { void alert({ message: (err as Error).message, variant: 'error' }); },
     });
   }
 

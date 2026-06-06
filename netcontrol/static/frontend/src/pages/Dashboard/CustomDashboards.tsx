@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { useCustomDashboards, useDeleteCustomDashboard } from '@/api/dashboard';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import { CreateDashboardModal } from './CreateDashboardModal';
 
 export function CustomDashboards() {
+  const { confirm } = useDialogs();
   const { data: dashboards = [], isPending, error } = useCustomDashboards();
   const deleteMutation = useDeleteCustomDashboard();
   const [showCreate, setShowCreate] = useState(false);
@@ -92,10 +94,10 @@ export function CustomDashboards() {
                 <button
                   className="btn btn-sm btn-danger"
                   title="Delete"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (!confirm(`Delete "${d.name}"? All panels will be removed.`)) return;
+                    if (!(await confirm(`Delete "${d.name}"? All panels will be removed.`))) return;
                     deleteMutation.mutate(d.id);
                   }}
                 >

@@ -8,6 +8,7 @@ import {
   useRunRiskAnalysis,
 } from '@/api/riskAnalysis';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   isOpen: boolean;
@@ -24,6 +25,7 @@ const CHANGE_TYPES = [
 ];
 
 export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
+  const { alert } = useDialogs();
   const groups = useRiskInventoryGroups();
   const creds = useRiskCredentials();
   const templates = useRiskTemplates();
@@ -39,7 +41,7 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
     e.preventDefault();
     const credId = parseInt(credentialId, 10);
     if (!credId) {
-      alert('Credential is required');
+      void alert('Credential is required');
       return;
     }
     const tplId = templateId ? parseInt(templateId, 10) : undefined;
@@ -47,7 +49,7 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
     if (!tplId) {
       const text = commands.trim();
       if (!text) {
-        alert('Enter proposed commands or select a template');
+        void alert('Enter proposed commands or select a template');
         return;
       }
       proposed = text.split('\n').filter((l) => l.trim());
@@ -67,7 +69,12 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           onClose();
           onAnalyzed(result);
         },
-        onError: (err) => alert(`Risk analysis failed: ${(err as Error).message}`),
+        onError: (err) => {
+          void alert({
+            message: `Risk analysis failed: ${(err as Error).message}`,
+            variant: 'error',
+          });
+        },
       },
     );
   };

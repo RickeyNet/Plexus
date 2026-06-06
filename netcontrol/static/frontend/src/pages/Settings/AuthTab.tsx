@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   AccessGroup,
   AdminCapabilities,
@@ -547,6 +548,7 @@ function NumberField({
 }
 
 function ServiceCredentialsSection() {
+  const { confirm } = useDialogs();
   const list = useServiceCredentialsList();
   const create = useCreateServiceCredential();
   const updateMut = useUpdateServiceCredential();
@@ -628,8 +630,8 @@ function ServiceCredentialsSection() {
     );
   };
 
-  const onDelete = (cred: CredentialSummary) => {
-    if (!window.confirm(`Delete service credential “${cred.name}”?`)) return;
+  const onDelete = async (cred: CredentialSummary) => {
+    if (!(await confirm(`Delete service credential “${cred.name}”?`))) return;
     remove.mutate(cred.id, {
       onSuccess: () =>
         setStatus({ kind: 'success', message: `Service credential “${cred.name}” deleted` }),
