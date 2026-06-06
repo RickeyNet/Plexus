@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 
 import { useAuthStatus } from '@/api/auth';
+import { prefetchRoute } from '@/lib/pageLoaders';
 
 // Navigation mirrors the legacy SPA sidebar (netcontrol/static/index.html). Each
 // item is either an internal React route (`to`) or a link back to the legacy UI
@@ -271,8 +272,17 @@ const NAV: TopItem[] = [
 function NavItem({ item, child }: { item: RouteItem | LegacyItem; child?: boolean }) {
   const cls = child ? 'nav-link nav-child-link' : 'nav-link';
   if (isRoute(item)) {
+    // Warm the page's chunk on hover/focus so it's usually downloaded before
+    // the click - turning a click-then-wait into an instant navigation.
+    const warm = () => prefetchRoute(item.to);
     return (
-      <NavLink to={item.to} end={item.to === '/'} className={({ isActive }) => (isActive ? `${cls} active` : cls)}>
+      <NavLink
+        to={item.to}
+        end={item.to === '/'}
+        className={({ isActive }) => (isActive ? `${cls} active` : cls)}
+        onMouseEnter={warm}
+        onFocus={warm}
+      >
         {item.icon}
         <span className="nav-label">{item.label}</span>
       </NavLink>
