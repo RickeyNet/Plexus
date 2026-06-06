@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -140,7 +140,9 @@ function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => vo
   const [enabled, setEnabled] = useState('1');
   const [description, setDescription] = useState('');
 
-  useEffect(() => {
+  const [prevData, setPrevData] = useState(query.data);
+  if (query.data !== prevData) {
+    setPrevData(query.data);
     const c = query.data;
     if (c) {
       setName(c.name ?? '');
@@ -151,7 +153,7 @@ function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => vo
       setEnabled(c.enabled ? '1' : '0');
       setDescription(c.description ?? '');
     }
-  }, [query.data]);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

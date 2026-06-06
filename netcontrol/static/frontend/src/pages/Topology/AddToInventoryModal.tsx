@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { useAddHost, useCreateInventoryGroup, useInventoryGroupsLite } from '@/api/topology';
 import { Modal } from '@/components/Modal';
@@ -23,11 +23,14 @@ export function AddToInventoryModal({ isOpen, hostname, ip, extNodeId, onClose, 
   const [selectedGroupId, setSelectedGroupId] = useState<number | ''>('');
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const [prevSeedKey, setPrevSeedKey] = useState<unknown>(null);
+  const seedKey = `${isOpen}|${groups.map((g) => g.id).join(',')}`;
+  if (seedKey !== prevSeedKey) {
+    setPrevSeedKey(seedKey);
     if (isOpen && selectedGroupId === '' && groups.length > 0) {
       setSelectedGroupId(groups[0].id);
     }
-  }, [isOpen, groups, selectedGroupId]);
+  }
 
   const hasGroups = groups.length > 0;
   const useNewGroupForm = !hasGroups || showNewGroup;

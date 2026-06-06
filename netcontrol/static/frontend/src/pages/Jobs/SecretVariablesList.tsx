@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -125,12 +125,14 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
 
-  useEffect(() => {
+  const [prevSecret, setPrevSecret] = useState(secret);
+  if (secret !== prevSecret) {
+    setPrevSecret(secret);
     if (secret) {
       setValue('');
       setDescription(secret.description ?? '');
     }
-  }, [secret]);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

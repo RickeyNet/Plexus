@@ -1,0 +1,105 @@
+E                                                                        [100%]
+=================================== ERRORS ====================================
+_____________ ERROR at setup of test_upsert_and_get_topology_link _____________
+
+tmp_path = WindowsPath('C:/Users/18652/AppData/Local/Temp/claude/pytest-of-Ack/pytest-2/test_upsert_and_get_topology_l0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001C8F8CAC510>
+
+    @pytest.fixture
+    async def topo_db(tmp_path, monkeypatch):
+        """Set up a fresh SQLite DB with schema for topology tests."""
+        db_path = str(tmp_path / "topo_test.db")
+        monkeypatch.setattr(db_module, "DB_PATH", db_path)
+        monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
+>       await db_module.init_db()
+
+tests\test_topology.py:440: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+routes\database.py:2685: in init_db
+    await run_migrations(db, engine=DB_ENGINE)
+routes\migrations\runner.py:231: in run_migrations
+    await mig["up"](db)
+routes\migrations\0045_add_icmp_columns_to_monitoring_polls.py:32: in up
+    await _up(db)
+routes\migrations\0045_add_icmp_columns_to_monitoring_polls.py:22: in _up
+    await db.execute(
+venv\Lib\site-packages\aiosqlite\core.py:223: in execute
+    cursor = await self._execute(self._conn.execute, sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+venv\Lib\site-packages\aiosqlite\core.py:160: in _execute
+    return await future
+           ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tx = <_queue.SimpleQueue object at 0x000001C8F8B6B940>
+
+    def _connection_worker_thread(tx: _TxQueue):
+        """
+        Execute function calls on a separate thread.
+    
+        :meta private:
+        """
+        while True:
+            # Continues running until all queue items are processed,
+            # even after connection is closed (so we can finalize all
+            # futures)
+    
+            future, function = tx.get()
+    
+            try:
+                LOG.debug("executing %s", function)
+>               result = function()
+                         ^^^^^^^^^^
+E               sqlite3.OperationalError: duplicate column name: icmp_alive
+
+venv\Lib\site-packages\aiosqlite\core.py:63: OperationalError
+---------------------------- Captured stderr setup ----------------------------
+2026-06-06 10:49:37,414 INFO [plexus.migrations] schema: marking v1.0.0 baseline migrations 1�32 as applied
+2026-06-06 10:49:37,453 INFO [plexus.migrations] schema: 16 pending migration(s) to apply
+2026-06-06 10:49:37,453 INFO [plexus.migrations] schema: applying migration 0033 - Add users.session_never_expires for kiosk/display accounts
+2026-06-06 10:49:37,454 INFO [plexus.migrations] schema: migration 0033 applied (1 ms)
+2026-06-06 10:49:37,454 INFO [plexus.migrations] schema: applying migration 0034 - Widen interface_stats / interface_ts octet columns to BIGINT
+2026-06-06 10:49:37,454 INFO [plexus.migrations] schema: migration 0034 applied (0 ms)
+2026-06-06 10:49:37,454 INFO [plexus.migrations] schema: applying migration 0035 - Add credentials.is_service flag for service-account credentials
+2026-06-06 10:49:37,455 INFO [plexus.migrations] schema: migration 0035 applied (0 ms)
+2026-06-06 10:49:37,455 INFO [plexus.migrations] schema: applying migration 0036 - Add flow_exporters table for per-device NetFlow/sFlow visibility
+2026-06-06 10:49:37,455 INFO [plexus.migrations] schema: migration 0036 applied (0 ms)
+2026-06-06 10:49:37,455 INFO [plexus.migrations] schema: applying migration 0037 - Hash-chain audit_events and block UPDATE/DELETE via triggers
+2026-06-06 10:49:37,461 INFO [plexus.migrations] schema: migration 0037 applied (5 ms)
+2026-06-06 10:49:37,461 INFO [plexus.migrations] schema: applying migration 0038 - Add jobs.parameters JSON column for per-job playbook parameters
+2026-06-06 10:49:37,463 INFO [plexus.migrations] schema: migration 0038 applied (2 ms)
+2026-06-06 10:49:37,463 INFO [plexus.migrations] schema: applying migration 0039 - Maintenance windows + deployment approval gates
+2026-06-06 10:49:37,465 INFO [plexus.migrations] schema: migration 0039 applied (2 ms)
+2026-06-06 10:49:37,466 INFO [plexus.migrations] schema: applying migration 0040 - Add templates.device_type; uniqueness on (name, device_type)
+2026-06-06 10:49:37,466 INFO [plexus.migrations] schema: migration 0040 applied (0 ms)
+2026-06-06 10:49:37,466 INFO [plexus.migrations] schema: applying migration 0041 - Add mac_move_events and mac_move_event_history tables
+2026-06-06 10:49:37,467 INFO [plexus.migrations] schema: migration 0041 applied (1 ms)
+2026-06-06 10:49:37,467 INFO [plexus.migrations] schema: applying migration 0042 - Add audit report tables (interfaces, VLANs, runs, findings, overrides, templates)
+2026-06-06 10:49:37,470 INFO [plexus.migrations] schema: migration 0042 applied (3 ms)
+2026-06-06 10:49:37,470 INFO [plexus.migrations] schema: applying migration 0043 - Add audit_schedules table and audit_runs.schedule_id column
+2026-06-06 10:49:37,474 INFO [plexus.migrations] schema: migration 0043 applied (3 ms)
+2026-06-06 10:49:37,474 INFO [plexus.migrations] schema: applying migration 0044 - Convert audit-table TIMESTAMPTZ columns to TEXT on Postgres
+2026-06-06 10:49:37,474 INFO [plexus.migrations] schema: migration 0044 applied (0 ms)
+2026-06-06 10:49:37,474 INFO [plexus.migrations] schema: applying migration 0045 - Add icmp_alive + icmp_rtt_ms to monitoring_polls
+2026-06-06 10:49:37,474 ERROR [plexus.migrations] schema: migration 0045 FAILED - database may need manual repair
+Traceback (most recent call last):
+  File "C:\Users\18652\Code\Plexus\routes\migrations\runner.py", line 231, in run_migrations
+    await mig["up"](db)
+  File "C:\Users\18652\Code\Plexus\routes\migrations\0045_add_icmp_columns_to_monitoring_polls.py", line 32, in up
+    await _up(db)
+  File "C:\Users\18652\Code\Plexus\routes\migrations\0045_add_icmp_columns_to_monitoring_polls.py", line 22, in _up
+    await db.execute(
+        "ALTER TABLE monitoring_polls ADD COLUMN icmp_alive INTEGER DEFAULT NULL"
+    )
+  File "C:\Users\18652\code\plexus\venv\Lib\site-packages\aiosqlite\core.py", line 223, in execute
+    cursor = await self._execute(self._conn.execute, sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\18652\code\plexus\venv\Lib\site-packages\aiosqlite\core.py", line 160, in _execute
+    return await future
+           ^^^^^^^^^^^^
+  File "C:\Users\18652\code\plexus\venv\Lib\site-packages\aiosqlite\core.py", line 63, in _connection_worker_thread
+    result = function()
+sqlite3.OperationalError: duplicate column name: icmp_alive
+=========================== short test summary info ===========================
+ERROR tests/test_topology.py::test_upsert_and_get_topology_link - sqlite3.Ope...
+1 error in 2.80s

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -60,10 +60,15 @@ function LoginRulesForm() {
   const update = useUpdateLoginRules();
   const [draft, setDraft] = useState<LoginRules | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [prevData, setPrevData] = useState(query.data);
 
-  useEffect(() => {
+  // Seed the editable draft from server data; re-seed when it changes.
+  // Adjusting state during render (guarded by the previous value) is React's
+  // recommended alternative to a setState-in-effect.
+  if (query.data !== prevData) {
+    setPrevData(query.data);
     if (query.data) setDraft(query.data);
-  }, [query.data]);
+  }
 
   if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
   if (query.isError)
@@ -136,10 +141,13 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
   const serviceCredentials = useServiceCredentialsList();
   const [draft, setDraft] = useState<AuthConfig | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [prevData, setPrevData] = useState(query.data);
 
-  useEffect(() => {
+  // Seed the editable draft from server data; re-seed when it changes.
+  if (query.data !== prevData) {
+    setPrevData(query.data);
     if (query.data) setDraft(query.data);
-  }, [query.data]);
+  }
 
   if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
   if (query.isError)

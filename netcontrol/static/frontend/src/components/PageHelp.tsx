@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 const STORAGE_KEY = 'plexus_help_dismissed';
 
@@ -27,9 +27,12 @@ function saveDismissed(d: Record<string, boolean>): void {
 export function PageHelp({ pageKey, title, text }: Props) {
   const [collapsed, setCollapsed] = useState<boolean>(() => !!loadDismissed()[pageKey]);
 
-  useEffect(() => {
+  const [prevPageKey, setPrevPageKey] = useState(pageKey);
+  // Re-read the dismissed state from storage when the page key changes.
+  if (pageKey !== prevPageKey) {
+    setPrevPageKey(pageKey);
     setCollapsed(!!loadDismissed()[pageKey]);
-  }, [pageKey]);
+  }
 
   function toggle() {
     setCollapsed((prev) => {

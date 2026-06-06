@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
@@ -90,7 +90,11 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
 
   const editorExtensions = useMemo(() => [type === 'ansible' ? yaml() : python()], [type]);
 
-  useEffect(() => {
+  const [prevMode, setPrevMode] = useState(mode);
+  const [prevData, setPrevData] = useState(detailQuery.data);
+  if (mode !== prevMode || detailQuery.data !== prevData) {
+    setPrevMode(mode);
+    setPrevData(detailQuery.data);
     if (mode === 'create') {
       setType('python'); setName(''); setFilename(''); setDescription('');
       setTagsStr(''); setContent(PYTHON_DEFAULT); setContentDirty(false);
@@ -104,7 +108,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       setContent(pb.content ?? '');
       setContentDirty(false);
     }
-  }, [mode, detailQuery.data]);
+  }
 
   function handleTypeChange(newType: PlaybookType) {
     setType(newType);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -36,9 +36,15 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
   }, [result.data]);
 
   const credList = useMemo(() => credentials.data || [], [credentials.data]);
-  useEffect(() => {
+  const [prevCredList, setPrevCredList] = useState(credList);
+  const [prevCredentialId, setPrevCredentialId] = useState(credentialId);
+  // Default to the first credential whenever the selection is cleared or the
+  // list loads/changes (mirrors the original credentialId/credList effect).
+  if (credList !== prevCredList || credentialId !== prevCredentialId) {
+    setPrevCredList(credList);
+    setPrevCredentialId(credentialId);
     if (credentialId == null && credList.length > 0) setCredentialId(credList[0].id);
-  }, [credentialId, credList]);
+  }
 
   const fixable = findings.filter(
     (f) => !f.passed && f.remediation && f.remediation.length > 0,

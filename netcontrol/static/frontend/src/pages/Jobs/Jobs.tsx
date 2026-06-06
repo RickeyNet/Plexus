@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { PageHelp } from '@/components/PageHelp';
@@ -65,9 +65,11 @@ export function Jobs() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>(() => tabFromPath(pathname));
 
-  useEffect(() => {
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
     setTab(tabFromPath(pathname));
-  }, [pathname]);
+  }
 
   function selectTab(t: Tab) {
     const target = TABS.find((x) => x.key === t)!;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { apiRequest } from '@/api/client';
@@ -120,51 +120,51 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
     return set;
   }, [existing]);
 
-  // Hydrate state from campaign + apply default image once images load
-  useEffect(() => {
-    if (hydrated) return;
+  // Hydrate state from campaign + apply default image once images load. This
+  // runs during render (guarded by `hydrated`) so it seeds the editable draft
+  // exactly once per open, before paint. `images` is read but intentionally
+  // not a guard key: a background images refetch must not overwrite
+  // user-edited rows.
+  if (!hydrated) {
     if (isEdit) {
-      if (!existing || imagesQ.isPending) return;
-      const opts = parseObject(existing.options);
-      const map = parseObject(existing.image_map);
-      const rows: ImageMapRow[] = Object.entries(map).map(([k, v]) => ({
-        pattern: k,
-        image: String(v),
-      }));
-      setName(existing.name);
-      setDescription(existing.description || '');
-      setCredentialId(
-        typeof opts.credential_id === 'number' ? opts.credential_id : '',
-      );
-      setImageMapRows(rows.length ? rows : [{ pattern: '', image: images[0]?.filename ?? '' }]);
-      setOptions({
-        skip_backup: Boolean(opts.skip_backup),
-        skip_md5: Boolean(opts.skip_md5),
-        skip_health_check: Boolean(opts.skip_health_check),
-        verify_upgrade: opts.verify_upgrade !== false,
-        parallel: typeof opts.parallel === 'number' ? opts.parallel : 4,
-        retries: typeof opts.retries === 'number' ? opts.retries : 2,
-      });
-      const ids = new Set<number>();
-      const ips: string[] = [];
-      for (const d of existing.devices) {
-        if (d.host_id) ids.add(d.host_id);
-        else ips.push(d.ip_address);
+      if (existing && !imagesQ.isPending) {
+        const opts = parseObject(existing.options);
+        const map = parseObject(existing.image_map);
+        const rows: ImageMapRow[] = Object.entries(map).map(([k, v]) => ({
+          pattern: k,
+          image: String(v),
+        }));
+        setName(existing.name);
+        setDescription(existing.description || '');
+        setCredentialId(
+          typeof opts.credential_id === 'number' ? opts.credential_id : '',
+        );
+        setImageMapRows(rows.length ? rows : [{ pattern: '', image: images[0]?.filename ?? '' }]);
+        setOptions({
+          skip_backup: Boolean(opts.skip_backup),
+          skip_md5: Boolean(opts.skip_md5),
+          skip_health_check: Boolean(opts.skip_health_check),
+          verify_upgrade: opts.verify_upgrade !== false,
+          parallel: typeof opts.parallel === 'number' ? opts.parallel : 4,
+          retries: typeof opts.retries === 'number' ? opts.retries : 2,
+        });
+        const ids = new Set<number>();
+        const ips: string[] = [];
+        for (const d of existing.devices) {
+          if (d.host_id) ids.add(d.host_id);
+          else ips.push(d.ip_address);
+        }
+        setHostIds(ids);
+        setAdHocIps(ips.join('\n'));
+        setHydrated(true);
       }
-      setHostIds(ids);
-      setAdHocIps(ips.join('\n'));
-      setHydrated(true);
-    } else {
-      if (imagesQ.isPending) return;
+    } else if (!imagesQ.isPending) {
       setImageMapRows([
         { pattern: '9200', image: autoSelectImage('9200', images) },
       ]);
       setHydrated(true);
     }
-    // `images` intentionally omitted: hydration must run once per open and a
-    // background images refetch should not overwrite user-edited rows.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, isEdit, existing, imagesQ.isPending]);
+  }
 
   const setRow = (i: number, patch: Partial<ImageMapRow>) => {
     setImageMapRows((rows) =>

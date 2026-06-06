@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import {
   type DashboardPanel,
@@ -56,25 +56,32 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
   const [gridW, setGridW] = useState(6);
   const [gridH, setGridH] = useState(4);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    if (panel) {
-      const q = parseQuery(panel.metric_query_json);
-      setTitle(panel.title || '');
-      setChartType(panel.chart_type || 'line');
-      setMetric(q.metric ?? 'cpu_percent');
-      setHost(q.host ?? '*');
-      setGridW(panel.grid_w || 6);
-      setGridH(panel.grid_h || 4);
-    } else {
-      setTitle('');
-      setChartType('line');
-      setMetric('cpu_percent');
-      setHost('*');
-      setGridW(6);
-      setGridH(4);
+  // Seed form fields when the modal opens or the edited panel changes.
+  const [prevSeed, setPrevSeed] = useState<{ isOpen: boolean; panel?: DashboardPanel | null }>({
+    isOpen,
+    panel,
+  });
+  if (prevSeed.isOpen !== isOpen || prevSeed.panel !== panel) {
+    setPrevSeed({ isOpen, panel });
+    if (isOpen) {
+      if (panel) {
+        const q = parseQuery(panel.metric_query_json);
+        setTitle(panel.title || '');
+        setChartType(panel.chart_type || 'line');
+        setMetric(q.metric ?? 'cpu_percent');
+        setHost(q.host ?? '*');
+        setGridW(panel.grid_w || 6);
+        setGridH(panel.grid_h || 4);
+      } else {
+        setTitle('');
+        setChartType('line');
+        setMetric('cpu_percent');
+        setHost('*');
+        setGridW(6);
+        setGridH(4);
+      }
     }
-  }, [isOpen, panel]);
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

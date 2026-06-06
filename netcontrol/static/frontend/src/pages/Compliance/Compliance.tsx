@@ -297,7 +297,7 @@ function ProfilesTab({
   return (
     <>
       {filtered.map((p) => {
-        let rules: { name?: string; pattern?: string }[] = [];
+        let rules: { name?: string; pattern?: string }[];
         try {
           rules = JSON.parse(p.rules || '[]');
         } catch {

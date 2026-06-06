@@ -295,9 +295,23 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
 
   const hint = authHintContent(provider);
 
-  useEffect(() => {
+  const [prevProvider, setPrevProvider] = useState(provider);
+  const [prevName, setPrevName] = useState(name);
+  const [prevAccountIdentifier, setPrevAccountIdentifier] = useState(accountIdentifier);
+  const [prevAuthConfigText, setPrevAuthConfigText] = useState(authConfigText);
+  // Clear the error when any of the editable identity fields change.
+  if (
+    provider !== prevProvider ||
+    name !== prevName ||
+    accountIdentifier !== prevAccountIdentifier ||
+    authConfigText !== prevAuthConfigText
+  ) {
+    setPrevProvider(provider);
+    setPrevName(name);
+    setPrevAccountIdentifier(accountIdentifier);
+    setPrevAuthConfigText(authConfigText);
     setError(null);
-  }, [provider, name, accountIdentifier, authConfigText]);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

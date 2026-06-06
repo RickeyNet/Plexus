@@ -14,17 +14,25 @@ export function EditImageModal({ image, onClose }: Props) {
   const [version, setVersion] = useState('');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [prevImage, setPrevImage] = useState(image);
 
-  useEffect(() => {
+  // Re-seed the form when a different image is opened. Adjusting state during
+  // render (guarded by the previous value) is React's recommended alternative
+  // to a setState-in-effect and avoids an extra render pass.
+  if (image !== prevImage) {
+    setPrevImage(image);
     if (image) {
       setModelPattern(image.model_pattern || '');
       setVersion(image.version || '');
       setNotes(image.notes || '');
       setError(null);
-      update.reset();
     }
-    // `update` is stable across renders only by identity-spec - depend on
-    // image alone so we don't reset the form on every parent re-render.
+  }
+
+  useEffect(() => {
+    // Clear any stale mutation state when a new image is opened. This is an
+    // external-store side effect, so it stays in an effect.
+    if (image) update.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image]);
 

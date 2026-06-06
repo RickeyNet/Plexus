@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import type { CloudSyncConfig, CloudSyncCursor, CloudSyncStatus } from '@/api/cloud';
 import { formatTimestamp, providerLabel } from './helpers';
@@ -21,11 +21,14 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
   const [interval, setInterval] = useState<number>(300);
   const [lookback, setLookback] = useState<number>(15);
 
-  useEffect(() => {
+  const [prevConfig, setPrevConfig] = useState(config);
+  // Re-seed the editable fields from the incoming config when it changes.
+  if (config !== prevConfig) {
+    setPrevConfig(config);
     setEnabled(Boolean(config?.enabled));
     setInterval(Number(config?.interval_seconds ?? 300));
     setLookback(Number(config?.lookback_minutes ?? 15));
-  }, [config]);
+  }
 
   function statusLabel(): string {
     if (!status) return `No ${kind.toLowerCase()} sync action recorded yet.`;

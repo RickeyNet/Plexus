@@ -46,20 +46,33 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   // reset on jobId change. (isOpen is derived from jobId, so depending
   // on both would run this twice per open and clear freshly-arrived
   // live events.)
-  useEffect(() => {
+  const [prevJobId, setPrevJobId] = useState(jobId);
+  if (jobId !== prevJobId) {
+    setPrevJobId(jobId);
     setLiveEvents([]);
     setLiveStatus(null);
     setWsState('idle');
     setConfirmRunLive(false);
     setConfirmCancel(false);
-  }, [jobId]);
+  }
 
   const job = jobQuery.data;
   const isLive = job && (job.status === 'running' || job.status === 'queued');
 
+  // Seed the "connecting" state in render whenever a (re)connect is about
+  // to happen, so the synchronous transition stays out of the effect body.
+  // Mirrors the effect's gate + dep list: any change to isOpen/jobId/isLive
+  // that lands on a connectable state starts a fresh connection.
+  const shouldConnect = Boolean(isOpen && jobId && isLive);
+  const connectKey = shouldConnect ? `${jobId}` : null;
+  const [prevConnectKey, setPrevConnectKey] = useState(connectKey);
+  if (connectKey !== prevConnectKey) {
+    setPrevConnectKey(connectKey);
+    if (connectKey) setWsState('connecting');
+  }
+
   useEffect(() => {
     if (!isOpen || !jobId || !isLive) return;
-    setWsState('connecting');
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws/jobs/${jobId}`);
     wsRef.current = ws;

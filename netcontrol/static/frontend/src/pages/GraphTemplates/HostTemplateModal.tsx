@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -26,7 +26,13 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
   const [deviceTypes, setDeviceTypes] = useState('');
   const [autoApply, setAutoApply] = useState(true);
 
-  useEffect(() => {
+  // Seed form fields from mode / loaded template data; re-seed when either changes.
+  const [prevSeed, setPrevSeed] = useState<{ mode: typeof mode; data: typeof query.data }>({
+    mode,
+    data: query.data,
+  });
+  if (prevSeed.mode !== mode || prevSeed.data !== query.data) {
+    setPrevSeed({ mode, data: query.data });
     if (mode === 'create') {
       setName(''); setDescription(''); setDeviceTypes(''); setAutoApply(true);
     } else if (mode === 'edit' && query.data) {
@@ -40,7 +46,7 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
       setDeviceTypes(dts.join(', '));
       setAutoApply(!!ht.auto_apply);
     }
-  }, [mode, query.data]);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

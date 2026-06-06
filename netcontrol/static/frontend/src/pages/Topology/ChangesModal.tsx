@@ -27,11 +27,18 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
   const [error, setError] = useState<string | null>(null);
   const ack = useAcknowledgeTopologyChanges();
 
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+  if (isOpen !== prevOpen) {
+    setPrevOpen(isOpen);
+    if (isOpen) {
+      setLoading(true);
+      setError(null);
+    }
+  }
+
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     fetchTopologyChanges(true, 200)
       .then((r) => {
         if (cancelled) return;

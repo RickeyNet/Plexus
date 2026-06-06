@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -41,10 +41,11 @@ function TopologyDiscoverySection() {
   const runNow = useRunTopologyDiscovery();
   const [draft, setDraft] = useState<TopologyDiscoveryConfig | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
-
-  useEffect(() => {
+  const [prevData, setPrevData] = useState(query.data);
+  if (query.data !== prevData) {
+    setPrevData(query.data);
     if (query.data) setDraft(query.data);
-  }, [query.data]);
+  }
 
   if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
   if (query.isError)
@@ -147,10 +148,11 @@ function StpDiscoverySection() {
   const runNow = useRunStpDiscovery();
   const [draft, setDraft] = useState<StpDiscoveryConfig | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
-
-  useEffect(() => {
+  const [prevData, setPrevData] = useState(query.data);
+  if (query.data !== prevData) {
+    setPrevData(query.data);
     if (query.data) setDraft(query.data);
-  }, [query.data]);
+  }
 
   if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
   if (query.isError)
@@ -306,12 +308,13 @@ function StpRootPoliciesSection() {
   const [hostname, setHostname] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
-
-  useEffect(() => {
+  const [prevGroups, setPrevGroups] = useState(groups.data);
+  if (groups.data !== prevGroups) {
+    setPrevGroups(groups.data);
     if (groupId === '' && groups.data && groups.data.length > 0) {
       setGroupId(groups.data[0].id);
     }
-  }, [groups.data, groupId]);
+  }
 
   return (
     <div>

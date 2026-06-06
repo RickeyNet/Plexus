@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import {
   type UpdateChannel,
@@ -32,10 +32,11 @@ export function SystemTab() {
 
   const [draft, setDraft] = useState<UpdatesConfig | null>(null);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
-
-  useEffect(() => {
+  const [prevData, setPrevData] = useState(configQ.data);
+  if (configQ.data !== prevData) {
+    setPrevData(configQ.data);
     if (configQ.data) setDraft(configQ.data);
-  }, [configQ.data]);
+  }
 
   if (status.isLoading || configQ.isLoading || !draft) {
     return <p className="text-muted">Loading…</p>;

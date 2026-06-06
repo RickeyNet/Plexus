@@ -144,9 +144,11 @@ export function Topology() {
   }, [positions]);
 
   // Sync change badge from topology fetch.
-  useEffect(() => {
+  const [prevUnackChanges, setPrevUnackChanges] = useState(data?.unacknowledged_changes);
+  if (data?.unacknowledged_changes !== prevUnackChanges) {
+    setPrevUnackChanges(data?.unacknowledged_changes);
     if (data?.unacknowledged_changes != null) setChangeBadge(data.unacknowledged_changes);
-  }, [data?.unacknowledged_changes]);
+  }
 
   // Initial STP event badge fetch.
   useEffect(() => {

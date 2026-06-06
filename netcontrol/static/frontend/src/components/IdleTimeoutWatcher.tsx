@@ -22,9 +22,13 @@ export function IdleTimeoutWatcher() {
 
   const clockOffset = useMemo(() => {
     if (!data?.server_time) return 0;
+    // Date.now() at the moment server_time changes is the intended (impure)
+    // read used to compute the client/server clock skew.
+    // eslint-disable-next-line react-hooks/purity
     return data.server_time - Math.floor(Date.now() / 1000);
   }, [data?.server_time]);
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const deadline = useMemo(() => {
     if (!data?.authenticated) return null;
     if (data.session_never_expires) return null;

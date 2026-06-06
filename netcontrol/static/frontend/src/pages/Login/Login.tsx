@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { useLogin, useRegister } from '@/api/auth';
 import { ApiError } from '@/api/client';
@@ -30,9 +30,11 @@ export function Login({ allowRegister = true }: Props) {
   const login = useLogin();
   const register = useRegister();
 
-  useEffect(() => {
+  const [prevMode, setPrevMode] = useState(mode);
+  if (mode !== prevMode) {
+    setPrevMode(mode);
     setError(null);
-  }, [mode]);
+  }
 
   async function onLogin(e: React.FormEvent) {
     e.preventDefault();

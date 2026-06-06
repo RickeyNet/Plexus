@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { useCredentials, useInventoryGroups } from '@/api/compliance';
 import {
@@ -33,14 +33,21 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
   );
   const [retentionDays, setRetentionDays] = useState(policy?.retention_days ?? 30);
 
-  useEffect(() => {
+  // Seed default selections from server data when it arrives (create mode only).
+  const [prevGroups, setPrevGroups] = useState(groups.data);
+  if (groups.data !== prevGroups) {
+    setPrevGroups(groups.data);
     if (!isEdit && groups.data && groupId == null && groups.data.length > 0) {
       setGroupId(groups.data[0].id);
     }
+  }
+  const [prevCreds, setPrevCreds] = useState(creds.data);
+  if (creds.data !== prevCreds) {
+    setPrevCreds(creds.data);
     if (!isEdit && creds.data && credId == null && creds.data.length > 0) {
       setCredId(creds.data[0].id);
     }
-  }, [isEdit, groups.data, creds.data, groupId, credId]);
+  }
 
   const isPending = create.isPending || update.isPending;
 

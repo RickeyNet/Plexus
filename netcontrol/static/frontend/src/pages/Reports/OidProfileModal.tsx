@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -29,7 +29,11 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
   const [description, setDescription] = useState('');
   const [oidsJson, setOidsJson] = useState(DEFAULT_OIDS);
 
-  useEffect(() => {
+  const [prevMode, setPrevMode] = useState(mode);
+  const [prevData, setPrevData] = useState(profileQuery.data);
+  if (mode !== prevMode || profileQuery.data !== prevData) {
+    setPrevMode(mode);
+    setPrevData(profileQuery.data);
     if (mode === 'create') {
       setName(''); setVendor(''); setDeviceType(''); setDescription(''); setOidsJson(DEFAULT_OIDS);
     } else if (mode === 'edit' && profileQuery.data) {
@@ -40,7 +44,7 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
       setDescription(p.description ?? '');
       setOidsJson(p.oids_json ?? '[]');
     }
-  }, [mode, profileQuery.data]);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

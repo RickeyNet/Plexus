@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { useChangePassword } from '@/api/auth';
 import { Modal } from './Modal';
@@ -19,14 +19,17 @@ export function ChangePasswordModal({ isOpen, onClose, onSuccess, forced = false
   const [error, setError] = useState<string | null>(null);
   const change = useChangePassword();
 
-  useEffect(() => {
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  // Reset the form whenever the modal transitions open.
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen);
     if (isOpen) {
       setCurrent('');
       setNext('');
       setConfirm('');
       setError(null);
     }
-  }, [isOpen]);
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

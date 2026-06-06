@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -44,21 +44,23 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
 
   // Seed defaults whenever the user picks a different playbook so the form
   // shows the schema's defaults instead of stale state from a prior selection.
-  useEffect(() => {
+  const [prevPbId, setPrevPbId] = useState(selectedPb?.id);
+  if (selectedPb?.id !== prevPbId) {
+    setPrevPbId(selectedPb?.id);
     if (!selectedPb) {
       setParamValues({});
-      return;
-    }
-    const seeded: Record<string, string | boolean> = {};
-    for (const f of paramSchema) {
-      if (f.type === 'bool') {
-        seeded[f.name] = typeof f.default === 'boolean' ? f.default : false;
-      } else {
-        seeded[f.name] = f.default == null ? '' : String(f.default);
+    } else {
+      const seeded: Record<string, string | boolean> = {};
+      for (const f of paramSchema) {
+        if (f.type === 'bool') {
+          seeded[f.name] = typeof f.default === 'boolean' ? f.default : false;
+        } else {
+          seeded[f.name] = f.default == null ? '' : String(f.default);
+        }
       }
+      setParamValues(seeded);
     }
-    setParamValues(seeded);
-  }, [selectedPb?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   function reset() {
     setPlaybookId(''); setCredentialId(''); setTemplateId('');

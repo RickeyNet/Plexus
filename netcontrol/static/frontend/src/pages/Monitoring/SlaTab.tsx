@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -444,7 +444,11 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
   const [groupId, setGroupId] = useState('');
   const [hostId, setHostId] = useState('');
 
-  useEffect(() => {
+  const [prevTarget, setPrevTarget] = useState(target);
+  const [prevIsCreate, setPrevIsCreate] = useState(isCreate);
+  if (target !== prevTarget || isCreate !== prevIsCreate) {
+    setPrevTarget(target);
+    setPrevIsCreate(isCreate);
     if (target) {
       setName(target.name);
       setMetric(target.metric);
@@ -457,7 +461,7 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
       setName(''); setMetric('uptime'); setTargetValue('99.9'); setWarningValue('99.0');
       setScope('global'); setGroupId(''); setHostId('');
     }
-  }, [target, isCreate]);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

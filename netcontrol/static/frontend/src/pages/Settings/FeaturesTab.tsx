@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import {
   AdminCapabilities,
@@ -19,9 +19,11 @@ export function FeaturesTab({
   // If the capabilities query refetches with a different hidden list (e.g.
   // another admin saved changes), fold the server state back into the local
   // draft so we don't display stale toggles.
-  useEffect(() => {
+  const [prevHidden, setPrevHidden] = useState(capabilities.feature_visibility.hidden);
+  if (capabilities.feature_visibility.hidden !== prevHidden) {
+    setPrevHidden(capabilities.feature_visibility.hidden);
     setHidden(new Set(capabilities.feature_visibility.hidden));
-  }, [capabilities.feature_visibility.hidden]);
+  }
 
   const catalog = capabilities.feature_visibility.catalog;
 

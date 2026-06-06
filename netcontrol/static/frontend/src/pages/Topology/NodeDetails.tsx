@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import {
   type StpState,
@@ -73,9 +73,11 @@ export function NodeDetails({
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
 
   // Reset to overview whenever the operator picks a different node
-  useEffect(() => {
+  const [prevNodeId, setPrevNodeId] = useState(node.id);
+  if (node.id !== prevNodeId) {
+    setPrevNodeId(node.id);
     setActiveTab('overview');
-  }, [node.id]);
+  }
 
   // Tabs other than overview are only meaningful for inventory devices --
   // the data sources are keyed by host_id and unknown nodes don't have one.
@@ -216,10 +218,13 @@ function OverviewTab(props: {
   const [error, setError] = useState<string | null>(null);
   const updateCategory = useUpdateHostCategory();
 
-  useEffect(() => {
+  const [prevNodeKey, setPrevNodeKey] = useState(`${node.id}|${node.device_category ?? ''}`);
+  const nodeKey = `${node.id}|${node.device_category ?? ''}`;
+  if (nodeKey !== prevNodeKey) {
+    setPrevNodeKey(nodeKey);
     setCategory(node.device_category ?? '');
     setError(null);
-  }, [node.id, node.device_category]);
+  }
 
   const connectedEdges = edges.filter(
     (e) => e.from === node.id || e.to === node.id,

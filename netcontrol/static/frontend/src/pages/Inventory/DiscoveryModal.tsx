@@ -83,7 +83,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     updated: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tickNow, setTickNow] = useState(Date.now());
+  const [tickNow, setTickNow] = useState(() => Date.now());
 
   const scanAbortRef = useRef<AbortController | null>(null);
 
