@@ -37,11 +37,22 @@ export function DeploymentJobStreamModal({
   const outputRef = useRef<HTMLPreElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Reset the streamed output/status when a new stream is about to open.
+  // The WebSocket wiring itself stays in the effect below.
+  const [prevStreamKey, setPrevStreamKey] = useState<string>(
+    `${isOpen}|${jobId}|${deploymentId}`,
+  );
+  const streamKey = `${isOpen}|${jobId}|${deploymentId}`;
+  if (streamKey !== prevStreamKey) {
+    setPrevStreamKey(streamKey);
+    if (isOpen && jobId) {
+      setOutput('');
+      setStatus({ kind: 'connecting' });
+    }
+  }
+
   useEffect(() => {
     if (!isOpen || !jobId) return;
-
-    setOutput('');
-    setStatus({ kind: 'connecting' });
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws/deployment/${jobId}`);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { useAuthStatus } from '@/api/auth';
@@ -83,9 +83,11 @@ export function DeviceDetail() {
     () => ALL_TABS.filter((t) => t.id !== 'flow' || !flowHidden),
     [flowHidden],
   );
-  useEffect(() => {
-    if (flowHidden && tab === 'flow') setTab('overview');
-  }, [flowHidden, tab]);
+  // If the Flow feature gets hidden while its tab is active, fall back to
+  // Overview. Done during render (prev-value guard) instead of in an effect.
+  if (flowHidden && tab === 'flow') {
+    setTab('overview');
+  }
 
   const loadOverview = tab === 'overview';
   const loadInterfaces = tab === 'interfaces';

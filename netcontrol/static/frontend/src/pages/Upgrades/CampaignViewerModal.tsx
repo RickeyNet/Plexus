@@ -384,15 +384,23 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
   const canCancelActivateDevices =
     isActivateRunning || activateCancelTargetCount > 0;
 
+  // Reset the live websocket-backed state whenever we switch campaigns, before
+  // the effect below opens the new socket. Doing this in render (not the
+  // effect) keeps the seeding setStates out of the effect body.
+  const [prevCampaignId, setPrevCampaignId] = useState(campaignId);
+  if (campaignId !== prevCampaignId) {
+    setPrevCampaignId(campaignId);
+    setWsState('connecting');
+    setLiveLines([]);
+    setLiveStatuses({});
+  }
+
   // WebSocket for live events
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(
       `${protocol}//${window.location.host}/ws/upgrades/${campaignId}`,
     );
-    setWsState('connecting');
-    setLiveLines([]);
-    setLiveStatuses({});
 
     ws.onopen = () => setWsState('open');
     ws.onerror = () => setWsState('error');

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -38,13 +38,23 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
   const credList = credentials.data || [];
   const groupList = useMemo(() => groups.data || [], [groups.data]);
 
-  // Auto-select defaults once data loads.
-  useEffect(() => {
+  // Auto-select defaults once data loads (or when a selection is cleared while a
+  // list is present — mirrors the original profileId/profileList and
+  // groupId/groupList effects).
+  const [prevProfileList, setPrevProfileList] = useState(profileList);
+  const [prevProfileId, setPrevProfileId] = useState(profileId);
+  if (profileList !== prevProfileList || profileId !== prevProfileId) {
+    setPrevProfileList(profileList);
+    setPrevProfileId(profileId);
     if (profileId == null && profileList.length > 0) setProfileId(profileList[0].id);
-  }, [profileId, profileList]);
-  useEffect(() => {
+  }
+  const [prevGroupList, setPrevGroupList] = useState(groupList);
+  const [prevGroupId, setPrevGroupId] = useState(groupId);
+  if (groupList !== prevGroupList || groupId !== prevGroupId) {
+    setPrevGroupList(groupList);
+    setPrevGroupId(groupId);
     if (groupId == null && groupList.length > 0) setGroupId(groupList[0].id);
-  }, [groupId, groupList]);
+  }
 
   const selectedGroup = groupList.find((g) => g.id === groupId);
   const selectedGroupHostCount = (selectedGroup?.hosts || []).length;

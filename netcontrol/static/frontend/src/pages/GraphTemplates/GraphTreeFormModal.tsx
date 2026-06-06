@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -24,14 +24,20 @@ export function GraphTreeFormModal({ mode, treeId, onClose }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
 
-  useEffect(() => {
+  // Seed form fields from mode / loaded tree data; re-seed when either changes.
+  const [prevSeed, setPrevSeed] = useState<{ mode: typeof mode; data: typeof query.data }>({
+    mode,
+    data: query.data,
+  });
+  if (prevSeed.mode !== mode || prevSeed.data !== query.data) {
+    setPrevSeed({ mode, data: query.data });
     if (mode === 'create') {
       setName(''); setDescription('');
     } else if (mode === 'edit' && query.data) {
       setName(query.data.name ?? '');
       setDescription(query.data.description ?? '');
     }
-  }, [mode, query.data]);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

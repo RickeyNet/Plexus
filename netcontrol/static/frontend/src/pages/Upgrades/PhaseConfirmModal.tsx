@@ -48,14 +48,14 @@ export function PhaseConfirmModal({
       ? `${deviceIds.length} selected device(s)`
       : 'all campaign devices';
 
-  const initialSchedule = useMemo(defaultScheduleValue, []);
+  const initialSchedule = useMemo(() => defaultScheduleValue(), []);
   const [scheduledAt, setScheduledAt] = useState(initialSchedule.value);
   const [error, setError] = useState<string | null>(null);
   const timezone =
     Intl.DateTimeFormat().resolvedOptions().timeZone || 'local timezone';
 
   useEffect(() => {
-    setError(null);
+    // Clear any stale mutation state on open (error starts null already).
     execute.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

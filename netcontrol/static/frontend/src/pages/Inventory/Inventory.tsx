@@ -517,6 +517,10 @@ function GroupCard({
   // never reach the max height, so no scrollbar appears and they render in
   // full - visually identical to before.
   const scrollRef = useRef<HTMLDivElement>(null);
+  // @tanstack/react-virtual returns a mutable virtualizer instance the React
+  // Compiler can't model, so it skips compiling this component. Usage is
+  // correct; suppress the advisory rather than refactor a working virtualizer.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: sortedHosts.length,
     getScrollElement: () => scrollRef.current,
