@@ -678,6 +678,103 @@ async def _run_alert_escalation() -> int:
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
+async def _process_poll_result(h: dict, res: dict, alert_rules_cache: list) -> int:
+    """Persist one poll result and run availability/alerting/metrics/baseline/
+    churn for the host. Returns the number of alerts created.
+
+    Invoked per-host as each poll completes (see ``_run_monitoring_poll_once``)
+    so this DB and alert work overlaps with the network polls still in flight,
+    rather than running as a serial tail after every device has been polled.
+    """
+    alerts_created = 0
+
+    # Store poll result
+    poll_id = await db.create_monitoring_poll(
+        host_id=res["host_id"],
+        cpu_percent=res["cpu_percent"],
+        memory_percent=res["memory_percent"],
+        memory_used_mb=res["memory_used_mb"],
+        memory_total_mb=res["memory_total_mb"],
+        uptime_seconds=res["uptime_seconds"],
+        if_up_count=res["if_up_count"],
+        if_down_count=res["if_down_count"],
+        if_admin_down=res["if_admin_down"],
+        if_details=json.dumps(res["if_details"]),
+        vpn_tunnels_up=res["vpn_tunnels_up"],
+        vpn_tunnels_down=res["vpn_tunnels_down"],
+        vpn_details=json.dumps(res["vpn_details"]),
+        route_count=res["route_count"],
+        route_snapshot=res["route_snapshot"][:5000],
+        poll_status=res["poll_status"],
+        poll_error=res["poll_error"],
+        response_time_ms=res.get("response_time_ms"),
+        packet_loss_pct=res.get("packet_loss_pct"),
+        icmp_alive=res.get("icmp_alive"),
+        icmp_rtt_ms=res.get("icmp_rtt_ms"),
+    )
+
+    # ── Availability Tracking: detect state transitions ──
+    try:
+        await _track_availability_from_poll(
+            res, poll_id,
+            hostname=h.get("hostname"),
+            ip_address=h.get("ip_address"),
+        )
+    except Exception as exc:
+        LOGGER.debug("availability: tracking error for host %s: %s",
+                     res["host_id"], str(exc))
+
+    # ── Alerting Engine: evaluate built-in thresholds + user rules ──
+    alerts_created += await _evaluate_alerts_for_poll(
+        res, poll_id, h.get("group_id"), alert_rules_cache)
+
+    # ── Metrics Engine: emit flexible metric samples + interface TS ──
+    try:
+        await emit_metric_samples_from_poll(res)
+        await store_interface_ts_from_poll(res["host_id"], res.get("if_details", []))
+        await store_interface_error_metrics_from_poll(res["host_id"], res.get("if_details", []))
+    except Exception as exc:
+        LOGGER.debug("metrics: emission error for host %s: %s",
+                     res["host_id"], redact_value(str(exc)))
+
+    # ── Baseline Deviation Alerting ──
+    try:
+        from netcontrol.routes.baseline_alerting import evaluate_baseline_alerts_for_poll
+        baseline_alerts = await evaluate_baseline_alerts_for_poll(res, poll_id)
+        alerts_created += baseline_alerts
+    except Exception as exc:
+        LOGGER.debug("baseline: evaluation error for host %s: %s",
+                     res["host_id"], redact_value(str(exc)))
+
+    # Route churn detection
+    if res["route_snapshot"]:
+        route_hash = hashlib.sha256(res["route_snapshot"].encode()).hexdigest()[:16]
+        prev_snap = await db.get_latest_route_snapshot(res["host_id"])
+        if prev_snap is None or prev_snap["routes_hash"] != route_hash:
+            await db.create_route_snapshot(
+                host_id=res["host_id"],
+                route_count=res["route_count"],
+                routes_text=res["route_snapshot"][:10000],
+                routes_hash=route_hash,
+            )
+            if prev_snap is not None:
+                delta = abs(res["route_count"] - prev_snap["route_count"])
+                suppressed = await db.is_alert_suppressed(
+                    res["host_id"], "route_churn", h.get("group_id"))
+                if not suppressed:
+                    await db.create_monitoring_alert(
+                        host_id=res["host_id"], poll_id=poll_id,
+                        alert_type="churn", metric="route_churn",
+                        message=f"Route table changed: {prev_snap['route_count']} -> {res['route_count']} routes (delta: {delta})",
+                        severity="warning" if delta < 10 else "critical",
+                        value=float(delta),
+                        dedup_key=f"{res['host_id']}:route_churn:churn",
+                    )
+                    alerts_created += 1
+
+    return alerts_created
+
+
 async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     """Run one monitoring poll cycle across all groups with SNMP enabled."""
     from netcontrol.routes.state import _resolve_snmp_discovery_config
@@ -721,108 +818,44 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
             targets.append((h, default_cred, snmp_cfg))
 
     async def _poll_one(h, c, s):
+        # Returns (host, result, error) so as_completed can attribute each
+        # result to its host; the per-device timeout/exception is captured
+        # rather than raised (see streaming poll for details).
         async with sem:
-            # Bound each device so one unresponsive host can't stall the
-            # whole scheduled cycle (see streaming poll for details).
-            return await asyncio.wait_for(
-                _poll_host_monitoring(h, c, s), timeout=poll_timeout
-            )
+            try:
+                res = await asyncio.wait_for(
+                    _poll_host_monitoring(h, c, s), timeout=poll_timeout
+                )
+                return h, res, None
+            except Exception as exc:  # noqa: BLE001 - recorded per host below
+                return h, None, exc
 
     tasks = [asyncio.create_task(_poll_one(h, c, s)) for h, c, s in targets]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for (h, _c, _s), res in zip(targets, results):
-        if isinstance(res, Exception):
+    # Process each host as its poll completes rather than after the whole
+    # batch finishes, so the per-host DB writes + alert/metric/baseline/churn
+    # work overlaps with the network polls still in flight instead of running
+    # as a serial tail once every device has been polled.
+    for coro in asyncio.as_completed(tasks):
+        try:
+            h, res, err = await coro
+        except Exception as exc:  # task crashed without host context
+            errors += 1
+            LOGGER.warning("monitoring: poll task crashed: %s", redact_value(str(exc)))
+            continue
+
+        if err is not None:
             errors += 1
             LOGGER.warning("monitoring: poll exception for %s: %s",
-                           h.get("hostname", "?"), redact_value(str(res)))
+                           h.get("hostname", "?"), redact_value(str(err)))
             continue
 
         hosts_polled += 1
-
-        # Store poll result
-        poll_id = await db.create_monitoring_poll(
-            host_id=res["host_id"],
-            cpu_percent=res["cpu_percent"],
-            memory_percent=res["memory_percent"],
-            memory_used_mb=res["memory_used_mb"],
-            memory_total_mb=res["memory_total_mb"],
-            uptime_seconds=res["uptime_seconds"],
-            if_up_count=res["if_up_count"],
-            if_down_count=res["if_down_count"],
-            if_admin_down=res["if_admin_down"],
-            if_details=json.dumps(res["if_details"]),
-            vpn_tunnels_up=res["vpn_tunnels_up"],
-            vpn_tunnels_down=res["vpn_tunnels_down"],
-            vpn_details=json.dumps(res["vpn_details"]),
-            route_count=res["route_count"],
-            route_snapshot=res["route_snapshot"][:5000],
-            poll_status=res["poll_status"],
-            poll_error=res["poll_error"],
-            response_time_ms=res.get("response_time_ms"),
-            packet_loss_pct=res.get("packet_loss_pct"),
-            icmp_alive=res.get("icmp_alive"),
-            icmp_rtt_ms=res.get("icmp_rtt_ms"),
-        )
-
-        # ── Availability Tracking: detect state transitions ──
         try:
-            await _track_availability_from_poll(
-                res, poll_id,
-                hostname=h.get("hostname"),
-                ip_address=h.get("ip_address"),
-            )
-        except Exception as exc:
-            LOGGER.debug("availability: tracking error for host %s: %s",
-                         res["host_id"], str(exc))
-
-        # ── Alerting Engine: evaluate built-in thresholds + user rules ──
-        alerts_created += await _evaluate_alerts_for_poll(
-            res, poll_id, h.get("group_id"), alert_rules_cache)
-
-        # ── Metrics Engine: emit flexible metric samples + interface TS ──
-        try:
-            await emit_metric_samples_from_poll(res)
-            await store_interface_ts_from_poll(res["host_id"], res.get("if_details", []))
-            await store_interface_error_metrics_from_poll(res["host_id"], res.get("if_details", []))
-        except Exception as exc:
-            LOGGER.debug("metrics: emission error for host %s: %s",
-                         res["host_id"], redact_value(str(exc)))
-
-        # ── Baseline Deviation Alerting ──
-        try:
-            from netcontrol.routes.baseline_alerting import evaluate_baseline_alerts_for_poll
-            baseline_alerts = await evaluate_baseline_alerts_for_poll(res, poll_id)
-            alerts_created += baseline_alerts
-        except Exception as exc:
-            LOGGER.debug("baseline: evaluation error for host %s: %s",
-                         res["host_id"], redact_value(str(exc)))
-
-        # Route churn detection
-        if res["route_snapshot"]:
-            route_hash = hashlib.sha256(res["route_snapshot"].encode()).hexdigest()[:16]
-            prev_snap = await db.get_latest_route_snapshot(res["host_id"])
-            if prev_snap is None or prev_snap["routes_hash"] != route_hash:
-                await db.create_route_snapshot(
-                    host_id=res["host_id"],
-                    route_count=res["route_count"],
-                    routes_text=res["route_snapshot"][:10000],
-                    routes_hash=route_hash,
-                )
-                if prev_snap is not None:
-                    delta = abs(res["route_count"] - prev_snap["route_count"])
-                    suppressed = await db.is_alert_suppressed(
-                        res["host_id"], "route_churn", h.get("group_id"))
-                    if not suppressed:
-                        await db.create_monitoring_alert(
-                            host_id=res["host_id"], poll_id=poll_id,
-                            alert_type="churn", metric="route_churn",
-                            message=f"Route table changed: {prev_snap['route_count']} -> {res['route_count']} routes (delta: {delta})",
-                            severity="warning" if delta < 10 else "critical",
-                            value=float(delta),
-                            dedup_key=f"{res['host_id']}:route_churn:churn",
-                        )
-                        alerts_created += 1
+            alerts_created += await _process_poll_result(h, res, alert_rules_cache)
+        except Exception as exc:  # one host's persistence must not abort the cycle
+            LOGGER.warning("monitoring: post-process error for %s: %s",
+                           h.get("hostname", "?"), redact_value(str(exc)))
 
     # Retention cleanup - throttled. These are full-table DELETE scans; running
     # them every cycle (as often as every 60s) is wasteful, so only run once
