@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { useUpdateProfile } from '@/api/auth';
 import { Modal } from './Modal';
@@ -15,12 +15,18 @@ export function EditProfileModal({ isOpen, onClose, username, initialDisplayName
   const [error, setError] = useState<string | null>(null);
   const update = useUpdateProfile();
 
-  useEffect(() => {
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  const [prevInitialDisplayName, setPrevInitialDisplayName] = useState(initialDisplayName);
+  // Re-seed the draft from the initial display name whenever the modal opens
+  // or the incoming initial value changes.
+  if (isOpen !== prevIsOpen || initialDisplayName !== prevInitialDisplayName) {
+    setPrevIsOpen(isOpen);
+    setPrevInitialDisplayName(initialDisplayName);
     if (isOpen) {
       setDisplayName(initialDisplayName);
       setError(null);
     }
-  }, [isOpen, initialDisplayName]);
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

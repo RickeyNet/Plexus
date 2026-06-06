@@ -37,8 +37,9 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   // Cache-bust the image URL when the floor changes so a fresh upload is
   // visible without forcing the browser to disregard cache for unrelated
-  // requests. floor.id / floor.image_filename are intentional triggers.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // requests. floor.id / floor.image_filename are intentional triggers, and
+  // Date.now() is the intended (impure) cache-buster.
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/purity
   const cacheKey = useMemo(() => Date.now(), [floor.id, floor.image_filename]);
   const upsert = useUpsertFloorPlacement();
   const [draggedHostId, setDraggedHostId] = useState<number | null>(null);
@@ -95,6 +96,7 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
   // (Closure captures the initial state, which is null.)
   const dragPosRef = useRef<{ x: number; y: number } | null>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/immutability -- refs are mutable by design
     dragPosRef.current = dragPos;
   }, [dragPos]);
 

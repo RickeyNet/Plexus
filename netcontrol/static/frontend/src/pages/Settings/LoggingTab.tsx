@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import {
   SyslogConfig,
@@ -21,10 +21,11 @@ export function LoggingTab() {
   const test = useTestSyslog();
   const [draft, setDraft] = useState<SyslogConfig | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
-
-  useEffect(() => {
+  const [prevData, setPrevData] = useState(query.data);
+  if (query.data !== prevData) {
+    setPrevData(query.data);
     if (query.data) setDraft(query.data);
-  }, [query.data]);
+  }
 
   if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
   if (query.isError)

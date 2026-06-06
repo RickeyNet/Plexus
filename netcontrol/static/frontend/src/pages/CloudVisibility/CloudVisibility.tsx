@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
@@ -60,9 +60,12 @@ export function CloudVisibility() {
   const [tab, setTab] = useState<Tab>(() => tabFromPath(pathname));
   const [filter, setFilter] = useState<CloudFilterState>({ provider: '', accountId: null });
 
-  useEffect(() => {
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  // Sync the active tab with the current route when navigation changes it.
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
     setTab(tabFromPath(pathname));
-  }, [pathname]);
+  }
 
   const providers = useCloudProviders();
   const accounts = useCloudAccounts(filter.provider || undefined);

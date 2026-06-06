@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { type InventoryGroupFull } from '@/api/inventory';
 import {
@@ -64,29 +64,36 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
   const [error, setError] = useState('');
 
   // Reset form when opening or when the existing window changes.
-  useEffect(() => {
-    if (!isOpen) return;
-    if (editingId && existing.data) {
-      setForm({
-        name: existing.data.name,
-        description: existing.data.description,
-        start_at: existing.data.start_at,
-        end_at: existing.data.end_at,
-        recurrence: existing.data.recurrence,
-        weekday_mask: existing.data.weekday_mask,
-        policy: existing.data.policy,
-        enabled: !!existing.data.enabled,
-        group_ids: existing.data.group_ids || [],
-      });
-      setStartLocal(isoToLocalInput(existing.data.start_at));
-      setEndLocal(isoToLocalInput(existing.data.end_at));
-    } else if (!editingId) {
-      setForm(DEFAULT_PAYLOAD);
-      setStartLocal('');
-      setEndLocal('');
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  const [prevEditingId, setPrevEditingId] = useState(editingId);
+  const [prevExisting, setPrevExisting] = useState(existing.data);
+  if (isOpen !== prevIsOpen || editingId !== prevEditingId || existing.data !== prevExisting) {
+    setPrevIsOpen(isOpen);
+    setPrevEditingId(editingId);
+    setPrevExisting(existing.data);
+    if (isOpen) {
+      if (editingId && existing.data) {
+        setForm({
+          name: existing.data.name,
+          description: existing.data.description,
+          start_at: existing.data.start_at,
+          end_at: existing.data.end_at,
+          recurrence: existing.data.recurrence,
+          weekday_mask: existing.data.weekday_mask,
+          policy: existing.data.policy,
+          enabled: !!existing.data.enabled,
+          group_ids: existing.data.group_ids || [],
+        });
+        setStartLocal(isoToLocalInput(existing.data.start_at));
+        setEndLocal(isoToLocalInput(existing.data.end_at));
+      } else if (!editingId) {
+        setForm(DEFAULT_PAYLOAD);
+        setStartLocal('');
+        setEndLocal('');
+      }
+      setError('');
     }
-    setError('');
-  }, [isOpen, editingId, existing.data]);
+  }
 
   const isEdit = editingId != null;
   const isPending = create.isPending || update.isPending;

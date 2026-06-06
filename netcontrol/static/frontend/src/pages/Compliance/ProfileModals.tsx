@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -93,20 +93,20 @@ export function EditProfileModal({
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
-  useEffect(() => {
-    if (!profile || hydrated) return;
+  // Hydrate the editable fields once the profile loads (one-time latch).
+  if (profile && !hydrated) {
+    setHydrated(true);
     setName(profile.name);
     setDescription(profile.description || '');
     setSeverity((SEVERITIES.find((s) => s === profile.severity) ?? 'medium') as (typeof SEVERITIES)[number]);
-    let pretty = '[]';
+    let pretty: string;
     try {
       pretty = JSON.stringify(JSON.parse(profile.rules || '[]'), null, 2);
     } catch {
       pretty = profile.rules || '[]';
     }
     setRulesText(pretty);
-    setHydrated(true);
-  }, [profile, hydrated]);
+  }
 
   return (
     <Modal isOpen onClose={onClose} title="Edit Compliance Profile">
@@ -183,12 +183,17 @@ export function AssignProfileModal({
   const groupList = groups.data || [];
   const credList = useMemo(() => credentials.data || [], [credentials.data]);
 
-  // Default to first credential when loaded.
-  useEffect(() => {
+  // Default to first credential when loaded (or when selection is cleared
+  // while a list is present — mirrors the original credentialId/credList effect).
+  const [prevCredList, setPrevCredList] = useState(credList);
+  const [prevCredentialId, setPrevCredentialId] = useState(credentialId);
+  if (credList !== prevCredList || credentialId !== prevCredentialId) {
+    setPrevCredList(credList);
+    setPrevCredentialId(credentialId);
     if (credentialId == null && credList.length > 0) {
       setCredentialId(credList[0].id);
     }
-  }, [credentialId, credList]);
+  }
 
   return (
     <Modal isOpen onClose={onClose} title="Assign Profile to Groups">

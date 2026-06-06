@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -43,7 +43,11 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
   const [content, setContent] = useState('');
   const [deviceType, setDeviceType] = useState('');
 
-  useEffect(() => {
+  const [prevMode, setPrevMode] = useState(mode);
+  const [prevData, setPrevData] = useState(detailQuery.data);
+  if (mode !== prevMode || detailQuery.data !== prevData) {
+    setPrevMode(mode);
+    setPrevData(detailQuery.data);
     if (mode === 'create') {
       setName(''); setDescription(''); setContent(''); setDeviceType('');
     } else if (mode === 'edit' && detailQuery.data) {
@@ -52,7 +56,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
       setContent(detailQuery.data.content ?? '');
       setDeviceType(detailQuery.data.device_type ?? '');
     }
-  }, [mode, detailQuery.data]);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

@@ -14,13 +14,18 @@ export function NewImageModal({ isOpen, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
 
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+  if (isOpen !== prevOpen) {
+    setPrevOpen(isOpen);
     if (!isOpen) {
       setFile(null);
       setError(null);
       setProgress(null);
-      upload.reset();
     }
+  }
+
+  useEffect(() => {
+    if (!isOpen) upload.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 

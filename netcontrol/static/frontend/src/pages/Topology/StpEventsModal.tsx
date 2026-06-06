@@ -19,11 +19,18 @@ export function StpEventsModal({ isOpen, onClose, onAcknowledged }: Props) {
   const [error, setError] = useState<string | null>(null);
   const ack = useAcknowledgeStpEvents();
 
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+  if (isOpen !== prevOpen) {
+    setPrevOpen(isOpen);
+    if (isOpen) {
+      setLoading(true);
+      setError(null);
+    }
+  }
+
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     fetchTopologyStpEvents(true, 300)
       .then((r) => { if (!cancelled) setEvents(r.events ?? []); })
       .catch((e: Error) => { if (!cancelled) setError(e.message); })
