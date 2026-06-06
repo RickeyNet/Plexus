@@ -2,6 +2,7 @@ import { useMemo, useState, ReactNode } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { PageHelp } from '@/components/PageHelp';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { TopologyCanvas } from '@/pages/TopologyCanvas';
 import {
   LabDeviceSummary,
@@ -328,6 +329,7 @@ function EnvironmentDetail({
   onSelectDevice,
   onEnvDeleted,
 }: EnvironmentDetailProps) {
+  const { confirm } = useDialogs();
   const deleteEnv = useDeleteEnvironment();
   const deleteDevice = useDeleteDevice(envId);
   const [createDeviceOpen, setCreateDeviceOpen] = useState(false);
@@ -365,9 +367,9 @@ function EnvironmentDetail({
             className="btn btn-danger"
             onClick={async () => {
               if (
-                !confirm(
+                !(await confirm(
                   `Delete environment "${env.name}"? This removes all devices and runs.`,
-                )
+                ))
               )
                 return;
               await deleteEnv.mutateAsync(env.id);
@@ -424,7 +426,7 @@ function EnvironmentDetail({
                         type="button"
                         className="btn btn-sm btn-danger"
                         onClick={async () => {
-                          if (!confirm(`Delete device "${d.hostname}"?`)) return;
+                          if (!(await confirm(`Delete device "${d.hostname}"?`))) return;
                           if (selectedDeviceId === d.id) onSelectDevice(null);
                           await deleteDevice.mutateAsync(d.id);
                         }}
@@ -454,6 +456,7 @@ function EnvironmentDetail({
 // ── Create device modal ────────────────────────────────────────────────────
 
 function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => void }) {
+  const { alert } = useDialogs();
   const [hostname, setHostname] = useState('');
   const [ip, setIp] = useState('');
   const [deviceType, setDeviceType] = useState('cisco_ios');
@@ -555,7 +558,10 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
               await clone.mutateAsync({ host_id: Number(cloneHostId) });
               onClose();
             } catch (err) {
-              alert(`Clone failed: ${(err as Error).message}`);
+              void alert({
+                message: `Clone failed: ${(err as Error).message}`,
+                variant: 'error',
+              });
             }
           }}
         >
@@ -787,6 +793,7 @@ function RunDetailModal({ runId, onClose }: { runId: number; onClose: () => void
 // ── Phase B-1: containerlab runtime card ──────────────────────────────────
 
 function RuntimeCard({ deviceId }: { deviceId: number }) {
+  const { confirm } = useDialogs();
   const status = useRuntimeStatus();
   const device = useDevice(deviceId);
   const events = useRuntimeEvents(deviceId);
@@ -922,7 +929,7 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
             className="btn btn-danger"
             disabled={destroy.isPending}
             onClick={async () => {
-              if (!confirm('Destroy the containerlab runtime for this device?')) return;
+              if (!(await confirm('Destroy the containerlab runtime for this device?'))) return;
               await destroy.mutateAsync();
             }}
           >
@@ -973,6 +980,7 @@ function TopologiesCard({
   envId: number;
   devices: LabDeviceSummary[];
 }) {
+  const { confirm } = useDialogs();
   const list = useTopologies(envId);
   const create = useCreateTopology(envId);
   const remove = useDeleteTopology(envId);
@@ -1078,7 +1086,7 @@ function TopologiesCard({
                     className="btn btn-sm btn-danger"
                     disabled={t.status === 'running'}
                     onClick={async () => {
-                      if (!confirm(`Delete topology "${t.name}"?`)) return;
+                      if (!(await confirm(`Delete topology "${t.name}"?`))) return;
                       if (openId === t.id) setOpenId(null);
                       await remove.mutateAsync(t.id);
                     }}
@@ -1108,6 +1116,7 @@ function TopologyEditor({
   topologyId: number;
   envDevices: LabDeviceSummary[];
 }) {
+  const { confirm } = useDialogs();
   const topo = useTopology(topologyId);
   const addMember = useAddTopologyMember(topologyId);
   const removeMember = useRemoveTopologyMember(topologyId);
@@ -1168,7 +1177,7 @@ function TopologyEditor({
           className="btn btn-danger"
           disabled={destroy.isPending || t.status === 'destroyed' || t.status === ''}
           onClick={async () => {
-            if (!confirm('Destroy topology?')) return;
+            if (!(await confirm('Destroy topology?'))) return;
             await destroy.mutateAsync();
           }}
         >

@@ -6,6 +6,7 @@ import { yaml } from '@codemirror/lang-yaml';
 import { dracula } from '@uiw/codemirror-theme-dracula';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreatePlaybook,
   usePlaybook,
@@ -73,6 +74,7 @@ const ANSIBLE_DEFAULT = `---
 `;
 
 export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
+  const { alert } = useDialogs();
   const isOpen = mode != null;
   const detailQuery = usePlaybook(mode === 'edit' ? playbookId : null);
   const createMut = useCreatePlaybook();
@@ -114,7 +116,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim() || !filename.trim() || !content.trim()) {
-      alert('Name, filename, and content are required');
+      void alert('Name, filename, and content are required');
       return;
     }
     let fname = filename.trim();
@@ -132,7 +134,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       content,
       type,
     };
-    const onError = (err: unknown) => alert((err as Error).message);
+    const onError = (err: unknown) => { void alert({ message: (err as Error).message, variant: 'error' }); };
     if (mode === 'edit' && playbookId != null) {
       updateMut.mutate({ id: playbookId, data }, { onSuccess: onClose, onError });
     } else {

@@ -7,6 +7,7 @@ import {
   useUpdatePanel,
 } from '@/api/dashboard';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface PanelMetricQuery {
   metric?: string;
@@ -43,6 +44,7 @@ function parseQuery(json: string | undefined): PanelMetricQuery {
 }
 
 export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
+  const { alert } = useDialogs();
   const create = useCreatePanel(dashboardId);
   const update = useUpdatePanel(dashboardId);
   const editing = panel != null;
@@ -88,7 +90,9 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
       grid_h: Math.min(Math.max(gridH, 1), 12),
     };
 
-    const onError = (err: unknown) => alert((err as Error).message);
+    const onError = (err: unknown) => {
+      void alert({ message: (err as Error).message, variant: 'error' });
+    };
     if (editing && panel) {
       update.mutate(
         { panelId: panel.id, data: payload },

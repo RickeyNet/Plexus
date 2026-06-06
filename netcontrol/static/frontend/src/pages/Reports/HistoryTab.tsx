@@ -1,11 +1,13 @@
 import { useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useReportRuns, type ReportRun } from '@/api/reports';
 
 import { ArtifactsModal } from './ArtifactsModal';
 import { downloadReportExport } from './helpers';
 
 export function HistoryTab() {
+  const { alert } = useDialogs();
   const query = useReportRuns();
   const [artifactsRunId, setArtifactsRunId] = useState<number | null>(null);
 
@@ -32,9 +34,9 @@ export function HistoryTab() {
   }
 
   function downloadCsv(runId: number) {
-    downloadReportExport(`/api/reports/runs/${runId}/csv`, `report_${runId}.csv`).catch((err) =>
-      alert((err as Error).message),
-    );
+    downloadReportExport(`/api/reports/runs/${runId}/csv`, `report_${runId}.csv`).catch((err) => {
+      void alert({ message: (err as Error).message, variant: 'error' });
+    });
   }
 
   return (

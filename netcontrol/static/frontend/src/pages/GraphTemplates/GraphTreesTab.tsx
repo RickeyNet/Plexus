@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useDeleteGraphTree,
   useGraphTrees,
@@ -10,6 +11,7 @@ import { GraphTreeFormModal } from './GraphTreeFormModal';
 import { GraphTreeDetailModal } from './GraphTreeDetailModal';
 
 export function GraphTreesTab() {
+  const { confirm, alert } = useDialogs();
   const query = useGraphTrees();
   const deleteMut = useDeleteGraphTree();
   const [formMode, setFormMode] = useState<{ mode: 'create' } | { mode: 'edit'; treeId: number } | null>(null);
@@ -17,10 +19,10 @@ export function GraphTreesTab() {
 
   const items: GraphTree[] = query.data?.graph_trees ?? [];
 
-  function handleDelete(id: number) {
-    if (!confirm('Delete this graph tree and all its nodes?')) return;
+  async function handleDelete(id: number) {
+    if (!(await confirm('Delete this graph tree and all its nodes?'))) return;
     deleteMut.mutate(id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 

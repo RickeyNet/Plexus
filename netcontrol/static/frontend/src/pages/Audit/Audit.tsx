@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useAuditRuns,
   useAuditFindings,
@@ -483,6 +484,7 @@ const SCHEDULE_PRESETS: { label: string; value: string }[] = [
 ];
 
 function SchedulesCard() {
+  const { confirm } = useDialogs();
   const schedules = useAuditSchedules();
   const update = useUpdateAuditSchedule();
   const remove = useDeleteAuditSchedule();
@@ -585,9 +587,9 @@ function SchedulesCard() {
                     className="btn btn-sm btn-danger"
                     style={{ marginLeft: '0.25rem' }}
                     disabled={remove.isPending}
-                    onClick={() => {
+                    onClick={async () => {
                       if (
-                        confirm(`Delete schedule "${s.name}"?`)
+                        await confirm(`Delete schedule "${s.name}"?`)
                       ) {
                         remove.mutate(s.id);
                       }
@@ -823,6 +825,7 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
 // ── Overrides card + Mute dialog (Phase 6) ─────────────────────────────────
 
 function OverridesCard() {
+  const { confirm } = useDialogs();
   const overrides = useAuditOverrides();
   const remove = useDeleteAuditOverride();
   const rows = overrides.data?.overrides ?? [];
@@ -889,8 +892,8 @@ function OverridesCard() {
                   <button
                     className="btn btn-sm btn-danger"
                     disabled={remove.isPending}
-                    onClick={() => {
-                      if (confirm('Remove this override?')) {
+                    onClick={async () => {
+                      if (await confirm('Remove this override?')) {
                         remove.mutate(o.id);
                       }
                     }}

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type DhcpServer,
   type DhcpServerPayload,
@@ -18,6 +19,7 @@ export function DhcpServerModal({ server, onClose }: Props) {
   const providers = useDhcpProviders();
   const create = useCreateDhcpServer();
   const update = useUpdateDhcpServer();
+  const { alert } = useDialogs();
   const isEdit = server != null;
 
   const [provider, setProvider] = useState(server?.provider ?? '');
@@ -35,11 +37,11 @@ export function DhcpServerModal({ server, onClose }: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!provider) {
-      alert('Select a provider.');
+      void alert('Select a provider.');
       return;
     }
     if (!name.trim() || !baseUrl.trim()) {
-      alert('Name and base URL are required.');
+      void alert('Name and base URL are required.');
       return;
     }
     const auth_config: Record<string, string> = {};
@@ -66,7 +68,7 @@ export function DhcpServerModal({ server, onClose }: Props) {
       }
       onClose();
     } catch (err) {
-      alert((err as Error).message);
+      void alert({ message: (err as Error).message, variant: 'error' });
     }
   };
 

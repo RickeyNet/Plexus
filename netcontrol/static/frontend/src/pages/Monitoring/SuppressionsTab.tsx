@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { useInventoryGroupsFull } from '@/api/inventory';
 import {
   useAlertSuppressions,
@@ -13,14 +14,15 @@ import { parseBackendDate } from '@/pages/Dashboard/helpers';
 import { formatTimestamp } from './helpers';
 
 export function SuppressionsTab() {
+  const { confirm, alert } = useDialogs();
   const suppressions = useAlertSuppressions();
   const deleteMut = useDeleteSuppression();
   const [showCreate, setShowCreate] = useState(false);
   const now = new Date();
 
-  function handleDelete(s: AlertSuppression) {
-    if (!confirm(`Delete suppression '${s.name}'?`)) return;
-    deleteMut.mutate(s.id, { onError: (e) => alert((e as Error).message) });
+  async function handleDelete(s: AlertSuppression) {
+    if (!(await confirm(`Delete suppression '${s.name}'?`))) return;
+    deleteMut.mutate(s.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   return (
@@ -76,6 +78,7 @@ function toLocalInput(d: Date): string {
 }
 
 function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const { alert } = useDialogs();
   const createMut = useCreateSuppression();
   const groups = useInventoryGroupsFull(true);
   const allHosts = (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: g.name })));
@@ -92,17 +95,17 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!starts) {
-      alert('Start time is required');
+      void alert('Start time is required');
       return;
     }
     if (!ends) {
-      alert('End time is required');
+      void alert('End time is required');
       return;
     }
     const startsDate = new Date(starts);
     const endsDate = new Date(ends);
     if (Number.isNaN(startsDate.getTime()) || Number.isNaN(endsDate.getTime())) {
-      alert('Invalid start or end time');
+      void alert('Invalid start or end time');
       return;
     }
     const data: SuppressionCreate = {
@@ -120,7 +123,7 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
         setName(''); setReason(''); setHostId(''); setGroupId(''); setMetric('');
         onClose();
       },
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 

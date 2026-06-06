@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateSecretVariable,
   useDeleteSecretVariable,
@@ -10,14 +11,15 @@ import {
 } from '@/api/jobs';
 
 export function SecretVariablesList() {
+  const { confirm, alert } = useDialogs();
   const query = useSecretVariables();
   const deleteMut = useDeleteSecretVariable();
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<SecretVariable | null>(null);
 
-  function handleDelete(v: SecretVariable) {
-    if (!confirm(`Delete secret '${v.name}'? Templates referencing {{secret.${v.name}}} will fail.`)) return;
-    deleteMut.mutate(v.id, { onError: (e) => alert((e as Error).message) });
+  async function handleDelete(v: SecretVariable) {
+    if (!(await confirm(`Delete secret '${v.name}'? Templates referencing {{secret.${v.name}}} will fail.`))) return;
+    deleteMut.mutate(v.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   return (
@@ -61,6 +63,7 @@ export function SecretVariablesList() {
 }
 
 function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const { alert } = useDialogs();
   const createMut = useCreateSecretVariable();
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
@@ -69,14 +72,14 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim() || !value) {
-      alert('Name and value are required');
+      void alert('Name and value are required');
       return;
     }
     createMut.mutate(
       { name: name.trim(), value, description: description.trim() },
       {
         onSuccess: () => { setName(''); setValue(''); setDescription(''); onClose(); },
-        onError: (e) => alert((e as Error).message),
+        onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
       },
     );
   }
@@ -117,6 +120,7 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
 }
 
 function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; onClose: () => void }) {
+  const { alert } = useDialogs();
   const updateMut = useUpdateSecretVariable();
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
@@ -135,7 +139,7 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
     if (value) data.value = value;
     updateMut.mutate({ id: secret.id, data }, {
       onSuccess: () => { setValue(''); setDescription(''); onClose(); },
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 

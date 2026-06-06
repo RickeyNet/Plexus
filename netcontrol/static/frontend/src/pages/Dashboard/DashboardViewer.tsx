@@ -10,6 +10,7 @@ import {
   useDeletePanel,
   useInventoryGroupsForDashboard,
 } from '@/api/dashboard';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 import { Panel } from './Panel';
 import { PanelModal } from './PanelModal';
@@ -25,6 +26,7 @@ function parseVariables(json: string | undefined): DashboardVariable[] {
 }
 
 export function DashboardViewer() {
+  const { confirm, alert } = useDialogs();
   const { id } = useParams<{ id: string }>();
   const dashboardId =
     id != null && Number.isFinite(Number(id)) ? Number(id) : null;
@@ -79,19 +81,23 @@ export function DashboardViewer() {
   const dashboard = dashQuery.data;
   const panels = dashboard.panels ?? [];
 
-  const handleDeleteDashboard = () => {
+  const handleDeleteDashboard = async () => {
     if (!dashboardId) return;
-    if (!confirm('Delete this dashboard? All panels will be removed. This action cannot be undone.')) return;
+    if (!(await confirm('Delete this dashboard? All panels will be removed. This action cannot be undone.'))) return;
     deleteDashboard.mutate(dashboardId, {
       onSuccess: () => navigate('/dashboards'),
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 
-  const handleDeletePanel = (panel: DashboardPanel) => {
-    if (!confirm('Delete this panel?')) return;
+  const handleDeletePanel = async (panel: DashboardPanel) => {
+    if (!(await confirm('Delete this panel?'))) return;
     deletePanel.mutate(panel.id, {
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
     });
   };
 

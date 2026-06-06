@@ -8,6 +8,7 @@ import {
   useRiskTemplates,
 } from '@/api/riskAnalysis';
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   isOpen: boolean;
@@ -24,6 +25,7 @@ const CHANGE_TYPES = [
 ];
 
 export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
+  const { alert } = useDialogs();
   const groups = useRiskInventoryGroups();
   const credentials = useRiskCredentials();
   const templates = useRiskTemplates();
@@ -59,20 +61,20 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
     e.preventDefault();
     const trimmedName = name.trim();
     if (!trimmedName) {
-      alert('Deployment name is required');
+      void alert('Deployment name is required');
       return;
     }
     if (!groupId) {
-      alert('Inventory group is required');
+      void alert('Inventory group is required');
       return;
     }
     if (!credentialId) {
-      alert('Credential is required');
+      void alert('Credential is required');
       return;
     }
     const cmdLines = commands.split('\n').filter((l) => l.trim());
     if (!templateId && !cmdLines.length) {
-      alert('Provide proposed commands or select a template');
+      void alert('Provide proposed commands or select a template');
       return;
     }
 
@@ -93,7 +95,12 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           onClose();
           onCreated(result.id);
         },
-        onError: (err) => alert(`Create deployment failed: ${(err as Error).message}`),
+        onError: (err) => {
+          void alert({
+            message: `Create deployment failed: ${(err as Error).message}`,
+            variant: 'error',
+          });
+        },
       },
     );
   };

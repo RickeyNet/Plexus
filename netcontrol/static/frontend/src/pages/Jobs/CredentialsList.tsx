@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateCredential,
   useDeleteCredential,
@@ -10,13 +11,14 @@ import {
 } from '@/api/jobs';
 
 export function CredentialsList() {
+  const { confirm, alert } = useDialogs();
   const query = useJobCredentials();
   const deleteMut = useDeleteCredential();
   const [showCreate, setShowCreate] = useState(false);
 
-  function handleDelete(id: number) {
-    if (!confirm('Delete this credential?')) return;
-    deleteMut.mutate(id, { onError: (e) => alert((e as Error).message) });
+  async function handleDelete(id: number) {
+    if (!(await confirm('Delete this credential?'))) return;
+    deleteMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   return (
@@ -43,6 +45,7 @@ export function CredentialsList() {
 }
 
 function CredentialRow({ credential, onDelete }: { credential: Credential; onDelete: () => void }) {
+  const { alert } = useDialogs();
   const updateMut = useUpdateCredential();
   const [name, setName] = useState(credential.name);
   const [username, setUsername] = useState(credential.username);
@@ -59,7 +62,7 @@ function CredentialRow({ credential, onDelete }: { credential: Credential; onDel
     if (secret) data.secret = secret;
     updateMut.mutate({ id: credential.id, data }, {
       onSuccess: () => { setPassword(''); setSecret(''); },
-      onError: (e) => alert((e as Error).message),
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
 
@@ -96,6 +99,7 @@ function CredentialRow({ credential, onDelete }: { credential: Credential; onDel
 }
 
 function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const { alert } = useDialogs();
   const createMut = useCreateCredential();
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
@@ -105,7 +109,7 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim() || !username.trim() || !password) {
-      alert('Name, username, and password are required');
+      void alert('Name, username, and password are required');
       return;
     }
     createMut.mutate(
@@ -115,7 +119,7 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
           setName(''); setUsername(''); setPassword(''); setSecret('');
           onClose();
         },
-        onError: (e) => alert((e as Error).message),
+        onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
       },
     );
   }
