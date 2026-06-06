@@ -1251,6 +1251,22 @@ async def lifespan(app: FastAPI):
         LOGGER.warning("lab runtime reconcile failed: %s", exc)
     await _run_discovery_sync_once()
     state.API_RATE_LIMIT_LOCK = asyncio.Lock()
+
+    # Size the default thread-pool executor to the monitoring poll fan-out.
+    # Each concurrent device poll borrows one worker for its blocking SSH
+    # session (via asyncio.to_thread); Python's default of min(32, cpu+4) can
+    # be smaller than poll_concurrency on low-core hosts, which would throttle
+    # the raised concurrency back down. Enlarge it (never shrink below default).
+    import concurrent.futures
+    _poll_concurrency = int(state.MONITORING_CONFIG.get(
+        "poll_concurrency", state.MONITORING_DEFAULTS["poll_concurrency"]))
+    asyncio.get_running_loop().set_default_executor(
+        concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(32, _poll_concurrency + 8),
+            thread_name_prefix="plexus-io",
+        )
+    )
+
     retention_task = asyncio.create_task(_job_retention_cleanup_loop())
     discovery_sync_task = asyncio.create_task(_discovery_sync_loop())
     topology_discovery_task = asyncio.create_task(_topology_discovery_loop())
