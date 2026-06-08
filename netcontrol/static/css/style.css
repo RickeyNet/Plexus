@@ -4720,6 +4720,13 @@ code {
     }
 }
 
+/* Base alignment for data tables: headers left-align to match their
+   left-aligned cell data (without this, <th> falls back to the browser
+   default of centered text and the columns appear offset). */
+.data-table th {
+    text-align: left;
+}
+
 .chart-table {
     width: 100%;
     border-collapse: collapse;
