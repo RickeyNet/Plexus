@@ -4,6 +4,7 @@ import { useDashboard } from '@/api/dashboard';
 
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
+import { CriticalIssuesBanner, ISSUE_ANCHORS } from './CriticalIssuesBanner';
 import { DevicesGridPanel } from './DevicesGridPanel';
 import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
@@ -77,6 +78,7 @@ export function Dashboard() {
         title="Your Network at a Glance"
         text="View device status, recent alerts, backup summaries, and quick stats. Scroll down to manage custom dashboards with your own metric panels."
       />
+      <CriticalIssuesBanner devices={devices} alerts={alerts} />
       <Suspense fallback={<PanelSkeleton />}>
         <OverviewPanels devices={devices} />
       </Suspense>
@@ -90,10 +92,14 @@ export function Dashboard() {
       <Suspense fallback={<PanelSkeleton />}>
         <TopTalkersPanel />
       </Suspense>
-      <DevicesGridPanel devices={devices} />
-      <Suspense fallback={<PanelSkeleton />}>
-        <BackupStatusPanel devices={devices} />
-      </Suspense>
+      <div id={ISSUE_ANCHORS.devices}>
+        <DevicesGridPanel devices={devices} />
+      </div>
+      <div id={ISSUE_ANCHORS.backups}>
+        <Suspense fallback={<PanelSkeleton />}>
+          <BackupStatusPanel devices={devices} />
+        </Suspense>
+      </div>
       <Suspense fallback={<PanelSkeleton />}>
         <EventsFeedPanel />
       </Suspense>
@@ -103,7 +109,9 @@ export function Dashboard() {
         jobs={stats.total_jobs ?? 0}
       />
       <HealthSection monitoring={monitoring} devices={devices} groups={groups} />
-      <AlertsSection alerts={alerts} />
+      <div id={ISSUE_ANCHORS.alerts}>
+        <AlertsSection alerts={alerts} />
+      </div>
     </>
   );
 }
