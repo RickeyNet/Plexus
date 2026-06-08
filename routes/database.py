@@ -2513,6 +2513,7 @@ class _PostgresConnectionCompat:
 
 _sqlite_conn = None
 _sqlite_conn_path = None                # DB_PATH the singleton is bound to
+_sqlite_conn_loop = None                # event loop the singleton was built on
 _sqlite_conn_lock = asyncio.Lock()      # guards lazy creation of _sqlite_conn
 _sqlite_access_lock = asyncio.Lock()    # serializes each critical section
 _pg_pool = None
@@ -2554,22 +2555,43 @@ class _ConnProxy:
 
 
 async def _get_sqlite_singleton():
-    # Bind the singleton to DB_PATH.  In production DB_PATH is constant
-    # for the process so this is created once.  Tests monkeypatch
-    # DB_PATH to a fresh temp file per case; detecting the change here
-    # rebuilds the connection (and closes the stale one) so each test
-    # still gets an isolated database.
-    global _sqlite_conn, _sqlite_conn_path
-    if _sqlite_conn is not None and _sqlite_conn_path == DB_PATH:
+    # Bind the singleton to DB_PATH *and* the running event loop.  In
+    # production both are constant for the process so the connection is
+    # created once and every subsequent call hits the fast early-return.
+    #
+    # Tests are the reason for the loop check: pytest-asyncio gives each
+    # test function its own event loop, and the many sync tests that call
+    # asyncio.run() several times per case spin up a fresh (then closed)
+    # loop on each call.  A connection is owned by the loop that created
+    # it — aiosqlite schedules result callbacks back onto that loop — so a
+    # singleton carried into a new loop would dispatch onto a dead loop and
+    # hang.  Detecting either a DB_PATH change or a loop change rebuilds the
+    # connection so each test/loop gets an isolated, live database.
+    global _sqlite_conn, _sqlite_conn_path, _sqlite_conn_loop
+    running = asyncio.get_running_loop()
+    if (_sqlite_conn is not None and _sqlite_conn_path == DB_PATH
+            and _sqlite_conn_loop is running):
         return _sqlite_conn
     async with _sqlite_conn_lock:
-        if _sqlite_conn is not None and _sqlite_conn_path == DB_PATH:
+        if (_sqlite_conn is not None and _sqlite_conn_path == DB_PATH
+                and _sqlite_conn_loop is running):
             return _sqlite_conn
         if _sqlite_conn is not None:
-            try:
-                await _sqlite_conn.close()
-            except Exception:
-                pass
+            # Only the owning loop can await close() (it schedules onto that
+            # loop).  When the loop has changed the old one is typically dead,
+            # so signal the worker thread directly: stop() is loop-independent,
+            # closes the underlying sqlite connection (releasing the file lock)
+            # and terminates the non-daemon worker thread (no leaked thread).
+            if _sqlite_conn_loop is running:
+                try:
+                    await _sqlite_conn.close()
+                except Exception:
+                    pass
+            else:
+                try:
+                    _sqlite_conn.stop()
+                except Exception:
+                    pass
             _sqlite_conn = None
         db_dir = os.path.dirname(DB_PATH)
         if db_dir:
@@ -2582,7 +2604,37 @@ async def _get_sqlite_singleton():
         await conn.execute("PRAGMA foreign_keys=ON")
         _sqlite_conn = conn
         _sqlite_conn_path = DB_PATH
+        _sqlite_conn_loop = running
         return _sqlite_conn
+
+
+def _dispose_sqlite_singleton_sync():
+    """Tear down the SQLite singleton from synchronous (test) teardown.
+
+    Loop-independent: ``stop()`` queues a close onto the worker thread,
+    which closes the underlying sqlite connection (releasing the WAL file
+    lock) and terminates the non-daemon worker thread — so nothing lingers
+    to block process exit or lock the next test's database.  The locks and
+    held-state are recreated so a critical section a failed test never
+    finished cannot leak into the next one.  No-op when no singleton exists.
+
+    Not used in production; an autouse pytest fixture calls this after each
+    test (see tests/conftest.py).
+    """
+    global _sqlite_conn, _sqlite_conn_path, _sqlite_conn_loop
+    global _sqlite_conn_lock, _sqlite_access_lock
+    conn = _sqlite_conn
+    _sqlite_conn = None
+    _sqlite_conn_path = None
+    _sqlite_conn_loop = None
+    _sqlite_conn_lock = asyncio.Lock()
+    _sqlite_access_lock = asyncio.Lock()
+    _held.set(None)
+    if conn is not None:
+        try:
+            conn.stop()
+        except Exception:
+            pass
 
 
 async def _get_pg_pool():
