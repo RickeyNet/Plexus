@@ -78,19 +78,73 @@ function parseObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
+// Per-phase status glyphs. Each carries a `title` so the meaning is
+// discoverable on hover; PHASE_ICON_LEGEND below documents them inline.
 function statusIcon(s: string | null | undefined) {
   switch (s) {
     case 'completed':
-      return <span style={{ color: 'var(--success)' }}>✓</span>;
+      return (
+        <span title="Completed" style={{ color: 'var(--success)' }}>
+          ✓
+        </span>
+      );
     case 'running':
-      return <span style={{ color: 'var(--info)' }}>⚙</span>;
+      return (
+        <span title="Running" style={{ color: 'var(--info)' }}>
+          ⚙
+        </span>
+      );
     case 'failed':
-      return <span style={{ color: 'var(--danger)' }}>✗</span>;
+      return (
+        <span title="Failed" style={{ color: 'var(--danger)' }}>
+          ✗
+        </span>
+      );
     case 'cancelled':
-      return <span style={{ opacity: 0.5 }}>∅</span>;
+      return (
+        <span title="Cancelled" style={{ opacity: 0.5 }}>
+          ∅
+        </span>
+      );
     default:
-      return <span style={{ opacity: 0.3 }}>•</span>;
+      return (
+        <span title="Pending" style={{ opacity: 0.3 }}>
+          •
+        </span>
+      );
   }
+}
+
+// Inline legend for the per-phase status glyphs rendered by statusIcon().
+function PhaseIconLegend() {
+  const items: Array<[string, string]> = [
+    ['completed', 'Completed'],
+    ['running', 'Running'],
+    ['failed', 'Failed'],
+    ['cancelled', 'Cancelled'],
+    ['pending', 'Pending'],
+  ];
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '0.75rem',
+        fontSize: '0.8em',
+        opacity: 0.75,
+        marginBottom: '0.4rem',
+      }}
+    >
+      {items.map(([status, label]) => (
+        <span
+          key={status}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+        >
+          {statusIcon(status)} {label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 // Capitalised, human-friendly version of a raw per-phase status token
@@ -868,6 +922,8 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 </select>
               </span>
             </div>
+
+            <PhaseIconLegend />
 
             <div style={{ overflowX: 'auto' }}>
               <table
