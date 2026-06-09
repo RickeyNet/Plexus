@@ -1018,6 +1018,21 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     if not devices:
         raise HTTPException(400, "No devices to process")
 
+    # A device cancelled in a prior attempt keeps its per-phase status pinned to
+    # "cancelled", which _run_phase treats as a permanent skip. Re-executing the
+    # phase for a device is an explicit operator request to run it again, so clear
+    # that stale "cancelled" status (on the selected devices only) before the run.
+    # Update both the DB and the in-memory snapshot the scheduled task closes over,
+    # since _process_device checks the snapshot before re-reading the DB.
+    phase_status_key = _phase_status_key(body.phase)
+    for dev in devices:
+        if dev.get(phase_status_key) == "cancelled":
+            await db.update_upgrade_device(
+                dev["id"], **{phase_status_key: "pending", "error_message": ""}
+            )
+            dev[phase_status_key] = "pending"
+            dev["error_message"] = ""
+
     # Parse image map
     image_map_raw = json.loads(campaign["image_map"]) if isinstance(campaign["image_map"], str) else campaign["image_map"]
     # image_map: {"pattern": "image_filename", ...}
