@@ -124,3 +124,56 @@ def test_upload_returns_503_when_storage_not_writable(image_client, monkeypatch)
     assert resp.status_code == 503, resp.text
     assert "unable to store" in resp.json()["detail"].lower()
 
+
+def test_find_existing_image_path_prefers_primary(tmp_path, monkeypatch):
+    primary = tmp_path / "state" / "software_images"
+    legacy = tmp_path / "repo" / "software_images"
+    primary.mkdir(parents=True)
+    legacy.mkdir(parents=True)
+    name = "cat9k_iosxe.17.15.05.SPA.bin"
+    (primary / name).write_bytes(b"primary")
+    (legacy / name).write_bytes(b"legacy")
+
+    monkeypatch.setattr(upgrades, "SOFTWARE_IMAGES_DIR", str(primary))
+    monkeypatch.setattr(upgrades, "_REPO_ROOT", str(tmp_path / "repo"))
+
+    found = upgrades._find_existing_image_path(name)
+    assert found == str(primary / name)
+
+
+def test_find_existing_image_path_falls_back_to_legacy_dir(tmp_path, monkeypatch):
+    """A file uploaded under the older repo-root scheme is still found."""
+    primary = tmp_path / "state" / "software_images"
+    legacy = tmp_path / "repo" / "software_images"
+    primary.mkdir(parents=True)
+    legacy.mkdir(parents=True)
+    name = "cat9k_iosxe.17.15.05.SPA.bin"
+    (legacy / name).write_bytes(b"legacy")  # only exists in the legacy location
+
+    monkeypatch.setattr(upgrades, "SOFTWARE_IMAGES_DIR", str(primary))
+    monkeypatch.setattr(upgrades, "_REPO_ROOT", str(tmp_path / "repo"))
+
+    found = upgrades._find_existing_image_path(name)
+    assert found == str(legacy / name)
+
+
+def test_find_existing_image_path_returns_none_when_absent(tmp_path, monkeypatch):
+    primary = tmp_path / "state" / "software_images"
+    primary.mkdir(parents=True)
+    monkeypatch.setattr(upgrades, "SOFTWARE_IMAGES_DIR", str(primary))
+    monkeypatch.setattr(upgrades, "_REPO_ROOT", str(tmp_path / "repo"))
+
+    assert upgrades._find_existing_image_path("missing.bin") is None
+
+
+def test_find_existing_image_path_rejects_traversal(tmp_path, monkeypatch):
+    primary = tmp_path / "state" / "software_images"
+    primary.mkdir(parents=True)
+    secret = tmp_path / "secret.bin"
+    secret.write_bytes(b"top secret")
+    monkeypatch.setattr(upgrades, "SOFTWARE_IMAGES_DIR", str(primary))
+    monkeypatch.setattr(upgrades, "_REPO_ROOT", str(tmp_path / "repo"))
+
+    # os.path.basename strips the traversal, so it never escapes the roots.
+    assert upgrades._find_existing_image_path("../secret.bin") is None
+
