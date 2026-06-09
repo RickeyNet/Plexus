@@ -48,6 +48,142 @@ const EMPTY_CHANNEL: NotificationChannel = {
   teams_webhook_url: '',
 };
 
+const SETUP_GUIDE: Record<NotificationChannelType, React.ReactNode> = {
+  email: (
+    <ol style={{ margin: 0, paddingLeft: '1.2rem', lineHeight: 1.6 }}>
+      <li>
+        Click <strong>Add Channel</strong> and set <strong>Type</strong> to{' '}
+        <em>Email (SMTP)</em>.
+      </li>
+      <li>
+        Enter the <strong>SMTP host</strong> and <strong>port</strong>: <code>587</code> with{' '}
+        <strong>STARTTLS</strong> checked, <code>465</code> with <strong>Implicit TLS (SMTPS)</strong>{' '}
+        checked, or <code>25</code> for an unauthenticated internal relay.
+      </li>
+      <li>
+        Set the <strong>From address</strong> and one or more comma-separated{' '}
+        <strong>Recipients</strong>.
+      </li>
+      <li>
+        Provide an <strong>SMTP username/password</strong> if your server requires authentication
+        (leave both blank for an open relay). An existing password stays set while masked as
+        ••••••••.
+      </li>
+      <li>
+        <strong>Save</strong>, then click <strong>Test</strong> on the row to send a test message.
+      </li>
+    </ol>
+  ),
+  pagerduty: (
+    <ol style={{ margin: 0, paddingLeft: '1.2rem', lineHeight: 1.6 }}>
+      <li>
+        In PagerDuty, open the target <strong>Service → Integrations → Add integration</strong> and
+        choose <strong>Events API v2</strong>.
+      </li>
+      <li>
+        Copy that integration&apos;s <strong>Integration/Routing Key</strong> (32 characters).
+      </li>
+      <li>
+        In Plexus, <strong>Add Channel</strong>, set <strong>Type</strong> to <em>PagerDuty</em>, and
+        paste the key into <strong>Integration / routing key</strong>.
+      </li>
+      <li>
+        Repeated occurrences of the same alert reuse its dedup key, so they collapse onto one
+        incident instead of paging repeatedly.
+      </li>
+      <li>
+        <strong>Save</strong>, then <strong>Test</strong> to trigger (and auto-resolve) a sample
+        incident.
+      </li>
+    </ol>
+  ),
+  webhook: (
+    <ol style={{ margin: 0, paddingLeft: '1.2rem', lineHeight: 1.6 }}>
+      <li>
+        <strong>Add Channel</strong> and set <strong>Type</strong> to <em>Webhook (JSON)</em>.
+      </li>
+      <li>
+        Enter the receiving <strong>Webhook URL</strong> (HTTPS recommended). Plexus{' '}
+        <code>POST</code>s a JSON body describing the alert per delivery.
+      </li>
+      <li>
+        Optionally set an <strong>Auth header name</strong> and <strong>value</strong> (for example{' '}
+        <code>Authorization</code> / <code>Bearer …</code>) if your endpoint requires one.
+      </li>
+      <li>
+        Leave <strong>Verify TLS certificate</strong> checked; uncheck it only for an internal
+        endpoint with a self-signed certificate.
+      </li>
+      <li>
+        <strong>Save</strong>, then <strong>Test</strong> to POST a sample payload.
+      </li>
+    </ol>
+  ),
+  teams: (
+    <ol style={{ margin: 0, paddingLeft: '1.2rem', lineHeight: 1.6 }}>
+      <li>
+        In Microsoft Teams, on the target channel choose <strong>••• → Connectors</strong> (or{' '}
+        <strong>Workflows</strong>), then add an <strong>Incoming Webhook</strong>.
+      </li>
+      <li>
+        Name it, click <strong>Create</strong>, and copy the generated webhook URL.
+      </li>
+      <li>
+        In Plexus, <strong>Add Channel</strong>, set <strong>Type</strong> to{' '}
+        <em>Microsoft Teams</em>, and paste it into <strong>Teams incoming webhook URL</strong>.
+        Plexus posts a MessageCard.
+      </li>
+      <li>
+        <strong>Save</strong>, then <strong>Test</strong> to post a sample card to the channel.
+      </li>
+    </ol>
+  ),
+};
+
+function SetupInstructions() {
+  const [tab, setTab] = useState<NotificationChannelType>('email');
+  return (
+    <details
+      style={{
+        marginBottom: '0.75rem',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius, 6px)',
+        padding: '0.5rem 0.75rem',
+        background: 'var(--surface-2, rgba(255,255,255,0.02))',
+      }}
+    >
+      <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+        How to set up each channel type
+      </summary>
+      <div
+        style={{
+          display: 'flex',
+          gap: '0.4rem',
+          flexWrap: 'wrap',
+          margin: '0.75rem 0',
+        }}
+      >
+        {TYPES.map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`btn btn-sm ${tab === t ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setTab(t)}
+          >
+            {TYPE_LABELS[t]}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontSize: '0.85rem' }}>{SETUP_GUIDE[tab]}</div>
+      <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '0.75rem', marginBottom: 0 }}>
+        For every type: <strong>Severity floor</strong> drops alerts below the chosen level; check{' '}
+        <strong>Default</strong> on a saved channel so it receives alerts not tied to a rule; and
+        assign channels to specific alerts under <strong>Monitoring → Rules</strong>.
+      </p>
+    </details>
+  );
+}
+
 function channelTarget(c: NotificationChannel): string {
   switch (c.type) {
     case 'email':
@@ -174,6 +310,8 @@ export function NotificationsTab() {
         deviations, route churn — go to the <strong>default</strong> channels selected below.
         Repeated occurrences of the same alert are de-duplicated and do not re-notify.
       </p>
+
+      <SetupInstructions />
 
       {channels.length === 0 ? (
         <p className="text-muted">No channels configured. Add one to start delivering alerts.</p>
