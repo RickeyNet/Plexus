@@ -261,6 +261,7 @@ async def _run_post_deployment_verification(
             host_passed = True
 
             # Drift check
+            drift_cp_id = None
             try:
                 drift_cp_id = await db.create_deployment_checkpoint(
                     deployment_id, phase="verify", check_name=f"drift_check_{hostname}",
@@ -275,13 +276,15 @@ async def _run_post_deployment_verification(
                 await _broadcast_deploy_line(job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift check for {hostname}: {label}\n")
             except Exception as exc:
-                await db.update_deployment_checkpoint(drift_cp_id, "failed",
-                    json.dumps({"error": str(exc)}))
+                if drift_cp_id is not None:
+                    await db.update_deployment_checkpoint(drift_cp_id, "failed",
+                        json.dumps({"error": str(exc)}))
                 await _broadcast_deploy_line(job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift check failed for {hostname}: {exc}\n")
                 host_passed = False
 
             # Metric health check
+            mh_cp_id = None
             try:
                 mh_cp_id = await db.create_deployment_checkpoint(
                     deployment_id, phase="verify", check_name=f"metric_health_{hostname}",
@@ -331,8 +334,9 @@ async def _run_post_deployment_verification(
                 await _broadcast_deploy_line(job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health for {hostname}: {icon} - {detail_str}\n")
             except Exception as exc:
-                await db.update_deployment_checkpoint(mh_cp_id, "failed",
-                    json.dumps({"error": str(exc)}))
+                if mh_cp_id is not None:
+                    await db.update_deployment_checkpoint(mh_cp_id, "failed",
+                        json.dumps({"error": str(exc)}))
                 await _broadcast_deploy_line(job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health check failed for {hostname}: {exc}\n")
                 host_passed = False

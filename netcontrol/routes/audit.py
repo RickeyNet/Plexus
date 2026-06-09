@@ -839,12 +839,16 @@ async def _claim_queued_run() -> int | None:
         if row is None:
             return None
         run_id = int(row[0])
-        await conn.execute(
+        update_cursor = await conn.execute(
             "UPDATE audit_runs SET status = 'running', started_at = datetime('now') "
             "WHERE id = ? AND status = 'queued'",
             (run_id,),
         )
         await conn.commit()
+        if update_cursor.rowcount != 1:
+            # Another claimer transitioned this run between our SELECT and
+            # UPDATE; treat as nothing claimed rather than double-processing.
+            return None
         return run_id
     finally:
         await conn.close()

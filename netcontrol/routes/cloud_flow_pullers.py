@@ -101,7 +101,10 @@ async def pull_aws_flow_logs(account: dict) -> dict:
     except ImportError:
         return {"ok": False, "error": "boto3_not_installed", "ingested": 0}
 
-    session = _build_boto3_session(auth)
+    import asyncio
+
+    # Session build may call sts.assume_role (blocking network I/O)
+    session = await asyncio.to_thread(_build_boto3_session, auth)
     regions = _parse_regions(account)
     cursor = await _get_cursor(account_id)
     start_dt, end_dt = _window(cursor)
@@ -160,7 +163,11 @@ def _build_boto3_session(auth: dict):
 
     role_arn = str(auth.get("role_arn") or "").strip()
     if role_arn:
-        sts = session.client("sts")
+        from botocore.config import Config
+
+        sts = session.client("sts", config=Config(
+            connect_timeout=10, read_timeout=30, retries={"max_attempts": 2},
+        ))
         assume_args: dict[str, str] = {
             "RoleArn": role_arn,
             "RoleSessionName": str(auth.get("role_session_name") or "plexus-flow-puller"),
