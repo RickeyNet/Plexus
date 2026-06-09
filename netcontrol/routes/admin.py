@@ -173,6 +173,45 @@ class SiemSinkRequest(BaseModel):
     backoff_cap: float = Field(default=60.0, ge=1.0, le=600.0)
 
 
+class NotificationChannelRequest(BaseModel):
+    """One outbound alert notification channel. Validated by
+    notification_channels.sanitize_channel before being stored."""
+
+    id: str = ""  # generated if blank on create
+    name: str = ""
+    enabled: bool = True
+    type: str = "webhook"  # email | pagerduty | webhook | teams
+    severity_floor: str = "warning"
+    queue_size: int = Field(default=1000, ge=10, le=100_000)
+    max_retries: int = Field(default=4, ge=0, le=20)
+    backoff_base: float = Field(default=1.0, ge=0.1, le=30.0)
+    backoff_cap: float = Field(default=60.0, ge=1.0, le=600.0)
+    # email
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    smtp_username: str = ""
+    smtp_password: str = ""
+    mail_from: str = ""
+    mail_to: str = ""
+    # pagerduty
+    routing_key: str = ""
+    # webhook
+    webhook_url: str = ""
+    webhook_auth_header: str = ""
+    webhook_auth_value: str = ""
+    verify_tls: bool = True
+    # teams
+    teams_webhook_url: str = ""
+
+
+class NotificationDefaultsRequest(BaseModel):
+    """The set of channels used for alerts not tied to a user rule."""
+
+    default_channel_ids: list[str] = Field(default_factory=list)
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 FEATURE_FLAGS = state.FEATURE_FLAGS
@@ -727,6 +766,155 @@ async def admin_test_siem_sink(sink_id: str, request: Request):
         "siem.sink.test",
         user=session["user"] if session else "",
         detail=f"sink={sink_id} ok={result['ok']} error={result['error']}",
+        correlation_id=_corr_id(request),
+    )
+    return result
+
+
+# ── Alert notification channels ────────────────────────────────────────────
+
+from netcontrol.routes import notification_channels  # noqa: E402
+
+
+async def _persist_and_apply_channels() -> list[dict]:
+    """Persist `state.NOTIFICATION_CHANNELS` + defaults to auth_settings and
+    reconcile the dispatcher. Returns the list of redacted dicts for the API."""
+    payload = {
+        "channels": [
+            notification_channels.channel_config_to_dict(c, redact_secrets=False)
+            for c in state.NOTIFICATION_CHANNELS
+        ],
+        "default_channel_ids": list(state.NOTIFICATION_DEFAULT_CHANNEL_IDS),
+    }
+    await db.set_auth_setting("notification_channels", payload)
+    await notification_channels.apply_channels(
+        state.NOTIFICATION_CHANNELS, state.NOTIFICATION_DEFAULT_CHANNEL_IDS)
+    return [notification_channels.channel_config_to_dict(c)
+            for c in state.NOTIFICATION_CHANNELS]
+
+
+def _channel_index(channel_id: str) -> int:
+    for i, c in enumerate(state.NOTIFICATION_CHANNELS):
+        if c.id == channel_id:
+            return i
+    return -1
+
+
+@router.get("/api/admin/notification-channels")
+async def admin_list_notification_channels():
+    """Return configured channels (secrets redacted), default channel ids, and
+    live runtime stats."""
+    return {
+        "channels": [notification_channels.channel_config_to_dict(c)
+                     for c in state.NOTIFICATION_CHANNELS],
+        "default_channel_ids": list(state.NOTIFICATION_DEFAULT_CHANNEL_IDS),
+        "stats": notification_channels.get_stats(),
+    }
+
+
+@router.post("/api/admin/notification-channels")
+async def admin_create_notification_channel(body: NotificationChannelRequest, request: Request):
+    data = body.model_dump()
+    if not data.get("id"):
+        data["id"] = secrets.token_hex(8)
+    if _channel_index(data["id"]) >= 0:
+        raise HTTPException(status_code=409, detail="Channel id already exists")
+    cfg = notification_channels.sanitize_channel(data)
+    if cfg is None:
+        raise HTTPException(status_code=400, detail="Invalid channel configuration")
+    state.NOTIFICATION_CHANNELS.append(cfg)
+    redacted = await _persist_and_apply_channels()
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "notification.channel.create",
+        user=session["user"] if session else "",
+        detail=f"channel={cfg.id} type={cfg.type}",
+        correlation_id=_corr_id(request),
+    )
+    return next((c for c in redacted if c["id"] == cfg.id), None)
+
+
+@router.put("/api/admin/notification-channels/{channel_id}")
+async def admin_update_notification_channel(
+    channel_id: str, body: NotificationChannelRequest, request: Request,
+):
+    idx = _channel_index(channel_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    data = body.model_dump()
+    data["id"] = channel_id
+    data = notification_channels.merge_secrets(data, state.NOTIFICATION_CHANNELS[idx])
+    cfg = notification_channels.sanitize_channel(data)
+    if cfg is None:
+        raise HTTPException(status_code=400, detail="Invalid channel configuration")
+    state.NOTIFICATION_CHANNELS[idx] = cfg
+    redacted = await _persist_and_apply_channels()
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "notification.channel.update",
+        user=session["user"] if session else "",
+        detail=f"channel={cfg.id} type={cfg.type} enabled={cfg.enabled}",
+        correlation_id=_corr_id(request),
+    )
+    return next((c for c in redacted if c["id"] == cfg.id), None)
+
+
+@router.delete("/api/admin/notification-channels/{channel_id}")
+async def admin_delete_notification_channel(channel_id: str, request: Request):
+    idx = _channel_index(channel_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    state.NOTIFICATION_CHANNELS.pop(idx)
+    # Drop the deleted channel from the default set too.
+    state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
+        c for c in state.NOTIFICATION_DEFAULT_CHANNEL_IDS if c != channel_id
+    ]
+    await _persist_and_apply_channels()
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "notification.channel.delete",
+        user=session["user"] if session else "",
+        detail=f"channel={channel_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
+
+
+@router.put("/api/admin/notification-channels-defaults")
+async def admin_set_notification_defaults(body: NotificationDefaultsRequest, request: Request):
+    """Set the default channel set used for alerts not tied to a user rule."""
+    valid_ids = {c.id for c in state.NOTIFICATION_CHANNELS}
+    state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
+        cid for cid in body.default_channel_ids if cid in valid_ids
+    ]
+    await _persist_and_apply_channels()
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "notification.defaults.update",
+        user=session["user"] if session else "",
+        detail=f"defaults={state.NOTIFICATION_DEFAULT_CHANNEL_IDS}",
+        correlation_id=_corr_id(request),
+    )
+    return {"default_channel_ids": list(state.NOTIFICATION_DEFAULT_CHANNEL_IDS)}
+
+
+@router.post("/api/admin/notification-channels/{channel_id}/test")
+async def admin_test_notification_channel(channel_id: str, request: Request):
+    """Deliver a synthetic probe alert through the channel so the operator can
+    verify credentials/connectivity from the Settings UI."""
+    if _channel_index(channel_id) < 0:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    result = await notification_channels.send_test_event(channel_id)
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "notification.channel.test",
+        user=session["user"] if session else "",
+        detail=f"channel={channel_id} ok={result['ok']} error={result['error']}",
         correlation_id=_corr_id(request),
     )
     return result

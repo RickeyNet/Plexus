@@ -476,6 +476,129 @@ export function useTestSiemSink() {
   });
 }
 
+// ── Alert notification channels ─────────────────────────────────────────────
+
+export type NotificationChannelType = 'email' | 'pagerduty' | 'webhook' | 'teams';
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  enabled: boolean;
+  type: NotificationChannelType | string;
+  severity_floor: string;
+  queue_size: number;
+  max_retries: number;
+  backoff_base: number;
+  backoff_cap: number;
+  // email
+  smtp_host: string;
+  smtp_port: number;
+  smtp_use_tls: boolean;
+  smtp_use_ssl: boolean;
+  smtp_username: string;
+  smtp_password: string;
+  mail_from: string;
+  mail_to: string;
+  // pagerduty
+  routing_key: string;
+  // webhook
+  webhook_url: string;
+  webhook_auth_header: string;
+  webhook_auth_value: string;
+  verify_tls: boolean;
+  // teams
+  teams_webhook_url: string;
+}
+
+export interface NotificationChannelStats {
+  id: string;
+  name: string;
+  enabled: boolean;
+  type: string;
+  queue_depth: number;
+  queue_size: number;
+  delivered: number;
+  delivery_failures: number;
+  dropped_queue_full: number;
+  dropped_below_severity: number;
+  last_error: string;
+  last_delivery_at: string;
+  last_failure_at: string;
+}
+
+export interface NotificationChannelsResponse {
+  channels: NotificationChannel[];
+  default_channel_ids: string[];
+  stats: NotificationChannelStats[];
+}
+
+export function useNotificationChannels() {
+  return useQuery<NotificationChannelsResponse>({
+    queryKey: ['admin', 'notification-channels'],
+    queryFn: () => apiRequest('/admin/notification-channels'),
+    // Keep delivery stats reasonably live while the tab is mounted.
+    refetchInterval: 15_000,
+  });
+}
+
+export function useCreateNotificationChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<NotificationChannel>) =>
+      apiRequest<NotificationChannel>('/admin/notification-channels', {
+        method: 'POST',
+        body: data,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'notification-channels'] }),
+  });
+}
+
+export function useUpdateNotificationChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<NotificationChannel> }) =>
+      apiRequest<NotificationChannel>(
+        `/admin/notification-channels/${encodeURIComponent(id)}`,
+        { method: 'PUT', body: data },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'notification-channels'] }),
+  });
+}
+
+export function useDeleteNotificationChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiRequest<{ ok: boolean }>(
+        `/admin/notification-channels/${encodeURIComponent(id)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'notification-channels'] }),
+  });
+}
+
+export function useTestNotificationChannel() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiRequest<{ ok: boolean; error: string }>(
+        `/admin/notification-channels/${encodeURIComponent(id)}/test`,
+        { method: 'POST' },
+      ),
+  });
+}
+
+export function useSetNotificationDefaults() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (default_channel_ids: string[]) =>
+      apiRequest<{ default_channel_ids: string[] }>(
+        '/admin/notification-channels-defaults',
+        { method: 'PUT', body: { default_channel_ids } },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'notification-channels'] }),
+  });
+}
+
 // ── Feature visibility ─────────────────────────────────────────────────────
 
 export function useUpdateFeatureVisibility() {

@@ -762,6 +762,7 @@ CREATE TABLE IF NOT EXISTS alert_rules (
     escalate_to     TEXT    NOT NULL DEFAULT 'critical',
     host_id         INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
     group_id        INTEGER REFERENCES inventory_groups(id) ON DELETE CASCADE,
+    channel_ids     TEXT    NOT NULL DEFAULT '',
     created_by      TEXT    NOT NULL DEFAULT '',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -4440,6 +4441,21 @@ def set_audit_event_hook(hook) -> None:
     _audit_event_hook = hook
 
 
+# The notification-channel engine registers itself here via
+# ``set_alert_created_hook`` at app startup. It is fired by
+# ``create_monitoring_alert`` ONLY when a brand-new alert row is inserted (not
+# when an existing alert is deduplicated), so a flapping condition does not
+# generate a notification storm. Fire-and-forget: exceptions never propagate.
+_alert_created_hook = None  # type: ignore[var-annotated]
+
+
+def set_alert_created_hook(hook) -> None:
+    """Register a coroutine fn(alert: dict) -> None called after a NEW
+    monitoring alert is created. Pass ``None`` to clear."""
+    global _alert_created_hook
+    _alert_created_hook = hook
+
+
 def _audit_canonical_bytes(
     timestamp: str,
     category: str,
@@ -7587,12 +7603,19 @@ async def create_monitoring_alert(
     threshold: float | None = None,
     rule_id: int | None = None,
     dedup_key: str = "",
+    channel_ids: str = "",
+    hostname: str = "",
 ) -> int:
     """Create or deduplicate a monitoring alert.
 
     If dedup_key is provided and an unacknowledged alert with the same key exists,
     bump its occurrence_count and update last_seen_at instead of creating a new one.
     Returns the alert ID (existing or new).
+
+    ``channel_ids`` (the owning rule's notification-channel assignment, if any)
+    and ``hostname`` are not persisted on the alert row; they are forwarded to
+    the alert-created hook so the notification engine can route the alert. The
+    hook fires ONLY on a genuinely new insert, never on a dedup bump.
     """
     db = await get_db()
     try:
@@ -7631,9 +7654,36 @@ async def create_monitoring_alert(
              severity, severity, value, threshold, dedup_key),
         )
         await db.commit()
-        return cursor.lastrowid
+        new_id = cursor.lastrowid
     finally:
         await db.close()
+
+    # Fan the new alert out to notification channels (best-effort). Done after
+    # the row is committed and the connection closed so a slow/wedged channel
+    # cannot hold a DB handle. Only fires for genuinely new alerts.
+    if _alert_created_hook is not None:
+        alert_event = {
+            "alert_id": new_id,
+            "host_id": host_id,
+            "hostname": hostname,
+            "poll_id": poll_id,
+            "rule_id": rule_id,
+            "alert_type": alert_type,
+            "metric": metric,
+            "message": message,
+            "severity": severity,
+            "value": value,
+            "threshold": threshold,
+            "dedup_key": dedup_key,
+            "channel_ids": channel_ids,
+            "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        try:
+            await _alert_created_hook(alert_event)
+        except Exception:
+            # Notification delivery must never break alert ingestion.
+            pass
+    return new_id
 
 
 async def get_monitoring_alerts(
@@ -7801,6 +7851,7 @@ async def create_alert_rule(
     group_id: int | None = None,
     description: str = "",
     created_by: str = "",
+    channel_ids: str = "",
 ) -> int:
     db = await get_db()
     try:
@@ -7808,11 +7859,11 @@ async def create_alert_rule(
             """INSERT INTO alert_rules
                (name, description, metric, rule_type, operator, value, severity,
                 consecutive, cooldown_minutes, escalate_after_minutes, escalate_to,
-                host_id, group_id, created_by, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+                host_id, group_id, channel_ids, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
             (name, description, metric, rule_type, operator, value, severity,
              consecutive, cooldown_minutes, escalate_after_minutes, escalate_to,
-             host_id, group_id, created_by),
+             host_id, group_id, channel_ids, created_by),
         )
         await db.commit()
         return cursor.lastrowid
@@ -7856,7 +7907,8 @@ async def get_alert_rule(rule_id: int) -> dict | None:
 async def update_alert_rule(rule_id: int, **kwargs) -> None:
     allowed = {"name", "description", "metric", "rule_type", "operator", "value",
                "severity", "enabled", "consecutive", "cooldown_minutes",
-               "escalate_after_minutes", "escalate_to", "host_id", "group_id"}
+               "escalate_after_minutes", "escalate_to", "host_id", "group_id",
+               "channel_ids"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return

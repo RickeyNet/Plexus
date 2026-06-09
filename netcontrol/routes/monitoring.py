@@ -539,6 +539,7 @@ def _check_threshold(value: float | None, operator: str, threshold: float) -> bo
 
 async def _evaluate_alerts_for_poll(
     res: dict, poll_id: int, group_id: int | None, rules: list[dict],
+    hostname: str = "",
 ) -> int:
     """Evaluate built-in thresholds and user-defined rules against a poll result.
 
@@ -597,7 +598,7 @@ async def _evaluate_alerts_for_poll(
             alert_type=chk["alert_type"], metric=chk["metric"],
             message=chk["message"], severity=chk["severity"],
             value=chk["value"], threshold=chk.get("threshold"),
-            dedup_key=dedup_key,
+            dedup_key=dedup_key, hostname=hostname,
         )
         alerts_created += 1
 
@@ -633,6 +634,8 @@ async def _evaluate_alerts_for_poll(
             value=metric_val, threshold=rule["value"],
             rule_id=rule["id"],
             dedup_key=dedup_key,
+            channel_ids=rule.get("channel_ids", "") or "",
+            hostname=hostname,
         )
         alerts_created += 1
 
@@ -726,7 +729,8 @@ async def _process_poll_result(h: dict, res: dict, alert_rules_cache: list) -> i
 
     # ── Alerting Engine: evaluate built-in thresholds + user rules ──
     alerts_created += await _evaluate_alerts_for_poll(
-        res, poll_id, h.get("group_id"), alert_rules_cache)
+        res, poll_id, h.get("group_id"), alert_rules_cache,
+        hostname=h.get("hostname", ""))
 
     # ── Metrics Engine: emit flexible metric samples + interface TS ──
     try:
@@ -1141,7 +1145,8 @@ async def monitoring_poll_now_stream(request: Request):
 
             # Alerting
             host_alerts = await _evaluate_alerts_for_poll(
-                res, poll_id, h.get("group_id"), alert_rules_cache)
+                res, poll_id, h.get("group_id"), alert_rules_cache,
+                hostname=h.get("hostname", ""))
             alerts_created += host_alerts
 
             # Metrics
@@ -1229,6 +1234,22 @@ async def admin_run_monitoring_now(request: Request):
 # ── Alert Rules CRUD ─────────────────────────────────────────────────────────
 
 
+def _normalize_channel_ids(raw) -> str:
+    """Store a rule's notification-channel assignment as a JSON list string.
+
+    Accepts a list, a comma-separated string, or None; always returns a stable
+    JSON-encoded list (``"[]"`` when empty) for the ``alert_rules.channel_ids``
+    TEXT column.
+    """
+    if raw is None:
+        return "[]"
+    if isinstance(raw, str):
+        raw = [t.strip() for t in raw.split(",") if t.strip()]
+    if not isinstance(raw, list):
+        return "[]"
+    return json.dumps([str(x).strip() for x in raw if str(x).strip()])
+
+
 @router.get("/api/monitoring/rules")
 async def list_alert_rules():
     return await db.get_alert_rules()
@@ -1270,6 +1291,7 @@ async def create_alert_rule_endpoint(body: dict, request: Request):
         group_id=body.get("group_id"),
         description=body.get("description", ""),
         created_by=user,
+        channel_ids=_normalize_channel_ids(body.get("channel_ids")),
     )
     await _audit("monitoring", "rule.created", user=user,
                  detail=f"rule_id={rule_id} name='{body.get('name', '')}' metric={body.get('metric', '')}",
@@ -1290,6 +1312,8 @@ async def update_alert_rule_endpoint(rule_id: int, body: dict, request: Request)
     rule = await db.get_alert_rule(rule_id)
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
+    if "channel_ids" in body:
+        body["channel_ids"] = _normalize_channel_ids(body.get("channel_ids"))
     await db.update_alert_rule(rule_id, **body)
     session = _get_session(request)
     await _audit("monitoring", "rule.updated", user=session["user"] if session else "",
