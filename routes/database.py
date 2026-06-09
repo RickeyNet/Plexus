@@ -281,6 +281,10 @@ CREATE TABLE IF NOT EXISTS hosts (
     serial_number TEXT NOT NULL DEFAULT '',
     vrf_name    TEXT    NOT NULL DEFAULT '',
     vlan_id     TEXT    NOT NULL DEFAULT '',
+    fdm_api_enabled   INTEGER NOT NULL DEFAULT 0,
+    fdm_credential_id INTEGER,
+    fdm_port          INTEGER NOT NULL DEFAULT 443,
+    fdm_verify_tls    INTEGER NOT NULL DEFAULT 0,
     UNIQUE(group_id, ip_address)
 );
 
@@ -3392,6 +3396,23 @@ async def find_host_by_ip(ip_address: str) -> dict | None:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def get_fdm_hosts() -> list[dict]:
+    """Hosts opted in to Cisco FDM REST-API polling (fdm_api_enabled = 1).
+
+    Drives the FDM metrics collector (netcontrol/integrations/cisco_fdm). Each
+    row carries fdm_credential_id / fdm_port / fdm_verify_tls used to build the
+    per-host FdmClient.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM hosts WHERE fdm_api_enabled = 1 ORDER BY hostname, ip_address"
+        )
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 

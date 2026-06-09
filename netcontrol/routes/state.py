@@ -186,6 +186,21 @@ MONITORING_MIN_INTERVAL = 60
 MONITORING_MAX_INTERVAL = 86400
 
 
+# ── Cisco FDM (Firepower Device Manager) REST-API polling ───────────────────
+# Polls FDM-managed FTDs over their on-box REST API and feeds the same
+# monitoring pipeline as SNMP. Disabled by default; opt hosts in via
+# hosts.fdm_api_enabled. poll_concurrency is deliberately lower than SNMP's
+# (each FTD caps at 5 shared HTTPS sessions, so we keep one session per host
+# and a modest fan-out across the fleet).
+FDM_DEFAULTS = {
+    "enabled": False,
+    "interval_seconds": 300,
+    "poll_concurrency": 8,
+    "per_host_timeout_seconds": 60,
+    "api_version": "latest",
+}
+
+
 # ── Outbound syslog defaults ────────────────────────────────────────────────
 
 SYSLOG_DEFAULTS = {
@@ -366,6 +381,7 @@ CONFIG_DRIFT_CHECK_CONFIG = dict(CONFIG_DRIFT_CHECK_DEFAULTS)
 MAC_MOVE_RETENTION_CONFIG = dict(MAC_MOVE_RETENTION_DEFAULTS)
 COMPLIANCE_CHECK_CONFIG = dict(COMPLIANCE_CHECK_DEFAULTS)
 MONITORING_CONFIG = dict(MONITORING_DEFAULTS)
+FDM_CONFIG = dict(FDM_DEFAULTS)
 SYSLOG_CONFIG = dict(SYSLOG_DEFAULTS)
 # SIEM audit-event forwarding sinks. List of siem_forwarder.SinkConfig
 # (loaded at startup; mutated by /api/admin/siem-sinks endpoints).
