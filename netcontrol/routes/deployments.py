@@ -25,6 +25,7 @@ from netcontrol.routes.shared import (
     _corr_id,
     _get_session,
     _push_config_to_device,
+    require_credential_access,
 )
 from netcontrol.telemetry import configure_logging
 
@@ -664,6 +665,8 @@ async def create_deployment(body: DeploymentCreate, request: Request):
     if not commands:
         raise HTTPException(status_code=400, detail="No proposed commands provided")
 
+    await require_credential_access(body.credential_id, session=session)
+
     deployment_id = await db.create_deployment(
         name=body.name,
         description=body.description,
@@ -818,10 +821,9 @@ async def execute_deployment(deployment_id: int, request: Request):
             correlation_id=_corr_id(request),
         )
 
-    # Resolve credentials
-    cred = await db.get_credential_raw(dep["credential_id"])
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    # Resolve credentials - the executing user must be allowed to use the
+    # credential bound to the deployment, not just whoever created it.
+    cred = await require_credential_access(dep["credential_id"], session=session)
     credentials = {
         "username": cred["username"],
         "password": decrypt(cred["password"]),
@@ -962,9 +964,7 @@ async def rollback_deployment(deployment_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
 
-    cred = await db.get_credential_raw(dep["credential_id"])
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(dep["credential_id"], session=session)
     credentials = {
         "username": cred["username"],
         "password": decrypt(cred["password"]),

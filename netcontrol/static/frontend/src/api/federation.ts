@@ -10,6 +10,7 @@ export interface FederationPeer {
   url: string;
   description?: string;
   enabled: boolean;
+  tls_verify?: boolean | number;
   has_token: boolean;
   last_sync_status?: string | null;
   last_sync_at?: string | null;
@@ -47,6 +48,7 @@ export interface FederationPeerInput {
   url: string;
   description?: string;
   enabled: boolean;
+  tls_verify?: boolean;
   api_token?: string;
 }
 

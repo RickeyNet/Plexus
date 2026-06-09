@@ -260,11 +260,13 @@ def test_promote_run_creates_deployment(tmp_path, monkeypatch):
         finally:
             await conn.close()
         from routes.crypto import encrypt
+        admin = await db_module.get_user_by_username("admin")
         cred_id = await db_module.create_credential(
             name="lab-cred",
             username="netadmin",
             enc_password=encrypt("password"),
             enc_secret=encrypt(""),
+            owner_id=int(admin["id"]) if admin else None,
         )
         return gid, hid, cred_id
 

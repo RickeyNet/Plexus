@@ -118,7 +118,8 @@ def _seed_credential() -> int:
         db = await db_module.get_db()
         try:
             cursor = await db.execute(
-                "INSERT INTO credentials (name, username, password, secret) VALUES (?,?,?,?)",
+                "INSERT INTO credentials (name, username, password, secret, owner_id)"
+                " VALUES (?,?,?,?, (SELECT id FROM users WHERE username='admin'))",
                 ("test-cred", "admin", enc_pw, ""),
             )
             await db.commit()

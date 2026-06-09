@@ -20,7 +20,7 @@ import netcontrol.routes.state as state
 from netcontrol.drivers import GenericDriver, get_driver
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, _run_show_command
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _run_show_command, require_credential_access
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,  # noqa: F401
     _discover_neighbors,  # noqa: F401
@@ -871,9 +871,7 @@ async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Req
     host = await db.get_host(host_id)
     if not host:
         raise HTTPException(404, "Host not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(404, "Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     driver = get_driver(host.get("device_type"))
     if isinstance(driver, GenericDriver):
@@ -913,9 +911,7 @@ async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, requ
     group = await db.get_group(group_id)
     if not group:
         raise HTTPException(404, "Group not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(404, "Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
     hosts = await db.get_hosts_for_group(group_id)
     if not hosts:
         return {"results": []}

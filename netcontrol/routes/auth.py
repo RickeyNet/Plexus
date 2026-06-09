@@ -15,7 +15,7 @@ import time
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
@@ -215,6 +215,12 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
     """
     if not LDAP_AVAILABLE:
         return False, "error", {}
+
+    # RFC 4513 §5.1.2: a simple bind with an empty password is an
+    # *unauthenticated* bind, which many directory servers accept without
+    # verifying anything. Reject it before ever touching the server.
+    if not password:
+        return False, "reject", {}
     assert python_ldap is not None
 
     server = ldap_cfg.get("server", "").strip()
@@ -579,8 +585,8 @@ async def _get_user_features(user: dict) -> list[str]:
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
 
 class RegisterRequest(BaseModel):
     username: str

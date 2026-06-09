@@ -18,6 +18,7 @@ from netcontrol.routes.shared import (
     _compute_config_diff,
     _corr_id,
     _get_session,
+    require_credential_access,
 )
 from netcontrol.telemetry import configure_logging
 
@@ -377,9 +378,7 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
     session = _get_session(request)
 
     # Resolve credentials
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=session)
     credentials = {
         "username": cred["username"],
         "password": decrypt(cred["password"]),

@@ -23,6 +23,7 @@ export function PeerFormModal({ existing, onClose, onSaved }: PeerFormModalProps
   const [token, setToken] = useState('');
   const [description, setDescription] = useState(existing?.description ?? '');
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+  const [tlsVerify, setTlsVerify] = useState(Boolean(existing?.tls_verify ?? true));
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
   const create = useCreateFederationPeer();
@@ -36,6 +37,7 @@ export function PeerFormModal({ existing, onClose, onSaved }: PeerFormModalProps
       url: url.trim(),
       description: description.trim(),
       enabled,
+      tls_verify: tlsVerify,
     };
     if (token) {
       body.api_token = token;
@@ -116,6 +118,22 @@ export function PeerFormModal({ existing, onClose, onSaved }: PeerFormModalProps
           />
           Enabled
         </label>
+      </div>
+      <div className="form-group">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <input
+            type="checkbox"
+            checked={tlsVerify}
+            onChange={(e) => setTlsVerify(e.target.checked)}
+          />
+          Verify TLS certificate
+        </label>
+        {!tlsVerify && (
+          <div style={{ color: 'var(--danger)', fontSize: '0.9em', marginTop: '0.25rem' }}>
+            Disabling verification allows on-path attackers to intercept the
+            peer API token. Only use for self-signed certs on trusted networks.
+          </div>
+        )}
       </div>
 
       {errMsg && (

@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from routes.crypto import decrypt
 
 from netcontrol.drivers import DriverCapabilityError, get_driver
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_credential_access
 from netcontrol.telemetry import configure_logging
 
 try:
@@ -262,9 +262,13 @@ async def rehydrate_scheduled_upgrades():
                 else campaign["options"]
             )
             cred_id = options.get("credential_id")
-            cred = await db.get_credential_raw(cred_id) if cred_id else None
-            if not cred:
-                raise ValueError(f"Credential {cred_id} not found")
+            if not cred_id:
+                raise ValueError("Campaign has no credential_id in options")
+            # Rehydrating a scheduled activate after restart: validate against
+            # the campaign creator, since there is no live session here.
+            cred = await require_credential_access(
+                cred_id, submitter_username=campaign.get("created_by") or None,
+            )
             credentials = {
                 "username": cred["username"],
                 "password": decrypt(cred["password"]),
@@ -1040,9 +1044,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     if not cred_id:
         raise HTTPException(400, "No credential_id in campaign options")
 
-    cred = await db.get_credential_raw(cred_id)
-    if not cred:
-        raise HTTPException(400, f"Credential {cred_id} not found")
+    cred = await require_credential_access(cred_id, session=session)
 
     credentials = {
         "username": cred["username"],

@@ -127,11 +127,11 @@ if os.name == "nt":
     socket.socket.shutdown = ignore_connection_reset_error(original_shutdown)
 
 if __name__ == "__main__":
-    # Local launcher defaults to dev bootstrap mode unless explicitly overridden.
-    # This keeps first-login credentials deterministic in local development.
-    os.environ.setdefault("APP_ENV", "dev")
-    os.environ.setdefault("PLEXUS_DEV_BOOTSTRAP", "true")
-    os.environ.setdefault("PLEXUS_BREAKGLASS_LOCAL_ADMIN", "true")
+    # Dev bootstrap (deterministic admin/netcontrol login) must be opted into
+    # explicitly via APP_ENV=dev or PLEXUS_DEV_BOOTSTRAP=true. Defaulting it on
+    # here would silently enable the well-known credentials in any deployment
+    # that launches via this script (including Docker). Without it, first boot
+    # creates an admin with a random password printed to stderr.
 
     parser = argparse.ArgumentParser(description="Plexus Automation Hub")
     parser.add_argument("--version", action="version", version=f"Plexus {APP_VERSION}")
@@ -152,6 +152,16 @@ if __name__ == "__main__":
 
     access_note = "network" if bind_host == "0.0.0.0" else "localhost only"
 
+    dev_bootstrap = (
+        _env_flag("PLEXUS_DEV_BOOTSTRAP", False)
+        or os.getenv("APP_ENV", "").strip().lower() in {"dev", "development", "local"}
+    )
+    login_note = (
+        "║   Default login:  admin / netcontrol                 ║"
+        if dev_bootstrap
+        else "║   First boot: admin password printed to stderr      ║"
+    )
+
     print(f"""
 ╔══════════════════════════════════════════════════════╗
 ║            Plexus Automation Hub                     ║
@@ -161,7 +171,7 @@ if __name__ == "__main__":
 ║   Bind:    {bind_host:<15} ({access_note})           ║
 ║   HTTPS:   {"Enabled" if args.https else "Disabled (use --https)":42}║
 ║                                                      ║
-║   Default login:  admin / netcontrol                 ║
+{login_note}
 ╚══════════════════════════════════════════════════════════╝
     """)
 

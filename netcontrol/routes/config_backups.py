@@ -21,6 +21,7 @@ from netcontrol.routes.shared import (
     _compute_config_diff,
     _corr_id,
     _get_session,
+    require_credential_access,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -87,14 +88,12 @@ async def create_config_backup_policy(body: ConfigBackupPolicyCreate, request: R
     group = await db.get_group(body.group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Inventory group not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    session = _get_session(request)
+    await require_credential_access(body.credential_id, session=session, allow_service=True)
     interval = max(state.CONFIG_BACKUP_POLICY_MIN_INTERVAL,
                    min(state.CONFIG_BACKUP_POLICY_MAX_INTERVAL, body.interval_seconds))
     retention = max(state.CONFIG_BACKUP_POLICY_MIN_RETENTION,
                     min(state.CONFIG_BACKUP_POLICY_MAX_RETENTION, body.retention_days))
-    session = _get_session(request)
     policy_id = await db.create_config_backup_policy(
         name=body.name, group_id=body.group_id, credential_id=body.credential_id,
         interval_seconds=interval, retention_days=retention,
@@ -128,9 +127,9 @@ async def update_config_backup_policy(policy_id: int, body: ConfigBackupPolicyUp
     if body.enabled is not None:
         updates["enabled"] = 1 if body.enabled else 0
     if body.credential_id is not None:
-        cred = await db.get_credential_raw(body.credential_id)
-        if not cred:
-            raise HTTPException(status_code=404, detail="Credential not found")
+        await require_credential_access(
+            body.credential_id, session=_get_session(request), allow_service=True,
+        )
         updates["credential_id"] = body.credential_id
     if body.interval_seconds is not None:
         updates["interval_seconds"] = max(state.CONFIG_BACKUP_POLICY_MIN_INTERVAL,
@@ -395,9 +394,9 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
         if not policy:
             raise HTTPException(status_code=404, detail="Policy not found")
         hosts = await db.get_hosts_for_group(policy["group_id"])
-        cred = await db.get_credential_raw(policy["credential_id"])
-        if not cred:
-            raise HTTPException(status_code=404, detail="Credential not found")
+        cred = await require_credential_access(
+            policy["credential_id"], session=_get_session(request), allow_service=True,
+        )
 
         backed_up = 0
         skipped = 0
@@ -454,9 +453,7 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     host = await db.get_host(backup["host_id"])
     if not host:
         raise HTTPException(status_code=404, detail="Host not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     # Push config
     import netmiko
@@ -536,9 +533,20 @@ async def _run_config_backups_once() -> dict:
     for policy in due_policies:
         try:
             hosts = await db.get_hosts_for_group(policy["group_id"])
-            cred = await db.get_credential_raw(policy["credential_id"])
-            if not cred:
-                LOGGER.warning("config-backup: credential %s not found for policy %s", policy["credential_id"], policy["id"])
+            try:
+                # Re-validate the stored credential against the policy creator so
+                # a policy can never keep running with a credential its creator
+                # no longer owns (or after the creator account is removed).
+                cred = await require_credential_access(
+                    policy["credential_id"],
+                    submitter_username=policy.get("created_by") or None,
+                    allow_service=True,
+                )
+            except HTTPException as exc:
+                LOGGER.warning(
+                    "config-backup: credential %s rejected for policy %s (created_by=%r): %s",
+                    policy["credential_id"], policy["id"], policy.get("created_by"), exc.detail,
+                )
                 errors += 1
                 continue
 
