@@ -370,6 +370,12 @@ SYSLOG_CONFIG = dict(SYSLOG_DEFAULTS)
 # SIEM audit-event forwarding sinks. List of siem_forwarder.SinkConfig
 # (loaded at startup; mutated by /api/admin/siem-sinks endpoints).
 SIEM_SINKS: list = []
+# Outbound alert notification channels. List of
+# notification_channels.ChannelConfig (loaded at startup; mutated by
+# /api/admin/notification-channels endpoints). NOTIFICATION_DEFAULT_CHANNEL_IDS
+# are the channels used for alerts not tied to a user rule.
+NOTIFICATION_CHANNELS: list = []
+NOTIFICATION_DEFAULT_CHANNEL_IDS: list[str] = []
 FEATURE_VISIBILITY_HIDDEN: list[str] = list(DEFAULT_HIDDEN_FEATURES)
 
 CLOUD_FLOW_SYNC_DEFAULTS = {

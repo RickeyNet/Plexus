@@ -36,7 +36,7 @@ import time
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
-from netcontrol.routes import siem_forwarder
+from netcontrol.routes import notification_channels, siem_forwarder
 from netcontrol.routes.admin import (
     AdminAccessGroupCreateRequest,
     AdminAccessGroupUpdateRequest,
@@ -952,6 +952,21 @@ async def _load_persisted_security_settings():
         state.SIEM_SINKS = siem_forwarder.sanitize_sinks(siem_sinks_raw.get("sinks"))
     else:
         state.SIEM_SINKS = []
+    notify_raw = await db.get_auth_setting("notification_channels")
+    # auth_settings stores dicts; the channel list is wrapped as
+    # {"channels": [...], "default_channel_ids": [...]}.
+    if isinstance(notify_raw, dict):
+        state.NOTIFICATION_CHANNELS = notification_channels.sanitize_channels(
+            notify_raw.get("channels"))
+        valid_ids = {c.id for c in state.NOTIFICATION_CHANNELS}
+        state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
+            str(c).strip()
+            for c in (notify_raw.get("default_channel_ids") or [])
+            if str(c).strip() in valid_ids
+        ]
+    else:
+        state.NOTIFICATION_CHANNELS = []
+        state.NOTIFICATION_DEFAULT_CHANNEL_IDS = []
     cloud_flow_sync = await db.get_auth_setting("cloud_flow_sync")
     state.CLOUD_FLOW_SYNC_CONFIG = _sanitize_cloud_flow_sync_config(cloud_flow_sync)
     cloud_flow_sync_status = await db.get_auth_setting("cloud_flow_sync_status")
@@ -1299,6 +1314,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         LOGGER.warning("siem_forwarder: startup failed: %s", type(exc).__name__)
 
+    # Notification channels: start the per-channel dispatcher tasks and
+    # register the hook that fans newly created monitoring alerts out to them.
+    try:
+        await notification_channels.start_dispatcher(
+            state.NOTIFICATION_CHANNELS, state.NOTIFICATION_DEFAULT_CHANNEL_IDS)
+        db.set_alert_created_hook(notification_channels.on_alert_created)
+    except Exception as exc:
+        LOGGER.warning("notification_channels: startup failed: %s", type(exc).__name__)
+
     flow_collector_started = False
     # Persisted flow_collector config (loaded above) drives lifecycle now.
     # Env vars only matter on the very first boot, where _load_persisted_
@@ -1433,6 +1457,11 @@ async def lifespan(app: FastAPI):
             await siem_forwarder.stop_dispatcher()
         except Exception as exc:
             LOGGER.warning("siem_forwarder: shutdown failed: %s", type(exc).__name__)
+        try:
+            db.set_alert_created_hook(None)
+            await notification_channels.stop_dispatcher()
+        except Exception as exc:
+            LOGGER.warning("notification_channels: shutdown failed: %s", type(exc).__name__)
 
 
 async def _rate_limit_cleanup_loop() -> None:

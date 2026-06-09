@@ -13,6 +13,7 @@ import { FeaturesTab } from './FeaturesTab';
 import { LoggingTab } from './LoggingTab';
 import { MonitoringTab } from './MonitoringTab';
 import { NetFlowTab } from './NetFlowTab';
+import { NotificationsTab } from './NotificationsTab';
 import { SiemTab } from './SiemTab';
 import { SystemTab } from './SystemTab';
 import { UsersTab } from './UsersTab';
@@ -27,6 +28,7 @@ type Tab =
   | 'discovery'
   | 'monitoring'
   | 'netflow'
+  | 'notifications'
   | 'features'
   | 'system';
 
@@ -67,6 +69,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'NetFlow / sFlow Collector',
     text: 'Toggle the UDP collector for NetFlow v5/v9, IPFIX, and sFlow v5; change listen ports and how long raw flows and hourly summaries are retained. Changes apply immediately - no restart needed.',
   },
+  notifications: {
+    title: 'Alert Notification Channels',
+    text: 'Deliver monitoring alerts to email (SMTP), PagerDuty (Events API v2), a generic JSON webhook, or a Microsoft Teams incoming webhook. Assign channels per alert rule (Monitoring → Rules); alerts not tied to a rule use the default channel set. Delivery is best-effort with bounded retry and de-duplication, so a flapping condition pages once, not continuously.',
+  },
   features: {
     title: 'Feature Visibility',
     text: 'Hide or show features for the entire instance. Use this to declutter the UI for operators who only need a subset of Plexus, or to stage rollouts.',
@@ -87,6 +93,7 @@ const ADMIN_TABS: { id: Tab; label: string }[] = [
   { id: 'discovery', label: 'Discovery' },
   { id: 'monitoring', label: 'Monitoring' },
   { id: 'netflow', label: 'NetFlow' },
+  { id: 'notifications', label: 'Notifications' },
   { id: 'features', label: 'Features' },
   { id: 'system', label: 'System' },
 ];
@@ -242,6 +249,7 @@ export function Settings() {
           {tab === 'discovery' && <DiscoveryTab />}
           {tab === 'monitoring' && <MonitoringTab />}
           {tab === 'netflow' && <NetFlowTab />}
+          {tab === 'notifications' && <NotificationsTab />}
           {tab === 'features' && <FeaturesTab capabilities={caps} />}
           {tab === 'system' && <SystemTab />}
         </div>
