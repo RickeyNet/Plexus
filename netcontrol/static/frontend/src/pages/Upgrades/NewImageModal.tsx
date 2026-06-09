@@ -73,7 +73,7 @@ export function NewImageModal({ isOpen, onClose }: Props) {
               style={{
                 height: '6px',
                 borderRadius: '3px',
-                background: 'var(--border)',
+                background: 'var(--border-light)',
                 overflow: 'hidden',
               }}
             >
@@ -81,7 +81,7 @@ export function NewImageModal({ isOpen, onClose }: Props) {
                 style={{
                   height: '100%',
                   width: `${progress}%`,
-                  background: 'var(--accent)',
+                  background: 'var(--primary)',
                   transition: 'width 0.2s ease',
                 }}
               />
