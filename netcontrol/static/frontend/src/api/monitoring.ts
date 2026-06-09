@@ -88,6 +88,8 @@ export interface AlertRule {
   group_name?: string | null;
   host_id?: number | null;
   group_id?: number | null;
+  // JSON-encoded list of notification-channel ids; empty means "use defaults".
+  channel_ids?: string | null;
 }
 
 export interface AlertSuppression {
@@ -400,6 +402,7 @@ export interface AlertRuleCreate {
   description?: string;
   host_id?: number;
   group_id?: number;
+  channel_ids?: string[];
 }
 
 export function useCreateAlertRule() {

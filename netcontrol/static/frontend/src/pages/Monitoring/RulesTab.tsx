@@ -11,13 +11,29 @@ import {
   type AlertRule,
   type AlertRuleCreate,
 } from '@/api/monitoring';
+import { useNotificationChannels } from '@/api/settings';
 import { severityColor } from './helpers';
+
+function parseChannelIds(raw?: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map((x) => String(x));
+  } catch {
+    return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
 
 export function RulesTab() {
   const { confirm, alert } = useDialogs();
   const rules = useAlertRules();
   const deleteMut = useDeleteAlertRule();
   const updateMut = useUpdateAlertRule();
+  const channelsQuery = useNotificationChannels();
+  const channelName = new Map<string, string>(
+    (channelsQuery.data?.channels ?? []).map((c) => [c.id, c.name || c.id]),
+  );
   const [showCreate, setShowCreate] = useState(false);
 
   function toggleEnabled(r: AlertRule) {
@@ -72,6 +88,11 @@ export function RulesTab() {
                 <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>
                   {scope} · Cooldown: {r.cooldown_minutes}m
                   {r.escalate_after_minutes > 0 && ` · Escalate to ${r.escalate_to} after ${r.escalate_after_minutes}m`}
+                  {(() => {
+                    const ids = parseChannelIds(r.channel_ids);
+                    const names = ids.map((id) => channelName.get(id) ?? id);
+                    return ` · Notify: ${names.length ? names.join(', ') : 'default channels'}`;
+                  })()}
                   {r.description && <><br />{r.description}</>}
                 </div>
               </div>
@@ -89,6 +110,8 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
   const { alert } = useDialogs();
   const createMut = useCreateAlertRule();
   const groups = useInventoryGroupsFull(true);
+  const channelsQuery = useNotificationChannels();
+  const channels = channelsQuery.data?.channels ?? [];
   const [name, setName] = useState('');
   const [metric, setMetric] = useState('cpu');
   const [operator, setOperator] = useState('>=');
@@ -99,6 +122,7 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
   const [groupId, setGroupId] = useState('');
   const [hostId, setHostId] = useState('');
   const [description, setDescription] = useState('');
+  const [channelIds, setChannelIds] = useState<string[]>([]);
 
   const allHosts = (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: g.name })));
 
@@ -117,10 +141,11 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
     };
     if (hostId) data.host_id = parseInt(hostId, 10);
     else if (groupId) data.group_id = parseInt(groupId, 10);
+    if (channelIds.length) data.channel_ids = channelIds;
 
     createMut.mutate(data, {
       onSuccess: () => {
-        setName(''); setValue('90'); setDescription(''); setHostId(''); setGroupId('');
+        setName(''); setValue('90'); setDescription(''); setHostId(''); setGroupId(''); setChannelIds([]);
         onClose();
       },
       onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
@@ -194,6 +219,40 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
               <option key={h.id} value={h.id}>{h.hostname} ({h.ip_address})</option>
             ))}
           </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Notification Channels</label>
+          {channels.length === 0 ? (
+            <div className="text-muted" style={{ fontSize: '0.82em' }}>
+              No channels configured. Add them under Settings → Notifications. Until then, alerts
+              only appear in-app.
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                {channels.map((c) => (
+                  <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88em' }}>
+                    <input
+                      type="checkbox"
+                      checked={channelIds.includes(c.id)}
+                      onChange={(e) =>
+                        setChannelIds((prev) =>
+                          e.target.checked ? [...prev, c.id] : prev.filter((x) => x !== c.id),
+                        )
+                      }
+                    />
+                    <span>
+                      {c.name || c.id}{' '}
+                      <span className="text-muted">({c.type}{c.enabled ? '' : ', disabled'})</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="text-muted" style={{ fontSize: '0.78em', marginTop: '0.25rem' }}>
+                Leave all unchecked to use the default channel set from Settings → Notifications.
+              </div>
+            </>
+          )}
         </div>
         <div className="form-group">
           <label className="form-label">Description</label>
