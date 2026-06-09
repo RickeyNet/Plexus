@@ -88,6 +88,46 @@ def _image_file_path(filename: str) -> str:
     return fpath
 
 
+def _candidate_image_dirs() -> list[str]:
+    """Directories that may hold stored images, primary (SOFTWARE_IMAGES_DIR) first.
+
+    The image directory resolution gained an env-driven state-root location
+    (PLEXUS_STATE_DIR / APP_SESSION_KEY_FILE), so deployments that set a state
+    dir now read from <state>/software_images while images uploaded under the
+    older scheme still live in <repo_root>/software_images. Reads search every
+    candidate so a file in the legacy location is still found.
+    """
+    dirs = [SOFTWARE_IMAGES_DIR, os.path.join(_REPO_ROOT, "software_images")]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for d in dirs:
+        key = os.path.realpath(d)
+        if key not in seen:
+            seen.add(key)
+            ordered.append(d)
+    return ordered
+
+
+def _safe_image_path_in(directory: str, filename: str) -> str | None:
+    """Resolve filename under directory, or None if it would escape that root."""
+    safe_name = os.path.basename(filename)
+    root = os.path.realpath(directory)
+    fpath = os.path.realpath(os.path.join(directory, safe_name))
+    prefix = root if root.endswith(os.sep) else root + os.sep
+    if fpath != root and not fpath.startswith(prefix):
+        return None
+    return fpath
+
+
+def _find_existing_image_path(filename: str) -> str | None:
+    """Return the first candidate directory that actually holds filename, else None."""
+    for directory in _candidate_image_dirs():
+        fpath = _safe_image_path_in(directory, filename)
+        if fpath and os.path.isfile(fpath):
+            return fpath
+    return None
+
+
 def _ensure_software_images_dir() -> None:
     os.makedirs(SOFTWARE_IMAGES_DIR, exist_ok=True)
 
@@ -727,7 +767,9 @@ async def delete_image(image_id: int, request: Request):
     if not img:
         raise HTTPException(404, "Image not found")
 
-    fpath = _image_file_path(img["filename"])
+    # Remove the on-disk file from wherever it actually lives (primary or a
+    # legacy directory), not just the primary location, to avoid orphaned files.
+    fpath = _find_existing_image_path(img["filename"]) or _image_file_path(img["filename"])
     if os.path.isfile(fpath):
         try:
             os.remove(fpath)
@@ -1975,11 +2017,20 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
             return
 
         if not os.path.isfile(image_path):
-            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                           error_message=f"Image file not found: {image_path}")
-            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=f"Image file not found: {image_path}")
-            await _emit(campaign_id, dev_id, "error", f"Image file not found on server: {target_image}", host=ip)
-            return
+            # The primary location may be empty if the image was stored under an
+            # older directory scheme; search the other candidate locations before
+            # failing so a legacy-located file is still picked up.
+            fallback = _find_existing_image_path(image_name)
+            if fallback:
+                image_path = fallback
+            else:
+                searched = ", ".join(_candidate_image_dirs())
+                await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
+                                               error_message=f"Image file not found in: {searched}")
+                await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=f"Image file not found in: {searched}")
+                await _emit(campaign_id, dev_id, "error",
+                            f"Image file not found on server: {target_image} (searched: {searched})", host=ip)
+                return
 
         # Compute local MD5
         local_md5 = None
