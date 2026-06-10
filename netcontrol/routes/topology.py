@@ -989,14 +989,16 @@ async def _run_topology_discovery_once() -> dict:
                 if if_stats:
                     try:
                         await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        LOGGER.warning("topology scheduled: graph template apply failed for %s: %s",
+                                       host["ip_address"], exc)
                 # Auto-discover SNMP data sources (interfaces, storage)
                 try:
                     from netcontrol.routes.snmp import auto_discover_data_sources
                     await auto_discover_data_sources(host["id"], host["ip_address"], snmp_cfg)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.warning("topology scheduled: data source auto-discovery failed for %s: %s",
+                                   host["ip_address"], exc)
                 # Collect MAC/ARP tables during topology discovery
                 try:
                     from netcontrol.routes.mac_tracking import collect_mac_arp_tables
@@ -1005,14 +1007,16 @@ async def _run_topology_discovery_once() -> dict:
                         device_type=host.get("device_type", ""),
                         host=host,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.warning("topology scheduled: MAC/ARP collection failed for %s: %s",
+                                   host["ip_address"], exc)
                 # Per-port inventory + VLAN definitions (feeds audit rules)
                 try:
                     from netcontrol.routes.mac_tracking import collect_interface_inventory
                     await collect_interface_inventory(host["id"], host["ip_address"], snmp_cfg)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.warning("topology scheduled: interface inventory collection failed for %s: %s",
+                                   host["ip_address"], exc)
                 # Record topology changes (only if there were previous links)
                 if old_link_keys:
                     await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
@@ -1025,8 +1029,8 @@ async def _run_topology_discovery_once() -> dict:
     if groups_scanned > 0:
         try:
             await db.resolve_topology_target_host_ids()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("topology scheduled: target host id resolution failed: %s", exc)
         LOGGER.info("topology scheduled: scanned %d groups, %d links discovered, %d errors",
                      groups_scanned, total_links, total_errors)
         increment_metric("topology.discovery.scheduled.success")
@@ -1727,8 +1731,9 @@ async def discover_topology_for_group(group_id: int):
                 if if_stats:
                     try:
                         await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        LOGGER.warning("topology: graph template apply failed for %s: %s",
+                                       host["ip_address"], exc)
                 # Record topology changes (only if there were previous links)
                 if old_link_keys:
                     await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
@@ -1830,8 +1835,9 @@ async def discover_topology_all():
                     if if_stats:
                         try:
                             await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            LOGGER.warning("topology: graph template apply failed for %s: %s",
+                                           host["ip_address"], exc)
                     # Record topology changes (only if there were previous links)
                     if old_link_keys:
                         await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)

@@ -11,6 +11,10 @@ from __future__ import annotations
 import asyncio
 import os
 
+from netcontrol.telemetry import configure_logging
+
+LOGGER = configure_logging("plexus.state")
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -482,36 +486,36 @@ def _sanitize_flow_collector_config(data: dict | None) -> dict:
             netflow_port = int(data.get("netflow_port", cfg["netflow_port"]))
             if 1 <= netflow_port <= 65535:
                 cfg["netflow_port"] = netflow_port
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            LOGGER.warning("flow collector config: invalid netflow_port, keeping default: %s", exc)
         try:
             sflow_port = int(data.get("sflow_port", cfg["sflow_port"]))
             # 0 is a sentinel meaning "do not bind sFlow"
             if sflow_port == 0 or 1 <= sflow_port <= 65535:
                 cfg["sflow_port"] = sflow_port
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            LOGGER.warning("flow collector config: invalid sflow_port, keeping default: %s", exc)
         try:
             ret_hours = int(data.get("retention_hours", cfg["retention_hours"]))
             cfg["retention_hours"] = max(
                 FLOW_COLLECTOR_MIN_RETENTION_HOURS,
                 min(FLOW_COLLECTOR_MAX_RETENTION_HOURS, ret_hours),
             )
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            LOGGER.warning("flow collector config: invalid retention_hours, keeping default: %s", exc)
         try:
             summary_days = int(data.get("summary_retention_days", cfg["summary_retention_days"]))
             cfg["summary_retention_days"] = max(1, min(3650, summary_days))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            LOGGER.warning("flow collector config: invalid summary_retention_days, keeping default: %s", exc)
         try:
             agg = int(data.get("aggregation_interval_seconds", cfg["aggregation_interval_seconds"]))
             cfg["aggregation_interval_seconds"] = max(
                 FLOW_COLLECTOR_MIN_AGG_INTERVAL,
                 min(FLOW_COLLECTOR_MAX_AGG_INTERVAL, agg),
             )
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            LOGGER.warning("flow collector config: invalid aggregation_interval_seconds, keeping default: %s", exc)
     return cfg
 
 

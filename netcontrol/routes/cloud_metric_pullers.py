@@ -403,8 +403,8 @@ def _build_gcp_monitoring_client(auth: dict):
 
                 credentials = service_account.Credentials.from_service_account_info(info)
                 return monitoring_v3.MetricServiceClient(credentials=credentials)
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as exc:
+            LOGGER.warning("GCP monitoring: service_account_json is not valid JSON: %s", exc)
 
     if creds_file:
         from google.oauth2 import service_account
@@ -616,8 +616,8 @@ def _parse_list(value: Any) -> list[str]:
                 parsed = json.loads(text)
                 if isinstance(parsed, list):
                     return [str(v).strip() for v in parsed if str(v).strip()]
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("_parse_list: value is not valid JSON, falling back to comma split: %s", exc)
         return [v.strip() for v in text.split(",") if v.strip()]
     return []
 

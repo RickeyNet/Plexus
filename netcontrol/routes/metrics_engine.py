@@ -209,8 +209,9 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
                         max_bps = speed_mbps * 1_000_000
                         utilization_pct = max(in_rate_bps, out_rate_bps) / max_bps * 100
                         utilization_pct = min(utilization_pct, 100.0)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                LOGGER.debug("metrics: rate calc failed for host %s if_index %s: %s",
+                             host_id, if_index, exc)
 
         rows.append((host_id, if_index, if_name, speed_mbps,
                       in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct))
@@ -343,10 +344,12 @@ async def store_interface_error_metrics_from_poll(
                                                 spike_factor=spike_factor,
                                                 severity=severity,
                                             ))
-                            except (ValueError, TypeError):
-                                pass
-                except (ValueError, TypeError):
-                    pass
+                            except (ValueError, TypeError) as exc:
+                                LOGGER.debug("metrics: spike baseline calc failed for host %s if_index %s %s: %s",
+                                             host_id, if_index, metric_name, exc)
+                except (ValueError, TypeError) as exc:
+                    LOGGER.debug("metrics: error rate calc failed for host %s if_index %s %s: %s",
+                                 host_id, if_index, metric_name, exc)
 
         error_stat_rows.append((
             if_index,
@@ -736,8 +739,8 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
                 candidate = "".join(text_parts)
                 if "." in candidate and len(candidate) > 5:
                     oid = candidate
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("metrics: trap OID extraction failed from %s: %s", source_ip, exc)
 
         asyncio.get_running_loop().create_task(
             _store_event(source_ip, "trap", "", "info", oid, message, raw_hex[:2000])
@@ -765,8 +768,8 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
                             6: "info", 7: "info"}
                 severity = _sev_map.get(sev_num, "info")
                 message = text[pri_end + 1:].strip()
-            except (ValueError, IndexError):
-                pass
+            except (ValueError, IndexError) as exc:
+                LOGGER.debug("metrics: syslog priority parse failed from %s: %s", source_ip, exc)
 
         asyncio.get_running_loop().create_task(
             _store_event(source_ip, "syslog", facility, severity, "", message, text[:2000])
@@ -780,8 +783,8 @@ async def _store_event(source_ip, event_type, facility, severity, oid, message, 
         host = await db.find_host_by_ip(source_ip)
         if host:
             host_id = host["id"]
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.debug("metrics: host lookup failed for %s: %s", source_ip, exc)
 
     await db.create_trap_syslog_event(
         source_ip=source_ip,

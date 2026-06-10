@@ -191,8 +191,8 @@ def evaluate_cdef_expression(expression: str, data_map: dict[str, list[float]]) 
                 # Unknown token - try as number or skip
                 try:
                     stack.append(float(token))
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    LOGGER.debug("cdef: skipping unknown token %r: %s", token, exc)
 
         result.append(stack[-1] if stack else 0.0)
 

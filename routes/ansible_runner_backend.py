@@ -337,5 +337,5 @@ async def execute_ansible_playbook(
         # Clean up temp directory
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.debug("Failed to clean up temp directory %s: %s", tmpdir, exc)

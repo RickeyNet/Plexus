@@ -449,8 +449,8 @@ def _build_gcp_logging_client(auth: dict, project_id: str):
                 from google.oauth2 import service_account
                 credentials = service_account.Credentials.from_service_account_info(info)
                 return gcp_logging.Client(project=project_id, credentials=credentials)
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as exc:
+            LOGGER.warning("GCP logging: service_account_json is not valid JSON: %s", exc)
     if creds_file:
         from google.oauth2 import service_account
         credentials = service_account.Credentials.from_service_account_file(creds_file)

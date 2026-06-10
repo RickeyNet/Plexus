@@ -210,8 +210,8 @@ async def _broadcast_deploy_line(job_id: str, line: str):
             for ws in dead:
                 try:
                     _deployment_job_sockets[job_id].remove(ws)
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as exc:
+                    LOGGER.debug("deploy broadcast: dead WS already removed for job %s: %s", job_id, exc)
 
 
 async def _finish_deploy_job(job_id: str, status: str = "completed"):
@@ -249,8 +249,9 @@ async def _run_post_deployment_verification(
             if cp.get("check_type") == "metric_baseline" and cp.get("phase") == "pre":
                 try:
                     baselines_by_host[cp["host_id"]] = json.loads(cp.get("result", "{}"))
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                except (json.JSONDecodeError, TypeError) as exc:
+                    LOGGER.warning("deployment %s: failed to parse metric baseline for host %s: %s",
+                                   deployment_id, cp.get("host_id"), exc)
 
         all_passed = True
         now_iso = datetime.now(UTC).isoformat()
@@ -762,8 +763,8 @@ async def get_deployment_correlation(deployment_id: int):
     host_ids: list[int] = []
     try:
         host_ids = json.loads(dep.get("host_ids") or "[]")
-    except (json.JSONDecodeError, TypeError):
-        pass
+    except (json.JSONDecodeError, TypeError) as exc:
+        LOGGER.warning("deployment %s: failed to parse host_ids: %s", deployment_id, exc)
 
     checkpoints = await db.get_deployment_checkpoints(deployment_id)
     drift_events = await db.get_config_drift_events_in_range(host_ids, window_start, window_end) if host_ids and window_start else []
@@ -1062,13 +1063,13 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
     if job.get("output"):
         try:
             await websocket.send_json({"type": "line", "data": job["output"]})
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("deploy WS: failed to send buffered output for job %s: %s", job_id, exc)
     if job.get("status") in ("completed", "failed"):
         try:
             await websocket.send_json({"type": "job_complete", "status": job["status"]})
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("deploy WS: failed to send job_complete for job %s: %s", job_id, exc)
 
     try:
         while True:
@@ -1079,12 +1080,12 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
                     await websocket.send_json({"type": "ping"})
                 except Exception:
                     break
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        LOGGER.debug("deploy WS: client disconnected for job %s: %s", job_id, exc)
     finally:
         async with _deployment_sockets_lock:
             if job_id in _deployment_job_sockets:
                 try:
                     _deployment_job_sockets[job_id].remove(websocket)
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    LOGGER.debug("deploy WS: socket already removed for job %s: %s", job_id, exc)

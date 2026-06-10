@@ -657,23 +657,26 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
             if oid.endswith("." + idx):
                 try:
                     in_val = int(val)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    LOGGER.debug("topology: bad in-octets value from %s for ifIndex %s: %s",
+                                 ip_address, idx, exc)
                 break
         for oid, val in out_octets_raw.items():
             if oid.endswith("." + idx):
                 try:
                     out_val = int(val)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    LOGGER.debug("topology: bad out-octets value from %s for ifIndex %s: %s",
+                                 ip_address, idx, exc)
                 break
         for oid, val in effective_speed.items():
             if oid.endswith("." + idx):
                 try:
                     raw_speed = int(val)
                     speed_mbps = raw_speed if high_speed_raw else raw_speed // 1_000_000
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    LOGGER.debug("topology: bad interface speed value from %s for ifIndex %s: %s",
+                                 ip_address, idx, exc)
                 break
 
         if_stats.append({
@@ -731,8 +734,9 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
                 raw = bytes(val)
                 if len(raw) == 4:
                     lldp_addr_map[key] = socket.inet_ntoa(raw)
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("topology: failed to parse LLDP management address from %s (oid %s): %s",
+                             ip_address, oid, exc)
 
     for oid, sys_name_val in lldp_names.items():
         suffix = oid[len(lldp_sys_name_base):]
@@ -950,8 +954,9 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
                 if_idx = bp_to_ifindex.get(bp)
                 if if_idx:
                     if_pvid_data[if_idx] = pvid
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("data_source_discovery: dot1qPvid bridge-port walk failed for %s: %s",
+                           ip_address, exc)
 
     # Collect all known if_indexes
     all_indexes = set()
@@ -1008,8 +1013,9 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
                 oids_json=json.dumps(oids_info),
             )
             counts["interfaces"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("data_source_discovery: failed to store interface %s for host %s: %s",
+                         idx, host_id, exc)
 
     # ── Process storage entries ──
     storage_type_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.2", {})
@@ -1038,8 +1044,9 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
                 oids_json=json.dumps(storage_info),
             )
             counts["storage"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("data_source_discovery: failed to store storage entry %s for host %s: %s",
+                         idx, host_id, exc)
 
     counts["total"] = counts["interfaces"] + counts["storage"]
     LOGGER.info("data_source_discovery: host %s (%s) - %d interfaces, %d storage entries",
