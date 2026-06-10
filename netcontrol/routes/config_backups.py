@@ -590,8 +590,9 @@ async def _run_config_backups_once() -> dict:
             # Retention cleanup for this policy
             try:
                 await db.delete_old_config_backups(policy["retention_days"])
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("config-backup: retention cleanup failed for policy %s: %s",
+                               policy["id"], exc)
 
         except Exception as exc:
             errors += 1

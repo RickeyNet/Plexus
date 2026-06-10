@@ -304,8 +304,8 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
     retention_days = int(state.COMPLIANCE_CHECK_CONFIG.get("retention_days", state.COMPLIANCE_CHECK_DEFAULTS["retention_days"]))
     try:
         await db.delete_old_compliance_scan_results(retention_days)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("compliance: retention cleanup failed: %s", exc)
 
     if assignments_run > 0:
         LOGGER.info("compliance: ran %d assignments, scanned %d hosts, %d violations, %d errors",
@@ -803,8 +803,9 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
     findings = []
     try:
         findings = json.loads(scan_result.get("findings", "[]"))
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        LOGGER.warning("compliance: failed to parse findings for scan %s (host %s): %s",
+                       body.result_id, host["id"], exc)
 
     rule_finding = None
     for f in findings:
@@ -887,8 +888,9 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
     new_findings = []
     try:
         new_findings = json.loads(rescan.get("findings", "[]"))
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        LOGGER.warning("compliance: failed to parse rescan findings for scan %s (host %s): %s",
+                       rescan_id, host["id"], exc)
     rule_now_passes = False
     for f in new_findings:
         if f.get("name") == body.rule_name and f.get("passed"):

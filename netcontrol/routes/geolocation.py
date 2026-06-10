@@ -12,6 +12,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.telemetry import configure_logging
+
+LOGGER = configure_logging("plexus.geolocation")
 
 router = APIRouter()
 
@@ -207,8 +210,8 @@ def _remove_floor_image(filename: str | None) -> None:
         path = _floor_image_path(filename)
         if os.path.isfile(path):
             os.remove(path)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.debug("geo: failed to remove floor image %s: %s", filename, exc)
 
 
 @router.post("/api/geo/floors/{floor_id}/image")

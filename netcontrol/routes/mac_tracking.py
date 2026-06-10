@@ -94,8 +94,8 @@ def _extract_mac_from_oid_suffix(suffix: str) -> str:
         mac_parts = parts[-6:]
         try:
             return ":".join(f"{int(p):02x}" for p in mac_parts)
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as exc:
+            LOGGER.debug("mac_tracking: could not parse MAC from OID suffix %r: %s", suffix, exc)
     return ""
 
 
@@ -533,8 +533,9 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 await db.record_mac_history(mac, host_id, row["port"], vlan=vlan)
                 seen_mac_vlan.add((mac, vlan))
                 result["macs_found"] += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("mac_tracking: host %s CLI MAC upsert failed for %s vlan %s: %s",
+                               host_id, mac, vlan, exc)
 
     # Final empty-FDB advisory — runs once the default-context AND any
     # per-VLAN context walks have all completed. Only fires when we got no
@@ -582,8 +583,9 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             await db.record_mac_history(mac, host_id, port_name, vlan=vlan)
             seen_mac_vlan.add((mac, vlan))
             result["macs_found"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("mac_tracking: host %s Q-BRIDGE MAC upsert failed for %s vlan %s: %s",
+                           host_id, mac, vlan, exc)
 
     # ── Standard bridge FDB (dot1dTpFdbTable) - no VLAN in OID ──
     # On Cisco we walked this per-VLAN context, so prefer the context-recorded
@@ -616,8 +618,9 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             await db.record_mac_history(mac, host_id, port_name, vlan=vlan_for_mac)
             seen_mac_vlan.add((mac, vlan_for_mac))
             result["macs_found"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("mac_tracking: host %s dot1d MAC upsert failed for %s vlan %s: %s",
+                           host_id, mac, vlan_for_mac, exc)
 
     # ── ARP table (global, ipNetToMediaTable) ──
     for oid, mac_val in arp_phys.items():
@@ -657,8 +660,9 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                             entry_type=entry.get("entry_type", "dynamic"),
                         )
             result["arps_found"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("mac_tracking: host %s ARP upsert failed for %s (%s): %s",
+                           host_id, mac, ip_addr, exc)
 
     result["diag"]["ports"] = len(if_index_to_name)
     result["diag"]["port_vlans"] = len(if_index_to_vlan)
@@ -848,14 +852,16 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
         if s:
             try:
                 return int(s)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                LOGGER.debug("interface_inventory: bad ifHighSpeed value %r for ifIndex %s: %s",
+                             s, if_idx, exc)
         s2 = lo_speed_by_idx.get(if_idx, "")
         if s2:
             try:
                 return max(0, int(s2) // 1_000_000)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                LOGGER.debug("interface_inventory: bad ifSpeed value %r for ifIndex %s: %s",
+                             s2, if_idx, exc)
         return 0
 
     # ── Decide which VLAN to report for an access port ──
@@ -897,8 +903,9 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
                 trunk_vlans=_trunk_vlans_for_idx(if_idx),
             )
             result["ports_written"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("interface_inventory: host %s port upsert failed for ifIndex %s (%s): %s",
+                           host_id, if_idx, name, exc)
 
     # ── Write VLAN definitions ──
     # vtpVlanName is indexed by <management-domain>.<vlan-id>; the trailing
@@ -928,8 +935,9 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
                 state=vlan_state_by_id.get(vid, "operational"),
             )
             result["vlans_written"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("interface_inventory: host %s VLAN upsert failed for vlan %s: %s",
+                           host_id, vid, exc)
 
     LOGGER.info(
         "interface_inventory: host %s (%s) - %d ports, %d VLANs collected",

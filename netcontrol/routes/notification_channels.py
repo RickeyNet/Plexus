@@ -325,8 +325,8 @@ def parse_channel_ids(raw: Any) -> list[str]:
                 parsed = json.loads(s)
                 if isinstance(parsed, list):
                     return [str(x).strip() for x in parsed if str(x).strip()]
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                LOGGER.warning("notify: channel_ids JSON parse failed, falling back to comma split: %s", exc)
         return [t.strip() for t in s.split(",") if t.strip()]
     return []
 
@@ -613,8 +613,9 @@ def _enqueue_one(rt: ChannelRuntime, alert: dict) -> None:
             rt.queue.get_nowait()
             rt.queue.task_done()
             rt.dropped_queue_full += 1
-        except asyncio.QueueEmpty:
-            pass
+        except asyncio.QueueEmpty as exc:
+            LOGGER.warning("notify channel %s: queue full, drop-oldest raced empty: %s",
+                           rt.config.id, exc)
         try:
             rt.queue.put_nowait(alert)
         except asyncio.QueueFull:
@@ -695,8 +696,8 @@ async def apply_channels(configs: list[ChannelConfig],
                 rt.task.cancel()
                 try:
                     await rt.task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                except (asyncio.CancelledError, Exception) as exc:
+                    LOGGER.debug("notify channel %s: task cancel: %s", cid, exc)
         for cid, cfg in desired.items():
             if cid in _channels:
                 continue
@@ -724,8 +725,8 @@ async def stop_dispatcher() -> None:
             rt.task.cancel()
             try:
                 await rt.task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as exc:
+                LOGGER.debug("notify channel %s: task cancel: %s", rt.config.id, exc)
     _started = False
 
 

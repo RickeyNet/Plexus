@@ -56,8 +56,9 @@ async def _get_client(host: dict, cred: dict, password: str) -> FdmClient:
             # opening a new one so we don't leak a slot in the 5-session budget.
             try:
                 await existing[1].close()
-            except Exception:  # noqa: BLE001 - best-effort teardown
-                pass
+            except Exception as exc:  # noqa: BLE001 - best-effort teardown
+                LOGGER.debug("cisco_fdm: error closing stale session for host %s: %s",
+                             host_id, exc)
         client = FdmClient(
             host["ip_address"],
             cred.get("username") or "",
@@ -161,8 +162,8 @@ async def close_all_clients() -> None:
         for _fp, client in _CLIENTS.values():
             try:
                 await client.close()
-            except Exception:  # noqa: BLE001 - best-effort teardown
-                pass
+            except Exception as exc:  # noqa: BLE001 - best-effort teardown
+                LOGGER.debug("cisco_fdm: error closing session on shutdown: %s", exc)
         _CLIENTS.clear()
 
 
