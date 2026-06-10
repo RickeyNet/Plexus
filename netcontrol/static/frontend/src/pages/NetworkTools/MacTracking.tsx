@@ -51,12 +51,43 @@ export function MacTracking() {
       {collect.isSuccess && (
         <div
           className="glass-card card"
-          style={{ borderColor: 'var(--success)', marginBottom: '1rem' }}
+          style={{
+            borderColor: collect.data.errors?.length
+              ? 'var(--warning)'
+              : 'var(--success)',
+            marginBottom: '1rem',
+          }}
         >
-          <span className="badge badge-success">
+          <span
+            className={`badge ${
+              collect.data.errors?.length ? 'badge-warning' : 'badge-success'
+            }`}
+          >
             Collected {collect.data.macs_found} MACs, {collect.data.arps_found} ARPs from{' '}
             {collect.data.hosts_collected} host(s)
           </span>
+          {!!collect.data.errors?.length && (
+            <details style={{ marginTop: '0.5rem' }}>
+              <summary style={{ cursor: 'pointer', fontSize: '0.85em' }}>
+                {collect.data.errors.length} diagnostic
+                {collect.data.errors.length === 1 ? '' : 's'} — some hosts
+                returned partial or no data
+              </summary>
+              <ul
+                style={{
+                  margin: '0.35rem 0 0',
+                  paddingLeft: '1.25rem',
+                  fontSize: '0.85em',
+                }}
+              >
+                {collect.data.errors.map((err, idx) => (
+                  <li key={idx} style={{ color: 'var(--warning)' }}>
+                    {err}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
       {collect.isError && (

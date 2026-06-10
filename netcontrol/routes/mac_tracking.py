@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
-from netcontrol.routes.shared import _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
 from netcontrol.telemetry import configure_logging
 
@@ -179,18 +179,29 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 driver_supports_cli = False
 
             if driver_supports_cli:
-                # get_credentials_for_group ignores its argument today
-                # (no per-group mapping yet) and returns every credential
-                # in the system; first match wins. Good enough until
-                # someone wires per-group SSH creds.
-                creds_list = await db.get_credentials_for_group(
-                    host.get("group_id") or 0
+                # Use the designated Plexus service credential for this
+                # unattended SSH login (the same account monitoring polls
+                # with), falling back to the legacy default credential for
+                # deployments that haven't set one. The old code grabbed
+                # whichever user credential happened to sort first, which
+                # logged into devices as an arbitrary operator and pulled an
+                # owned user credential into a background path — exactly what
+                # the credential-ownership model is meant to prevent.
+                cred_id = (
+                    state.AUTH_CONFIG.get("service_credential_id")
+                    or state.AUTH_CONFIG.get("default_credential_id")
                 )
-                if creds_list:
+                service_cred = await db.get_credential_raw(cred_id) if cred_id else None
+                if service_cred is None:
+                    result["errors"].append(
+                        "CLI MAC collection skipped: no service or default "
+                        "credential configured (set one in Settings); using SNMP."
+                    )
+                else:
                     result["diag"]["cli_attempted"] = True
                     try:
                         cli_macs = await _collect_mac_table_via_cli(
-                            host, creds_list[0]
+                            host, service_cred
                         )
                         result["diag"]["cli_succeeded"] = True
                         result["diag"]["cli_mac_count"] = len(cli_macs)
@@ -1002,12 +1013,20 @@ async def get_port_macs(host_id: int, port_name: str):
     return await db.get_macs_on_port(host_id, port_name)
 
 
+# Guards against overlapping full-fleet collections. A full run walks every
+# SNMP-enabled host and can take minutes (per-host VLAN budget is 60s), so a
+# second concurrent run — an impatient double-click, or a manual run racing a
+# scheduled one — would just double the device load for no benefit.
+_full_collection_running = False
+
+
 @router.post("/api/mac-tracking/collect")
 async def trigger_mac_collection(host_id: int | None = Query(None)):
     """Trigger immediate MAC/ARP collection.
     If host_id is provided, collect from that host only.
     Otherwise, collect from all hosts with SNMP enabled.
     """
+    global _full_collection_running
     from netcontrol.routes.state import _resolve_snmp_discovery_config
 
     if host_id is not None:
@@ -1025,16 +1044,28 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         result.setdefault("hosts_collected", 1)
         return result
 
-    # Collect from all groups
-    groups = await db.get_all_groups()
-    total = {"macs_found": 0, "arps_found": 0, "hosts_collected": 0, "errors": []}
-    sem = asyncio.Semaphore(4)
+    # Full-fleet collection. The check-then-set is atomic under asyncio (no
+    # await between), so this reliably rejects a second concurrent run.
+    if _full_collection_running:
+        raise HTTPException(409, "A full MAC/ARP collection is already running")
+    _full_collection_running = True
+    try:
+        # Flatten every SNMP-enabled host into one work list so the concurrency
+        # cap stays saturated across the whole fleet instead of resetting per
+        # group (one slow group no longer stalls the rest).
+        targets: list[tuple[dict, dict]] = []
+        for group in await db.get_all_groups():
+            snmp_cfg = _resolve_snmp_discovery_config(group["id"])
+            if not snmp_cfg.get("enabled"):
+                continue
+            for h in await db.get_hosts_for_group(group["id"]):
+                targets.append((h, snmp_cfg))
 
-    for group in groups:
-        snmp_cfg = _resolve_snmp_discovery_config(group["id"])
-        if not snmp_cfg.get("enabled"):
-            continue
-        hosts = await db.get_hosts_for_group(group["id"])
+        total: dict = {
+            "macs_found": 0, "arps_found": 0, "hosts_collected": 0,
+            "errors": [], "host_errors": [],
+        }
+        sem = asyncio.Semaphore(4)
 
         async def _collect_one(h, cfg):
             async with sem:
@@ -1044,18 +1075,34 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
                     host=h,
                 )
 
-        tasks = [asyncio.create_task(_collect_one(h, snmp_cfg)) for h in hosts]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(
+            *(_collect_one(h, cfg) for h, cfg in targets),
+            return_exceptions=True,
+        )
 
-        for h, res in zip(hosts, results):
+        for (h, _cfg), res in zip(targets, results):
+            hostname = h.get("hostname") or f"host-{h['id']}"
             if isinstance(res, Exception):
-                total["errors"].append(f"{h.get('hostname', '?')}: {str(res)}")
+                total["errors"].append(f"{hostname}: {res}")
                 continue
             total["macs_found"] += res["macs_found"]
             total["arps_found"] += res["arps_found"]
             total["hosts_collected"] += 1
+            # Surface the per-host collection diagnostics that all-hosts mode
+            # used to drop on the floor. These (per-VLAN budget hits, view
+            # permission failures, "device isn't a bridge") are exactly the
+            # signal the silent-host debugging workflow depends on.
+            host_errs = res.get("errors") or []
+            if host_errs:
+                total["host_errors"].append({
+                    "host_id": h["id"], "hostname": hostname, "errors": host_errs,
+                })
+                for e in host_errs:
+                    total["errors"].append(f"{hostname}: {e}")
 
-    return total
+        return total
+    finally:
+        _full_collection_running = False
 
 
 @router.post("/api/mac-tracking/cleanup")
@@ -1108,6 +1155,11 @@ async def acknowledge_mac_move_event(event_id: int, request: Request):
     ok = await db.acknowledge_mac_move_event(event_id, actor=user)
     if not ok:
         raise HTTPException(404, "Move event not found")
+    await _audit(
+        "mac-tracking", "move.acknowledged", user=user,
+        detail=f"event_id={event_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -1123,8 +1175,18 @@ async def acknowledge_all_mac_move_events(
         for eid in body.event_ids:
             if await db.acknowledge_mac_move_event(eid, actor=user):
                 acked += 1
+        await _audit(
+            "mac-tracking", "move.acknowledged_bulk", user=user,
+            detail=f"acknowledged={acked} of {len(body.event_ids)} requested ids",
+            correlation_id=_corr_id(request),
+        )
         return {"ok": True, "acknowledged": acked}
     acked = await db.acknowledge_open_mac_move_events(actor=user)
+    await _audit(
+        "mac-tracking", "move.acknowledged_all", user=user,
+        detail=f"acknowledged={acked} open events",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True, "acknowledged": acked}
 
 
