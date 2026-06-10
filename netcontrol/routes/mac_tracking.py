@@ -71,6 +71,14 @@ ARP_TYPE_MAP = {
     "1": "other", "2": "invalid", "3": "dynamic", "4": "static",
 }
 
+# A port reporting more distinct MACs than this in one collection is treated as
+# an uplink/trunk rather than an access port. MACs seen there are recorded but
+# excluded from move detection — every switch upstream of a host's real access
+# port also sees that MAC on its uplink, so counting those as "moves" floods
+# the move log with noise. 20 comfortably clears a busy access port (phones +
+# PCs + a few VMs) while catching aggregation/uplink ports.
+_UPLINK_MAC_THRESHOLD = 20
+
 
 def _format_mac(raw_value) -> str:
     """Convert SNMP binary MAC address to colon-separated hex string."""
@@ -356,10 +364,13 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     per_vlan_attempts = 0
     per_vlan_successes = 0
     per_vlan_skipped = 0
-    # Maps MAC → VLAN learnt during per-VLAN context walks. Used to tag
-    # dot1dTpFdb entries (which carry no VLAN in their OID) with the right
-    # VLAN when the Q-BRIDGE walk didn't already cover that MAC.
-    dot1d_mac_context_vlan: dict[str, int] = {}
+    # dot1dTpFdb rows carry no VLAN in their OID, so a per-VLAN context walk is
+    # the only thing that knows which VLAN they belong to. We keep each
+    # context's rows separately (tagged with the context VLAN) rather than
+    # merging them into one shared dict — merging loses the VLAN and makes
+    # same-MAC-in-many-VLANs entries (HSRP/VRRP virtual MACs) collapse onto
+    # whichever parallel context happened to finish last.
+    per_vlan_dot1d: list[tuple[int, dict, dict, dict]] = []
     result["diag"]["vlans_discovered"] = len(vlans_in_use)
     # When the CLI already gave us the full MAC table, skip the per-VLAN
     # SNMP block entirely — it's the slow, fragile part and CLI is
@@ -461,33 +472,16 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 continue
             if q_rows or d_addr_rows:
                 per_vlan_successes += 1
-            # Merge into the dicts the downstream parsers already read from.
-            # The dot1qTpFdbPort OID encodes the VLAN in its OID suffix, so
-            # entries from different VLAN contexts coexist without colliding.
-            # dot1dTpFdb* entries are bridge-scoped (no VLAN in OID), so we
-            # remember which VLAN context produced each MAC so the parser
-            # below can tag it with that VLAN instead of the port's PVID.
+            # The dot1qTpFdbPort OID encodes the VLAN in its suffix, so rows
+            # from different VLAN contexts coexist in one dict without
+            # colliding — safe to merge.
             q_fdb_port.update(q_rows)
-            fdb_addr.update(d_addr_rows)
-            fdb_port.update(d_port_rows)
-            fdb_status.update(d_status_rows)
-            # Tag every MAC observed in this context with this VLAN, so the
-            # default-context dot1d parser below can resolve VLAN correctly
-            # even when the q-bridge fast path skipped the dot1d walks.
-            for oid in q_rows.keys():
-                suffix = oid[len(DOT1Q_TP_FDB_PORT):].lstrip(".")
-                parts = suffix.split(".")
-                if len(parts) >= 7:
-                    mac = _extract_mac_from_oid_suffix(".".join(parts[1:7]))
-                    if mac:
-                        dot1d_mac_context_vlan[mac] = vid
-            for oid, mac_val in d_addr_rows.items():
-                mac = _format_mac(mac_val)
-                if not mac or len(mac) < 12:
-                    suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
-                    mac = _extract_mac_from_oid_suffix(suffix)
-                if mac:
-                    dot1d_mac_context_vlan[mac] = vid
+            # dot1dTpFdb* rows are bridge-scoped (no VLAN in the OID). Keep each
+            # context's rows tagged with this VLAN instead of merging, so the
+            # emission pass below assigns the right VLAN even when the same MAC
+            # appears in several contexts.
+            if d_addr_rows:
+                per_vlan_dot1d.append((vid, d_addr_rows, d_port_rows, d_status_rows))
 
         if per_vlan_skipped:
             result["errors"].append(
@@ -512,115 +506,113 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 f"Per-VLAN FDB walks partially failed: {preview}{suffix}"
             )
 
-    # Track (mac, vlan) we've already upserted this run so the standard FDB
-    # walk doesn't double-count entries the Q-BRIDGE / CLI passes recorded.
-    seen_mac_vlan: set[tuple[str, int]] = set()
+    # ── Assemble the authoritative (mac, vlan) → location map ────────────
+    # One sighting per (mac, vlan), chosen by source priority so the most
+    # trustworthy VLAN/port wins and nothing is written twice:
+    #   1. CLI scrape          - full per-VLAN table in one round-trip
+    #   2. Q-BRIDGE FDB        - VLAN encoded in the OID (default + per-VLAN ctx)
+    #   3. per-VLAN dot1d FDB  - VLAN known from the SNMPv3 context
+    #   4. default-ctx dot1d   - VLAN guessed from the learning port's PVID
+    sightings: dict[tuple[str, int], dict] = {}
 
-    # ── Upsert CLI-collected MACs (preferred source) ─────────────────────
-    # When the CLI scrape succeeded, treat those rows as authoritative and
-    # write them first. seen_mac_vlan dedups any (mac, vlan) the SNMP FDB
-    # parser below would otherwise also try to insert.
+    def _add_sighting(mac: str, vlan: int, port_name: str,
+                      port_index: int, entry_type: str) -> None:
+        if not mac:
+            return
+        sightings.setdefault((mac, vlan), {
+            "mac": mac, "vlan": vlan, "port_name": port_name,
+            "port_index": port_index, "entry_type": entry_type,
+        })
+
+    # 1. CLI rows (authoritative when present).
     if cli_macs:
         for row in cli_macs:
-            mac = row["mac"]
-            vlan = row["vlan"]
-            try:
-                await db.upsert_mac_entry(
-                    host_id=host_id, mac_address=mac, vlan=vlan,
-                    port_name=row["port"], port_index=0,
-                    entry_type=row["type"],
-                )
-                await db.record_mac_history(mac, host_id, row["port"], vlan=vlan)
-                seen_mac_vlan.add((mac, vlan))
-                result["macs_found"] += 1
-            except Exception as exc:
-                LOGGER.warning("mac_tracking: host %s CLI MAC upsert failed for %s vlan %s: %s",
-                               host_id, mac, vlan, exc)
+            _add_sighting(row["mac"], row["vlan"], row["port"], 0, row["type"])
 
-    # Final empty-FDB advisory — runs once the default-context AND any
-    # per-VLAN context walks have all completed. Only fires when we got no
-    # protocol errors AND CLI didn't bail us out: that's the genuine
-    # "this device isn't a bridge" case worth telling the operator about.
-    if (not fdb_errors and not per_vlan_errors and not fdb_addr
-            and not q_fdb_port and not cli_macs):
+    # Only parse the SNMP FDB when the CLI scrape didn't already give us the
+    # full table. Running both would write each MAC twice under mismatched
+    # VLAN/port spellings (CLI "Gi1/0/1" vs ifName "GigabitEthernet1/0/1") and
+    # make the change detector see a phantom move on every poll.
+    if not cli_macs:
+        # 2. Q-BRIDGE FDB (default context + any per-VLAN contexts merged in).
+        for oid, port_val in q_fdb_port.items():
+            suffix = oid[len(DOT1Q_TP_FDB_PORT):].lstrip(".")
+            parts = suffix.split(".")
+            port_name, port_index, port_vlan = _resolve_port(str(port_val))
+            if len(parts) >= 7:
+                try:
+                    vlan = int(parts[0])
+                except (ValueError, TypeError):
+                    vlan = port_vlan
+                mac = _extract_mac_from_oid_suffix(".".join(parts[1:7]))
+            else:
+                vlan = port_vlan
+                mac = _extract_mac_from_oid_suffix(suffix)
+            _add_sighting(mac, vlan, port_name, port_index, "dynamic")
+
+        # 3. per-VLAN-context dot1d FDB — VLAN is the context id, not the OID.
+        for vid, d_addr_rows, d_port_rows, d_status_rows in per_vlan_dot1d:
+            for oid, mac_val in d_addr_rows.items():
+                suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
+                mac = _format_mac(mac_val)
+                if not mac or len(mac) < 12:
+                    mac = _extract_mac_from_oid_suffix(suffix)
+                if not mac:
+                    continue
+                bridge_port = str(d_port_rows.get(DOT1D_TP_FDB_PORT + "." + suffix, "0"))
+                status = FDB_STATUS_MAP.get(
+                    str(d_status_rows.get(DOT1D_TP_FDB_STATUS + "." + suffix, "")), "dynamic")
+                port_name, port_index, _ = _resolve_port(bridge_port)
+                _add_sighting(mac, vid, port_name, port_index, status)
+
+        # 4. default-context dot1d FDB — VLAN falls back to the port's PVID.
+        for oid, mac_val in fdb_addr.items():
+            suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
+            mac = _format_mac(mac_val)
+            if not mac or len(mac) < 12:
+                mac = _extract_mac_from_oid_suffix(suffix)
+            if not mac:
+                continue
+            bridge_port = str(fdb_port.get(DOT1D_TP_FDB_PORT + "." + suffix, "0"))
+            status = FDB_STATUS_MAP.get(
+                str(fdb_status.get(DOT1D_TP_FDB_STATUS + "." + suffix, "")), "dynamic")
+            port_name, port_index, port_vlan = _resolve_port(bridge_port)
+            _add_sighting(mac, port_vlan, port_name, port_index, status)
+
+    # Final empty-FDB advisory — only when nothing at all turned up and no
+    # protocol error explains it: the genuine "this device doesn't bridge" case.
+    if not sightings and not fdb_errors and not per_vlan_errors:
         result["errors"].append(
             "Device responded but returned no FDB entries "
             "(likely a router / L3-only device, or FDB hidden behind a non-default SNMPv3 context)."
         )
 
-    # ── Q-BRIDGE VLAN-aware FDB (dot1qTpFdbTable) - has VLAN in OID ──
-    # When the device populates this table (most modern bridges do via the
-    # default context), the VLAN comes straight from the OID and is correct
-    # for both access and trunk traffic.
-    for oid, port_val in q_fdb_port.items():
-        suffix = oid[len(DOT1Q_TP_FDB_PORT):].lstrip(".")
-        parts = suffix.split(".")
-        bridge_port = str(port_val)
-        port_name, port_index, port_vlan = _resolve_port(bridge_port)
+    # ── Identify uplink/trunk ports ──────────────────────────────────────
+    # A port carrying many distinct MACs is an uplink/trunk, not an access
+    # location. We still record those MACs (the FDB is real) but tell
+    # record_mac_history to skip move detection for them — otherwise every
+    # switch between a host and its access edge would log a "move" each poll.
+    port_mac_counts: dict[str, int] = {}
+    for s in sightings.values():
+        port_mac_counts[s["port_name"]] = port_mac_counts.get(s["port_name"], 0) + 1
 
-        if len(parts) >= 7:
-            try:
-                vlan = int(parts[0])
-            except (ValueError, TypeError):
-                vlan = port_vlan
-            mac = _extract_mac_from_oid_suffix(".".join(parts[1:7]))
-        else:
-            vlan = port_vlan
-            mac = _extract_mac_from_oid_suffix(suffix)
-
-        if not mac:
-            continue
-
+    # ── Write the deduplicated sightings ─────────────────────────────────
+    for s in sightings.values():
+        is_uplink = port_mac_counts.get(s["port_name"], 0) > _UPLINK_MAC_THRESHOLD
         try:
             await db.upsert_mac_entry(
-                host_id=host_id, mac_address=mac, vlan=vlan,
-                port_name=port_name, port_index=port_index,
-                entry_type="dynamic",
+                host_id=host_id, mac_address=s["mac"], vlan=s["vlan"],
+                port_name=s["port_name"], port_index=s["port_index"],
+                entry_type=s["entry_type"],
             )
-            # record_mac_history is change-detecting: it only writes a history
-            # row + opens a mac_move_event when the MAC's switch/port/vlan/ip
-            # actually changed, so calling it every poll is safe.
-            await db.record_mac_history(mac, host_id, port_name, vlan=vlan)
-            seen_mac_vlan.add((mac, vlan))
+            await db.record_mac_history(
+                s["mac"], host_id, s["port_name"], vlan=s["vlan"],
+                is_uplink=is_uplink,
+            )
             result["macs_found"] += 1
         except Exception as exc:
-            LOGGER.warning("mac_tracking: host %s Q-BRIDGE MAC upsert failed for %s vlan %s: %s",
-                           host_id, mac, vlan, exc)
-
-    # ── Standard bridge FDB (dot1dTpFdbTable) - no VLAN in OID ──
-    # On Cisco we walked this per-VLAN context, so prefer the context-recorded
-    # VLAN; that's the authoritative source. Otherwise fall back to the
-    # learning port's PVID — incorrect for trunks but it's all we have.
-    for oid, mac_val in fdb_addr.items():
-        suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
-        mac = _format_mac(mac_val)
-        if not mac or len(mac) < 12:
-            mac = _extract_mac_from_oid_suffix(suffix)
-        if not mac:
-            continue
-
-        port_oid = DOT1D_TP_FDB_PORT + "." + suffix
-        status_oid = DOT1D_TP_FDB_STATUS + "." + suffix
-        bridge_port = str(fdb_port.get(port_oid, "0"))
-        status = FDB_STATUS_MAP.get(str(fdb_status.get(status_oid, "")), "dynamic")
-
-        port_name, port_index, port_vlan = _resolve_port(bridge_port)
-        vlan_for_mac = dot1d_mac_context_vlan.get(mac, port_vlan)
-        if (mac, vlan_for_mac) in seen_mac_vlan:
-            continue
-
-        try:
-            await db.upsert_mac_entry(
-                host_id=host_id, mac_address=mac, vlan=vlan_for_mac,
-                port_name=port_name, port_index=port_index,
-                entry_type=status,
-            )
-            await db.record_mac_history(mac, host_id, port_name, vlan=vlan_for_mac)
-            seen_mac_vlan.add((mac, vlan_for_mac))
-            result["macs_found"] += 1
-        except Exception as exc:
-            LOGGER.warning("mac_tracking: host %s dot1d MAC upsert failed for %s vlan %s: %s",
-                           host_id, mac, vlan_for_mac, exc)
+            LOGGER.warning("mac_tracking: host %s MAC upsert failed for %s vlan %s: %s",
+                           host_id, s["mac"], s["vlan"], exc)
 
     # ── ARP table (global, ipNetToMediaTable) ──
     for oid, mac_val in arp_phys.items():
@@ -647,18 +639,12 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 host_id=host_id, ip_address=ip_addr, mac_address=mac,
                 interface_name=iface_name,
             )
+            # Stamp the IP onto this MAC's forwarding entries wherever they live
+            # (the access switch, not this L3 device). enrich_mac_ip matches by
+            # MAC across all hosts via the index and only fills empty IPs — one
+            # targeted UPDATE instead of the old full-table LIKE scan per ARP.
             if ip_addr:
-                mac_entries = await db.search_mac_tracking(mac)
-                for entry in mac_entries:
-                    if entry.get("host_id") == host_id and not entry.get("ip_address"):
-                        await db.upsert_mac_entry(
-                            host_id=host_id, mac_address=mac,
-                            vlan=entry.get("vlan", 0),
-                            port_name=entry.get("port_name", ""),
-                            port_index=entry.get("port_index", 0),
-                            ip_address=ip_addr,
-                            entry_type=entry.get("entry_type", "dynamic"),
-                        )
+                await db.enrich_mac_ip(mac, ip_addr)
             result["arps_found"] += 1
         except Exception as exc:
             LOGGER.warning("mac_tracking: host %s ARP upsert failed for %s (%s): %s",
@@ -1148,19 +1134,27 @@ async def acknowledge_all_mac_move_events(
 
 
 async def _run_mac_move_retention_once() -> dict:
-    """Prune MAC move events past the retention window."""
+    """Prune MAC move events and movement-history rows past the retention window."""
     days = int(state.MAC_MOVE_RETENTION_CONFIG.get(
         "event_retention_days",
         state.MAC_MOVE_RETENTION_DEFAULTS["event_retention_days"]))
     removed = 0
+    history_removed = 0
     try:
         removed = await db.delete_old_mac_move_events(days)
     except Exception as exc:
         LOGGER.warning("mac move retention failed: %s", exc)
-    if removed:
-        LOGGER.info("mac move retention: pruned %d events older than %d days",
-                    removed, days)
-    return {"removed": removed, "retention_days": days}
+    # The movement-history log grows independently of the events (it gets a row
+    # on every per-switch relocation), so prune it on the same window — without
+    # this it grew unbounded.
+    try:
+        history_removed = await db.delete_old_mac_history(days)
+    except Exception as exc:
+        LOGGER.warning("mac history retention failed: %s", exc)
+    if removed or history_removed:
+        LOGGER.info("mac move retention: pruned %d events, %d history rows older than %d days",
+                    removed, history_removed, days)
+    return {"removed": removed, "history_removed": history_removed, "retention_days": days}
 
 
 async def _mac_move_retention_loop() -> None:

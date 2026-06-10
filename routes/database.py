@@ -12226,7 +12226,15 @@ async def upsert_mac_entry(host_id: int, mac_address: str, vlan: int,
                ON CONFLICT(host_id, mac_address, vlan) DO UPDATE SET
                 port_name = excluded.port_name,
                 port_index = excluded.port_index,
-                ip_address = excluded.ip_address,
+                -- Preserve the previously enriched IP when this upsert carries
+                -- none. The FDB passes always pass ip_address='' (the L2 switch
+                -- doesn't know the IP); the ARP enrichment pass fills it in
+                -- later. Without this guard every FDB poll would wipe the IP
+                -- and the ARP pass would have to re-set it each cycle.
+                ip_address = CASE
+                    WHEN excluded.ip_address <> '' THEN excluded.ip_address
+                    ELSE mac_address_table.ip_address
+                END,
                 entry_type = excluded.entry_type,
                 last_seen = datetime('now')
                RETURNING id""",
@@ -12268,37 +12276,77 @@ async def upsert_arp_entry(host_id: int, ip_address: str, mac_address: str,
         await db.close()
 
 
-async def record_mac_history(mac_address: str, host_id: int, port_name: str,
-                              vlan: int = 0, ip_address: str = "") -> int | None:
-    """Record a MAC sighting, but only when its location actually changed.
+async def enrich_mac_ip(mac_address: str, ip_address: str) -> int:
+    """Stamp an ARP-learned IP onto MAC-table rows that don't have one yet.
 
-    Mirrors config-drift change detection: the most recent history row for
-    this MAC is the "last known location". If the switch (host_id), port,
-    VLAN, or IP binding differs, we append a history row AND open a
-    mac_move_event. If nothing changed, this is a no-op so the history table
-    stays a true movement log rather than a per-poll firehose.
+    ARP lives on the L3 device (router/SVI) while the MAC's forwarding entry
+    lives on the access switch - different host_id - so enrichment matches by
+    MAC across every host, not just the ARP holder. Only rows with no IP are
+    touched, so a real IP is never silently overwritten. Uses idx_mac_table_mac
+    instead of the old per-row ``search_mac_tracking`` LIKE scan.
 
-    Returns the new history row id, or None when there was no change.
+    Returns the number of rows updated.
     """
+    if not mac_address or not ip_address:
+        return 0
     db = await get_db()
     try:
         cursor = await db.execute(
-            """SELECT host_id, port_name, vlan, ip_address
+            """UPDATE mac_address_table
+               SET ip_address = ?
+               WHERE mac_address = ? AND (ip_address IS NULL OR ip_address = '')""",
+            (ip_address, mac_address),
+        )
+        await db.commit()
+        return cursor.rowcount if cursor.rowcount is not None else 0
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+async def record_mac_history(mac_address: str, host_id: int, port_name: str,
+                              vlan: int = 0, ip_address: str = "",
+                              is_uplink: bool = False) -> int | None:
+    """Record a MAC sighting on a switch, but only when its location changed.
+
+    Change detection is **per switch**: the comparison is against the last
+    sighting of this MAC *on this same host_id*, not against the MAC's last
+    sighting anywhere. A MAC is legitimately present on many switches at once
+    (its access switch plus every uplink between here and there), so a
+    different host is NOT a move - it's just another vantage point. Only a
+    change of port, VLAN, or IP binding *on the same switch* is a real
+    relocation (e.g. someone repatched the cable), and that's what opens a
+    mac_move_event.
+
+    ``is_uplink`` sightings (a MAC seen on a trunk/uplink port that carries
+    many MACs) are skipped entirely: they aren't access-edge locations, and
+    recording them would reintroduce the cross-switch flapping this function
+    exists to avoid.
+
+    Returns the new history row id, or None when there was no change (or the
+    sighting was on an uplink).
+    """
+    if is_uplink:
+        return None
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT port_name, vlan, ip_address
                FROM mac_tracking_history
-               WHERE mac_address = ?
+               WHERE mac_address = ? AND host_id = ?
                ORDER BY seen_at DESC, id DESC LIMIT 1""",
-            (mac_address,),
+            (mac_address, host_id),
         )
         prev = await cursor.fetchone()
 
         if prev is not None:
             p = prev if isinstance(prev, tuple) else (
-                prev["host_id"], prev["port_name"], prev["vlan"], prev["ip_address"])
-            prev_host, prev_port, prev_vlan, prev_ip = p[0], p[1] or "", p[2] or 0, p[3] or ""
+                prev["port_name"], prev["vlan"], prev["ip_address"])
+            prev_port, prev_vlan, prev_ip = p[0] or "", p[1] or 0, p[2] or ""
 
             changed = []
-            if prev_host != host_id:
-                changed.append("switch")
             if (prev_port or "") != (port_name or ""):
                 changed.append("port")
             if (prev_vlan or 0) != (vlan or 0):
@@ -12325,7 +12373,7 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
                     to_host_id, to_port, to_vlan, to_ip)
                    VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (mac_address, ",".join(changed),
-                 prev_host, prev_port, prev_vlan, prev_ip,
+                 host_id, prev_port, prev_vlan, prev_ip,
                  host_id, port_name, vlan, ip_address),
             )
             event_id = cursor.lastrowid
@@ -12335,15 +12383,14 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
                     actor, details)
                    VALUES (?, ?, 'detected', '', 'open', 'system', ?)""",
                 (event_id, mac_address,
-                 f"{'+'.join(changed)} changed: "
-                 f"host {prev_host}->{host_id}, "
+                 f"{'+'.join(changed)} changed on switch {host_id}: "
                  f"port {prev_port or '-'}->{port_name or '-'}, "
                  f"vlan {prev_vlan}->{vlan}"),
             )
             await db.commit()
             return event_id
 
-        # First time we've ever seen this MAC - record the baseline sighting.
+        # First time we've seen this MAC on this switch - baseline sighting.
         cursor = await db.execute(
             """INSERT INTO mac_tracking_history
                (mac_address, ip_address, host_id, port_name, vlan)
@@ -12508,6 +12555,26 @@ async def delete_old_mac_move_events(retention_days: int) -> int:
         cursor = await db.execute(
             "DELETE FROM mac_move_events "
             "WHERE detected_at < datetime('now', ? || ' days')",
+            (f"-{int(retention_days)}",),
+        )
+        await db.commit()
+        return cursor.rowcount if cursor.rowcount is not None else 0
+    finally:
+        await db.close()
+
+
+async def delete_old_mac_history(retention_days: int) -> int:
+    """Prune MAC movement-history rows older than retention_days.
+
+    The history table is the per-switch sighting log behind move detection; it
+    grows every time a MAC relocates, so it needs the same retention treatment
+    as the move events themselves (which were the only thing pruned before).
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM mac_tracking_history "
+            "WHERE seen_at < datetime('now', ? || ' days')",
             (f"-{int(retention_days)}",),
         )
         await db.commit()
@@ -12714,10 +12781,10 @@ async def cleanup_stale_mac_entries(days: int = 30) -> int:
     try:
         cursor = await db.execute(
             "DELETE FROM mac_address_table WHERE last_seen < datetime('now', ? || ' days')",
-            (f"-{days}",),
+            (f"-{int(days)}",),
         )
         await db.commit()
-        return cursor.rowcount
+        return cursor.rowcount if cursor.rowcount is not None else 0
     finally:
         await db.close()
 
