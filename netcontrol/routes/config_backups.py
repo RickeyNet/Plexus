@@ -468,11 +468,13 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
             "secret": decrypt(cred.get("secret", "")),
         }
         net_connect = netmiko.ConnectHandler(**device)
-        if device["secret"]:
-            net_connect.enable()
-        config_lines = backup["config_text"].splitlines()
-        net_connect.send_config_set(config_lines)
-        net_connect.disconnect()
+        try:
+            if device["secret"]:
+                net_connect.enable()
+            config_lines = backup["config_text"].splitlines()
+            net_connect.send_config_set(config_lines)
+        finally:
+            net_connect.disconnect()
 
     try:
         await asyncio.to_thread(_push_config)
