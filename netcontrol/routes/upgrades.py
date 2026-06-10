@@ -228,8 +228,8 @@ async def rehydrate_scheduled_upgrades():
                         completed_at=_utc_now_iso(),
                         error_message="Scheduled activate had no persisted run time; reschedule required.",
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("Failed to record activate_failed for campaign %s: %s", campaign["id"], exc)
             continue
 
         try:
@@ -246,8 +246,8 @@ async def rehydrate_scheduled_upgrades():
             )
             try:
                 await db.update_upgrade_campaign(campaign["id"], status="activate_failed")
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("Failed to record activate_failed for campaign %s: %s", campaign["id"], exc)
             continue
 
         campaign_id = campaign["id"]
@@ -298,8 +298,8 @@ async def rehydrate_scheduled_upgrades():
                             "check credentials/devices and reschedule."
                         ),
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("Failed to record rehydration failure for campaign %s: %s", campaign_id, exc)
             continue
 
         # If the scheduled window has already passed, do not run automatically -
@@ -337,8 +337,8 @@ async def rehydrate_scheduled_upgrades():
                     f"Scheduled activate window ({scheduled_at_utc.isoformat()}) was missed due to a server restart. "
                     "Please reschedule the activate phase.",
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("Failed to record missed activate window for campaign %s: %s", campaign_id, exc)
             continue
 
         LOGGER.info(
@@ -540,8 +540,8 @@ async def _broadcast_upgrade_event(campaign_id: int, event: dict):
             for ws in dead:
                 try:
                     _campaign_sockets[campaign_id].remove(ws)
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as exc:
+                    LOGGER.debug("upgrade broadcast: dead WS already removed for campaign %s: %s", campaign_id, exc)
 
 
 async def _emit(campaign_id: int, device_id: int | None, level: str, message: str, host: str = ""):
@@ -680,8 +680,8 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         if os.path.isfile(dest):
             try:
                 os.remove(dest)
-            except OSError:
-                pass
+            except OSError as exc:
+                LOGGER.debug("Failed to remove partial upload %s: %s", dest, exc)
         LOGGER.exception("Failed to write image file %s", filename)
         raise HTTPException(503, _storage_unavailable_detail("store"))
 
@@ -714,8 +714,8 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         if os.path.isfile(dest):
             try:
                 os.remove(dest)
-            except OSError:
-                pass
+            except OSError as rm_err:
+                LOGGER.debug("Failed to remove partial upload %s: %s", dest, rm_err)
         if db._is_unique_violation(exc):
             raise HTTPException(
                 409,
@@ -815,8 +815,8 @@ async def create_campaign(body: CampaignCreate, request: Request):
                     campaign_id, hid, host["ip_address"], host.get("hostname", ""),
                 )
                 added += 1
-            except Exception:
-                pass  # duplicate
+            except Exception as exc:
+                LOGGER.debug("create_campaign: skipping duplicate device %s: %s", host["ip_address"], exc)
 
     # Add ad-hoc IPs
     for ip in body.ad_hoc_ips:
@@ -825,8 +825,8 @@ async def create_campaign(body: CampaignCreate, request: Request):
             try:
                 await db.add_upgrade_device(campaign_id, None, ip, "")
                 added += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("create_campaign: skipping ad-hoc device %s: %s", ip, exc)
 
     await _audit("upgrades", "campaign_create", user=user,
                  detail=f"Created campaign '{body.name}' with {added} devices")
@@ -901,8 +901,8 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
                     campaign_id, hid, host["ip_address"], host.get("hostname", ""),
                 )
                 added += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("update_campaign: skipping duplicate device %s: %s", host["ip_address"], exc)
 
     for ip in body.ad_hoc_ips:
         ip = ip.strip()
@@ -910,8 +910,8 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
             try:
                 await db.add_upgrade_device(campaign_id, None, ip, "")
                 added += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("update_campaign: skipping ad-hoc device %s: %s", ip, exc)
 
     total_devices = len(await db.get_upgrade_devices(campaign_id))
     await _audit("upgrades", "campaign_update", user=user,
@@ -1383,8 +1383,8 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
                     await ws.send_json({"type": "ping"})
                 except Exception:
                     break
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        LOGGER.debug("upgrade WS disconnected for campaign %s: %s", campaign_id, exc)
     finally:
         async with _campaign_sockets_lock:
             sockets = _campaign_sockets.get(campaign_id, [])
@@ -1924,8 +1924,8 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
     finally:
         try:
             await asyncio.to_thread(conn.disconnect)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
 
 
 # ── TRANSFER ─────────────────────────────────────────────────────────────────
@@ -2113,8 +2113,8 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
             # Write memory after transfer
             try:
                 await asyncio.to_thread(conn.send_command, "write memory", read_timeout=60)
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("write memory failed after transfer for %s: %s", ip, exc)
 
             prestage_ok, prestage_err = await _run_install_add_prestage(
                 conn, campaign_id, dev_id, ip, image_name, dest_path,
@@ -2158,8 +2158,8 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                     if md5_passed:
                         try:
                             await asyncio.to_thread(verify_conn.send_command, "write memory", read_timeout=60)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            LOGGER.debug("write memory failed after transfer for %s: %s", ip, exc)
                         prestage_ok, prestage_err = await _run_install_add_prestage(
                             verify_conn, campaign_id, dev_id, ip, image_name, dest_path,
                             device_type=device_type,
@@ -2171,21 +2171,21 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                             await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip)
                             try:
                                 await asyncio.to_thread(verify_conn.disconnect)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
                             return
                         await db.update_upgrade_device(dev_id, transfer_status="completed", phase="transfer_done")
                         await _emit_device_status(campaign_id, dev_id, transfer_status="completed")
                         await _emit(campaign_id, dev_id, "success", "Transfer phase complete", host=ip)
                     try:
                         await asyncio.to_thread(verify_conn.disconnect)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
                     return
                 try:
                     await asyncio.to_thread(verify_conn.disconnect)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
             except Exception:
                 await _emit(campaign_id, dev_id, "warn", "Could not reconnect to verify flash", host=ip)
 
@@ -2203,8 +2203,8 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
     finally:
         try:
             await asyncio.to_thread(conn.disconnect)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
 
 
 # ── ACTIVATE ─────────────────────────────────────────────────────────────────
@@ -2408,8 +2408,8 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                     error_message=msg)
                                 try:
                                     await asyncio.to_thread(new_conn.disconnect)
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
                                 return
 
                             # Re-verify AFTER commit: a "successful" commit
@@ -2437,8 +2437,8 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                     error_message=msg)
                                 try:
                                     await asyncio.to_thread(new_conn.disconnect)
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
                                 return
                             running_version = post_commit_version
 
@@ -2465,14 +2465,14 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                                   error_message=f"Version mismatch: {running_version}")
                         try:
                             await asyncio.to_thread(new_conn.disconnect)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
                         return
 
                 try:
                     await asyncio.to_thread(new_conn.disconnect)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
             else:
                 await _emit(campaign_id, dev_id, "error",
                             f"Switch did not come back within {verify_wait // 60} minutes", host=ip)
@@ -2499,8 +2499,8 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
     finally:
         try:
             await asyncio.to_thread(conn.disconnect)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
 
 
 # ── VERIFY ──────────────────────────────────────────────────────────────────
@@ -2610,8 +2610,8 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
     finally:
         try:
             await asyncio.to_thread(conn.disconnect)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
 
 
 async def _device_verify_prestage(campaign_id, dev, credentials, image_map, options):
@@ -2720,8 +2720,8 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
     finally:
         try:
             await asyncio.to_thread(conn.disconnect)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2776,8 +2776,8 @@ async def _health_check(conn, hostname):
                 if match and match.group(2) != "Ready":
                     warnings.append(f"Stack member {match.group(1)}: {match.group(2)}")
                     critical = True
-    except Exception:
-        pass  # Not a stack
+    except Exception as exc:
+        LOGGER.debug("Stack check skipped on %s (not a stack?): %s", hostname, exc)
 
     return not critical, warnings
 
@@ -2865,8 +2865,8 @@ async def _transfer_image(conn, image_path, image_name, dest_path, options):
             exists = await asyncio.to_thread(_check_image_exists, conn, image_name, dest_path)
             if exists:
                 return True, None
-        except Exception:
-            pass  # Connection may be dead; will retry or fail
+        except Exception as exc:
+            LOGGER.debug("Flash check failed after transfer attempt %d of %s: %s", attempt, image_name, exc)
 
         if last_error and attempt >= max_attempts:
             return False, last_error

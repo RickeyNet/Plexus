@@ -144,8 +144,9 @@ async def _broadcast_capture_line(job_id: str, text: str) -> None:
             for ws in dead:
                 try:
                     _capture_job_sockets[job_id].remove(ws)
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as exc:
+                    LOGGER.debug("capture broadcast: WS already removed for job %s: %s",
+                                 job_id, exc)
 
 
 async def _finish_capture_job(job_id: str, status: str) -> None:
@@ -316,8 +317,9 @@ async def _broadcast_revert_line(job_id: str, line: str):
             for ws in dead:
                 try:
                     _revert_job_sockets[job_id].remove(ws)
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as exc:
+                    LOGGER.debug("revert broadcast: WS already removed for job %s: %s",
+                                 job_id, exc)
 
 
 async def _finish_revert_job(job_id: str, status: str = "completed"):
@@ -506,8 +508,9 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
                 actor=user,
                 details="revert job failed; see server logs",
             )
-        except Exception:
-            pass
+        except Exception as hist_exc:
+            LOGGER.warning("config-drift: failed to record revert_failed history for event %s: %s",
+                           event["id"], hist_exc)
         await _broadcast_revert_line(job_id,
             f"[{datetime.now(UTC).strftime('%H:%M:%S')}] FAILED: {exc}\n")
         await _finish_revert_job(job_id, "failed")
@@ -541,8 +544,8 @@ async def _run_config_drift_check_once() -> dict:
     try:
         await db.delete_old_config_snapshots(retention_days)
         await db.delete_old_config_drift_events(retention_days)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("config drift retention cleanup failed: %s", exc)
 
     if hosts_checked > 0:
         LOGGER.info("config drift check: checked %d hosts, %d drifted, %d errors",
@@ -864,8 +867,8 @@ async def websocket_config_capture(websocket: WebSocket, job_id: str):
                     await websocket.send_json({"type": "ping"})
                 except Exception:
                     break
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        LOGGER.debug("capture WS disconnected for job %s: %s", job_id, exc)
     finally:
         async with _capture_sockets_lock:
             if job_id in _capture_job_sockets and websocket in _capture_job_sockets[job_id]:
@@ -1101,8 +1104,8 @@ async def ws_config_revert(websocket: WebSocket, job_id: str):
                     await websocket.send_json({"type": "ping"})
                 except Exception:
                     break
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        LOGGER.debug("revert WS disconnected for job %s: %s", job_id, exc)
     finally:
         async with _revert_sockets_lock:
             if websocket in _revert_job_sockets.get(job_id, []):

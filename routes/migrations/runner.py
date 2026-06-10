@@ -54,8 +54,8 @@ class _FileLock:
                 import msvcrt
                 try:
                     msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    _LOGGER.debug("Failed to unlock migration lock file %s: %s", self._path, exc)
             else:
                 import fcntl
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
@@ -247,7 +247,10 @@ async def run_migrations(db, *, engine: str = "sqlite") -> int:
         if engine == "postgres":
             try:
                 await db.execute(f"SELECT pg_advisory_unlock({_ADVISORY_LOCK_ID})")
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.warning(
+                    "Migration cleanup failed: could not release Postgres advisory lock %s: %s",
+                    _ADVISORY_LOCK_ID, exc,
+                )
         if lock is not None:
             lock.release()

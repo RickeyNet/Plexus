@@ -101,8 +101,8 @@ def _load_or_create_key() -> bytes:
                     "Run: chmod 600 %s",
                     KEY_FILE, stat.S_IMODE(mode), KEY_FILE,
                 )
-        except (OSError, AttributeError):
-            pass  # Windows or stat unavailable
+        except (OSError, AttributeError) as exc:
+            LOGGER.debug("Key file permission check skipped (Windows or stat unavailable): %s", exc)
         return raw
 
     # Generate new 32-byte AES-256 key, base64-encoded to 44 bytes
@@ -123,8 +123,8 @@ def _load_or_create_key() -> bytes:
         # Another process beat us - read their key instead
         try:
             os.remove(tmp_path)
-        except OSError:
-            pass
+        except OSError as exc:
+            LOGGER.debug("Could not remove temporary key file %s: %s", tmp_path, exc)
         return _load_or_create_key()
     except OSError:
         # Fallback for Windows where O_EXCL may behave differently
@@ -132,8 +132,8 @@ def _load_or_create_key() -> bytes:
             f.write(key_b64)
         try:
             os.chmod(KEY_FILE, 0o600)
-        except OSError:
-            pass
+        except OSError as exc:
+            LOGGER.debug("Could not set permissions on key file %s: %s", KEY_FILE, exc)
     LOGGER.info("Generated new AES-256 encryption key at %s", KEY_FILE)
     return key_b64
 
@@ -148,7 +148,7 @@ _legacy_fernet = None
 try:
     _legacy_fernet = Fernet(_key_b64)
 except (ValueError, TypeError, binascii.Error):
-    pass
+    LOGGER.debug("Key is not a legacy Fernet key; legacy Fernet decryption disabled")
 
 # For AES-256-GCM: if this is a legacy Fernet key (32 bytes = 16 sign + 16 enc),
 # we use the full 32 bytes as the AES-256 key.  New keys are already 32 bytes.

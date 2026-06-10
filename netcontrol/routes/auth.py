@@ -468,8 +468,8 @@ async def _authenticate_dev_bootstrap(username: str, password: str) -> dict | No
                 role="admin",
                 must_change_password=False,
             )
-        except ValueError:
-            pass
+        except ValueError as exc:
+            LOGGER.debug("auth bootstrap: create_user failed (user likely already exists): %s", exc)
 
     return await db.get_user_by_username(expected_username)
 

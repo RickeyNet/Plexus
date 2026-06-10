@@ -742,8 +742,8 @@ async def stop_flow_collector() -> bool:
             if _sflow_protocol:
                 await _sflow_protocol._flush_buffer()
             _sflow_transport.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("flow_collector: sFlow transport close failed: %s", exc)
         _sflow_transport = None
         _sflow_protocol = None
 
@@ -752,8 +752,8 @@ async def stop_flow_collector() -> bool:
             if _flow_protocol:
                 await _flow_protocol._flush_buffer()
             _flow_transport.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("flow_collector: NetFlow transport close failed: %s", exc)
         _flow_transport = None
         _flow_protocol = None
 
@@ -934,8 +934,8 @@ async def _cancel_aggregation_task() -> None:
     _flow_aggregation_task.cancel()
     try:
         await _flow_aggregation_task
-    except (asyncio.CancelledError, Exception):
-        pass
+    except (asyncio.CancelledError, Exception) as exc:
+        LOGGER.debug("flow_collector: aggregation task cancel wait raised: %s", exc)
     _flow_aggregation_task = None
 
 

@@ -442,8 +442,8 @@ async def _deliver_tcp(sink: SinkConfig, message: str) -> None:
         writer.close()
         try:
             await writer.wait_closed()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("siem sink %s: tcp close failed: %s", sink.id, exc)
 
 
 def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
@@ -476,12 +476,12 @@ def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
         finally:
             try:
                 _os.unlink(cert_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                LOGGER.debug("siem sink %s: temp cert cleanup failed: %s", sink.id, exc)
             try:
                 _os.unlink(key_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                LOGGER.debug("siem sink %s: temp key cleanup failed: %s", sink.id, exc)
     return ctx
 
 
@@ -499,8 +499,8 @@ async def _deliver_tls(sink: SinkConfig, message: str) -> None:
         writer.close()
         try:
             await writer.wait_closed()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("siem sink %s: tls close failed: %s", sink.id, exc)
 
 
 async def _deliver_https(sink: SinkConfig, message: str) -> None:
@@ -624,8 +624,9 @@ async def enqueue_event(event: dict) -> None:
                 rt.queue.get_nowait()
                 rt.queue.task_done()
                 rt.dropped_queue_full += 1
-            except asyncio.QueueEmpty:
-                pass
+            except asyncio.QueueEmpty as exc:
+                LOGGER.warning("siem sink %s: queue full, drop-oldest raced empty: %s",
+                               rt.config.id, exc)
             try:
                 rt.queue.put_nowait(event)
             except asyncio.QueueFull:
@@ -654,8 +655,8 @@ async def apply_sinks(configs: list[SinkConfig]) -> None:
                 rt.task.cancel()
                 try:
                     await rt.task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                except (asyncio.CancelledError, Exception) as exc:
+                    LOGGER.debug("siem sink %s: task cancel: %s", sink_id, exc)
 
         # Start fresh ones.
         for sink_id, cfg in desired.items():
@@ -702,8 +703,8 @@ async def stop_dispatcher() -> None:
             rt.task.cancel()
             try:
                 await rt.task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as exc:
+                LOGGER.debug("siem sink %s: task cancel: %s", rt.config.id, exc)
     _started = False
 
 

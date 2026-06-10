@@ -337,8 +337,8 @@ async def _process_job_queue_inner():
     if next_job.get("host_ids"):
         try:
             stored_host_ids = json.loads(next_job["host_ids"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse stored host_ids: %s", job_id, exc)
 
     if stored_host_ids:
         hosts = await db.get_hosts_by_ids(stored_host_ids)
@@ -357,8 +357,8 @@ async def _process_job_queue_inner():
                     "device_type": "cisco_ios",
                     "group_id": None,
                 })
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse stored ad_hoc_ips: %s", job_id, exc)
 
     if not hosts:
         await db.finish_job(job_id, status="failed")
@@ -537,8 +537,8 @@ async def _run_ansible_job(
                 for ws in dead:
                     try:
                         _job_sockets[job_id].remove(ws)
-                    except (ValueError, KeyError):
-                        pass
+                    except (ValueError, KeyError) as exc:
+                        LOGGER.debug("job %s: dead WS already removed: %s", job_id, exc)
 
     job_succeeded = False
     try:
@@ -650,8 +650,8 @@ async def _run_job(
                 for ws in dead:
                     try:
                         _job_sockets[job_id].remove(ws)
-                    except (ValueError, KeyError):
-                        pass
+                    except (ValueError, KeyError) as exc:
+                        LOGGER.debug("job %s: dead WS already removed: %s", job_id, exc)
 
     job_succeeded = False
     try:
@@ -700,8 +700,8 @@ async def _run_job(
     for ws in sockets:
         try:
             await ws.send_json(done_msg)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("job %s: failed to send job_complete to WS client: %s", job_id, exc)
 
     # Re-probe affected hosts via SNMP after a successful live job so that
     # any transient SNMP agent restart doesn't leave inventory stale.
@@ -919,8 +919,8 @@ async def cancel_job_endpoint(job_id: int, request: Request):
     for ws in sockets:
         try:
             await ws.send_json(done_msg)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("job %s: failed to send job_complete to WS client: %s", job_id, exc)
 
     await _audit("jobs", "job.cancelled", user=user,
                  detail=f"cancelled job {job_id}", correlation_id=_corr_id(request))
@@ -947,20 +947,20 @@ async def retry_job_endpoint(job_id: int, request: Request):
     if job.get("host_ids"):
         try:
             retry_host_ids = json.loads(job["host_ids"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse host_ids for retry: %s", job_id, exc)
     retry_ad_hoc = None
     if job.get("ad_hoc_ips"):
         try:
             retry_ad_hoc = json.loads(job["ad_hoc_ips"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse ad_hoc_ips for retry: %s", job_id, exc)
     retry_params = None
     if job.get("parameters"):
         try:
             retry_params = json.loads(job["parameters"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse parameters for retry: %s", job_id, exc)
 
     new_job_id = await db.create_job(
         job["playbook_id"], job.get("inventory_group_id"),
@@ -1000,20 +1000,20 @@ async def rerun_job_endpoint(job_id: int, request: Request):
     if job.get("host_ids"):
         try:
             rerun_host_ids = json.loads(job["host_ids"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse host_ids for rerun: %s", job_id, exc)
     rerun_ad_hoc = None
     if job.get("ad_hoc_ips"):
         try:
             rerun_ad_hoc = json.loads(job["ad_hoc_ips"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse ad_hoc_ips for rerun: %s", job_id, exc)
     rerun_params = None
     if job.get("parameters"):
         try:
             rerun_params = json.loads(job["parameters"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse parameters for rerun: %s", job_id, exc)
 
     new_job_id = await db.create_job(
         job["playbook_id"], job.get("inventory_group_id"),
@@ -1122,8 +1122,8 @@ async def websocket_job(websocket: WebSocket, job_id: int):
                     await websocket.send_json({"type": "ping"})
                 except Exception:
                     break
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        LOGGER.debug("job %s: WS client disconnected: %s", job_id, exc)
     finally:
         async with _job_sockets_lock:
             if job_id in _job_sockets and websocket in _job_sockets[job_id]:

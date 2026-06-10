@@ -229,15 +229,17 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 if cpu_val is not None:
                     try:
                         result["cpu_percent"] = float(int(cpu_val))
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as exc:
+                        LOGGER.warning("monitoring: bad CPU value from %s (oid %s): %s",
+                                       host["ip_address"], cpu_oid, redact_value(str(exc)))
             elif cpu_old_vals:
                 cpu_val = next(iter(cpu_old_vals.values()), None)
                 if cpu_val is not None:
                     try:
                         result["cpu_percent"] = float(int(cpu_val))
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as exc:
+                        LOGGER.warning("monitoring: bad CPU value from %s (oid %s): %s",
+                                       host["ip_address"], cpu_old_oid, redact_value(str(exc)))
 
             # Memory - supports two patterns:
             #   Cisco:  used + free OIDs (bytes) → compute total
@@ -251,8 +253,10 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         result["memory_used_mb"] = round(used / 1048576, 1)
                         result["memory_total_mb"] = round(total / 1048576, 1)
                         result["memory_percent"] = round(used / total * 100, 1)
-                except (ValueError, TypeError, StopIteration):
-                    pass
+                except (ValueError, TypeError, StopIteration) as exc:
+                    LOGGER.warning("monitoring: bad memory values from %s (oids %s/%s): %s",
+                                   host["ip_address"], mem_used_oid, mem_free_oid,
+                                   redact_value(str(exc)))
             elif mem_used_vals and mem_total_vals:
                 try:
                     used = int(next(iter(mem_used_vals.values())))
@@ -261,24 +265,28 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         result["memory_used_mb"] = round(used / 1048576, 1)
                         result["memory_total_mb"] = round(total / 1048576, 1)
                         result["memory_percent"] = round(used / total * 100, 1)
-                except (ValueError, TypeError, StopIteration):
-                    pass
+                except (ValueError, TypeError, StopIteration) as exc:
+                    LOGGER.warning("monitoring: bad memory values from %s (oids %s/%s): %s",
+                                   host["ip_address"], mem_used_oid, mem_total_oid,
+                                   redact_value(str(exc)))
             elif mem_used_vals:
                 # Fortinet fgSysMemUsage returns usage as a percentage directly
                 try:
                     pct = float(int(next(iter(mem_used_vals.values()))))
                     if 0 <= pct <= 100:
                         result["memory_percent"] = pct
-                except (ValueError, TypeError, StopIteration):
-                    pass
+                except (ValueError, TypeError, StopIteration) as exc:
+                    LOGGER.warning("monitoring: bad memory usage value from %s (oid %s): %s",
+                                   host["ip_address"], mem_used_oid, redact_value(str(exc)))
 
             # Uptime
             if uptime_vals:
                 try:
                     ticks = int(next(iter(uptime_vals.values())))
                     result["uptime_seconds"] = ticks // 100
-                except (ValueError, TypeError, StopIteration):
-                    pass
+                except (ValueError, TypeError, StopIteration) as exc:
+                    LOGGER.warning("monitoring: bad uptime value from %s (oid %s): %s",
+                                   host["ip_address"], uptime_oid, redact_value(str(exc)))
 
             # Interface details
             effective_names = if_names or if_descrs
@@ -304,8 +312,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     if s_oid.endswith("." + idx):
                         try:
                             speed_mbps = int(s_val)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            LOGGER.debug("monitoring: bad ifHighSpeed value from %s for ifIndex %s: %s",
+                                         host["ip_address"], idx, str(exc))
                         break
 
                 in_octets = 0
@@ -314,15 +323,17 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     if i_oid.endswith("." + idx):
                         try:
                             in_octets = int(i_val)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            LOGGER.debug("monitoring: bad ifHCInOctets value from %s for ifIndex %s: %s",
+                                         host["ip_address"], idx, str(exc))
                         break
                 for o_oid, o_val in hc_out.items():
                     if o_oid.endswith("." + idx):
                         try:
                             out_octets = int(o_val)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            LOGGER.debug("monitoring: bad ifHCOutOctets value from %s for ifIndex %s: %s",
+                                         host["ip_address"], idx, str(exc))
                         break
 
                 status_str = "up" if oper == 1 else ("admin_down" if admin == 2 else "down")
@@ -342,29 +353,33 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     if e_oid.endswith("." + idx):
                         try:
                             in_errors = int(e_val)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            LOGGER.debug("monitoring: bad ifInErrors value from %s for ifIndex %s: %s",
+                                         host["ip_address"], idx, str(exc))
                         break
                 for e_oid, e_val in if_out_errs.items():
                     if e_oid.endswith("." + idx):
                         try:
                             out_errors = int(e_val)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            LOGGER.debug("monitoring: bad ifOutErrors value from %s for ifIndex %s: %s",
+                                         host["ip_address"], idx, str(exc))
                         break
                 for e_oid, e_val in if_in_disc.items():
                     if e_oid.endswith("." + idx):
                         try:
                             in_discards = int(e_val)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            LOGGER.debug("monitoring: bad ifInDiscards value from %s for ifIndex %s: %s",
+                                         host["ip_address"], idx, str(exc))
                         break
                 for e_oid, e_val in if_out_disc.items():
                     if e_oid.endswith("." + idx):
                         try:
                             out_discards = int(e_val)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            LOGGER.debug("monitoring: bad ifOutDiscards value from %s for ifIndex %s: %s",
+                                         host["ip_address"], idx, str(exc))
                         break
 
                 if_details.append({
@@ -878,8 +893,8 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
             await db.delete_old_route_snapshots(retention_days)
             await db.delete_expired_suppressions()
             await metrics_retention_cleanup()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(str(exc)))
 
     LOGGER.info("monitoring: poll complete - %d hosts, %d alerts, %d errors",
                 hosts_polled, alerts_created, errors)
@@ -1140,8 +1155,9 @@ async def monitoring_poll_now_stream(request: Request):
                     hostname=h.get("hostname"),
                     ip_address=h.get("ip_address"),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("availability: tracking error for host %s: %s",
+                             res["host_id"], str(exc))
 
             # Alerting
             host_alerts = await _evaluate_alerts_for_poll(
@@ -1153,8 +1169,9 @@ async def monitoring_poll_now_stream(request: Request):
             try:
                 await emit_metric_samples_from_poll(res)
                 await store_interface_ts_from_poll(res["host_id"], res.get("if_details", []))
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("metrics: emission error for host %s: %s",
+                             res["host_id"], redact_value(str(exc)))
 
             # Route churn
             if res["route_snapshot"]:
@@ -1189,8 +1206,8 @@ async def monitoring_poll_now_stream(request: Request):
             await db.delete_old_route_snapshots(retention_days)
             await db.delete_expired_suppressions()
             await metrics_retention_cleanup()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(str(exc)))
 
         await _audit("monitoring", "poll.manual", user=user,
                      detail=f"hosts={hosts_polled} alerts={alerts_created}")

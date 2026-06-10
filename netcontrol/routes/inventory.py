@@ -196,8 +196,9 @@ async def _probe_discovery_target(
                 try:
                     writer.close()
                     await writer.wait_closed()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.debug("discovery: error closing probe connection to %s:%s: %s",
+                                 ip_address, port, exc)
     if not detected_port:
         # Last-resort ICMP probe so hosts that block SNMP/22/443 but still
         # answer ping (firewalls with locked-down mgmt planes, appliances
@@ -364,8 +365,9 @@ async def _sync_group_hosts(
             # Auto-apply graph templates to newly discovered host
             try:
                 await db.apply_graph_templates_to_host(new_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("inventory: failed to apply graph templates to host %s: %s",
+                             new_id, exc)
             added += 1
             continue
 
@@ -781,8 +783,8 @@ async def add_host(group_id: int, body: HostCreate):
     # Auto-apply graph templates to manually added host
     try:
         await db.apply_graph_templates_to_host(hid)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("inventory: failed to apply graph templates to host %s: %s", hid, exc)
     await push_inventory_host_allocation(
         hostname=body.hostname,
         ip_address=body.ip_address,

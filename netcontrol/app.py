@@ -418,8 +418,8 @@ def _migrate_legacy_session_key() -> None:
     try:
         os.makedirs(os.path.dirname(SECRET_KEY_FILE) or ".", exist_ok=True)
         os.replace(legacy, SECRET_KEY_FILE)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.warning("session key migration: could not move %s to %s: %s", legacy, SECRET_KEY_FILE, exc)
 
 
 _migrate_legacy_session_key()
@@ -445,8 +445,8 @@ def _load_or_create_secret_key() -> str:
             f.write(key)
         try:
             os.chmod(SECRET_KEY_FILE, 0o600)
-        except OSError:
-            pass
+        except OSError as exc:
+            LOGGER.debug("could not set permissions on %s: %s", SECRET_KEY_FILE, exc)
     return key
 
 
@@ -896,25 +896,25 @@ def _flow_collector_seed_from_env() -> dict | None:
         try:
             seeded["netflow_port"] = int(netflow_port_raw)
         except ValueError:
-            pass
+            LOGGER.warning("flow settings seed: ignoring invalid APP_NETFLOW_PORT value %r", netflow_port_raw)
     sflow_port_raw = os.getenv("APP_SFLOW_PORT", "").strip()
     if sflow_port_raw:
         try:
             seeded["sflow_port"] = int(sflow_port_raw)
         except ValueError:
-            pass
+            LOGGER.warning("flow settings seed: ignoring invalid APP_SFLOW_PORT value %r", sflow_port_raw)
     retention_raw = os.getenv("APP_FLOW_RETENTION_HOURS", "").strip()
     if retention_raw:
         try:
             seeded["retention_hours"] = int(retention_raw)
         except ValueError:
-            pass
+            LOGGER.warning("flow settings seed: ignoring invalid APP_FLOW_RETENTION_HOURS value %r", retention_raw)
     agg_raw = os.getenv("APP_FLOW_AGGREGATION_INTERVAL_SECONDS", "").strip()
     if agg_raw:
         try:
             seeded["aggregation_interval_seconds"] = int(agg_raw)
         except ValueError:
-            pass
+            LOGGER.warning("flow settings seed: ignoring invalid APP_FLOW_AGGREGATION_INTERVAL_SECONDS value %r", agg_raw)
     return seeded or None
 
 

@@ -2590,13 +2590,13 @@ async def _get_sqlite_singleton():
             if _sqlite_conn_loop is running:
                 try:
                     await _sqlite_conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _LOGGER.debug("Failed to close stale SQLite connection: %s", exc)
             else:
                 try:
                     _sqlite_conn.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _LOGGER.debug("Failed to stop stale SQLite connection: %s", exc)
             _sqlite_conn = None
         db_dir = os.path.dirname(DB_PATH)
         if db_dir:
@@ -2638,8 +2638,8 @@ def _dispose_sqlite_singleton_sync():
     if conn is not None:
         try:
             conn.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.debug("Failed to stop SQLite connection during teardown: %s", exc)
 
 
 async def _get_pg_pool():
@@ -3442,8 +3442,11 @@ async def add_host(group_id: int, hostname: str, ip_address: str,
                 vrf_name=vrf_name or "", source_type="host",
                 source_ref=str(new_id), note="host added",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.warning(
+                "Failed to record IP assignment for host %s (%s): %s",
+                new_id, ip_address, exc,
+            )
     return new_id
 
 
@@ -3469,8 +3472,11 @@ async def remove_host(host_id: int):
             await record_ip_release(
                 address=prior_ip, vrf_name=prior_vrf, note="host removed"
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.warning(
+                "Failed to record IP release for removed host %s (%s): %s",
+                host_id, prior_ip, exc,
+            )
 
 
 async def update_host(host_id: int, hostname: str, ip_address: str,
@@ -3515,8 +3521,11 @@ async def update_host(host_id: int, hostname: str, ip_address: str,
                 vrf_name=new_vrf or "", source_type="host",
                 source_ref=str(host_id), note="host updated",
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.warning(
+            "Failed to record IP assignment history for updated host %s (%s): %s",
+            host_id, new_ip, exc,
+        )
 
 
 async def move_hosts(host_ids: list[int], target_group_id: int) -> int:
@@ -3562,8 +3571,11 @@ async def bulk_delete_hosts(host_ids: list[int]) -> int:
                 await record_ip_release(
                     address=ip, vrf_name=vrf, note="bulk host delete"
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.warning(
+                    "Failed to record IP release for bulk-deleted host (%s): %s",
+                    ip, exc,
+                )
     return rowcount
 
 
@@ -7701,9 +7713,12 @@ async def create_monitoring_alert(
         }
         try:
             await _alert_created_hook(alert_event)
-        except Exception:
+        except Exception as exc:
             # Notification delivery must never break alert ingestion.
-            pass
+            _LOGGER.warning(
+                "Notification delivery failed for alert %s (rule %s, host %s): %s",
+                new_id, rule_id, host_id, exc,
+            )
     return new_id
 
 
@@ -12002,24 +12017,20 @@ async def upsert_snmp_data_source(
         update_sets = ["name = excluded.name"]
     db = await get_db()
     try:
-        await db.execute(
+        cursor = await db.execute(
             f"""INSERT INTO snmp_data_sources
                 (host_id, ds_type, instance_key, name, table_oid, index_oid,
                  instance_label, oids_json, poll_interval, enabled)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(host_id, ds_type, instance_key) DO UPDATE SET
-                {', '.join(update_sets)}""",
+                {', '.join(update_sets)}
+                RETURNING id""",
             (host_id, ds_type, instance_key, name, table_oid, index_oid,
              instance_label, oids_json, poll_interval, enabled),
         )
-        await db.commit()
-        # Fetch the row id (works for both insert and update)
-        cursor = await db.execute(
-            "SELECT id FROM snmp_data_sources WHERE host_id = ? AND ds_type = ? AND instance_key = ?",
-            (host_id, ds_type, instance_key),
-        )
         row = await cursor.fetchone()
-        return row[0] if isinstance(row, tuple) else dict(row)["id"]
+        await db.commit()
+        return int(row[0])
     except Exception:
         await db.rollback()
         raise
@@ -12208,7 +12219,7 @@ async def upsert_mac_entry(host_id: int, mac_address: str, vlan: int,
     """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE."""
     db = await get_db()
     try:
-        await db.execute(
+        cursor = await db.execute(
             """INSERT INTO mac_address_table
                (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type)
                VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -12217,16 +12228,13 @@ async def upsert_mac_entry(host_id: int, mac_address: str, vlan: int,
                 port_index = excluded.port_index,
                 ip_address = excluded.ip_address,
                 entry_type = excluded.entry_type,
-                last_seen = datetime('now')""",
+                last_seen = datetime('now')
+               RETURNING id""",
             (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type),
         )
-        await db.commit()
-        cursor = await db.execute(
-            "SELECT id FROM mac_address_table WHERE host_id = ? AND mac_address = ? AND vlan = ?",
-            (host_id, mac_address, vlan),
-        )
         row = await cursor.fetchone()
-        return row[0] if isinstance(row, tuple) else dict(row)["id"]
+        await db.commit()
+        return int(row[0])
     except Exception:
         await db.rollback()
         raise
@@ -12239,23 +12247,20 @@ async def upsert_arp_entry(host_id: int, ip_address: str, mac_address: str,
     """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE."""
     db = await get_db()
     try:
-        await db.execute(
+        cursor = await db.execute(
             """INSERT INTO arp_table
                (host_id, ip_address, mac_address, interface_name, vrf)
                VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(host_id, ip_address, vrf) DO UPDATE SET
                 mac_address = excluded.mac_address,
                 interface_name = excluded.interface_name,
-                last_seen = datetime('now')""",
+                last_seen = datetime('now')
+               RETURNING id""",
             (host_id, ip_address, mac_address, interface_name, vrf),
         )
-        await db.commit()
-        cursor = await db.execute(
-            "SELECT id FROM arp_table WHERE host_id = ? AND ip_address = ? AND vrf = ?",
-            (host_id, ip_address, vrf),
-        )
         row = await cursor.fetchone()
-        return row[0] if isinstance(row, tuple) else dict(row)["id"]
+        await db.commit()
+        return int(row[0])
     except Exception:
         await db.rollback()
         raise
@@ -13148,7 +13153,7 @@ async def upsert_metric_baseline(host_id: int, metric_name: str,
     """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE (SQLite 3.24+)."""
     db = await get_db()
     try:
-        await db.execute(
+        cursor = await db.execute(
             """INSERT INTO metric_baselines
                (host_id, metric_name, labels_json, day_of_week, hour_of_day,
                 baseline_avg, baseline_stddev, baseline_min, baseline_max,
@@ -13162,21 +13167,15 @@ async def upsert_metric_baseline(host_id: int, metric_name: str,
                 baseline_p95 = excluded.baseline_p95,
                 sample_count = excluded.sample_count,
                 learning_window_days = excluded.learning_window_days,
-                last_computed = datetime('now')""",
+                last_computed = datetime('now')
+               RETURNING id""",
             (host_id, metric_name, labels_json, day_of_week, hour_of_day,
              baseline_avg, baseline_stddev, baseline_min, baseline_max,
              baseline_p95, sample_count, learning_window_days),
         )
-        await db.commit()
-        # Retrieve the row id
-        cursor = await db.execute(
-            """SELECT id FROM metric_baselines
-               WHERE host_id = ? AND metric_name = ? AND labels_json = ?
-                     AND day_of_week = ? AND hour_of_day = ?""",
-            (host_id, metric_name, labels_json, day_of_week, hour_of_day),
-        )
         row = await cursor.fetchone()
-        return row[0] if isinstance(row, tuple) else dict(row)["id"]
+        await db.commit()
+        return int(row[0])
     except Exception:
         await db.rollback()
         raise
@@ -14648,8 +14647,11 @@ async def create_local_ipam_allocation(
                 recorded_by=created_by or "",
                 note=description or "",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.warning(
+                "Failed to record IP assignment for IPAM allocation %s (%s): %s",
+                result.get("id"), address, exc,
+            )
     return result
 
 
@@ -14676,8 +14678,11 @@ async def delete_ipam_allocation(allocation_id: int) -> bool:
                 vrf_name=(prior_d.get("vrf_name") or "").strip(),
                 note="ipam allocation deleted",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.warning(
+                "Failed to record IP release for deleted IPAM allocation %s (%s): %s",
+                allocation_id, prior_d.get("address"), exc,
+            )
     return deleted
 
 
