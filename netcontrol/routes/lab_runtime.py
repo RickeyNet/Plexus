@@ -57,6 +57,7 @@ from netcontrol.routes.shared import (
     _compute_config_diff,
     _corr_id,
     _push_config_to_device,
+    require_credential_access,
 )
 from netcontrol.telemetry import configure_logging
 
@@ -545,9 +546,7 @@ async def simulate_live_endpoint(
     cred_id = device.get("runtime_credential_id")
     if not cred_id:
         raise HTTPException(status_code=400, detail="Lab device has no associated credential")
-    cred = await db.get_credential_raw(int(cred_id))
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(int(cred_id), session=session)
     credentials = {
         "username": cred["username"],
         "password": cred["password"],

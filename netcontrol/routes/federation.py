@@ -55,6 +55,7 @@ class PeerCreate(BaseModel):
     api_token: str = ""
     description: str = ""
     enabled: bool = True
+    tls_verify: bool = True
 
 
 class PeerUpdate(BaseModel):
@@ -63,6 +64,7 @@ class PeerUpdate(BaseModel):
     api_token: str | None = None
     description: str | None = None
     enabled: bool | None = None
+    tls_verify: bool | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -128,17 +130,23 @@ def _build_headers(api_token_enc: str) -> dict:
     return headers
 
 
-async def _fetch_peer_data(url: str, api_token_enc: str) -> dict:
+def _peer_tls_verify(peer) -> bool:
+    """Whether TLS certificates should be verified for this peer (default yes)."""
+    d = dict(peer) if not isinstance(peer, dict) else peer
+    return bool(d.get("tls_verify", 1))
+
+
+async def _fetch_peer_data(peer) -> dict:
     """Fetch aggregate data from a remote Plexus peer."""
-    headers = _build_headers(api_token_enc)
-    base = url.rstrip("/")
+    headers = _build_headers(peer["api_token_enc"])
+    base = peer["url"].rstrip("/")
     result = {
         "devices": {"total": 0, "up": 0, "down": 0, "groups": 0},
         "alerts": {"active": 0, "critical": 0, "warning": 0},
         "compliance": {"total_profiles": 0, "compliant_pct": 0},
         "version": "",
     }
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=False) as client:
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=_peer_tls_verify(peer)) as client:
         # Fetch inventory summary
         try:
             resp = await client.get(f"{base}/api/inventory/groups", headers=headers)
@@ -231,9 +239,9 @@ async def create_peer(
     try:
         c = await cur.execute(
             """INSERT INTO federation_peers
-                   (name, url, api_token_enc, description, enabled, created_by)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (body.name, url, token_enc, body.description, int(body.enabled), username),
+                   (name, url, api_token_enc, description, enabled, tls_verify, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (body.name, url, token_enc, body.description, int(body.enabled), int(body.tls_verify), username),
         )
         await cur.commit()
         new_id = c.lastrowid
@@ -275,6 +283,8 @@ async def update_peer(
         updates["description"] = body.description
     if body.enabled is not None:
         updates["enabled"] = int(body.enabled)
+    if body.tls_verify is not None:
+        updates["tls_verify"] = int(body.tls_verify)
 
     if not updates:
         return _peer_row_to_dict(existing)
@@ -334,7 +344,7 @@ async def test_peer(peer_id: int, request: Request, _user=Depends(_require_admin
     headers = _build_headers(peer["api_token_enc"])
 
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=False) as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=_peer_tls_verify(peer)) as client:
             resp = await client.get(f"{url}/api/admin/capabilities", headers=headers)
         if resp.status_code == 200:
             caps = resp.json()
@@ -364,7 +374,7 @@ async def sync_peer(peer_id: int, request: Request, _user=Depends(_require_admin
     now = datetime.now(UTC).isoformat()
 
     try:
-        data = await _fetch_peer_data(peer["url"], peer["api_token_enc"])
+        data = await _fetch_peer_data(peer)
     except Exception:
         LOGGER.exception("Federation sync failed for peer %d", peer_id)
         cur = await db.get_db()
@@ -513,7 +523,7 @@ async def federation_sync_loop() -> None:
 
             for peer in peers:
                 try:
-                    data = await _fetch_peer_data(peer["url"], peer["api_token_enc"])
+                    data = await _fetch_peer_data(peer)
                     now = datetime.now(UTC).isoformat()
                     cur = await db.get_db()
                     try:

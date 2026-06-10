@@ -372,11 +372,13 @@ def test_simulate_live_runs_real_push(tmp_path, monkeypatch):
     # Seed a credential that the device will reference.
     async def _seed_cred():
         from routes.crypto import encrypt
+        admin = await db_module.get_user_by_username("admin")
         return await db_module.create_credential(
             name="lab-cred",
             username="admin",
             enc_password=encrypt("password"),
             enc_secret=encrypt(""),
+            owner_id=int(admin["id"]) if admin else None,
         )
 
     cred_id = asyncio.run(_seed_cred())
@@ -628,11 +630,13 @@ def _seed_compliance_profile_blocking_snmp_public(group_id: int):
             severity="critical",
             rules=_json.dumps(rules),
         )
+        admin = await db_module.get_user_by_username("admin")
         cred_id = await db_module.create_credential(
             name=f"comp-cred-{group_id}",
             username="admin",
             enc_password=_encrypt("password"),
             enc_secret=_encrypt(""),
+            owner_id=int(admin["id"]) if admin else None,
         )
         await db_module.create_compliance_assignment(
             profile_id=prof_id,

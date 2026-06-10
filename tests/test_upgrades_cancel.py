@@ -199,6 +199,11 @@ async def test_execute_phase_resets_cancelled_devices_before_running(
     monkeypatch.setattr(upgrades, "decrypt", lambda value: value)
     monkeypatch.setattr(upgrades.db, "get_upgrade_campaign", fake_get_upgrade_campaign)
     monkeypatch.setattr(upgrades.db, "get_credential_raw", fake_get_credential_raw)
+
+    async def fake_require_credential_access(credential_id, **_kwargs):
+        return await fake_get_credential_raw(credential_id)
+
+    monkeypatch.setattr(upgrades, "require_credential_access", fake_require_credential_access)
     monkeypatch.setattr(upgrades.db, "get_upgrade_devices", fake_get_upgrade_devices)
     monkeypatch.setattr(upgrades.db, "create_upgrade_operation", fake_create_upgrade_operation)
     monkeypatch.setattr(upgrades.db, "update_upgrade_device", fake_update_upgrade_device)
