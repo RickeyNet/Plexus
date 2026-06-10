@@ -24,6 +24,13 @@ certs/
 *.db
 *.sqlite3
 
+# Software images (NOS/firmware blobs, often 700MB-1GB+ each).
+# Bind-mounted at runtime via docker-compose (./software_images ->
+# /app/state/software_images); must never be baked into image layers or the
+# layer export fills the container runtime's data-root.
+software_images/
+state/software_images/
+
 # IDE and editor
 .vscode/
 .idea/
