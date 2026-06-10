@@ -19,6 +19,7 @@ from netcontrol.routes.shared import (
     _corr_id,
     _get_session,
     _push_config_to_device,
+    require_credential_access,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -679,9 +680,7 @@ async def capture_config_snapshot(body: ConfigSnapshotCaptureRequest, request: R
     host = await db.get_host(body.host_id)
     if not host:
         raise HTTPException(status_code=404, detail="Host not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
     try:
         config_text = await _capture_running_config(host, cred)
     except Exception as exc:
@@ -708,9 +707,7 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
     hosts = await db.get_hosts_for_group(body.group_id)
     if not hosts:
         raise HTTPException(status_code=404, detail="No hosts found in group")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     results = []
     sem = asyncio.Semaphore(4)
@@ -746,9 +743,7 @@ async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
     hosts = await db.get_hosts_for_group(body.group_id)
     if not hosts:
         raise HTTPException(status_code=404, detail="No hosts found in group")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     job_id = str(uuid.uuid4())
     _capture_jobs[job_id] = {
@@ -778,9 +773,7 @@ async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request:
     host = await db.get_host(body.host_id)
     if not host:
         raise HTTPException(status_code=404, detail="Host not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     job_id = str(uuid.uuid4())
     _capture_jobs[job_id] = {
@@ -1033,11 +1026,8 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
     if not baseline or not baseline.get("config_text"):
         raise HTTPException(status_code=400, detail="No baseline config found for this host")
 
-    credentials = await db.get_credential_raw(body.credential_id)
-    if not credentials:
-        raise HTTPException(status_code=404, detail="Credential not found")
-
     session = _get_session(request)
+    credentials = await require_credential_access(body.credential_id, session=session)
     user = session["user"] if session else ""
 
     job_id = str(uuid.uuid4())
@@ -1169,9 +1159,7 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
     host = await db.get_host(body.host_id)
     if not host:
         raise HTTPException(status_code=404, detail="Host not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
     try:
         config_text = await _capture_running_config(host, cred)
     except Exception as exc:

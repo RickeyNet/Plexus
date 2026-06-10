@@ -11,7 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
-from netcontrol.routes.shared import _audit, _capture_running_config, _corr_id, _get_session, _push_config_to_device
+from netcontrol.routes.shared import (
+    _audit,
+    _capture_running_config,
+    _corr_id,
+    _get_session,
+    _push_config_to_device,
+    require_credential_access,
+)
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
@@ -236,10 +243,21 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
     for assignment in due_assignments:
         try:
             hosts = await db.get_hosts_for_group(assignment["group_id"])
-            cred = await db.get_credential_raw(assignment["credential_id"])
-            if not cred:
-                LOGGER.warning("compliance: credential %s not found for assignment %s",
-                               assignment["credential_id"], assignment["id"])
+            try:
+                # Re-validate the stored credential against whoever assigned it
+                # so the scan can't keep running with a credential the assigner
+                # no longer owns (or after the assigner account is removed).
+                cred = await require_credential_access(
+                    assignment["credential_id"],
+                    submitter_username=assignment.get("assigned_by") or None,
+                    allow_service=True,
+                )
+            except HTTPException as exc:
+                LOGGER.warning(
+                    "compliance: credential %s rejected for assignment %s (assigned_by=%r): %s",
+                    assignment["credential_id"], assignment["id"],
+                    assignment.get("assigned_by"), exc.detail,
+                )
                 errors += 1
                 continue
 
@@ -419,9 +437,9 @@ async def create_compliance_assignment(body: ComplianceAssignmentCreate, request
     group = await db.get_group(body.group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Inventory group not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    await require_credential_access(
+        body.credential_id, session=_get_session(request), allow_service=True,
+    )
     # Prevent duplicate (profile_id, group_id) - DB has UNIQUE constraint but give a clean error
     existing = await db.get_compliance_assignments(profile_id=body.profile_id, group_id=body.group_id)
     if existing:
@@ -453,6 +471,9 @@ async def update_compliance_assignment(assignment_id: int, body: ComplianceAssig
     if body.enabled is not None:
         updates["enabled"] = 1 if body.enabled else 0
     if body.credential_id is not None:
+        await require_credential_access(
+            body.credential_id, session=_get_session(request), allow_service=True,
+        )
         updates["credential_id"] = body.credential_id
     if body.interval_seconds is not None:
         updates["interval_seconds"] = max(state.COMPLIANCE_ASSIGNMENT_MIN_INTERVAL,
@@ -556,9 +577,9 @@ async def scan_assignment_now(assignment_id: int, request: Request):
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance profile not found")
 
-    cred = await db.get_credential_raw(assignment["credential_id"])
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(
+        assignment["credential_id"], session=_get_session(request), allow_service=True,
+    )
 
     hosts = await db.get_hosts_for_group(assignment["group_id"])
     if not hosts:
@@ -624,9 +645,7 @@ async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
     profile = await db.get_compliance_profile(body.profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance profile not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     result = await _evaluate_host_compliance(host, profile, cred)
     result_id = await db.create_compliance_scan_result(
@@ -660,9 +679,7 @@ async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Req
     profile = await db.get_compliance_profile(body.profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance profile not found")
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+    cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     if body.host_ids:
         hosts = await db.get_hosts_by_ids(body.host_ids)
