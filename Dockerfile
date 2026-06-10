@@ -19,8 +19,13 @@ FROM python:3.14-slim
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# System dependencies for python-ldap and pysnmp
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# System dependencies for python-ldap and pysnmp.
+# Use HTTPS mirrors: the build host blocks outbound plain HTTP (port 80),
+# so the default http:// deb.debian.org URIs time out.
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list \
+    ; apt-get update && apt-get install -y --no-install-recommends \
     libldap2-dev libsasl2-dev libssl-dev gcc gosu \
     && rm -rf /var/lib/apt/lists/*
 
