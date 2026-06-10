@@ -222,6 +222,7 @@ from netcontrol.routes.metrics_engine import (
     inject_auth as metrics_engine_inject_auth,
     router as metrics_engine_router,
 )
+from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.routes.monitoring import (
     _alert_escalation_loop,
     _baseline_computation_loop,
@@ -1291,6 +1292,7 @@ async def lifespan(app: FastAPI):
     config_backup_task = asyncio.create_task(_config_backup_loop())
     compliance_check_task = asyncio.create_task(_compliance_check_loop())
     monitoring_task = asyncio.create_task(_monitoring_poll_loop())
+    fdm_poll_task = asyncio.create_task(fdm_poll_loop())
     escalation_task = asyncio.create_task(_alert_escalation_loop())
     baseline_task = asyncio.create_task(_baseline_computation_loop())
     downsampling_task = asyncio.create_task(_downsampling_loop())
@@ -1350,6 +1352,7 @@ async def lifespan(app: FastAPI):
         config_backup_task.cancel()
         compliance_check_task.cancel()
         monitoring_task.cancel()
+        fdm_poll_task.cancel()
         escalation_task.cancel()
         baseline_task.cancel()
         downsampling_task.cancel()
@@ -1396,6 +1399,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await monitoring_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await fdm_poll_task
         except asyncio.CancelledError:
             pass
         try:
