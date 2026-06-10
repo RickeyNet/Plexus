@@ -362,3 +362,48 @@ auditors review every tool with credentials, and medical devices have unique net
   - [ ] Next slice (phase G): harden cloud credential handling to enforce secret references, support rotation-safe auth patterns, and plug into external vault providers.
   - [ ] Next slice (phase H): add cloud-specific alerting and dashboards (tunnel/down events, route instability, denied-traffic spikes, cloud-edge health).
   - [ ] Next slice (phase I): production hardening for scale and operations (provider pagination robustness, large-account performance tests, and operator runbooks).
+
+## Code Review Backlog (June 2026 Audit)
+
+Findings from the full-codebase review (security items, MAC-tracking logic fixes, and credential-ownership enforcement already landed). Ordered by recommended sequence — batch 1 unblocks everything after it.
+
+### Batch 1 - Quick Wins (low risk, do first)
+
+- [ ] **Fix the 13 pre-existing failing tests** - `test_week4_security` (3), `test_audit_overrides` (3), `test_geolocation` (4), `test_upgrades_images` (2), `test_cloud_visibility` (1). *Why: they fail on clean main and mask real regressions - every review session has needed stash-and-diff baselining just to tell new failures from the noise.*
+- [ ] **Repo hygiene** - gitignore and untrack `coverage.json`, `_pytest_one.txt`, `.pytest_after.txt`, `netcontrol.db.migrate.lock`; CI should regenerate coverage artifacts, not version them.
+- [ ] **Add `pytest-xdist` to `requirements-dev.txt`** and document `-n auto` (already proven locally: full suite drops from ~18 min serial to ~4 min with 6 workers). Consider markers/timeout config in `pytest.ini` while in there.
+- [ ] **Fix blocking `time.sleep(1)` in `netcontrol/routes/cloud_flow_pullers.py:216`** - blocks the event loop for up to 60s per CloudWatch poll; use `await asyncio.sleep()`.
+
+### Batch 2 - Background Long-Running Endpoints
+
+- [ ] **Inventory discovery scan** (`netcontrol/routes/inventory.py:1002`) - full CIDR probe (up to 4096 hosts) runs inline in the HTTP handler; move to a job record + WebSocket/polling pattern like config-drift capture jobs.
+- [ ] **MAC fleet collection** (`/api/mac-tracking/collect` all-hosts mode) - now has a 409 overlap guard and per-host diagnostics, but still runs inline; reuse the same job pattern once it exists. Frontend needs a job-polling hook to keep the results display.
+- [ ] **Batch MAC upserts** - each MAC costs two awaited DB round-trips (upsert + history), each opening/closing a connection; tens of thousands of connection cycles per collection.
+
+### Batch 3 - Frontend Shared Hooks (one hook per PR, mechanical migrations)
+
+- [ ] **`useFormDraft<T>()`** - replaces the duplicated draft-seeding pattern in 11 files (Settings tabs, Jobs/Reports/Upgrades form modals, MacTracking).
+- [ ] **`useFilteredList<T>()`** - replaces the duplicated search/filter `useMemo` pattern in 20+ list pages; standardizes case-insensitivity and debouncing.
+- [ ] **`useTabbedPage<T>()`** - replaces the duplicated tab-state + URL-sync pattern in 20+ tabbed pages.
+- [ ] **`<FormField>` accessibility wrapper** - ~400 `form-input` fields rely on placeholder text with no `<label>`/`aria-label`; wrapper enforces label association, migrate incrementally.
+- [ ] **Decompose oversized components** - `Lab.tsx` (1,512 lines), `Topology.tsx` (1,344 lines / 24 useState hooks → useReducer), `Ipam.tsx` (1,213), `CampaignViewerModal.tsx` (1,064), `DiscoveryModal.tsx` (857, 13-useState state machine → useReducer).
+- [ ] **Query-key factories per API file** - inconsistent TanStack Query key shapes make invalidation fragile.
+
+### Batch 4 - Test & Tooling Structure
+
+- [ ] **Expand `tools/coverage_gate.py`** beyond the single `netcontrol/app.py` rule - add the top untested route modules (`monitoring.py` 67K, `metrics_engine.py` 50K, `jobs.py` 45K, `admin.py` 35K have zero tests).
+- [ ] **Shrink the `mypy.ini` `ignore_errors = True` list** (18 modules including app, database, auth, jobs, monitoring) - one module per PR.
+- [ ] **Run Postgres smoke tests on all PRs** (currently SQLite-only unless `APP_DATABASE_URL` is set) - real deployments are Postgres.
+- [ ] **Frontend coverage threshold in CI** - 5 test files for 180 components; any threshold forces improvement.
+
+### Batch 5 - Security Follow-Ups
+
+- [ ] **Credential-isolation regression tests** - prove user A cannot use user B's `credential_id` through each endpoint hardened in the IDOR sweep (deployments, config backups/drift, compliance, upgrades, inventory, risk analysis, lab runtime).
+- [ ] **FDM collector credential model** (`netcontrol/integrations/cisco_fdm/collector.py:87`) - background poller fetches raw credentials with no ownership/service-cred policy; align with the service-credential pattern used by monitoring and MAC CLI collection.
+- [ ] **Air-gap README** (`deploy/airgap/README.md:100`) still advertises the `admin/netcontrol` default login - update for the new random-password first boot.
+- [ ] **Pre-existing backend cleanups** - 40+ `SELECT *` queries on wide tables; silent `except Exception` in the audit-hook forwarder (`routes/database.py:~4637`) can drop audit events invisibly; likely-missing indexes on `monitoring_polls(host_id, sampled_at)` and `audit_events(category)`; hardcoded `asyncio.Semaphore(4)` in 8+ collectors should be configurable.
+- [ ] **Late-binding `init_*()` boilerplate** - ~30 route modules repeat the `_require_auth = None` + init pattern; extract a shared helper.
+
+### Batch 6 - The Big One
+
+- [ ] **Split `routes/database.py` (16,795 lines) into domain modules** (hosts, credentials, monitoring, audit, mac-tracking, lab, etc.) while preserving the `routes.database` API surface. *Prerequisite: batches 1 and 4 - the suite must be green and fast before a refactor this wide.*
