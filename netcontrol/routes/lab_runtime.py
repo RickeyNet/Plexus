@@ -282,30 +282,46 @@ async def deploy_lab_device(
         runtime_error="",
     )
 
-    rc, stdout, stderr = await _run_containerlab(
-        ["deploy", "-t", str(topo), "--reconfigure"],
-        cwd=workdir,
-    )
-    if rc != 0:
-        msg = (stderr or stdout).strip()[:500] or f"containerlab deploy exited rc={rc}"
+    try:
+        rc, stdout, stderr = await _run_containerlab(
+            ["deploy", "-t", str(topo), "--reconfigure"],
+            cwd=workdir,
+        )
+        if rc != 0:
+            msg = (stderr or stdout).strip()[:500] or f"containerlab deploy exited rc={rc}"
+            await db.update_lab_device_runtime(
+                device["id"], runtime_status="error", runtime_error=msg,
+            )
+            await db.add_lab_runtime_event(
+                device["id"], action="deploy", status="error", actor=actor, detail=msg,
+            )
+            raise HTTPException(status_code=500, detail=msg)
+
+        inspect_doc = await _inspect_lab(workdir) or {}
+        mgmt_ipv4 = _extract_mgmt_ipv4(inspect_doc, node_name)
+        started_at = datetime.now(UTC).isoformat()
+        await db.update_lab_device_runtime(
+            device["id"],
+            runtime_status="running",
+            runtime_mgmt_address=mgmt_ipv4,
+            runtime_started_at=started_at,
+            runtime_error="",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Don't leave the device stuck in "provisioning" if containerlab
+        # itself (or post-deploy inspection) blows up unexpectedly. The
+        # workdir is kept so a later destroy can still tear down partial
+        # deploys via the topology file.
+        msg = f"deploy failed: {exc}"[:500]
         await db.update_lab_device_runtime(
             device["id"], runtime_status="error", runtime_error=msg,
         )
         await db.add_lab_runtime_event(
             device["id"], action="deploy", status="error", actor=actor, detail=msg,
         )
-        raise HTTPException(status_code=500, detail=msg)
-
-    inspect_doc = await _inspect_lab(workdir) or {}
-    mgmt_ipv4 = _extract_mgmt_ipv4(inspect_doc, node_name)
-    started_at = datetime.now(UTC).isoformat()
-    await db.update_lab_device_runtime(
-        device["id"],
-        runtime_status="running",
-        runtime_mgmt_address=mgmt_ipv4,
-        runtime_started_at=started_at,
-        runtime_error="",
-    )
+        raise HTTPException(status_code=500, detail=msg) from exc
     await db.add_lab_runtime_event(
         device["id"], action="deploy", status="ok", actor=actor,
         detail=f"node={node_name} mgmt={mgmt_ipv4 or 'unknown'}",
