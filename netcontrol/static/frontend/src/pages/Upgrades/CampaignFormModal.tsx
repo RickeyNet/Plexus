@@ -230,10 +230,6 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
       setError('Add at least one image mapping');
       return;
     }
-    if (!credentialId) {
-      setError('Select a credential');
-      return;
-    }
     const ips = adHocIps
       .split(/[\n,]+/)
       .map((s) => s.trim())
@@ -247,7 +243,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
       name,
       description,
       image_map: map,
-      credential_id: Number(credentialId),
+      credential_id: credentialId ? Number(credentialId) : null,
       host_ids: Array.from(hostIds),
       ad_hoc_ips: ips,
       options,
@@ -364,19 +360,22 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
             <label className="form-label">Credential</label>
             <select
               className="form-select"
-              required
               value={credentialId}
               onChange={(e) =>
                 setCredentialId(e.target.value ? Number(e.target.value) : '')
               }
             >
-              <option value="">Select credential…</option>
+              <option value="">Use default service credential</option>
               {creds.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name || `Credential ${c.id}`}
                 </option>
               ))}
             </select>
+            <small className="text-muted" style={{ fontSize: '0.85em' }}>
+              Leave unset to run with the service credential configured in
+              Settings.
+            </small>
           </div>
 
           <fieldset

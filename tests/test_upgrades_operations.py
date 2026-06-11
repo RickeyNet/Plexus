@@ -302,3 +302,59 @@ async def test_execute_validates_credential_against_campaign_creator(
     assert captured.get("session") is None
     # Scheduled/unattended upgrades may use a service credential.
     assert captured.get("allow_service") is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_campaign_credential_explicit(monkeypatch):
+    """An explicit campaign credential is validated against the creator."""
+    captured: dict = {}
+
+    async def fake_require(credential_id, **kwargs):
+        captured["credential_id"] = credential_id
+        captured.update(kwargs)
+        return {"id": credential_id, "username": "u", "password": "p", "secret": ""}
+
+    monkeypatch.setattr(upgrades, "require_credential_access", fake_require)
+
+    cred = await upgrades._resolve_campaign_credential(9, "alice")
+    assert cred["id"] == 9
+    assert captured["submitter_username"] == "alice"
+    assert captured["allow_service"] is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_campaign_credential_falls_back_to_service(monkeypatch):
+    """No credential set → use the configured service credential, with no
+    per-user ownership check (it's the system default)."""
+    monkeypatch.setattr(
+        upgrades.state, "AUTH_CONFIG", {"service_credential_id": 42}
+    )
+
+    async def fake_get_raw(cred_id):
+        return {"id": cred_id, "username": "svc", "password": "p", "secret": "", "is_service": 1}
+
+    monkeypatch.setattr(upgrades.db, "get_credential_raw", fake_get_raw)
+
+    called = False
+
+    async def fake_require(*_a, **_k):
+        nonlocal called
+        called = True
+        raise AssertionError("ownership check must not run for the service default")
+
+    monkeypatch.setattr(upgrades, "require_credential_access", fake_require)
+
+    cred = await upgrades._resolve_campaign_credential(None, "alice")
+    assert cred["id"] == 42
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_campaign_credential_none_configured(monkeypatch):
+    """No campaign credential and no service/default configured → 400."""
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(upgrades.state, "AUTH_CONFIG", {})
+    with pytest.raises(HTTPException) as exc:
+        await upgrades._resolve_campaign_credential(None, "alice")
+    assert exc.value.status_code == 400

@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from routes.crypto import decrypt
 
+import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, get_driver
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_credential_access
 from netcontrol.telemetry import configure_logging
@@ -38,6 +39,50 @@ except ImportError:
 router = APIRouter()
 ws_router = APIRouter()
 LOGGER = configure_logging("plexus.upgrades")
+
+
+async def _resolve_campaign_credential(
+    cred_id, created_by, session: dict | None = None,
+) -> dict:
+    """Resolve the credential a campaign should run with.
+
+    If the campaign has an explicit ``credential_id`` it's validated against
+    the campaign's creator (with a live-session fallback for legacy campaigns,
+    and ``allow_service`` since scheduled upgrades are unattended work). When
+    no credential was set, fall back to the configured service/default
+    credential — the system account used for unattended work, same as
+    monitoring and MAC collection — with no per-user check, because it isn't a
+    user-selected credential.
+
+    Raises HTTPException(400/403/404) on any failure.
+    """
+    if cred_id:
+        created_by = (created_by or "").strip()
+        if created_by and created_by.lower() != "unknown":
+            return await require_credential_access(
+                cred_id, submitter_username=created_by, allow_service=True,
+            )
+        return await require_credential_access(
+            cred_id, session=session, allow_service=True,
+        )
+
+    fallback_id = (
+        state.AUTH_CONFIG.get("service_credential_id")
+        or state.AUTH_CONFIG.get("default_credential_id")
+    )
+    if not fallback_id:
+        raise HTTPException(
+            400,
+            "No credential set on the campaign and no service/default "
+            "credential configured. Select a credential, or set a service "
+            "credential in Settings to use as the default.",
+        )
+    cred = await db.get_credential_raw(fallback_id)
+    if not cred:
+        raise HTTPException(
+            400, f"Configured default credential {fallback_id} no longer exists"
+        )
+    return cred
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -261,16 +306,11 @@ async def rehydrate_scheduled_upgrades():
                 if isinstance(campaign["options"], str)
                 else campaign["options"]
             )
-            cred_id = options.get("credential_id")
-            if not cred_id:
-                raise ValueError("Campaign has no credential_id in options")
-            # Rehydrating a scheduled activate after restart: validate against
-            # the campaign creator, since there is no live session here.
-            # allow_service mirrors execute_phase so a campaign bound to a
-            # service credential still resumes after a restart.
-            cred = await require_credential_access(
-                cred_id, submitter_username=campaign.get("created_by") or None,
-                allow_service=True,
+            # Rehydrating a scheduled activate after restart: resolve against
+            # the campaign creator (no live session here), falling back to the
+            # configured service credential when the campaign has none set.
+            cred = await _resolve_campaign_credential(
+                options.get("credential_id"), campaign.get("created_by"),
             )
             credentials = {
                 "username": cred["username"],
@@ -427,7 +467,9 @@ class CampaignCreate(BaseModel):
     options: dict = {}
     host_ids: list[int] = []
     ad_hoc_ips: list[str] = []
-    credential_id: int
+    # Optional: when omitted the campaign runs with the configured service
+    # credential (the system account used for unattended work).
+    credential_id: int | None = None
 
 
 class CampaignUpdate(BaseModel):
@@ -437,7 +479,7 @@ class CampaignUpdate(BaseModel):
     options: dict = {}
     host_ids: list[int] = []
     ad_hoc_ips: list[str] = []
-    credential_id: int
+    credential_id: int | None = None
 
 
 class CampaignPhaseRequest(BaseModel):
@@ -800,6 +842,12 @@ async def create_campaign(body: CampaignCreate, request: Request):
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
+    # Bind-time IDOR gate: if a credential is specified, the creator must own
+    # it (or be an admin for a service credential). When omitted, the campaign
+    # runs with the configured service credential at execution time.
+    if body.credential_id is not None:
+        await require_credential_access(body.credential_id, session=session, allow_service=True)
+
     campaign_id = await db.create_upgrade_campaign(
         name=body.name,
         description=body.description,
@@ -878,6 +926,11 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
 
     if campaign_id in _running_campaigns:
         raise HTTPException(409, "Cannot edit a running campaign")
+
+    # Bind-time IDOR gate (see create_campaign). Omitting the credential keeps
+    # the campaign on the configured service-credential default.
+    if body.credential_id is not None:
+        await require_credential_access(body.credential_id, session=session, allow_service=True)
 
     # Update campaign metadata
     await db.update_upgrade_campaign(
@@ -1041,33 +1094,13 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
         if scheduled_at_utc <= datetime.now(UTC):
             raise HTTPException(400, "scheduled_at must be in the future")
 
-    # Get credential
+    # Resolve the credential. An explicit campaign credential is validated
+    # against the creator (see helper); when none is set the configured service
+    # credential is used as the default for this unattended work.
     options = json.loads(campaign["options"]) if isinstance(campaign["options"], str) else campaign["options"]
-    cred_id = options.get("credential_id")
-    if not cred_id:
-        raise HTTPException(400, "No credential_id in campaign options")
-
-    # A campaign binds its credential at creation time, so validate against the
-    # campaign's creator — consistent with the scheduled-rehydrate path above —
-    # rather than the operator who happens to trigger this phase. That lets any
-    # authorized operator run a campaign the creator already set up, while still
-    # blocking the IDOR: a creator can only bind (and therefore run) a campaign
-    # with a credential they own. Legacy campaigns with no recorded creator fall
-    # back to the live session.
-    #
-    # allow_service=True: scheduled/unattended upgrades are exactly the kind of
-    # background work service credentials exist for (same as monitoring/backups/
-    # compliance), so a campaign may legitimately be bound to one. The helper
-    # still restricts service creds to admin creators/submitters.
-    created_by = (campaign.get("created_by") or "").strip()
-    if created_by and created_by.lower() != "unknown":
-        cred = await require_credential_access(
-            cred_id, submitter_username=created_by, allow_service=True,
-        )
-    else:
-        cred = await require_credential_access(
-            cred_id, session=session, allow_service=True,
-        )
+    cred = await _resolve_campaign_credential(
+        options.get("credential_id"), campaign.get("created_by"), session=session,
+    )
 
     credentials = {
         "username": cred["username"],
