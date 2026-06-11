@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -1586,6 +1587,11 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token", "X-API-Token", "Authorization"],
 )
 
+# Added last so it sits outermost in the stack and compresses every response,
+# including static assets. Starlette skips text/event-stream by default, so
+# the SSE endpoints (monitoring, topology, inventory) are unaffected.
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
 
 @app.middleware("http")
 async def csrf_protection_middleware(request: Request, call_next):
@@ -1840,12 +1846,14 @@ async def version():
 
 @app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
 async def dashboard():
-    stats = await db.get_dashboard_stats()
-    recent_jobs = await db.get_all_jobs(limit=5)
-    groups = await db.get_all_groups()
-    monitoring = await db.get_monitoring_summary()
-    latest_polls = await db.get_latest_monitoring_polls()
-    alerts = await db.get_monitoring_alerts(acknowledged=False, limit=50)
+    stats, recent_jobs, groups, monitoring, latest_polls, alerts = await asyncio.gather(
+        db.get_dashboard_stats(),
+        db.get_all_jobs(limit=5),
+        db.get_all_groups(),
+        db.get_monitoring_summary(),
+        db.get_latest_monitoring_polls(),
+        db.get_monitoring_alerts(acknowledged=False, limit=50),
+    )
     return {
         "stats": stats,
         "recent_jobs": recent_jobs,
