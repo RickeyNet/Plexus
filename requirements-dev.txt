@@ -4,12 +4,12 @@ pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 # Parallel test execution: run `pytest -n auto` (~4 min vs ~18 min serial)
 pytest-xdist==3.8.0
-ruff==0.15.16
+ruff==0.15.17
 mypy==2.1.0
 pre-commit==4.6.0
 types-requests==2.33.0.20260518
-pip-audit==2.10.0
+pip-audit==2.10.1
 bandit==1.9.4
 # safety 3.5.2 pinned pydantic<2.10, blocking Python 3.14 (which needs
 # pydantic-core ≥2.27 with PyO3 ≥0.23). 3.7.0 dropped that cap.
-safety>=3.7.0,<4
+safety>=3.8.1,<4
