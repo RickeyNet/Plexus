@@ -4069,22 +4069,6 @@ async def get_service_credentials() -> list[dict]:
         await db.close()
 
 
-async def get_credentials_for_group(group_id: int) -> list[dict]:
-    """Return raw credentials available for a group.
-
-    There is no group-credential mapping table yet, so this returns all
-    credentials.  The caller picks the first match.
-    """
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            "SELECT * FROM credentials ORDER BY id"
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
-
-
 async def get_credential_raw(cred_id: int) -> dict | None:
     """Return full credential including encrypted password/secret."""
     db = await get_db()

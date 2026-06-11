@@ -142,3 +142,47 @@ async def test_enrich_mac_ip_is_cross_host_and_non_destructive(mac_db):
 async def test_enrich_mac_ip_ignores_blank_args(mac_db):
     assert await db_module.enrich_mac_ip("", "10.0.0.1") == 0
     assert await db_module.enrich_mac_ip(MAC, "") == 0
+
+
+@pytest.mark.asyncio
+async def test_full_collection_aggregates_per_host_diagnostics(mac_db, monkeypatch):
+    """All-hosts collect must surface each host's errors, not just exceptions."""
+    import netcontrol.routes.mac_tracking as mac_tracking
+    import netcontrol.routes.state as state_module
+
+    monkeypatch.setattr(
+        state_module, "_resolve_snmp_discovery_config",
+        lambda _gid: {"enabled": True},
+    )
+
+    async def fake_collect(host_id, ip, cfg, **kwargs):
+        # host 100 returns a diagnostic, host 200 is clean
+        if host_id == 100:
+            return {"macs_found": 3, "arps_found": 1,
+                    "errors": ["per-VLAN walks hit 60s budget"]}
+        return {"macs_found": 5, "arps_found": 2, "errors": []}
+
+    monkeypatch.setattr(mac_tracking, "collect_mac_arp_tables", fake_collect)
+
+    total = await mac_tracking.trigger_mac_collection(host_id=None)
+
+    assert total["macs_found"] == 8
+    assert total["arps_found"] == 3
+    assert total["hosts_collected"] == 2
+    # The per-host diagnostic is preserved (structured + flattened), not dropped.
+    assert len(total["host_errors"]) == 1
+    assert total["host_errors"][0]["host_id"] == 100
+    assert any("60s budget" in e for e in total["errors"])
+
+
+@pytest.mark.asyncio
+async def test_full_collection_rejects_concurrent_run(mac_db, monkeypatch):
+    """A second full collection while one is running returns 409."""
+    import netcontrol.routes.mac_tracking as mac_tracking
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(mac_tracking, "_full_collection_running", True)
+
+    with pytest.raises(HTTPException) as exc:
+        await mac_tracking.trigger_mac_collection(host_id=None)
+    assert exc.value.status_code == 409

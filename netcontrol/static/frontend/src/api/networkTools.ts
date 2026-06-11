@@ -30,6 +30,7 @@ export interface MacCollectResult {
   arps_found: number;
   hosts_collected: number;
   errors?: string[];
+  host_errors?: { host_id: number; hostname: string; errors: string[] }[];
 }
 
 export interface MacTrackingStats {
