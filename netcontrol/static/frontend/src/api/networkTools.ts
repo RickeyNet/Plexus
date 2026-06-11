@@ -202,16 +202,62 @@ export function useAcknowledgeAllMacMoves() {
 export function useTriggerMacCollection() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (hostId?: number) => {
-      const path = hostId
-        ? `/mac-tracking/collect?host_id=${hostId}`
-        : '/mac-tracking/collect';
-      return apiRequest<MacCollectResult>(path, { method: 'POST' });
-    },
+    // Single-host collection only - it returns the result inline. The
+    // all-hosts (fleet) variant runs as a background job; use
+    // useStartFleetMacCollection + useMacCollectionJob for that.
+    mutationFn: (hostId: number) =>
+      apiRequest<MacCollectResult>(
+        `/mac-tracking/collect?host_id=${hostId}`,
+        { method: 'POST' },
+      ),
     onSuccess: () => {
       // Newly-collected entries should appear on the next search.
       qc.invalidateQueries({ queryKey: ['mac-tracking'] });
     },
+  });
+}
+
+export interface MacCollectJobStart {
+  job_id: string;
+  status: string;
+  hosts_total: number;
+}
+
+export interface MacCollectJob {
+  job_id: string;
+  kind: string;
+  status: 'running' | 'completed' | 'partial' | 'failed';
+  started_at: string;
+  finished_at: string | null;
+  progress: {
+    hosts_done?: number;
+    hosts_total?: number;
+    macs_found?: number;
+    arps_found?: number;
+  };
+  result: MacCollectResult | null;
+  error: string | null;
+}
+
+export function useStartFleetMacCollection() {
+  return useMutation({
+    mutationFn: () =>
+      apiRequest<MacCollectJobStart>('/mac-tracking/collect', {
+        method: 'POST',
+      }),
+  });
+}
+
+export function useMacCollectionJob(jobId: string | null) {
+  return useQuery({
+    // Deliberately NOT under the ['mac-tracking'] prefix: completion
+    // invalidates that whole prefix, and the job query itself must not be
+    // caught in its own invalidation.
+    queryKey: ['mac-collect-job', jobId],
+    queryFn: () => apiRequest<MacCollectJob>(`/mac-tracking/collect/jobs/${jobId}`),
+    enabled: jobId != null,
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.status !== 'running' ? false : 2000,
   });
 }
 

@@ -40,18 +40,29 @@ class DummyRequest:
 
 
 @pytest.mark.asyncio
-async def test_default_admin_creation_sets_must_change_password():
+async def test_default_admin_creation_sets_must_change_password(monkeypatch):
     """_ensure_default_admin must set must_change_password=True."""
     created = {}
 
+    # Force the non-dev, first-boot path: no dev bootstrap, no preset
+    # password, and no pre-existing user to promote.
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("PLEXUS_DEV_BOOTSTRAP", raising=False)
+    monkeypatch.delenv("PLEXUS_INITIAL_ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("PLEXUS_FORCE_ADMIN_PASSWORD_RESET", raising=False)
+
     async def fake_get_all_users():
         return []
+
+    async def fake_get_user_by_username(username):
+        return None
 
     async def fake_create_user(username, pw_hash, salt, *, display_name="", role="user", must_change_password=False):
         created["must_change_password"] = must_change_password
         return 1
 
     with patch.object(app_module.db, "get_all_users", fake_get_all_users), \
+         patch.object(app_module.db, "get_user_by_username", fake_get_user_by_username), \
          patch.object(app_module.db, "create_user", fake_create_user):
         await app_module._ensure_default_admin()
 
@@ -373,7 +384,9 @@ async def test_auth_status_includes_csrf_token_for_authenticated_session(monkeyp
     token = app_module.create_session_token("alice", 7)
     req = DummyRequest(cookies={"session": token})
 
-    data = await app_module.auth_status(cast(Request, req))
+    from fastapi import Response
+
+    data = await app_module.auth_status(cast(Request, req), Response())
     assert data["authenticated"] is True
     assert data["username"] == "alice"
     assert "csrf_token" in data
@@ -435,6 +448,7 @@ def test_security_check_payload_reflects_runtime_flags(monkeypatch):
     monkeypatch.setattr(app_module, "APP_HTTPS_ENABLED", True)
     monkeypatch.setattr(app_module, "APP_HSTS_ENABLED", True)
     monkeypatch.setattr(app_module, "APP_HSTS_MAX_AGE", 31536000)
+    monkeypatch.setattr(app_module, "APP_HTTPS_REDIRECT", True)
     monkeypatch.setattr(app_module, "APP_CORS_ALLOW_ORIGINS", ["https://plexus.example.com"])
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "secret-token")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "true")
@@ -443,6 +457,7 @@ def test_security_check_payload_reflects_runtime_flags(monkeypatch):
 
     assert payload["ok"] is True
     assert payload["transport"]["https_enabled"] is True
+    assert payload["transport"]["https_redirect"] is True
     assert payload["transport"]["hsts_enabled"] is True
     assert payload["cookies"]["session_cookie_secure"] is True
     assert payload["cors"]["allow_origins"] == ["https://plexus.example.com"]

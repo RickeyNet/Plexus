@@ -144,9 +144,26 @@ async def test_enrich_mac_ip_ignores_blank_args(mac_db):
     assert await db_module.enrich_mac_ip(MAC, "") == 0
 
 
+async def _wait_for_job(job_id: str, deadline_seconds: float = 5.0) -> dict:
+    """Poll the in-memory job registry until the job leaves 'running'."""
+    import asyncio
+
+    from netcontrol.routes import background_jobs
+
+    deadline = asyncio.get_event_loop().time() + deadline_seconds
+    while True:
+        job = background_jobs.get_job(job_id)
+        assert job is not None, "job vanished from the registry"
+        if job["status"] != "running":
+            return job
+        assert asyncio.get_event_loop().time() < deadline, "job never finished"
+        await asyncio.sleep(0.01)
+
+
 @pytest.mark.asyncio
 async def test_full_collection_aggregates_per_host_diagnostics(mac_db, monkeypatch):
-    """All-hosts collect must surface each host's errors, not just exceptions."""
+    """All-hosts collect runs as a background job whose result must surface
+    each host's errors, not just exceptions."""
     import netcontrol.routes.mac_tracking as mac_tracking
     import netcontrol.routes.state as state_module
 
@@ -164,7 +181,13 @@ async def test_full_collection_aggregates_per_host_diagnostics(mac_db, monkeypat
 
     monkeypatch.setattr(mac_tracking, "collect_mac_arp_tables", fake_collect)
 
-    total = await mac_tracking.trigger_mac_collection(host_id=None)
+    launched = await mac_tracking.trigger_mac_collection(host_id=None)
+    assert launched["status"] == "running"
+    assert launched["hosts_total"] == 2
+
+    job = await _wait_for_job(launched["job_id"])
+    assert job["status"] == "completed"
+    total = job["result"]
 
     assert total["macs_found"] == 8
     assert total["arps_found"] == 3
@@ -173,6 +196,8 @@ async def test_full_collection_aggregates_per_host_diagnostics(mac_db, monkeypat
     assert len(total["host_errors"]) == 1
     assert total["host_errors"][0]["host_id"] == 100
     assert any("60s budget" in e for e in total["errors"])
+    # The guard flag is released once the job finishes.
+    assert mac_tracking._full_collection_running is False
 
 
 @pytest.mark.asyncio
@@ -186,3 +211,118 @@ async def test_full_collection_rejects_concurrent_run(mac_db, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await mac_tracking.trigger_mac_collection(host_id=None)
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_collection_job_endpoint_roundtrip(mac_db, monkeypatch):
+    """The job polling endpoint returns the running job and 404s unknown ids."""
+    import netcontrol.routes.mac_tracking as mac_tracking
+    import netcontrol.routes.state as state_module
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(
+        state_module, "_resolve_snmp_discovery_config",
+        lambda _gid: {"enabled": True},
+    )
+
+    async def fake_collect(host_id, ip, cfg, **kwargs):
+        return {"macs_found": 1, "arps_found": 0, "errors": []}
+
+    monkeypatch.setattr(mac_tracking, "collect_mac_arp_tables", fake_collect)
+
+    launched = await mac_tracking.trigger_mac_collection(host_id=None)
+    job = await mac_tracking.get_mac_collection_job(launched["job_id"])
+    assert job["kind"] == "mac-fleet-collection"
+
+    await _wait_for_job(launched["job_id"])
+
+    with pytest.raises(HTTPException) as exc:
+        await mac_tracking.get_mac_collection_job("nope")
+    assert exc.value.status_code == 404
+
+
+# ── Batched write paths ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_batch_sightings_match_sequential_move_semantics(mac_db):
+    """record_mac_sightings_batch must reproduce record_mac_history's
+    semantics: baseline on first sight, no-op when unchanged, move event on
+    port change, uplinks skipped for history."""
+    a = mac_db["host_a"]
+
+    counts = await db_module.record_mac_sightings_batch(a, [
+        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/1", "port_index": 1,
+         "entry_type": "dynamic", "is_uplink": False},
+    ])
+    assert counts == {"macs": 1, "history": 1, "moves": 0}
+    assert await _open_move_count() == 0
+
+    # Same location again - history no-op.
+    counts = await db_module.record_mac_sightings_batch(a, [
+        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/1", "port_index": 1,
+         "entry_type": "dynamic", "is_uplink": False},
+    ])
+    assert counts == {"macs": 1, "history": 0, "moves": 0}
+
+    # Port change - opens a move event.
+    counts = await db_module.record_mac_sightings_batch(a, [
+        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/5", "port_index": 5,
+         "entry_type": "dynamic", "is_uplink": False},
+    ])
+    assert counts == {"macs": 1, "history": 1, "moves": 1}
+    assert await _open_move_count() == 1
+
+    # Uplink sighting - FDB row written, history/move skipped.
+    counts = await db_module.record_mac_sightings_batch(a, [
+        {"mac": "11:22:33:44:55:66", "vlan": 10, "port_name": "Po1",
+         "port_index": 99, "entry_type": "dynamic", "is_uplink": True},
+    ])
+    assert counts == {"macs": 1, "history": 0, "moves": 0}
+    assert await _open_move_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_sightings_same_mac_twice_in_one_batch(mac_db):
+    """Two same-MAC sightings in one batch compare against each other
+    sequentially, exactly as two record_mac_history calls would have."""
+    a = mac_db["host_a"]
+
+    counts = await db_module.record_mac_sightings_batch(a, [
+        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/1", "port_index": 1,
+         "entry_type": "dynamic", "is_uplink": False},
+        {"mac": MAC, "vlan": 20, "port_name": "Gi1/0/1", "port_index": 1,
+         "entry_type": "dynamic", "is_uplink": False},
+    ])
+    # First is the baseline; second differs in VLAN → move, same as the old
+    # sequential per-sighting calls.
+    assert counts["history"] == 2
+    assert counts["moves"] == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_arp_upsert_and_cross_host_enrichment(mac_db):
+    """upsert_arp_entries_batch writes ARP rows and enriches empty MAC-table
+    IPs cross-host without overwriting existing ones."""
+    a, b = mac_db["host_a"], mac_db["host_b"]
+
+    # FDB rows live on switch A (no IP) and switch B (already enriched).
+    await db_module.record_mac_sightings_batch(a, [
+        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/1", "port_index": 1,
+         "entry_type": "dynamic", "is_uplink": False},
+    ])
+    await db_module.upsert_mac_entry(host_id=b, mac_address=MAC, vlan=10,
+                                     port_name="Gi1/0/2", ip_address="10.9.9.9")
+
+    # ARP learned on switch B (the L3 device).
+    written = await db_module.upsert_arp_entries_batch(b, [
+        {"ip_address": "10.0.50.5", "mac_address": MAC, "interface_name": "Vlan10"},
+        {"ip_address": "", "mac_address": "ff:ee:dd:cc:bb:aa", "interface_name": ""},
+    ])
+    assert written == 2
+
+    rows = await db_module.search_mac_tracking(MAC)
+    by_host = {r["host_id"]: r for r in rows}
+    # Switch A's empty IP was enriched cross-host; switch B's existing IP kept.
+    assert by_host[a]["ip_address"] == "10.0.50.5"
+    assert by_host[b]["ip_address"] == "10.9.9.9"

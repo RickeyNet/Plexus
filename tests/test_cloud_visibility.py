@@ -1,5 +1,7 @@
 """Tests for cloud visibility account and topology foundation."""
 
+from datetime import UTC, datetime, timedelta
+
 import netcontrol.routes.cloud_visibility as cloud_visibility_module
 import pytest
 import routes.database as db_module
@@ -528,6 +530,13 @@ async def test_ingest_cloud_traffic_metrics_normalized_and_query_stats(tmp_path,
     assert account is not None
     account_id = int(account["id"])
 
+    # Use timestamps relative to now so the samples always fall inside the
+    # stats endpoints' lookback window (hours=24). Hardcoded dates go stale.
+    now = datetime.now(UTC).replace(microsecond=0)
+    t0 = (now - timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t1 = (now - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t2 = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     ingest_result = await cloud_visibility_module.ingest_cloud_traffic_metrics_api(
         account_id,
         _DummyRequest(),
@@ -542,8 +551,8 @@ async def test_ingest_cloud_traffic_metrics_normalized_and_query_stats(tmp_path,
                     "statistic": "total",
                     "unit": "bytes",
                     "value": 120000,
-                    "interval_start": "2026-04-20T12:00:00Z",
-                    "interval_end": "2026-04-20T12:05:00Z",
+                    "interval_start": t0,
+                    "interval_end": t1,
                 },
                 {
                     "metric_name": "bytes_in",
@@ -552,8 +561,8 @@ async def test_ingest_cloud_traffic_metrics_normalized_and_query_stats(tmp_path,
                     "statistic": "total",
                     "unit": "bytes",
                     "value": 80000,
-                    "interval_start": "2026-04-20T12:05:00Z",
-                    "interval_end": "2026-04-20T12:10:00Z",
+                    "interval_start": t1,
+                    "interval_end": t2,
                 },
                 {
                     "metric_name": "packets_out",
@@ -562,8 +571,8 @@ async def test_ingest_cloud_traffic_metrics_normalized_and_query_stats(tmp_path,
                     "statistic": "total",
                     "unit": "count",
                     "value": 2300,
-                    "interval_start": "2026-04-20T12:00:00Z",
-                    "interval_end": "2026-04-20T12:05:00Z",
+                    "interval_start": t0,
+                    "interval_end": t1,
                 },
             ],
         ),

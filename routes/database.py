@@ -12390,6 +12390,174 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
         await db.close()
 
 
+async def record_mac_sightings_batch(host_id: int, sightings: list[dict]) -> dict:
+    """Persist one host's deduplicated FDB sightings in a single transaction.
+
+    Each sighting: ``{mac, vlan, port_name, port_index, entry_type, is_uplink}``.
+    Replaces the per-MAC ``upsert_mac_entry`` + ``record_mac_history`` loop -
+    two awaited round-trips (each opening and closing a connection) per MAC
+    became tens of thousands of connection cycles on a fleet collection. This
+    runs the same upserts/inserts over one connection with one commit.
+
+    Move semantics match ``record_mac_history`` exactly, including the
+    sequential in-batch behavior: the "last known location" view is seeded
+    from the DB once, then updated in memory as each sighting is processed,
+    so two same-MAC sightings in one batch compare against each other just as
+    they would have across two sequential calls. Uplink sightings get their
+    FDB row upserted but are skipped for history/move purposes.
+
+    Returns ``{"macs": upserted, "history": rows added, "moves": events opened}``.
+    """
+    if not sightings:
+        return {"macs": 0, "history": 0, "moves": 0}
+    db = await get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO mac_address_table
+               (host_id, mac_address, vlan, port_name, port_index, ip_address, entry_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(host_id, mac_address, vlan) DO UPDATE SET
+                port_name = excluded.port_name,
+                port_index = excluded.port_index,
+                ip_address = CASE
+                    WHEN excluded.ip_address <> '' THEN excluded.ip_address
+                    ELSE mac_address_table.ip_address
+                END,
+                entry_type = excluded.entry_type,
+                last_seen = datetime('now')""",
+            [(host_id, s["mac"], s["vlan"], s.get("port_name", ""),
+              s.get("port_index", 0), "", s.get("entry_type", "dynamic"))
+             for s in sightings],
+        )
+
+        # Latest known location per MAC on this switch, one query for the
+        # whole batch (id is monotonic, so MAX(id) is the newest sighting).
+        cursor = await db.execute(
+            """SELECT h.mac_address, h.port_name, h.vlan, h.ip_address
+               FROM mac_tracking_history h
+               JOIN (SELECT mac_address, MAX(id) AS max_id
+                     FROM mac_tracking_history
+                     WHERE host_id = ?
+                     GROUP BY mac_address) latest ON latest.max_id = h.id""",
+            (host_id,),
+        )
+        rows = await cursor.fetchall()
+        last: dict[str, tuple[str, int, str]] = {}
+        for row in rows:
+            r = row if isinstance(row, tuple) else (
+                row["mac_address"], row["port_name"], row["vlan"], row["ip_address"])
+            last[r[0]] = (r[1] or "", r[2] or 0, r[3] or "")
+
+        history_rows: list[tuple] = []
+        moves = 0
+        for s in sightings:
+            if s.get("is_uplink"):
+                continue
+            mac = s["mac"]
+            port_name = s.get("port_name", "") or ""
+            vlan = s.get("vlan", 0) or 0
+            prev = last.get(mac)
+            if prev is None:
+                # First sighting on this switch - baseline, no move event.
+                history_rows.append((mac, "", host_id, port_name, vlan))
+                last[mac] = (port_name, vlan, "")
+                continue
+            prev_port, prev_vlan, prev_ip = prev
+            changed = []
+            if prev_port != port_name:
+                changed.append("port")
+            if prev_vlan != vlan:
+                changed.append("vlan")
+            # The FDB pass never carries an IP, so the IP-change clause of
+            # record_mac_history can't fire here (it needs an IP on both sides).
+            if not changed:
+                continue
+            history_rows.append((mac, "", host_id, port_name, vlan))
+            cursor = await db.execute(
+                """INSERT INTO mac_move_events
+                   (mac_address, status, change_kind,
+                    from_host_id, from_port, from_vlan, from_ip,
+                    to_host_id, to_port, to_vlan, to_ip)
+                   VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (mac, ",".join(changed),
+                 host_id, prev_port, prev_vlan, prev_ip,
+                 host_id, port_name, vlan, ""),
+            )
+            event_id = cursor.lastrowid
+            await db.execute(
+                """INSERT INTO mac_move_event_history
+                   (event_id, mac_address, action, from_status, to_status,
+                    actor, details)
+                   VALUES (?, ?, 'detected', '', 'open', 'system', ?)""",
+                (event_id, mac,
+                 f"{'+'.join(changed)} changed on switch {host_id}: "
+                 f"port {prev_port or '-'}->{port_name or '-'}, "
+                 f"vlan {prev_vlan}->{vlan}"),
+            )
+            moves += 1
+            last[mac] = (port_name, vlan, prev_ip)
+
+        if history_rows:
+            await db.executemany(
+                """INSERT INTO mac_tracking_history
+                   (mac_address, ip_address, host_id, port_name, vlan)
+                   VALUES (?, ?, ?, ?, ?)""",
+                history_rows,
+            )
+        await db.commit()
+        return {"macs": len(sightings), "history": len(history_rows), "moves": moves}
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+async def upsert_arp_entries_batch(host_id: int, entries: list[dict]) -> int:
+    """Persist one host's ARP table in a single transaction.
+
+    Each entry: ``{ip_address, mac_address, interface_name}``. Mirrors the
+    per-entry ``upsert_arp_entry`` + ``enrich_mac_ip`` loop (two awaited
+    round-trips per ARP row) as two ``executemany`` passes over one
+    connection with one commit. Enrichment keeps ``enrich_mac_ip``'s
+    semantics: cross-host by MAC, and only rows with no IP are touched.
+
+    Returns the number of ARP entries written.
+    """
+    if not entries:
+        return 0
+    db = await get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO arp_table
+               (host_id, ip_address, mac_address, interface_name, vrf)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(host_id, ip_address, vrf) DO UPDATE SET
+                mac_address = excluded.mac_address,
+                interface_name = excluded.interface_name,
+                last_seen = datetime('now')""",
+            [(host_id, e["ip_address"], e["mac_address"],
+              e.get("interface_name", ""), e.get("vrf", ""))
+             for e in entries],
+        )
+        enrich_rows = [(e["ip_address"], e["mac_address"])
+                       for e in entries if e["ip_address"] and e["mac_address"]]
+        if enrich_rows:
+            await db.executemany(
+                """UPDATE mac_address_table
+                   SET ip_address = ?
+                   WHERE mac_address = ? AND (ip_address IS NULL OR ip_address = '')""",
+                enrich_rows,
+            )
+        await db.commit()
+        return len(entries)
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
 # ── MAC move events (drift-style) ───────────────────────────────────────────
 
 async def get_mac_move_events(status: str = "", limit: int = 200,
@@ -17391,6 +17559,20 @@ async def create_cloud_traffic_metrics_batch(rows: list[tuple]) -> int:
         await db.close()
 
 
+def _cloud_metric_window_cutoff(hours: int) -> str:
+    """Return the lookback cutoff as an ISO-8601 UTC string.
+
+    cloud_traffic_metrics interval timestamps are written via Python's
+    ``datetime.isoformat()`` ('T' separator, '+00:00' offset). Comparing them
+    lexically against SQLite's ``datetime('now', ...)`` output
+    ('YYYY-MM-DD HH:MM:SS', space separator) is wrong at the cutoff-day
+    boundary because 'T' sorts after ' ', so compute the cutoff in Python in
+    the same format the rows are stored in. This is also engine-agnostic
+    (works identically on SQLite and Postgres).
+    """
+    return (datetime.now(UTC) - timedelta(hours=max(1, int(hours)))).isoformat()
+
+
 async def get_cloud_traffic_metric_summary(
     account_id: int | None = None,
     provider: str | None = None,
@@ -17399,9 +17581,9 @@ async def get_cloud_traffic_metric_summary(
     db = await get_db()
     try:
         clauses = [
-            "interval_end >= datetime('now', ? || ' hours')",
+            "interval_end >= ?",
         ]
-        params: list = [f"-{max(1, int(hours))}"]
+        params: list = [_cloud_metric_window_cutoff(hours)]
         if account_id is not None:
             clauses.append("account_id = ?")
             params.append(account_id)
@@ -17449,9 +17631,9 @@ async def get_cloud_traffic_metric_timeline(
     db = await get_db()
     try:
         clauses = [
-            "interval_end >= datetime('now', ? || ' hours')",
+            "interval_end >= ?",
         ]
-        params: list = [f"-{max(1, int(hours))}"]
+        params: list = [_cloud_metric_window_cutoff(hours)]
         if account_id is not None:
             clauses.append("account_id = ?")
             params.append(account_id)
@@ -17492,9 +17674,9 @@ async def get_cloud_traffic_metric_top_resources(
     db = await get_db()
     try:
         clauses = [
-            "interval_end >= datetime('now', ? || ' hours')",
+            "interval_end >= ?",
         ]
-        params: list = [f"-{max(1, int(hours))}"]
+        params: list = [_cloud_metric_window_cutoff(hours)]
         if account_id is not None:
             clauses.append("account_id = ?")
             params.append(account_id)
