@@ -24,6 +24,7 @@ from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _run_show_command, require_credential_access
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,  # noqa: F401
+    _collect_interface_ips,
     _discover_neighbors,  # noqa: F401
     _probe_discovery_target_snmp,
     _snmp_get,
@@ -304,142 +305,329 @@ async def _discover_hosts(request: DiscoveryScanRequest, group_id: int | None = 
     return len(targets), discovered
 
 
+def _is_fallback_hostname(name: str) -> bool:
+    """True for discovery's synthetic names (no real sysName was learned)."""
+    n = (name or "").strip()
+    return n.startswith("snmp-") or n.startswith("host-")
+
+
+def _norm_name(name: str) -> str:
+    """Normalize a hostname for identity comparison (case + domain insensitive)."""
+    return (name or "").strip().lower().split(".")[0]
+
+
+def _normalize_discovered_entry(host: dict) -> dict | None:
+    """Flatten a raw probe result into the fields the dedup planner needs."""
+    ip = str(host.get("ip_address", "")).strip()
+    if not ip:
+        return None
+    hostname = str(host.get("hostname") or "").strip() or f"host-{ip.replace('.', '-')}"
+    # A "real" sysName is a stable per-device identity; the snmp-/host- fallback
+    # names are per-IP and must NOT be used to group devices.
+    explicit_sys = str(host.get("sys_name") or "").strip()
+    if explicit_sys:
+        sys_name = explicit_sys
+    elif not _is_fallback_hostname(hostname):
+        sys_name = hostname
+    else:
+        sys_name = ""
+    probe_protocol = str(host.get("discovery", {}).get("protocol", "")).strip()
+    return {
+        "ip": ip,
+        "hostname": hostname,
+        "sys_name_norm": _norm_name(sys_name) if sys_name else "",
+        "serial": str(host.get("serial_number") or "").strip(),
+        "device_type": str(host.get("device_type") or "unknown").strip() or "unknown",
+        "status": str(host.get("status") or "online").strip() or "online",
+        "model": str(host.get("model") or "").strip(),
+        "software_version": str(host.get("software_version") or "").strip(),
+        "device_category": str(host.get("device_category") or "").strip(),
+        "probe_protocol": probe_protocol,
+        "snmp_reachable": probe_protocol.startswith("snmp"),
+    }
+
+
+def _build_discovery_plan(
+    discovered: list[dict],
+    existing_hosts: list[dict],
+    existing_ip_index: dict[str, int],
+    interface_ip_map: dict[str, list[str]],
+) -> dict:
+    """Decide adds / updates / IP-alias sets / duplicate suppressions.
+
+    A physical device owns many interface IPs. Discovered IPs are grouped into
+    one device when they share a serial number, a real sysName, or membership
+    in another IP's SNMP ipAddrTable (interface_ip_map). Each device maps to at
+    most one inventory host; its other IPs become aliases. Pre-existing
+    duplicate host rows are suppressed (deleted) only on STRONG evidence — the
+    duplicate's IP appears in the device's own ipAddrTable, or it shares the
+    serial — never on a sysName match alone.
+
+    Pure function (no I/O) so the dedup logic is unit-testable.
+    """
+    entries_by_ip = {e["ip"]: e for e in discovered}
+
+    # ── Union-find over discovered IPs ────────────────────────────────────
+    parent = {ip: ip for ip in entries_by_ip}
+
+    def _find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: str, b: str) -> None:
+        if a in parent and b in parent:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+    by_serial: dict[str, str] = {}
+    for e in discovered:
+        if e["serial"]:
+            by_serial.setdefault(e["serial"], e["ip"])
+            _union(by_serial[e["serial"]], e["ip"])
+    by_name: dict[str, str] = {}
+    for e in discovered:
+        if e["sys_name_norm"]:
+            by_name.setdefault(e["sys_name_norm"], e["ip"])
+            _union(by_name[e["sys_name_norm"]], e["ip"])
+    for ip, iface in interface_ip_map.items():
+        if ip not in parent:
+            continue
+        for other in iface:
+            if other in parent:
+                _union(ip, other)
+
+    groups: dict[str, list[str]] = {}
+    for ip in entries_by_ip:
+        groups.setdefault(_find(ip), []).append(ip)
+
+    # ── Existing-host lookups ─────────────────────────────────────────────
+    existing_by_id = {h["id"]: h for h in existing_hosts}
+    existing_by_serial: dict[str, dict] = {}
+    existing_by_name: dict[str, dict] = {}
+    for h in existing_hosts:
+        s = (h.get("serial_number") or "").strip()
+        if s:
+            existing_by_serial.setdefault(s, h)
+        hn = (h.get("hostname") or "").strip()
+        if hn and not _is_fallback_hostname(hn):
+            existing_by_name.setdefault(_norm_name(hn), h)
+
+    plan: dict = {"add": [], "update": [], "delete": [], "matched": 0, "covered_ips": set()}
+
+    for ips in groups.values():
+        entries = [entries_by_ip[ip] for ip in ips]
+        group_ips = set(ips)
+        iface_ips: set[str] = set()
+        for ip in ips:
+            iface_ips.update(interface_ip_map.get(ip, []))
+        full_ips = group_ips | iface_ips
+        plan["covered_ips"] |= full_ips
+
+        snmp_entries = [e for e in entries if e["snmp_reachable"]]
+        any_snmp = bool(snmp_entries)
+        serial = next((e["serial"] for e in entries if e["serial"]), "")
+        sys_norm = next((e["sys_name_norm"] for e in entries if e["sys_name_norm"]), "")
+        real_hostname = next(
+            (e["hostname"] for e in entries if e["sys_name_norm"]),
+            (snmp_entries or entries)[0]["hostname"],
+        )
+        device_type = (
+            next((e["device_type"] for e in snmp_entries if e["device_type"] != "unknown"), "")
+            or next((e["device_type"] for e in entries if e["device_type"] != "unknown"), "unknown")
+        )
+        model = next((e["model"] for e in entries if e["model"]), "")
+        sw = next((e["software_version"] for e in entries if e["software_version"]), "")
+        category = next((e["device_category"] for e in entries if e["device_category"]), "")
+        status = next((e["status"] for e in snmp_entries), entries[0]["status"])
+
+        # Canonical existing host: serial > known IP (primary/alias) > sysName.
+        canonical = None
+        if serial and serial in existing_by_serial:
+            canonical = existing_by_serial[serial]
+        if canonical is None:
+            for ip in list(group_ips) + sorted(iface_ips):
+                hid = existing_ip_index.get(ip)
+                if hid is not None and hid in existing_by_id:
+                    canonical = existing_by_id[hid]
+                    break
+        if canonical is None and sys_norm and sys_norm in existing_by_name:
+            canonical = existing_by_name[sys_norm]
+
+        canonical_id = canonical["id"] if canonical else None
+
+        # Strong duplicates of THIS device: another existing host whose primary
+        # IP is in the device's ipAddrTable, or that shares its serial.
+        for h in existing_hosts:
+            if canonical_id is not None and h["id"] == canonical_id:
+                continue
+            hip = (h.get("ip_address") or "").strip()
+            hser = (h.get("serial_number") or "").strip()
+            if (hser and serial and hser == serial) or (hip and hip in iface_ips):
+                if h["id"] not in plan["delete"]:
+                    plan["delete"].append(h["id"])
+
+        if canonical is None:
+            primary_ip = (
+                snmp_entries[0]["ip"] if snmp_entries
+                else sorted(group_ips, key=lambda x: ipaddress.ip_address(x))[0]
+            )
+            plan["add"].append({
+                "hostname": real_hostname, "ip": primary_ip, "device_type": device_type,
+                "status": status, "model": model, "software_version": sw,
+                "device_category": category, "serial_number": serial,
+                "alias_ips": sorted(full_ips - {primary_ip}),
+            })
+        else:
+            primary_ip = (canonical.get("ip_address") or "").strip()
+            eff_hostname = real_hostname if sys_norm else canonical.get("hostname")
+            existing_dt = canonical.get("device_type", "unknown")
+            eff_dt = device_type
+            # Only an *explicit* SSH/HTTPS probe is low-confidence (its banner
+            # reveals vendor but not OS variant); a blank protocol or any SNMP
+            # probe is authoritative. A low-confidence probe may only fill an
+            # unknown type, never overwrite an established one.
+            low_confidence = (not any_snmp) and any(
+                e["probe_protocol"] in ("ssh", "https") for e in entries
+            )
+            if low_confidence and existing_dt != "unknown" and device_type != existing_dt:
+                eff_dt = existing_dt
+            elif device_type == "unknown" and existing_dt != "unknown":
+                eff_dt = existing_dt
+            plan["update"].append({
+                "host_id": canonical_id, "hostname": eff_hostname, "ip": primary_ip,
+                "device_type": eff_dt, "status": status, "model": model,
+                "software_version": sw, "device_category": category,
+                "serial_number": serial, "alias_ips": sorted(full_ips - {primary_ip}),
+            })
+
+    # "matched" = devices reconciled this cycle (adds + updates), preserving the
+    # pre-dedup meaning of "how many discovered devices were processed".
+    plan["matched"] = len(plan["add"]) + len(plan["update"])
+    return plan
+
+
 async def _sync_group_hosts(
     group_id: int,
     discovered_hosts: list[dict],
     remove_absent: bool = False,
+    *,
+    interface_ip_resolver=None,
 ) -> dict:
+    """Reconcile discovered devices into inventory, deduplicating a
+    multi-interface device into a single host (see _build_discovery_plan).
+
+    ``interface_ip_resolver`` is an injectable ``async (ip) -> list[str]`` used
+    only in tests; in production the device's SNMP ipAddrTable is walked.
+    """
     existing_hosts = await db.get_hosts_for_group(group_id)
-    existing_by_ip = {str(host["ip_address"]): host for host in existing_hosts}
+    existing_by_id = {h["id"]: h for h in existing_hosts}
+    existing_ip_index = await db.get_host_ip_index(group_id)
 
-    normalized_discovered: dict[str, dict] = {}
-    for host in discovered_hosts:
-        ip = str(host.get("ip_address", "")).strip()
-        if not ip:
-            continue
-        # Preserve the probe protocol ("snmpv2c"/"snmpv3" vs "ssh"/"https").
-        # The device_type merge below needs it to tell an authoritative
-        # SNMP classification from a low-confidence SSH-banner guess.  A
-        # missing/blank protocol is treated as authoritative so callers
-        # that build discovered dicts by hand (and existing SNMP-shaped
-        # flows) keep their previous update behaviour.
-        probe_protocol = str(
-            host.get("discovery", {}).get("protocol", "")
-        ).strip()
-        normalized_discovered[ip] = {
-            "hostname": str(host.get("hostname") or "").strip() or f"host-{ip.replace('.', '-')}",
-            "ip_address": ip,
-            "device_type": str(host.get("device_type") or "unknown").strip() or "unknown",
-            "status": str(host.get("status") or "online").strip() or "online",
-            "model": str(host.get("model") or "").strip(),
-            "software_version": str(host.get("software_version") or "").strip(),
-            "probe_protocol": probe_protocol,
-        }
+    normalized = [n for n in (_normalize_discovered_entry(h) for h in discovered_hosts) if n]
 
-    added = 0
-    updated = 0
-    removed = 0
+    # ── Learn each device's full interface-IP set via SNMP ipAddrTable ────
+    # Walk one representative IP per device (deduped by serial/sysName) so a
+    # device with many IPs isn't walked once per IP.
+    interface_ip_map: dict[str, list[str]] = {}
+    snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+    if interface_ip_resolver is not None:
+        for e in normalized:
+            if e["snmp_reachable"]:
+                interface_ip_map[e["ip"]] = await interface_ip_resolver(e["ip"])
+    elif snmp_cfg.get("enabled"):
+        reps: dict[str, str] = {}
+        for e in normalized:
+            if e["snmp_reachable"]:
+                reps.setdefault(e["serial"] or e["sys_name_norm"] or e["ip"], e["ip"])
+        targets = list(reps.values())
+        sem = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
 
-    for ip, discovered in normalized_discovered.items():
-        existing = existing_by_ip.get(ip)
-        model = discovered.get("model", "")
-        sw_version = discovered.get("software_version", "")
-        category = discovered.get("device_category", "")
-        if existing is None:
-            _validate_host_ip(discovered["ip_address"])
-            try:
-                new_id = await db.add_host(group_id, discovered["hostname"], discovered["ip_address"], discovered["device_type"])
-            except ValueError:
-                # Race or duplicate within the same payload - another caller
-                # (or a prior loop iteration with a near-identical IP) already
-                # inserted the row. Treat as an update on the next pass instead
-                # of crashing the whole onboard.
-                continue
-            await db.update_host_status(new_id, discovered["status"])
-            await push_inventory_host_allocation(
-                hostname=discovered["hostname"],
-                ip_address=discovered["ip_address"],
-                source_hint="discovery-add",
+        async def _walk(ip: str) -> list[str]:
+            async with sem:
+                return await _collect_interface_ips(
+                    ip, float(snmp_cfg.get("timeout_seconds", 2.0)), snmp_cfg,
+                )
+
+        walked = await asyncio.gather(*[_walk(ip) for ip in targets], return_exceptions=True)
+        for ip, res in zip(targets, walked):
+            if isinstance(res, list):
+                interface_ip_map[ip] = res
+
+    plan = _build_discovery_plan(normalized, existing_hosts, existing_ip_index, interface_ip_map)
+
+    added = updated = removed = 0
+    # Never delete a host we're keeping as a canonical update target.
+    keep_ids = {u["host_id"] for u in plan["update"]}
+
+    async def _write_device_info(host_id: int, item: dict, existing: dict | None) -> None:
+        model = item.get("model", "")
+        sw = item.get("software_version", "")
+        category = item.get("device_category", "")
+        if model or sw or category:
+            await db.update_host_device_info(
+                host_id,
+                model or (existing or {}).get("model", ""),
+                sw or (existing or {}).get("software_version", ""),
+                category or (existing or {}).get("device_category", ""),
             )
-            if model or sw_version or category:
-                await db.update_host_device_info(new_id, model, sw_version, category)
-            # Auto-apply graph templates to newly discovered host
-            try:
-                await db.apply_graph_templates_to_host(new_id)
-            except Exception as exc:
-                LOGGER.debug("inventory: failed to apply graph templates to host %s: %s",
-                             new_id, exc)
-            added += 1
-            continue
+        serial = item.get("serial_number", "")
+        if serial and serial != (existing or {}).get("serial_number", ""):
+            await db.update_host_serial(host_id, serial)
+        await db.set_host_ip_aliases(host_id, item["ip"], item.get("alias_ips", []))
 
-        # Only overwrite hostname if discovery returned a real sysName
-        # (not a fallback like "snmp-x-x-x-x" or "host-x-x-x-x").
-        new_hostname = discovered["hostname"]
-        is_fallback_name = new_hostname.startswith("snmp-") or new_hostname.startswith("host-")
-        effective_hostname = existing.get("hostname") if is_fallback_name else new_hostname
-
-        # Don't let a low-confidence re-classification clobber a known
-        # device_type.  Two cases:
-        #
-        #  1. SNMP unreachable -> SSH-banner fallback.  The banner reveals
-        #     vendor ("cisco") but almost never the OS variant, so the
-        #     fallback confidently mislabels an IOS-XE Catalyst as
-        #     "cisco_ios" (it hits the else-branch in
-        #     _probe_discovery_target).  That wrong-but-specific value
-        #     would otherwise overwrite an SNMP-confirmed "cisco_xe" and
-        #     break upgrades (CiscoIOSDriver has no activate command).
-        #  2. SNMP unreachable and even SSH can't classify -> "unknown".
-        #
-        # Rule: a non-SNMP probe may only *fill in* an unknown existing
-        # type, never *change* an already-specific one.  SNMP probes are
-        # authoritative and always apply.
-        new_device_type = discovered["device_type"]
-        existing_device_type = existing.get("device_type", "unknown")
-        probe_protocol = str(discovered.get("probe_protocol", ""))
-        # Only an *explicit* SSH/HTTPS probe is low-confidence.  A blank
-        # protocol is treated as authoritative so hand-built discovered
-        # dicts and SNMP-shaped flows keep updating device_type as before.
-        low_confidence_probe = probe_protocol in ("ssh", "https")
+    # ── Updates (existing hosts first, so IDs/ordering stay stable) ───────
+    for item in plan["update"]:
+        existing = existing_by_id.get(item["host_id"], {})
         if (
-            low_confidence_probe
-            and existing_device_type != "unknown"
-            and new_device_type != existing_device_type
+            existing.get("hostname") != item["hostname"]
+            or existing.get("device_type") != item["device_type"]
         ):
-            # SNMP is down; the SSH banner only reveals vendor, not OS
-            # variant, so it confidently mislabels an IOS-XE Catalyst as
-            # "cisco_ios".  Don't let that overwrite an SNMP-confirmed
-            # "cisco_xe" (CiscoIOSDriver has no activate command, which
-            # breaks upgrades).  Keep the established classification.
-            new_device_type = existing_device_type
-        elif new_device_type == "unknown" and existing_device_type != "unknown":
-            new_device_type = existing_device_type
-
-        if (
-            existing.get("hostname") != effective_hostname
-            or existing.get("device_type") != new_device_type
-        ):
-            await db.update_host(existing["id"], effective_hostname, discovered["ip_address"], new_device_type)
+            await db.update_host(item["host_id"], item["hostname"], item["ip"], item["device_type"])
             await push_inventory_host_allocation(
-                hostname=effective_hostname,
-                ip_address=discovered["ip_address"],
-                source_hint="discovery-update",
+                hostname=item["hostname"], ip_address=item["ip"], source_hint="discovery-update",
             )
             updated += 1
-        # Don't blank out model/version with empty values - only update
-        # when discovery actually returned data (e.g. via SNMP sysDescr).
-        if model or sw_version or category:
-            effective_model = model or existing.get("model", "")
-            effective_sw = sw_version or existing.get("software_version", "")
-            effective_cat = category or existing.get("device_category", "")
-            await db.update_host_device_info(existing["id"], effective_model, effective_sw, effective_cat)
-        await db.update_host_status(existing["id"], discovered["status"])
+        await _write_device_info(item["host_id"], item, existing)
+        await db.update_host_status(item["host_id"], item["status"])
 
+    # ── Adds ──────────────────────────────────────────────────────────────
+    for item in plan["add"]:
+        _validate_host_ip(item["ip"])
+        try:
+            new_id = await db.add_host(group_id, item["hostname"], item["ip"], item["device_type"])
+        except ValueError:
+            # Race/duplicate within the payload - reconciled on the next pass.
+            continue
+        await db.update_host_status(new_id, item["status"])
+        await push_inventory_host_allocation(
+            hostname=item["hostname"], ip_address=item["ip"], source_hint="discovery-add",
+        )
+        await _write_device_info(new_id, item, None)
+        try:
+            await db.apply_graph_templates_to_host(new_id)
+        except Exception as exc:
+            LOGGER.debug("inventory: failed to apply graph templates to host %s: %s", new_id, exc)
+        added += 1
+
+    # ── Suppress pre-existing duplicate host rows (strong evidence only) ──
+    for dup_id in plan["delete"]:
+        if dup_id in keep_ids:
+            continue
+        await db.remove_host(dup_id)
+        removed += 1
+
+    # ── remove_absent: drop hosts no device claims this cycle ─────────────
     if remove_absent:
-        discovered_ips = set(normalized_discovered)
-        for ip, existing in existing_by_ip.items():
-            if ip in discovered_ips:
+        covered = plan["covered_ips"]
+        for h in existing_hosts:
+            if h["id"] in keep_ids or h["id"] in plan["delete"]:
                 continue
-            await db.remove_host(existing["id"])
+            if (h.get("ip_address") or "").strip() in covered:
+                continue
+            await db.remove_host(h["id"])
             removed += 1
 
     if added or updated or removed:
@@ -449,7 +637,7 @@ async def _sync_group_hosts(
         "added": added,
         "updated": updated,
         "removed": removed,
-        "matched": len(normalized_discovered),
+        "matched": plan["matched"],
         "existing_before": len(existing_hosts),
         "existing_after": len(existing_hosts) + added - removed,
     }

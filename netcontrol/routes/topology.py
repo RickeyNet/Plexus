@@ -1327,6 +1327,20 @@ async def get_topology(group_id: int | None = Query(default=None)):
                 else:
                     _hostname_to_canonical[norm] = nid
 
+        # Fold in each device's secondary interface IPs so a neighbor reported
+        # via one of those IPs resolves to the owning host instead of spawning a
+        # duplicate external node (a router advertises CDP/LLDP from whichever
+        # interface faces the neighbor, not its management IP).
+        _node_host_ids = [nid for nid in nodes_by_id if isinstance(nid, int)]
+        try:
+            for alias in await db.get_ip_aliases_for_hosts(_node_host_ids):
+                alias_ip = (alias.get("ip_address") or "").strip()
+                alias_host = alias.get("host_id")
+                if alias_ip and alias_ip not in _ip_to_host and alias_host in nodes_by_id:
+                    _ip_to_host[alias_ip] = alias_host
+        except Exception as exc:
+            LOGGER.debug("topology: interface-IP alias resolution skipped: %s", exc)
+
         # Remove duplicate inventory nodes (keep the canonical one)
         for dup_id in _dup_host_map:
             nodes_by_id.pop(dup_id, None)

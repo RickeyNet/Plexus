@@ -8,6 +8,7 @@ and topology route modules.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import re
 import socket
@@ -325,6 +326,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
             ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
             ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
             ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1 (chassis)
+            ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.11.1")),  # entPhysicalSerialNum.1 (chassis)
         )
     finally:
         engine.close_dispatcher()
@@ -349,6 +351,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
                     ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
                     ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
                     ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1
+                    ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.11.1")),  # entPhysicalSerialNum.1
                 )
                 if not error_indication and not error_status:
                     version = "2c-fallback"
@@ -369,6 +372,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     sys_descr = values.get("1.3.6.1.2.1.1.1.0", "")
     sys_name = values.get("1.3.6.1.2.1.1.5.0", "")
     ent_model = values.get("1.3.6.1.2.1.47.1.1.1.1.13.1", "")
+    ent_serial = values.get("1.3.6.1.2.1.47.1.1.1.1.11.1", "")
 
     # pysnmp returns special objects (NoSuchInstance, NoSuchObject, endOfMibView)
     # that str() converts to long descriptive strings - treat those as empty.
@@ -378,6 +382,8 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         sys_descr = ""
     if ent_model and any(m in ent_model.lower() for m in _SNMP_BAD_MARKERS):
         ent_model = ""
+    if ent_serial and any(m in ent_serial.lower() for m in _SNMP_BAD_MARKERS):
+        ent_serial = ""
     vendor, detected_type, os_name = _infer_vendor_os_from_text(sys_descr)
     hw_model, sw_version = _parse_model_and_version(sys_descr)
     # Prefer entPhysicalModelName (actual hardware PID like C9300-48T) over
@@ -393,6 +399,12 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         "status": "online",
         "model": hw_model,
         "software_version": sw_version,
+        # sysName and chassis serial are stable device identities (unlike the
+        # per-interface IP), used by discovery to dedup a multi-interface
+        # device into a single host. sys_name is "" when the device returned
+        # no/blank sysName, so callers must treat it as "no identity".
+        "sys_name": sys_name,
+        "serial_number": ent_serial.strip(),
         "discovery": {
             "protocol": f"snmpv{version}",
             "port": port,
@@ -410,6 +422,54 @@ async def _probe_discovery_target_snmp(ip_address: str, timeout_seconds: float, 
     except Exception as exc:
         LOGGER.warning("SNMP probe failed for %s: %s", ip_address, exc)
         return None
+
+
+# ipAddrTable.ipAdEntAddr — every IPv4 address configured on the device. The
+# value (and the OID suffix) is the dotted-quad interface IP.
+IP_AD_ENT_ADDR_OID = "1.3.6.1.2.1.4.20.1.1"
+
+
+async def _collect_interface_ips(ip_address: str, timeout_seconds: float,
+                                 snmp_config: dict) -> list[str]:
+    """Walk the device's ipAddrTable and return its configured IPv4 interface
+    IPs (loopback/link-local/multicast excluded).
+
+    Used by discovery to learn every IP a device owns so its other interface
+    IPs aren't onboarded as separate hosts. Best-effort: returns [] on any SNMP
+    failure or when pysnmp is unavailable.
+    """
+    if not PYSMNP_AVAILABLE:
+        return []
+    try:
+        rows = await _snmp_walk(
+            ip_address, timeout_seconds, snmp_config, IP_AD_ENT_ADDR_OID, max_rows=512,
+        )
+    except Exception as exc:
+        LOGGER.debug("interface-IP walk failed for %s: %s", ip_address, exc)
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for oid, value in rows.items():
+        # Prefer the value; fall back to the last 4 OID octets.
+        candidate = str(value).strip()
+        try:
+            parsed = ipaddress.ip_address(candidate)
+        except ValueError:
+            suffix = ".".join(oid.rsplit(".", 4)[-4:]) if oid.count(".") >= 4 else ""
+            try:
+                parsed = ipaddress.ip_address(suffix)
+            except ValueError:
+                continue
+        if parsed.version != 4:
+            continue
+        if parsed.is_loopback or parsed.is_link_local or parsed.is_multicast or parsed.is_unspecified:
+            continue
+        text = str(parsed)
+        if text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out
 
 
 # ── SNMP Walk & Build Auth ───────────────────────────────────────────────────
