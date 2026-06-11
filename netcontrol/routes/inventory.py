@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import GenericDriver, get_driver
+from netcontrol.routes import background_jobs
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _run_show_command, require_credential_access
@@ -997,21 +998,86 @@ async def move_hosts(body: dict):
 # ── Discovery routes ─────────────────────────────────────────────────────────
 
 
-@router.post("/api/inventory/{group_id}/discovery/scan")
+@router.post("/api/inventory/{group_id}/discovery/scan", status_code=202)
 async def discovery_scan(group_id: int, body: DiscoveryScanRequest):
+    """Launch a discovery scan as a background job.
+
+    A full-CIDR probe (up to 4096 hosts) can run for minutes; running it
+    inline held the HTTP request open the whole time. The scan now runs as a
+    background task - poll GET /api/inventory/discovery/jobs/{job_id} for
+    progress and the result (same payload shape the inline response had).
+    The SSE variant at .../discovery/scan/stream is unchanged.
+    """
     group = await db.get_group(group_id)
     if not group:
         raise HTTPException(404, "Group not found")
     try:
-        scanned_count, discovered = await _discover_hosts(body, group_id=group_id)
+        targets = _expand_scan_targets(body.cidrs, body.max_hosts)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    return {
-        "group_id": group_id,
-        "scanned_hosts": scanned_count,
-        "discovered_count": len(discovered),
-        "discovered_hosts": discovered,
-    }
+
+    job = background_jobs.create_job(
+        "discovery-scan",
+        {"group_id": group_id, "scanned": 0, "total": len(targets), "found": 0},
+    )
+    asyncio.create_task(_run_discovery_scan_job(job["job_id"], group_id, body, targets))
+    return {"job_id": job["job_id"], "status": "running",
+            "group_id": group_id, "total_targets": len(targets)}
+
+
+async def _run_discovery_scan_job(job_id: str, group_id: int,
+                                  body: DiscoveryScanRequest,
+                                  targets: list[str]) -> None:
+    """Background task: probe every target, tracking progress on the job."""
+    semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
+    snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+
+    async def _scan_one(ip_address: str) -> dict | None:
+        async with semaphore:
+            return await _probe_discovery_target(
+                ip_address=ip_address,
+                timeout_seconds=body.timeout_seconds,
+                device_type=body.device_type,
+                hostname_prefix=body.hostname_prefix,
+                use_snmp=body.use_snmp,
+                snmp_config=snmp_cfg,
+                use_icmp=body.use_icmp,
+            )
+
+    tasks = [asyncio.create_task(_scan_one(ip)) for ip in targets]
+    try:
+        discovered: list[dict] = []
+        scanned = 0
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            scanned += 1
+            if result is not None:
+                discovered.append(result)
+            background_jobs.update_progress(job_id, scanned=scanned, found=len(discovered))
+        discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
+        background_jobs.finish_job(job_id, "completed", result={
+            "group_id": group_id,
+            "scanned_hosts": len(targets),
+            "discovered_count": len(discovered),
+            "discovered_hosts": discovered,
+        })
+    except Exception as exc:
+        LOGGER.exception("inventory: discovery scan job %s failed", job_id)
+        # Reap the still-pending probes so their results/exceptions are
+        # consumed instead of warning "Task exception was never retrieved".
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        background_jobs.finish_job(job_id, "failed", error=str(exc))
+
+
+@router.get("/api/inventory/discovery/jobs/{job_id}")
+async def get_discovery_scan_job(job_id: str):
+    """Poll a discovery-scan job launched by POST .../discovery/scan."""
+    job = background_jobs.get_job(job_id, kind="discovery-scan")
+    if job is None:
+        raise HTTPException(404, "Discovery job not found (it may have expired)")
+    return job
 
 
 @router.post("/api/inventory/{group_id}/discovery/scan/stream")

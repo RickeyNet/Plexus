@@ -58,7 +58,13 @@ def image_client(tmp_path, monkeypatch):
         "password": "netcontrol",
     })
     csrf_token = resp.json().get("csrf_token", "")
-    return _AuthClient(client, csrf_token), images_dir
+    try:
+        yield _AuthClient(client, csrf_token), images_dir
+    finally:
+        # Exit the TestClient context so the app lifespan shuts down and
+        # cancels its background loops; otherwise they outlive this test
+        # and stop the next test's DB connection out from under it.
+        client.__exit__(None, None, None)
 
 
 def test_upload_and_delete_image(image_client):
@@ -97,7 +103,7 @@ def test_upload_rejects_duplicate_filename(image_client):
         files={"file": ("duplicate.bin", io.BytesIO(b"second"), "application/octet-stream")},
     )
     assert second.status_code == 409, second.text
-    assert "already exists" in second.json()["detail"].lower()
+    assert "already exists" in second.json()["error"]["message"].lower()
 
 
 def test_upload_rejects_invalid_filename(image_client):
@@ -122,7 +128,7 @@ def test_upload_returns_503_when_storage_not_writable(image_client, monkeypatch)
         files={"file": ("test.bin", io.BytesIO(b"x"), "application/octet-stream")},
     )
     assert resp.status_code == 503, resp.text
-    assert "unable to store" in resp.json()["detail"].lower()
+    assert "unable to store" in resp.json()["error"]["message"].lower()
 
 
 def test_find_existing_image_path_prefers_primary(tmp_path, monkeypatch):
