@@ -266,8 +266,11 @@ async def rehydrate_scheduled_upgrades():
                 raise ValueError("Campaign has no credential_id in options")
             # Rehydrating a scheduled activate after restart: validate against
             # the campaign creator, since there is no live session here.
+            # allow_service mirrors execute_phase so a campaign bound to a
+            # service credential still resumes after a restart.
             cred = await require_credential_access(
                 cred_id, submitter_username=campaign.get("created_by") or None,
+                allow_service=True,
             )
             credentials = {
                 "username": cred["username"],
@@ -1044,7 +1047,27 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     if not cred_id:
         raise HTTPException(400, "No credential_id in campaign options")
 
-    cred = await require_credential_access(cred_id, session=session)
+    # A campaign binds its credential at creation time, so validate against the
+    # campaign's creator — consistent with the scheduled-rehydrate path above —
+    # rather than the operator who happens to trigger this phase. That lets any
+    # authorized operator run a campaign the creator already set up, while still
+    # blocking the IDOR: a creator can only bind (and therefore run) a campaign
+    # with a credential they own. Legacy campaigns with no recorded creator fall
+    # back to the live session.
+    #
+    # allow_service=True: scheduled/unattended upgrades are exactly the kind of
+    # background work service credentials exist for (same as monitoring/backups/
+    # compliance), so a campaign may legitimately be bound to one. The helper
+    # still restricts service creds to admin creators/submitters.
+    created_by = (campaign.get("created_by") or "").strip()
+    if created_by and created_by.lower() != "unknown":
+        cred = await require_credential_access(
+            cred_id, submitter_username=created_by, allow_service=True,
+        )
+    else:
+        cred = await require_credential_access(
+            cred_id, session=session, allow_service=True,
+        )
 
     credentials = {
         "username": cred["username"],

@@ -651,6 +651,27 @@ async def _run_rollback_job(
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
+async def _resolve_deployment_credential(dep: dict, session: dict | None) -> dict:
+    """Resolve and authorize the credential bound to a deployment.
+
+    A deployment binds its credential at creation (validated there against the
+    creator), so execute/rollback validate against the deployment's *creator*
+    rather than whoever triggers the action — the approval workflow routinely
+    has a different operator (or an admin) run a plan someone else created.
+    allow_service=True lets a deployment use a shared service credential, the
+    same as the unattended collectors. Legacy deployments with no recorded
+    creator fall back to the live session.
+    """
+    created_by = (dep.get("created_by") or "").strip()
+    if created_by and created_by.lower() != "unknown":
+        return await require_credential_access(
+            dep["credential_id"], submitter_username=created_by, allow_service=True,
+        )
+    return await require_credential_access(
+        dep["credential_id"], session=session, allow_service=True,
+    )
+
+
 @router.post("/api/deployments")
 async def create_deployment(body: DeploymentCreate, request: Request):
     """Create a new deployment plan."""
@@ -670,7 +691,9 @@ async def create_deployment(body: DeploymentCreate, request: Request):
     if not commands:
         raise HTTPException(status_code=400, detail="No proposed commands provided")
 
-    await require_credential_access(body.credential_id, session=session)
+    # Bind-time IDOR gate: the creator must own (or, for a service credential,
+    # be an admin able to use) the credential they're attaching to this plan.
+    await require_credential_access(body.credential_id, session=session, allow_service=True)
 
     deployment_id = await db.create_deployment(
         name=body.name,
@@ -826,9 +849,8 @@ async def execute_deployment(deployment_id: int, request: Request):
             correlation_id=_corr_id(request),
         )
 
-    # Resolve credentials - the executing user must be allowed to use the
-    # credential bound to the deployment, not just whoever created it.
-    cred = await require_credential_access(dep["credential_id"], session=session)
+    # Resolve credentials against the deployment's creator (see helper).
+    cred = await _resolve_deployment_credential(dep, session)
     credentials = {
         "username": cred["username"],
         "password": decrypt(cred["password"]),
@@ -969,7 +991,7 @@ async def rollback_deployment(deployment_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
 
-    cred = await require_credential_access(dep["credential_id"], session=session)
+    cred = await _resolve_deployment_credential(dep, session)
     credentials = {
         "username": cred["username"],
         "password": decrypt(cred["password"]),
