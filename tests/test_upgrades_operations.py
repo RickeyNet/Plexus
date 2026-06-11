@@ -248,3 +248,57 @@ async def test_scheduled_execute_failure_is_recorded(monkeypatch: pytest.MonkeyP
         args[2] == "error" and "Scheduled activate failed" in args[3]
         for args in emitted
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_validates_credential_against_campaign_creator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A campaign binds its credential at creation, so execute must validate
+    against the campaign's creator — not the operator triggering the phase —
+    otherwise a different (even admin) operator running someone else's campaign
+    gets a spurious 403."""
+
+    monkeypatch.setattr(upgrades, "NETMIKO_AVAILABLE", True)
+    # The operator triggering the run is NOT the campaign creator.
+    monkeypatch.setattr(
+        upgrades, "_get_session", lambda _request: {"user": "bob", "user_id": 2}
+    )
+
+    async def fake_get_upgrade_campaign(_campaign_id):
+        return {
+            "id": 7,
+            "image_map": {"C9200": "cat9k_iosxe.bin"},
+            "options": {"credential_id": 9},
+            "created_by": "alice",
+        }
+
+    monkeypatch.setattr(upgrades.db, "get_upgrade_campaign", fake_get_upgrade_campaign)
+    monkeypatch.setattr(upgrades, "_running_campaigns", {})
+
+    captured: dict = {}
+
+    class _Stop(Exception):
+        pass
+
+    async def fake_require_credential_access(credential_id, **kwargs):
+        captured["credential_id"] = credential_id
+        captured.update(kwargs)
+        raise _Stop()  # short-circuit before the heavy execution machinery
+
+    monkeypatch.setattr(
+        upgrades, "require_credential_access", fake_require_credential_access
+    )
+
+    with pytest.raises(_Stop):
+        await upgrades.execute_phase(
+            7, upgrades.CampaignPhaseRequest(phase="activate"), request=None
+        )
+
+    assert captured["credential_id"] == 9
+    # Validated against the creator (alice), via the submitter path — not the
+    # live session of the triggering operator (bob).
+    assert captured.get("submitter_username") == "alice"
+    assert captured.get("session") is None
+    # Scheduled/unattended upgrades may use a service credential.
+    assert captured.get("allow_service") is True
