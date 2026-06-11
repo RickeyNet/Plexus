@@ -245,7 +245,8 @@ export interface UpgradeCampaignInput {
   name: string;
   description: string;
   image_map: Record<string, string>;
-  credential_id: number;
+  // null = run with the configured service credential.
+  credential_id: number | null;
   host_ids: number[];
   ad_hoc_ips: string[];
   options: UpgradeCampaignOptions;
