@@ -46,17 +46,20 @@ async def _make_host(group_name: str = "g1", hostname: str = "sw1") -> int:
 
 async def test_override_crud_roundtrip(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
+    # host_id has a FOREIGN KEY to hosts(id) (enforced: the shared SQLite
+    # connection runs with PRAGMA foreign_keys=ON), so a real host is needed.
+    host_id = await _make_host()
 
     created = await audit_router._create_override(
         rule_id="port.duplex_mismatch",
-        host_id=42,
+        host_id=host_id,
         mode="mute",
         reason="known asymmetric peer",
         created_by="alice",
         expires_at=None,
     )
     assert created["rule_id"] == "port.duplex_mismatch"
-    assert created["host_id"] == 42
+    assert created["host_id"] == host_id
     assert created["mode"] == "mute"
     assert created["expires_at"] in (None, "")
 
@@ -298,22 +301,24 @@ async def test_unique_constraint_blocks_duplicate_override(tmp_path, monkeypatch
     """UNIQUE(rule_id, host_id) -- second create for the same pair must
     fail. The endpoint maps that to 409; the helper itself raises."""
     await _init_clean_db(tmp_path, monkeypatch)
+    host_id = await _make_host()
 
     await audit_router._create_override(
-        rule_id="r1", host_id=5, mode="mute", reason="",
+        rule_id="r1", host_id=host_id, mode="mute", reason="",
         created_by="", expires_at=None,
     )
     with pytest.raises(Exception):
         await audit_router._create_override(
-            rule_id="r1", host_id=5, mode="mute", reason="",
+            rule_id="r1", host_id=host_id, mode="mute", reason="",
             created_by="", expires_at=None,
         )
 
 
 async def test_endpoint_returns_409_on_duplicate(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
+    host_id = await _make_host()
     payload = {
-        "rule_id": "r1", "host_id": 5, "mode": "mute",
+        "rule_id": "r1", "host_id": host_id, "mode": "mute",
         "reason": "", "created_by": "", "expires_at": None,
     }
     # First create succeeds.

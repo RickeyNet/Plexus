@@ -2,6 +2,8 @@
 pytest==9.0.3
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
+# Parallel test execution: run `pytest -n auto` (~4 min vs ~18 min serial)
+pytest-xdist==3.8.0
 ruff==0.15.16
 mypy==2.1.0
 pre-commit==4.6.0

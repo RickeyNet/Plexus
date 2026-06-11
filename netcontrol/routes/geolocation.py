@@ -18,6 +18,12 @@ LOGGER = configure_logging("plexus.geolocation")
 
 router = APIRouter()
 
+
+async def _geo_audit(request: Request, action: str, detail: str) -> None:
+    session = _get_session(request)
+    user = session.get("user", "") if session else ""
+    await _audit("geolocation", action, user=user, detail=detail, correlation_id=_corr_id(request))
+
 # ── Floor plan image storage ─────────────────────────────────────────────────
 # Images are stored in a directory outside the web-served static tree and
 # served via the /api/geo/floors/{id}/image endpoint to prevent path traversal.
@@ -38,16 +44,16 @@ class GeoSiteCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = ""
     address: str = ""
-    lat: float | None = None
-    lng: float | None = None
+    lat: float | None = Field(default=None, ge=-90.0, le=90.0)
+    lng: float | None = Field(default=None, ge=-180.0, le=180.0)
 
 
 class GeoSiteUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
     address: str | None = None
-    lat: float | None = None
-    lng: float | None = None
+    lat: float | None = Field(default=None, ge=-90.0, le=90.0)
+    lng: float | None = Field(default=None, ge=-180.0, le=180.0)
 
 
 class GeoFloorCreate(BaseModel):
@@ -83,10 +89,6 @@ async def list_geo_sites_api():
 async def create_geo_site_api(body: GeoSiteCreate, request: Request):
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
-    if body.lat is not None and not (-90 <= body.lat <= 90):
-        raise HTTPException(400, "lat must be between -90 and 90")
-    if body.lng is not None and not (-180 <= body.lng <= 180):
-        raise HTTPException(400, "lng must be between -180 and 180")
     try:
         site = await db.create_geo_site(
             name=body.name,
@@ -98,7 +100,7 @@ async def create_geo_site_api(body: GeoSiteCreate, request: Request):
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
-    await _audit(request, "geo_site_create", f"Created site '{body.name}'")
+    await _geo_audit(request, "geo_site_create", f"Created site '{body.name}'")
     return site
 
 
@@ -116,16 +118,12 @@ async def update_geo_site_api(site_id: int, body: GeoSiteUpdate, request: Reques
     existing = await db.get_geo_site(site_id)
     if not existing:
         raise HTTPException(404, "Site not found")
-    if body.lat is not None and not (-90 <= body.lat <= 90):
-        raise HTTPException(400, "lat must be between -90 and 90")
-    if body.lng is not None and not (-180 <= body.lng <= 180):
-        raise HTTPException(400, "lng must be between -180 and 180")
     updates = body.model_dump(exclude_none=True)
     try:
         site = await db.update_geo_site(site_id, **updates)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
-    await _audit(request, "geo_site_update", f"Updated site id={site_id}")
+    await _geo_audit(request, "geo_site_update", f"Updated site id={site_id}")
     return site
 
 
@@ -139,7 +137,7 @@ async def delete_geo_site_api(site_id: int, request: Request):
     for floor in floors:
         _remove_floor_image(floor.get("image_filename"))
     await db.delete_geo_site(site_id)
-    await _audit(request, "geo_site_delete", f"Deleted site '{existing.get('name')}'")
+    await _geo_audit(request, "geo_site_delete", f"Deleted site '{existing.get('name')}'")
     return {"ok": True}
 
 
@@ -158,7 +156,7 @@ async def create_geo_floor_api(site_id: int, body: GeoFloorCreate, request: Requ
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
-    await _audit(request, "geo_floor_create", f"Created floor '{body.name}' in site id={site_id}")
+    await _geo_audit(request, "geo_floor_create", f"Created floor '{body.name}' in site id={site_id}")
     return floor
 
 
@@ -180,7 +178,7 @@ async def update_geo_floor_api(floor_id: int, body: GeoFloorUpdate, request: Req
         updated = await db.update_geo_floor(floor_id, **updates)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
-    await _audit(request, "geo_floor_update", f"Updated floor id={floor_id}")
+    await _geo_audit(request, "geo_floor_update", f"Updated floor id={floor_id}")
     return updated
 
 
@@ -191,7 +189,7 @@ async def delete_geo_floor_api(floor_id: int, request: Request):
         raise HTTPException(404, "Floor not found")
     _remove_floor_image(floor.get("image_filename"))
     await db.delete_geo_floor(floor_id)
-    await _audit(request, "geo_floor_delete", f"Deleted floor id={floor_id}")
+    await _geo_audit(request, "geo_floor_delete", f"Deleted floor id={floor_id}")
     return {"ok": True}
 
 
@@ -270,7 +268,7 @@ async def upload_floor_image_api(
         f.write(data)
 
     await db.update_geo_floor(floor_id, image_filename=filename)
-    await _audit(request, "geo_floor_image_upload", f"Uploaded floor plan for floor id={floor_id}")
+    await _geo_audit(request, "geo_floor_image_upload", f"Uploaded floor plan for floor id={floor_id}")
     return {"ok": True, "filename": filename}
 
 
@@ -324,7 +322,7 @@ async def upsert_floor_placement_api(
     if not host:
         raise HTTPException(404, "Host not found")
     placement = await db.upsert_geo_placement(floor_id, host_id, body.x_pct, body.y_pct)
-    await _audit(request, "geo_placement_upsert",
+    await _geo_audit(request, "geo_placement_upsert",
                  f"Placed host id={host_id} on floor id={floor_id} at ({body.x_pct:.3f}, {body.y_pct:.3f})")
     return placement
 
@@ -334,6 +332,6 @@ async def delete_floor_placement_api(floor_id: int, host_id: int, request: Reque
     removed = await db.delete_geo_placement(floor_id, host_id)
     if not removed:
         raise HTTPException(404, "Placement not found")
-    await _audit(request, "geo_placement_delete",
+    await _geo_audit(request, "geo_placement_delete",
                  f"Removed host id={host_id} from floor id={floor_id}")
     return {"ok": True}

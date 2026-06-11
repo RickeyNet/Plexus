@@ -33,6 +33,7 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 - Windows dev machine, Linux deployment target
 - No bash available - use `cmd` or PowerShell for shell commands
 - Tests: `pytest` with `pytest-asyncio`, coverage gate at 30%
+- Full suite is slow serially (~18 min); use `pytest -n auto` (pytest-xdist) for ~4 min runs
 - Linting: `ruff`, type checking: `mypy`, security: `bandit` + `pip-audit`
 - CI: GitHub Actions with CodeQL scanning
 

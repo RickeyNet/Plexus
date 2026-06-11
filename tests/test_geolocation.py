@@ -88,14 +88,21 @@ def _make_client(tmp_path, monkeypatch):
 
 @pytest.fixture
 def geo_client(tmp_path, monkeypatch):
-    return _make_client(tmp_path, monkeypatch)
+    client = _make_client(tmp_path, monkeypatch)
+    try:
+        yield client
+    finally:
+        # Exit the TestClient context so the app lifespan shuts down and
+        # cancels its background loops; otherwise they outlive this test
+        # and stop the next test's DB connection out from under it.
+        client._client.__exit__(None, None, None)
 
 
 # ── Site CRUD ─────────────────────────────────────────────────────────────────
 
 def test_create_site(geo_client):
     resp = geo_client.post("/api/geo/sites", json={"name": "Melbourne HQ", "address": "123 Main St"})
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Melbourne HQ"
     assert data["address"] == "123 Main St"
@@ -147,12 +154,12 @@ def test_duplicate_site_name_returns_409(geo_client):
     assert resp.status_code == 409
 
 
-def test_invalid_lat_returns_400(geo_client):
+def test_invalid_lat_returns_422(geo_client):
     resp = geo_client.post("/api/geo/sites", json={"name": "Bad Lat", "lat": 999.0, "lng": 0.0})
     assert resp.status_code == 422
 
 
-def test_invalid_lng_returns_400(geo_client):
+def test_invalid_lng_returns_422(geo_client):
     resp = geo_client.post("/api/geo/sites", json={"name": "Bad Lng", "lat": 0.0, "lng": -999.0})
     assert resp.status_code == 422
 
@@ -167,7 +174,7 @@ def test_missing_site_name_returns_422(geo_client):
 def test_create_floor(geo_client):
     site = geo_client.post("/api/geo/sites", json={"name": "Floor Test Site"}).json()
     resp = geo_client.post(f"/api/geo/sites/{site['id']}/floors", json={"name": "Ground Floor", "floor_number": 0})
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Ground Floor"
     assert data["floor_number"] == 0

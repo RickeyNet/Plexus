@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Reliability and performance
+- Run inventory discovery scans and all-hosts MAC/ARP fleet collection as background jobs instead of inline HTTP handlers: `POST .../discovery/scan` and `POST /api/mac-tracking/collect` (all-hosts mode) now return `202` with a `job_id`, pollable via `GET /api/inventory/discovery/jobs/{id}` and `GET /api/mac-tracking/collect/jobs/{id}`. The MAC Tracking page shows live collection progress; the SSE discovery stream and single-host collect are unchanged.
+- Batch MAC/ARP persistence: each host's FDB sightings and ARP table now write in one transaction (`record_mac_sightings_batch`, `upsert_arp_entries_batch`) instead of two connection round-trips per MAC, eliminating tens of thousands of connection cycles per fleet collection. Move-detection semantics are unchanged.
+- Cancel the audit scheduler task on app shutdown (it was the one background task never cancelled, leaking past lifespan shutdown).
+- Fix cloud-metric time-window queries comparing ISO-format timestamps lexically against SQLite `datetime('now')` output, which over-included up to ~24h at the window boundary.
+
+### Bug fixes
+- Restore audit logging for geolocation and billing routes: all 14 `_audit()` calls passed the request object as the audit category, so every audit write from those routes failed silently.
+- Validate site latitude/longitude in the Pydantic models (422) instead of ad-hoc 400 checks, matching the rest of the API.
+
 ### Device upgrades
 - Add per-device cancellation for upgrade activation so operators can cancel selected devices that are stuck or failed in the activate step without reloading them during business hours.
 - Fix Verify Upgrade version-mismatch handling so a device that is not running the expected target image marks both Verify and Activate as failed, clearing stale green Activate checks.

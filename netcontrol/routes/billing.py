@@ -27,6 +27,12 @@ from netcontrol.telemetry import configure_logging
 router = APIRouter()
 LOGGER = configure_logging("plexus.billing")
 
+
+async def _billing_audit(request: Request, action: str, detail: dict) -> None:
+    session = _get_session(request)
+    user = session.get("user", "") if session else ""
+    await _audit("billing", action, user=user, detail=json.dumps(detail), correlation_id=_corr_id(request))
+
 # ── Late-binding auth ────────────────────────────────────────────────────────
 _require_auth = None
 _require_admin = None
@@ -299,7 +305,7 @@ async def create_circuit(payload: BillingCircuitCreate, request: Request):
         overage_enabled=payload.overage_enabled,
         created_by=owner,
     )
-    await _audit(request, "billing_circuit_created", {
+    await _billing_audit(request, "billing_circuit_created", {
         "circuit_id": circuit["id"], "name": payload.name,
     })
     return circuit
@@ -314,7 +320,7 @@ async def update_circuit(circuit_id: int, payload: BillingCircuitUpdate, request
     if not updates:
         return existing
     updated = await db.update_billing_circuit(circuit_id, **updates)
-    await _audit(request, "billing_circuit_updated", {
+    await _billing_audit(request, "billing_circuit_updated", {
         "circuit_id": circuit_id, "changes": list(updates.keys()),
     })
     return updated
@@ -325,7 +331,7 @@ async def delete_circuit(circuit_id: int, request: Request):
     deleted = await db.delete_billing_circuit(circuit_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Circuit not found")
-    await _audit(request, "billing_circuit_deleted", {"circuit_id": circuit_id})
+    await _billing_audit(request, "billing_circuit_deleted", {"circuit_id": circuit_id})
     return {"status": "deleted"}
 
 
@@ -373,7 +379,7 @@ async def generate_billing(payload: BillingGenerateRequest, request: Request):
                     "error": "generation_failed",
                 })
 
-    await _audit(request, "billing_generated", {
+    await _billing_audit(request, "billing_generated", {
         "count": len(results),
         "circuit_id": payload.circuit_id,
         "customer": payload.customer,
@@ -405,7 +411,7 @@ async def delete_period(period_id: int, request: Request):
     deleted = await db.delete_billing_period(period_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Billing period not found")
-    await _audit(request, "billing_period_deleted", {"period_id": period_id})
+    await _billing_audit(request, "billing_period_deleted", {"period_id": period_id})
     return {"status": "deleted"}
 
 

@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.routes import background_jobs
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
 from netcontrol.telemetry import configure_logging
@@ -608,24 +609,28 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         port_mac_counts[s["port_name"]] = port_mac_counts.get(s["port_name"], 0) + 1
 
     # ── Write the deduplicated sightings ─────────────────────────────────
-    for s in sightings.values():
-        is_uplink = port_mac_counts.get(s["port_name"], 0) > _UPLINK_MAC_THRESHOLD
-        try:
-            await db.upsert_mac_entry(
-                host_id=host_id, mac_address=s["mac"], vlan=s["vlan"],
-                port_name=s["port_name"], port_index=s["port_index"],
-                entry_type=s["entry_type"],
-            )
-            await db.record_mac_history(
-                s["mac"], host_id, s["port_name"], vlan=s["vlan"],
-                is_uplink=is_uplink,
-            )
-            result["macs_found"] += 1
-        except Exception as exc:
-            LOGGER.warning("mac_tracking: host %s MAC upsert failed for %s vlan %s: %s",
-                           host_id, s["mac"], s["vlan"], exc)
+    # One batched transaction per host instead of two awaited round-trips per
+    # MAC (upsert + history each opened and closed a connection - tens of
+    # thousands of connection cycles per fleet collection).
+    sighting_batch = [
+        {
+            "mac": s["mac"], "vlan": s["vlan"],
+            "port_name": s["port_name"], "port_index": s["port_index"],
+            "entry_type": s["entry_type"],
+            "is_uplink": port_mac_counts.get(s["port_name"], 0) > _UPLINK_MAC_THRESHOLD,
+        }
+        for s in sightings.values()
+    ]
+    try:
+        counts = await db.record_mac_sightings_batch(host_id, sighting_batch)
+        result["macs_found"] += counts["macs"]
+    except Exception as exc:
+        LOGGER.warning("mac_tracking: host %s MAC batch write failed (%d sightings): %s",
+                       host_id, len(sighting_batch), exc)
+        result["errors"].append(f"MAC table write failed: {exc}")
 
     # ── ARP table (global, ipNetToMediaTable) ──
+    arp_batch: list[dict] = []
     for oid, mac_val in arp_phys.items():
         suffix = oid[len(IP_NET_TO_MEDIA_PHYS):].lstrip(".")
         mac = _format_mac(mac_val)
@@ -645,21 +650,21 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         type_oid = IP_NET_TO_MEDIA_TYPE + "." + suffix
         arp_type = ARP_TYPE_MAP.get(str(arp_type_rows.get(type_oid, "")), "dynamic")
 
+        arp_batch.append({
+            "ip_address": ip_addr, "mac_address": mac,
+            "interface_name": iface_name,
+        })
+
+    # One batched transaction: ARP upserts plus the cross-host IP enrichment
+    # of mac_address_table (the access switch holds the FDB row; this L3
+    # device holds the ARP binding), instead of two round-trips per entry.
+    if arp_batch:
         try:
-            await db.upsert_arp_entry(
-                host_id=host_id, ip_address=ip_addr, mac_address=mac,
-                interface_name=iface_name,
-            )
-            # Stamp the IP onto this MAC's forwarding entries wherever they live
-            # (the access switch, not this L3 device). enrich_mac_ip matches by
-            # MAC across all hosts via the index and only fills empty IPs — one
-            # targeted UPDATE instead of the old full-table LIKE scan per ARP.
-            if ip_addr:
-                await db.enrich_mac_ip(mac, ip_addr)
-            result["arps_found"] += 1
+            result["arps_found"] += await db.upsert_arp_entries_batch(host_id, arp_batch)
         except Exception as exc:
-            LOGGER.warning("mac_tracking: host %s ARP upsert failed for %s (%s): %s",
-                           host_id, mac, ip_addr, exc)
+            LOGGER.warning("mac_tracking: host %s ARP batch write failed (%d entries): %s",
+                           host_id, len(arp_batch), exc)
+            result["errors"].append(f"ARP table write failed: {exc}")
 
     result["diag"]["ports"] = len(if_index_to_name)
     result["diag"]["port_vlans"] = len(if_index_to_vlan)
@@ -1060,49 +1065,97 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
                 continue
             for h in await db.get_hosts_for_group(group["id"]):
                 targets.append((h, snmp_cfg))
+    except Exception:
+        _full_collection_running = False
+        raise
 
-        total: dict = {
-            "macs_found": 0, "arps_found": 0, "hosts_collected": 0,
-            "errors": [], "host_errors": [],
-        }
+    # A full run walks every SNMP-enabled host and can take minutes, so it
+    # runs as a background job; the frontend polls the job endpoint below.
+    # The runner clears _full_collection_running when it finishes.
+    job = background_jobs.create_job(
+        "mac-fleet-collection",
+        {"hosts_done": 0, "hosts_total": len(targets)},
+    )
+    asyncio.create_task(_run_fleet_collection_job(job["job_id"], targets))
+    return {"job_id": job["job_id"], "status": "running",
+            "hosts_total": len(targets)}
+
+
+async def _run_fleet_collection_job(job_id: str,
+                                    targets: list[tuple[dict, dict]]) -> None:
+    """Background task: collect MAC/ARP tables from every target host."""
+    global _full_collection_running
+    total: dict = {
+        "macs_found": 0, "arps_found": 0, "hosts_collected": 0,
+        "errors": [], "host_errors": [],
+    }
+    tasks: list[asyncio.Task] = []
+    try:
         sem = asyncio.Semaphore(4)
 
-        async def _collect_one(h, cfg):
+        async def _collect_one(h: dict, cfg: dict) -> tuple[dict, dict | Exception]:
             async with sem:
-                return await collect_mac_arp_tables(
-                    h["id"], h["ip_address"], cfg,
-                    device_type=h.get("device_type", ""),
-                    host=h,
-                )
+                try:
+                    res = await collect_mac_arp_tables(
+                        h["id"], h["ip_address"], cfg,
+                        device_type=h.get("device_type", ""),
+                        host=h,
+                    )
+                except Exception as exc:
+                    return h, exc
+                return h, res
 
-        results = await asyncio.gather(
-            *(_collect_one(h, cfg) for h, cfg in targets),
-            return_exceptions=True,
-        )
-
-        for (h, _cfg), res in zip(targets, results):
+        tasks = [asyncio.create_task(_collect_one(h, cfg)) for h, cfg in targets]
+        done = 0
+        for coro in asyncio.as_completed(tasks):
+            h, res = await coro
+            done += 1
             hostname = h.get("hostname") or f"host-{h['id']}"
             if isinstance(res, Exception):
                 total["errors"].append(f"{hostname}: {res}")
-                continue
-            total["macs_found"] += res["macs_found"]
-            total["arps_found"] += res["arps_found"]
-            total["hosts_collected"] += 1
-            # Surface the per-host collection diagnostics that all-hosts mode
-            # used to drop on the floor. These (per-VLAN budget hits, view
-            # permission failures, "device isn't a bridge") are exactly the
-            # signal the silent-host debugging workflow depends on.
-            host_errs = res.get("errors") or []
-            if host_errs:
-                total["host_errors"].append({
-                    "host_id": h["id"], "hostname": hostname, "errors": host_errs,
-                })
-                for e in host_errs:
-                    total["errors"].append(f"{hostname}: {e}")
-
-        return total
+            else:
+                total["macs_found"] += res["macs_found"]
+                total["arps_found"] += res["arps_found"]
+                total["hosts_collected"] += 1
+                # Surface the per-host collection diagnostics that all-hosts
+                # mode used to drop on the floor. These (per-VLAN budget hits,
+                # view permission failures, "device isn't a bridge") are
+                # exactly the signal the silent-host debugging workflow
+                # depends on.
+                host_errs = res.get("errors") or []
+                if host_errs:
+                    total["host_errors"].append({
+                        "host_id": h["id"], "hostname": hostname,
+                        "errors": host_errs,
+                    })
+                    for e in host_errs:
+                        total["errors"].append(f"{hostname}: {e}")
+            background_jobs.update_progress(
+                job_id, hosts_done=done,
+                macs_found=total["macs_found"], arps_found=total["arps_found"],
+            )
+        background_jobs.finish_job(job_id, "completed", result=total)
+    except Exception as exc:
+        LOGGER.exception("mac_tracking: fleet collection job %s failed", job_id)
+        # Reap still-pending collectors so their results/exceptions are
+        # consumed instead of warning "Task exception was never retrieved".
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        background_jobs.finish_job(job_id, "failed", result=total, error=str(exc))
     finally:
         _full_collection_running = False
+
+
+@router.get("/api/mac-tracking/collect/jobs/{job_id}")
+async def get_mac_collection_job(job_id: str):
+    """Poll a fleet-collection job. Result carries the same aggregate payload
+    the endpoint used to return inline (macs_found, arps_found,
+    hosts_collected, errors, host_errors)."""
+    job = background_jobs.get_job(job_id, kind="mac-fleet-collection")
+    if job is None:
+        raise HTTPException(404, "Collection job not found (it may have expired)")
+    return job
 
 
 @router.post("/api/mac-tracking/cleanup")

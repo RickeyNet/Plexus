@@ -1358,6 +1358,7 @@ async def lifespan(app: FastAPI):
         downsampling_task.cancel()
         rate_limit_cleanup_task.cancel()
         report_scheduler_task.cancel()
+        audit_task.cancel()
         cloud_flow_sync_task.cancel()
         cloud_traffic_sync_task.cancel()
         federation_task.cancel()
@@ -1423,6 +1424,10 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await report_scheduler_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await audit_task
         except asyncio.CancelledError:
             pass
         try:
