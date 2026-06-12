@@ -1,5 +1,5 @@
 """
-Migration 0053: Indexes for hot-path scans on suppressions, topology, alerts.
+Migration 0054: Indexes for hot-path scans on suppressions, topology, alerts.
 
 Three tables are filtered on unindexed columns in code paths that run every
 poll cycle, so each grows into a progressively slower full-table scan:
@@ -16,7 +16,7 @@ poll cycle, so each grows into a progressively slower full-table scan:
 
 from __future__ import annotations
 
-VERSION = 53
+VERSION = 54
 DESCRIPTION = "Add indexes for alert_suppressions, topology_changes, monitoring_alerts hot paths"
 
 

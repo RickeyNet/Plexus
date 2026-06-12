@@ -58,6 +58,13 @@ def test_disabled_window_is_never_active():
     assert window_is_active(w, now) is False
 
 
+def test_null_enabled_column_means_enabled():
+    # A NULL enabled column (None) must not be treated as disabled.
+    w = _window(enabled=None)
+    now = datetime(2026, 5, 14, 11, 0, tzinfo=UTC)
+    assert window_is_active(w, now) is True
+
+
 def test_daily_recurrence_active_each_day():
     w = _window(recurrence="daily")
     # Tomorrow at 11:00 -- should still be inside the daily band.

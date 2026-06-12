@@ -17,10 +17,10 @@ Entries marked **[verified]** were confirmed by reading the code; others are sta
 
 ## Verified medium
 
-- **[medium][verified] routes/database.py:12022, 12229, 12258, 13179** — Four upsert helpers end with `row[0] if isinstance(row, tuple) else dict(row)["id"]` after a re-SELECT. `aiosqlite` rows are `sqlite3.Row` (not tuple), so the `dict(row)` branch always runs; if the row was deleted between `commit()` and the SELECT, `dict(None)` raises `TypeError`. Fix: use `INSERT … ON CONFLICT … RETURNING id` (single statement, atomic) or guard `if row is None`.
-- **[medium][verified] netcontrol/routes/federation.py:148-205** — `_fetch_peer_data` correctly checks `status_code == 200`, but non-200 responses and exceptions are logged at DEBUG and the result silently keeps zeros — an unreachable/misconfigured peer is indistinguishable from an empty one in the UI. Fix: record per-section error strings in `result` and log at WARNING.
-- **[medium][verified] netcontrol/routes/jobs.py:700-704** — Final `job_complete` WebSocket notify swallows all exceptions with bare `pass` and has no send timeout (other broadcasts use one); a wedged socket can stall job teardown. Fix: `asyncio.wait_for(ws.send_json(...), timeout=5)` + debug log on failure.
-- **[medium][verified] netcontrol/routes/maintenance_windows.py:101** — `if not window.get("enabled", 1)` treats a NULL `enabled` column as disabled (the default only applies when the key is *missing*, not when it's `None`). Fix: `if not (window.get("enabled") if window.get("enabled") is not None else 1):` or normalize at the DB layer.
+- ~~**[medium][verified] routes/database.py:12022, 12229, 12258, 13179**~~ — RESOLVED (2026-06-11): the four crash-prone re-SELECT sites were removed by the MAC-tracking batch rewrites. The two remaining `isinstance(row, tuple)` usages (seed_built_in_graph_templates, acknowledge_mac_move_event) iterate fetchall rows or are None-guarded — no `dict(None)` path left.
+- ~~**[medium][verified] netcontrol/routes/federation.py:148-205**~~ — FIXED (2026-06-11): `_fetch_peer_data` records per-section failures in `result["errors"]` and logs at WARNING; manual and background sync now set `last_sync_status='partial'` with the error summary instead of 'ok', and the Federation UI renders a Partial badge.
+- ~~**[medium][verified] netcontrol/routes/jobs.py:700-704**~~ — FIXED (2026-06-11): both `job_complete` WS broadcast sites wrap `send_json` in `asyncio.wait_for(..., timeout=5)` (failures were already debug-logged, not bare `pass`).
+- ~~**[medium][verified] netcontrol/routes/maintenance_windows.py:101**~~ — FIXED (2026-06-11): `window_is_active` treats a NULL `enabled` column as enabled; only an explicit falsy value disables the window.
 
 ## Reported (plausible, not yet re-verified)
 
