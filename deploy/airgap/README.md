@@ -96,9 +96,25 @@ The installer:
 
 ## Step 4 - First login
 
-Browse to `https://<vm-ip-or-hostname>`. Click through the self-signed
-certificate warning. Default login: `admin` / `netcontrol` (forced password
-change on first login).
+On first boot Plexus generates a **random one-time password** for the
+bootstrap `admin` account and prints it once to the app container's stderr.
+Retrieve it before logging in:
+
+```bash
+sudo docker compose -f /opt/plexus/docker-compose.yml logs plexus | grep -A3 '\*\*\*'
+```
+
+Look for the `*** Created default admin account ***` banner with the
+username and password. Then browse to `https://<vm-ip-or-hostname>`, click
+through the self-signed certificate warning, and log in - you'll be forced
+to change the password immediately.
+
+To choose the initial password yourself instead, add
+`PLEXUS_INITIAL_ADMIN_PASSWORD=<value>` to `/opt/plexus/.env` **before the
+first start** (it is consumed once, still forces a change on first login;
+`PLEXUS_INITIAL_ADMIN_USERNAME` overrides the `admin` username). If the
+password is ever lost, set `PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true` and
+restart - a fresh one-time password is printed to the logs.
 
 ## Common follow-ups
 
