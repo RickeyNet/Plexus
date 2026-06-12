@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel
 from routes.crypto import decrypt
 
+import netcontrol.routes.state as state
 from netcontrol.routes.config_drift import _analyze_drift_for_host
 from netcontrol.routes.maintenance_windows import evaluate_change_gate
 from netcontrol.routes.shared import (
@@ -37,17 +38,15 @@ VERIFICATION_METRICS = ["cpu_percent", "memory_percent", "packet_loss_pct", "res
 VERIFICATION_DELAY_SECONDS = 60
 
 # ── Late-binding auth dependencies (injected by app.py) ──────────────────────
+# Route-level auth comes from app.py's include_router dependencies; only the
+# WebSocket session check needs late-bound callables here.
 
-_require_auth = None
-_require_feature = None
 _verify_session_token = None
 _get_user_features = None
 
 
-def init_deployments(require_auth, require_feature, verify_session_token_fn=None, get_user_features_fn=None):
-    global _require_auth, _require_feature, _verify_session_token, _get_user_features
-    _require_auth = require_auth
-    _require_feature = require_feature
+def init_deployments(verify_session_token_fn=None, get_user_features_fn=None):
+    global _verify_session_token, _get_user_features
     _verify_session_token = verify_session_token_fn
     _get_user_features = get_user_features_fn
 
@@ -436,7 +435,7 @@ async def _run_deployment_job(
 
         failed_hosts = []
         successful_hosts = []
-        sem = asyncio.Semaphore(4)
+        sem = state.device_op_semaphore()
 
         async def _deploy_one(h):
             async with sem:
@@ -562,7 +561,7 @@ async def _run_rollback_job(
             return
 
         rollback_failures = 0
-        sem = asyncio.Semaphore(4)
+        sem = state.device_op_semaphore()
 
         async def _rollback_one(host):
             nonlocal rollback_failures

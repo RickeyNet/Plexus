@@ -408,7 +408,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         #      threshold on every device class we've tested.
         # A wall-clock deadline guards against pathological cases (huge VTP
         # domain on a slow agent) so the collector never hangs forever.
-        per_vlan_sem = asyncio.Semaphore(4)
+        per_vlan_sem = state.device_op_semaphore()
         deadline = time.monotonic() + 60.0
 
         async def _walk_one_vlan(vid: int) -> dict:
@@ -1091,7 +1091,7 @@ async def _run_fleet_collection_job(job_id: str,
     }
     tasks: list[asyncio.Task] = []
     try:
-        sem = asyncio.Semaphore(4)
+        sem = state.device_op_semaphore()
 
         async def _collect_one(h: dict, cfg: dict) -> tuple[dict, dict | Exception]:
             async with sem:

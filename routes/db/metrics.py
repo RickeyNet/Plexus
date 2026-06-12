@@ -1151,8 +1151,13 @@ async def get_deployments_for_host_in_range(
     """Return deployments that include the given host within a time range."""
     db = await _dbcore.get_db()
     try:
+        # Explicit columns: consumers (alert-correlation API, root-cause
+        # classifier) need identity/status fields only - proposed_commands
+        # can be a multi-KB blob per row and never leaves this function.
         cursor = await db.execute(
-            """SELECT * FROM deployments
+            """SELECT id, name, description, status, change_type, host_ids,
+                      created_by, started_at, finished_at
+               FROM deployments
                WHERE started_at >= ? AND started_at <= ?
                ORDER BY started_at DESC LIMIT 50""",
             (start, end),

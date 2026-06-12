@@ -214,19 +214,15 @@ def _validate_cli_inputs(image_name: str, dest_path: str) -> str | None:
 
 
 # ── Late-binding auth dependencies (injected by app.py) ──────────────────────
+# Route-level auth comes from app.py's include_router dependencies; only the
+# WebSocket session check needs a late-bound callable here.
 
-_require_auth = None
-_require_feature = None
 _verify_session_token = None
-_get_user_features = None
 
 
-def init_upgrades(require_auth, require_feature, verify_session_token=None, get_user_features=None):
-    global _require_auth, _require_feature, _verify_session_token, _get_user_features
-    _require_auth = require_auth
-    _require_feature = require_feature
+def init_upgrades(verify_session_token=None):
+    global _verify_session_token
     _verify_session_token = verify_session_token
-    _get_user_features = get_user_features
     try:
         _ensure_software_images_dir()
     except OSError:

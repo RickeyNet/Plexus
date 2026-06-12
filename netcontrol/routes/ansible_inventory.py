@@ -22,12 +22,6 @@ _LOGGER = logging.getLogger("plexus.ansible_inventory")
 router = APIRouter()
 
 # Late-bound auth dependency
-_require_auth = None
-
-
-def init_ansible_inventory(require_auth):
-    global _require_auth
-    _require_auth = require_auth
 
 
 # ── Device type mapping (mirrors routes/ansible_runner_backend.py) ───────────

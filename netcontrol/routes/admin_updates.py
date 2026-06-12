@@ -43,13 +43,6 @@ LOGGER = configure_logging("plexus.admin_updates")
 # ── Late-binding auth deps (not used directly; admin gate is applied at
 #    router-include time, matching the monitoring/admin pattern). ───────────
 
-_require_admin = None
-
-
-def init_admin_updates(require_admin):
-    global _require_admin
-    _require_admin = require_admin
-
 
 # ── Config ────────────────────────────────────────────────────────────────
 

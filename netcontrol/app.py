@@ -61,11 +61,9 @@ from netcontrol.routes.admin import (
     router as admin_router,
 )
 from netcontrol.routes.admin_updates import (
-    init_admin_updates,
     router as admin_updates_router,
 )
 from netcontrol.routes.ansible_inventory import (
-    init_ansible_inventory,
     router as ansible_inventory_router,
 )
 from netcontrol.routes.audit import _audit_run_loop, router as audit_router
@@ -89,7 +87,6 @@ from netcontrol.routes.auth import (
 )
 from netcontrol.routes.baseline_alerting import router as baseline_alerting_router
 from netcontrol.routes.billing import (
-    init_billing,
     router as billing_router,
 )
 from netcontrol.routes.cdef_engine import router as cdef_router
@@ -119,7 +116,6 @@ from netcontrol.routes.compliance import (
 from netcontrol.routes.config_backups import (
     _config_backup_loop,
     _run_config_backups_once,
-    init_config_backups,
     router as config_backups_router,
 )
 from netcontrol.routes.config_drift import (
@@ -169,7 +165,6 @@ from netcontrol.routes.geolocation import router as geolocation_router
 from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
 from netcontrol.routes.interface_errors import (
-    init_interface_errors,
     router as interface_errors_router,
 )
 from netcontrol.routes.inventory import (
@@ -200,7 +195,6 @@ from netcontrol.routes.jobs import (
     ws_router as jobs_ws_router,
 )
 from netcontrol.routes.lab import (
-    init_lab,
     router as lab_router,
 )
 from netcontrol.routes.lab_drift import (
@@ -215,13 +209,11 @@ from netcontrol.routes.lab_runtime import (
 from netcontrol.routes.lab_topology import router as lab_topology_router
 from netcontrol.routes.mac_tracking import _mac_move_retention_loop, router as mac_tracking_router
 from netcontrol.routes.maintenance_windows import (
-    init_maintenance_windows,
     router as maintenance_windows_router,
 )
 from netcontrol.routes.metrics_engine import (
     _downsampling_loop,
     admin_router as metrics_engine_admin_router,
-    inject_auth as metrics_engine_inject_auth,
     router as metrics_engine_router,
 )
 from netcontrol.routes.monitoring import (
@@ -235,7 +227,6 @@ from netcontrol.routes.monitoring import (
     _run_alert_escalation,
     _run_monitoring_poll_once,
     admin_router as monitoring_admin_router,
-    init_monitoring,
     router as monitoring_router,
 )
 from netcontrol.routes.playbooks import (
@@ -255,10 +246,9 @@ from netcontrol.routes.risk_analysis import (
     _compute_risk_score,
     _run_risk_analysis_for_host,
     _simulate_config_change,
-    init_risk_analysis,
     router as risk_analysis_router,
 )
-from netcontrol.routes.secret_variables import init_secret_variables, router as secret_variables_router
+from netcontrol.routes.secret_variables import router as secret_variables_router
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
     _build_snmp_auth,
@@ -1470,7 +1460,6 @@ app.include_router(
 # Secret Variables - encrypted key-value store for template substitution
 # List/names endpoints need auth only (template editor autocomplete);
 # create/update/delete enforce admin inside the route handlers.
-init_secret_variables(require_auth, require_admin)
 app.include_router(
     secret_variables_router,
     dependencies=[Depends(require_auth)],
@@ -1771,24 +1760,14 @@ async def dashboard():
 
 # Initialize late-binding dependencies for modules that need them
 init_jobs(require_auth, require_feature, verify_session_token, _get_user_features, require_admin_fn=require_admin)
-init_config_drift(require_auth, require_feature, require_admin, verify_session_token, _get_user_features)
-init_config_backups(require_auth, require_feature, require_admin, verify_session_token, _get_user_features)
+init_config_drift(verify_session_token, _get_user_features)
 init_compliance(require_auth, require_feature, require_admin)
-init_risk_analysis(require_auth, require_feature)
-init_deployments(require_auth, require_feature, verify_session_token, _get_user_features)
-init_maintenance_windows(require_auth, require_feature)
-init_monitoring(require_auth, require_feature, require_admin)
-init_interface_errors(require_auth, require_admin)
-init_billing(require_auth, require_admin)
+init_deployments(verify_session_token, _get_user_features)
 init_cloud_visibility(require_admin)
 init_ipam(require_admin)
-init_admin_updates(require_admin)
 init_dhcp(require_admin)
 init_federation(require_admin)
-init_lab(require_auth, require_feature)
-init_upgrades(require_auth, require_feature, verify_session_token, _get_user_features)
-init_ansible_inventory(require_auth)
-metrics_engine_inject_auth(require_auth, require_admin)
+init_upgrades(verify_session_token)
 
 # Jobs
 app.include_router(

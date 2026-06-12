@@ -50,17 +50,6 @@ from netcontrol.telemetry import configure_logging
 router = APIRouter()
 LOGGER = configure_logging("plexus.lab")
 
-# ── Late-binding auth dependencies (injected by app.py) ──────────────────────
-
-_require_auth = None
-_require_feature = None
-
-
-def init_lab(require_auth, require_feature):
-    global _require_auth, _require_feature
-    _require_auth = require_auth
-    _require_feature = require_feature
-
 
 # ── Models ────────────────────────────────────────────────────────────────────
 

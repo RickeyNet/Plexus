@@ -238,7 +238,7 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
     violations = 0
     errors = 0
 
-    sem = asyncio.Semaphore(4)
+    sem = state.device_op_semaphore()
 
     for assignment in due_assignments:
         try:
@@ -585,7 +585,7 @@ async def scan_assignment_now(assignment_id: int, request: Request):
     if not hosts:
         raise HTTPException(status_code=400, detail="No hosts in the assigned group")
 
-    sem = asyncio.Semaphore(4)
+    sem = state.device_op_semaphore()
     hosts_scanned = 0
     violations = 0
     errors = 0
@@ -689,7 +689,7 @@ async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Req
     if not hosts:
         raise HTTPException(status_code=400, detail="No hosts found to scan")
 
-    sem = asyncio.Semaphore(4)
+    sem = state.device_op_semaphore()
     host_results = []
 
     async def _scan_host(h):

@@ -32,25 +32,6 @@ router = APIRouter()
 # Track which policies are currently running to prevent concurrent runs
 _running_policies: set[int] = set()
 
-# ── Late-binding auth dependencies ────────────────────────────────────────────
-
-_require_auth = None
-_require_feature = None
-_require_admin = None
-_verify_session_token = None
-_get_user_features = None
-
-
-def init_config_backups(require_auth_fn, require_feature_fn, require_admin_fn,
-                        verify_session_token_fn, get_user_features_fn):
-    global _require_auth, _require_feature, _require_admin
-    global _verify_session_token, _get_user_features
-    _require_auth = require_auth_fn
-    _require_feature = require_feature_fn
-    _require_admin = require_admin_fn
-    _verify_session_token = verify_session_token_fn
-    _get_user_features = get_user_features_fn
-
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
 
@@ -401,7 +382,7 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
         backed_up = 0
         skipped = 0
         errs = 0
-        sem = asyncio.Semaphore(4)
+        sem = state.device_op_semaphore()
 
         async def _do_backup(host):
             nonlocal backed_up, skipped, errs
@@ -530,7 +511,7 @@ async def _run_config_backups_once() -> dict:
     hosts_backed_up = 0
     errors = 0
 
-    sem = asyncio.Semaphore(4)
+    sem = state.device_op_semaphore()
 
     for policy in due_policies:
         try:

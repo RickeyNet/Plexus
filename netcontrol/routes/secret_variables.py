@@ -34,17 +34,6 @@ LOGGER = configure_logging("plexus.secret_variables")
 
 router = APIRouter()
 
-# ── Late-binding auth ─────────────────────────────────────────────────────────
-
-_require_auth = None
-_require_admin = None
-
-
-def init_secret_variables(require_auth_fn, require_admin_fn):
-    global _require_auth, _require_admin
-    _require_auth = require_auth_fn
-    _require_admin = require_admin_fn
-
 
 # ── Validation ────────────────────────────────────────────────────────────────
 

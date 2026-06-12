@@ -1107,7 +1107,7 @@ async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, requ
     if not hosts:
         return {"results": []}
 
-    sem = asyncio.Semaphore(5)
+    sem = state.device_op_semaphore()
 
     async def _fetch_one(host: dict) -> dict:
         async with sem:

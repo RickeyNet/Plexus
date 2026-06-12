@@ -33,16 +33,6 @@ async def _billing_audit(request: Request, action: str, detail: dict) -> None:
     user = session.get("user", "") if session else ""
     await _audit("billing", action, user=user, detail=json.dumps(detail), correlation_id=_corr_id(request))
 
-# ── Late-binding auth ────────────────────────────────────────────────────────
-_require_auth = None
-_require_admin = None
-
-
-def init_billing(require_auth, require_admin):
-    global _require_auth, _require_admin
-    _require_auth = require_auth
-    _require_admin = require_admin
-
 
 # ── Pydantic models ─────────────────────────────────────────────────────────
 
