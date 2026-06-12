@@ -21,6 +21,8 @@ import {
   useTriggerMacCollection,
 } from '@/api/networkTools';
 
+import { useShowMore } from '@/lib/useShowMore';
+
 import { formatTimestamp } from './formatting';
 
 type Tab = 'search' | 'moves' | 'hosts';
@@ -823,7 +825,9 @@ function MoveEventsTable({
   ackPendingId: number | null;
   onShowLog: (id: number) => void;
 }) {
+  const { visible, hiddenCount, showMore } = useShowMore(rows);
   return (
+    <>
     <table className="data-table" style={{ width: '100%' }}>
       <thead>
         <tr>
@@ -837,7 +841,7 @@ function MoveEventsTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((r) => (
+        {visible.map((r) => (
           <tr key={r.id}>
             <td>
               <code style={{ fontSize: '0.85em' }}>{r.mac_address}</code>
@@ -892,6 +896,17 @@ function MoveEventsTable({
         ))}
       </tbody>
     </table>
+    {hiddenCount > 0 && (
+      <button
+        type="button"
+        className="btn btn-sm"
+        style={{ marginTop: '0.5rem' }}
+        onClick={showMore}
+      >
+        Show more ({hiddenCount.toLocaleString()} hidden)
+      </button>
+    )}
+    </>
   );
 }
 
@@ -958,7 +973,9 @@ function ResultsTable({
   rows: MacEntry[];
   onShowHistory: (mac: string) => void;
 }) {
+  const { visible, hiddenCount, showMore } = useShowMore(rows);
   return (
+    <>
     <table className="data-table" style={{ width: '100%' }}>
       <thead>
         <tr>
@@ -974,7 +991,7 @@ function ResultsTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((r, idx) => (
+        {visible.map((r, idx) => (
           <tr key={`${r.mac_address}-${idx}`}>
             <td>
               <code style={{ fontSize: '0.85em' }}>{r.mac_address || '-'}</code>
@@ -1001,6 +1018,17 @@ function ResultsTable({
         ))}
       </tbody>
     </table>
+    {hiddenCount > 0 && (
+      <button
+        type="button"
+        className="btn btn-sm"
+        style={{ marginTop: '0.5rem' }}
+        onClick={showMore}
+      >
+        Show more ({hiddenCount.toLocaleString()} hidden)
+      </button>
+    )}
+    </>
   );
 }
 

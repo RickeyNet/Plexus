@@ -69,6 +69,33 @@ def _normalize_link_key(
     )
 
 
+async def _write_links_and_stats(host_id: int, neighbors: list[dict], if_stats: list[dict]) -> None:
+    """Persist one host's discovered neighbors and interface counters.
+
+    Two batched writes instead of a delete plus one round-trip per row.
+    """
+    await db.replace_topology_links_for_host(host_id, [
+        {
+            "source_host_id": n["source_host_id"],
+            "source_ip": n["source_ip"],
+            "source_interface": n["local_interface"],
+            "target_host_id": None,
+            "target_ip": n.get("remote_ip", ""),
+            "target_device_name": n["remote_device_name"],
+            "target_interface": n["remote_interface"],
+            "protocol": n["protocol"],
+            "target_platform": n.get("remote_platform", ""),
+        }
+        for n in neighbors
+    ])
+    if if_stats:
+        await db.upsert_interface_stats_batch([
+            (s["host_id"], s["if_index"], s["if_name"], s["if_speed_mbps"],
+             s["in_octets"], s["out_octets"])
+            for s in if_stats
+        ])
+
+
 def _normalize_ip_text(raw_ip: str) -> str:
     text = str(raw_ip or "").strip()
     if not text:
@@ -969,22 +996,7 @@ async def _run_topology_discovery_once() -> dict:
                     for n in neighbors
                 }
 
-                await db.delete_topology_links_for_host(host["id"])
-                for n in neighbors:
-                    await db.upsert_topology_link(
-                        source_host_id=n["source_host_id"],
-                        source_ip=n["source_ip"],
-                        source_interface=n["local_interface"],
-                        target_host_id=None,
-                        target_ip=n.get("remote_ip", ""),
-                        target_device_name=n["remote_device_name"],
-                        target_interface=n["remote_interface"],
-                        protocol=n["protocol"],
-                        target_platform=n.get("remote_platform", ""),
-                    )
-                # Store interface stats
-                for stat in if_stats:
-                    await db.upsert_interface_stat(**stat)
+                await _write_links_and_stats(host["id"], neighbors, if_stats)
                 # Auto-apply interface-scope graph templates
                 if if_stats:
                     try:
@@ -1625,21 +1637,7 @@ async def discover_topology_stream():
                                                 n["remote_device_name"], n["remote_interface"])
                             for n in neighbors
                         }
-                        await db.delete_topology_links_for_host(host["id"])
-                        for n in neighbors:
-                            await db.upsert_topology_link(
-                                source_host_id=n["source_host_id"],
-                                source_ip=n["source_ip"],
-                                source_interface=n["local_interface"],
-                                target_host_id=None,
-                                target_ip=n.get("remote_ip", ""),
-                                target_device_name=n["remote_device_name"],
-                                target_interface=n["remote_interface"],
-                                protocol=n["protocol"],
-                                target_platform=n.get("remote_platform", ""),
-                            )
-                        for stat in if_stats:
-                            await db.upsert_interface_stat(**stat)
+                        await _write_links_and_stats(host["id"], neighbors, if_stats)
                         if old_link_keys:
                             await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
                         group_links += len(neighbors)
@@ -1725,22 +1723,7 @@ async def discover_topology_for_group(group_id: int):
                     for n in neighbors
                 }
 
-                await db.delete_topology_links_for_host(host["id"])
-                for n in neighbors:
-                    await db.upsert_topology_link(
-                        source_host_id=n["source_host_id"],
-                        source_ip=n["source_ip"],
-                        source_interface=n["local_interface"],
-                        target_host_id=None,
-                        target_ip=n.get("remote_ip", ""),
-                        target_device_name=n["remote_device_name"],
-                        target_interface=n["remote_interface"],
-                        protocol=n["protocol"],
-                        target_platform=n.get("remote_platform", ""),
-                    )
-                # Store interface stats
-                for stat in if_stats:
-                    await db.upsert_interface_stat(**stat)
+                await _write_links_and_stats(host["id"], neighbors, if_stats)
                 # Auto-apply interface-scope graph templates
                 if if_stats:
                     try:
@@ -1829,22 +1812,7 @@ async def discover_topology_all():
                         for n in neighbors
                     }
 
-                    await db.delete_topology_links_for_host(host["id"])
-                    for n in neighbors:
-                        await db.upsert_topology_link(
-                            source_host_id=n["source_host_id"],
-                            source_ip=n["source_ip"],
-                            source_interface=n["local_interface"],
-                            target_host_id=None,
-                            target_ip=n.get("remote_ip", ""),
-                            target_device_name=n["remote_device_name"],
-                            target_interface=n["remote_interface"],
-                            protocol=n["protocol"],
-                            target_platform=n.get("remote_platform", ""),
-                        )
-                    # Store interface stats
-                    for stat in if_stats:
-                        await db.upsert_interface_stat(**stat)
+                    await _write_links_and_stats(host["id"], neighbors, if_stats)
                     # Auto-apply interface-scope graph templates
                     if if_stats:
                         try:
@@ -1953,21 +1921,7 @@ async def discover_topology_for_group_stream(group_id: int):
                                             n["remote_device_name"], n["remote_interface"])
                         for n in neighbors
                     }
-                    await db.delete_topology_links_for_host(host["id"])
-                    for n in neighbors:
-                        await db.upsert_topology_link(
-                            source_host_id=n["source_host_id"],
-                            source_ip=n["source_ip"],
-                            source_interface=n["local_interface"],
-                            target_host_id=None,
-                            target_ip=n.get("remote_ip", ""),
-                            target_device_name=n["remote_device_name"],
-                            target_interface=n["remote_interface"],
-                            protocol=n["protocol"],
-                            target_platform=n.get("remote_platform", ""),
-                        )
-                    for stat in if_stats:
-                        await db.upsert_interface_stat(**stat)
+                    await _write_links_and_stats(host["id"], neighbors, if_stats)
                     if old_link_keys:
                         await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
                     total_links += len(neighbors)

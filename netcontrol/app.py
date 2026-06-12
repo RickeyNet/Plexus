@@ -2099,12 +2099,22 @@ if os.path.isdir(STATIC_DIR):
 # React frontend (Phase 1.1+ of FRONTEND_MIGRATION.md). Built from
 # netcontrol/static/frontend via `npm run build`. Mounted at /frontend with
 # SPA-style fallback so client-side routes resolve to index.html.
+class _ImmutableStaticFiles(StaticFiles):
+    """Vite content-hashes every filename under dist/assets, so any change
+    produces a new URL — the old one can be cached forever."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 if os.path.isdir(FRONTEND_DIST):
     _frontend_assets = os.path.join(FRONTEND_DIST, "assets")
     if os.path.isdir(_frontend_assets):
         app.mount(
             "/frontend/assets",
-            StaticFiles(directory=_frontend_assets),
+            _ImmutableStaticFiles(directory=_frontend_assets),
             name="frontend_assets",
         )
 
