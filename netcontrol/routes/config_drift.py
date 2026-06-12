@@ -528,15 +528,23 @@ async def _run_config_drift_check_once() -> dict:
     drifted = 0
     errors = 0
 
-    for bl in baselines:
-        try:
-            result = await _analyze_drift_for_host(bl["host_id"])
-            hosts_checked += 1
-            if result.get("drifted"):
-                drifted += 1
-        except Exception as exc:
+    semaphore = asyncio.Semaphore(4)
+
+    async def _check_one(host_id: int) -> dict:
+        async with semaphore:
+            return await _analyze_drift_for_host(host_id)
+
+    results = await asyncio.gather(
+        *[_check_one(bl["host_id"]) for bl in baselines], return_exceptions=True,
+    )
+    for bl, result in zip(baselines, results):
+        if isinstance(result, BaseException):
             errors += 1
-            LOGGER.warning("config drift check failed for host_id=%s: %s", bl["host_id"], exc)
+            LOGGER.warning("config drift check failed for host_id=%s: %s", bl["host_id"], result)
+            continue
+        hosts_checked += 1
+        if result.get("drifted"):
+            drifted += 1
 
     # Retention cleanup
     retention_days = int(state.CONFIG_DRIFT_CHECK_CONFIG.get(

@@ -4875,6 +4875,43 @@ async def delete_topology_links_for_host(host_id: int) -> int:
         await db.close()
 
 
+async def replace_topology_links_for_host(host_id: int, links: list[dict]) -> int:
+    """Replace all links sourced from a host in a single transaction.
+
+    Batched alternative to delete_topology_links_for_host() + per-link
+    upsert_topology_link(): one DELETE plus one executemany, and the old
+    links never vanish without their replacements in a committed state.
+    """
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM topology_links WHERE source_host_id = ?", (host_id,)
+        )
+        if links:
+            await db.executemany(
+                """INSERT INTO topology_links
+                   (source_host_id, source_ip, source_interface,
+                    target_host_id, target_ip, target_device_name,
+                    target_interface, protocol, target_platform, discovered_at)
+                   VALUES (?,?,?,?,?,?,?,?,?, datetime('now'))
+                   ON CONFLICT(source_host_id, source_interface, target_device_name, target_interface)
+                   DO UPDATE SET
+                       target_host_id = excluded.target_host_id,
+                       target_ip = excluded.target_ip,
+                       protocol = excluded.protocol,
+                       target_platform = excluded.target_platform,
+                       discovered_at = excluded.discovered_at""",
+                [(link["source_host_id"], link["source_ip"], link["source_interface"],
+                  link["target_host_id"], link["target_ip"], link["target_device_name"],
+                  link["target_interface"], link["protocol"], link["target_platform"])
+                 for link in links],
+            )
+        await db.commit()
+        return len(links)
+    finally:
+        await db.close()
+
+
 async def delete_all_topology_links() -> int:
     """Delete all topology links."""
     db = await get_db()

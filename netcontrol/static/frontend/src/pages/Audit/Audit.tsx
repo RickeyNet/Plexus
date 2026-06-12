@@ -19,6 +19,7 @@ import {
   type AuditOverrideMode,
   type AuditSeverity,
 } from '@/api/audit';
+import { useShowMore } from '@/lib/useShowMore';
 
 const SEVERITY_BADGE: Record<AuditSeverity, string> = {
   critical: 'badge-danger',
@@ -770,6 +771,7 @@ function ScheduleEditor({
 
 function FindingsTable({ findings }: { findings: AuditFinding[] }) {
   const [muting, setMuting] = useState<AuditFinding | null>(null);
+  const { visible, hiddenCount, showMore } = useShowMore(findings);
   return (
     <>
     <table className="data-table">
@@ -785,7 +787,7 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
         </tr>
       </thead>
       <tbody>
-        {findings.map((f) => (
+        {visible.map((f) => (
           <tr key={f.id}>
             <td>
               <span className={`badge ${SEVERITY_BADGE[f.severity]}`}>
@@ -812,6 +814,16 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
         ))}
       </tbody>
     </table>
+    {hiddenCount > 0 && (
+      <button
+        type="button"
+        className="btn btn-sm"
+        style={{ marginTop: '0.5rem' }}
+        onClick={showMore}
+      >
+        Show more ({hiddenCount.toLocaleString()} hidden)
+      </button>
+    )}
     {muting && (
       <MuteFindingDialog
         finding={muting}
