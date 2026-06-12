@@ -29,7 +29,7 @@ class _LabClient:
         return self._client.post(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch):
+def _auth_client(tmp_path, monkeypatch, request):
     db_path = str(tmp_path / "lab_runtime_test.db")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-runtime")
@@ -48,6 +48,7 @@ def _auth_client(tmp_path, monkeypatch):
 
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
+    request.addfinalizer(lambda: client.__exit__(None, None, None))
 
     resp = client.post(
         "/api/auth/login",
@@ -175,9 +176,9 @@ def test_extract_mgmt_ipv4_legacy_shape():
 # ── HTTP endpoints (with mocked driver) ─────────────────────────────────────
 
 
-def test_runtime_status_endpoint(tmp_path, monkeypatch):
+def test_runtime_status_endpoint(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _name: None)
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     resp = client.get("/api/lab/runtime")
     assert resp.status_code == 200
     body = resp.json()
@@ -185,9 +186,9 @@ def test_runtime_status_endpoint(tmp_path, monkeypatch):
     assert "linux" in body["allowed_node_kinds"]
 
 
-def test_deploy_rejected_when_unavailable(tmp_path, monkeypatch):
+def test_deploy_rejected_when_unavailable(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _name: None)
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     env_id = client.post("/api/lab/environments", json={"name": "rt-env"}).json()["id"]
     dev_id = client.post(
@@ -203,14 +204,14 @@ def test_deploy_rejected_when_unavailable(tmp_path, monkeypatch):
     assert "containerlab" in resp.text.lower()
 
 
-def test_deploy_rejects_disallowed_node_kind(tmp_path, monkeypatch):
+def test_deploy_rejects_disallowed_node_kind(tmp_path, monkeypatch, request):
     # Pretend containerlab is available so the request hits validation.
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     monkeypatch.setattr(
         lab_runtime, "_run_containerlab",
         AsyncMock(return_value=(0, "version 0.50\n", "")),
     )
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "rt-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -225,7 +226,7 @@ def test_deploy_rejects_disallowed_node_kind(tmp_path, monkeypatch):
     assert "node kind" in resp.text.lower()
 
 
-def test_deploy_happy_path_records_state_and_event(tmp_path, monkeypatch):
+def test_deploy_happy_path_records_state_and_event(tmp_path, monkeypatch, request):
     """Successful deploy should write running state, mgmt IP, and an event row."""
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
 
@@ -252,7 +253,7 @@ def test_deploy_happy_path_records_state_and_event(tmp_path, monkeypatch):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "rt-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -285,7 +286,7 @@ def test_deploy_happy_path_records_state_and_event(tmp_path, monkeypatch):
     assert any(e["action"] == "deploy" and e["status"] == "ok" for e in events)
 
 
-def test_destroy_clears_state(tmp_path, monkeypatch):
+def test_destroy_clears_state(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     inspect_json = (
         '{"containers": [{"name": "clab-plx-rtr-1", "ipv4_address": "172.20.20.5/24"}]}'
@@ -305,7 +306,7 @@ def test_destroy_clears_state(tmp_path, monkeypatch):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "rt-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -325,7 +326,7 @@ def test_destroy_clears_state(tmp_path, monkeypatch):
     assert detail["runtime_mgmt_address"] in ("", None)
 
 
-def test_simulate_live_runs_real_push(tmp_path, monkeypatch):
+def test_simulate_live_runs_real_push(tmp_path, monkeypatch, request):
     """simulate-live should pull pre/post configs from the device via Netmiko mocks."""
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     inspect_json = (
@@ -367,7 +368,7 @@ def test_simulate_live_runs_real_push(tmp_path, monkeypatch):
     monkeypatch.setattr(lab_runtime, "_capture_running_config", _fake_capture)
     monkeypatch.setattr(lab_runtime, "_push_config_to_device", _fake_push)
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     # Seed a credential that the device will reference.
     async def _seed_cred():
@@ -418,7 +419,7 @@ def test_simulate_live_runs_real_push(tmp_path, monkeypatch):
 # ── Operational hardening ───────────────────────────────────────────────────
 
 
-def test_destroy_removes_workdir(tmp_path, monkeypatch):
+def test_destroy_removes_workdir(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     inspect_json = (
         '{"containers": [{"name": "clab-plx-rtr-w", "ipv4_address": "172.20.20.5/24"}]}'
@@ -439,7 +440,7 @@ def test_destroy_removes_workdir(tmp_path, monkeypatch):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(workroot))
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "wd-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -462,7 +463,7 @@ def test_destroy_removes_workdir(tmp_path, monkeypatch):
     assert not device_workdir.exists()
 
 
-def test_reconcile_marks_stale_running_rows(tmp_path, monkeypatch):
+def test_reconcile_marks_stale_running_rows(tmp_path, monkeypatch, request):
     """If a row says 'running' but containerlab no longer reports it, mark stopped."""
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
 
@@ -485,7 +486,7 @@ def test_reconcile_marks_stale_running_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "rec-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -544,7 +545,7 @@ def test_reconcile_skips_when_containerlab_unavailable(tmp_path, monkeypatch):
     assert summary["marked_stopped"] == 0
 
 
-def test_reap_idle_runtimes_destroys_old_labs(tmp_path, monkeypatch):
+def test_reap_idle_runtimes_destroys_old_labs(tmp_path, monkeypatch, request):
     """Rows older than the configured TTL should be torn down."""
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     inspect_json = (
@@ -570,7 +571,7 @@ def test_reap_idle_runtimes_destroys_old_labs(tmp_path, monkeypatch):
     # Set TTL to 1 second so anything started before "now" qualifies.
     monkeypatch.setenv("PLEXUS_LAB_RUNTIME_TTL_SECONDS", "1")
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "ttl-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -648,9 +649,9 @@ def _seed_compliance_profile_blocking_snmp_public(group_id: int):
     return asyncio.run(_do())
 
 
-def test_simulate_offline_includes_compliance_impact(tmp_path, monkeypatch):
+def test_simulate_offline_includes_compliance_impact(tmp_path, monkeypatch, request):
     """Phase A simulate should now surface compliance regressions when the source host has profiles."""
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     async def _seed():
         gid = await db_module.create_group(name="comp-grp")

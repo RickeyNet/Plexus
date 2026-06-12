@@ -374,7 +374,7 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 - [x] **Add `pytest-xdist` to `requirements-dev.txt`** and document `-n auto` (already proven locally: full suite drops from ~18 min serial to ~4 min with 6 workers). Consider markers/timeout config in `pytest.ini` while in there.
 - [x] **Fix blocking `time.sleep(1)` in `netcontrol/routes/cloud_flow_pullers.py:216`** - stale finding: the sleep is inside `_run()`, which executes via `await asyncio.to_thread(_run)` (line 256) — it sleeps a worker thread, not the event loop. No change needed.
 - [x] **Fix `_audit(request, ...)` misuse in `geolocation.py` (9 calls) and `billing.py` (5 calls)** - already fixed: both files now route through `_geo_audit`/`_billing_audit` wrappers that call `_audit` with the correct `(category, action, user=, detail=, correlation_id=)` signature; repo-wide grep finds no remaining `_audit(request, ...)` calls.
-- [ ] **Migrate remaining `resp.json()["detail"]` asserts** - `tests/test_session_idle_timeout.py` and `tests/test_siem_forwarder.py` still assert the legacy FastAPI error shape; the standardized envelope is `{ok, error: {code, message}}`.
+- [x] **Migrate remaining `resp.json()["detail"]` asserts** - verified stale 2026-06-12: no test asserts the legacy FastAPI error shape anymore (`test_session_idle_timeout.py:88` reads `HTTPException.detail` in-process, which is correct; `test_siem_forwarder.py` has no response-shape asserts).
 
 ### Batch 2 - Background Long-Running Endpoints
 

@@ -2,6 +2,9 @@
 pytest==9.0.3
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
+# Per-test wall-clock cap: a wedged event loop fails in minutes with a
+# traceback instead of hanging the whole run (see pytest.ini [timeout]).
+pytest-timeout==2.4.0
 # Parallel test execution: run `pytest -n auto` (~4 min vs ~18 min serial)
 pytest-xdist==3.8.0
 ruff==0.15.16

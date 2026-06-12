@@ -33,7 +33,7 @@ class _LabClient:
         return self._client.delete(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch):
+def _auth_client(tmp_path, monkeypatch, request):
     db_path = str(tmp_path / "lab_test.db")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-lab")
@@ -52,6 +52,7 @@ def _auth_client(tmp_path, monkeypatch):
 
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
+    request.addfinalizer(lambda: client.__exit__(None, None, None))
 
     resp = client.post(
         "/api/auth/login",
@@ -85,8 +86,8 @@ async def test_lab_tables_exist_after_init(tmp_path, monkeypatch):
 # ── Environment + device CRUD ───────────────────────────────────────────────
 
 
-def test_environment_create_list_delete(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_environment_create_list_delete(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     resp = client.post(
         "/api/lab/environments",
@@ -112,8 +113,8 @@ def test_environment_create_list_delete(tmp_path, monkeypatch):
     assert resp.status_code == 404
 
 
-def test_device_create_and_simulate(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_device_create_and_simulate(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     env_id = client.post(
         "/api/lab/environments", json={"name": "sim-env"},
@@ -170,8 +171,8 @@ def test_device_create_and_simulate(tmp_path, monkeypatch):
     assert "Gi0/2" in resp.json()["running_config"]
 
 
-def test_simulate_with_apply_persists_config(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_simulate_with_apply_persists_config(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "apply-env"}).json()["id"]
     device_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -193,9 +194,9 @@ def test_simulate_with_apply_persists_config(tmp_path, monkeypatch):
 # ── Clone-from-host + promote ───────────────────────────────────────────────
 
 
-def test_clone_host_uses_latest_snapshot(tmp_path, monkeypatch):
+def test_clone_host_uses_latest_snapshot(tmp_path, monkeypatch, request):
     """Cloning a production host into the lab should pull latest config snapshot."""
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     # Seed: create a group + host + snapshot synchronously via TestClient lifespan.
     import asyncio
@@ -238,8 +239,8 @@ def test_clone_host_uses_latest_snapshot(tmp_path, monkeypatch):
     assert "prod-rtr" in dev["running_config"]
 
 
-def test_promote_run_creates_deployment(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_promote_run_creates_deployment(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     # Seed group + host + snapshot + credential so promote can target real infra.
     import asyncio
