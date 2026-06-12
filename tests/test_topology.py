@@ -758,13 +758,9 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
                        "protocol": "cdp", "remote_platform": ""}]
         return neighbors, []  # (neighbors, if_stats)
 
-    async def fake_delete(host_id):
-        call_log.append(("delete", host_id))
-        return 0
-
-    async def fake_upsert(**kwargs):
-        call_log.append(("upsert", kwargs["source_host_id"]))
-        return 1
+    async def fake_replace(host_id, links):
+        call_log.append(("replace", host_id, len(links)))
+        return len(links)
 
     async def fake_resolve():
         call_log.append(("resolve",))
@@ -772,8 +768,7 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
 
     monkeypatch.setattr(app_module, "_discover_neighbors", fake_discover)
     monkeypatch.setattr(topology_module, "_discover_neighbors", fake_discover)
-    monkeypatch.setattr(app_module.db, "delete_topology_links_for_host", fake_delete)
-    monkeypatch.setattr(app_module.db, "upsert_topology_link", fake_upsert)
+    monkeypatch.setattr(app_module.db, "replace_topology_links_for_host", fake_replace)
     monkeypatch.setattr(app_module.db, "resolve_topology_target_host_ids", fake_resolve)
     monkeypatch.setattr(app_module.db, "get_topology_links_for_host", AsyncMock(return_value=[]))
     monkeypatch.setattr(topology_module, "db", app_module.db)
@@ -784,9 +779,10 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
     assert result["links_discovered"] == 2
     assert result["errors"] == 0
 
-    # DB writes (delete/upsert) should come AFTER all discovers
+    # DB writes (batched replace per host) should come AFTER all discovers
     discover_indices = [i for i, entry in enumerate(call_log) if entry[0] == "discover"]
-    db_write_indices = [i for i, entry in enumerate(call_log) if entry[0] in ("delete", "upsert")]
+    db_write_indices = [i for i, entry in enumerate(call_log) if entry[0] == "replace"]
+    assert len(db_write_indices) == 2  # one batched write per host
     assert max(discover_indices) < min(db_write_indices), \
         "All SNMP walks should complete before any DB writes"
 

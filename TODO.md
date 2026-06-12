@@ -408,4 +408,4 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 
 ### Batch 6 - The Big One
 
-- [ ] **Split `routes/database.py` (16,795 lines) into domain modules** (hosts, credentials, monitoring, audit, mac-tracking, lab, etc.) while preserving the `routes.database` API surface. *Prerequisite: batches 1 and 4 - the suite must be green and fast before a refactor this wide.*
+- [x] **Split `routes/database.py` (16,795 lines) into domain modules** (hosts, credentials, monitoring, audit, mac-tracking, lab, etc.) while preserving the `routes.database` API surface. *Prerequisite: batches 1 and 4 - the suite must be green and fast before a refactor this wide.* Done 2026-06: core (connection singleton, pragmas, schema, init_db) stays in `routes/database.py` (~2,800 lines); 20 domain modules live in `routes/db/*` and are star re-exported through the facade, so all `import routes.database as db` callsites and test monkeypatches (`DB_PATH`, `DB_ENGINE`, `get_db`) work unchanged — moved code reads those names late-bound via the facade. Public API surface verified byte-identical (606 names) against a pre-split snapshot.
