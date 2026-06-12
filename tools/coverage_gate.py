@@ -14,6 +14,9 @@ from pathlib import Path
 
 DEFAULT_RULES = {
     "netcontrol/app.py": 49.0,
+    # Floor from tests/test_monitoring.py (alert eval, suppression,
+    # availability, escalation). Raise as endpoint/poller tests land.
+    "netcontrol/routes/monitoring.py": 20.0,
 }
 
 
