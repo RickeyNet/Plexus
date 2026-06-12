@@ -113,6 +113,7 @@ _INSERT_ID_TABLES = {
     "access_groups",
     "inventory_groups",
     "hosts",
+    "host_ip_aliases",
     "playbooks",
     "templates",
     "credentials",
@@ -287,6 +288,18 @@ CREATE TABLE IF NOT EXISTS hosts (
     fdm_verify_tls    INTEGER NOT NULL DEFAULT 0,
     UNIQUE(group_id, ip_address)
 );
+
+-- Secondary interface IPs a device owns (learned from its SNMP ipAddrTable).
+-- Lets discovery recognise that a probed IP belongs to a device already in
+-- inventory instead of creating a duplicate host per interface IP, and lets
+-- topology resolve secondary IPs to the owning host. See migration 0053.
+CREATE TABLE IF NOT EXISTS host_ip_aliases (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id     INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    ip_address  TEXT    NOT NULL,
+    UNIQUE(host_id, ip_address)
+);
+CREATE INDEX IF NOT EXISTS idx_host_ip_aliases_ip ON host_ip_aliases(ip_address);
 
 CREATE TABLE IF NOT EXISTS playbooks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3396,6 +3409,108 @@ async def find_host_by_ip(ip_address: str) -> dict | None:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+# ── Multi-interface device identity / IP aliases ─────────────────────────────
+#
+# A device owns one primary IP (hosts.ip_address) plus any number of secondary
+# interface IPs (host_ip_aliases). Discovery uses these, together with serial
+# number and sysName, to recognise that a freshly probed IP is an existing
+# device rather than a new one — preventing one router with many interface IPs
+# from registering as many duplicate hosts.
+
+
+async def get_host_ip_index(group_id: int) -> dict[str, int]:
+    """Return {ip_address: host_id} covering every host in the group across both
+    its primary IP and its recorded interface-IP aliases."""
+    db = await get_db()
+    try:
+        index: dict[str, int] = {}
+        cursor = await db.execute(
+            "SELECT id, ip_address FROM hosts WHERE group_id = ?", (group_id,)
+        )
+        for row in await cursor.fetchall():
+            d = dict(row)
+            ip = (d.get("ip_address") or "").strip()
+            if ip:
+                index[ip] = int(d["id"])
+        cursor = await db.execute(
+            """SELECT a.ip_address AS ip, a.host_id AS host_id
+               FROM host_ip_aliases a
+               JOIN hosts h ON h.id = a.host_id
+               WHERE h.group_id = ?""",
+            (group_id,),
+        )
+        for row in await cursor.fetchall():
+            d = dict(row)
+            ip = (d.get("ip") or "").strip()
+            # A primary IP always wins over an alias if they ever collide.
+            if ip and ip not in index:
+                index[ip] = int(d["host_id"])
+        return index
+    finally:
+        await db.close()
+
+
+async def set_host_ip_aliases(host_id: int, primary_ip: str, alias_ips: list[str]) -> int:
+    """Replace the recorded interface-IP aliases for a host.
+
+    The host's own primary IP is never stored as an alias. Returns the number
+    of alias rows written.
+    """
+    primary = (primary_ip or "").strip()
+    clean = sorted({
+        ip.strip() for ip in alias_ips
+        if ip and ip.strip() and ip.strip() != primary
+    })
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM host_ip_aliases WHERE host_id = ?", (host_id,))
+        for ip in clean:
+            await db.execute(
+                "INSERT INTO host_ip_aliases (host_id, ip_address) VALUES (?, ?)",
+                (host_id, ip),
+            )
+        await db.commit()
+        return len(clean)
+    finally:
+        await db.close()
+
+
+async def get_ip_aliases_for_hosts(host_ids: list[int]) -> list[dict]:
+    """Return [{host_id, ip_address}] interface-IP aliases for the given hosts.
+
+    Used by topology to resolve a neighbor reported via a device's secondary
+    interface IP back to the owning inventory host.
+    """
+    if not host_ids:
+        return []
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" * len(host_ids))
+        cursor = await db.execute(
+            f"SELECT host_id, ip_address FROM host_ip_aliases WHERE host_id IN ({placeholders})",
+            tuple(host_ids),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_hosts_with_identity(group_id: int) -> list[dict]:
+    """Hosts in the group with the fields discovery dedups on (id, hostname,
+    ip_address, serial_number)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, hostname, ip_address, serial_number, device_type, "
+            "model, software_version, device_category, status "
+            "FROM hosts WHERE group_id = ?",
+            (group_id,),
+        )
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
