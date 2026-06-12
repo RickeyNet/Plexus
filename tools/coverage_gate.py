@@ -17,6 +17,9 @@ DEFAULT_RULES = {
     # Floor from tests/test_monitoring.py (alert eval, suppression,
     # availability, escalation). Raise as endpoint/poller tests land.
     "netcontrol/routes/monitoring.py": 20.0,
+    # Floor from tests/test_jobs.py (param coercion, queue ordering,
+    # dependency gating, event writer). The runner itself is untested.
+    "netcontrol/routes/jobs.py": 25.0,
 }
 
 
