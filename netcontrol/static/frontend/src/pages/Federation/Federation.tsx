@@ -359,6 +359,7 @@ function EnabledBadge({ enabled }: { enabled: boolean }) {
 function SyncStatusBadge({ status }: { status?: string | null }) {
   const s = String(status || 'never').toLowerCase();
   if (s === 'ok') return <span className="badge badge-success">Synced</span>;
+  if (s === 'partial') return <span className="badge badge-warning">Partial</span>;
   if (s === 'error') return <span className="badge badge-danger">Error</span>;
   return <span className="badge badge-secondary">Never</span>;
 }

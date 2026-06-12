@@ -699,7 +699,8 @@ async def _run_job(
         sockets = _job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
-            await ws.send_json(done_msg)
+            # Timeout so one wedged client socket can't stall job teardown.
+            await asyncio.wait_for(ws.send_json(done_msg), timeout=5)
         except Exception as exc:
             LOGGER.debug("job %s: failed to send job_complete to WS client: %s", job_id, exc)
 
@@ -918,7 +919,8 @@ async def cancel_job_endpoint(job_id: int, request: Request):
         sockets = _job_sockets.pop(job_id, [])
     for ws in sockets:
         try:
-            await ws.send_json(done_msg)
+            # Timeout so one wedged client socket can't stall job teardown.
+            await asyncio.wait_for(ws.send_json(done_msg), timeout=5)
         except Exception as exc:
             LOGGER.debug("job %s: failed to send job_complete to WS client: %s", job_id, exc)
 

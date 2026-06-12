@@ -137,7 +137,12 @@ def _peer_tls_verify(peer) -> bool:
 
 
 async def _fetch_peer_data(peer) -> dict:
-    """Fetch aggregate data from a remote Plexus peer."""
+    """Fetch aggregate data from a remote Plexus peer.
+
+    Failed sections keep their zero defaults but are recorded in
+    ``result["errors"]`` (section → message) so callers can distinguish an
+    unreachable or misconfigured peer from a genuinely empty one.
+    """
     headers = _build_headers(peer["api_token_enc"])
     base = peer["url"].rstrip("/")
     result = {
@@ -145,66 +150,62 @@ async def _fetch_peer_data(peer) -> dict:
         "alerts": {"active": 0, "critical": 0, "warning": 0},
         "compliance": {"total_profiles": 0, "compliant_pct": 0},
         "version": "",
+        "errors": {},
     }
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=_peer_tls_verify(peer)) as client:
-        # Fetch inventory summary
-        try:
-            resp = await client.get(f"{base}/api/inventory/groups", headers=headers)
-            if resp.status_code == 200:
-                groups = resp.json()
-                result["devices"]["groups"] = len(groups) if isinstance(groups, list) else 0
-        except Exception as exc:
-            LOGGER.debug("Federation: inventory/groups fetch failed: %s", exc)
 
-        # Fetch hosts
-        try:
-            resp = await client.get(f"{base}/api/inventory/hosts", headers=headers)
-            if resp.status_code == 200:
-                hosts = resp.json()
-                if isinstance(hosts, list):
-                    result["devices"]["total"] = len(hosts)
-                    result["devices"]["up"] = sum(1 for h in hosts if h.get("status") == "up")
-                    result["devices"]["down"] = sum(1 for h in hosts if h.get("status") == "down")
-        except Exception as exc:
-            LOGGER.debug("Federation: inventory/hosts fetch failed: %s", exc)
+        async def _get_json(section: str, path: str):
+            """GET a peer endpoint; on any failure record it and return None."""
+            try:
+                resp = await client.get(f"{base}{path}", headers=headers)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP {resp.status_code}")
+                return resp.json()
+            except Exception as exc:
+                result["errors"][section] = f"{path}: {exc}"
+                LOGGER.warning("Federation peer %s: %s fetch failed: %s",
+                               peer["name"], section, exc)
+                return None
 
-        # Fetch active alerts
-        try:
-            resp = await client.get(f"{base}/api/monitoring/alerts", headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                alerts = data if isinstance(data, list) else data.get("alerts", [])
-                active = [a for a in alerts if a.get("state") == "active"]
-                result["alerts"]["active"] = len(active)
-                result["alerts"]["critical"] = sum(
-                    1 for a in active if a.get("severity") == "critical"
-                )
-                result["alerts"]["warning"] = sum(
-                    1 for a in active if a.get("severity") == "warning"
-                )
-        except Exception as exc:
-            LOGGER.debug("Federation: alerts fetch failed: %s", exc)
+        groups = await _get_json("groups", "/api/inventory/groups")
+        if isinstance(groups, list):
+            result["devices"]["groups"] = len(groups)
 
-        # Fetch compliance summary
-        try:
-            resp = await client.get(f"{base}/api/compliance/profiles", headers=headers)
-            if resp.status_code == 200:
-                profiles = resp.json()
-                if isinstance(profiles, list):
-                    result["compliance"]["total_profiles"] = len(profiles)
-        except Exception as exc:
-            LOGGER.debug("Federation: compliance fetch failed: %s", exc)
+        hosts = await _get_json("hosts", "/api/inventory/hosts")
+        if isinstance(hosts, list):
+            result["devices"]["total"] = len(hosts)
+            result["devices"]["up"] = sum(1 for h in hosts if h.get("status") == "up")
+            result["devices"]["down"] = sum(1 for h in hosts if h.get("status") == "down")
 
-        # Fetch version
-        try:
-            resp = await client.get(f"{base}/api/admin/capabilities", headers=headers)
-            if resp.status_code == 200:
-                caps = resp.json()
-                result["version"] = caps.get("version", "")
-        except Exception as exc:
-            LOGGER.debug("Federation: capabilities fetch failed: %s", exc)
+        data = await _get_json("alerts", "/api/monitoring/alerts")
+        if data is not None:
+            alerts = data if isinstance(data, list) else data.get("alerts", [])
+            active = [a for a in alerts if a.get("state") == "active"]
+            result["alerts"]["active"] = len(active)
+            result["alerts"]["critical"] = sum(
+                1 for a in active if a.get("severity") == "critical"
+            )
+            result["alerts"]["warning"] = sum(
+                1 for a in active if a.get("severity") == "warning"
+            )
+
+        profiles = await _get_json("compliance", "/api/compliance/profiles")
+        if isinstance(profiles, list):
+            result["compliance"]["total_profiles"] = len(profiles)
+
+        caps = await _get_json("version", "/api/admin/capabilities")
+        if isinstance(caps, dict):
+            result["version"] = caps.get("version", "")
 
     return result
+
+
+def _sync_status_from(data: dict) -> tuple[str, str]:
+    """Map a _fetch_peer_data result to (last_sync_status, last_sync_message)."""
+    errors = data.get("errors") or {}
+    if not errors:
+        return "ok", ""
+    return "partial", "; ".join(f"{k}: {v}" for k, v in errors.items())[:500]
 
 
 # ── CRUD Routes ──────────────────────────────────────────────────────────────
@@ -414,10 +415,11 @@ async def sync_peer(peer_id: int, request: Request, _user=Depends(_require_admin
             (peer_id, "metadata", json.dumps({"version": data.get("version", "")}), now),
         )
 
-        # Update peer sync status
+        # Update peer sync status ("partial" when some sections failed)
+        sync_status, sync_message = _sync_status_from(data)
         await cur.execute(
             "UPDATE federation_peers SET last_sync_at = ?, last_sync_status = ?, last_sync_message = ?, updated_at = ? WHERE id = ?",
-            (now, "ok", "", now, peer_id),
+            (now, sync_status, sync_message, now, peer_id),
         )
         await cur.commit()
     finally:
@@ -544,9 +546,10 @@ async def federation_sync_loop() -> None:
                             "INSERT INTO federation_snapshots (peer_id, category, data_json, captured_at) VALUES (?, ?, ?, ?)",
                             (peer["id"], "metadata", json.dumps({"version": data.get("version", "")}), now),
                         )
+                        sync_status, sync_message = _sync_status_from(data)
                         await cur.execute(
-                            "UPDATE federation_peers SET last_sync_at = ?, last_sync_status = ?, last_sync_message = '', updated_at = ? WHERE id = ?",
-                            (now, "ok", now, peer["id"]),
+                            "UPDATE federation_peers SET last_sync_at = ?, last_sync_status = ?, last_sync_message = ?, updated_at = ? WHERE id = ?",
+                            (now, sync_status, sync_message, now, peer["id"]),
                         )
                         await cur.commit()
                     finally:
