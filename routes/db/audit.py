@@ -36,10 +36,18 @@ __all__ = [
 
 
 # Serializes audit-event inserts within this process so concurrent writers
-# cannot fork the hash chain. Plexus is single-process today; multi-worker
-# Postgres deployments would need an additional DB-level barrier (e.g.
-# pg_advisory_xact_lock) layered on top.
+# cannot fork the hash chain. On Postgres an advisory lock (below) extends
+# the same guarantee across worker processes.
 _audit_chain_lock = asyncio.Lock()
+
+# Session-scoped Postgres advisory lock key for chain writes. The asyncio
+# lock above cannot stop a second worker process from reading the same
+# chain tail; every writer takes this advisory lock around the tail-read +
+# insert instead. Session-scoped (not xact-scoped) because the compat
+# layer runs autocommit, so there is no surrounding transaction to bind an
+# xact lock to. asyncpg's pool reset releases advisory locks when the
+# connection is returned, so a dropped connection cannot strand the lock.
+_AUDIT_CHAIN_PG_LOCK_KEY = 0x506C_6578_4155_4454  # "PlexAUDT"
 
 
 # Optional async hook fired after every successful audit insert. The SIEM
@@ -180,7 +188,13 @@ async def add_audit_event(
 
     async with _audit_chain_lock:
         conn = await _dbcore.get_db()
+        pg_locked = False
         try:
+            if _dbcore.DB_ENGINE == "postgres":
+                await conn.execute(
+                    "SELECT pg_advisory_lock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,)
+                )
+                pg_locked = True
             cursor = await conn.execute(
                 "SELECT row_hash FROM audit_events ORDER BY id DESC LIMIT 1"
             )
@@ -204,6 +218,16 @@ async def add_audit_event(
             new_id = cursor.lastrowid
             await conn.commit()
         finally:
+            if pg_locked:
+                try:
+                    await conn.execute(
+                        "SELECT pg_advisory_unlock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,)
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "audit chain: failed to release pg advisory lock; "
+                        "pool reset will reclaim it"
+                    )
             await conn.close()
 
     if _audit_event_hook is not None:
@@ -220,10 +244,14 @@ async def add_audit_event(
         }
         try:
             await _audit_event_hook(event)
-        except Exception:
+        except Exception as exc:
             # Forwarding must never break audit ingestion. The DB row is
-            # already committed; downstream observability is best-effort.
-            pass
+            # already committed; downstream observability is best-effort —
+            # but a dropped event must not be invisible.
+            _LOGGER.warning(
+                "audit hook dropped event id=%s category=%s action=%s: %s",
+                new_id, category, action, type(exc).__name__,
+            )
     return new_id
 
 
