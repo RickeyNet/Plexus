@@ -110,7 +110,7 @@ class FdmClient:
         self._access_expiry = 0.0
         self._refresh_expiry = 0.0
 
-    async def __aenter__(self) -> "FdmClient":
+    async def __aenter__(self) -> FdmClient:
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
