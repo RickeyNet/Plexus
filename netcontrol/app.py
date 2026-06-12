@@ -37,6 +37,7 @@ import time
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
+from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.routes import notification_channels, siem_forwarder
 from netcontrol.routes.admin import (
     AdminAccessGroupCreateRequest,
@@ -223,7 +224,6 @@ from netcontrol.routes.metrics_engine import (
     inject_auth as metrics_engine_inject_auth,
     router as metrics_engine_router,
 )
-from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.routes.monitoring import (
     _alert_escalation_loop,
     _baseline_computation_loop,
@@ -1284,29 +1284,34 @@ async def lifespan(app: FastAPI):
         )
     )
 
-    retention_task = asyncio.create_task(_job_retention_cleanup_loop())
-    discovery_sync_task = asyncio.create_task(_discovery_sync_loop())
-    topology_discovery_task = asyncio.create_task(_topology_discovery_loop())
-    stp_discovery_task = asyncio.create_task(_stp_discovery_loop())
-    config_drift_task = asyncio.create_task(_config_drift_check_loop())
-    mac_move_retention_task = asyncio.create_task(_mac_move_retention_loop())
-    config_backup_task = asyncio.create_task(_config_backup_loop())
-    compliance_check_task = asyncio.create_task(_compliance_check_loop())
-    monitoring_task = asyncio.create_task(_monitoring_poll_loop())
-    fdm_poll_task = asyncio.create_task(fdm_poll_loop())
-    escalation_task = asyncio.create_task(_alert_escalation_loop())
-    baseline_task = asyncio.create_task(_baseline_computation_loop())
-    downsampling_task = asyncio.create_task(_downsampling_loop())
-    rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
-    report_scheduler_task = asyncio.create_task(_report_scheduler_loop())
-    audit_task = asyncio.create_task(_audit_run_loop())
-    cloud_flow_sync_task = asyncio.create_task(_cloud_flow_sync_loop())
-    cloud_traffic_sync_task = asyncio.create_task(_cloud_traffic_metric_sync_loop())
-    federation_task = asyncio.create_task(federation_sync_loop())
-    ipam_sync_task = asyncio.create_task(_ipam_sync_loop())
-    dhcp_sync_task = asyncio.create_task(_dhcp_sync_loop())
-    lab_runtime_ttl_task = asyncio.create_task(lab_runtime_ttl_loop())
-    lab_drift_task = asyncio.create_task(lab_drift_scheduler_loop())
+    background_tasks = [
+        asyncio.create_task(loop(), name=loop.__name__)
+        for loop in (
+            _job_retention_cleanup_loop,
+            _discovery_sync_loop,
+            _topology_discovery_loop,
+            _stp_discovery_loop,
+            _config_drift_check_loop,
+            _mac_move_retention_loop,
+            _config_backup_loop,
+            _compliance_check_loop,
+            _monitoring_poll_loop,
+            fdm_poll_loop,
+            _alert_escalation_loop,
+            _baseline_computation_loop,
+            _downsampling_loop,
+            _rate_limit_cleanup_loop,
+            _report_scheduler_loop,
+            _audit_run_loop,
+            _cloud_flow_sync_loop,
+            _cloud_traffic_metric_sync_loop,
+            federation_sync_loop,
+            _ipam_sync_loop,
+            _dhcp_sync_loop,
+            lab_runtime_ttl_loop,
+            lab_drift_scheduler_loop,
+        )
+    ]
 
     # SIEM forwarder: start the per-sink dispatcher tasks and register the
     # hook that fans audit events out to them. Done before the rest of the
@@ -1344,121 +1349,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        retention_task.cancel()
-        discovery_sync_task.cancel()
-        topology_discovery_task.cancel()
-        stp_discovery_task.cancel()
-        config_drift_task.cancel()
-        mac_move_retention_task.cancel()
-        config_backup_task.cancel()
-        compliance_check_task.cancel()
-        monitoring_task.cancel()
-        fdm_poll_task.cancel()
-        escalation_task.cancel()
-        baseline_task.cancel()
-        downsampling_task.cancel()
-        rate_limit_cleanup_task.cancel()
-        report_scheduler_task.cancel()
-        audit_task.cancel()
-        cloud_flow_sync_task.cancel()
-        cloud_traffic_sync_task.cancel()
-        federation_task.cancel()
-        ipam_sync_task.cancel()
-        dhcp_sync_task.cancel()
-        lab_runtime_ttl_task.cancel()
-        lab_drift_task.cancel()
-        try:
-            await retention_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await discovery_sync_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await topology_discovery_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await stp_discovery_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await config_drift_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await mac_move_retention_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await config_backup_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await compliance_check_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await monitoring_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await fdm_poll_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await escalation_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await baseline_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await downsampling_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await rate_limit_cleanup_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await report_scheduler_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await audit_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await cloud_flow_sync_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await cloud_traffic_sync_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await federation_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await ipam_sync_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await dhcp_sync_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await lab_runtime_ttl_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await lab_drift_task
-        except asyncio.CancelledError:
-            pass
+        for task in background_tasks:
+            task.cancel()
+        # Cancelled loops unwind here; a loop that died with any other
+        # exception is logged instead of aborting the rest of shutdown.
+        results = await asyncio.gather(*background_tasks, return_exceptions=True)
+        for task, res in zip(background_tasks, results):
+            if isinstance(res, Exception):
+                LOGGER.warning(
+                    "background loop %s exited with %s during shutdown",
+                    task.get_name(), type(res).__name__,
+                )
         await _cancel_flow_aggregation_task()
         if flow_collector_started:
             try:
