@@ -98,7 +98,10 @@ def window_is_active(window: dict, now: datetime | None = None) -> bool:
 
     Disabled windows always return False.
     """
-    if not window.get("enabled", 1):
+    # A NULL enabled column means enabled; dict-default alone would treat
+    # None as disabled (the default only applies when the key is missing).
+    enabled = window.get("enabled")
+    if enabled is not None and not enabled:
         return False
     now = now or datetime.now(UTC)
     start = _parse_iso(window["start_at"])
