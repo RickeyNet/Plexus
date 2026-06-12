@@ -4,7 +4,146 @@ import netcontrol.app as app_module
 import netcontrol.routes.inventory as inventory_module
 import netcontrol.routes.state as state_module
 import pytest
+import routes.database as db_module
 from fastapi import HTTPException, Request
+
+
+def _norm(raw: dict) -> dict:
+    return inventory_module._normalize_discovered_entry(raw)
+
+
+# ── Multi-interface device dedup (planner is pure / no I/O) ──────────────────
+
+
+def test_normalize_entry_identity():
+    snmp = _norm({"hostname": "core-rtr", "ip_address": "10.0.0.1",
+                  "serial_number": "FOC123", "discovery": {"protocol": "snmpv2c"}})
+    assert snmp["sys_name_norm"] == "core-rtr"
+    assert snmp["serial"] == "FOC123"
+    assert snmp["snmp_reachable"] is True
+
+    # A synthetic fallback name is per-IP, never a device identity.
+    fallback = _norm({"hostname": "host-10-0-0-2", "ip_address": "10.0.0.2"})
+    assert fallback["sys_name_norm"] == ""
+    assert fallback["snmp_reachable"] is False
+
+    # Explicit sys_name wins and is domain-normalized.
+    explicit = _norm({"hostname": "x", "ip_address": "10.0.0.3", "sys_name": "Edge.example.com"})
+    assert explicit["sys_name_norm"] == "edge"
+
+
+def test_plan_groups_two_snmp_ips_with_same_sysname():
+    d = [
+        _norm({"hostname": "rtr", "ip_address": "10.0.0.1", "sys_name": "rtr", "discovery": {"protocol": "snmpv2c"}}),
+        _norm({"hostname": "rtr", "ip_address": "10.0.0.2", "sys_name": "rtr", "discovery": {"protocol": "snmpv2c"}}),
+    ]
+    plan = inventory_module._build_discovery_plan(d, [], {}, {})
+    assert len(plan["add"]) == 1
+    add = plan["add"][0]
+    assert {add["ip"], *add["alias_ips"]} == {"10.0.0.1", "10.0.0.2"}
+    assert plan["delete"] == []
+
+
+def test_plan_pingonly_secondary_grouped_via_interface_table():
+    """A ping-only secondary IP (fallback name) is folded into the SNMP device
+    because it appears in that device's ipAddrTable."""
+    d = [
+        _norm({"hostname": "rtr", "ip_address": "10.0.0.1", "sys_name": "rtr", "discovery": {"protocol": "snmpv2c"}}),
+        _norm({"hostname": "host-10-0-0-2", "ip_address": "10.0.0.2", "discovery": {"protocol": "icmp"}}),
+    ]
+    iface = {"10.0.0.1": ["10.0.0.1", "10.0.0.2"]}
+    plan = inventory_module._build_discovery_plan(d, [], {}, iface)
+    assert len(plan["add"]) == 1
+    add = plan["add"][0]
+    assert add["ip"] == "10.0.0.1"  # the SNMP IP is canonical
+    assert add["alias_ips"] == ["10.0.0.2"]
+
+
+def test_plan_matches_existing_by_serial():
+    d = [_norm({"hostname": "rtr-new", "ip_address": "10.0.0.9", "sys_name": "rtr-new",
+                "serial_number": "S1", "discovery": {"protocol": "snmpv2c"}})]
+    existing = [{"id": 1, "hostname": "rtr-old", "ip_address": "10.0.0.1",
+                 "serial_number": "S1", "device_type": "cisco_ios"}]
+    plan = inventory_module._build_discovery_plan(d, existing, {"10.0.0.1": 1}, {})
+    assert plan["add"] == []
+    assert [u["host_id"] for u in plan["update"]] == [1]
+    assert plan["update"][0]["ip"] == "10.0.0.1"  # existing primary IP preserved
+    assert "10.0.0.9" in plan["update"][0]["alias_ips"]
+
+
+def test_plan_suppresses_existing_duplicate_in_interface_table():
+    """The classic bug: a second host row whose IP is really a secondary
+    interface of the canonical device is deleted (strong evidence)."""
+    d = [_norm({"hostname": "rtr", "ip_address": "10.0.0.1", "sys_name": "rtr",
+                "discovery": {"protocol": "snmpv2c"}})]
+    existing = [
+        {"id": 1, "hostname": "rtr", "ip_address": "10.0.0.1", "serial_number": "", "device_type": "cisco_ios"},
+        {"id": 2, "hostname": "host-10-0-0-2", "ip_address": "10.0.0.2", "serial_number": "", "device_type": "unknown"},
+    ]
+    iface = {"10.0.0.1": ["10.0.0.1", "10.0.0.2"]}
+    plan = inventory_module._build_discovery_plan(d, existing, {"10.0.0.1": 1, "10.0.0.2": 2}, iface)
+    assert [u["host_id"] for u in plan["update"]] == [1]
+    assert plan["delete"] == [2]
+
+
+def test_plan_sysname_match_alone_never_deletes_existing():
+    """Without serial or interface-table evidence, sysName similarity must not
+    delete a host (default 'Router' names would wrongly merge real devices)."""
+    d = [_norm({"hostname": "Router", "ip_address": "10.0.0.1", "sys_name": "Router",
+                "discovery": {"protocol": "snmpv2c"}})]
+    existing = [
+        {"id": 1, "hostname": "Router", "ip_address": "10.0.0.1", "serial_number": "", "device_type": "cisco_ios"},
+        {"id": 2, "hostname": "Router", "ip_address": "10.9.9.9", "serial_number": "", "device_type": "cisco_ios"},
+    ]
+    plan = inventory_module._build_discovery_plan(d, existing, {"10.0.0.1": 1, "10.9.9.9": 2}, {})
+    assert plan["delete"] == []
+
+
+@pytest.fixture
+async def inv_db(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "inv_dedup.db")
+    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
+    await db_module.init_db()
+    gid = await db_module.create_group("core")
+    return gid
+
+
+@pytest.mark.asyncio
+async def test_sync_suppresses_secondary_interface_duplicate(inv_db, monkeypatch):
+    """End-to-end: a pre-existing duplicate host that is really a secondary
+    interface IP is removed and recorded as an alias on the next sync."""
+    gid = inv_db
+    canonical = await db_module.add_host(gid, "rtr", "10.0.0.1", "cisco_ios")
+    dup = await db_module.add_host(gid, "host-10-0-0-2", "10.0.0.2", "unknown")
+
+    async def fake_noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(inventory_module, "push_inventory_host_allocation", fake_noop)
+    monkeypatch.setattr(
+        inventory_module.state, "_resolve_snmp_discovery_config", lambda _g: {"enabled": False}
+    )
+
+    async def resolver(_ip):
+        return ["10.0.0.1", "10.0.0.2"]
+
+    discovered = [{
+        "hostname": "rtr", "ip_address": "10.0.0.1", "device_type": "cisco_ios",
+        "status": "online", "sys_name": "rtr", "serial_number": "",
+        "discovery": {"protocol": "snmpv2c"},
+    }]
+    result = await inventory_module._sync_group_hosts(
+        gid, discovered, interface_ip_resolver=resolver,
+    )
+
+    assert result["removed"] == 1
+    hosts = await db_module.get_hosts_for_group(gid)
+    assert [h["id"] for h in hosts] == [canonical]   # duplicate gone
+    assert dup not in {h["id"] for h in hosts}
+    # The duplicate's IP is now resolvable to the canonical host via its alias.
+    index = await db_module.get_host_ip_index(gid)
+    assert index.get("10.0.0.2") == canonical
 
 
 def test_expand_scan_targets_deduplicates_and_respects_limit():
@@ -76,11 +215,24 @@ async def test_sync_group_hosts_adds_updates_and_removes(monkeypatch):
     async def fake_update_host_status(host_id, status):
         calls["status"].append((host_id, status))
 
+    async def fake_get_host_ip_index(group_id):
+        return {"10.1.1.1": 1, "10.1.1.2": 2}
+
+    async def fake_noop(*_a, **_k):
+        return None
+
     monkeypatch.setattr(app_module.db, "get_hosts_for_group", fake_get_hosts_for_group)
     monkeypatch.setattr(app_module.db, "add_host", fake_add_host)
     monkeypatch.setattr(app_module.db, "update_host", fake_update_host)
     monkeypatch.setattr(app_module.db, "remove_host", fake_remove_host)
     monkeypatch.setattr(app_module.db, "update_host_status", fake_update_host_status)
+    monkeypatch.setattr(app_module.db, "get_host_ip_index", fake_get_host_ip_index)
+    monkeypatch.setattr(app_module.db, "set_host_ip_aliases", fake_noop)
+    monkeypatch.setattr(app_module.db, "update_host_serial", fake_noop)
+    monkeypatch.setattr(inventory_module, "push_inventory_host_allocation", fake_noop)
+    monkeypatch.setattr(
+        state_module, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False}
+    )
     monkeypatch.setattr(inventory_module, "db", app_module.db)
 
     result = await inventory_module._sync_group_hosts(77, discovered_hosts, remove_absent=True)
@@ -149,11 +301,20 @@ async def test_ssh_fallback_does_not_clobber_snmp_confirmed_device_type(monkeypa
     async def fake_noop(*_a, **_k):
         return None
 
+    async def fake_ip_index(_group_id):
+        return {"10.2.2.1": 1, "10.2.2.2": 2, "10.2.2.3": 3}
+
     monkeypatch.setattr(inventory_module.db, "get_hosts_for_group", fake_get_hosts_for_group)
     monkeypatch.setattr(inventory_module.db, "update_host", fake_update_host)
     monkeypatch.setattr(inventory_module.db, "update_host_status", fake_noop)
     monkeypatch.setattr(inventory_module.db, "update_host_device_info", fake_noop)
+    monkeypatch.setattr(inventory_module.db, "get_host_ip_index", fake_ip_index)
+    monkeypatch.setattr(inventory_module.db, "set_host_ip_aliases", fake_noop)
+    monkeypatch.setattr(inventory_module.db, "update_host_serial", fake_noop)
     monkeypatch.setattr(inventory_module, "push_inventory_host_allocation", fake_noop)
+    monkeypatch.setattr(
+        state_module, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False}
+    )
 
     await inventory_module._sync_group_hosts(5, discovered_hosts, remove_absent=False)
 
