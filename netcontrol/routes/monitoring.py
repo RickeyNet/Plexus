@@ -37,6 +37,12 @@ LOGGER = configure_logging("plexus.monitoring")
 _last_retention_cleanup = 0.0
 
 
+def _exc_text(exc: BaseException) -> str:
+    """str(exc), falling back to the type name — TimeoutError and friends
+    stringify to '' and would otherwise log an empty message."""
+    return str(exc) or type(exc).__name__
+
+
 async def _track_availability_from_poll(
     res: dict,
     poll_id: int,
@@ -833,6 +839,10 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
                     _poll_host_monitoring(h, c, s), timeout=poll_timeout
                 )
                 return h, res, None
+            except TimeoutError:
+                # Bare TimeoutError stringifies to '' - name it like the
+                # streaming poll does so the log says what happened.
+                return h, None, TimeoutError(f"poll exceeded {poll_timeout:.0f}s")
             except Exception as exc:  # noqa: BLE001 - recorded per host below
                 return h, None, exc
 
@@ -847,13 +857,13 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
             h, res, err = await coro
         except Exception as exc:  # task crashed without host context
             errors += 1
-            LOGGER.warning("monitoring: poll task crashed: %s", redact_value(str(exc)))
+            LOGGER.warning("monitoring: poll task crashed: %s", redact_value(_exc_text(exc)))
             continue
 
         if err is not None:
             errors += 1
             LOGGER.warning("monitoring: poll exception for %s: %s",
-                           h.get("hostname", "?"), redact_value(str(err)))
+                           h.get("hostname", "?"), redact_value(_exc_text(err)))
             continue
 
         hosts_polled += 1
@@ -861,7 +871,7 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
             alerts_created += await _process_poll_result(h, res, alert_rules_cache)
         except Exception as exc:  # one host's persistence must not abort the cycle
             LOGGER.warning("monitoring: post-process error for %s: %s",
-                           h.get("hostname", "?"), redact_value(str(exc)))
+                           h.get("hostname", "?"), redact_value(_exc_text(exc)))
 
     # Retention cleanup - throttled. These are full-table DELETE scans; running
     # them every cycle (as often as every 60s) is wasteful, so only run once
@@ -881,7 +891,7 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
             await db.delete_expired_suppressions()
             await metrics_retention_cleanup()
         except Exception as exc:
-            LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(str(exc)))
+            LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
 
     LOGGER.info("monitoring: poll complete - %d hosts, %d alerts, %d errors",
                 hosts_polled, alerts_created, errors)
@@ -899,7 +909,7 @@ async def _monitoring_poll_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            LOGGER.warning("monitoring poll loop failure: %s", redact_value(str(exc)))
+            LOGGER.warning("monitoring poll loop failure: %s", redact_value(_exc_text(exc)))
             await asyncio.sleep(state.MONITORING_DEFAULTS["interval_seconds"])
 
 
@@ -1088,7 +1098,7 @@ async def monitoring_poll_now_stream(request: Request):
             except Exception as exc:  # task itself crashed (no host context)
                 errors += 1
                 completed += 1
-                LOGGER.warning("monitoring: poll exception: %s", redact_value(str(exc)))
+                LOGGER.warning("monitoring: poll exception: %s", redact_value(_exc_text(exc)))
                 yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': '(unknown)', 'error': 'Poll failed for host.'})}\n\n"
                 continue
 
@@ -1097,7 +1107,7 @@ async def monitoring_poll_now_stream(request: Request):
                 errors += 1
                 completed += 1
                 LOGGER.warning("monitoring: poll failed for %s: %s",
-                               hostname, redact_value(str(err)))
+                               hostname, redact_value(_exc_text(err)))
                 detail = (
                     "Timed out - device unresponsive."
                     if isinstance(err, TimeoutError)
@@ -1194,7 +1204,7 @@ async def monitoring_poll_now_stream(request: Request):
             await db.delete_expired_suppressions()
             await metrics_retention_cleanup()
         except Exception as exc:
-            LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(str(exc)))
+            LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
 
         await _audit("monitoring", "poll.manual", user=user,
                      detail=f"hosts={hosts_polled} alerts={alerts_created}")
