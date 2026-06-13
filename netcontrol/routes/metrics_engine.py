@@ -27,16 +27,6 @@ router = APIRouter()
 admin_router = APIRouter()
 LOGGER = configure_logging("plexus.metrics_engine")
 
-# ── Late-binding auth (injected by app.py) ───────────────────────────────────
-_require_auth = None
-_require_admin = None
-
-
-def inject_auth(auth_dep, admin_dep):
-    global _require_auth, _require_admin
-    _require_auth = auth_dep
-    _require_admin = admin_dep
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1.  VENDOR OID REGISTRY  (Multi-vendor SNMP support)

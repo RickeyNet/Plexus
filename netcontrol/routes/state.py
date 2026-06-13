@@ -160,6 +160,20 @@ COMPLIANCE_ASSIGNMENT_MIN_INTERVAL = 3600
 COMPLIANCE_ASSIGNMENT_MAX_INTERVAL = 604800
 
 
+# ── Device-operation fan-out ─────────────────────────────────────────────────
+# Concurrency cap for bulk device CLI/SSH operations: config backups, drift
+# checks, compliance scans, deployments, MAC collection, discovery serial
+# fetch, risk analysis. One knob because they all contend for the same
+# blocking-SSH thread pool; raise with care on low-core hosts.
+
+DEVICE_OP_CONCURRENCY = max(1, int(os.getenv("APP_DEVICE_OP_CONCURRENCY", "4") or "4"))
+
+
+def device_op_semaphore() -> asyncio.Semaphore:
+    """Fresh semaphore sized to the configured device-operation fan-out."""
+    return asyncio.Semaphore(DEVICE_OP_CONCURRENCY)
+
+
 # ── Monitoring defaults ─────────────────────────────────────────────────────
 
 MONITORING_DEFAULTS = {

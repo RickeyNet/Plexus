@@ -25,17 +25,6 @@ from netcontrol.telemetry import configure_logging
 router = APIRouter()
 LOGGER = configure_logging("plexus.risk_analysis")
 
-# ── Late-binding auth dependencies (injected by app.py) ──────────────────────
-
-_require_auth = None
-_require_feature = None
-
-
-def init_risk_analysis(require_auth, require_feature):
-    global _require_auth, _require_feature
-    _require_auth = require_auth
-    _require_feature = require_feature
-
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -418,7 +407,7 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
         raise HTTPException(status_code=400, detail="No target hosts found")
 
     # Run analysis for each host (with bounded concurrency)
-    sem = asyncio.Semaphore(4)
+    sem = state.device_op_semaphore()
     results = []
 
     async def _analyze_one(h):

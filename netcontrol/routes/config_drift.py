@@ -28,22 +28,16 @@ LOGGER = configure_logging("plexus.config_drift")
 router = APIRouter()
 ws_router = APIRouter()  # WebSocket routes - registered without HTTP auth dependency
 
-# ── Late-binding auth dependencies ────────────────────────────────────────────
+# ── Late-binding auth dependencies (injected by app.py) ──────────────────────
+# Route-level auth comes from app.py's include_router dependencies; only the
+# WebSocket session check needs late-bound callables here.
 
-_require_auth = None
-_require_feature = None
-_require_admin = None
 _verify_session_token = None
 _get_user_features = None
 
 
-def init_config_drift(require_auth_fn, require_feature_fn, require_admin_fn,
-                      verify_session_token_fn, get_user_features_fn):
-    global _require_auth, _require_feature, _require_admin
+def init_config_drift(verify_session_token_fn, get_user_features_fn):
     global _verify_session_token, _get_user_features
-    _require_auth = require_auth_fn
-    _require_feature = require_feature_fn
-    _require_admin = require_admin_fn
     _verify_session_token = verify_session_token_fn
     _get_user_features = get_user_features_fn
 
@@ -185,7 +179,7 @@ async def _run_config_capture_job(
     await _broadcast_capture_line(job_id,
         f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Starting config capture for {total} host(s)...\n")
 
-    sem = asyncio.Semaphore(4)
+    sem = state.device_op_semaphore()
 
     captured_host_ids = []
 
@@ -528,7 +522,7 @@ async def _run_config_drift_check_once() -> dict:
     drifted = 0
     errors = 0
 
-    semaphore = asyncio.Semaphore(4)
+    semaphore = state.device_op_semaphore()
 
     async def _check_one(host_id: int) -> dict:
         async with semaphore:
@@ -721,7 +715,7 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     results = []
-    sem = asyncio.Semaphore(4)
+    sem = state.device_op_semaphore()
 
     async def _capture_one(h):
         async with sem:

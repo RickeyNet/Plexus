@@ -83,19 +83,6 @@ async def _track_availability_from_poll(
             )
             break
 
-# ── Late-binding auth dependencies (injected by app.py) ──────────────────────
-
-_require_auth = None
-_require_feature = None
-_require_admin = None
-
-
-def init_monitoring(require_auth, require_feature, require_admin):
-    global _require_auth, _require_feature, _require_admin
-    _require_auth = require_auth
-    _require_feature = require_feature
-    _require_admin = require_admin
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

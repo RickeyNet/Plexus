@@ -401,10 +401,10 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 ### Batch 5 - Security Follow-Ups
 
 - [ ] **Credential-isolation regression tests** - prove user A cannot use user B's `credential_id` through each endpoint hardened in the IDOR sweep (deployments, config backups/drift, compliance, upgrades, inventory, risk analysis, lab runtime).
-- [ ] **FDM collector credential model** (`netcontrol/integrations/cisco_fdm/collector.py:87`) - background poller fetches raw credentials with no ownership/service-cred policy; align with the service-credential pattern used by monitoring and MAC CLI collection.
+- [x] **FDM collector credential model** (`netcontrol/integrations/cisco_fdm/collector.py:87`) - done 2026-06-12: `collect_host` rejects non-service credentials (same policy as monitoring/MAC pollers) with a regression test. Bind-time gate still needed when the endpoint that sets `hosts.fdm_credential_id` ships.
 - [ ] **Air-gap README** (`deploy/airgap/README.md:100`) still advertises the `admin/netcontrol` default login - update for the new random-password first boot.
-- [ ] **Pre-existing backend cleanups** - 40+ `SELECT *` queries on wide tables; silent `except Exception` in the audit-hook forwarder (`routes/database.py:~4637`) can drop audit events invisibly; likely-missing indexes on `monitoring_polls(host_id, sampled_at)` and `audit_events(category)`; hardcoded `asyncio.Semaphore(4)` in 8+ collectors should be configurable.
-- [ ] **Late-binding `init_*()` boilerplate** - ~30 route modules repeat the `_require_auth = None` + init pattern; extract a shared helper.
+- [x] **Pre-existing backend cleanups** - done 2026-06-12: audit-hook drops now logged (routes/db/audit.py); migration 0055 adds `monitoring_polls(host_id, polled_at)` + `audit_events(category)` (column is `polled_at`, not `sampled_at`); 14 hardcoded semaphores route through `state.device_op_semaphore()` / `APP_DEVICE_OP_CONCURRENCY`. `SELECT *` audit found most uses are narrow tables or fetch-one-by-id where the blob is the payload; the one real waste (deployments annotation query pulling proposed_commands blobs) is trimmed.
+- [x] **Late-binding `init_*()` boilerplate** - resolved 2026-06-12 by deletion, not a helper: 11 modules bound auth callables that were never used (route auth comes from app.py's include_router dependencies) - dead init functions/globals removed; config_drift/deployments/upgrades trimmed to the WebSocket session-check callables they actually use; app.py wiring updated. Remaining init_* functions all bind callables that are genuinely consumed.
 
 ### Batch 6 - The Big One
 

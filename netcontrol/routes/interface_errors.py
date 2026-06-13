@@ -20,16 +20,6 @@ from netcontrol.telemetry import configure_logging
 router = APIRouter()
 LOGGER = configure_logging("plexus.interface_errors")
 
-# ── Late-binding auth (injected by app.py) ───────────────────────────────────
-_require_auth = None
-_require_admin = None
-
-
-def init_interface_errors(require_auth, require_admin):
-    global _require_auth, _require_admin
-    _require_auth = require_auth
-    _require_admin = require_admin
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # API Endpoints
