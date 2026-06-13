@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
-from starlette.requests import Request
 import pytest
-
 from netcontrol.routes import upgrades
+from starlette.requests import Request
 
 
 def test_all_cancelled_phase_derives_cancelled_campaign_status() -> None:

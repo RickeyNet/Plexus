@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import httpx
 import pytest
-
 from netcontrol.integrations.cisco_fdm.client import FdmApiError, FdmClient
 
 
