@@ -88,6 +88,17 @@ async def collect_host(host: dict) -> dict:
     cred = await db.get_credential_raw(cred_id)
     if not cred:
         return error_result(host_id, f"FDM credential {cred_id} not found")
+    if not cred.get("is_service"):
+        # Same policy as the monitoring and MAC CLI pollers: an unattended
+        # collector has no user context, so it may only use Plexus-owned
+        # service credentials - never a user's personal stored credential
+        # (which a host binding could otherwise exfiltrate via a poller
+        # pointed at an attacker-controlled endpoint).
+        return error_result(
+            host_id,
+            f"FDM credential {cred_id} is not a service credential; "
+            "background polling requires one",
+        )
     try:
         password = decrypt(cred["password"]) if cred.get("password") else ""
     except Exception:  # noqa: BLE001 - decryption failure must not crash the cycle
