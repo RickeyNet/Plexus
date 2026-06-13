@@ -38,7 +38,7 @@ class _AuthClient:
         return self._client.delete(url, **kw)
 
 
-def _make_auth_client(tmp_path, monkeypatch):
+def _make_auth_client(tmp_path, monkeypatch, request):
     db_path = str(tmp_path / "serial_test.db")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-serial")
@@ -66,6 +66,7 @@ def _make_auth_client(tmp_path, monkeypatch):
 
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
+    request.addfinalizer(lambda: client.__exit__(None, None, None))
     resp = client.post(
         "/api/auth/login",
         json={"username": "admin", "password": "netcontrol"},
@@ -148,9 +149,9 @@ def _get_host_serial(host_id: int) -> str:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-def test_fetch_serial_success(tmp_path, monkeypatch):
+def test_fetch_serial_success(tmp_path, monkeypatch, request):
     """Happy path: SSH returns a valid serial number line; it is stored and returned."""
-    client = _make_auth_client(tmp_path, monkeypatch)
+    client = _make_auth_client(tmp_path, monkeypatch, request)
 
     # Seed group, host, credential
     resp = client.post("/api/inventory", json={"name": "Core", "description": ""})
@@ -180,9 +181,9 @@ def test_fetch_serial_success(tmp_path, monkeypatch):
     assert _get_host_serial(host_id) == "FCW2346L0AJ"
 
 
-def test_fetch_serial_multiline_output(tmp_path, monkeypatch):
+def test_fetch_serial_multiline_output(tmp_path, monkeypatch, request):
     """Parser finds the Serial Number line even when there is surrounding output."""
-    client = _make_auth_client(tmp_path, monkeypatch)
+    client = _make_auth_client(tmp_path, monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "Access", "description": ""})
     group_id = resp.json()["id"]
@@ -208,9 +209,9 @@ def test_fetch_serial_multiline_output(tmp_path, monkeypatch):
     assert resp.json()["serial_number"] == "ABC1234WXYZ"
 
 
-def test_fetch_serial_missing_host(tmp_path, monkeypatch):
+def test_fetch_serial_missing_host(tmp_path, monkeypatch, request):
     """Returns 404 when host does not exist."""
-    client = _make_auth_client(tmp_path, monkeypatch)
+    client = _make_auth_client(tmp_path, monkeypatch, request)
     cred_id = _seed_credential()
     resp = client.post(
         "/api/hosts/99999/fetch-serial",
@@ -219,9 +220,9 @@ def test_fetch_serial_missing_host(tmp_path, monkeypatch):
     assert resp.status_code == 404
 
 
-def test_fetch_serial_missing_credential(tmp_path, monkeypatch):
+def test_fetch_serial_missing_credential(tmp_path, monkeypatch, request):
     """Returns 404 when credential does not exist."""
-    client = _make_auth_client(tmp_path, monkeypatch)
+    client = _make_auth_client(tmp_path, monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "Dist", "description": ""})
     group_id = resp.json()["id"]
@@ -234,9 +235,9 @@ def test_fetch_serial_missing_credential(tmp_path, monkeypatch):
     assert resp.status_code == 404
 
 
-def test_fetch_serial_ssh_failure(tmp_path, monkeypatch):
+def test_fetch_serial_ssh_failure(tmp_path, monkeypatch, request):
     """Returns 502 when SSH connection fails."""
-    client = _make_auth_client(tmp_path, monkeypatch)
+    client = _make_auth_client(tmp_path, monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "Edge", "description": ""})
     group_id = resp.json()["id"]
@@ -255,9 +256,9 @@ def test_fetch_serial_ssh_failure(tmp_path, monkeypatch):
     assert resp.status_code == 502
 
 
-def test_fetch_serial_no_serial_in_output(tmp_path, monkeypatch):
+def test_fetch_serial_no_serial_in_output(tmp_path, monkeypatch, request):
     """Returns 422 when the command output contains no serial number line."""
-    client = _make_auth_client(tmp_path, monkeypatch)
+    client = _make_auth_client(tmp_path, monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "WAN", "description": ""})
     group_id = resp.json()["id"]
@@ -276,7 +277,7 @@ def test_fetch_serial_no_serial_in_output(tmp_path, monkeypatch):
     assert resp.status_code == 422
 
 
-def test_fetch_serial_unknown_vendor_is_rejected(tmp_path, monkeypatch):
+def test_fetch_serial_unknown_vendor_is_rejected(tmp_path, monkeypatch, request):
     """A host with no registered driver must 422 before any SSH is attempted.
 
     Phase 4 of the driver framework: fetching a serial against an
@@ -287,7 +288,7 @@ def test_fetch_serial_unknown_vendor_is_rejected(tmp_path, monkeypatch):
     called, which catches a regression where the guard moves below the
     SSH attempt.
     """
-    client = _make_auth_client(tmp_path, monkeypatch)
+    client = _make_auth_client(tmp_path, monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "Mixed", "description": ""})
     group_id = resp.json()["id"]
@@ -328,7 +329,7 @@ def test_fetch_serial_unknown_vendor_is_rejected(tmp_path, monkeypatch):
     assert "frobozz_os" in resp.text
 
 
-def test_fetch_serial_nxos_uses_processor_board_id(tmp_path, monkeypatch):
+def test_fetch_serial_nxos_uses_processor_board_id(tmp_path, monkeypatch, request):
     """NX-OS hosts route through the NX-OS driver, not the IOS one.
 
     The driver-aware refactor's value-add is exactly this case: a
@@ -337,7 +338,7 @@ def test_fetch_serial_nxos_uses_processor_board_id(tmp_path, monkeypatch):
     IOS-style include filter and parsed for "System Serial Number" -
     both wrong, both silently returning "Not found in output".
     """
-    client = _make_auth_client(tmp_path, monkeypatch)
+    client = _make_auth_client(tmp_path, monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "DC", "description": ""})
     group_id = resp.json()["id"]

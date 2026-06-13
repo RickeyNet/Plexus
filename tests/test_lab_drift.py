@@ -28,7 +28,7 @@ class _LabClient:
         return self._client.post(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch):
+def _auth_client(tmp_path, monkeypatch, request):
     db_path = str(tmp_path / "lab_drift_test.db")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-drift")
@@ -45,6 +45,7 @@ def _auth_client(tmp_path, monkeypatch):
     from starlette.testclient import TestClient
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
+    request.addfinalizer(lambda: client.__exit__(None, None, None))
     resp = client.post(
         "/api/auth/login",
         json={"username": "admin", "password": "netcontrol"},
@@ -97,9 +98,9 @@ def _seed_host_with_snapshot(hostname: str, ip: str, config_text: str) -> int:
 # ── On-demand check ─────────────────────────────────────────────────────────
 
 
-def test_drift_check_in_sync(tmp_path, monkeypatch):
+def test_drift_check_in_sync(tmp_path, monkeypatch, request):
     """Twin matches the production snapshot byte-for-byte → in_sync."""
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     config = "hostname rtr-1\ninterface Gi0/0\n ip address 10.0.0.1 255.255.255.0\n"
     host_id = _seed_host_with_snapshot("rtr-1", "10.0.0.1", config)
 
@@ -121,9 +122,9 @@ def test_drift_check_in_sync(tmp_path, monkeypatch):
     assert latest["status"] == "in_sync"
 
 
-def test_drift_check_detects_divergence(tmp_path, monkeypatch):
+def test_drift_check_detects_divergence(tmp_path, monkeypatch, request):
     """Modifying production after cloning should produce status='drifted'."""
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     initial = "hostname rtr-2\nip domain-name example.com\n"
     host_id = _seed_host_with_snapshot("rtr-2", "10.0.0.2", initial)
@@ -163,9 +164,9 @@ def test_drift_check_detects_divergence(tmp_path, monkeypatch):
     assert "snmp-server community public" in detail["diff_text"]
 
 
-def test_drift_check_missing_source_for_blank_device(tmp_path, monkeypatch):
+def test_drift_check_missing_source_for_blank_device(tmp_path, monkeypatch, request):
     """A lab device authored manually (no source host) reports missing_source."""
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "blank-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -181,9 +182,9 @@ def test_drift_check_missing_source_for_blank_device(tmp_path, monkeypatch):
     assert latest["status"] == "missing_source"
 
 
-def test_drift_check_missing_when_no_prod_snapshot(tmp_path, monkeypatch):
+def test_drift_check_missing_when_no_prod_snapshot(tmp_path, monkeypatch, request):
     """Source host exists but has no captured snapshot yet."""
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     async def _seed():
         gid = await db_module.create_group(name="bare-grp")
@@ -213,9 +214,9 @@ def test_drift_check_missing_when_no_prod_snapshot(tmp_path, monkeypatch):
 # ── Scheduler iteration ──────────────────────────────────────────────────────
 
 
-def test_run_drift_check_all_walks_only_eligible_devices(tmp_path, monkeypatch):
+def test_run_drift_check_all_walks_only_eligible_devices(tmp_path, monkeypatch, request):
     """The sweep should walk only devices with source_host_id set."""
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
 
     # Eligible: one cloned device matching prod (in_sync).
     host_id = _seed_host_with_snapshot("rtr-3", "10.0.0.4", "hostname rtr-3\n")

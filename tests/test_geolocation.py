@@ -35,7 +35,7 @@ class _AuthClient:
         return self._client.delete(url, **kw)
 
 
-def _make_client(tmp_path, monkeypatch):
+def _make_client(tmp_path, monkeypatch, request):
     db_path = str(tmp_path / "geo_test.db")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-geo")
@@ -63,6 +63,7 @@ def _make_client(tmp_path, monkeypatch):
 
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
+    request.addfinalizer(lambda: client.__exit__(None, None, None))
     response = client.post(
         "/api/auth/login",
         json={"username": "admin", "password": "netcontrol"},
@@ -87,15 +88,10 @@ def _make_client(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def geo_client(tmp_path, monkeypatch):
-    client = _make_client(tmp_path, monkeypatch)
-    try:
-        yield client
-    finally:
-        # Exit the TestClient context so the app lifespan shuts down and
-        # cancels its background loops; otherwise they outlive this test
-        # and stop the next test's DB connection out from under it.
-        client._client.__exit__(None, None, None)
+def geo_client(tmp_path, monkeypatch, request):
+    # _make_client registers a finalizer on `request` that exits the
+    # TestClient, shutting down the app lifespan and its background loops.
+    return _make_client(tmp_path, monkeypatch, request)
 
 
 # ── Site CRUD ─────────────────────────────────────────────────────────────────

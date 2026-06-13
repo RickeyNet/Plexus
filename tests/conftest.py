@@ -5,7 +5,7 @@ import sys
 # older interpreters so the production code (which uses ``from datetime import
 # UTC``) can be imported without modification during tests.
 if sys.version_info < (3, 11) and not hasattr(_dt, "UTC"):
-    _dt.UTC = _dt.UTC
+    _dt.UTC = _dt.timezone.utc
 
 import asyncio
 
@@ -43,6 +43,12 @@ def _tracking_enter(self):
 
 
 def _tracking_exit(self, *exc):
+    # Idempotent: tests/fixtures may close explicitly while a helper-registered
+    # finalizer (or this conftest's safety net) also fires. The second exit of
+    # an already-shut-down client must be a no-op, not an error.
+    if getattr(self, "_plexus_exited", False):
+        return None
+    self._plexus_exited = True
     try:
         return _orig_exit(self, *exc)
     finally:
@@ -74,6 +80,7 @@ def _reset_db_singleton():
     # next test.
     while _live_clients:
         client = _live_clients.pop()
+        client._plexus_exited = True
         saved_path = _db.DB_PATH
         _db.DB_PATH = getattr(client, "_plexus_db_path", saved_path)
         try:
