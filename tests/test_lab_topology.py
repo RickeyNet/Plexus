@@ -34,7 +34,7 @@ class _LabClient:
         return self._client.delete(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch):
+def _auth_client(tmp_path, monkeypatch, request):
     db_path = str(tmp_path / "lab_topology_test.db")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-topology")
@@ -51,6 +51,7 @@ def _auth_client(tmp_path, monkeypatch):
     from starlette.testclient import TestClient
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
+    request.addfinalizer(lambda: client.__exit__(None, None, None))
     resp = client.post(
         "/api/auth/login",
         json={"username": "admin", "password": "netcontrol"},
@@ -141,8 +142,8 @@ def _create_member_device(client, env_id, hostname, kind="linux", image="alpine"
     return dev_id
 
 
-def test_topology_crud(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_topology_crud(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "topo-env"}).json()["id"]
 
     # Create
@@ -172,8 +173,8 @@ def test_topology_crud(tmp_path, monkeypatch):
     assert resp.status_code == 200
 
 
-def test_membership_and_link_validation(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_membership_and_link_validation(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "topo-mem"}).json()["id"]
     topo_id = client.post(
         f"/api/lab/environments/{env_id}/topologies",
@@ -231,8 +232,8 @@ def test_membership_and_link_validation(tmp_path, monkeypatch):
     assert detail["links"][0]["id"] == link_id
 
 
-def test_member_must_belong_to_same_environment(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_member_must_belong_to_same_environment(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     env1 = client.post("/api/lab/environments", json={"name": "e1"}).json()["id"]
     env2 = client.post("/api/lab/environments", json={"name": "e2"}).json()["id"]
     topo = client.post(
@@ -254,7 +255,7 @@ def test_member_must_belong_to_same_environment(tmp_path, monkeypatch):
 # ── Deploy / destroy with mocked subprocess ─────────────────────────────────
 
 
-def test_deploy_topology_happy_path(tmp_path, monkeypatch):
+def test_deploy_topology_happy_path(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     inspect_json = (
         '{"containers": ['
@@ -277,7 +278,7 @@ def test_deploy_topology_happy_path(tmp_path, monkeypatch):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "deploy-env"}).json()["id"]
     topo_id = client.post(
         f"/api/lab/environments/{env_id}/topologies",
@@ -321,13 +322,13 @@ def test_deploy_topology_happy_path(tmp_path, monkeypatch):
         assert d["runtime_mgmt_address"]
 
 
-def test_deploy_rejects_when_topology_empty(tmp_path, monkeypatch):
+def test_deploy_rejects_when_topology_empty(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     monkeypatch.setattr(
         lab_runtime, "_run_containerlab",
         AsyncMock(return_value=(0, "version 0.50\n", "")),
     )
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "empty-env"}).json()["id"]
     topo_id = client.post(
         f"/api/lab/environments/{env_id}/topologies",
@@ -338,14 +339,14 @@ def test_deploy_rejects_when_topology_empty(tmp_path, monkeypatch):
     assert "no member" in resp.text.lower()
 
 
-def test_deploy_rejects_member_with_freestanding_runtime(tmp_path, monkeypatch):
+def test_deploy_rejects_member_with_freestanding_runtime(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
 
     async def _fake_run(args, cwd=None):
         return 0, "version 0.50\n", ""
 
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "fs-env"}).json()["id"]
     topo_id = client.post(
         f"/api/lab/environments/{env_id}/topologies",
@@ -371,7 +372,7 @@ def test_deploy_rejects_member_with_freestanding_runtime(tmp_path, monkeypatch):
     assert resp.status_code == 409
 
 
-def test_destroy_topology_clears_member_state(tmp_path, monkeypatch):
+def test_destroy_topology_clears_member_state(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     inspect_json = (
         '{"containers": [{"name": "clab-foo-rtr-d", "ipv4_address": "172.20.30.7/24"}]}'
@@ -391,7 +392,7 @@ def test_destroy_topology_clears_member_state(tmp_path, monkeypatch):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "des-env"}).json()["id"]
     topo_id = client.post(
         f"/api/lab/environments/{env_id}/topologies",

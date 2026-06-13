@@ -35,7 +35,7 @@ class _AuthClient:
         return self._client.delete(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch):
+def _auth_client(tmp_path, monkeypatch, request):
     db_path = str(tmp_path / "ipam_test.db")
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-ipam")
@@ -65,6 +65,7 @@ def _auth_client(tmp_path, monkeypatch):
 
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
+    request.addfinalizer(lambda: client.__exit__(None, None, None))
     response = client.post(
         "/api/auth/login",
         json={"username": "admin", "password": "netcontrol"},
@@ -185,8 +186,8 @@ def _seed_external_ipam_snapshot():
     return _seed()
 
 
-def test_ipam_overview_returns_subnets_and_duplicates(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_ipam_overview_returns_subnets_and_duplicates(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         import asyncio
 
@@ -220,8 +221,8 @@ def test_ipam_overview_returns_subnets_and_duplicates(tmp_path, monkeypatch):
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_overview_group_filter_scopes_inventory_only(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_ipam_overview_group_filter_scopes_inventory_only(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         import asyncio
 
@@ -242,8 +243,8 @@ def test_ipam_overview_group_filter_scopes_inventory_only(tmp_path, monkeypatch)
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_subnet_detail_reports_available_capacity_and_allocations(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_ipam_subnet_detail_reports_available_capacity_and_allocations(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         import asyncio
 
@@ -284,8 +285,8 @@ def test_ipam_subnet_detail_reports_available_capacity_and_allocations(tmp_path,
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_source_sync_updates_overview_contract(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_ipam_source_sync_updates_overview_contract(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         async def _fake_collect_ipam_snapshot(source, auth_config):
             assert source["provider"] == "netbox"
@@ -348,10 +349,10 @@ def test_ipam_source_sync_updates_overview_contract(tmp_path, monkeypatch):
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_sync_config_get_and_update(tmp_path, monkeypatch):
+def test_ipam_sync_config_get_and_update(tmp_path, monkeypatch, request):
     import netcontrol.routes.state as state_module
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         # GET returns current config
         response = client.get("/api/ipam/sync-config")
@@ -385,8 +386,8 @@ def test_ipam_sync_config_get_and_update(tmp_path, monkeypatch):
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_reservation_delete_removes_entry(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_ipam_reservation_delete_removes_entry(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         import asyncio
 
@@ -424,11 +425,11 @@ def test_ipam_reservation_delete_removes_entry(tmp_path, monkeypatch):
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_address_context_returns_subnet_and_conflict(tmp_path, monkeypatch):
+def test_ipam_address_context_returns_subnet_and_conflict(tmp_path, monkeypatch, request):
     """GET /api/ipam/address/{ip} returns matched subnet and conflict status."""
     import asyncio
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         asyncio.run(_seed_ipam_data())
 
@@ -465,11 +466,11 @@ def test_ipam_address_context_returns_subnet_and_conflict(tmp_path, monkeypatch)
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_local_prefix_and_allocation_crud(tmp_path, monkeypatch):
+def test_ipam_local_prefix_and_allocation_crud(tmp_path, monkeypatch, request):
     """Native Plexus IPAM: create prefix, allocate IP, verify in overview and detail, then delete both."""
     import asyncio
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         # Create a local subnet prefix via the native API
         r = client.post("/api/ipam/prefixes", json={"subnet": "192.168.10.0/24", "description": "Test LAN"})
@@ -521,11 +522,11 @@ def test_ipam_local_prefix_and_allocation_crud(tmp_path, monkeypatch):
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_builtin_source_cannot_be_deleted(tmp_path, monkeypatch):
+def test_ipam_builtin_source_cannot_be_deleted(tmp_path, monkeypatch, request):
     """The built-in Plexus IPAM source must not be deletable via the API."""
     import asyncio
 
-    client = _auth_client(tmp_path, monkeypatch)
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         builtin = asyncio.run(db_module.get_or_create_builtin_ipam_source())
         source_id = builtin["id"]
@@ -538,8 +539,8 @@ def test_ipam_builtin_source_cannot_be_deleted(tmp_path, monkeypatch):
         client._client.__exit__(None, None, None)
 
 
-def test_ipam_source_create_and_update_push_toggle(tmp_path, monkeypatch):
-    client = _auth_client(tmp_path, monkeypatch)
+def test_ipam_source_create_and_update_push_toggle(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
     try:
         create_response = client.post(
             "/api/ipam/sources",
