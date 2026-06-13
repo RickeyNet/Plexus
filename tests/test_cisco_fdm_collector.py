@@ -8,10 +8,9 @@ and that each polled host is handed to ``_process_poll_result``.
 
 from __future__ import annotations
 
-import pytest
-
 import netcontrol.integrations.cisco_fdm.collector as collector
 import netcontrol.routes.state as state
+import pytest
 from netcontrol.integrations.cisco_fdm.client import FdmApiError
 
 
@@ -32,9 +31,9 @@ class _FakeClient:
         return self._metrics
 
 
-def _patch_creds(monkeypatch):
+def _patch_creds(monkeypatch, *, is_service=True):
     async def _fake_cred(_cred_id):
-        return {"username": "apiuser", "password": "enc"}
+        return {"username": "apiuser", "password": "enc", "is_service": is_service}
 
     monkeypatch.setattr(collector.db, "get_credential_raw", _fake_cred)
     # decrypt is imported inside collect_host from routes.crypto
@@ -67,6 +66,15 @@ async def test_collect_host_without_credential_is_error_result(monkeypatch):
     res = await collector.collect_host(host)
     assert res["poll_status"] == "error"
     assert "credential" in res["poll_error"]
+
+
+@pytest.mark.asyncio
+async def test_collect_host_rejects_non_service_credential(monkeypatch):
+    _patch_creds(monkeypatch, is_service=False)
+    host = {"id": 9, "ip_address": "10.0.0.9", "fdm_credential_id": 1}
+    res = await collector.collect_host(host)
+    assert res["poll_status"] == "error"
+    assert "service credential" in res["poll_error"]
 
 
 @pytest.mark.asyncio
