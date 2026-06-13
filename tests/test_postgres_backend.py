@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -54,3 +55,38 @@ async def test_postgres_delete_expired_jobs_path(monkeypatch):
     deleted = await db_module.delete_expired_jobs(30)
     assert isinstance(deleted, int)
     assert deleted >= 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_audit_chain_concurrent_writers(monkeypatch):
+    """Concurrent audit writes must not fork the hash chain on Postgres.
+
+    Exercises the pg_advisory_lock acquire/release path in add_audit_event
+    (the SQLite suite never runs it) and proves prev_hash linkage stays
+    intact under concurrency within one process.
+    """
+    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
+    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
+
+    await db_module.init_db()
+    ids = await asyncio.gather(*(
+        db_module.add_audit_event("ci", "pg.chain_smoke", user=f"writer{i}")
+        for i in range(10)
+    ))
+    assert len(set(ids)) == 10
+
+    result = await db_module.verify_audit_chain()
+    assert result["ok"] is True, result
+    assert result["total_rows"] >= 10
+
+
+@pytest.mark.asyncio
+async def test_postgres_audit_events_filtered_listing(monkeypatch):
+    """Category-filtered listing works on Postgres (uses the 0055 index)."""
+    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
+    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
+
+    await db_module.init_db()
+    await db_module.add_audit_event("ci_filter", "pg.listing_smoke", user="lister")
+    events = await db_module.get_audit_events(limit=5, category="ci_filter")
+    assert events and all(e["category"] == "ci_filter" for e in events)
