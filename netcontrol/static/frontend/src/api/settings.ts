@@ -787,10 +787,13 @@ export interface ServiceCredentialUpdatePayload {
   secret?: string;
 }
 
-export function useServiceCredentialsList() {
+export function useServiceCredentialsList(enabled = true) {
   return useQuery<CredentialSummary[]>({
     queryKey: ['credentials', 'service'],
     queryFn: () => apiRequest('/credentials/service'),
+    // The endpoint is admin-only; non-admin callers pass enabled=false so
+    // the query never fires (and never retries a guaranteed 403).
+    enabled,
   });
 }
 
