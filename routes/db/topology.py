@@ -1637,8 +1637,10 @@ def _compile_config_backup_regex(pattern: str) -> re.Pattern:
     if _has_redos_shape(pattern):
         raise ValueError("invalid_regex")
     try:
-        # codeql[py/regex-injection]: pattern length-bounded, screened for
-        # catastrophic-backtracking shapes, and only reachable by admins.
+        # Safe despite py/regex-injection: pattern is length-bounded, screened
+        # for catastrophic-backtracking shapes, and only reachable by admins.
+        # The CodeQL alert is dismissed ("won't fix") in the Security tab -
+        # inline comments do not suppress GitHub code scanning alerts.
         return re.compile(pattern, re.IGNORECASE)
     except re.error as exc:
         raise ValueError("invalid_regex") from exc

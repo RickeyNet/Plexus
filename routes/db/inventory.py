@@ -516,8 +516,8 @@ async def add_host(group_id: int, hostname: str, ip_address: str,
             )
         except Exception as exc:
             _LOGGER.warning(
-                "Failed to record IP assignment for host %s (%s): %s",
-                new_id, ip_address, exc,
+                "Failed to record IP assignment for host %s: %s",
+                new_id, exc,
             )
     return new_id
 
@@ -546,8 +546,8 @@ async def remove_host(host_id: int):
             )
         except Exception as exc:
             _LOGGER.warning(
-                "Failed to record IP release for removed host %s (%s): %s",
-                host_id, prior_ip, exc,
+                "Failed to record IP release for removed host %s: %s",
+                host_id, exc,
             )
 
 
@@ -595,8 +595,8 @@ async def update_host(host_id: int, hostname: str, ip_address: str,
             )
     except Exception as exc:
         _LOGGER.warning(
-            "Failed to record IP assignment history for updated host %s (%s): %s",
-            host_id, new_ip, exc,
+            "Failed to record IP assignment history for updated host %s: %s",
+            host_id, exc,
         )
 
 
