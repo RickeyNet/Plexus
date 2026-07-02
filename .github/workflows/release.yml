@@ -29,9 +29,13 @@ jobs:
 
       - name: Resolve release tag
         id: release
+        env:
+          # Passed via env rather than interpolated into the script so a
+          # crafted dispatch input cannot inject shell commands.
+          DISPATCH_TAG: ${{ github.event.inputs.release_tag }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            raw="${{ github.event.inputs.release_tag }}"
+            raw="${DISPATCH_TAG}"
           else
             raw="${GITHUB_REF_NAME}"
           fi
@@ -43,7 +47,9 @@ jobs:
           echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Validate version and changelog consistency
-        run: python tools/check_release_consistency.py "${{ steps.release.outputs.tag }}"
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: python tools/check_release_consistency.py "${RELEASE_TAG}"
 
       - name: Set lowercase image name
         id: image
@@ -71,6 +77,29 @@ jobs:
           tags: |
             type=raw,value=${{ steps.release.outputs.tag }}
             type=raw,value=latest
+
+      # Multi-platform builds cannot be loaded into the local daemon, so scan
+      # a single-platform build first; its layers stay in the buildx cache and
+      # are reused by the publish step below.
+      - name: Build image for vulnerability scan (amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: ${{ steps.image.outputs.name }}:scan
+          build-args: |
+            PLEXUS_VERSION=${{ steps.release.outputs.version }}
+            PLEXUS_GIT_SHA=${{ steps.release.outputs.sha }}
+
+      - name: Scan image (trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.image.outputs.name }}:scan
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
 
       - name: Build and publish image
         uses: docker/build-push-action@v7

@@ -18,3 +18,17 @@ updates:
       github-actions:
         patterns:
           - "*"
+  - package-ecosystem: "npm"
+    directory: "/netcontrol/static/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      frontend-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
