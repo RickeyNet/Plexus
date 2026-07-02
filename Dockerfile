@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 1: build the React frontend (Phase 1.1+ of FRONTEND_MIGRATION.md)
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS frontend-build
+FROM node:26-alpine AS frontend-build
 WORKDIR /frontend
 
 # Copy manifests first so the install layer caches across source-only changes.
