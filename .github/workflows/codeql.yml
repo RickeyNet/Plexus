@@ -16,12 +16,12 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze (python)
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        language: ["python"]
+        language: ["python", "javascript-typescript"]
 
     steps:
       - name: Checkout repository
