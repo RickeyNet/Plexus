@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Stage 1: build the React frontend (Phase 1.1+ of FRONTEND_MIGRATION.md)
+# Stage 1: build the React frontend (netcontrol/static/frontend)
 # ──────────────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS frontend-build
 WORKDIR /frontend

@@ -2,7 +2,7 @@
 
 The Plexus UI - a React + TypeScript SPA that replaced the legacy vanilla-JS
 frontend (migration history in
-[FRONTEND_MIGRATION.md](../../../FRONTEND_MIGRATION.md)). The legacy
+[docs/FRONTEND_MIGRATION.md](../../../docs/FRONTEND_MIGRATION.md)). The legacy
 `netcontrol/static/js/` modules have been deleted; this app is the only
 frontend.
 

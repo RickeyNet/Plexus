@@ -2004,9 +2004,9 @@ FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# React frontend (Phase 1.1+ of FRONTEND_MIGRATION.md). Built from
-# netcontrol/static/frontend via `npm run build`. Mounted at /frontend with
-# SPA-style fallback so client-side routes resolve to index.html.
+# React frontend - the only UI (migration history: docs/FRONTEND_MIGRATION.md).
+# Built from netcontrol/static/frontend via `npm run build`. Mounted at
+# /frontend with SPA-style fallback so client-side routes resolve to index.html.
 class _ImmutableStaticFiles(StaticFiles):
     """Vite content-hashes every filename under dist/assets, so any change
     produces a new URL — the old one can be cached forever."""
@@ -2048,7 +2048,7 @@ if os.path.isdir(FRONTEND_DIST):
 @app.get("/")
 async def serve_frontend():
     """Serve the React UI. The legacy vanilla-JS SPA was retired after the
-    Phase 2 migration completed (FRONTEND_MIGRATION.md); React is now the
+    migration completed (docs/FRONTEND_MIGRATION.md); React is now the
     only frontend. Falls back to /docs only when no bundle is deployed."""
     if os.path.isfile(FRONTEND_INDEX):
         return RedirectResponse(url="/frontend/")

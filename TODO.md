@@ -406,6 +406,27 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 - [x] **Pre-existing backend cleanups** - done 2026-06-12: audit-hook drops now logged (routes/db/audit.py); migration 0055 adds `monitoring_polls(host_id, polled_at)` + `audit_events(category)` (column is `polled_at`, not `sampled_at`); 14 hardcoded semaphores route through `state.device_op_semaphore()` / `APP_DEVICE_OP_CONCURRENCY`. `SELECT *` audit found most uses are narrow tables or fetch-one-by-id where the blob is the payload; the one real waste (deployments annotation query pulling proposed_commands blobs) is trimmed.
 - [x] **Late-binding `init_*()` boilerplate** - resolved 2026-06-12 by deletion, not a helper: 11 modules bound auth callables that were never used (route auth comes from app.py's include_router dependencies) - dead init functions/globals removed; config_drift/deployments/upgrades trimmed to the WebSocket session-check callables they actually use; app.py wiring updated. Remaining init_* functions all bind callables that are genuinely consumed.
 
+### Frontend Post-Migration Follow-Ups
+
+Extracted from `docs/FRONTEND_MIGRATION.md` (archived 2026-07-06 after the
+migration completed and the legacy files were deleted).
+
+- [ ] **Playwright E2E suite** - never built (the plan's Phase 0.3 was skipped;
+  the migration shipped on backend tests + Vitest only). Stand up Playwright
+  against the React app for the critical flows: login, inventory group/host
+  CRUD, playbook job launch + streamed output, topology view, monitoring
+  dashboard, credential add/edit, compliance scan.
+- [ ] **Consolidate AI drift across React pages** - audit for inconsistent
+  patterns; the concrete known offenders are already tracked in "Batch 3 -
+  Frontend Shared Hooks" above.
+- [ ] **Remove `script-src 'unsafe-inline'` from the CSP** in
+  `netcontrol/app.py` (~line 1646) - the legacy inline `onclick=` handlers it
+  existed for are gone; React needs no inline scripts.
+- [ ] **Track bundle size and page-load in CI** - migration targets were main
+  bundle <1MB gzipped (currently ~465KB with ECharts) and TTI <2s on local
+  network; neither is measured automatically yet.
+- Frontend unit-test coverage threshold is already tracked in Batch 4.
+
 ### Batch 6 - The Big One
 
 - [x] **Split `routes/database.py` (16,795 lines) into domain modules** (hosts, credentials, monitoring, audit, mac-tracking, lab, etc.) while preserving the `routes.database` API surface. *Prerequisite: batches 1 and 4 - the suite must be green and fast before a refactor this wide.* Done 2026-06: core (connection singleton, pragmas, schema, init_db) stays in `routes/database.py` (~2,800 lines); 20 domain modules live in `routes/db/*` and are star re-exported through the facade, so all `import routes.database as db` callsites and test monkeypatches (`DB_PATH`, `DB_ENGINE`, `get_db`) work unchanged — moved code reads those names late-bound via the facade. Public API surface verified byte-identical (606 names) against a pre-split snapshot.

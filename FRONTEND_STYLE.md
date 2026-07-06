@@ -5,10 +5,10 @@ writing or porting any frontend code.** It is referenced from every AI
 migration prompt and is the single source of truth for "how do we do
 things in this app."
 
-This is a *living* document - as the migration progresses, conventions
-that prove themselves get codified here. Conventions that prove wrong
-get replaced. Always update this file when you change a pattern, and
-mention the change in the FRONTEND_MIGRATION.md decision log.
+This is a *living* document - conventions that prove themselves get
+codified here. Conventions that prove wrong get replaced. Always update
+this file when you change a pattern, and mention the change in the
+decision log in `docs/FRONTEND_MIGRATION.md` (archived migration plan).
 
 > Project layout: `netcontrol/static/frontend/` is the React app
 > (Vite + TS). Builds to `dist/`, served by FastAPI at `/frontend/`.
@@ -219,7 +219,7 @@ pattern:
 
 **Legacy CSS only.** The React app loads
 `netcontrol/static/css/style.css` and reuses its class names. This is a
-hard rule from the 2026-05-02 decision (see FRONTEND_MIGRATION.md).
+hard rule from the 2026-05-02 decision (see `docs/FRONTEND_MIGRATION.md`).
 
 Common classes:
 

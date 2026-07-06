@@ -1,4 +1,11 @@
-# Frontend Migration Plan
+# Frontend Migration Plan (ARCHIVED)
+
+> **Status: complete.** The migration finished and the legacy vanilla-JS
+> frontend was deleted on 2026-07-06. This document is kept as a historical
+> record - the decision log below explains why the frontend is built the way
+> it is. Remaining follow-ups were extracted to `TODO.md` § "Frontend
+> Post-Migration Follow-Ups". Current conventions live in
+> `FRONTEND_STYLE.md` at the repo root.
 
 Migrate Plexus's vanilla JS SPA (~33K lines across 18 modules) to a modern React + TypeScript stack, page-by-page, over ~9-12 months.
 
