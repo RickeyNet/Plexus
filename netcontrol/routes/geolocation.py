@@ -295,7 +295,16 @@ async def get_floor_image_api(floor_id: int):
         ".svg": "image/svg+xml",
     }
     media_type = _media_map.get(ext, "application/octet-stream")
-    return FileResponse(path, media_type=media_type)
+    headers = None
+    if ext == ".svg":
+        # An uploaded SVG can carry inline <script>; when opened directly as a
+        # top-level document that script would run in the app origin (stored
+        # XSS). A restrictive CSP with `sandbox` (no allow-scripts) neutralizes
+        # it while still allowing the image to render inline via <img>.
+        headers = {
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        }
+    return FileResponse(path, media_type=media_type, headers=headers)
 
 
 # ── Device placements ─────────────────────────────────────────────────────────

@@ -419,12 +419,22 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # A role change alters privileges; revoke the target's outstanding
+    # sessions so a demotion/promotion takes effect immediately.
+    if role is not None and role != (target.get("role") or ""):
+        await db.bump_user_session_epoch(user_id)
+    await _audit(
+        "auth", "user.update",
+        user=session["user"] if session else "",
+        detail=f"updated user id={user_id}" + (f" role={role}" if role else ""),
+        correlation_id=_corr_id(request),
+    )
     user = await db.get_user_by_id(user_id)
     return await _admin_user_payload(user)
 
 
 @router.put("/api/admin/users/{user_id}/password")
-async def admin_reset_user_password(user_id: int, body: AdminUserPasswordResetRequest):
+async def admin_reset_user_password(user_id: int, body: AdminUserPasswordResetRequest, request: Request):
     target = await db.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
@@ -434,11 +444,20 @@ async def admin_reset_user_password(user_id: int, body: AdminUserPasswordResetRe
     salt = secrets.token_hex(16)
     pw_hash = _hash_password_fn(body.new_password, salt)
     await db.update_user_password(user_id, pw_hash, salt)
+    # Force the target off all existing sessions after an admin reset.
+    await db.bump_user_session_epoch(user_id)
+    session = _get_session(request)
+    await _audit(
+        "auth", "user.password_reset",
+        user=session["user"] if session else "",
+        detail=f"reset password for user id={user_id} ('{target.get('username', '')}')",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
 @router.put("/api/admin/users/{user_id}/groups")
-async def admin_set_user_groups(user_id: int, body: AdminUserGroupAssignmentRequest):
+async def admin_set_user_groups(user_id: int, body: AdminUserGroupAssignmentRequest, request: Request):
     target = await db.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
@@ -446,6 +465,16 @@ async def admin_set_user_groups(user_id: int, body: AdminUserGroupAssignmentRequ
         await db.set_user_groups(user_id, body.group_ids)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Group membership drives effective feature access; revoke the target's
+    # sessions so the new privilege set applies on their next request.
+    await db.bump_user_session_epoch(user_id)
+    session = _get_session(request)
+    await _audit(
+        "auth", "user.groups_changed",
+        user=session["user"] if session else "",
+        detail=f"set groups for user id={user_id}: {body.group_ids}",
+        correlation_id=_corr_id(request),
+    )
     user = await db.get_user_by_id(user_id)
     return await _admin_user_payload(user)
 

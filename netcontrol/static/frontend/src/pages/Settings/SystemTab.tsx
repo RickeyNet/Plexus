@@ -266,7 +266,7 @@ function CheckResultBox({
           Published {new Date(last.published_at).toLocaleString()}
         </div>
       )}
-      {last.html_url && (
+      {last.html_url && /^https?:\/\//i.test(last.html_url) && (
         <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
           <a href={last.html_url} target="_blank" rel="noreferrer">
             View release on GitHub →

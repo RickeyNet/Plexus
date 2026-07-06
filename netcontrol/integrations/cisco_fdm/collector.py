@@ -34,11 +34,21 @@ _CLIENTS: dict[int, tuple[tuple, FdmClient]] = {}
 _CLIENTS_LOCK = asyncio.Lock()
 
 
+def _verify_tls(host: dict) -> bool:
+    """Resolve the per-host TLS-verify setting, secure by default.
+
+    A missing value means verification is ON; only an explicit stored 0
+    (operator opt-out for a self-signed FDM cert) disables it.
+    """
+    val = host.get("fdm_verify_tls", 1)
+    return bool(1 if val is None else val)
+
+
 def _fingerprint(host: dict, cred: dict) -> tuple:
     return (
         host.get("ip_address"),
         int(host.get("fdm_port") or 443),
-        bool(host.get("fdm_verify_tls")),
+        _verify_tls(host),
         host.get("fdm_credential_id"),
         cred.get("username"),
     )
@@ -64,7 +74,7 @@ async def _get_client(host: dict, cred: dict, password: str) -> FdmClient:
             cred.get("username") or "",
             password,
             port=int(host.get("fdm_port") or 443),
-            verify_tls=bool(host.get("fdm_verify_tls")),
+            verify_tls=_verify_tls(host),
             api_version=state.FDM_CONFIG.get("api_version", state.FDM_DEFAULTS["api_version"]),
         )
         _CLIENTS[host_id] = (fp, client)

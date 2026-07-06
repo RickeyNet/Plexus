@@ -26,7 +26,7 @@ from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, get_driver
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_credential_access
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_credential_access, verify_ws_session
 from netcontrol.telemetry import configure_logging
 
 try:
@@ -218,11 +218,13 @@ def _validate_cli_inputs(image_name: str, dest_path: str) -> str | None:
 # WebSocket session check needs a late-bound callable here.
 
 _verify_session_token = None
+_get_user_features = None
 
 
-def init_upgrades(verify_session_token=None):
-    global _verify_session_token
+def init_upgrades(verify_session_token=None, get_user_features_fn=None):
+    global _verify_session_token, _get_user_features
     _verify_session_token = verify_session_token
+    _get_user_features = get_user_features_fn
     try:
         _ensure_software_images_dir()
     except OSError:
@@ -1382,13 +1384,24 @@ async def cancel_campaign_devices(
 @ws_router.websocket("/ws/upgrades/{campaign_id}")
 async def upgrade_websocket(ws: WebSocket, campaign_id: int):
     """Stream upgrade events to the browser in real-time."""
-    # Verify auth before accepting the connection
-    if _verify_session_token:
-        token = ws.cookies.get("session") or ws.query_params.get("token", "")
-        session = _verify_session_token(token) if token else None
-        if not session:
-            await ws.close(code=4001, reason="Unauthorized")
-            return
+    # Verify auth before accepting the connection. The token comes from the
+    # session cookie only - never a query-string param, which would leak the
+    # token into proxy/access logs and browser history. Enforce the same
+    # idle/absolute-lifetime, user-existence, and feature checks the other WS
+    # endpoints use (fail closed rather than fail open).
+    token = ws.cookies.get("session")
+    session = await verify_ws_session(token)
+    if not session:
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+    user = await db.get_user_by_id(session["user_id"])
+    if not user:
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+    features = await _get_user_features(user) if _get_user_features else []
+    if user.get("role") != "admin" and "upgrades" not in features:
+        await ws.close(code=4001, reason="Unauthorized")
+        return
 
     await ws.accept()
 
