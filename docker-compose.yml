@@ -19,7 +19,7 @@ services:
       APP_HOST: 0.0.0.0
       APP_PORT: 8080
       APP_DB_ENGINE: postgres
-      APP_DATABASE_URL: postgresql://${POSTGRES_USER:-plexus}:${POSTGRES_PASSWORD:-plexus}@postgres:5432/${POSTGRES_DB:-plexus}
+      APP_DATABASE_URL: postgresql://${POSTGRES_USER:-plexus}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (run deploy/setup.sh to generate one)}@postgres:5432/${POSTGRES_DB:-plexus}
       APP_DB_PATH: /app/state/netcontrol.db
       APP_SESSION_KEY_FILE: /app/state/session.key
       APP_ENCRYPTION_KEY_FILE: /app/state/netcontrol.key
@@ -52,7 +52,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-plexus}
       POSTGRES_USER: ${POSTGRES_USER:-plexus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-plexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (run deploy/setup.sh to generate one)}
     volumes:
       - plexus-postgres:/var/lib/postgresql/data
     healthcheck:

@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from routes.crypto import decrypt, encrypt
 
+from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 
@@ -70,13 +71,18 @@ class PeerUpdate(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _validate_url(url: str) -> str:
-    """Validate and normalize a peer URL."""
+    """Validate and normalize a peer URL (scheme, hostname, SSRF guard)."""
     url = url.strip().rstrip("/")
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=422, detail="Peer URL must use http or https scheme")
     if not parsed.hostname:
         raise HTTPException(status_code=422, detail="Peer URL must include a hostname")
+    # SSRF guard: reject metadata/link-local/loopback targets.
+    try:
+        validate_outbound_url(url)
+    except OutboundRequestError as exc:
+        raise HTTPException(status_code=422, detail=f"Peer URL rejected: {exc}")
     return url
 
 

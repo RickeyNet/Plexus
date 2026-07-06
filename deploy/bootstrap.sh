@@ -106,7 +106,9 @@ cat <<EOF
   Plexus is up.
 
   Browse to:  https://${IP}
-  Login:      admin / netcontrol  (forced password change on first login)
+  Login:      admin / <one-time password printed to the app log on first boot>
+              Retrieve it with:  docker compose logs plexus | grep -A3 'default admin'
+              You will be forced to change it at first login.
 
   Useful commands (run as ${TARGET_USER}):
     cd ${INSTALL_DIR}

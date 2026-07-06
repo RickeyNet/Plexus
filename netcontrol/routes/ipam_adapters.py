@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 from typing import Any
 
 import httpx
+
+from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
 
 _HTTP_TIMEOUT_SECONDS = 20.0
 _VALID_PROVIDERS = {"netbox", "phpipam", "infoblox"}
@@ -31,6 +34,17 @@ _PROVIDER_INFO = {
 
 class IpamAdapterError(RuntimeError):
     """Raised when a provider config or API response is invalid."""
+
+
+async def _guard_url(url: str) -> None:
+    """SSRF pre-check: reject metadata/link-local/loopback targets.
+
+    DNS resolution can block, so it runs in a worker thread.
+    """
+    try:
+        await asyncio.to_thread(validate_outbound_url, url)
+    except OutboundRequestError as exc:
+        raise IpamAdapterError(f"target URL rejected: {exc}") from exc
 
 
 def normalize_ipam_provider(raw: str | None) -> str:
@@ -60,6 +74,7 @@ async def _fetch_json(
     auth=None,
     verify: bool = True,
 ) -> Any:
+    await _guard_url(url)
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=verify) as client:
         response = await client.get(url, headers=headers, params=params, auth=auth)
         response.raise_for_status()
@@ -76,6 +91,7 @@ async def _request_json(
     auth=None,
     verify: bool = True,
 ) -> Any:
+    await _guard_url(url)
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=verify) as client:
         response = await client.request(
             method.upper(),

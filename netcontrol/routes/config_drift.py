@@ -20,12 +20,14 @@ from netcontrol.routes.shared import (
     _get_session,
     _push_config_to_device,
     require_credential_access,
+    verify_ws_session,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 LOGGER = configure_logging("plexus.config_drift")
 
 router = APIRouter()
+admin_router = APIRouter()  # /api/admin/* routes - registered with require_admin
 ws_router = APIRouter()  # WebSocket routes - registered without HTTP auth dependency
 
 # ── Late-binding auth dependencies (injected by app.py) ──────────────────────
@@ -821,7 +823,7 @@ async def get_capture_job(job_id: str):
 async def websocket_config_capture(websocket: WebSocket, job_id: str):
     """Stream config capture job output in real-time."""
     token = websocket.cookies.get("session")
-    session = _verify_session_token(token) if token else None
+    session = await verify_ws_session(token)
     if not session:
         await websocket.close(code=1008)
         return
@@ -1063,7 +1065,7 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
 async def ws_config_revert(websocket: WebSocket, job_id: str):
     """WebSocket for streaming revert job output."""
     token = websocket.cookies.get("session")
-    session = _verify_session_token(token) if token else None
+    session = await verify_ws_session(token)
     if not session:
         await websocket.close(code=1008)
         return
@@ -1197,13 +1199,13 @@ async def get_config_drift_summary():
 
 # ── Routes: Admin Config Drift Schedule ──────────────────────────────────────
 
-@router.get("/api/admin/config-drift")
+@admin_router.get("/api/admin/config-drift")
 async def admin_get_config_drift_config():
     """Get the scheduled drift check configuration."""
     return state.CONFIG_DRIFT_CHECK_CONFIG
 
 
-@router.put("/api/admin/config-drift")
+@admin_router.put("/api/admin/config-drift")
 async def admin_update_config_drift_config(body: dict, request: Request):
     """Update drift check schedule settings."""
     state.CONFIG_DRIFT_CHECK_CONFIG = state._sanitize_config_drift_check_config(body)
@@ -1218,7 +1220,7 @@ async def admin_update_config_drift_config(body: dict, request: Request):
     return state.CONFIG_DRIFT_CHECK_CONFIG
 
 
-@router.post("/api/admin/config-drift/run-now")
+@admin_router.post("/api/admin/config-drift/run-now")
 async def admin_run_config_drift_check_now(request: Request):
     """Trigger an immediate scheduled drift check."""
     result = await _run_config_drift_check_once()

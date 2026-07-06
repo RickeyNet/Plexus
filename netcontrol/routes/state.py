@@ -35,6 +35,12 @@ def _parse_cors_origins() -> list[str]:
 # ── Environment-derived constants ────────────────────────────────────────────
 
 APP_HTTPS_ENABLED = _env_flag("APP_HTTPS", False)
+# Whether session/CSRF cookies carry the Secure attribute. Defaults to
+# APP_HTTPS but is settable independently: when the app runs plain HTTP behind
+# a TLS-terminating reverse proxy (the shipped nginx deploy), the external
+# scheme is HTTPS even though APP_HTTPS is false, so operators should set
+# APP_COOKIE_SECURE=true to keep the cookie from ever traversing plaintext.
+APP_COOKIE_SECURE = _env_flag("APP_COOKIE_SECURE", APP_HTTPS_ENABLED)
 APP_HSTS_ENABLED = _env_flag("APP_HSTS", APP_HTTPS_ENABLED)
 APP_HSTS_MAX_AGE = int(os.getenv("APP_HSTS_MAX_AGE", "31536000"))
 # When true, the app-level middleware redirects plaintext HTTP requests to HTTPS.

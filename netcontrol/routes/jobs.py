@@ -24,7 +24,14 @@ from routes.secret_resolver import (
 )
 
 import netcontrol.routes.state as state
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_credential_access
+from netcontrol.routes.shared import (
+    _audit,
+    _corr_id,
+    _get_session,
+    require_credential_access,
+    require_owner_or_admin,
+    verify_ws_session,
+)
 from netcontrol.telemetry import configure_logging
 
 # Grace period (seconds) after a live job before re-probing SNMP on affected
@@ -736,15 +743,20 @@ async def get_job_queue():
 
 
 @router.get("/api/jobs/{job_id}")
-async def get_job(job_id: int):
+async def get_job(job_id: int, request: Request):
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    await require_owner_or_admin(request, job.get("launched_by"))
     return job
 
 
 @router.get("/api/jobs/{job_id}/events")
-async def get_job_events(job_id: int):
+async def get_job_events(job_id: int, request: Request):
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    await require_owner_or_admin(request, job.get("launched_by"))
     return await db.get_job_events(job_id)
 
 
@@ -900,6 +912,7 @@ async def cancel_job_endpoint(job_id: int, request: Request):
     if job["status"] not in ("queued", "running"):
         raise HTTPException(400, f"Cannot cancel job with status '{job['status']}'")
 
+    await require_owner_or_admin(request, job.get("launched_by"))
     session = _get_session(request)
     user = session["user"] if session else ""
 
@@ -941,6 +954,7 @@ async def retry_job_endpoint(job_id: int, request: Request):
     if job["status"] not in ("failed", "cancelled"):
         raise HTTPException(400, f"Can only retry failed or cancelled jobs, current status: '{job['status']}'")
 
+    await require_owner_or_admin(request, job.get("launched_by"))
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
@@ -995,6 +1009,7 @@ async def rerun_job_endpoint(job_id: int, request: Request):
     if job["status"] in ("queued", "running"):
         raise HTTPException(400, f"Job is still {job['status']} - wait for it to finish first")
 
+    await require_owner_or_admin(request, job.get("launched_by"))
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
@@ -1044,6 +1059,7 @@ async def update_job_priority_endpoint(job_id: int, body: dict, request: Request
         raise HTTPException(404, "Job not found")
     if job["status"] != "queued":
         raise HTTPException(400, "Can only change priority of queued jobs")
+    await require_owner_or_admin(request, job.get("launched_by"))
     new_priority = body.get("priority")
     if new_priority is None or not isinstance(new_priority, int):
         raise HTTPException(400, "priority (int 0-4) required")
@@ -1072,7 +1088,7 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     4. Server sends {"type": "job_complete"} when done
     """
     token = websocket.cookies.get("session")
-    session = _verify_session_token(token) if token else None
+    session = await verify_ws_session(token)
     if not session:
         await websocket.close(code=1008)
         return
@@ -1084,6 +1100,16 @@ async def websocket_job(websocket: WebSocket, job_id: int):
 
     features = await _get_user_features(user)
     if user.get("role") != "admin" and "jobs" not in features:
+        await websocket.close(code=1008)
+        return
+
+    # Object-level authorization: only the job's owner (or an admin) may
+    # stream its output, which routinely contains device configs/output.
+    job = await db.get_job(job_id)
+    if not job:
+        await websocket.close(code=1008)
+        return
+    if user.get("role") != "admin" and job.get("launched_by") != session.get("user"):
         await websocket.close(code=1008)
         return
 
@@ -1100,7 +1126,6 @@ async def websocket_job(websocket: WebSocket, job_id: int):
         })
 
     # Check if job is already done
-    job = await db.get_job(job_id)
     if job and job["status"] not in ("running", "pending"):
         await websocket.send_json({
             "type": "job_complete", "job_id": job_id, "status": job["status"]
