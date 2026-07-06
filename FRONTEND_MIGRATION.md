@@ -270,8 +270,12 @@ After the last module migrates:
 - [ ] Final Playwright pass over every page
 - [x] Update `AGENTS.md` to reflect the new frontend stack (no `CLAUDE.md` in repo)
 - [x] Update `README.md` architecture diagram (already React-accurate; verified)
-- Note: `js/websocket.js` kept per Appendix A (still listed as "evaluate"); now
-  unreferenced and a candidate for removal once the jobs WS path is confirmed.
+- [x] Delete `js/websocket.js` (2026-07-06 - React Jobs/Deployments/
+  Configuration/Upgrades all use their own native WebSocket handling; the file
+  was unreferenced)
+- [x] Delete `js/echarts.min.js`, `js/vis-network.min.js`, and
+  `vendor/codemirror/*` (2026-07-06 - React bundles echarts, vis-network, and
+  CodeMirror from npm; the vendored copies were unreferenced)
 - Note: `script-src 'unsafe-inline'` in app.py CSP is now removable (legacy
   inline onclick= handlers gone) - tracked as a follow-up security tightening.
 
@@ -397,11 +401,13 @@ This section grows as decisions are made during the migration.
 
 ## Appendix A - What stays in vanilla JS forever
 
-Some files don't need migration:
-- `js/echarts.min.js` (vendor, 45 lines wrapper)
-- `js/vis-network.min.js` (vendor, 34 lines wrapper)
-- `vendor/codemirror/*` (vendor)
-- `js/websocket.js` (136 lines) - may be replaced by a TanStack Query subscription pattern, evaluate during jobs migration
+Originally this listed vendored libraries expected to outlive the migration.
+All of them ended up superseded by npm packages bundled into the React app and
+were deleted on 2026-07-06 (see Phase 3):
+- ~~`js/echarts.min.js`~~ → `echarts` npm package
+- ~~`js/vis-network.min.js`~~ → `vis-network` / `vis-data` npm packages
+- ~~`vendor/codemirror/*`~~ → `@uiw/react-codemirror` + `@codemirror/*` npm packages
+- ~~`js/websocket.js`~~ → native WebSocket handling in the React jobs/deployments/configuration/upgrades pages
 
 ## Appendix B - Files to delete in Phase 3
 
