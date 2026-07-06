@@ -44,6 +44,11 @@ from typing import Any
 
 import httpx
 
+from netcontrol.routes.net_guard import (
+    OutboundRequestError,
+    validate_outbound_host,
+    validate_outbound_url,
+)
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.siem")
@@ -540,6 +545,17 @@ async def deliver(sink: SinkConfig, event: dict) -> None:
         message = wrap_syslog(event, rendered)
     else:
         message = rendered
+
+    # SSRF guard: reject metadata/link-local/loopback targets for
+    # admin-configured sinks (the raw socket protocols make this an internal
+    # connect primitive otherwise).
+    try:
+        if sink.protocol == "https":
+            await asyncio.to_thread(validate_outbound_url, sink.url)
+        else:
+            await asyncio.to_thread(validate_outbound_host, sink.host)
+    except OutboundRequestError as exc:
+        raise RuntimeError(f"siem sink {sink.id}: target rejected: {exc}") from exc
 
     if sink.protocol == "udp":
         await _deliver_udp(sink, message)

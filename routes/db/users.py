@@ -30,6 +30,7 @@ __all__ = [
     "get_user_by_id",
     "create_user",
     "update_user_password",
+    "bump_user_session_epoch",
     "update_user_profile",
     "update_user_admin",
     "get_all_users",
@@ -63,7 +64,7 @@ async def get_user_by_id(user_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, username, display_name, role, must_change_password, session_never_expires, created_at FROM users WHERE id = ?",
+            "SELECT id, username, display_name, role, must_change_password, session_never_expires, session_epoch, created_at FROM users WHERE id = ?",
             (user_id,),
         )
         return row_to_dict(await cursor.fetchone())
@@ -104,6 +105,23 @@ async def update_user_password(
             (password_hash, salt, int(bool(must_change_password)), user_id),
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def bump_user_session_epoch(user_id: int) -> int:
+    """Increment a user's session_epoch, invalidating all previously-issued
+    session tokens for that user. Returns the new epoch (0 on failure)."""
+    db = await _dbcore.get_db()
+    try:
+        await db.execute(
+            "UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?",
+            (user_id,),
+        )
+        await db.commit()
+        cursor = await db.execute("SELECT session_epoch FROM users WHERE id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
     finally:
         await db.close()
 

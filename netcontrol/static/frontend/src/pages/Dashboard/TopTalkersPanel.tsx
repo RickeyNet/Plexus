@@ -112,7 +112,13 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
         axisPointer: { type: 'shadow' },
         formatter: (params: { name: string; value: number; data: { flows: number } }[]) => {
           const p = params[0];
-          return `<strong>${p.name}</strong><br/>${formatBytes(p.value)}<br/>${p.data.flows} flows`;
+          // ECharts renders tooltip HTML via innerHTML, and p.name is the
+          // flow "talker" IP sourced from ingested NetFlow/sFlow data (not
+          // trusted). Escape it to prevent DOM-XSS. The numeric fields are safe.
+          const name = String(p.name).replace(/[&<>"']/g, (c) =>
+            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string,
+          );
+          return `<strong>${name}</strong><br/>${formatBytes(p.value)}<br/>${p.data.flows} flows`;
         },
       },
       grid: { left: 8, right: 60, top: 8, bottom: 24, containLabel: true },

@@ -31,6 +31,10 @@ APP_PORT=8080
 # only if you are running the app without the nginx reverse proxy.
 APP_HTTPS=false
 APP_HSTS=true
+# nginx terminates TLS, so the external scheme is HTTPS even though the app
+# listens on plain HTTP. Mark session/CSRF cookies Secure so they never
+# traverse plaintext.
+APP_COOKIE_SECURE=true
 APP_RELOAD=false
 
 # Set this to your server's hostname/URL
@@ -112,7 +116,10 @@ echo ""
 echo "  1. Review and edit .env (set APP_CORS_ORIGINS)"
 echo "  2. Run:  docker compose up -d"
 echo "  3. Open: https://$(hostname -f 2>/dev/null || echo 'your-vm-ip')"
-echo "  4. Login: admin / netcontrol (forced password change)"
+echo "  4. Login as 'admin'. The one-time password was generated on first"
+echo "     boot and printed to the app log - retrieve it with:"
+echo "         docker compose logs plexus | grep -A3 'default admin'"
+echo "     You will be forced to change it at first login."
 echo ""
 echo "  To view logs:     docker compose logs -f plexus"
 echo "  To stop:          docker compose down"

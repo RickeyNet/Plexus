@@ -167,9 +167,26 @@ async def verify_radius_user(username: str, password: str) -> tuple[bool, str]:
 
 async def upsert_external_user(username: str, display_name: str = "",
                                 role: str = "user") -> dict | None:
-    """Ensure a local shadow user exists for externally-authenticated identities (RADIUS/LDAP)."""
+    """Ensure a local shadow user exists for externally-authenticated identities (RADIUS/LDAP).
+
+    Guards against directory name-collision privilege escalation: if a local
+    account with this username already exists as an ``admin`` but the external
+    provider did NOT explicitly map this identity to admin (``role != "admin"``),
+    refuse to adopt it. Otherwise anyone who controls a directory account named
+    like a local admin (e.g. ``admin``) would authenticate straight into the
+    local admin account. Legitimate local admins still log in via the
+    break-glass local-password path; LDAP admin-group members pass ``role=admin``
+    and are allowed through.
+    """
     user = await db.get_user_by_username(username)
     if user:
+        if (user.get("role") or "").lower() == "admin" and role != "admin":
+            LOGGER.warning(
+                "auth: refusing to bind external identity '%s' onto pre-existing "
+                "local admin account (external mapping did not grant admin)",
+                username,
+            )
+            return None
         return user
 
     salt = secrets.token_hex(16)
@@ -317,7 +334,13 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             conn.set_option(python_ldap.OPT_REFERRALS, 0)
             conn.protocol_version = python_ldap.VERSION3
             if use_ssl:
-                conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, python_ldap.OPT_X_TLS_ALLOW)
+                # This connection carries the end user's real password, so it
+                # MUST honor the admin-configured tls_verify policy - not a
+                # hardcoded permissive level. Downgrading to ALLOW here would
+                # expose the user credential bind to MITM even when the admin
+                # selected demand/hard.
+                tls_level = _TLS_LEVEL_MAP.get(tls_verify, python_ldap.OPT_X_TLS_DEMAND)
+                conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, tls_level)
                 conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
         else:
             # No service account and no template - try direct bind with UPN
@@ -662,7 +685,7 @@ async def login(body: LoginRequest, request: Request):
     # Use the canonical username from the DB (may differ in case from input)
     canonical_user = user["username"]
     await _audit_fn("auth", "login.success", user=canonical_user, detail=f"source={auth_source}", correlation_id=_corr_id(request))
-    token = _create_session_token_fn(canonical_user, user["id"])
+    token = _create_session_token_fn(canonical_user, user["id"], user.get("session_epoch") or 0)
     csrf_token = _generate_csrf_token(canonical_user)
     response = JSONResponse({
         "ok": True,
@@ -851,8 +874,22 @@ async def change_password(body: ChangePasswordRequest, request: Request):
     salt = secrets.token_hex(16)
     pw_hash = _hash_password_fn(body.new_password, salt)
     await db.update_user_password(user["id"], pw_hash, salt)
+    # Revoke all previously-issued sessions for this user (a password change
+    # should log out other devices), then re-issue THIS request's cookie with
+    # the new epoch so the user who just changed their password stays signed in.
+    new_epoch = await db.bump_user_session_epoch(user["id"])
     await _audit("auth", "password.change", user=session["user"], correlation_id=_corr_id(request))
-    return {"ok": True}
+    token = _create_session_token_fn(session["user"], user["id"], new_epoch)
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        samesite="strict",
+        max_age=_SESSION_MAX_AGE,
+        secure=_APP_HTTPS_ENABLED,
+    )
+    return response
 
 
 @router.get("/api/auth/profile", dependencies=[Depends(_require_auth_dep)])

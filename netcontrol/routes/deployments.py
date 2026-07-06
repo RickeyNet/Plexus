@@ -27,6 +27,8 @@ from netcontrol.routes.shared import (
     _get_session,
     _push_config_to_device,
     require_credential_access,
+    require_owner_or_admin,
+    verify_ws_session,
 )
 from netcontrol.telemetry import configure_logging
 
@@ -761,21 +763,23 @@ async def get_deployment_summary_endpoint():
 
 
 @router.get("/api/deployments/{deployment_id}")
-async def get_deployment_detail(deployment_id: int):
+async def get_deployment_detail(deployment_id: int, request: Request):
     dep = await db.get_deployment(deployment_id)
     if not dep:
         raise HTTPException(status_code=404, detail="Deployment not found")
+    await require_owner_or_admin(request, dep.get("created_by"))
     checkpoints = await db.get_deployment_checkpoints(deployment_id)
     snapshots = await db.get_deployment_snapshots(deployment_id)
     return {**dep, "checkpoints": checkpoints, "snapshots": snapshots}
 
 
 @router.get("/api/deployments/{deployment_id}/correlation")
-async def get_deployment_correlation(deployment_id: int):
+async def get_deployment_correlation(deployment_id: int, request: Request):
     """Return correlated events (drift, alerts, audit trail) around a deployment."""
     dep = await db.get_deployment(deployment_id)
     if not dep:
         raise HTTPException(status_code=404, detail="Deployment not found")
+    await require_owner_or_admin(request, dep.get("created_by"))
 
     started = dep.get("started_at") or dep.get("created_at")
     finished = dep.get("finished_at")
@@ -812,6 +816,7 @@ async def execute_deployment(deployment_id: int, request: Request):
     if dep["status"] not in ("planning", "failed"):
         raise HTTPException(status_code=400, detail=f"Cannot execute deployment in '{dep['status']}' status")
 
+    await require_owner_or_admin(request, dep.get("created_by"))
     session = _get_session(request)
     user = session["user"] if session else ""
 
@@ -927,6 +932,10 @@ async def approve_deployment(deployment_id: int, body: DeploymentApprovalDecisio
             status_code=400,
             detail=f"Cannot approve deployment with approval_status='{dep.get('approval_status')}'",
         )
+    # Approval is a privileged change-control action: require admin (or the
+    # server API token). This closes the gap where any deployments-feature
+    # holder could approve a deployment they had no part in.
+    await require_owner_or_admin(request, None)
     session = _get_session(request)
     user = session["user"] if session else ""
     if user and user == (dep.get("created_by") or ""):
@@ -961,6 +970,7 @@ async def reject_deployment(deployment_id: int, body: DeploymentApprovalDecision
             status_code=400,
             detail=f"Cannot reject deployment with approval_status='{dep.get('approval_status')}'",
         )
+    await require_owner_or_admin(request, None)
     session = _get_session(request)
     user = session["user"] if session else ""
     await db.set_deployment_approval(
@@ -987,6 +997,7 @@ async def rollback_deployment(deployment_id: int, request: Request):
     if dep["status"] not in ("completed", "failed", "post-check"):
         raise HTTPException(status_code=400, detail=f"Cannot rollback deployment in '{dep['status']}' status")
 
+    await require_owner_or_admin(request, dep.get("created_by"))
     session = _get_session(request)
     user = session["user"] if session else ""
 
@@ -1029,6 +1040,7 @@ async def delete_deployment_endpoint(deployment_id: int, request: Request):
         raise HTTPException(status_code=404, detail="Deployment not found")
     if dep["status"] in ("executing", "pre-check", "post-check", "rolling-back"):
         raise HTTPException(status_code=400, detail="Cannot delete an active deployment")
+    await require_owner_or_admin(request, dep.get("created_by"))
     await db.delete_deployment(deployment_id)
     session = _get_session(request)
     await _audit(
@@ -1058,7 +1070,7 @@ async def get_deployment_job_status(job_id: str):
 async def ws_deployment(websocket: WebSocket, job_id: str):
     """WebSocket for streaming deployment/rollback job output."""
     token = websocket.cookies.get("session")
-    session = _verify_session_token(token) if token else None
+    session = await verify_ws_session(token)
     if not session:
         await websocket.close(code=1008)
         return
@@ -1072,6 +1084,15 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
     if user.get("role") != "admin" and "deployments" not in features:
         await websocket.close(code=1008)
         return
+
+    # Object-level authorization: non-admins may only stream deployments they
+    # created. The stream carries device config push/rollback output.
+    if user.get("role") != "admin":
+        deployment_id = (_deployment_jobs.get(job_id, {}) or {}).get("deployment_id")
+        dep = await db.get_deployment(deployment_id) if deployment_id else None
+        if not dep or dep.get("created_by") != session.get("user"):
+            await websocket.close(code=1008)
+            return
 
     await websocket.accept()
     async with _deployment_sockets_lock:

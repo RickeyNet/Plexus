@@ -56,6 +56,7 @@ from typing import Any
 
 import httpx
 
+from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.notify")
@@ -486,11 +487,20 @@ async def _deliver_pagerduty(cfg: ChannelConfig, alert: dict) -> None:
             raise RuntimeError(f"pagerduty HTTP {resp.status_code}: {resp.text[:200]}")
 
 
+async def _guard_url(url: str) -> None:
+    """SSRF pre-check for admin-configured webhook targets."""
+    try:
+        await asyncio.to_thread(validate_outbound_url, url)
+    except OutboundRequestError as exc:
+        raise RuntimeError(f"webhook target rejected: {exc}") from exc
+
+
 async def _deliver_webhook(cfg: ChannelConfig, alert: dict) -> None:
     body = format_webhook(alert)
     headers = {"Content-Type": "application/json"}
     if cfg.webhook_auth_header and cfg.webhook_auth_value:
         headers[cfg.webhook_auth_header] = cfg.webhook_auth_value
+    await _guard_url(cfg.webhook_url)
     async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT, verify=_httpx_verify(cfg)) as client:
         resp = await client.post(cfg.webhook_url, json=body, headers=headers)
         if resp.status_code >= 400:
@@ -499,6 +509,7 @@ async def _deliver_webhook(cfg: ChannelConfig, alert: dict) -> None:
 
 async def _deliver_teams(cfg: ChannelConfig, alert: dict) -> None:
     body = format_teams(alert)
+    await _guard_url(cfg.teams_webhook_url)
     async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT, verify=_httpx_verify(cfg)) as client:
         resp = await client.post(cfg.teams_webhook_url, json=body)
         # Teams connectors return 200 with body "1" on success.

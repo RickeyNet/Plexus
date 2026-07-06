@@ -125,6 +125,7 @@ from netcontrol.routes.config_drift import (
     _capture_jobs,
     _config_drift_check_loop,
     _run_config_drift_check_once,
+    admin_router as config_drift_admin_router,
     init_config_drift,
     router as config_drift_router,
     ws_router as config_drift_ws_router,
@@ -157,6 +158,7 @@ from netcontrol.routes.flow_collector import (
     FLOW_COLLECTOR_CONFIG,
     _cancel_aggregation_task as _cancel_flow_aggregation_task,
     _ensure_aggregation_task as _ensure_flow_aggregation_task,
+    admin_router as flow_collector_admin_router,
     router as flow_collector_router,
     start_flow_collector,
     stop_flow_collector,
@@ -622,15 +624,18 @@ async def verify_user(username: str, password: str) -> dict | None:
     return None
 
 
-def create_session_token(username: str, user_id: int) -> str:
+def create_session_token(username: str, user_id: int, session_epoch: int = 0) -> str:
     # `originally_issued_at` is the absolute-cap anchor; `last_activity` is
     # bumped on every authenticated request to support idle-timeout. Both
     # are unix timestamps. The serializer also embeds its own issue time
     # (used by max_age=) but we need our own field that survives refreshes.
+    # `session_epoch` binds the token to the user's current revocation
+    # generation; bumping the user's epoch invalidates every prior token.
     now = int(time.time())
     return _serializer.dumps({
         "user": username,
         "user_id": user_id,
+        "session_epoch": int(session_epoch or 0),
         "originally_issued_at": now,
         "last_activity": now,
     })
@@ -642,6 +647,7 @@ def _refresh_session_token(data: dict) -> str:
     return _serializer.dumps({
         "user": data["user"],
         "user_id": data["user_id"],
+        "session_epoch": int(data.get("session_epoch") or 0),
         "originally_issued_at": data.get("originally_issued_at", int(time.time())),
         "last_activity": int(time.time()),
     })
@@ -720,6 +726,15 @@ async def require_auth(request: Request, response: Response = None):
         raise HTTPException(status_code=401, detail="Session expired")
 
     user = await db.get_user_by_id(session["user_id"])
+    # Session revocation: reject tokens minted before the user's current
+    # epoch (bumped on password change, admin reset, privilege change).
+    if user is not None:
+        token_epoch = int(session.get("session_epoch") or 0)
+        user_epoch = int(user.get("session_epoch") or 0)
+        if token_epoch != user_epoch:
+            if response is not None:
+                response.delete_cookie("session", samesite="strict")
+            raise HTTPException(status_code=401, detail="Session has been revoked")
     if user and user.get("must_change_password") and path not in PASSWORD_CHANGE_ALLOWED_PATHS:
         raise HTTPException(
             status_code=403,
@@ -762,7 +777,7 @@ async def require_auth(request: Request, response: Response = None):
             httponly=True,
             samesite="strict",
             max_age=SESSION_MAX_AGE,
-            secure=APP_HTTPS_ENABLED,
+            secure=APP_COOKIE_SECURE,
         )
 
     return session
@@ -803,6 +818,7 @@ DISCOVERY_PROBE_PORTS = state.DISCOVERY_PROBE_PORTS
 JOB_RETENTION_MIN_DAYS = state.JOB_RETENTION_MIN_DAYS
 JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = state.JOB_RETENTION_CLEANUP_INTERVAL_SECONDS
 APP_HTTPS_ENABLED = state.APP_HTTPS_ENABLED
+APP_COOKIE_SECURE = state.APP_COOKIE_SECURE
 APP_HSTS_ENABLED = state.APP_HSTS_ENABLED
 APP_HSTS_MAX_AGE = state.APP_HSTS_MAX_AGE
 APP_HTTPS_REDIRECT = state.APP_HTTPS_REDIRECT
@@ -1433,7 +1449,10 @@ init_auth(
     verify_user_fn=verify_user,
     create_session_token_fn=create_session_token,
     session_max_age=SESSION_MAX_AGE,
-    app_https_enabled=APP_HTTPS_ENABLED,
+    # Drives the cookie Secure attribute; use the dedicated cookie-secure flag
+    # so a TLS-terminating-proxy deploy can mark cookies Secure even when the
+    # app's own listener is plain HTTP (APP_HTTPS=false).
+    app_https_enabled=APP_COOKIE_SECURE,
 )
 init_admin(
     require_admin_fn=require_admin,
@@ -1767,7 +1786,7 @@ init_cloud_visibility(require_admin)
 init_ipam(require_admin)
 init_dhcp(require_admin)
 init_federation(require_admin)
-init_upgrades(verify_session_token)
+init_upgrades(verify_session_token, _get_user_features)
 
 # Jobs
 app.include_router(
@@ -1803,6 +1822,10 @@ app.include_router(
     config_drift_router,
     dependencies=[Depends(require_auth), Depends(require_feature("config-drift"))],
 )
+app.include_router(
+    config_drift_admin_router,
+    dependencies=[Depends(require_admin)],
+)
 app.include_router(config_drift_ws_router)  # WebSocket - handles its own auth
 # Config Backups + admin
 app.include_router(
@@ -1830,11 +1853,12 @@ app.include_router(
 )
 app.include_router(deployments_ws_router)  # WebSocket - handles its own auth
 # Maintenance windows (gating layer for deployments) -- shares the
-# deployments feature key so any operator who can run a deployment can
-# also see/manage the windows that govern it.
+# deployments feature key for reads, but mutations require deployments.write
+# (or admin). A window can suppress the deployment time-gate, so opening or
+# editing one is a privileged change, not a read-level action.
 app.include_router(
     maintenance_windows_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("deployments"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("deployments"))],
 )
 # Monitoring + SLA + admin
 app.include_router(
@@ -1894,6 +1918,10 @@ app.include_router(
     flow_collector_router,
     dependencies=[Depends(require_auth), Depends(require_feature("traffic-analysis"))],
 )
+app.include_router(
+    flow_collector_admin_router,
+    dependencies=[Depends(require_admin)],
+)
 # Baseline Deviation Alerting
 app.include_router(
     baseline_alerting_router,
@@ -1912,7 +1940,7 @@ app.include_router(
 # Bandwidth Billing & 95th Percentile
 app.include_router(
     billing_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("reports"))],
 )
 # Cloud Visibility (AWS/Azure/GCP hybrid foundation)
 app.include_router(
@@ -2006,9 +2034,12 @@ if os.path.isdir(FRONTEND_DIST):
         deep links handled by react-router resolve correctly.
         """
         if path:
-            candidate = os.path.normpath(os.path.join(FRONTEND_DIST, path))
+            candidate = os.path.realpath(os.path.join(FRONTEND_DIST, path))
             # Guard against path traversal: candidate must stay inside dist/.
-            if candidate.startswith(FRONTEND_DIST) and os.path.isfile(candidate):
+            # Compare against realpath + separator so a sibling directory with
+            # the same prefix (e.g. dist-evil/) can't satisfy a bare startswith.
+            dist_root = os.path.realpath(FRONTEND_DIST)
+            if (candidate == dist_root or candidate.startswith(dist_root + os.sep)) and os.path.isfile(candidate):
                 return FileResponse(candidate)
         if os.path.isfile(FRONTEND_INDEX):
             return FileResponse(FRONTEND_INDEX)

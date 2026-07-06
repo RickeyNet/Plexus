@@ -8,13 +8,20 @@ from __future__ import annotations
 import asyncio
 import difflib
 import re
+import time
 
 import routes.database as db
 from fastapi import HTTPException
 
+import netcontrol.routes.state as state
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.shared")
+
+# Mirrors app.SESSION_MAX_AGE (absolute session lifetime cap, 24h). Kept as a
+# local constant so WS auth can enforce the same cap require_auth does without
+# importing app (which would create a cycle).
+_WS_SESSION_MAX_AGE = 86400
 
 
 # ── Audit helper ─────────────────────────────────────────────────────────────
@@ -65,6 +72,75 @@ def _get_session(request) -> dict | None:
     if _verify_session_token_fn is None:
         return None
     return _verify_session_token_fn(token)
+
+
+async def verify_ws_session(token: str) -> dict | None:
+    """Validate a WebSocket session token the same way require_auth does.
+
+    The raw ``verify_session_token`` only checks the signature; the idle
+    timeout and absolute-lifetime cap are enforced by ``require_auth`` for
+    HTTP requests. WebSocket handlers bypass ``require_auth``, so without
+    this an arbitrarily old (but validly signed) cookie could open a stream.
+    This mirrors require_auth's time checks, honoring the
+    ``session_never_expires`` kiosk opt-out.
+
+    Returns the session dict on success, or None (caller should close the
+    socket with code 1008).
+    """
+    if not token or _verify_session_token_fn is None:
+        return None
+    session = _verify_session_token_fn(token)
+    if not session or "user_id" not in session:
+        return None
+    user = await db.get_user_by_id(session["user_id"])
+    if not user:
+        return None
+    # Session revocation check (mirrors require_auth).
+    if int(session.get("session_epoch") or 0) != int(user.get("session_epoch") or 0):
+        return None
+    if bool(user.get("session_never_expires")):
+        return session
+    now = int(time.time())
+    originally_issued = int(session.get("originally_issued_at") or 0)
+    if originally_issued > 0 and now - originally_issued > _WS_SESSION_MAX_AGE:
+        return None
+    idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
+    last_activity = int(session.get("last_activity") or 0)
+    if idle_timeout > 0 and last_activity > 0 and now - last_activity > idle_timeout:
+        return None
+    return session
+
+
+# ── Object-level authorization (ownership) ───────────────────────────────────
+
+async def require_owner_or_admin(request, owner_username: str | None) -> dict | None:
+    """Enforce that the caller owns an object (by username) or is an admin.
+
+    Router-level ``require_auth``/``require_feature`` has already
+    authenticated the request before any handler runs, so if no session
+    cookie is present the request was authenticated via the server API
+    token (``auth_mode == "token"``), which is admin-equivalent by design -
+    such callers are allowed through.
+
+    For cookie-authenticated requests the caller must either be the object's
+    owner (``owner_username`` matches the session user) or hold the admin
+    role. Raises HTTPException(403) otherwise. Returns the session dict (or
+    None for API-token callers).
+
+    This is object-level authorization layered on top of the feature-level
+    gate; it prevents a user who merely holds a feature (e.g. ``jobs``) from
+    reading or controlling objects created by other users.
+    """
+    session = _get_session(request)
+    if session is None:
+        # No cookie => authenticated via API token upstream. Allow.
+        return None
+    if owner_username and session.get("user") == owner_username:
+        return session
+    user = await db.get_user_by_id(session["user_id"])
+    if user and user.get("role") == "admin":
+        return session
+    raise HTTPException(status_code=403, detail="You do not have access to this resource")
 
 
 # ── Credential ownership enforcement ─────────────────────────────────────────

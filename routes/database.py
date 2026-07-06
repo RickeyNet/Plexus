@@ -232,6 +232,7 @@ CREATE TABLE IF NOT EXISTS users (
     role        TEXT    NOT NULL DEFAULT 'user',
     must_change_password INTEGER NOT NULL DEFAULT 0,
     session_never_expires INTEGER NOT NULL DEFAULT 0,
+    session_epoch INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -285,7 +286,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     fdm_api_enabled   INTEGER NOT NULL DEFAULT 0,
     fdm_credential_id INTEGER,
     fdm_port          INTEGER NOT NULL DEFAULT 443,
-    fdm_verify_tls    INTEGER NOT NULL DEFAULT 0,
+    fdm_verify_tls    INTEGER NOT NULL DEFAULT 1,
     UNIQUE(group_id, ip_address)
 );
 

@@ -24,6 +24,7 @@ import netcontrol.routes.state as state
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
+admin_router = APIRouter()  # /api/admin/* routes - registered with require_admin
 LOGGER = configure_logging("plexus.flow_collector")
 
 
@@ -886,7 +887,7 @@ async def api_flow_exporters():
     return {"exporters": rows, "cache_size": len(_exporter_cache)}
 
 
-@router.post("/api/admin/flows/start")
+@admin_router.post("/api/admin/flows/start")
 async def api_start_collector(
     port: int = Query(2055, ge=1, le=65535),
     sflow_port: int | None = Query(None, ge=1, le=65535),
@@ -902,7 +903,7 @@ async def api_start_collector(
     }
 
 
-@router.post("/api/admin/flows/stop")
+@admin_router.post("/api/admin/flows/stop")
 async def api_stop_collector():
     ok = await stop_flow_collector()
     if not ok:
@@ -1006,12 +1007,12 @@ def _config_snapshot() -> dict:
     }
 
 
-@router.get("/api/admin/flows/config")
+@admin_router.get("/api/admin/flows/config")
 async def api_get_flow_config():
     return _config_snapshot()
 
 
-@router.put("/api/admin/flows/config")
+@admin_router.put("/api/admin/flows/config")
 async def api_update_flow_config(body: dict):
     sanitized = state._sanitize_flow_collector_config(body)
     await db.set_auth_setting("flow_collector", sanitized)

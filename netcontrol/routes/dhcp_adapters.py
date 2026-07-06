@@ -9,10 +9,13 @@ Supports three providers:
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 from typing import Any
 
 import httpx
+
+from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
 
 _HTTP_TIMEOUT_SECONDS = 30.0
 _VALID_PROVIDERS = {"kea", "windows", "infoblox"}
@@ -38,6 +41,14 @@ _PROVIDER_INFO = {
 
 class DhcpAdapterError(RuntimeError):
     """Raised when a DHCP provider config or response is invalid."""
+
+
+async def _guard_url(url: str) -> None:
+    """SSRF pre-check: reject metadata/link-local/loopback targets."""
+    try:
+        await asyncio.to_thread(validate_outbound_url, url)
+    except OutboundRequestError as exc:
+        raise DhcpAdapterError(f"target URL rejected: {exc}") from exc
 
 
 def normalize_dhcp_provider(raw: str | None) -> str:
@@ -69,6 +80,7 @@ async def _fetch_json(
     auth=None,
     verify: bool = True,
 ) -> Any:
+    await _guard_url(url)
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=verify) as client:
         response = await client.request(
             method.upper(),
