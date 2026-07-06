@@ -93,6 +93,14 @@ export function ConfigJobStreamModal({
 
     return () => {
       wsRef.current = null;
+      // Detach handlers before close so any in-flight buffered messages or
+      // the synthetic onclose don't fire setState on an unmounted/replaced
+      // effect run - otherwise the previous job's buffered lines can bleed
+      // into the next job's output pane (matches the sibling stream modals).
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
       try {
         ws.close();
       } catch {

@@ -79,6 +79,10 @@ _job_sockets_lock = asyncio.Lock()
 _running_job_tasks: dict[int, asyncio.Task] = {}  # job_id -> asyncio.Task for cancellation
 _running_tasks_lock = asyncio.Lock()
 
+# Set at shutdown so the queue processor stops launching new jobs while
+# in-flight ones drain (see drain_running_jobs).
+_shutting_down = False
+
 _PRIORITY_LABELS = {0: "low", 1: "below-normal", 2: "normal", 3: "high", 4: "critical"}
 _JOB_EVENT_BATCH_SIZE = max(1, int(os.getenv("APP_JOB_EVENT_BATCH_SIZE", "50")))
 _JOB_EVENT_FLUSH_SECONDS = max(
@@ -310,7 +314,70 @@ async def _process_job_queue():
         LOGGER.exception("Queue processor error: %s", exc)
 
 
+async def reap_and_resume_jobs() -> None:
+    """Boot-time job-queue reconciliation. Call once from the app lifespan.
+
+    1. Fail any job orphaned in 'running' by a prior crash - otherwise it
+       counts against the concurrency gate forever and wedges the queue.
+    2. Prime the queue so 'queued' jobs left from before the restart drain
+       (the processor is otherwise only kicked reactively by API actions).
+    """
+    try:
+        orphaned = await db.reap_orphaned_running_jobs()
+    except Exception as exc:
+        LOGGER.warning("job reaper: failed to reset orphaned running jobs: %s", exc)
+        orphaned = []
+    for job_id in orphaned:
+        try:
+            await db.add_job_event(
+                job_id, "error",
+                "Job was interrupted by a server restart and marked failed. "
+                "Re-run it if the change did not complete.",
+            )
+        except Exception as exc:
+            LOGGER.debug("job reaper: could not add event to job %s: %s", job_id, exc)
+    if orphaned:
+        LOGGER.warning(
+            "job reaper: marked %d orphaned running job(s) as failed: %s",
+            len(orphaned), orphaned,
+        )
+    await _process_job_queue()
+
+
+async def drain_running_jobs(grace_seconds: float | None = None) -> None:
+    """Wait for in-flight job tasks to finish on shutdown (SIGTERM).
+
+    Gives a firmware push / config deploy a brief grace window to complete
+    rather than being severed mid-device-write when the event loop tears
+    down. Jobs still running after the window are left as-is; the next-boot
+    reaper (reap_and_resume_jobs) reconciles them. We do NOT cancel them -
+    cancelling mid-write is worse than a clean process exit + restart reap.
+    """
+    global _shutting_down
+    _shutting_down = True  # stop the done-callback from launching new jobs
+    if grace_seconds is None:
+        grace_seconds = float(os.getenv("APP_SHUTDOWN_JOB_GRACE_SECONDS", "15"))
+    async with _running_tasks_lock:
+        tasks = list(_running_job_tasks.values())
+    if not tasks:
+        return
+    LOGGER.info(
+        "shutdown: waiting up to %.0fs for %d in-flight job(s) to finish",
+        grace_seconds, len(tasks),
+    )
+    _, pending = await asyncio.wait(tasks, timeout=grace_seconds)
+    if pending:
+        LOGGER.warning(
+            "shutdown: %d job(s) still running after the grace window; "
+            "they will be reconciled by the reaper on next boot",
+            len(pending),
+        )
+
+
 async def _process_job_queue_inner():
+    if _shutting_down:
+        # Don't start new work while the process is draining for shutdown.
+        return
     running = await db.get_running_job_count()
     if running >= _MAX_CONCURRENT_JOBS:
         LOGGER.debug("Queue: max concurrency reached (%d/%d)", running, _MAX_CONCURRENT_JOBS)

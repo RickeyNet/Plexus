@@ -543,6 +543,11 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
         self.mode = mode
         self._buffer: list[tuple] = []
         self._flush_task: asyncio.Task | None = None
+        # Hold strong references to fire-and-forget tasks spawned from the hot
+        # UDP path. The event loop only keeps a weak reference, so without this
+        # a task can be garbage-collected before it runs, silently dropping an
+        # exporter-stat update or a buffer flush under load.
+        self._bg_tasks: set[asyncio.Task] = set()
 
     def connection_made(self, transport):
         self.transport = transport
@@ -585,12 +590,19 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
 
         # Per-exporter telemetry: count this packet (not per-record) so the
         # number matches what the device actually sent over the wire.
-        asyncio.create_task(_record_exporter_packet(
+        self._spawn(_record_exporter_packet(
             exporter_ip, flow_type, host_id, last_record_at, sampling_rate
         ))
 
         if len(self._buffer) >= FLOW_COLLECTOR_CONFIG.get("batch_size", 100):
-            asyncio.create_task(self._flush_buffer())
+            self._spawn(self._flush_buffer())
+
+    def _spawn(self, coro) -> None:
+        """Fire off a background coroutine, holding a strong reference until it
+        finishes so the loop's weak reference can't let it be GC'd mid-flight."""
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     async def _flush_buffer(self):
         if not self._buffer:

@@ -13,6 +13,10 @@ services:
     container_name: plexus-app
     restart: unless-stopped
     logging: *default-logging
+    # Give in-flight jobs (firmware pushes / config deploys) time to drain on
+    # SIGTERM before Docker force-kills. Must exceed APP_SHUTDOWN_JOB_GRACE_
+    # SECONDS (default 15s) plus background-loop teardown.
+    stop_grace_period: 30s
     env_file:
       - .env
     environment:
@@ -24,8 +28,16 @@ services:
       APP_SESSION_KEY_FILE: /app/state/session.key
       APP_ENCRYPTION_KEY_FILE: /app/state/netcontrol.key
       PLEXUS_SOFTWARE_IMAGES_DIR: /app/state/software_images
+      # Keep uploaded floor-plan images on the persistent state volume;
+      # the code default (<app>/floor_plans) is on the ephemeral layer and
+      # is lost on every container recreate.
+      GEO_FLOOR_PLAN_DIR: /app/state/floor_plans
     ports:
-      - "8080:8080"
+      # Bind the app port to loopback only - nginx reaches it over the
+      # internal Docker network (http://plexus:8080), so publishing it on all
+      # host interfaces would expose the app with no TLS/HSTS/security headers.
+      # Host-local access (debugging) still works via 127.0.0.1:8080.
+      - "127.0.0.1:8080:8080"
       - "2055:2055/udp"    # NetFlow collector
       - "6343:6343/udp"    # sFlow collector
       - "162:162/udp"      # SNMP traps
@@ -37,6 +49,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Resource limits act as runaway backstops (a busy flow collector + job
+    # fan-out + large image uploads must not exhaust host memory and OOM
+    # Postgres). Tune to the host; these are generous starting points.
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+        reservations:
+          memory: 512m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health', timeout=4)"]
       interval: 30s
@@ -55,6 +76,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (run deploy/setup.sh to generate one)}
     volumes:
       - plexus-postgres:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 256m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-plexus} -d ${POSTGRES_DB:-plexus}"]
       interval: 10s
@@ -73,6 +100,10 @@ services:
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs:/etc/nginx/certs:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256m
     depends_on:
       plexus:
         condition: service_healthy

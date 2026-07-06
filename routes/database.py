@@ -2669,6 +2669,29 @@ async def _get_pg_pool():
         return _pg_pool
 
 
+async def close_db_pool() -> None:
+    """Cleanly release database connections at app shutdown.
+
+    Closes the asyncpg pool (Postgres) and stops the SQLite singleton so
+    connections are returned/closed deterministically rather than being
+    reclaimed only at process exit. Safe to call when nothing was opened.
+    """
+    global _pg_pool
+    pool = _pg_pool
+    _pg_pool = None
+    if pool is not None:
+        try:
+            await pool.close()
+        except Exception as exc:
+            _LOGGER.warning("close_db_pool: failed to close pg pool: %s", exc)
+    conn = _sqlite_conn
+    if conn is not None:
+        try:
+            conn.stop()
+        except Exception as exc:
+            _LOGGER.debug("close_db_pool: failed to stop sqlite connection: %s", exc)
+
+
 async def get_db():
     """Return a backend connection (reused, not opened per call).
 

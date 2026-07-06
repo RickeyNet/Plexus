@@ -5,6 +5,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuthStatus } from '@/api/auth';
 import { resetSessionExpiryFlag, setSessionExpiredHandler } from '@/api/client';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { PageLoader } from '@/components/PageLoader';
 import { StarfieldCanvas } from '@/components/StarfieldCanvas';
 import { IdleTimeoutWatcher } from '@/components/IdleTimeoutWatcher';
@@ -118,6 +119,7 @@ function MetricTimeRangeBar() {
 export function App() {
   const qc = useQueryClient();
   const { data: auth, isLoading } = useAuthStatus();
+  const { pathname } = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
@@ -190,6 +192,7 @@ export function App() {
       <main className="main-content" aria-live="polite">
         <Breadcrumb />
         <MetricTimeRangeBar />
+        <ErrorBoundary resetKey={pathname}>
         <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -242,6 +245,7 @@ export function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </Suspense>
+        </ErrorBoundary>
       </main>
 
       <UserMenu isOpen={userMenuOpen} onClose={() => setUserMenuOpen(false)} />

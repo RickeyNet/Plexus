@@ -28,6 +28,7 @@ from netcontrol.routes.shared import (
     _push_config_to_device,
     require_credential_access,
     require_owner_or_admin,
+    supervise_task,
     verify_ws_session,
 )
 from netcontrol.telemetry import configure_logging
@@ -531,9 +532,12 @@ async def _run_deployment_job(
 
         # Schedule post-deployment verification for successful deployments
         if final_status == "completed" and successful_hosts:
-            asyncio.create_task(_run_post_deployment_verification(
-                job_id, deployment_id, successful_hosts, user,
-            ))
+            supervise_task(
+                asyncio.create_task(_run_post_deployment_verification(
+                    job_id, deployment_id, successful_hosts, user,
+                )),
+                f"deployment post-verify {job_id}",
+            )
 
     except Exception as exc:
         LOGGER.error("deployment job %s failed: %s", job_id, exc)
@@ -878,7 +882,10 @@ async def execute_deployment(deployment_id: int, request: Request):
     }
     _deployment_job_sockets[job_id] = []
 
-    asyncio.create_task(_run_deployment_job(job_id, deployment_id, hosts, commands, credentials, user))
+    supervise_task(
+        asyncio.create_task(_run_deployment_job(job_id, deployment_id, hosts, commands, credentials, user)),
+        f"deployment job {job_id}",
+    )
 
     await _audit(
         "deployments", "deployment.executed",
@@ -1022,7 +1029,10 @@ async def rollback_deployment(deployment_id: int, request: Request):
     }
     _deployment_job_sockets[job_id] = []
 
-    asyncio.create_task(_run_rollback_job(job_id, deployment_id, hosts, credentials, user))
+    supervise_task(
+        asyncio.create_task(_run_rollback_job(job_id, deployment_id, hosts, credentials, user)),
+        f"rollback job {job_id}",
+    )
 
     await _audit(
         "deployments", "deployment.rollback",

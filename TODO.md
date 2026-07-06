@@ -427,6 +427,34 @@ migration completed and the legacy files were deleted).
   network; neither is measured automatically yet.
 - Frontend unit-test coverage threshold is already tracked in Batch 4.
 
+### Deferred hardening (from the 2026-07-06 multi-dimension sweep)
+
+Low-severity items I could not complete safely without a build/verify loop.
+Everything else from that sweep was fixed the same day (see
+`SECURITY_ENHANCEMENTS.md` pass 5 and the ops/backend/frontend fixes).
+
+- [ ] **Dockerfile: move the build toolchain out of the runtime image** -
+  `Dockerfile:28-30` installs `gcc libldap2-dev libsasl2-dev libssl-dev` into
+  the final `python:3.14-slim` image and never removes them (~200MB + attack
+  surface). Plan: a builder stage installs the `-dev` packages + gcc and
+  `pip install`s into a venv; the runtime stage copies the venv and installs
+  only the runtime shared libs (`libldap2 libsasl2-2 libssl3` - verify exact
+  names on the trixie base) plus `gosu`. Deferred because a wrong runtime-lib
+  package name ships an image that fails at import, and I can't `docker build`
+  to verify here.
+- [ ] **Pin GitHub Actions to commit SHAs** - `ci.yml` / `release.yml` /
+  `release-sbom.yml` use floating tags (`actions/checkout@v6`,
+  `gitleaks/gitleaks-action@v2`, `docker/build-push-action@v7`,
+  `aquasecurity/trivy-action@0.28.0`, `actions/setup-python@v6`). Repin each
+  to the SHA the tag currently points at (leave the tag in a trailing comment)
+  to close the mutable-tag supply-chain window. Deferred: needs each action's
+  current SHA looked up and verified.
+- [ ] **Consistent-snapshot backup for SQLite installs** - `deploy/backup.sh`
+  tars the live `/app/state` volume; with WAL mode a sqlite install can capture
+  a torn DB. Use `sqlite3 netcontrol.db ".backup"` or `VACUUM INTO` for the
+  sqlite path (Postgres already uses `pg_dump`). Low priority: the documented
+  compose deployment is Postgres.
+
 ### Batch 6 - The Big One
 
 - [x] **Split `routes/database.py` (16,795 lines) into domain modules** (hosts, credentials, monitoring, audit, mac-tracking, lab, etc.) while preserving the `routes.database` API surface. *Prerequisite: batches 1 and 4 - the suite must be green and fast before a refactor this wide.* Done 2026-06: core (connection singleton, pragmas, schema, init_db) stays in `routes/database.py` (~2,800 lines); 20 domain modules live in `routes/db/*` and are star re-exported through the facade, so all `import routes.database as db` callsites and test monkeypatches (`DB_PATH`, `DB_ENGINE`, `get_db`) work unchanged — moved code reads those names late-bound via the facade. Public API surface verified byte-identical (606 names) against a pre-split snapshot.

@@ -192,7 +192,9 @@ from netcontrol.routes.jobs import (
     _MAX_CONCURRENT_JOBS as _jobs_MAX_CONCURRENT_JOBS,
     _job_semaphore as _jobs_job_semaphore,
     _process_job_queue,
+    drain_running_jobs,
     init_jobs,
+    reap_and_resume_jobs,
     router as jobs_router,
     ws_router as jobs_ws_router,
 )
@@ -1259,6 +1261,10 @@ async def lifespan(app: FastAPI):
     await db.seed_built_in_cdefs()
     await db.get_or_create_builtin_ipam_source()
     await _cleanup_expired_jobs()
+    # Reconcile the job queue after a possible crash: fail jobs orphaned in
+    # 'running' (they would block the concurrency gate forever) and drain any
+    # jobs left 'queued' from before the restart.
+    await reap_and_resume_jobs()
     await rehydrate_scheduled_upgrades()
     try:
         recon = await reconcile_running_labs()
@@ -1355,6 +1361,14 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Give in-flight jobs a grace window to finish before tearing the loop
+        # down, so a firmware push / config deploy isn't severed mid-write on
+        # SIGTERM. Bounded by APP_SHUTDOWN_JOB_GRACE_SECONDS; must stay under
+        # the container's stop_grace_period.
+        try:
+            await drain_running_jobs()
+        except Exception as exc:
+            LOGGER.warning("shutdown: job drain failed: %s", type(exc).__name__)
         for task in background_tasks:
             task.cancel()
         # Cancelled loops unwind here; a loop that died with any other
@@ -1382,6 +1396,11 @@ async def lifespan(app: FastAPI):
             await notification_channels.stop_dispatcher()
         except Exception as exc:
             LOGGER.warning("notification_channels: shutdown failed: %s", type(exc).__name__)
+        # Release DB connections last, after every consumer above has stopped.
+        try:
+            await db.close_db_pool()
+        except Exception as exc:
+            LOGGER.warning("db pool shutdown failed: %s", type(exc).__name__)
 
 
 async def _rate_limit_cleanup_loop() -> None:
