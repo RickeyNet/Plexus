@@ -175,13 +175,41 @@ async def require_credential_access(
 
     Raises HTTPException(400/401/403/404) on any failure so callers that
     already propagate HTTPException don't need extra handling.
+
+    Every decision (allow or deny) emits a ``credential`` audit event so the
+    trail records who used which credential. Grants that don't rest on plain
+    ownership (API-token bypass, admin use of a service credential) are
+    flagged with an ``override`` marker so legitimate admin use is
+    distinguishable from a future authorization regression.
     """
+    caller = (
+        "api-token" if session is not None and session.get("auth_mode") == "token"
+        else (session or {}).get("user") or submitter_username or "(unauthenticated)"
+    )
+
+    async def _deny(status: int, detail: str, cred: dict | None = None) -> HTTPException:
+        await _audit(
+            "credential", "use_denied", user=str(caller),
+            detail=f"credential_id={credential_id} "
+                   f"owner_id={cred.get('owner_id') if cred else '?'} reason={detail}",
+        )
+        return HTTPException(status_code=status, detail=detail)
+
+    async def _allow(cred: dict, override: str | None = None) -> dict:
+        await _audit(
+            "credential", "use", user=str(caller),
+            detail=f"credential_id={credential_id} owner_id={cred.get('owner_id')} "
+                   f"service={int(bool(cred.get('is_service')))}"
+                   + (f" override={override}" if override else ""),
+        )
+        return cred
+
     if credential_id is None:
-        raise HTTPException(status_code=400, detail="credential_id is required")
+        raise await _deny(400, "credential_id is required")
 
     cred = await db.get_credential_raw(credential_id)
     if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
+        raise await _deny(404, "Credential not found")
 
     is_service_cred = bool(cred.get("is_service"))
 
@@ -189,46 +217,37 @@ async def require_credential_access(
         # Service creds are only available to call sites that explicitly
         # opt in; this protects user-facing flows from accidentally pulling
         # a Plexus-internal cred just because it was configured as a default.
-        raise HTTPException(
-            status_code=403,
-            detail="This credential is reserved for Plexus internal use",
-        )
+        raise await _deny(403, "This credential is reserved for Plexus internal use", cred)
 
     if session is not None:
         if session.get("auth_mode") == "token":
-            return cred
+            return await _allow(cred, override="api-token")
         user_id = session.get("user_id")
         if user_id is None:
-            raise HTTPException(status_code=401, detail="Not authenticated")
+            raise await _deny(401, "Not authenticated", cred)
         if is_service_cred:
             user = await db.get_user_by_id(int(user_id))
             if user and user.get("role") == "admin":
-                return cred
-            raise HTTPException(
-                status_code=403,
-                detail="Service credentials require admin access",
-            )
+                return await _allow(cred, override="admin-service-cred")
+            raise await _deny(403, "Service credentials require admin access", cred)
         if cred.get("owner_id") == int(user_id):
-            return cred
-        raise HTTPException(status_code=403, detail="You can only use your own credentials")
+            return await _allow(cred)
+        raise await _deny(403, "You can only use your own credentials", cred)
 
     if submitter_username:
         user = await db.get_user_by_username(submitter_username)
         if not user:
             # Submitter no longer exists (deleted account). Fail closed.
-            raise HTTPException(status_code=403, detail="Submitter account is no longer valid")
+            raise await _deny(403, "Submitter account is no longer valid", cred)
         if is_service_cred:
             if user.get("role") == "admin":
-                return cred
-            raise HTTPException(
-                status_code=403,
-                detail="Service credentials require admin submitter",
-            )
+                return await _allow(cred, override="admin-service-cred")
+            raise await _deny(403, "Service credentials require admin submitter", cred)
         if cred.get("owner_id") == int(user["id"]):
-            return cred
-        raise HTTPException(status_code=403, detail="Credential is not owned by the task submitter")
+            return await _allow(cred)
+        raise await _deny(403, "Credential is not owned by the task submitter", cred)
 
-    raise HTTPException(status_code=401, detail="Not authenticated")
+    raise await _deny(401, "Not authenticated", cred)
 
 
 # ── Config capture/push/diff ────────────────────────────────────────────────
