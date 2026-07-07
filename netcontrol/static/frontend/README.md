@@ -1,24 +1,25 @@
 # Plexus React Frontend
 
-Phase 1.1 of [FRONTEND_MIGRATION.md](../../../FRONTEND_MIGRATION.md). This
-folder houses the new React + TypeScript + PatternFly app that will, page by
-page, replace the vanilla JS in `netcontrol/static/js/`.
-
-Today this is a Hello World - proves the build pipeline, dev proxy, FastAPI
-mount, TanStack Query wiring, and PatternFly styling all work end-to-end.
+The Plexus UI - a React + TypeScript SPA that replaced the legacy vanilla-JS
+frontend (migration history in
+[FRONTEND_MIGRATION.md](../../../FRONTEND_MIGRATION.md)). The legacy
+`netcontrol/static/js/` modules have been deleted; this app is the only
+frontend.
 
 ## Stack
 
-| Concern        | Choice                              |
-| -------------- | ----------------------------------- |
-| Framework      | React 18 (StrictMode)               |
-| Language       | TypeScript (strict)                 |
-| Build          | Vite                                |
-| Routing        | react-router-dom v6                 |
-| Server state   | TanStack Query                      |
-| UI components  | PatternFly 6                        |
-| Forms          | react-hook-form + zod (added later) |
-| Client state   | zustand (added later)               |
+| Concern        | Choice                                                  |
+| -------------- | ------------------------------------------------------- |
+| Framework      | React 19 (StrictMode)                                   |
+| Language       | TypeScript (strict)                                     |
+| Build          | Vite                                                    |
+| Routing        | react-router-dom v7 (`basename="/frontend"`)            |
+| Server state   | TanStack Query v5                                       |
+| Styling        | Legacy stylesheet `/static/css/style.css` (no PatternFly) |
+| Charts         | ECharts (`src/lib/echart.tsx`)                          |
+| Topology       | vis-network                                             |
+| Code editor    | CodeMirror 6 (`@uiw/react-codemirror`)                  |
+| Unit tests     | Vitest                                                  |
 
 ## Develop
 
@@ -38,8 +39,7 @@ npm run dev   # http://localhost:5173/frontend/
 ```
 
 Vite proxies `/api` and `/static` to `127.0.0.1:8080`, so cookie-based session
-auth works without CORS gymnastics. Log in via the legacy SPA (`/`) once; the
-session cookie is shared with the React app.
+auth works without CORS gymnastics.
 
 Override the proxy target with `PLEXUS_BACKEND_URL` if the backend runs
 elsewhere.
@@ -66,12 +66,11 @@ netcontrol/static/frontend/
 ├── vite.config.ts
 ├── src/
 │   ├── main.tsx           # entry; QueryClientProvider + Router
-│   ├── App.tsx            # PatternFly Page shell + routes
-│   ├── api/
-│   │   ├── client.ts      # fetch wrapper, CSRF, errors
-│   │   └── auth.ts        # useAuthStatus()
-│   └── pages/
-│       └── Home.tsx       # Hello-world / connectivity check
+│   ├── App.tsx            # app shell (nav sidebar) + routes
+│   ├── api/               # TanStack Query hooks (client.ts = fetch wrapper, CSRF, errors)
+│   ├── components/        # shared components (modals, dialogs, panels)
+│   ├── lib/               # ECharts wrapper, utilities
+│   └── pages/             # one folder per page (Inventory, Jobs, Topology, ...)
 └── README.md
 ```
 
