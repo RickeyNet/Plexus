@@ -816,12 +816,10 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
     if rule_finding and rule_finding.get("passed"):
         raise HTTPException(400, f"Rule '{body.rule_name}' already passes - no remediation needed")
 
-    # Load credential
-    cred = await db.get_credential_raw(body.credential_id)
-    if not cred:
-        raise HTTPException(404, "Credential not found")
-
+    # Load credential - ownership enforced so a user cannot remediate with
+    # another user's credential (this was the last unvalidated IDOR path).
     session = _get_session(request)
+    cred = await require_credential_access(body.credential_id, session=session)
 
     if body.dry_run:
         # Dry-run: just return what would be pushed

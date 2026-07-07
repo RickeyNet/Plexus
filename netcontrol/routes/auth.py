@@ -121,6 +121,11 @@ ATTRIBUTE\tNAS-Identifier\t32\tstring
 
 def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) -> tuple[bool, str]:
     """Perform a blocking RADIUS PAP authentication request."""
+    # Defense in depth (mirrors the LDAP guard): never send an empty
+    # password to the RADIUS server - the API layer already rejects it,
+    # but this function must stay safe if called from a new path.
+    if not password:
+        return False, "reject"
     if not PYRAD_AVAILABLE:
         LOGGER.warning("radius: pyrad library is not installed - cannot authenticate")
         return False, "error"
