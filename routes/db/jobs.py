@@ -144,11 +144,19 @@ async def add_job_events(job_id: int, events: list[tuple[str, str, str]]) -> Non
         await db.close()
 
 
-async def get_job_events(job_id: int) -> list[dict]:
+async def get_job_events(job_id: int, limit: int = 10000) -> list[dict]:
+    """Return job events in chronological order, capped to the most recent
+    ``limit``. A verbose multi-host job can emit tens of thousands of lines;
+    both the REST endpoint and the WebSocket history replay bound the payload
+    so a reconnect can't stream the whole unbounded log.
+    """
     db = await _dbcore.get_db()
     try:
+        safe_limit = max(1, int(limit))
         cursor = await db.execute(
-            "SELECT * FROM job_events WHERE job_id = ? ORDER BY id", (job_id,)
+            "SELECT * FROM (SELECT * FROM job_events WHERE job_id = ? "
+            "ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
+            (job_id, safe_limit),
         )
         return rows_to_list(await cursor.fetchall())
     finally:

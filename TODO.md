@@ -393,7 +393,7 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 
 ### Batch 4 - Test & Tooling Structure
 
-- [ ] **Expand `tools/coverage_gate.py`** beyond the single `netcontrol/app.py` rule - add the top untested route modules (`monitoring.py` 67K, `metrics_engine.py` 50K, `jobs.py` 45K, `admin.py` 35K have zero tests).
+- [ ] **Expand `tools/coverage_gate.py`** beyond the single `netcontrol/app.py` rule - add the top untested route modules. Update 2026-07-07: `monitoring.py` (tests/test_monitoring*.py, test_sla_summary.py) and `jobs.py` (tests/test_jobs.py) now have coverage; `metrics_engine.py` 50K and `admin.py` 35K still have zero tests.
 - [ ] **Shrink the `mypy.ini` `ignore_errors = True` list** (18 modules including app, database, auth, jobs, monitoring) - one module per PR.
 - [x] **Run Postgres smoke tests on all PRs** - verified 2026-06-12: ci.yml already has a `postgres-smoke` job (postgres:16 service container) on every PR; what was thin is the coverage. Expanded `tests/test_postgres_backend.py` from 2 to 4 tests: concurrent audit-chain writers (exercises the pg_advisory_lock path that SQLite runs never touch) and category-filtered audit listing (0055 index). Full API-test matrix on Postgres remains future work - most app tests are DB_PATH/SQLite-bound by design.
 - [ ] **Frontend coverage threshold in CI** - 5 test files for 180 components; any threshold forces improvement.

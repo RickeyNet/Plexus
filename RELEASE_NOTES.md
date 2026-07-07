@@ -21,6 +21,14 @@ current upgrade verification fix in the working tree.
 
 ### Performance
 - Added monitoring poll indexes and batched post-poll database writes.
+- Folded the SLA-summary per-host jitter calculation into the main grouped
+  query, removing one extra database round-trip per host (500 queries on a
+  500-host summary).
+- Added indexes on `config_snapshots(host_id)` and
+  `config_drift_events(host_id, status)` so drift dashboards and bulk scans no
+  longer full-scan ever-growing tables.
+- Bounded job-event replay and audit-chain verification so a verbose job or a
+  large audit log no longer loads the whole table into memory at once.
 - Reduced dashboard and page-load API churn.
 - Removed the dashboard topology mini-map from first paint.
 - Enabled frontend performance mode by default and switched the starfield to a
@@ -28,6 +36,29 @@ current upgrade verification fix in the working tree.
 
 ### Compliance and UI
 - Replaced native compliance confirm/alert prompts with shared themed dialogs.
+- Fixed a compliance false-pass: `must_contain` / `must_not_contain` rules now
+  match config directives line-anchored and negation-aware, so a device with a
+  hardening feature explicitly disabled (e.g. `no service password-encryption`)
+  is no longer reported compliant. `regex_match` now searches up to 2 MB and
+  flags when a large config was truncated instead of silently failing.
+- Frontend now renders FastAPI request-validation (422) errors as readable
+  "field: message" text instead of `[object Object]`.
+
+### Data correctness
+- IPAM subnet-utilization snapshots no longer enumerate the address space; an
+  IPv6 /64 previously materialized 2**64 addresses and exhausted memory.
+  Utilization is computed with integer membership math, and point-to-point
+  `/31` and `/127` subnets now report both usable hosts instead of zero.
+- Topology weathermap counter-wrap handling is now width-aware: a device
+  reboot no longer fabricates a utilization spike on 64-bit interface counters
+  (a reset is dropped rather than "corrected" by +2**32).
+- STP root-election instability now alerts when the recent-change count meets
+  or exceeds the threshold (an exact-match check previously missed rapid churn
+  that jumped past the threshold between polls).
+- Syslog severity 3 (Error) now maps to warning rather than critical, so
+  routine device errors don't flood the critical tier.
+- Juniper serial parsing no longer returns a chassis part number on models
+  that populate the part-number column.
 
 ### Security and access control
 - Enforced credential ownership on every operational endpoint (job launch,
@@ -46,6 +77,20 @@ current upgrade verification fix in the working tree.
 - Enforced the forced-password-change gate and object ownership on WebSocket
   streams; disabled the dev-only admin bootstrap by default in production
   containers.
+- Rejected non-positive `limit` values on capped list endpoints. SQLite treats
+  `LIMIT -1` as unlimited, so a `?limit=-1` on an endpoint that declared only
+  an upper bound previously returned the entire table (MAC search, deployments,
+  audit findings, flows, syslog/trap events, risk analyses).
+- Closed a deployment execute race: two concurrent `/execute` calls could both
+  read `planning` status and both push commands to devices. Execution now
+  atomically claims the deployment; the loser gets a 409.
+- Bounded request fields that reach device commands (deployment
+  `proposed_commands`, campaign `image_map`) so an unbounded payload can't be
+  submitted.
+- Stopped leaking raw exception text in error responses on the config-drift,
+  DHCP-sync and lab-create paths (details are logged server-side).
+- Campaign creation now reports host ids it could not add (unknown or
+  duplicate) instead of silently building a smaller campaign than requested.
 
 ### Reliability
 - Jobs interrupted by a crash or restart are now reconciled on startup instead

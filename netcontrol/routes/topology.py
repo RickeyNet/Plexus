@@ -241,6 +241,25 @@ def _weathermap_width(utilization_pct: float) -> int:
     return 8
 
 
+def _counter_delta(prev: int, cur: int) -> int | None:
+    """Delta between two monotonic SNMP octet counters.
+
+    A negative delta means either a 32-bit counter wrap or a counter reset
+    (device reboot / SNMP agent restart). High-capacity Counter64 values do
+    not realistically wrap, so a negative delta on 64-bit-range samples is a
+    reset and the interval is unusable (returns None) rather than being
+    "corrected" by +2**32, which fabricated a huge utilization spike after
+    every reboot. Only a genuine 32-bit counter (both samples < 2**32) gets
+    the +2**32 wrap correction.
+    """
+    delta = cur - prev
+    if delta >= 0:
+        return delta
+    if prev < 2**32 and cur < 2**32:
+        return delta + 2**32
+    return None
+
+
 def _calc_interface_utilization(stat: dict) -> dict | None:
     """Calculate utilization percentage from two counter snapshots."""
     if not stat.get("prev_polled_at") or not stat.get("polled_at"):
@@ -260,13 +279,13 @@ def _calc_interface_utilization(stat: dict) -> dict | None:
         if stat.get("prev_in_octets") is None or stat.get("prev_out_octets") is None:
             return None
 
-        in_delta = stat["in_octets"] - stat["prev_in_octets"]
-        out_delta = stat["out_octets"] - stat["prev_out_octets"]
-        # Handle 32/64-bit counter wraps
-        if in_delta < 0:
-            in_delta += 2**32
-        if out_delta < 0:
-            out_delta += 2**32
+        # Width-aware wrap/reset handling (see _counter_delta). A reboot
+        # between polls yields a negative delta on 64-bit counters; drop the
+        # interval instead of inventing a spike.
+        in_delta = _counter_delta(stat["prev_in_octets"], stat["in_octets"])
+        out_delta = _counter_delta(stat["prev_out_octets"], stat["out_octets"])
+        if in_delta is None or out_delta is None:
+            return None
 
         in_bps = (in_delta * 8) / delta_sec
         out_bps = (out_delta * 8) / delta_sec
@@ -643,7 +662,10 @@ async def _record_stp_events_for_host(
             within_minutes=STP_ROOT_CHANGE_LOOKBACK_MINUTES,
             max_rows=1000,
         )
-        if recent_root_changes == STP_ROOT_CHANGE_ANOMALY_THRESHOLD:
+        # >= not ==: between two polls the count can jump past the threshold
+        # (e.g. threshold 3 but 5 changes landed in the window), and an exact
+        # match would then never fire. Dedup on dedup_suffix prevents spam.
+        if recent_root_changes >= STP_ROOT_CHANGE_ANOMALY_THRESHOLD:
             await db.insert_stp_topology_event(
                 host_id=host_id,
                 vlan_id=vlan_id,

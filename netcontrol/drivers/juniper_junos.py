@@ -171,8 +171,23 @@ class JuniperJunosDriver(Driver):
             # Drop the "Chassis" label itself and look at the remaining
             # whitespace-separated columns.
             rest = stripped[len("Chassis"):].split()
+            # A Junos serial is alphanumeric and mixes letters and digits
+            # (e.g. "JN12345AB"). On models where the Chassis row also carries
+            # a Part number (e.g. "750-012345"), the old first-alnum-token
+            # rule returned the part number. Prefer a token that has both a
+            # letter and a digit; treat all-digit tokens (part numbers) as
+            # non-serials; fall back to the first alnum token otherwise.
+            fallback = None
             for token in rest:
-                if len(token) >= 6 and token.replace("-", "").isalnum():
+                core = token.replace("-", "")
+                if len(token) < 6 or not core.isalnum():
+                    continue
+                if core.isdigit():
+                    # All-digit (part number / numeric column), not a serial.
+                    continue
+                if fallback is None:
+                    fallback = token
+                if any(c.isalpha() for c in core) and any(c.isdigit() for c in core):
                     return token
-            return None
+            return fallback
         return None

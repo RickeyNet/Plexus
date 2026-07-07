@@ -1579,17 +1579,40 @@ async def snapshot_subnet_utilization(
     vrf_name = (vrf_name or "").strip()
     sn = str(net)
 
-    if net.prefixlen == 32 or net.prefixlen == 128:
-        total = 1
-        host_iter = [net.network_address]
+    # Usable-host bounds are computed as integer ranges rather than by
+    # enumerating net.hosts(): an IPv6 /64 has 2**64 addresses, and
+    # list(net.hosts()) would exhaust memory / hang the worker. Every
+    # membership test below is O(1) integer arithmetic.
+    is_v6 = net.version == 6
+    net_first = int(net.network_address)
+    net_last = int(net.broadcast_address)  # last address of the block (v4 & v6)
+    if net.prefixlen >= (127 if is_v6 else 31):
+        # /31 and /127 have two usable hosts (RFC 3021 / point-to-point); /32
+        # and /128 have one. No network/broadcast reservation applies.
+        total = net.num_addresses
+        usable_first, usable_last = net_first, net_last
     else:
-        total = max(0, net.num_addresses - 2)
-        host_iter = list(net.hosts())
-    host_set = {str(h) for h in host_iter}
+        # Exclude the network address (both families) and, for IPv4, broadcast.
+        usable_first = net_first + 1
+        usable_last = net_last if is_v6 else net_last - 1
+        total = max(0, usable_last - usable_first + 1)
+
+    def _usable_int(ip_str: str) -> int | None:
+        """Integer form of ip_str iff it is a usable host in net, else None."""
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return None
+        if ip.version != net.version:
+            return None
+        v = int(ip)
+        if v < usable_first or v > usable_last:
+            return None
+        return v
 
     db = await _dbcore.get_db()
     try:
-        used_set: set[str] = set()
+        used_ints: set[int] = set()
         cur = await db.execute(
             "SELECT ip_address, vrf_name FROM hosts WHERE ip_address != '' AND ip_address IS NOT NULL"
         )
@@ -1598,8 +1621,9 @@ async def snapshot_subnet_utilization(
             h_vrf = (row.get("vrf_name") or "").strip()
             if vrf_name and h_vrf != vrf_name:
                 continue
-            if ip_s in host_set:
-                used_set.add(ip_s)
+            v = _usable_int(ip_s)
+            if v is not None:
+                used_ints.add(v)
 
         cur = await db.execute(
             "SELECT address, vrf_name FROM ipam_allocations WHERE prefix_subnet = ?",
@@ -1609,11 +1633,13 @@ async def snapshot_subnet_utilization(
             a_vrf = (row.get("vrf_name") or "").strip()
             if vrf_name and a_vrf and a_vrf != vrf_name:
                 continue
-            ip_s = (row.get("address") or "").strip()
-            if ip_s in host_set:
-                used_set.add(ip_s)
+            v = _usable_int((row.get("address") or "").strip())
+            if v is not None:
+                used_ints.add(v)
 
-        reserved_set: set[str] = set()
+        # Reservation ranges → merged integer intervals clamped to the usable
+        # space. Counting via interval math avoids materializing large ranges.
+        raw_intervals: list[tuple[int, int]] = []
         cur = await db.execute(
             "SELECT start_ip, end_ip FROM ipam_reservations WHERE subnet = ?",
             (sn,),
@@ -1622,16 +1648,31 @@ async def snapshot_subnet_utilization(
             try:
                 start = ipaddress.ip_address(row["start_ip"])
                 end = ipaddress.ip_address(row["end_ip"])
-                cur_ip = start
-                while cur_ip <= end:
-                    s = str(cur_ip)
-                    if s in host_set:
-                        reserved_set.add(s)
-                    cur_ip += 1
             except ValueError:
                 continue
+            if start.version != net.version or end.version != net.version:
+                continue
+            lo = max(int(start), usable_first)
+            hi = min(int(end), usable_last)
+            if lo <= hi:
+                raw_intervals.append((lo, hi))
+        merged: list[tuple[int, int]] = []
+        for lo, hi in sorted(raw_intervals):
+            if merged and lo <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            else:
+                merged.append((lo, hi))
 
-        pending_set: set[str] = set()
+        def _in_reserved(v: int) -> bool:
+            return any(lo <= v <= hi for lo, hi in merged)
+
+        # reserved excludes addresses already counted as used (dedup).
+        reserved_total = sum(hi - lo + 1 for lo, hi in merged)
+        used_in_reserved = sum(1 for v in used_ints if _in_reserved(v))
+        reserved = max(0, reserved_total - used_in_reserved)
+
+        pending = 0
+        counted_pending: set[int] = set()
         now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
         cur = await db.execute(
             """SELECT address, vrf_name, expires_at FROM ipam_pending_allocations
@@ -1645,23 +1686,27 @@ async def snapshot_subnet_utilization(
             exp = row.get("expires_at") or ""
             if exp and exp < now_iso:
                 continue
-            ip_s = (row.get("address") or "").strip()
-            if ip_s in host_set:
-                pending_set.add(ip_s)
+            v = _usable_int((row.get("address") or "").strip())
+            if v is None or v in used_ints or _in_reserved(v) or v in counted_pending:
+                continue
+            counted_pending.add(v)
+            pending += 1
 
-        # Sets may overlap; deduplicate so counts sum correctly.
-        used = len(used_set)
-        reserved = len(reserved_set - used_set)
-        pending = len(pending_set - used_set - reserved_set)
+        used = len(used_ints)
         consumed = used + reserved + pending
         free = max(0, total - consumed)
         pct = (consumed / total * 100.0) if total > 0 else 0.0
+        # SQLite INTEGER columns are signed 64-bit; a /64's total overflows it.
+        # Clamp the stored counts (pct already reflects the true total).
+        _INT64_MAX = 9223372036854775807
+        total_store = min(total, _INT64_MAX)
+        free_store = min(free, _INT64_MAX)
 
         cur = await db.execute(
             """INSERT INTO ipam_subnet_utilization
                   (subnet, vrf_name, total, used, reserved, pending, free, utilization_pct)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (sn, vrf_name, total, used, reserved, pending, free, pct),
+            (sn, vrf_name, total_store, used, reserved, pending, free_store, pct),
         )
         await db.commit()
         new_id = cur.lastrowid

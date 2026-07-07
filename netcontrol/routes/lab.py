@@ -241,8 +241,12 @@ async def create_environment(body: EnvironmentCreate, request: Request):
             owner_id=owner_id,
             shared=body.shared,
         )
+    except ValueError as exc:
+        # Validation errors carry a user-facing message; surface it.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to create: {exc}") from exc
+        LOGGER.error("lab: create environment failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=400, detail="Failed to create lab environment") from exc
     await _audit(
         "lab", "environment.created",
         user=session["user"] if session else "",

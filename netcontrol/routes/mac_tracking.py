@@ -954,7 +954,7 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
 
 
 @router.get("/api/mac-tracking/search")
-async def search_mac(query: str = Query(""), limit: int = Query(5000, le=50000)):
+async def search_mac(query: str = Query(""), limit: int = Query(5000, ge=1, le=50000)):
     """Search across MAC/ARP tables by MAC address, IP, or port name.
 
     A blank query returns the most recently collected entries. The default
@@ -1007,7 +1007,7 @@ async def get_host_mac_arp(host_id: int):
 
 
 @router.get("/api/mac-tracking/history/{mac_address:path}")
-async def get_mac_movement_history(mac_address: str, limit: int = Query(100, le=500)):
+async def get_mac_movement_history(mac_address: str, limit: int = Query(100, ge=1, le=500)):
     """Get port movement history for a specific MAC address."""
     return await db.get_mac_history(mac_address, limit)
 
@@ -1178,7 +1178,7 @@ class MacMoveBulkAckRequest(BaseModel):
 async def list_mac_move_events(
     status: str = Query("", pattern="^(open|acknowledged)?$"),
     host_id: int | None = Query(None),
-    limit: int = Query(200, le=1000),
+    limit: int = Query(200, ge=1, le=1000),
 ):
     """List MAC move events (newest first).
 
@@ -1195,7 +1195,7 @@ async def mac_move_event_summary():
 
 
 @router.get("/api/mac-tracking/moves/{event_id}/history")
-async def mac_move_event_history(event_id: int, limit: int = Query(500, le=1000)):
+async def mac_move_event_history(event_id: int, limit: int = Query(500, ge=1, le=1000)):
     """Lifecycle timeline (detected, acknowledged) for one move event."""
     return await db.get_mac_move_event_history(event_id, limit)
 

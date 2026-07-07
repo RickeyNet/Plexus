@@ -940,6 +940,7 @@ async def get_sla_summary(
                        COUNT(*) AS total_polls,
                        SUM(CASE WHEN p.poll_status = 'ok' THEN 1 ELSE 0 END) AS ok_polls,
                        AVG(p.response_time_ms) AS avg_latency,
+                       AVG(p.response_time_ms * p.response_time_ms) AS mean_sq_rt,
                        AVG(p.packet_loss_pct) AS avg_packet_loss
                 FROM monitoring_polls p
                 JOIN hosts h ON h.id = p.host_id
@@ -965,6 +966,16 @@ async def get_sla_summary(
             lat = round(r["avg_latency"], 2) if r["avg_latency"] is not None else None
             pkt = round(r["avg_packet_loss"], 2) if r["avg_packet_loss"] is not None else None
 
+            # Jitter = stddev of response time, derived from the same grouped
+            # aggregate (mean and mean-of-squares) rather than a per-host query.
+            mean_rt = r["avg_latency"]
+            mean_sq = r["mean_sq_rt"]
+            if mean_rt is not None and mean_sq is not None:
+                variance = mean_sq - (mean_rt ** 2)
+                jitter = round(max(0.0, variance) ** 0.5, 2)
+            else:
+                jitter = None
+
             total_uptime += uptime_pct
             if lat is not None:
                 total_latency += lat
@@ -983,26 +994,10 @@ async def get_sla_summary(
                 "uptime_pct": uptime_pct,
                 "avg_latency_ms": lat,
                 "avg_packet_loss_pct": pkt,
+                "jitter_ms": jitter,
             })
 
         host_count = len(hosts) or 1
-
-        # Compute jitter per host from response_time_ms variance
-        for h in hosts:
-            jcursor = await db.execute(
-                """SELECT AVG(p.response_time_ms) AS mean_rt,
-                           AVG(p.response_time_ms * p.response_time_ms) AS mean_sq_rt
-                    FROM monitoring_polls p
-                    WHERE p.host_id = ? AND p.response_time_ms IS NOT NULL
-                      AND p.polled_at >= datetime('now', '-' || ? || ' days')""",
-                (h["host_id"], days),
-            )
-            jr = await jcursor.fetchone()
-            if jr and jr[0] is not None and jr[1] is not None:
-                variance = jr[1] - (jr[0] ** 2)
-                h["jitter_ms"] = round(max(0, variance) ** 0.5, 2)
-            else:
-                h["jitter_ms"] = None
 
         # MTTR / MTTD from alerts
         cursor = await db.execute(

@@ -1508,7 +1508,7 @@ async def list_host_vlans(host_id: int):
 
 
 @router.get("/api/hosts/{host_id}/audit-findings")
-async def list_host_audit_findings(host_id: int, limit: int = Query(default=50, le=500)):
+async def list_host_audit_findings(host_id: int, limit: int = Query(default=50, ge=1, le=500)):
     """Latest findings across all runs for one host (most recent first).
 
     Powers the NodeDetails Audit tab so the topology pane can surface

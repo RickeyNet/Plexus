@@ -753,8 +753,12 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
                 sev_num = pri & 0x07
                 fac_num = (pri >> 3) & 0x1F
                 facility = str(fac_num)
+                # RFC 5424 numeric severities → Plexus taxonomy. 0-2
+                # (Emergency/Alert/Critical) are critical; 3-4 (Error/Warning)
+                # map to warning so routine device "error" syslogs don't flood
+                # the critical tier; 5-7 (Notice/Info/Debug) are info.
                 _sev_map = {0: "critical", 1: "critical", 2: "critical",
-                            3: "critical", 4: "warning", 5: "info",
+                            3: "warning", 4: "warning", 5: "info",
                             6: "info", 7: "info"}
                 severity = _sev_map.get(sev_num, "info")
                 message = text[pri_end + 1:].strip()
@@ -1136,7 +1140,7 @@ async def trap_syslog_events(
     event_type: str | None = Query(default=None),
     host_id: int | None = Query(default=None),
     severity: str | None = Query(default=None),
-    limit: int = Query(default=200, le=5000),
+    limit: int = Query(default=200, ge=1, le=5000),
 ):
     return await db.get_trap_syslog_events(event_type, host_id, severity, limit)
 

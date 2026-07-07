@@ -127,6 +127,7 @@ __all__ = [
     "get_deployments",
     "get_deployment",
     "update_deployment_status",
+    "claim_deployment_for_execute",
     "delete_deployment",
     "get_deployment_summary",
     "create_deployment_checkpoint",
@@ -2701,6 +2702,28 @@ async def get_deployment(deployment_id: int) -> dict | None:
             (deployment_id,),
         )
         return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def claim_deployment_for_execute(deployment_id: int) -> bool:
+    """Atomically transition a deployment from planning/failed into execution.
+
+    Returns True if this caller won the claim, False if the deployment was
+    already claimed by a concurrent request. This closes the execute TOCTOU:
+    without it, two simultaneous /execute calls both read status='planning'
+    and both push commands to the devices.
+    """
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE deployments SET status = 'pre-check', "
+            "started_at = COALESCE(started_at, datetime('now')) "
+            "WHERE id = ? AND status IN ('planning', 'failed')",
+            (deployment_id,),
+        )
+        await db.commit()
+        return (cursor.rowcount or 0) > 0
     finally:
         await db.close()
 

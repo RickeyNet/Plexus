@@ -615,7 +615,7 @@ async def list_config_baselines(host_id: int | None = Query(default=None)):
         return await db.get_config_baselines(host_id=host_id)
     except Exception as exc:
         LOGGER.error("config-drift: list baselines error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Failed to list config baselines")
 
 
 @router.get("/api/config-drift/baselines/{baseline_id}")
@@ -718,7 +718,7 @@ async def capture_config_snapshot(body: ConfigSnapshotCaptureRequest, request: R
         config_text = await _capture_running_config(host, cred)
     except Exception as exc:
         LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
-        raise HTTPException(status_code=502, detail=f"SSH capture failed: {exc}")
+        raise HTTPException(status_code=502, detail="SSH capture failed; see server logs")
     snapshot_id = await db.create_config_snapshot(
         host_id=body.host_id,
         config_text=config_text,
@@ -1221,7 +1221,7 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
         config_text = await _capture_running_config(host, cred)
     except Exception as exc:
         LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
-        raise HTTPException(status_code=502, detail=f"SSH capture failed: {exc}")
+        raise HTTPException(status_code=502, detail="SSH capture failed; see server logs")
     snapshot_id = await db.create_config_snapshot(
         host_id=body.host_id, config_text=config_text, capture_method="manual",
     )

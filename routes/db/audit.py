@@ -128,37 +128,45 @@ async def verify_audit_chain() -> dict:
             "prev_hash, row_hash "
             "FROM audit_events ORDER BY id ASC"
         )
-        rows = await cursor.fetchall()
+
+        # Stream in batches rather than materializing the entire audit_events
+        # table: the chain is verified sequentially, so we only need a window
+        # at a time. This keeps memory bounded as the log grows to millions of
+        # rows.
+        expected_prev = ""
+        total = 0
+        _BATCH = 2000
+        while True:
+            rows = await cursor.fetchmany(_BATCH)
+            if not rows:
+                break
+            for row in rows:
+                row_id = row[0]
+                ts = row[1] if isinstance(row[1], str) else str(row[1])
+                cat, act, usr, det, corr, stored_prev, stored_hash = (
+                    row[2], row[3], row[4], row[5], row[6], row[7], row[8]
+                )
+                total += 1
+
+                if (stored_prev or "") != expected_prev:
+                    return {
+                        "ok": False,
+                        "total_rows": total,
+                        "first_break_id": row_id,
+                        "first_break_reason": "prev_hash_mismatch",
+                    }
+
+                recomputed = _audit_row_hash(ts, cat, act, usr, det, corr, stored_prev or "")
+                if recomputed != (stored_hash or ""):
+                    return {
+                        "ok": False,
+                        "total_rows": total,
+                        "first_break_id": row_id,
+                        "first_break_reason": "row_hash_mismatch",
+                    }
+                expected_prev = stored_hash or ""
     finally:
         await conn.close()
-
-    expected_prev = ""
-    total = 0
-    for row in rows:
-        row_id = row[0]
-        ts = row[1] if isinstance(row[1], str) else str(row[1])
-        cat, act, usr, det, corr, stored_prev, stored_hash = (
-            row[2], row[3], row[4], row[5], row[6], row[7], row[8]
-        )
-        total += 1
-
-        if (stored_prev or "") != expected_prev:
-            return {
-                "ok": False,
-                "total_rows": total,
-                "first_break_id": row_id,
-                "first_break_reason": "prev_hash_mismatch",
-            }
-
-        recomputed = _audit_row_hash(ts, cat, act, usr, det, corr, stored_prev or "")
-        if recomputed != (stored_hash or ""):
-            return {
-                "ok": False,
-                "total_rows": total,
-                "first_break_id": row_id,
-                "first_break_reason": "row_hash_mismatch",
-            }
-        expected_prev = stored_hash or ""
 
     return {
         "ok": True,
