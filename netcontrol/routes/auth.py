@@ -196,7 +196,7 @@ async def upsert_external_user(username: str, display_name: str = "",
 
     salt = secrets.token_hex(16)
     random_pw = secrets.token_urlsafe(32)
-    pw_hash = _hash_password_fn(random_pw, salt)
+    pw_hash = await asyncio.to_thread(_hash_password_fn, random_pw, salt)
     try:
         user_id = await db.create_user(
             username,
@@ -481,7 +481,7 @@ async def _authenticate_dev_bootstrap(username: str, password: str) -> dict | No
 
     user = await db.get_user_by_username(expected_username)
     salt = secrets.token_hex(16)
-    pw_hash = _hash_password_fn(expected_password, salt)
+    pw_hash = await asyncio.to_thread(_hash_password_fn, expected_password, salt)
 
     if user:
         await db.update_user_admin(int(user["id"]), role="admin")
@@ -731,7 +731,7 @@ async def register(body: RegisterRequest, request: Request = None):
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     salt = secrets.token_hex(16)
-    pw_hash = _hash_password_fn(body.password, salt)
+    pw_hash = await asyncio.to_thread(_hash_password_fn, body.password, salt)
     display = body.display_name or body.username.title()
     user_id = await db.create_user(body.username, pw_hash, salt, display_name=display, role="user")
     user = await db.get_user_by_id(user_id)
@@ -877,7 +877,7 @@ async def change_password(body: ChangePasswordRequest, request: Request):
     if len(body.new_password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     salt = secrets.token_hex(16)
-    pw_hash = _hash_password_fn(body.new_password, salt)
+    pw_hash = await asyncio.to_thread(_hash_password_fn, body.new_password, salt)
     await db.update_user_password(user["id"], pw_hash, salt)
     # Revoke all previously-issued sessions for this user (a password change
     # should log out other devices), then re-issue THIS request's cookie with

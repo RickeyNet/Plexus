@@ -542,7 +542,7 @@ async def _ensure_default_admin():
         must_change_password = True
 
     salt = secrets.token_hex(16)
-    pw_hash = _hash_password(password, salt)
+    pw_hash = await asyncio.to_thread(_hash_password, password, salt)
 
     if has_admin and force_reset:
         target = await db.get_user_by_username(bootstrap_username)
@@ -620,7 +620,9 @@ async def verify_user(username: str, password: str) -> dict | None:
     user = await db.get_user_by_username(username)
     if not user:
         return None
-    computed = _hash_password(password, user["salt"])
+    # PBKDF2 with 600k iterations is deliberately expensive (~200-500ms CPU);
+    # run it off the event loop so a login burst can't stall every other request.
+    computed = await asyncio.to_thread(_hash_password, password, user["salt"])
     if secrets.compare_digest(computed, user["password_hash"]):
         return user
     return None

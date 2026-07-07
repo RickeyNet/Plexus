@@ -7,6 +7,7 @@ config-backups, compliance, monitoring, SNMP) remain in app.py for now.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import secrets
 import sys
@@ -378,7 +379,7 @@ async def admin_create_user(body: AdminUserCreateRequest, request: Request):
     role = body.role if body.role in {"admin", "user"} else "user"
 
     salt = secrets.token_hex(16)
-    pw_hash = _hash_password_fn(body.password, salt)
+    pw_hash = await asyncio.to_thread(_hash_password_fn, body.password, salt)
     display = body.display_name.strip() if body.display_name else username.title()
     try:
         user_id = await db.create_user(username, pw_hash, salt, display_name=display, role=role)
@@ -442,7 +443,7 @@ async def admin_reset_user_password(user_id: int, body: AdminUserPasswordResetRe
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     salt = secrets.token_hex(16)
-    pw_hash = _hash_password_fn(body.new_password, salt)
+    pw_hash = await asyncio.to_thread(_hash_password_fn, body.new_password, salt)
     await db.update_user_password(user_id, pw_hash, salt)
     # Force the target off all existing sessions after an admin reset.
     await db.bump_user_session_epoch(user_id)

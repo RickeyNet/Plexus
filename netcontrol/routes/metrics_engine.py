@@ -27,6 +27,29 @@ router = APIRouter()
 admin_router = APIRouter()
 LOGGER = configure_logging("plexus.metrics_engine")
 
+# Strong references to fire-and-forget background tasks. asyncio only holds a
+# weak reference to a pending task, so without this a spike-event or trap/syslog
+# store task can be garbage-collected before it runs. Tasks discard themselves
+# on completion.
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_bg(coro) -> asyncio.Task:
+    """Schedule a background coroutine, retaining a strong reference and
+    logging any exception it raises instead of dropping it silently."""
+    task = asyncio.ensure_future(coro)
+    _bg_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _bg_tasks.discard(t)
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                LOGGER.error("metrics: background task failed: %s", exc, exc_info=exc)
+
+    task.add_done_callback(_done)
+    return task
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1.  VENDOR OID REGISTRY  (Multi-vendor SNMP support)
@@ -155,6 +178,43 @@ async def resolve_oids_for_device(device_type: str) -> dict:
 # 2.  INTERFACE TIME-SERIES  (rate calculation + historical storage)
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _parse_db_time(value) -> datetime | None:
+    """Parse a DB timestamp into an aware UTC datetime.
+
+    ``polled_at``/``prev_polled_at`` are written by SQLite ``datetime('now')``
+    as *naive* UTC strings. Parsing them yields a naive datetime; subtracting
+    that from an aware ``datetime.now(UTC)`` raises ``TypeError`` — which the
+    old broad ``except`` swallowed, leaving every interface rate NULL. Normalize
+    to aware UTC so the arithmetic is well-defined on both stored and live
+    timestamps.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _counter_delta(prev: int, cur: int) -> int | None:
+    """Width-aware delta between two monotonic SNMP counters.
+
+    A negative delta is a 32-bit wrap only when both samples fit in 32 bits
+    (``+2**32``). Otherwise it is a counter reset (reboot / agent restart) and
+    the interval is unusable (``None``) rather than being "corrected" into a
+    fabricated multi-terabit spike.
+    """
+    delta = cur - prev
+    if delta >= 0:
+        return delta
+    if prev < 2**32 and cur < 2**32:
+        return delta + 2**32
+    return None
+
+
 async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> int:
     """After a monitoring poll, store per-interface counters as time-series
     and compute rates by comparing with the previous interface_stats row."""
@@ -180,28 +240,21 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
         utilization_pct = None
 
         prev = prev_map.get(str(if_index))
-        if prev and prev.get("polled_at"):
-            try:
-                t_prev = datetime.fromisoformat(prev["polled_at"])
-                t_now = datetime.now(UTC)
-                dt_sec = (t_now - t_prev).total_seconds()
-                if dt_sec > 0:
-                    delta_in = in_octets - (prev.get("in_octets") or 0)
-                    delta_out = out_octets - (prev.get("out_octets") or 0)
-                    # Handle 64-bit counter wrap
-                    if delta_in < 0:
-                        delta_in += 2**64
-                    if delta_out < 0:
-                        delta_out += 2**64
+        t_prev = _parse_db_time(prev.get("polled_at")) if prev else None
+        if t_prev is not None:
+            dt_sec = (datetime.now(UTC) - t_prev).total_seconds()
+            if dt_sec > 0:
+                delta_in = _counter_delta(prev.get("in_octets") or 0, in_octets)
+                delta_out = _counter_delta(prev.get("out_octets") or 0, out_octets)
+                # A None delta means a counter reset this interval — skip it
+                # rather than emit a fabricated spike.
+                if delta_in is not None and delta_out is not None:
                     in_rate_bps = (delta_in * 8) / dt_sec
                     out_rate_bps = (delta_out * 8) / dt_sec
                     if speed_mbps > 0:
                         max_bps = speed_mbps * 1_000_000
                         utilization_pct = max(in_rate_bps, out_rate_bps) / max_bps * 100
                         utilization_pct = min(utilization_pct, 100.0)
-            except (ValueError, TypeError) as exc:
-                LOGGER.debug("metrics: rate calc failed for host %s if_index %s: %s",
-                             host_id, if_index, exc)
 
         rows.append((host_id, if_index, if_name, speed_mbps,
                       in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct))
@@ -280,66 +333,53 @@ async def store_interface_error_metrics_from_poll(
             metric_rows.append((host_id, metric_name, labels, float(counter_val)))
 
             # Compute rate if we have a previous sample
-            if prev and prev.get("polled_at") and prev.get("prev_polled_at"):
-                try:
-                    t_prev = datetime.fromisoformat(prev["polled_at"])
-                    t_now = datetime.now(UTC)
-                    dt_sec = (t_now - t_prev).total_seconds()
-                    if dt_sec > 0:
-                        prev_field = f"prev_{field}" if f"prev_{field}" in prev else field
-                        delta = counter_val - (prev.get(field) or 0)
-                        if delta < 0:
-                            delta += 2**32  # 32-bit counter wrap
-                        rate = delta / dt_sec
+            t_prev = (
+                _parse_db_time(prev.get("polled_at"))
+                if prev and prev.get("prev_polled_at")
+                else None
+            )
+            if t_prev is not None:
+                dt_sec = (datetime.now(UTC) - t_prev).total_seconds()
+                delta = _counter_delta(prev.get(field) or 0, counter_val)
+                if dt_sec > 0 and delta is not None:
+                    rate = delta / dt_sec
 
-                        # Store the rate as a separate metric
-                        rate_metric = f"{metric_name}_rate"
-                        metric_rows.append((host_id, rate_metric, labels, rate))
+                    # Store the rate as a separate metric
+                    rate_metric = f"{metric_name}_rate"
+                    metric_rows.append((host_id, rate_metric, labels, rate))
 
-                        # Spike detection: compare to baseline from previous intervals
-                        prev_prev_val = prev.get(f"prev_{field}") or 0
-                        prev_val = prev.get(field) or 0
-                        prev_dt_str = prev.get("prev_polled_at")
-                        polled_str = prev.get("polled_at")
-                        if prev_dt_str and polled_str:
-                            try:
-                                t_pp = datetime.fromisoformat(prev_dt_str)
-                                t_p = datetime.fromisoformat(polled_str)
-                                pp_dt = (t_p - t_pp).total_seconds()
-                                if pp_dt > 0:
-                                    prev_delta = prev_val - prev_prev_val
-                                    if prev_delta < 0:
-                                        prev_delta += 2**32
-                                    baseline_rate = prev_delta / pp_dt
+                    # Spike detection: compare to baseline from previous intervals
+                    prev_prev_val = prev.get(f"prev_{field}") or 0
+                    prev_val = prev.get(field) or 0
+                    t_pp = _parse_db_time(prev.get("prev_polled_at"))
+                    t_p = _parse_db_time(prev.get("polled_at"))
+                    prev_delta = _counter_delta(prev_prev_val, prev_val)
+                    pp_dt = (t_p - t_pp).total_seconds() if (t_pp and t_p) else 0
+                    if pp_dt > 0 and prev_delta is not None:
+                        baseline_rate = prev_delta / pp_dt
 
-                                    # Check for spike
-                                    if (rate >= _ERROR_MIN_RATE and
-                                            baseline_rate >= 0 and
-                                            (baseline_rate == 0 or rate / max(baseline_rate, 0.001) >= _ERROR_SPIKE_FACTOR)):
-                                        cooldown_key = (host_id, if_index, metric_name)
-                                        now_ts = datetime.now(UTC).timestamp()
-                                        last_event = _spike_cooldown.get(cooldown_key, 0)
-                                        if now_ts - last_event >= _SPIKE_COOLDOWN_SECONDS:
-                                            _spike_cooldown[cooldown_key] = now_ts
-                                            spike_factor = rate / max(baseline_rate, 0.001)
-                                            severity = "critical" if spike_factor >= 20 or rate >= 100 else "warning"
-                                            # Trigger root-cause correlation asynchronously
-                                            asyncio.create_task(_create_correlated_error_event(
-                                                host_id=host_id,
-                                                if_index=if_index,
-                                                if_name=if_name,
-                                                metric_name=metric_name,
-                                                current_rate=rate,
-                                                baseline_rate=baseline_rate,
-                                                spike_factor=spike_factor,
-                                                severity=severity,
-                                            ))
-                            except (ValueError, TypeError) as exc:
-                                LOGGER.debug("metrics: spike baseline calc failed for host %s if_index %s %s: %s",
-                                             host_id, if_index, metric_name, exc)
-                except (ValueError, TypeError) as exc:
-                    LOGGER.debug("metrics: error rate calc failed for host %s if_index %s %s: %s",
-                                 host_id, if_index, metric_name, exc)
+                        # Check for spike
+                        if (rate >= _ERROR_MIN_RATE and
+                                baseline_rate >= 0 and
+                                (baseline_rate == 0 or rate / max(baseline_rate, 0.001) >= _ERROR_SPIKE_FACTOR)):
+                            cooldown_key = (host_id, if_index, metric_name)
+                            now_ts = datetime.now(UTC).timestamp()
+                            last_event = _spike_cooldown.get(cooldown_key, 0)
+                            if now_ts - last_event >= _SPIKE_COOLDOWN_SECONDS:
+                                _spike_cooldown[cooldown_key] = now_ts
+                                spike_factor = rate / max(baseline_rate, 0.001)
+                                severity = "critical" if spike_factor >= 20 or rate >= 100 else "warning"
+                                # Trigger root-cause correlation asynchronously
+                                _spawn_bg(_create_correlated_error_event(
+                                    host_id=host_id,
+                                    if_index=if_index,
+                                    if_name=if_name,
+                                    metric_name=metric_name,
+                                    current_rate=rate,
+                                    baseline_rate=baseline_rate,
+                                    spike_factor=spike_factor,
+                                    severity=severity,
+                                ))
 
         error_stat_rows.append((
             if_index,
@@ -732,7 +772,7 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         except Exception as exc:
             LOGGER.debug("metrics: trap OID extraction failed from %s: %s", source_ip, exc)
 
-        asyncio.get_running_loop().create_task(
+        _spawn_bg(
             _store_event(source_ip, "trap", "", "info", oid, message, raw_hex[:2000])
         )
 
@@ -765,7 +805,7 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
             except (ValueError, IndexError) as exc:
                 LOGGER.debug("metrics: syslog priority parse failed from %s: %s", source_ip, exc)
 
-        asyncio.get_running_loop().create_task(
+        _spawn_bg(
             _store_event(source_ip, "syslog", facility, severity, "", message, text[:2000])
         )
 
@@ -874,8 +914,9 @@ async def metrics_query(
     # If group is specified and host is *, resolve host IDs from group
     if group and host == "*":
         group_hosts = await db.get_hosts_for_group(group)
-        if group_hosts:
-            host_ids = [h["id"] for h in group_hosts]
+        # An empty/nonexistent group must scope to no hosts, not silently fall
+        # through to the whole fleet (downstream treats an empty list as "all").
+        host_ids = [h["id"] for h in group_hosts] or [-1]
 
     # Parse time range
     now = datetime.now(UTC)
@@ -929,7 +970,7 @@ async def capacity_planning(
     host: str = Query(default="*", description="Host ID, comma-separated IDs, or * for all"),
     range: str = Query(default="90d", description="Time range: 30d, 90d, 365d"),
     group: int | None = Query(default=None, description="Filter by inventory group ID"),
-    projection_days: int = Query(default=30, description="Days to project forward"),
+    projection_days: int = Query(default=30, ge=1, le=365, description="Days to project forward"),
     threshold: float = Query(default=90.0, description="Capacity threshold for ETA calculation"),
 ):
     """Long-term capacity planning with trend projection."""
@@ -943,8 +984,9 @@ async def capacity_planning(
             raise HTTPException(400, "Invalid host parameter")
     if group and host == "*":
         group_hosts = await db.get_hosts_for_group(group)
-        if group_hosts:
-            host_ids = [h["id"] for h in group_hosts]
+        # An empty/nonexistent group must scope to no hosts, not silently fall
+        # through to the whole fleet (downstream treats an empty list as "all").
+        host_ids = [h["id"] for h in group_hosts] or [-1]
 
     # Parse time range
     now = datetime.now(UTC)
@@ -1023,10 +1065,16 @@ async def capacity_planning(
             current_val = slope * total_days + intercept
             if current_val < threshold:
                 days_until = (threshold - current_val) / slope
-                eta_date = (now + timedelta(days=days_until)).strftime("%Y-%m-%d")
+                # A near-flat slope makes days_until astronomically large;
+                # timedelta(days=days_until) overflows (uncaught 500). Only
+                # render an ETA date inside a sane horizon (~100 years).
+                if 0 <= days_until <= 36_500:
+                    eta_date = (now + timedelta(days=days_until)).strftime("%Y-%m-%d")
+                else:
+                    eta_date = None
                 threshold_eta = {
                     "date": eta_date,
-                    "days_until": round(days_until),
+                    "days_until": round(days_until) if days_until <= 36_500 else None,
                     "current_value": round(current_val, 2),
                 }
 
@@ -1105,17 +1153,24 @@ async def vendor_oids_list():
     }
 
 
-@router.post("/api/metrics/vendor-oids")
+# NOTE: create/delete live on admin_router (require_admin). Custom OID entries
+# override built-ins fleet-wide, so redirecting SNMP polling to bogus OIDs would
+# silently break CPU/memory monitoring for every device — an admin-only action.
+@admin_router.post("/api/metrics/vendor-oids")
 async def vendor_oids_create(body: dict, request: Request):
     """Add a custom vendor OID mapping."""
     vendor = body.get("vendor", "")
     device_type = body.get("device_type", "")
     if not vendor or not device_type:
         raise HTTPException(400, "vendor and device_type are required")
+    try:
+        cpu_walk = int(body.get("cpu_walk", 1))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "cpu_walk must be an integer")
     entry_id = await db.upsert_vendor_oid(
         vendor=vendor, device_type=device_type,
         cpu_oid=body.get("cpu_oid", ""),
-        cpu_walk=int(body.get("cpu_walk", 1)),
+        cpu_walk=cpu_walk,
         mem_used_oid=body.get("mem_used_oid", ""),
         mem_free_oid=body.get("mem_free_oid", ""),
         mem_total_oid=body.get("mem_total_oid", ""),
@@ -1125,7 +1180,7 @@ async def vendor_oids_create(body: dict, request: Request):
     return {"id": entry_id}
 
 
-@router.delete("/api/metrics/vendor-oids/{entry_id}")
+@admin_router.delete("/api/metrics/vendor-oids/{entry_id}")
 async def vendor_oids_delete(entry_id: int):
     ok = await db.delete_vendor_oid(entry_id)
     if not ok:

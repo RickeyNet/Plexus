@@ -196,12 +196,70 @@ _INSERT_ID_TABLES = {
     "audit_findings",
     "audit_rule_overrides",
     "audit_schedules",
+    # Backfill: single-row INSERTs whose callers read lastrowid. Without these
+    # the Postgres path returned lastrowid=None (create_dashboard/panel crashed
+    # on dict(None); IPAM/DHCP/geo/metrics writes silently lost their ids).
+    "dashboards",
+    "dashboard_panels",
+    "secret_variables",
+    "metric_samples",
+    "metric_rollups",
+    "vendor_oid_registry",
+    "upgrade_operations",
+    "ipam_sources",
+    "ipam_prefixes",
+    "ipam_allocations",
+    "ipam_reservations",
+    "ipam_pending_allocations",
+    "ipam_ip_history",
+    "ipam_reconciliation_runs",
+    "dhcp_servers",
+    "geo_sites",
+    "geo_floors",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
 
 # Only allow simple column identifiers in dynamic SQL (letters, digits, underscore).
 _SAFE_COLUMN_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _minute_bucket_expr(column: str, bucket_minutes: int) -> str:
+    """SQL expression truncating a timestamp column to N-minute buckets and
+    emitting a ``YYYY-MM-DDTHH:MM:00`` string.
+
+    SQLite uses strftime/printf; Postgres has neither, so it needs a to_char /
+    extract branch (without it the flow/cloud timeline endpoints 500 on pg).
+    ``bucket_minutes`` must be a validated int (callers clamp 1..60) — it is
+    interpolated, not parameterized, so it must never be user-controlled text.
+    """
+    if not _SAFE_COLUMN_RE.match(column):
+        raise ValueError(f"unsafe column identifier: {column!r}")
+    b = int(bucket_minutes)
+    if DB_ENGINE == "postgres":
+        return (
+            f"to_char({column}::timestamp, 'YYYY-MM-DD\"T\"HH24:') || "
+            f"lpad((floor(extract(minute from {column}::timestamp)::int / {b})::int * {b})::text, 2, '0') || "
+            f"':00'"
+        )
+    return (
+        f"strftime('%Y-%m-%dT%H:', {column}) || "
+        f"printf('%02d', (CAST(strftime('%M', {column}) AS INTEGER) / {b}) * {b}) || "
+        f"':00'"
+    )
+
+
+def _minutes_between_expr(later: str, earlier: str) -> str:
+    """SQL expression for minutes elapsed (``later`` - ``earlier``).
+
+    SQLite uses ``julianday()*1440``; Postgres has no ``julianday()`` (the SLA
+    MTTR/MTTD queries 500 on pg without this branch), so it uses
+    ``EXTRACT(EPOCH ...)/60``. Both operands may be arbitrary timestamp
+    subexpressions (they are parenthesized), never user text.
+    """
+    if DB_ENGINE == "postgres":
+        return f"(EXTRACT(EPOCH FROM (({later})::timestamp - ({earlier})::timestamp)) / 60.0)"
+    return f"((julianday({later}) - julianday({earlier})) * 1440)"
 
 
 def _safe_dynamic_update(table: str, field_exprs: list[str], values: list, where_clause: str, where_val) -> tuple[str, tuple]:
@@ -2480,17 +2538,25 @@ class _PostgresConnectionCompat:
             rows = await self._conn.fetch(converted, *params)
             return _PostgresCursorCompat(rows=rows, rowcount=len(rows))
 
-        if query_upper.startswith("INSERT"):
+        has_returning = "RETURNING" in query_upper
+        if query_upper.startswith("INSERT") and not has_returning:
             m = re.match(r"^\s*INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)", query_stripped, re.IGNORECASE)
             table = m.group(1).lower() if m else ""
-            if table in _INSERT_ID_TABLES and "RETURNING" not in query_upper:
-                returning_query = f"{converted.rstrip()} RETURNING id"
-                row = await self._conn.fetchrow(returning_query, *params)
-                lastrowid = row["id"] if row is not None and "id" in row else None
-                return _PostgresCursorCompat(lastrowid=lastrowid, rowcount=1 if row else 0)
+            if table in _INSERT_ID_TABLES:
+                converted = f"{converted.rstrip()} RETURNING id"
+                has_returning = True
 
-            status = await self._conn.execute(converted, *params)
-            return _PostgresCursorCompat(rowcount=_parse_rowcount(status))
+        if has_returning:
+            # Any statement with a RETURNING clause — explicit (hand-written
+            # INSERT/UPDATE ... RETURNING) or the ``id`` we just appended for
+            # lastrowid emulation — must run through fetch(), otherwise asyncpg's
+            # execute() discards the rows and callers doing fetchone()/lastrowid
+            # get None and crash.
+            rows = await self._conn.fetch(converted, *params)
+            lastrowid = None
+            if rows and "id" in rows[0].keys():
+                lastrowid = rows[0]["id"]
+            return _PostgresCursorCompat(rows=rows, lastrowid=lastrowid, rowcount=len(rows))
 
         status = await self._conn.execute(converted, *params)
         return _PostgresCursorCompat(rowcount=_parse_rowcount(status))
@@ -2507,6 +2573,14 @@ class _PostgresConnectionCompat:
 
     async def commit(self):
         # asyncpg uses autocommit when no explicit transaction is active.
+        return None
+
+    async def rollback(self):
+        # No explicit transaction is opened (every statement autocommits), so
+        # there is nothing to undo. The method must exist so error-path
+        # ``await db.rollback()`` calls don't AttributeError on the pg backend
+        # — that previously masked expected integrity errors (e.g. a duplicate
+        # name surfaced as a 500 instead of a clean ValueError/409).
         return None
 
     async def close(self):

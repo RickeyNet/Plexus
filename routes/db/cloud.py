@@ -6,6 +6,7 @@ Split out of routes/database.py; star re-exported there so the
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import ipaddress
 import json
@@ -67,6 +68,51 @@ def _cloud_json_text(value, default: str = "{}") -> str:
         return default
 
 
+def _looks_encrypted(value: str) -> bool:
+    """Heuristic test for whether a stored auth_config string is ciphertext
+    (AES-256-GCM ``0x02`` prefix or legacy Fernet ``gAAAAA``) rather than a
+    legacy plaintext-JSON row written before at-rest encryption."""
+    if not value or value[:1] in "{[":
+        return False
+    if value.startswith("gAAAAA"):
+        return True
+    try:
+        raw = base64.urlsafe_b64decode(value.encode())
+    except Exception:
+        return False
+    return raw[:1] == b"\x02"
+
+
+def _cloud_auth_encrypt(value) -> str:
+    """Serialize and encrypt an auth_config blob for at-rest storage.
+
+    Cloud account secrets (AWS ``secret_access_key``, Azure ``client_secret``,
+    GCP key material) were previously stored as plaintext JSON. Encrypt them
+    with the shared AES-256-GCM key, matching the IPAM/DHCP source pattern.
+    """
+    text = _cloud_json_text(value, default="")
+    if not text or text == "{}":
+        return ""
+    from routes.crypto import encrypt as _enc
+    return _enc(text)
+
+
+def _cloud_auth_decrypt(stored) -> str:
+    """Return plaintext JSON for a stored auth_config, transparently handling
+    both new ciphertext and legacy plaintext rows so existing accounts keep
+    working without a migration step."""
+    if not stored:
+        return "{}"
+    if _looks_encrypted(stored):
+        from routes.crypto import decrypt as _dec
+        try:
+            return _dec(stored) or "{}"
+        except Exception:
+            _LOGGER.warning("cloud: could not decrypt stored auth_config; treating as empty")
+            return "{}"
+    return stored
+
+
 async def create_cloud_account(
     provider: str,
     name: str,
@@ -91,7 +137,7 @@ async def create_cloud_account(
                 account_identifier,
                 region_scope,
                 auth_type,
-                _cloud_json_text(auth_config_json),
+                _cloud_auth_encrypt(auth_config_json),
                 notes,
                 int(bool(enabled)),
                 created_by,
@@ -116,7 +162,13 @@ async def get_cloud_account(account_id: int) -> dict | None:
             (account_id,),
         )
         row = await cursor.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        account = dict(row)
+        # Decrypt for internal callers (collectors read auth_config_json off the
+        # account dict). API responses strip this via _serialize_account.
+        account["auth_config_json"] = _cloud_auth_decrypt(account.get("auth_config_json"))
+        return account
     finally:
         await db.close()
 
@@ -145,7 +197,10 @@ async def list_cloud_accounts(
                 ORDER BY ca.provider ASC, ca.name ASC""",
             tuple(params),
         )
-        return rows_to_list(await cursor.fetchall())
+        accounts = rows_to_list(await cursor.fetchall())
+        for account in accounts:
+            account["auth_config_json"] = _cloud_auth_decrypt(account.get("auth_config_json"))
+        return accounts
     finally:
         await db.close()
 
@@ -172,7 +227,7 @@ async def update_cloud_account(account_id: int, **kwargs) -> dict | None:
             if key not in allowed or value is None:
                 continue
             if key == "auth_config_json":
-                value = _cloud_json_text(value)
+                value = _cloud_auth_encrypt(value)
             if key == "enabled":
                 value = int(bool(value))
             sets.append(f"{key} = ?")
@@ -945,11 +1000,10 @@ async def get_cloud_traffic_metric_timeline(
             clauses.append("metric_name = ?")
             params.append(metric_name)
         where = " AND ".join(clauses)
+        bucket_expr = _dbcore._minute_bucket_expr("interval_end", bucket_minutes)
         cursor = await db.execute(
             f"""SELECT
-                   strftime('%Y-%m-%dT%H:', interval_end) ||
-                   printf('%02d', (CAST(strftime('%M', interval_end) AS INTEGER) / {bucket_minutes}) * {bucket_minutes}) ||
-                   ':00' as bucket,
+                   {bucket_expr} as bucket,
                    COUNT(*) as sample_count,
                    COALESCE(SUM(metric_value), 0) as total_value,
                    COALESCE(AVG(metric_value), 0) as avg_value,

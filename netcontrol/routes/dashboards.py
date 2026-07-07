@@ -6,9 +6,10 @@ from __future__ import annotations
 import logging
 
 import routes.database as db
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from netcontrol.routes.shared import _get_session, require_owner_or_admin
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -53,9 +54,23 @@ class PanelUpdate(BaseModel):
 
 # ── Dashboard CRUD ────────────────────────────────────────────────────────────
 
+async def _is_admin_session(session: dict | None) -> bool:
+    if session is None:
+        # API-token callers are admin-equivalent by design.
+        return True
+    user = await db.get_user_by_id(session["user_id"])
+    return bool(user and user.get("role") == "admin")
+
+
 @router.get("/api/dashboards")
 async def list_dashboards_api(request: Request):
-    dashboards = await db.list_dashboards()
+    session = _get_session(request)
+    # Non-admin users see only their own dashboards; admins and API-token
+    # callers see all. Previously this returned every user's dashboards.
+    owner = None
+    if not await _is_admin_session(session):
+        owner = (session or {}).get("user")
+    dashboards = await db.list_dashboards(owner=owner)
     return {"dashboards": dashboards}
 
 
@@ -75,18 +90,20 @@ async def create_dashboard_api(payload: DashboardCreate, request: Request):
 
 
 @router.get("/api/dashboards/{dashboard_id}")
-async def get_dashboard_api(dashboard_id: int):
+async def get_dashboard_api(dashboard_id: int, request: Request):
     dashboard = await db.get_dashboard(dashboard_id)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Dashboard not found")
+    await require_owner_or_admin(request, dashboard.get("owner"))
     return dashboard
 
 
 @router.put("/api/dashboards/{dashboard_id}")
-async def update_dashboard_api(dashboard_id: int, payload: DashboardUpdate):
+async def update_dashboard_api(dashboard_id: int, payload: DashboardUpdate, request: Request):
     existing = await db.get_dashboard(dashboard_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Dashboard not found")
+    await require_owner_or_admin(request, existing.get("owner"))
     updated = await db.update_dashboard(
         dashboard_id,
         name=payload.name,
@@ -98,7 +115,11 @@ async def update_dashboard_api(dashboard_id: int, payload: DashboardUpdate):
 
 
 @router.delete("/api/dashboards/{dashboard_id}")
-async def delete_dashboard_api(dashboard_id: int):
+async def delete_dashboard_api(dashboard_id: int, request: Request):
+    existing = await db.get_dashboard(dashboard_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    await require_owner_or_admin(request, existing.get("owner"))
     deleted = await db.delete_dashboard(dashboard_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Dashboard not found")
@@ -108,10 +129,11 @@ async def delete_dashboard_api(dashboard_id: int):
 # ── Panel CRUD ────────────────────────────────────────────────────────────────
 
 @router.post("/api/dashboards/{dashboard_id}/panels", status_code=201)
-async def create_panel_api(dashboard_id: int, payload: PanelCreate):
+async def create_panel_api(dashboard_id: int, payload: PanelCreate, request: Request):
     existing = await db.get_dashboard(dashboard_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Dashboard not found")
+    await require_owner_or_admin(request, existing.get("owner"))
     panel = await db.create_dashboard_panel(
         dashboard_id=dashboard_id,
         title=payload.title,
@@ -127,7 +149,11 @@ async def create_panel_api(dashboard_id: int, payload: PanelCreate):
 
 
 @router.put("/api/dashboards/{dashboard_id}/panels/{panel_id}")
-async def update_panel_api(dashboard_id: int, panel_id: int, payload: PanelUpdate):
+async def update_panel_api(dashboard_id: int, panel_id: int, payload: PanelUpdate, request: Request):
+    existing = await db.get_dashboard(dashboard_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    await require_owner_or_admin(request, existing.get("owner"))
     updated = await db.update_dashboard_panel(
         panel_id,
         title=payload.title,
@@ -145,7 +171,11 @@ async def update_panel_api(dashboard_id: int, panel_id: int, payload: PanelUpdat
 
 
 @router.delete("/api/dashboards/{dashboard_id}/panels/{panel_id}")
-async def delete_panel_api(dashboard_id: int, panel_id: int):
+async def delete_panel_api(dashboard_id: int, panel_id: int, request: Request):
+    existing = await db.get_dashboard(dashboard_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    await require_owner_or_admin(request, existing.get("owner"))
     deleted = await db.delete_dashboard_panel(panel_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Panel not found")
