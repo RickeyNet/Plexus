@@ -840,7 +840,7 @@ async def api_top_talkers(
     host_id: int | None = Query(None),
     hours: int = Query(1, ge=1, le=168),
     direction: str = Query("src"),
-    limit: int = Query(20, le=100),
+    limit: int = Query(20, ge=1, le=100),
 ):
     results = await db.get_flow_top_talkers(host_id, hours, direction, limit)
     for r in results:
@@ -852,7 +852,7 @@ async def api_top_talkers(
 async def api_top_applications(
     host_id: int | None = Query(None),
     hours: int = Query(1, ge=1, le=168),
-    limit: int = Query(20, le=100),
+    limit: int = Query(20, ge=1, le=100),
 ):
     results = await db.get_flow_top_applications(host_id, hours, limit)
     for r in results:
@@ -867,7 +867,7 @@ async def api_top_applications(
 async def api_top_conversations(
     host_id: int | None = Query(None),
     hours: int = Query(1, ge=1, le=168),
-    limit: int = Query(20, le=100),
+    limit: int = Query(20, ge=1, le=100),
 ):
     return await db.get_flow_top_conversations(host_id, hours, limit)
 

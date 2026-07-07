@@ -819,12 +819,13 @@ async def get_job(job_id: int, request: Request):
 
 
 @router.get("/api/jobs/{job_id}/events")
-async def get_job_events(job_id: int, request: Request):
+async def get_job_events(job_id: int, request: Request,
+                         limit: int = Query(default=10000, ge=1, le=100000)):
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
     await require_owner_or_admin(request, job.get("launched_by"))
-    return await db.get_job_events(job_id)
+    return await db.get_job_events(job_id, limit)
 
 
 @router.post("/api/jobs/launch", status_code=201)

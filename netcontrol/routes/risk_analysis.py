@@ -477,7 +477,7 @@ async def list_risk_analyses(
     host_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
     risk_level: str | None = Query(default=None),
-    limit: int = Query(default=100, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
 ):
     return await db.get_risk_analyses(host_id=host_id, group_id=group_id, risk_level=risk_level, limit=limit)
 

@@ -10,10 +10,11 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
@@ -59,15 +60,19 @@ def init_deployments(verify_session_token_fn=None, get_user_features_fn=None):
 
 class DeploymentCreate(BaseModel):
     """Create a new deployment with rollback support."""
-    name: str
-    description: str = ""
+    name: str = Field(max_length=200)
+    description: str = Field(default="", max_length=2000)
     group_id: int
     credential_id: int
-    change_type: str = "template"
-    proposed_commands: list[str] = []
+    change_type: str = Field(default="template", max_length=50)
+    # Bound both the number of commands and each command's length: these are
+    # concatenated and pushed to devices, so an unbounded payload is a memory
+    # and device-safety risk.
+    proposed_commands: list[Annotated[str, Field(max_length=4000)]] = Field(
+        default_factory=list, max_length=10000)
     template_id: int | None = None
     risk_analysis_id: int | None = None
-    host_ids: list[int] = []
+    host_ids: list[int] = Field(default_factory=list, max_length=100000)
 
 
 class DeploymentExecute(BaseModel):
@@ -756,7 +761,7 @@ async def create_deployment(body: DeploymentCreate, request: Request):
 async def list_deployments(
     status: str | None = Query(default=None),
     group_id: int | None = Query(default=None),
-    limit: int = Query(default=100, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
 ):
     return await db.get_deployments(status=status, group_id=group_id, limit=limit)
 
@@ -875,6 +880,14 @@ async def execute_deployment(deployment_id: int, request: Request):
         raise HTTPException(status_code=400, detail="No target hosts found")
 
     commands = [line for line in dep["proposed_commands"].splitlines() if line.strip()]
+
+    # Atomically claim the deployment so two concurrent execute calls cannot
+    # both push commands to the devices (TOCTOU on the status check above).
+    if not await db.claim_deployment_for_execute(deployment_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Deployment is already executing or was just executed",
+        )
 
     job_id = str(uuid.uuid4())
     _deployment_jobs[job_id] = {

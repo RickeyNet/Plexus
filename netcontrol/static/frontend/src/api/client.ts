@@ -32,6 +32,41 @@ export class ApiError extends Error {
   }
 }
 
+// Turn a FastAPI error `detail` into a human string. FastAPI request
+// validation (422) returns `detail` as an array of {loc, msg, type} objects;
+// String()-ing that yields "[object Object],[object Object]". Flatten it to
+// "field: message; field: message" so the UI shows something useful.
+export function formatErrorDetail(detail: unknown): string | null {
+  if (detail == null) return null;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((item) => {
+        if (item && typeof item === 'object' && 'msg' in item) {
+          const rec = item as { msg?: unknown; loc?: unknown };
+          const loc = Array.isArray(rec.loc)
+            ? rec.loc.filter((p) => p !== 'body' && p !== 'query' && p !== 'path')
+            : [];
+          const field = loc.length ? `${loc.join('.')}: ` : '';
+          return `${field}${String(rec.msg)}`;
+        }
+        return typeof item === 'string' ? item : JSON.stringify(item);
+      })
+      .filter(Boolean);
+    return msgs.length ? msgs.join('; ') : null;
+  }
+  if (typeof detail === 'object') {
+    const rec = detail as { msg?: unknown };
+    if ('msg' in rec) return String(rec.msg);
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return null;
+    }
+  }
+  return String(detail);
+}
+
 // Tripped on the first 401 so concurrent page queries don't each trigger a
 // separate reload when the server-side session has idle-expired.
 let sessionExpiryHandled = false;
@@ -127,7 +162,7 @@ export async function apiRequest<T = unknown>(
   if (!res.ok) {
     const detail =
       (parsed && typeof parsed === 'object' && 'detail' in parsed
-        ? String((parsed as { detail: unknown }).detail)
+        ? formatErrorDetail((parsed as { detail: unknown }).detail)
         : null) ?? res.statusText;
     if (
       res.status === 401 &&
