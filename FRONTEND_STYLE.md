@@ -12,8 +12,8 @@ mention the change in the FRONTEND_MIGRATION.md decision log.
 
 > Project layout: `netcontrol/static/frontend/` is the React app
 > (Vite + TS). Builds to `dist/`, served by FastAPI at `/frontend/`.
-> Source root is `src/`. The legacy vanilla SPA lives in
-> `netcontrol/static/js/` and is being replaced one module at a time.
+> Source root is `src/`. The legacy vanilla SPA (`netcontrol/static/js/`)
+> has been fully migrated and deleted; React is the only frontend.
 
 ---
 
