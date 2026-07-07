@@ -8,7 +8,7 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 ## Architecture
 - **Backend**: FastAPI app in `netcontrol/app.py`, routes split across `netcontrol/routes/`
 - **Database**: SQLite (default) or Postgres (`APP_DB_ENGINE=postgres`), abstracted in `routes/database.py`
-- **Frontend**: React 18 + TypeScript + Vite SPA in `netcontrol/static/frontend/`, built to `frontend/dist/` and served at `/frontend` (the legacy vanilla-JS SPA was removed after the FRONTEND_MIGRATION.md port completed)
+- **Frontend**: React 19 + TypeScript + Vite SPA in `netcontrol/static/frontend/`, built to `frontend/dist/` and served at `/frontend` (the legacy vanilla-JS SPA was removed after the migration - history in `docs/FRONTEND_MIGRATION.md`, conventions in `FRONTEND_STYLE.md`)
 - **Encryption**: Fernet (AES-128-CBC + HMAC-SHA256) via `routes/crypto.py`, key in `netcontrol.key` at the repo root (override via `APP_ENCRYPTION_KEY_FILE`)
 - **Auth**: Session cookies (itsdangerous signed tokens), CSRF protection, PBKDF2-SHA256 passwords
 - **Playbooks**: Python classes in `templates/playbooks/` registered via `@register_playbook` decorator
