@@ -402,7 +402,7 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 
 - [ ] **Credential-isolation regression tests** - prove user A cannot use user B's `credential_id` through each endpoint hardened in the IDOR sweep (deployments, config backups/drift, compliance, upgrades, inventory, risk analysis, lab runtime).
 - [x] **FDM collector credential model** (`netcontrol/integrations/cisco_fdm/collector.py:87`) - done 2026-06-12: `collect_host` rejects non-service credentials (same policy as monitoring/MAC pollers) with a regression test. Bind-time gate still needed when the endpoint that sets `hosts.fdm_credential_id` ships.
-- [ ] **Air-gap README** (`deploy/airgap/README.md:100`) still advertises the `admin/netcontrol` default login - update for the new random-password first boot.
+- [x] **Air-gap README** (`deploy/airgap/README.md`) - done 2026-07-07: "Step 4 - First login" already documents retrieving the random one-time bootstrap password from the container logs and the `PLEXUS_INITIAL_ADMIN_PASSWORD` override; the stale `admin/netcontrol` copy is gone.
 - [x] **Pre-existing backend cleanups** - done 2026-06-12: audit-hook drops now logged (routes/db/audit.py); migration 0055 adds `monitoring_polls(host_id, polled_at)` + `audit_events(category)` (column is `polled_at`, not `sampled_at`); 14 hardcoded semaphores route through `state.device_op_semaphore()` / `APP_DEVICE_OP_CONCURRENCY`. `SELECT *` audit found most uses are narrow tables or fetch-one-by-id where the blob is the payload; the one real waste (deployments annotation query pulling proposed_commands blobs) is trimmed.
 - [x] **Late-binding `init_*()` boilerplate** - resolved 2026-06-12 by deletion, not a helper: 11 modules bound auth callables that were never used (route auth comes from app.py's include_router dependencies) - dead init functions/globals removed; config_drift/deployments/upgrades trimmed to the WebSocket session-check callables they actually use; app.py wiring updated. Remaining init_* functions all bind callables that are genuinely consumed.
 
@@ -419,9 +419,14 @@ migration completed and the legacy files were deleted).
 - [ ] **Consolidate AI drift across React pages** - audit for inconsistent
   patterns; the concrete known offenders are already tracked in "Batch 3 -
   Frontend Shared Hooks" above.
-- [ ] **Remove `script-src 'unsafe-inline'` from the CSP** in
-  `netcontrol/app.py` (~line 1646) - the legacy inline `onclick=` handlers it
-  existed for are gone; React needs no inline scripts.
+- [x] **Remove `script-src 'unsafe-inline'` from the CSP** in
+  `netcontrol/app.py` - done 2026-07-07: global `script-src` is now `'self'`
+  only (no `'unsafe-inline'`, no CDN); the React bundle ships as external hashed
+  modules. The security-headers middleware uses `setdefault` so the one page
+  that needs a looser policy - the graph-export embed page (inline bootstrap
+  `<script>` + CDN ECharts, data-only) - sets its own scoped CSP without being
+  clobbered. `style-src 'unsafe-inline'` is retained for dynamic `style=` attrs.
+  Regression test: `tests/test_csp_headers.py`.
 - [ ] **Track bundle size and page-load in CI** - migration targets were main
   bundle <1MB gzipped (currently ~465KB with ECharts) and TTI <2s on local
   network; neither is measured automatically yet.
@@ -480,9 +485,13 @@ Remaining low-value tail:
   migrated. A one-time startup backfill (encrypt any `_looks_encrypted`-false
   `auth_config_json`) would close the residual at-rest exposure for accounts
   never re-saved.
-- [ ] **admin secret-sink / notification-channel create TOCTOU** - concurrent
-  creates with the same explicit id can both pass the `_sink_index` check and
-  append duplicates (admin-only, low impact).
+- [x] **admin secret-sink / notification-channel create TOCTOU** - done
+  2026-07-07: the read-modify-write of the shared `state.SIEM_SINKS` /
+  `state.NOTIFICATION_CHANNELS` (+ default-channel) globals now runs under a
+  per-resource `asyncio.Lock` (`_sink_mutation_lock` / `_channel_mutation_lock`)
+  spanning the id-uniqueness check through the `set_auth_setting` persist, so
+  concurrent create/update/delete calls can no longer duplicate an id or lose an
+  update via a stale payload winning the last write.
 
 ### Batch 6 - The Big One
 

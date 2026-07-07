@@ -229,7 +229,22 @@ async def get_graph_embed(
         echarts_theme=echarts_theme_safe,
         option_json=safe_json,
     )
-    return HTMLResponse(content=html)
+    # This page (and only this page) needs an inline bootstrap <script>, an
+    # inline <style> block, and ECharts from the CDN. Set its CSP explicitly so
+    # the global security-headers middleware (script-src 'self') leaves it alone
+    # instead of blocking the chart. The rendered content is data-only: the
+    # theme is whitelisted, the chart JSON is <>-escaped, and the title is
+    # XML-escaped, so no user input reaches an executable context.
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'"
+    )
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 @router.get("/api/graph-image/{host_graph_id}.svg")

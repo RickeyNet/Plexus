@@ -134,6 +134,15 @@ current upgrade verification fix in the working tree.
 - Password hashing (PBKDF2, 600k iterations) now runs off the event loop, so a
   burst of logins can no longer stall every other request; discovery reverse-DNS
   lookups were likewise moved off the loop.
+- Tightened the Content-Security-Policy: `script-src` is now `'self'` only
+  (dropping `'unsafe-inline'` and the CDN) since the React app ships as external
+  hashed modules. The single-purpose graph-export embed page, which needs an
+  inline bootstrap and CDN ECharts, carries its own scoped CSP and renders only
+  escaped, data-only content.
+- Admin SIEM-sink and notification-channel create/update/delete now serialize
+  their read-modify-write of the in-memory config under a lock, so two
+  concurrent admin edits can no longer duplicate an id or silently drop one
+  edit by racing the persist.
 
 ### Database backends
 - Hardened the Postgres (asyncpg) compatibility layer so the pg backend matches
