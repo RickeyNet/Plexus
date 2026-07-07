@@ -23,6 +23,7 @@ from routes.crypto import decrypt, encrypt
 
 from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.state import _env_flag
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -76,6 +77,19 @@ def _validate_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=422, detail="Peer URL must use http or https scheme")
+    # Peer requests attach the decrypted API token as an X-API-Token header,
+    # and on the receiving Plexus that token is admin-equivalent - sending it
+    # over plaintext HTTP hands it to anyone on-path. Require HTTPS unless the
+    # operator explicitly opts out (isolated lab networks).
+    if parsed.scheme == "http" and not _env_flag("PLEXUS_FEDERATION_ALLOW_HTTP", False):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Peer URL must use https - the peer API token would be sent in "
+                "plaintext. Set PLEXUS_FEDERATION_ALLOW_HTTP=true to override "
+                "for isolated lab networks."
+            ),
+        )
     if not parsed.hostname:
         raise HTTPException(status_code=422, detail="Peer URL must include a hostname")
     # SSRF guard: reject metadata/link-local/loopback targets.

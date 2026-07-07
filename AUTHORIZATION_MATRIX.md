@@ -99,6 +99,28 @@ are exempt (not susceptible to CSRF).
 | Update | ✅ | ❌ (admin only) | ❌ |
 | Delete | ✅ | ❌ (admin only) | ❌ |
 
+Operational endpoints (job launch, deployments, config backups/drift,
+compliance, upgrades, risk analysis, inventory discovery) enforce the same
+ownership rules at credential-*use* time via
+`require_credential_access()` in `netcontrol/routes/shared.py`. Background
+workers (job queue, backup/compliance schedulers) re-validate against the
+task's original submitter. Every allow/deny decision emits a `credential`
+audit event; non-ownership grants carry an `override=` marker.
+
+### API-token callers
+
+The server API token (`X-API-Token`) is **admin-equivalent by design**: it
+bypasses role checks (`require_admin` short-circuits on `auth_mode ==
+"token"`) and credential-ownership checks (including unowned and other
+users' credentials). It exists for CI/CD and machine-to-machine use
+(federation peers authenticate with it). Consequences:
+
+- Treat the API token like a root credential: store it in a secrets
+  manager, rotate it, and never send it over plaintext HTTP (federation
+  peer URLs require HTTPS unless `PLEXUS_FEDERATION_ALLOW_HTTP=true`).
+- Per-token scoping is not implemented; if finer-grained machine access is
+  needed, that requires a token-scopes design first.
+
 ## Notes
 
 - OpenAPI docs (`/docs`, `/redoc`, `/openapi.json`) disabled by default; enable with `APP_ENABLE_DOCS=true`
