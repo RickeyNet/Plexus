@@ -26,7 +26,14 @@ from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, get_driver
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_credential_access, verify_ws_session
+from netcontrol.routes.shared import (
+    _audit,
+    _corr_id,
+    _get_session,
+    require_credential_access,
+    require_owner_or_admin,
+    verify_ws_session,
+)
 from netcontrol.telemetry import configure_logging
 
 try:
@@ -901,10 +908,14 @@ async def list_campaigns():
 
 
 @router.get("/api/upgrades/campaigns/{campaign_id}")
-async def get_campaign(campaign_id: int):
+async def get_campaign(campaign_id: int, request: Request):
     campaign = await db.get_upgrade_campaign(campaign_id)
     if not campaign:
         raise HTTPException(404, "Campaign not found")
+    # Object-level authz: a campaign's events/operations carry device output
+    # and config captures, so only its creator (or an admin) may read it -
+    # holding the `upgrades` feature is not enough (matches the jobs WS).
+    await require_owner_or_admin(request, campaign.get("created_by"))
     campaign = await _repair_stale_running_campaign(campaign)
     campaign["is_actively_running"] = campaign_id in _running_campaigns
     campaign["devices"] = await db.get_upgrade_devices(campaign_id)
@@ -994,7 +1005,12 @@ async def delete_campaign(campaign_id: int, request: Request):
 
 
 @router.get("/api/upgrades/campaigns/{campaign_id}/events")
-async def get_campaign_events(campaign_id: int, device_id: int = None, limit: int = Query(default=1000, ge=1, le=10000)):
+async def get_campaign_events(campaign_id: int, request: Request, device_id: int = None, limit: int = Query(default=1000, ge=1, le=10000)):
+    campaign = await db.get_upgrade_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+    # Same object-level authz as get_campaign - the events are device output.
+    await require_owner_or_admin(request, campaign.get("created_by"))
     return await db.get_upgrade_events(campaign_id, device_id=device_id, limit=limit)
 
 
@@ -1018,7 +1034,7 @@ async def list_backups():
         backups.append({
             "filename": fname,
             "size": stat.st_size,
-            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "modified": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
         })
     return backups
 
@@ -1400,6 +1416,16 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
         return
     features = await _get_user_features(user) if _get_user_features else []
     if user.get("role") != "admin" and "upgrades" not in features:
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+
+    # Object-level authz: only the campaign's creator (or an admin) may stream
+    # its output. Mirrors the REST get_campaign check and the jobs WS.
+    campaign = await db.get_upgrade_campaign(campaign_id)
+    if not campaign:
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+    if user.get("role") != "admin" and campaign.get("created_by") != session.get("user"):
         await ws.close(code=4001, reason="Unauthorized")
         return
 

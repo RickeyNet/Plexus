@@ -245,9 +245,14 @@ export function useCancelJob() {
   return useMutation({
     mutationFn: (id: number) =>
       apiRequest<{ ok: boolean }>(`/jobs/${id}/cancel`, { method: 'POST' }),
-    onSuccess: () => {
+    // Invalidate the single-job queries too, not just the lists: an open
+    // JobOutputModal reads ['job', id] and would otherwise keep showing the
+    // job as running (with the Cancel button still live) after it's cancelled.
+    onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ['jobs'] });
       qc.invalidateQueries({ queryKey: ['job-queue'] });
+      qc.invalidateQueries({ queryKey: ['job', id] });
+      qc.invalidateQueries({ queryKey: ['job-events', id] });
     },
   });
 }
@@ -257,9 +262,11 @@ export function useRetryJob() {
   return useMutation({
     mutationFn: (id: number) =>
       apiRequest<JobLaunchResult>(`/jobs/${id}/retry`, { method: 'POST' }),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ['jobs'] });
       qc.invalidateQueries({ queryKey: ['job-queue'] });
+      qc.invalidateQueries({ queryKey: ['job', id] });
+      qc.invalidateQueries({ queryKey: ['job-events', id] });
     },
   });
 }
@@ -269,9 +276,11 @@ export function useRerunJobLive() {
   return useMutation({
     mutationFn: (id: number) =>
       apiRequest<JobLaunchResult>(`/jobs/${id}/rerun`, { method: 'POST' }),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ['jobs'] });
       qc.invalidateQueries({ queryKey: ['job-queue'] });
+      qc.invalidateQueries({ queryKey: ['job', id] });
+      qc.invalidateQueries({ queryKey: ['job-events', id] });
     },
   });
 }
