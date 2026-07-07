@@ -6,6 +6,7 @@ import {
   useInterfaceErrorSummary,
   useResolveErrorEvent,
 } from '@/api/deviceDetail';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { ErrorChart } from './ErrorChart';
 
@@ -133,7 +134,7 @@ function ActiveEventsTable({
           const sevClass = e.severity === 'critical' ? 'danger' : 'warning';
           return (
             <tr key={e.id}>
-              <td style={{ whiteSpace: 'nowrap' }}>{new Date(e.created_at).toLocaleString()}</td>
+              <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(e.created_at)}</td>
               <td>
                 <strong>{e.if_name || `idx-${e.if_index}`}</strong>
               </td>

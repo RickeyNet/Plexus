@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { useAuthStatus } from '@/api/auth';
 import { PageHelp } from '@/components/PageHelp';
+import { formatBackendDateTime } from '@/lib/datetime';
 import { TimeSeriesChart, TimeSeries } from '@/lib/echart';
 import {
   MetricQueryResult,
@@ -276,7 +277,7 @@ function DeviceInfoBar({ poll, hostId }: { poll: MonitoringPoll | null; hostId: 
         <Item label="Uptime" value={formatUptime(poll.uptime_seconds)} />
         <Item
           label="Last Poll"
-          value={poll.polled_at ? new Date(poll.polled_at).toLocaleString() : 'N/A'}
+          value={formatBackendDateTime(poll.polled_at, 'N/A')}
         />
       </div>
     </div>
@@ -524,7 +525,7 @@ function AlertsTab({ alerts, loading }: { alerts: MonitoringAlert[]; loading: bo
         <tbody>
           {alerts.map((a) => (
             <tr key={a.id}>
-              <td>{new Date(a.created_at).toLocaleString()}</td>
+              <td>{formatBackendDateTime(a.created_at)}</td>
               <td>
                 <span className={`badge badge-${sevClass(a.severity)}`}>{a.severity}</span>
               </td>
@@ -591,7 +592,7 @@ function ComplianceTab({
                 <span className={`badge badge-${cls}`}>{r.status || ''}</span>
               </td>
               <td>{r.score != null ? r.score + '%' : 'N/A'}</td>
-              <td>{r.scanned_at ? new Date(r.scanned_at).toLocaleString() : 'N/A'}</td>
+              <td>{formatBackendDateTime(r.scanned_at, 'N/A')}</td>
             </tr>
           );
         })}
@@ -630,7 +631,7 @@ function SyslogTab({ events, loading }: { events: SyslogEvent[]; loading: boolea
           return (
             <tr key={i}>
               <td style={{ whiteSpace: 'nowrap' }}>
-                {e.timestamp ? new Date(e.timestamp).toLocaleString() : '-'}
+                {formatBackendDateTime(e.timestamp, '-')}
               </td>
               <td>
                 <span className={`badge badge-${sevClass}`}>{sev || '-'}</span>

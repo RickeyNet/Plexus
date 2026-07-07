@@ -48,11 +48,21 @@ async def _audit(
         LOGGER.warning("Failed to write audit event category=%s action=%s", category, action)
 
 
+# Strong references to supervised fire-and-forget tasks. asyncio holds only a
+# weak reference to a pending task, so without this a task can be garbage-
+# collected before it runs. Tasks remove themselves on completion.
+_supervised_tasks: set[asyncio.Task] = set()
+
+
 def supervise_task(task: asyncio.Task, label: str) -> None:
     """Log an exception escaping a fire-and-forget task rather than letting
-    asyncio swallow it silently. Attach to any create_task whose result
-    nobody awaits, so a crash surfaces in logs instead of vanishing."""
+    asyncio swallow it silently, and retain a strong reference so the task
+    can't be GC'd mid-flight. Attach to any create_task whose result nobody
+    awaits, so a crash surfaces in logs instead of vanishing."""
+    _supervised_tasks.add(task)
+
     def _cb(t: asyncio.Task) -> None:
+        _supervised_tasks.discard(t)
         if t.cancelled():
             return
         exc = t.exception()

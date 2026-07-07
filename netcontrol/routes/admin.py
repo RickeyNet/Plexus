@@ -376,7 +376,9 @@ async def admin_create_user(body: AdminUserCreateRequest, request: Request):
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    role = body.role if body.role in {"admin", "user"} else "user"
+    if body.role is not None and body.role not in {"admin", "user"}:
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
+    role = body.role or "user"
 
     salt = secrets.token_hex(16)
     pw_hash = await asyncio.to_thread(_hash_password_fn, body.password, salt)
@@ -389,6 +391,9 @@ async def admin_create_user(body: AdminUserCreateRequest, request: Request):
         try:
             await db.set_user_groups(user_id, body.group_ids)
         except ValueError as e:
+            # Roll back the just-created user so a bad group id doesn't leave an
+            # orphaned account (whose name then blocks the admin's retry).
+            await db.delete_user(user_id)
             raise HTTPException(status_code=400, detail=str(e))
     session = _get_session(request)
     await _audit("auth", "user.create", user=session["user"] if session else "", detail=f"created user '{username}' role={role}", correlation_id=_corr_id(request))
@@ -405,6 +410,8 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
     username = body.username.strip() if body.username is not None else None
     if username is not None and len(username) < 3:
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if body.role is not None and body.role not in {"admin", "user"}:
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
     role = body.role if body.role in {"admin", "user"} else None
     session = _get_session(request)
     if role == "user" and session and int(session["user_id"]) == user_id:
@@ -490,13 +497,13 @@ async def admin_delete_user(user_id: int, request: Request):
     if session and int(session["user_id"]) == user_id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
 
-    if target.get("role") == "admin":
-        users = await db.get_all_users()
-        admin_count = len([u for u in users if u.get("role") == "admin"])
-        if admin_count <= 1:
-            raise HTTPException(status_code=400, detail="Cannot delete the last admin user")
-
-    await db.delete_user(user_id)
+    # Atomic last-admin guard (the check lives inside the DELETE), so two
+    # concurrent deletes of the final admins can't both slip through.
+    outcome = await db.delete_user_guarded(user_id)
+    if outcome == "not_found":
+        raise HTTPException(status_code=404, detail="User not found")
+    if outcome == "last_admin":
+        raise HTTPException(status_code=400, detail="Cannot delete the last admin user")
     await _audit("auth", "user.delete", user=session["user"] if session else "", detail=f"deleted user '{target['username']}'", correlation_id=_corr_id(request))
     return {"ok": True}
 

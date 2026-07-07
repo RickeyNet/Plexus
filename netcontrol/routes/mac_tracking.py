@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 import netcontrol.routes.state as state
 from netcontrol.routes import background_jobs
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
 from netcontrol.telemetry import configure_logging
 
@@ -1076,7 +1076,13 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         "mac-fleet-collection",
         {"hosts_done": 0, "hosts_total": len(targets)},
     )
-    asyncio.create_task(_run_fleet_collection_job(job["job_id"], targets))
+    # Supervise: keep a strong reference (so the task can't be GC'd, which would
+    # strand _full_collection_running=True and 409 every future run) and log any
+    # crash instead of it vanishing.
+    supervise_task(
+        asyncio.create_task(_run_fleet_collection_job(job["job_id"], targets)),
+        "mac-fleet-collection",
+    )
     return {"job_id": job["job_id"], "status": "running",
             "hosts_total": len(targets)}
 

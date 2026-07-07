@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 
 import { useCustomDashboards, useDeleteCustomDashboard } from '@/api/dashboard';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { formatBackendDate } from '@/lib/datetime';
 
 import { CreateDashboardModal } from './CreateDashboardModal';
 
@@ -89,7 +90,7 @@ export function CustomDashboards() {
                 }}
               >
                 <span className="text-muted" style={{ fontSize: '0.75rem' }}>
-                  {d.updated_at ? new Date(d.updated_at).toLocaleDateString() : ''}
+                  {d.updated_at ? formatBackendDate(d.updated_at) : ''}
                 </span>
                 <button
                   className="btn btn-sm btn-danger"

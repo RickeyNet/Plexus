@@ -35,6 +35,7 @@ __all__ = [
     "update_user_admin",
     "get_all_users",
     "delete_user",
+    "delete_user_guarded",
     "get_user_group_ids",
     "set_user_groups",
     "get_all_access_groups",
@@ -184,6 +185,43 @@ async def delete_user(user_id: int):
         await db.execute("DELETE FROM credentials WHERE owner_id = ?", (user_id,))
         await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
         await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+async def delete_user_guarded(user_id: int) -> str:
+    """Delete a user, refusing to remove the last remaining admin.
+
+    The last-admin check lives *inside* the DELETE statement — its COUNT
+    subquery is evaluated atomically at execution — so two concurrent deletes
+    of the final two admins can't both pass a separate check and leave zero
+    admins (the check-then-act TOCTOU the route-level guard had). Credentials
+    are removed first for the FK, and rolled back if the user delete is blocked.
+
+    Returns "deleted", "not_found", or "last_admin".
+    """
+    db = await _dbcore.get_db()
+    try:
+        cur = await db.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+        if await cur.fetchone() is None:
+            return "not_found"
+        await db.execute("DELETE FROM credentials WHERE owner_id = ?", (user_id,))
+        cur2 = await db.execute(
+            """DELETE FROM users
+               WHERE id = ?
+                 AND (role != 'admin'
+                      OR (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1)""",
+            (user_id,),
+        )
+        if (cur2.rowcount or 0) < 1:
+            # Blocked as the last admin — undo the credentials delete too.
+            await db.rollback()
+            return "last_admin"
+        await db.commit()
+        return "deleted"
     except Exception:
         await db.rollback()
         raise
