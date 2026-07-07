@@ -117,3 +117,21 @@ Regression tests: `tests/test_credential_isolation.py`.
 - [x] **TLS verification disabled on federation API (token disclosure to MITM)** - Fixed (completed 2026-07-06): `verify=False` is gone - both the background sync and `test_peer` use `verify=_peer_tls_verify(peer)`, which reads the per-peer `tls_verify` column added by migration 0052 and **defaults to verify** (existing rows migrated to 1). The flag is surfaced in the admin UI (`PeerFormModal.tsx`) and settable via the peer create/update API. Added 2026-07-06: `_validate_url` now rejects `http://` peer URLs (the decrypted `X-API-Token` would travel plaintext) unless the operator sets `PLEXUS_FEDERATION_ALLOW_HTTP=true` for isolated labs. The `require_admin` token short-circuit was reviewed and kept as intentional design; it is now explicitly documented in `AUTHORIZATION_MATRIX.md` § "API-token callers" (admin-equivalent, treat like a root credential, per-token scopes would need a dedicated design).
 
 - [x] **LDAP authentication bypass via empty-password bind** - Fixed (verified 2026-07-06): `LoginRequest` enforces `min_length=1` on both username and password (`auth.py:610-612`), and `_ldap_authenticate_sync` rejects empty passwords at entry with an RFC 4513 §5.1.2 comment explaining the unauthenticated-bind hazard (`auth.py:236-240`). Matching defense-in-depth guard added to `_radius_authenticate_sync` 2026-07-06 so no future call path can send an empty password to either external provider.
+
+## Multi-dimension sweep (pass 5, 2026-07-06)
+
+A fresh four-dimension review (security, backend correctness, frontend,
+ops/CI) after passes 1-4. Security findings below; non-security fixes from the
+same sweep (job reaper, SIGTERM drain, ErrorBoundary, compose hardening, etc.)
+are recorded in the code and `TODO.md`. Remaining low-severity ops items are in
+`TODO.md` § "Deferred hardening".
+
+### Medium
+
+- [x] **Horizontal IDOR on the Upgrades feature** - `get_campaign`, `get_campaign_events`, and the `/ws/upgrades/{id}` WebSocket (`upgrades.py`) gated only on the `upgrades` feature, not on campaign ownership, even though campaigns store `created_by` - so any user with the feature could enumerate the sequential integer `campaign_id` and read another user's firmware-campaign device output (same class the jobs/deployments WS already guard against). Fixed 2026-07-06: all three now call `require_owner_or_admin(created_by)` (WS mirrors the jobs-WS inline check). Verified against the code before fixing.
+
+### Low
+
+- [x] **`must_change_password` gate not enforced on WebSocket streams** - The HTTP middleware blocks a must-change user from every route except password-change, but `verify_ws_session` never checked the flag, so such a user could open `/ws/jobs`, `/ws/deployment`, `/ws/upgrades`, and the config-capture/revert sockets before rotating. Fixed 2026-07-06: `verify_ws_session` (`shared.py`) now rejects sessions with `must_change_password` set, mirroring the HTTP gate.
+- [x] **config-capture / config-revert WS lacked the owner check** - Same class as the Upgrades IDOR but materially lower risk (job ids are uuid4, so cross-user enumeration is impractical). Fixed 2026-07-06 for defense in depth: the capture/revert job records now store `launched_by` and both WS handlers reject a non-owner non-admin (`config_drift.py`).
+- [x] **Credential-use audit logging** (carried from pass-3 Medium) - `require_credential_access` now emits a `credential`/`use` or `use_denied` audit event on every decision, flagging non-ownership grants with `override=` markers. See the pass-3 section.

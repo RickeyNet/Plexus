@@ -20,6 +20,7 @@ from netcontrol.routes.shared import (
     _get_session,
     _push_config_to_device,
     require_credential_access,
+    supervise_task,
     verify_ws_session,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
@@ -173,7 +174,33 @@ async def _run_config_capture_job(
     credentials: dict,
     user: str,
 ) -> None:
-    """Background task: capture running-config from hosts, streaming progress."""
+    """Background task: capture running-config from hosts, streaming progress.
+
+    Wrapped so the job is always finalized: if anything after the per-host
+    loop (drift-analysis broadcasts, finish) raises, the job is still marked
+    terminal and its in-memory record scheduled for cleanup - otherwise WS
+    subscribers would stream forever and the record would leak.
+    """
+    status = "failed"
+    try:
+        status = await _capture_job_body(job_id, hosts, credentials, user)
+    except Exception as exc:
+        LOGGER.exception("config-drift: capture job %s crashed: %s", job_id, exc)
+    finally:
+        try:
+            await _finish_capture_job(job_id, status)
+        except Exception as exc:
+            LOGGER.error("config-drift: could not finalize capture job %s: %s", job_id, exc)
+
+
+async def _capture_job_body(
+    job_id: str,
+    hosts: list[dict],
+    credentials: dict,
+    user: str,
+) -> str:
+    """Capture running-config from hosts, streaming progress. Returns the
+    terminal status; _run_config_capture_job owns finalization."""
     total = len(hosts)
     ok_count = 0
     fail_count = 0
@@ -246,8 +273,7 @@ async def _run_config_capture_job(
         await _broadcast_capture_line(job_id,
             f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Analysis complete: {compliant_count} compliant, {drift_count} drifted, {skip_count} skipped (no baseline).\n")
 
-    status = "completed" if fail_count == 0 else ("partial" if ok_count > 0 else "failed")
-    await _finish_capture_job(job_id, status)
+    return "completed" if fail_count == 0 else ("partial" if ok_count > 0 else "failed")
 
 
 async def _analyze_drift_for_host(host_id: int) -> dict:
@@ -752,6 +778,8 @@ async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
         raise HTTPException(status_code=404, detail="No hosts found in group")
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
+    session = _get_session(request)
+    launched_by = session["user"] if session else "admin"
     job_id = str(uuid.uuid4())
     _capture_jobs[job_id] = {
         "job_id": job_id,
@@ -759,11 +787,13 @@ async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
         "started_at": datetime.now(UTC).isoformat(),
         "finished_at": None,
         "output_lines": [],
+        "launched_by": launched_by,
     }
 
-    session = _get_session(request)
-    launched_by = session["user"] if session else "admin"
-    asyncio.create_task(_run_config_capture_job(job_id, hosts, cred, launched_by))
+    supervise_task(
+        asyncio.create_task(_run_config_capture_job(job_id, hosts, cred, launched_by)),
+        f"config-capture job {job_id}",
+    )
 
     await _audit(
         "config-drift", "snapshot.capture_job",
@@ -782,6 +812,8 @@ async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request:
         raise HTTPException(status_code=404, detail="Host not found")
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
+    session = _get_session(request)
+    launched_by = session["user"] if session else "admin"
     job_id = str(uuid.uuid4())
     _capture_jobs[job_id] = {
         "job_id": job_id,
@@ -789,11 +821,13 @@ async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request:
         "started_at": datetime.now(UTC).isoformat(),
         "finished_at": None,
         "output_lines": [],
+        "launched_by": launched_by,
     }
 
-    session = _get_session(request)
-    launched_by = session["user"] if session else "admin"
-    asyncio.create_task(_run_config_capture_job(job_id, [host], cred, launched_by))
+    supervise_task(
+        asyncio.create_task(_run_config_capture_job(job_id, [host], cred, launched_by)),
+        f"config-capture job {job_id}",
+    )
 
     await _audit(
         "config-drift", "snapshot.capture_job",
@@ -838,13 +872,20 @@ async def websocket_config_capture(websocket: WebSocket, job_id: str):
         await websocket.close(code=1008)
         return
 
-    await websocket.accept()
-
     job = _capture_jobs.get(job_id)
     if not job:
+        await websocket.accept()
         await websocket.send_json({"type": "error", "message": "Job not found"})
         await websocket.close()
         return
+    # Object-level authz: only the job's launcher (or an admin) may stream its
+    # device output. UUID keys already make cross-user enumeration impractical;
+    # this closes the gap for defense in depth (matches the jobs WS).
+    if user.get("role") != "admin" and job.get("launched_by") != session.get("user"):
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
 
     # Replay accumulated output
     for line in list(job.get("output_lines", [])):
@@ -1038,10 +1079,13 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
     user = session["user"] if session else ""
 
     job_id = str(uuid.uuid4())
-    _revert_jobs[job_id] = {"status": "running", "output": "", "event_id": body.event_id, "host_id": event["host_id"]}
+    _revert_jobs[job_id] = {"status": "running", "output": "", "event_id": body.event_id, "host_id": event["host_id"], "launched_by": user}
     _revert_job_sockets[job_id] = []
 
-    asyncio.create_task(_run_revert_job(job_id, event, host, baseline, credentials, user))
+    supervise_task(
+        asyncio.create_task(_run_revert_job(job_id, event, host, baseline, credentials, user)),
+        f"config-revert job {job_id}",
+    )
     await db.create_config_drift_event_history(
         event_id=body.event_id,
         host_id=event["host_id"],
@@ -1080,12 +1124,18 @@ async def ws_config_revert(websocket: WebSocket, job_id: str):
         await websocket.close(code=1008)
         return
 
-    await websocket.accept()
     job = _revert_jobs.get(job_id)
     if not job:
+        await websocket.accept()
         await websocket.send_json({"type": "error", "data": "Job not found"})
         await websocket.close()
         return
+    # Object-level authz: only the job's launcher (or an admin) may stream it.
+    if user.get("role") != "admin" and job.get("launched_by") != session.get("user"):
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
 
     # Replay history
     if job["output"]:

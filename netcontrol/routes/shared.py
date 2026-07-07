@@ -48,6 +48,19 @@ async def _audit(
         LOGGER.warning("Failed to write audit event category=%s action=%s", category, action)
 
 
+def supervise_task(task: asyncio.Task, label: str) -> None:
+    """Log an exception escaping a fire-and-forget task rather than letting
+    asyncio swallow it silently. Attach to any create_task whose result
+    nobody awaits, so a crash surfaces in logs instead of vanishing."""
+    def _cb(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            LOGGER.error("%s crashed: %s", label, exc, exc_info=exc)
+    task.add_done_callback(_cb)
+
+
 def _corr_id(request) -> str:
     """Extract the correlation ID attached by correlation_id_middleware."""
     return getattr(request.state, "correlation_id", "") if hasattr(request, "state") else ""
@@ -94,6 +107,11 @@ async def verify_ws_session(token: str) -> dict | None:
         return None
     user = await db.get_user_by_id(session["user_id"])
     if not user:
+        return None
+    # Forced-password-change gate (mirrors the HTTP middleware, which blocks
+    # every route except the password-change endpoints). A user who must
+    # rotate their password may not open device-output streams first.
+    if user.get("must_change_password"):
         return None
     # Session revocation check (mirrors require_auth).
     if int(session.get("session_epoch") or 0) != int(user.get("session_epoch") or 0):

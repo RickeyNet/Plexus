@@ -39,6 +39,7 @@ __all__ = [
     "get_next_queued_job",
     "check_job_dependencies_met",
     "get_running_job_count",
+    "reap_orphaned_running_jobs",
     "get_dashboard_stats",
 ]
 
@@ -289,6 +290,33 @@ async def get_running_job_count() -> int:
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM jobs WHERE status = 'running'")
         return (await cursor.fetchone())[0]
+    finally:
+        await db.close()
+
+
+async def reap_orphaned_running_jobs() -> list[int]:
+    """Mark jobs left in 'running' by a crashed/restarted process as 'failed'.
+
+    A job only leaves 'running' when its in-process asyncio task calls
+    finish_job. If the process died mid-run, the row stays 'running' forever
+    and keeps counting against the concurrency gate (get_running_job_count),
+    which can permanently wedge the queue after a restart. Called once at
+    startup. Re-queuing is deliberately avoided: an interrupted config/
+    firmware push must not silently re-execute - the operator re-runs it.
+
+    Returns the affected job ids so the caller can emit job events.
+    """
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("SELECT id FROM jobs WHERE status = 'running'")
+        ids = [row[0] for row in await cursor.fetchall()]
+        if ids:
+            await db.execute(
+                "UPDATE jobs SET status = 'failed', finished_at = ? WHERE status = 'running'",
+                (datetime.now(UTC).isoformat(),),
+            )
+            await db.commit()
+        return ids
     finally:
         await db.close()
 
