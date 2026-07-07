@@ -548,6 +548,20 @@ CREATE TABLE IF NOT EXISTS config_drift_event_history (
     created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+-- config_snapshots is queried by host_id ordered by capture time (drift
+-- capture, snapshot history) and grows unbounded; without this index each
+-- bulk-scan host lookup full-scans an ever-larger table.
+CREATE INDEX IF NOT EXISTS idx_config_snapshots_host_captured
+ON config_snapshots(host_id, captured_at DESC);
+
+-- config_drift_events is filtered by host_id and by status (open drift
+-- dashboards, per-host drift). No index previously existed at all.
+CREATE INDEX IF NOT EXISTS idx_config_drift_events_host_status
+ON config_drift_events(host_id, status, detected_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_config_drift_events_status
+ON config_drift_events(status, detected_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_config_drift_event_history_event_created
 ON config_drift_event_history(event_id, created_at DESC);
 

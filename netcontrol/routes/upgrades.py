@@ -17,11 +17,12 @@ import socket
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
 
 import routes.database as db
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
@@ -466,24 +467,28 @@ class ImageUpdate(BaseModel):
 
 
 class CampaignCreate(BaseModel):
-    name: str
-    description: str = ""
-    image_map: dict = {}
-    options: dict = {}
-    host_ids: list[int] = []
-    ad_hoc_ips: list[str] = []
+    name: str = Field(max_length=200)
+    description: str = Field(default="", max_length=2000)
+    # image_map keys are model/version patterns and values are image filenames;
+    # bound the entry count so a create call can't carry an unbounded dict.
+    image_map: dict = Field(default_factory=dict, max_length=1000)
+    options: dict = Field(default_factory=dict, max_length=200)
+    host_ids: list[int] = Field(default_factory=list, max_length=100000)
+    ad_hoc_ips: list[Annotated[str, Field(max_length=64)]] = Field(
+        default_factory=list, max_length=100000)
     # Optional: when omitted the campaign runs with the configured service
     # credential (the system account used for unattended work).
     credential_id: int | None = None
 
 
 class CampaignUpdate(BaseModel):
-    name: str
-    description: str = ""
-    image_map: dict = {}
-    options: dict = {}
-    host_ids: list[int] = []
-    ad_hoc_ips: list[str] = []
+    name: str = Field(max_length=200)
+    description: str = Field(default="", max_length=2000)
+    image_map: dict = Field(default_factory=dict, max_length=1000)
+    options: dict = Field(default_factory=dict, max_length=200)
+    host_ids: list[int] = Field(default_factory=list, max_length=100000)
+    ad_hoc_ips: list[Annotated[str, Field(max_length=64)]] = Field(
+        default_factory=list, max_length=100000)
     credential_id: int | None = None
 
 
@@ -861,20 +866,29 @@ async def create_campaign(body: CampaignCreate, request: Request):
         created_by=user,
     )
 
-    # Add devices from host_ids (inventory)
+    # Add devices from host_ids (inventory). Track what could not be added so
+    # the caller isn't silently handed a smaller campaign than they asked for
+    # (an unknown host id or a duplicate previously vanished with only a debug
+    # log).
     added = 0
+    not_found_host_ids: list[int] = []
+    skipped_host_ids: list[int] = []
     for hid in body.host_ids:
         host = await db.get_host(hid)
-        if host:
-            try:
-                await db.add_upgrade_device(
-                    campaign_id, hid, host["ip_address"], host.get("hostname", ""),
-                )
-                added += 1
-            except Exception as exc:
-                LOGGER.debug("create_campaign: skipping duplicate device %s: %s", host["ip_address"], exc)
+        if not host:
+            not_found_host_ids.append(hid)
+            continue
+        try:
+            await db.add_upgrade_device(
+                campaign_id, hid, host["ip_address"], host.get("hostname", ""),
+            )
+            added += 1
+        except Exception as exc:
+            skipped_host_ids.append(hid)
+            LOGGER.debug("create_campaign: skipping duplicate device %s: %s", host["ip_address"], exc)
 
     # Add ad-hoc IPs
+    skipped_ips: list[str] = []
     for ip in body.ad_hoc_ips:
         ip = ip.strip()
         if ip:
@@ -882,13 +896,28 @@ async def create_campaign(body: CampaignCreate, request: Request):
                 await db.add_upgrade_device(campaign_id, None, ip, "")
                 added += 1
             except Exception as exc:
+                skipped_ips.append(ip)
                 LOGGER.debug("create_campaign: skipping ad-hoc device %s: %s", ip, exc)
+
+    if not_found_host_ids or skipped_host_ids or skipped_ips:
+        LOGGER.warning(
+            "Campaign '%s': %d devices added; not-found host ids=%s, "
+            "duplicate/skipped host ids=%s, skipped ips=%s",
+            body.name, added, not_found_host_ids, skipped_host_ids, skipped_ips,
+        )
 
     await _audit("upgrades", "campaign_create", user=user,
                  detail=f"Created campaign '{body.name}' with {added} devices")
     LOGGER.info("Campaign created: %s (%d devices) by %s", body.name, added, user)
 
-    return {"id": campaign_id, "devices_added": added}
+    return {
+        "id": campaign_id,
+        "devices_added": added,
+        "requested": len(body.host_ids) + len([i for i in body.ad_hoc_ips if i.strip()]),
+        "not_found_host_ids": not_found_host_ids,
+        "skipped_host_ids": skipped_host_ids,
+        "skipped_ips": skipped_ips,
+    }
 
 
 @router.get("/api/upgrades/campaigns")

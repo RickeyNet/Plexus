@@ -99,6 +99,35 @@ class ComplianceRemediateRequest(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
+def _config_has_directive(config_text: str, pattern: str) -> bool:
+    """Line-anchored presence test for a config directive.
+
+    A naive substring check is wrong because a disabled feature still contains
+    the bare directive text: ``"service password-encryption" in
+    "no service password-encryption"`` is True, which would report a device
+    that has the feature *turned off* as compliant. Here a line whose stripped
+    form begins with ``no `` counts as an explicit negation and does NOT satisfy
+    an affirmative pattern. If the pattern itself is a ``no ...`` directive, a
+    matching ``no ...`` line does satisfy it (the operator wants it present).
+    """
+    pat = pattern.strip().lower()
+    if not pat:
+        return False
+    pat_is_negation = pat.startswith("no ")
+    for raw in config_text.splitlines():
+        line = raw.strip().lower()
+        if not line or pat not in line:
+            continue
+        if pat_is_negation:
+            return True
+        if line.startswith("no "):
+            # Feature explicitly disabled — the "no ..." line contains the bare
+            # directive but must not count as present.
+            continue
+        return True
+    return False
+
+
 def _evaluate_rule(rule: dict, config_text: str) -> dict:
     """Evaluate a single compliance rule against running config.
 
@@ -122,21 +151,35 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
         return result
 
     if rule_type == "must_contain":
-        found = pattern.lower() in config_text.lower()
+        found = _config_has_directive(config_text, pattern)
         result["passed"] = found
         result["detail"] = "Pattern found" if found else f"Missing: {pattern}"
     elif rule_type == "must_not_contain":
-        found = pattern.lower() in config_text.lower()
+        found = _config_has_directive(config_text, pattern)
         result["passed"] = not found
         result["detail"] = "Pattern absent (good)" if not found else f"Prohibited pattern found: {pattern}"
     elif rule_type == "regex_match":
         try:
             compiled = _re.compile(pattern, _re.MULTILINE | _re.IGNORECASE)
-            # Guard against catastrophic backtracking: limit search to first 500KB
-            search_text = config_text[:512_000]
+            # Guard against catastrophic backtracking by capping the searched
+            # length. 2MB comfortably covers large chassis configs while still
+            # bounding worst-case regex cost.
+            _MAX_SEARCH = 2_000_000
+            search_text = config_text[:_MAX_SEARCH]
+            truncated = len(config_text) > _MAX_SEARCH
             match = compiled.search(search_text)
             result["passed"] = match is not None
-            result["detail"] = "Regex matched" if match else f"Regex not matched: {pattern}"
+            if match:
+                result["detail"] = "Regex matched"
+            elif truncated:
+                # Distinguish a genuine miss from a truncation artifact so a
+                # large config isn't silently reported non-compliant.
+                result["detail"] = (
+                    f"Regex not matched in first {_MAX_SEARCH // 1000}KB "
+                    f"(config truncated for search): {pattern}"
+                )
+            else:
+                result["detail"] = f"Regex not matched: {pattern}"
         except _re.error as e:
             result["passed"] = False
             result["detail"] = f"Invalid regex: {e}"
