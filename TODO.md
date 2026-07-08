@@ -400,7 +400,18 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 
 ### Batch 5 - Security Follow-Ups
 
-- [ ] **Credential-isolation regression tests** - prove user A cannot use user B's `credential_id` through each endpoint hardened in the IDOR sweep (deployments, config backups/drift, compliance, upgrades, inventory, risk analysis, lab runtime).
+- [x] **Credential-isolation regression tests** - done 2026-07-07:
+  `tests/test_credential_isolation_http.py` drives one representative endpoint
+  per IDOR-swept module over real HTTP (risk-analysis, inventory fetch-serial,
+  config-drift capture, config-backups restore, compliance scan, deployments
+  create, upgrades campaign create, jobs launch) and asserts a non-owner gets
+  403 "You can only use your own credentials" and a bogus id gets 404 - both
+  fire before any device I/O. Both accounts are admins so the request clears the
+  feature gate and reaches the credential check, which proves the stronger
+  property that even an admin can't use another user's personal credential.
+  lab_runtime is excluded by design (its credential is device-bound and gated by
+  `_get_device_or_403`; covered by `test_lab_runtime.py` + the helper policy in
+  `test_credential_isolation.py`).
 - [x] **FDM collector credential model** (`netcontrol/integrations/cisco_fdm/collector.py:87`) - done 2026-06-12: `collect_host` rejects non-service credentials (same policy as monitoring/MAC pollers) with a regression test. Bind-time gate still needed when the endpoint that sets `hosts.fdm_credential_id` ships.
 - [x] **Air-gap README** (`deploy/airgap/README.md`) - done 2026-07-07: "Step 4 - First login" already documents retrieving the random one-time bootstrap password from the container logs and the `PLEXUS_INITIAL_ADMIN_PASSWORD` override; the stale `admin/netcontrol` copy is gone.
 - [x] **Pre-existing backend cleanups** - done 2026-06-12: audit-hook drops now logged (routes/db/audit.py); migration 0055 adds `monitoring_polls(host_id, polled_at)` + `audit_events(category)` (column is `polled_at`, not `sampled_at`); 14 hardcoded semaphores route through `state.device_op_semaphore()` / `APP_DEVICE_OP_CONCURRENCY`. `SELECT *` audit found most uses are narrow tables or fetch-one-by-id where the blob is the payload; the one real waste (deployments annotation query pulling proposed_commands blobs) is trimmed.
