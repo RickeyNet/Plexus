@@ -19,6 +19,7 @@ import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
     _is_unique_violation,
+    _minute_bucket_expr,
     row_to_dict,
     rows_to_list,
 )
@@ -148,11 +149,10 @@ async def get_flow_timeline(host_id: int | None = None, hours: int = 6,
         if host_id is not None:
             where += " AND host_id = ?"
             params.append(host_id)
+        bucket_expr = _minute_bucket_expr("received_at", bucket_minutes)
         cursor = await db.execute(
             f"""SELECT
-                   strftime('%Y-%m-%dT%H:', received_at) ||
-                   printf('%02d', (CAST(strftime('%M', received_at) AS INTEGER) / {bucket_minutes}) * {bucket_minutes}) ||
-                   ':00' as bucket,
+                   {bucket_expr} as bucket,
                    SUM(bytes) as total_bytes,
                    SUM(packets) as total_packets,
                    COUNT(*) as flow_count
@@ -437,11 +437,10 @@ async def get_cloud_flow_timeline(
             clauses.append("flow_type = ?")
             params.append(_cloud_flow_type(provider))
         where = " AND ".join(clauses)
+        bucket_expr = _minute_bucket_expr("received_at", bucket_minutes)
         cursor = await db.execute(
             f"""SELECT
-                   strftime('%Y-%m-%dT%H:', received_at) ||
-                   printf('%02d', (CAST(strftime('%M', received_at) AS INTEGER) / {bucket_minutes}) * {bucket_minutes}) ||
-                   ':00' as bucket,
+                   {bucket_expr} as bucket,
                    SUM(bytes) as total_bytes,
                    SUM(packets) as total_packets,
                    COUNT(*) as flow_count

@@ -173,7 +173,13 @@ async def persist_cloud_traffic_sync_status(status: dict) -> dict:
 
 def _serialize_account(account: dict) -> dict:
     item = dict(account)
-    item["auth_config"] = _json_loads_safe(item.get("auth_config_json"), {})
+    # Never expose stored cloud credentials (AWS secret keys, Azure client
+    # secrets, GCP key material) in API responses — surface only whether one is
+    # configured, matching the IPAM/DHCP source pattern. The full blob is
+    # available internally to collectors via the account dict / DB accessor.
+    raw = item.pop("auth_config_json", None)
+    item.pop("auth_config", None)
+    item["has_auth_config"] = bool(_json_loads_safe(raw, {}))
     return item
 
 
