@@ -19,6 +19,7 @@ import {
   type AuditOverrideMode,
   type AuditSeverity,
 } from '@/api/audit';
+import { formatBackendDateTime } from '@/lib/datetime';
 import { useShowMore } from '@/lib/useShowMore';
 
 const SEVERITY_BADGE: Record<AuditSeverity, string> = {
@@ -159,7 +160,7 @@ export function Audit() {
                   </td>
                   <td>
                     {r.started_at
-                      ? new Date(r.started_at).toLocaleString()
+                      ? formatBackendDateTime(r.started_at)
                       : '-'}
                   </td>
                   <td>{r.host_count}</td>
@@ -553,7 +554,7 @@ function SchedulesCard() {
                 </td>
                 <td>
                   {s.last_run_at
-                    ? new Date(s.last_run_at).toLocaleString()
+                    ? formatBackendDateTime(s.last_run_at)
                     : 'never'}
                 </td>
                 <td style={{ textAlign: 'right' }}>
@@ -892,12 +893,12 @@ function OverridesCard() {
                 </td>
                 <td>
                   {o.expires_at
-                    ? new Date(o.expires_at).toLocaleString()
+                    ? formatBackendDateTime(o.expires_at)
                     : <span className="text-muted">never</span>}
                 </td>
                 <td>
                   {o.created_at
-                    ? new Date(o.created_at).toLocaleString()
+                    ? formatBackendDateTime(o.created_at)
                     : '-'}
                 </td>
                 <td style={{ textAlign: 'right' }}>

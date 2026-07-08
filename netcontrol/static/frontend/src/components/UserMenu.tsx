@@ -16,6 +16,7 @@ export function UserMenu({ isOpen, onClose }: UserMenuProps) {
   const qc = useQueryClient();
   const { data } = useAuthStatus();
   const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
 
@@ -26,14 +27,25 @@ export function UserMenu({ isOpen, onClose }: UserMenuProps) {
 
   const onSignOut = async () => {
     setSigningOut(true);
+    setSignOutError(null);
     try {
       await apiRequest('/auth/logout', { method: 'POST' });
-    } catch {
-      // Even if the call fails (expired session etc.), the gate will flip.
+      // Only drop the CSRF token once the server has actually ended the
+      // session. Nulling it on a failed logout left a still-live session
+      // unable to send any authenticated mutation.
+      setCsrfToken(null);
+      onClose();
+    } catch (err) {
+      // Network blip / 500: keep the session and its CSRF token intact so the
+      // user can retry rather than getting stuck signed-in-but-broken.
+      setSignOutError(err instanceof Error ? err.message : 'Sign out failed. Please try again.');
+    } finally {
+      // Always re-enable the button (never leave it stuck on "Signing out…")
+      // and refetch auth status — if the session was terminated server-side,
+      // this flips the app to the login gate.
+      setSigningOut(false);
+      qc.invalidateQueries({ queryKey: ['auth', 'status'] });
     }
-    setCsrfToken(null);
-    onClose();
-    qc.invalidateQueries({ queryKey: ['auth', 'status'] });
   };
 
   return (
@@ -75,6 +87,11 @@ export function UserMenu({ isOpen, onClose }: UserMenuProps) {
           <button className="btn btn-danger" onClick={onSignOut} disabled={signingOut}>
             {signingOut ? 'Signing out…' : 'Sign Out'}
           </button>
+          {signOutError && (
+            <div style={{ color: 'var(--danger)', fontSize: '0.8rem', marginTop: '0.25rem' }}>
+              {signOutError}
+            </div>
+          )}
         </div>
       </Modal>
       <EditProfileModal

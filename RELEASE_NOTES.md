@@ -43,8 +43,26 @@ current upgrade verification fix in the working tree.
   flags when a large config was truncated instead of silently failing.
 - Frontend now renders FastAPI request-validation (422) errors as readable
   "field: message" text instead of `[object Object]`.
+- Nested modals now track the Escape-close stack by a stable per-instance
+  token, so a background poll re-rendering the page can't reorder the stack and
+  make Escape close the wrong (outer) dialog.
+- A failed sign-out no longer bricks the account: the button re-enables, the
+  CSRF token is only cleared once the server has ended the session (so a
+  transient failure can't leave a live session unable to submit anything), and
+  the error is surfaced with a retry.
+- The IPAM Refresh button now invalidates the correct query keys, so the
+  reconcile-runs and DHCP panels actually refresh (they previously no-op'd).
+- Device-detail, audit, error-trending, flow, and custom-dashboard views now
+  parse naive backend (UTC) timestamps through a shared helper, fixing times
+  that displayed shifted by the browser's timezone offset.
 
 ### Data correctness
+- Per-interface bandwidth rates are computed again. The rate math subtracted a
+  naive stored timestamp from an aware "now", raising a TypeError that a broad
+  except swallowed — so every interface rate stayed NULL and the bandwidth
+  dashboard and error-spike detection were silently dead. Stored timestamps are
+  now normalized to UTC, and the metric-engine counter delta is width-aware so a
+  counter reset no longer fabricates a multi-terabit spike.
 - IPAM subnet-utilization snapshots no longer enumerate the address space; an
   IPv6 /64 previously materialized 2**64 addresses and exhausted memory.
   Utilization is computed with integer membership math, and point-to-point
@@ -91,8 +109,48 @@ current upgrade verification fix in the working tree.
   DHCP-sync and lab-create paths (details are logged server-side).
 - Campaign creation now reports host ids it could not add (unknown or
   duplicate) instead of silently building a smaller campaign than requested.
+- Cloud account credentials (AWS secret keys, Azure client secrets, GCP key
+  material) are no longer returned by the accounts/topology GET endpoints —
+  responses expose only whether a credential is configured — and are now
+  encrypted at rest with the shared key (legacy plaintext rows are read
+  transparently and re-encrypted on next save), matching IPAM/DHCP sources.
+- Lab topology management subnets are validated as strict CIDRs before they
+  reach the containerlab YAML, closing a YAML-injection path that could run
+  arbitrary nodes/binds/exec directives on the lab host.
+- Custom dashboards and their panels now enforce per-owner access on read,
+  update, delete, and listing (an admin still sees all), closing an IDOR where
+  any dashboard user could read or overwrite another user's dashboards by id.
+- Promoting a lab run to a deployment now enforces credential ownership, so a
+  user can't bind another user's stored credential to a production deployment.
+- Custom vendor-OID registry writes/deletes now require admin (custom entries
+  override SNMP polling OIDs fleet-wide); the read-only listing stays available.
+- Capacity-planning projection length is bounded (1–365 days) and the ETA
+  calculation is clamped, so a huge `projection_days` can no longer freeze the
+  event loop building projection points or overflow into a 500.
+- Admin user create/update reject an unknown role instead of silently coercing
+  it; deleting the last admin is blocked atomically (the check lives inside the
+  DELETE, so concurrent deletes can't leave zero admins); a failed group
+  assignment during user creation rolls the half-created account back.
+- Password hashing (PBKDF2, 600k iterations) now runs off the event loop, so a
+  burst of logins can no longer stall every other request; discovery reverse-DNS
+  lookups were likewise moved off the loop.
+
+### Database backends
+- Hardened the Postgres (asyncpg) compatibility layer so the pg backend matches
+  SQLite behavior: added the missing `rollback()` (its absence turned every
+  expected integrity error into a 500), fetched rows for hand-written
+  `RETURNING` inserts and any `RETURNING` statement (previously discarded, which
+  crashed MAC/ARP upserts and baseline/data-source writes), backfilled the
+  lastrowid table allowlist (dashboards, IPAM/DHCP, geo, metrics — inserts there
+  had been losing their ids), and gave the flow/cloud timeline (`strftime`/
+  `printf`) and SLA MTTR/MTTD (`julianday`) queries Postgres branches so they no
+  longer 500.
 
 ### Reliability
+- Fire-and-forget background tasks (fleet MAC/ARP collection, discovery scans,
+  metric-engine event stores) now retain a strong reference and log crashes, so
+  a task can't be garbage-collected mid-run — which previously could strand the
+  collection lock and 409 every subsequent run.
 - Jobs interrupted by a crash or restart are now reconciled on startup instead
   of staying "running" indefinitely, which previously could permanently block
   the job queue; jobs left queued also resume after a restart.
