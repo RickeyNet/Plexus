@@ -21,7 +21,14 @@ from netcontrol.drivers import GenericDriver, get_driver
 from netcontrol.routes import background_jobs
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, _run_show_command, require_credential_access
+from netcontrol.routes.shared import (
+    _audit,
+    _corr_id,
+    _get_session,
+    _run_show_command,
+    require_credential_access,
+    supervise_task,
+)
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,  # noqa: F401
     _collect_interface_ips,
@@ -1210,7 +1217,10 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest):
         "discovery-scan",
         {"group_id": group_id, "scanned": 0, "total": len(targets), "found": 0},
     )
-    asyncio.create_task(_run_discovery_scan_job(job["job_id"], group_id, body, targets))
+    supervise_task(
+        asyncio.create_task(_run_discovery_scan_job(job["job_id"], group_id, body, targets)),
+        "discovery-scan",
+    )
     return {"job_id": job["job_id"], "status": "running",
             "group_id": group_id, "total_targets": len(targets)}
 

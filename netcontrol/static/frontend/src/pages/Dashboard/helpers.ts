@@ -1,4 +1,8 @@
 import type { DeviceHealth } from '@/api/dashboard';
+import { parseBackendDate } from '@/lib/datetime';
+
+// Re-exported for existing importers; canonical impl lives in @/lib/datetime.
+export { parseBackendDate };
 
 export type HealthStatus = 'healthy' | 'warning' | 'critical' | 'down' | 'unknown';
 
@@ -59,21 +63,6 @@ export function formatUptime(seconds: number | null | undefined): string {
   const mins = Math.floor((seconds % 3600) / 60);
   if (hours > 0) return `${hours}h ${mins}m`;
   return `${mins}m`;
-}
-
-// Returns true when an ISO string already has a timezone suffix (Z or ±HH:MM).
-function hasTimezone(s: string): boolean {
-  return /Z$|[+-]\d{2}:?\d{2}$/.test(s);
-}
-
-// Backend returns naive (UTC) timestamps without a tz suffix in some places;
-// callers should funnel through this so we don't accidentally parse them as
-// local time and avoid `+00:00Z` (invalid) when a zone is already present.
-export function parseBackendDate(isoStr: string | null | undefined): Date | null {
-  if (!isoStr) return null;
-  const normalized = hasTimezone(isoStr) ? isoStr : `${isoStr}Z`;
-  const d = new Date(normalized);
-  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 export function timeAgo(isoStr: string | null | undefined): string {

@@ -393,7 +393,7 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 
 ### Batch 4 - Test & Tooling Structure
 
-- [ ] **Expand `tools/coverage_gate.py`** beyond the single `netcontrol/app.py` rule - add the top untested route modules. Update 2026-07-07: `monitoring.py` (tests/test_monitoring*.py, test_sla_summary.py) and `jobs.py` (tests/test_jobs.py) now have coverage; `metrics_engine.py` 50K and `admin.py` 35K still have zero tests.
+- [ ] **Expand `tools/coverage_gate.py`** beyond the single `netcontrol/app.py` rule - add the top untested route modules. Update 2026-07-07: `monitoring.py` (tests/test_monitoring*.py, test_sla_summary.py) and `jobs.py` (tests/test_jobs.py) now have coverage. `metrics_engine.py` now has `test_metrics_rate_calc.py` (rate calc + counter delta) and `test_batch_b_authz.py` (capacity-planning bound, vendor-OID admin gate); `admin.py` now has `test_admin_user_mgmt.py` (last-admin guard, role validation). Both still want broader coverage but are no longer at zero.
 - [ ] **Shrink the `mypy.ini` `ignore_errors = True` list** (18 modules including app, database, auth, jobs, monitoring) - one module per PR.
 - [x] **Run Postgres smoke tests on all PRs** - verified 2026-06-12: ci.yml already has a `postgres-smoke` job (postgres:16 service container) on every PR; what was thin is the coverage. Expanded `tests/test_postgres_backend.py` from 2 to 4 tests: concurrent audit-chain writers (exercises the pg_advisory_lock path that SQLite runs never touch) and category-filtered audit listing (0055 index). Full API-test matrix on Postgres remains future work - most app tests are DB_PATH/SQLite-bound by design.
 - [ ] **Frontend coverage threshold in CI** - 5 test files for 180 components; any threshold forces improvement.
@@ -452,6 +452,28 @@ migration completed and the legacy files were deleted).
   a torn DB. Use `sqlite3 netcontrol.db ".backup"` or `VACUUM INTO` for the
   sqlite path (Postgres already uses `pg_dump`). Low priority: the documented
   compose deployment is Postgres.
+
+### Deferred hardening (from the 2026-07-07 five-agent audit)
+
+- Maintenance follow-up is tracked in the private security workspace.
+
+- [ ] **Chart-axis timestamp shift** - `InterfaceTab`/`DeviceDetail` feed raw
+  naive-UTC strings into the time-series chart's `time:` field; the chart parses
+  them internally as local time, so axis/hover labels are offset. Series are
+  internally consistent (relative positions correct), so this is labels-only.
+  Fix means normalizing at the chart boundary (or teaching the chart wrapper to
+  parse backend timestamps) - touches many chart callers, so deferred.
+- [ ] **Silent frontend mutation-failure feedback** - several destructive/bulk
+  actions swallow errors with no UI feedback (Lab delete/destroy/remove, Drift
+  bulk accept/resolve-all, CustomDashboards delete, ErrorTrending ack/resolve,
+  BackupStatusPanel showing "never" on a query error, Cloud Flow/Traffic sync).
+  Each needs an `onError`/rendered error state.
+- [ ] **Cloud auth at-rest backfill** - existing plaintext cloud-account rows
+  are read transparently and re-encrypted on next save, but are not proactively
+  migrated. A one-time startup backfill (encrypt any `_looks_encrypted`-false
+  `auth_config_json`) would close the residual at-rest exposure for accounts
+  never re-saved.
+- Maintenance follow-up is tracked in the private security workspace.
 
 ### Batch 6 - The Big One
 

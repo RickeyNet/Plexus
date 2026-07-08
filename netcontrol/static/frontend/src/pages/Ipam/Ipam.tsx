@@ -76,14 +76,17 @@ export function Ipam() {
   const intervalMin = Math.round((config.interval_seconds ?? 1800) / 60);
 
   const handleRefresh = () => {
+    // Query keys must match the hyphenated keys registered in api/ipam.ts
+    // (KEYS). The previous camelCase strings never matched, so Refresh silently
+    // no-op'd the reconcile and DHCP panels.
     qc.invalidateQueries({ queryKey: ['ipam-overview'] });
     qc.invalidateQueries({ queryKey: ['ipam-subnet-detail'] });
     qc.invalidateQueries({ queryKey: ['ipam-sources'] });
-    qc.invalidateQueries({ queryKey: ['reconcileRuns'] });
-    qc.invalidateQueries({ queryKey: ['reconcileDiffs'] });
-    qc.invalidateQueries({ queryKey: ['dhcpServers'] });
-    qc.invalidateQueries({ queryKey: ['dhcpExhaustion'] });
-    qc.invalidateQueries({ queryKey: ['dhcpCorrelation'] });
+    qc.invalidateQueries({ queryKey: ['ipam-reconcile-runs'] });
+    qc.invalidateQueries({ queryKey: ['ipam-reconcile-diffs'] });
+    qc.invalidateQueries({ queryKey: ['dhcp-servers'] });
+    qc.invalidateQueries({ queryKey: ['dhcp-exhaustion'] });
+    qc.invalidateQueries({ queryKey: ['dhcp-correlation'] });
   };
 
   const summaryCards = [
