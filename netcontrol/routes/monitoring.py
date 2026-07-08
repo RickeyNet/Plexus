@@ -545,16 +545,49 @@ def _check_threshold(value: float | None, operator: str, threshold: float) -> bo
     return ops.get(operator, False)
 
 
+def _suppression_active_local(
+    rows: list[dict], host_id: int, metric: str, group_id: int | None,
+) -> bool:
+    """In-memory equivalent of db.is_alert_suppressed against a preloaded set of
+    active suppression rows (see db.get_active_alert_suppressions). Mirrors the
+    SQL match: a global (host+group NULL) row with empty or matching metric, a
+    host-scoped row, or a group-scoped row, in each case matching when the row's
+    metric is '' (all metrics) or equals this metric."""
+    for r in rows:
+        r_metric = r.get("metric") or ""
+        if r_metric and r_metric != metric:
+            continue
+        r_host = r.get("host_id")
+        r_group = r.get("group_id")
+        if r_host is None and r_group is None:
+            return True  # global suppression (metric already matched above)
+        if r_host is not None and r_host == host_id:
+            return True
+        if group_id is not None and r_group is not None and r_group == group_id:
+            return True
+    return False
+
+
 async def _evaluate_alerts_for_poll(
     res: dict, poll_id: int, group_id: int | None, rules: list[dict],
-    hostname: str = "",
+    hostname: str = "", suppressions: list[dict] | None = None,
 ) -> int:
     """Evaluate built-in thresholds and user-defined rules against a poll result.
 
     Returns the number of new alerts created (dedup'd alerts count as 0).
+
+    ``suppressions`` is an optional preloaded list of active suppression rows
+    (from db.get_active_alert_suppressions); when provided, suppression is
+    tested in-memory instead of one DB round-trip per firing check. When None,
+    falls back to the per-check db.is_alert_suppressed query.
     """
     alerts_created = 0
     host_id = res["host_id"]
+
+    async def _suppressed(metric: str) -> bool:
+        if suppressions is not None:
+            return _suppression_active_local(suppressions, host_id, metric, group_id)
+        return await db.is_alert_suppressed(host_id, metric, group_id)
 
     # ── Built-in threshold checks (always active as fallbacks) ──
     built_in_checks = []
@@ -597,8 +630,7 @@ async def _evaluate_alerts_for_poll(
 
     # Fire built-in checks with dedup + suppression
     for chk in built_in_checks:
-        suppressed = await db.is_alert_suppressed(host_id, chk["metric"], group_id)
-        if suppressed:
+        if await _suppressed(chk["metric"]):
             continue
         dedup_key = f"{host_id}:{chk['metric']}:{chk['alert_type']}"
         await db.create_monitoring_alert(
@@ -627,8 +659,7 @@ async def _evaluate_alerts_for_poll(
             continue
 
         # Check suppression
-        suppressed = await db.is_alert_suppressed(host_id, rule["metric"], group_id)
-        if suppressed:
+        if await _suppressed(rule["metric"]):
             continue
 
         dedup_key = f"{host_id}:{rule['metric']}:rule:{rule['id']}"
@@ -689,7 +720,10 @@ async def _run_alert_escalation() -> int:
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
-async def _process_poll_result(h: dict, res: dict, alert_rules_cache: list) -> int:
+async def _process_poll_result(
+    h: dict, res: dict, alert_rules_cache: list,
+    suppressions: list[dict] | None = None,
+) -> int:
     """Persist one poll result and run availability/alerting/metrics/baseline/
     churn for the host. Returns the number of alerts created.
 
@@ -738,7 +772,7 @@ async def _process_poll_result(h: dict, res: dict, alert_rules_cache: list) -> i
     # ── Alerting Engine: evaluate built-in thresholds + user rules ──
     alerts_created += await _evaluate_alerts_for_poll(
         res, poll_id, h.get("group_id"), alert_rules_cache,
-        hostname=h.get("hostname", ""))
+        hostname=h.get("hostname", ""), suppressions=suppressions)
 
     # ── Metrics Engine: emit flexible metric samples + interface TS ──
     try:
@@ -803,8 +837,11 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
         "poll_concurrency", state.MONITORING_DEFAULTS["poll_concurrency"])))
     sem = asyncio.Semaphore(max_concurrency)
 
-    # Pre-load user-defined alert rules for this cycle
+    # Pre-load user-defined alert rules + active suppressions once for this
+    # cycle so alert evaluation matches them in-memory instead of issuing one
+    # is_alert_suppressed() query per firing check per host.
     alert_rules_cache = await db.get_alert_rules(enabled_only=True)
+    suppressions_cache = await db.get_active_alert_suppressions()
 
     # Resolve the credential used for SSH polling. Prefer the dedicated
     # service credential (Plexus internal account); fall back to the legacy
@@ -868,7 +905,8 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
 
         hosts_polled += 1
         try:
-            alerts_created += await _process_poll_result(h, res, alert_rules_cache)
+            alerts_created += await _process_poll_result(
+                h, res, alert_rules_cache, suppressions=suppressions_cache)
         except Exception as exc:  # one host's persistence must not abort the cycle
             LOGGER.warning("monitoring: post-process error for %s: %s",
                            h.get("hostname", "?"), redact_value(_exc_text(exc)))
@@ -957,6 +995,11 @@ async def monitoring_polls(
     limit: int = Query(default=200, ge=1, le=10000),
     include_details: bool = Query(default=False),
 ):
+    # include_details appends the large per-poll blobs (if_details, vpn_details,
+    # route_snapshot). Bound that path so a wide ?limit can't serialize thousands
+    # of full blobs at once; the lean list view (default) keeps the full range.
+    if include_details:
+        limit = min(limit, 500)
     return await db.get_latest_monitoring_polls(group_id, limit, include_details)
 
 
@@ -1045,6 +1088,7 @@ async def monitoring_poll_now_stream(request: Request):
         )
         default_cred = await db.get_credential_raw(cred_id) if cred_id else None
         alert_rules_cache = await db.get_alert_rules(enabled_only=True)
+        suppressions_cache = await db.get_active_alert_suppressions()
 
         for group in groups:
             snmp_cfg = _resolve_snmp_discovery_config(group["id"])
@@ -1159,7 +1203,7 @@ async def monitoring_poll_now_stream(request: Request):
             # Alerting
             host_alerts = await _evaluate_alerts_for_poll(
                 res, poll_id, h.get("group_id"), alert_rules_cache,
-                hostname=h.get("hostname", ""))
+                hostname=h.get("hostname", ""), suppressions=suppressions_cache)
             alerts_created += host_alerts
 
             # Metrics

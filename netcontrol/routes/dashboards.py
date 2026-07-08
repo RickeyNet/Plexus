@@ -215,16 +215,17 @@ async def dashboard_top_interfaces_api(
 
     tops = await db.get_top_interfaces_by_bandwidth(start=start_str, limit=limit)
 
+    # Fetch every top interface's series in ONE windowed query instead of the
+    # old N+1 (one query_interface_ts per interface). Results come back grouped
+    # by (host_id, if_index), already ascending by time for plotting.
+    pairs = [(t["host_id"], t["if_index"]) for t in tops]
+    series_by_pair = await db.query_interface_ts_multi(
+        pairs, start=start_str, limit_per=series_limit
+    )
+
     interfaces = []
     for t in tops:
-        series = await db.query_interface_ts(
-            host_id=t["host_id"],
-            if_index=t["if_index"],
-            start=start_str,
-            limit=series_limit,
-        )
-        # query_interface_ts returns DESC; flip to ascending for time-axis plotting
-        series.reverse()
+        series = series_by_pair.get((t["host_id"], t["if_index"]), [])
         interfaces.append({
             "host_id": t["host_id"],
             "hostname": t.get("hostname") or "",

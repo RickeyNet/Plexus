@@ -37,6 +37,7 @@ __all__ = [
     "create_interface_ts_batch",
     "get_top_interfaces_by_bandwidth",
     "query_interface_ts",
+    "query_interface_ts_multi",
     "delete_old_interface_ts",
     "get_interface_error_stats_for_host",
     "upsert_interface_error_stat",
@@ -385,6 +386,51 @@ async def query_interface_ts(
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
+
+
+async def query_interface_ts_multi(
+    pairs: list[tuple[int, int]],
+    start: str,
+    limit_per: int = 500,
+) -> dict[tuple[int, int], list[dict]]:
+    """Fetch time-series for many (host_id, if_index) pairs in ONE query.
+
+    Replaces the dashboard bandwidth-trend N+1 (one query_interface_ts per top
+    interface). A window function caps each pair to its newest ``limit_per``
+    samples; results are returned ascending by time, grouped by pair. Works on
+    SQLite (>=3.25) and Postgres.
+    """
+    if not pairs:
+        return {}
+    pair_clauses = " OR ".join(["(host_id = ? AND if_index = ?)"] * len(pairs))
+    params: list = [start]
+    for host_id, if_index in pairs:
+        params.extend((host_id, if_index))
+    params.append(limit_per)
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            f"""SELECT host_id, if_index, sampled_at, in_rate_bps, out_rate_bps
+                FROM (
+                    SELECT host_id, if_index, sampled_at, in_rate_bps, out_rate_bps,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY host_id, if_index
+                               ORDER BY sampled_at DESC
+                           ) AS rn
+                    FROM interface_ts
+                    WHERE sampled_at >= ? AND ({pair_clauses})
+                ) sub
+                WHERE rn <= ?
+                ORDER BY host_id, if_index, sampled_at ASC""",
+            tuple(params),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+    grouped: dict[tuple[int, int], list[dict]] = {}
+    for r in rows:
+        grouped.setdefault((r["host_id"], r["if_index"]), []).append(r)
+    return grouped
 
 
 async def delete_old_interface_ts(retention_days: int = 30) -> int:

@@ -33,6 +33,34 @@ current upgrade verification fix in the working tree.
 - Removed the dashboard topology mini-map from first paint.
 - Enabled frontend performance mode by default and switched the starfield to a
   lower-overhead static path.
+- SNMP table walks now use GETBULK (v2c/v3) instead of one-per-row GETNEXT,
+  cutting round-trips ~25x on large tables. Every collector (monitoring,
+  MAC/ARP, interface inventory, neighbor discovery) funnels through the one
+  walk primitive, so all of them benefit. v1 falls back to GETNEXT.
+- The topology graph (`/api/topology`) and the interface-utilization map (the
+  `/utilization` endpoint + its SSE stream) are served from short-TTL,
+  per-group caches with a coalescing lock, so opening several Topology tabs no
+  longer re-runs the heaviest handler on every load/tick. The graph cache is
+  invalidated on discovery link writes and change acknowledgement.
+- The dashboard bandwidth-trend panel fetches every top interface's series in
+  one windowed query instead of one query per interface (N+1 removed).
+- The monitoring poll loop preloads active alert-suppressions once per cycle and
+  matches them in memory instead of issuing one suppression query per firing
+  check per host; vendor-OID resolution is likewise cached per device_type
+  (invalidated when overrides change) instead of re-queried per host per cycle.
+- Inferred-topology discovery now bounds its per-host MAC/ARP + data-source
+  collection with the shared device-op semaphore, so a large subnet can't fire
+  2xN heavy SNMP/CLI collectors at once.
+- Charts reuse their ECharts instance via `setOption` instead of disposing and
+  re-initialising the canvas on every data refresh (up to ~14 charts on a
+  device's Interfaces tab).
+- Federation background sync fetches all peers concurrently; the config-drift
+  check loads only baselined host ids (not every baseline's full config blob);
+  large floor-plan image uploads write off the event loop; compliance regexes
+  are compiled once and cached; and `include_details` monitoring-poll queries
+  are bounded so a wide limit can't serialise thousands of full blobs.
+- Added a `compliance_scan_results(host_id, profile_id, id)` index so the
+  compliance dashboard/summary no longer full-scans that table.
 
 ### Compliance and UI
 - Replaced native compliance confirm/alert prompts with shared themed dialogs.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -264,8 +265,13 @@ async def upload_floor_image_api(
     if old_filename and old_filename != filename:
         _remove_floor_image(old_filename)
 
-    with open(dest, "wb") as f:
-        f.write(data)
+    # Write off the event loop: floor-plan images can be up to ~20 MB and a
+    # synchronous write blocks every other request for its duration.
+    def _write_image() -> None:
+        with open(dest, "wb") as f:
+            f.write(data)
+
+    await asyncio.to_thread(_write_image)
 
     await db.update_geo_floor(floor_id, image_filename=filename)
     await _geo_audit(request, "geo_floor_image_upload", f"Uploaded floor plan for floor id={floor_id}")

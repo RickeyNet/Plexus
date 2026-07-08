@@ -15,6 +15,7 @@ import logging
 import math
 import socket
 import struct
+import time
 from datetime import UTC, datetime, timedelta, timezone
 
 import routes.database as db
@@ -149,11 +150,23 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
 }
 
 
-async def resolve_oids_for_device(device_type: str) -> dict:
-    """Return the best-matching OID set for a device_type string.
+# Short-TTL cache for OID resolution. resolve_oids_for_device() is called once
+# per host per monitoring cycle, but the result is a pure function of
+# device_type (DB overrides change only via the admin vendor-OID endpoints,
+# which call clear_oid_cache()). Without this, a 500-host fleet issues 500
+# identical get_vendor_oid_for_host() round-trips every cycle. Keyed by
+# device_type; TTL bounds staleness if an override write somehow misses the
+# invalidation hook.
+_OID_CACHE: dict[str, tuple[float, dict]] = {}
+_OID_CACHE_TTL = 300.0  # seconds
 
-    Order: DB custom entries  →  built-in vendor map  →  _fallback.
-    """
+
+def clear_oid_cache() -> None:
+    """Drop the resolved-OID cache. Called when vendor-OID overrides change."""
+    _OID_CACHE.clear()
+
+
+async def _resolve_oids_uncached(device_type: str) -> dict:
     # 1. Check DB for operator-defined overrides
     db_entry = await db.get_vendor_oid_for_host(device_type)
     if db_entry:
@@ -172,6 +185,23 @@ async def resolve_oids_for_device(device_type: str) -> dict:
                 best_len = len(oids["device_type"])
 
     return dict(VENDOR_OID_DEFAULTS[best_key])
+
+
+async def resolve_oids_for_device(device_type: str) -> dict:
+    """Return the best-matching OID set for a device_type string.
+
+    Order: DB custom entries  →  built-in vendor map  →  _fallback.
+    Cached per device_type for _OID_CACHE_TTL seconds (see _OID_CACHE).
+    """
+    key = device_type or ""
+    now = time.monotonic()
+    hit = _OID_CACHE.get(key)
+    if hit is not None and now - hit[0] < _OID_CACHE_TTL:
+        return dict(hit[1])
+
+    resolved = await _resolve_oids_uncached(device_type)
+    _OID_CACHE[key] = (now, dict(resolved))
+    return dict(resolved)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1177,6 +1207,7 @@ async def vendor_oids_create(body: dict, request: Request):
         uptime_oid=body.get("uptime_oid", "1.3.6.1.2.1.1.3"),
         notes=body.get("notes", ""),
     )
+    clear_oid_cache()  # a new/updated override must take effect next poll
     return {"id": entry_id}
 
 
@@ -1185,6 +1216,7 @@ async def vendor_oids_delete(entry_id: int):
     ok = await db.delete_vendor_oid(entry_id)
     if not ok:
         raise HTTPException(404, "Entry not found")
+    clear_oid_cache()  # removing an override reverts to built-in map next poll
     return {"ok": True}
 
 

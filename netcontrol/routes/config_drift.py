@@ -545,7 +545,10 @@ async def _run_config_drift_check_once() -> dict:
     if not state.CONFIG_DRIFT_CHECK_CONFIG.get("enabled"):
         return {"enabled": False, "hosts_checked": 0, "drifted": 0, "errors": 0}
 
-    baselines = await db.get_config_baselines()
+    # Only the host_ids are needed to fan out; get_baselined_host_ids avoids
+    # loading every baseline's full config_text blob (fetched again per host
+    # inside _analyze_drift_for_host).
+    host_ids = await db.get_baselined_host_ids()
     hosts_checked = 0
     drifted = 0
     errors = 0
@@ -557,12 +560,12 @@ async def _run_config_drift_check_once() -> dict:
             return await _analyze_drift_for_host(host_id)
 
     results = await asyncio.gather(
-        *[_check_one(bl["host_id"]) for bl in baselines], return_exceptions=True,
+        *[_check_one(hid) for hid in host_ids], return_exceptions=True,
     )
-    for bl, result in zip(baselines, results):
+    for hid, result in zip(host_ids, results):
         if isinstance(result, BaseException):
             errors += 1
-            LOGGER.warning("config drift check failed for host_id=%s: %s", bl["host_id"], result)
+            LOGGER.warning("config drift check failed for host_id=%s: %s", hid, result)
             continue
         hosts_checked += 1
         if result.get("drifted"):

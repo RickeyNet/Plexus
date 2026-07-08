@@ -47,6 +47,7 @@ __all__ = [
     "delete_alert_rule",
     "create_alert_suppression",
     "get_alert_suppressions",
+    "get_active_alert_suppressions",
     "is_alert_suppressed",
     "delete_alert_suppression",
     "delete_expired_suppressions",
@@ -709,6 +710,24 @@ async def get_alert_suppressions(active_only: bool = False) -> list[dict]:
                 LEFT JOIN inventory_groups g ON g.id = s.group_id
                 {where}
                 ORDER BY s.ends_at DESC""",
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_active_alert_suppressions() -> list[dict]:
+    """Return the currently-active suppression rows (starts_at <= now < ends_at).
+
+    Lean projection (host_id, group_id, metric) for in-memory matching by the
+    monitoring poll loop, which preloads these once per cycle instead of issuing
+    one is_alert_suppressed() query per firing check per host.
+    """
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT host_id, group_id, metric FROM alert_suppressions
+               WHERE starts_at <= datetime('now') AND ends_at > datetime('now')"""
         )
         return rows_to_list(await cursor.fetchall())
     finally:

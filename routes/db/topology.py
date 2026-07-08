@@ -65,6 +65,7 @@ __all__ = [
     "get_config_baseline",
     "get_config_baseline_for_host",
     "get_config_baselines",
+    "get_baselined_host_ids",
     "update_config_baseline",
     "delete_config_baseline",
     "create_config_snapshot",
@@ -1088,6 +1089,24 @@ async def get_config_baselines(
                 (limit,),
             )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_baselined_host_ids(limit: int = 200) -> list[int]:
+    """Return just the host_ids that have a config baseline (newest first).
+
+    The drift-check loop only needs the ids to fan out per-host analysis;
+    get_config_baselines() pulls every baseline's full config_text blob, which
+    is wasted I/O when the caller discards everything but host_id.
+    """
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT host_id FROM config_baselines ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [row[0] for row in await cursor.fetchall()]
     finally:
         await db.close()
 

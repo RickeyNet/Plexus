@@ -191,7 +191,9 @@ export function useInterfaceTimeSeries(
 
 export function useMonitoringAlerts(hostId: number | null, limit = 50, enabled = true) {
   return useQuery<MonitoringAlertsResult>({
-    queryKey: ['monitoring-alerts', hostId, limit],
+    // Device-scoped: distinct prefix so page-level ['monitoring-alerts']
+    // invalidations (poll-now / time-range refresh) don't refetch this shape.
+    queryKey: ['device-alerts', hostId, limit],
     queryFn: () => apiRequest(`/monitoring/alerts?host_id=${hostId}&limit=${limit}`),
     enabled: hostId != null && enabled,
   });
@@ -203,7 +205,9 @@ export function useMonitoringAlerts(hostId: number | null, limit = 50, enabled =
 // and the interface/VLAN tables render empty.
 export function useMonitoringPollHistory(hostId: number | null, limit = 1) {
   return useQuery<PollHistoryResult>({
-    queryKey: ['monitoring-poll-history', hostId, limit],
+    // Device-scoped: distinct prefix so page-level ['monitoring-poll-history']
+    // invalidations don't refetch this (differently-shaped) device query.
+    queryKey: ['device-poll-history', hostId, limit],
     queryFn: async () => {
       const data = await apiRequest<MonitoringPoll[] | PollHistoryResult>(
         `/monitoring/polls/${hostId}/history?limit=${limit}`,
@@ -217,7 +221,9 @@ export function useMonitoringPollHistory(hostId: number | null, limit = 1) {
 export function useMonitoringPolls(limit = 100) {
   type PollsResult = { polls?: (MonitoringPoll & { host_id?: number })[] };
   return useQuery<PollsResult>({
-    queryKey: ['monitoring-polls', limit],
+    // Device-scoped: distinct prefix so page-level ['monitoring-polls']
+    // invalidations (poll-now / time-range refresh) don't refetch this shape.
+    queryKey: ['device-polls', limit],
     queryFn: async () => {
       const data = await apiRequest<
         (MonitoringPoll & { host_id?: number })[] | PollsResult
