@@ -17,13 +17,14 @@ deploy time.
 """
 from __future__ import annotations
 
+import ipaddress
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from netcontrol.routes import lab_runtime
 from netcontrol.routes.lab import (
@@ -48,13 +49,36 @@ LOGGER = configure_logging("plexus.lab_topology")
 _ENDPOINT_RE = __import__("re").compile(r"^[a-zA-Z][a-zA-Z0-9._/-]{0,47}$")
 
 
+def _normalize_mgmt_subnet(value: str) -> str:
+    """Validate a management subnet as a strict IPv4/IPv6 CIDR.
+
+    ``mgmt_subnet`` is interpolated into a containerlab topology YAML scalar
+    and then deployed with ``containerlab deploy``. Without validation a value
+    containing a newline could break out of the YAML scalar and inject
+    arbitrary nodes/binds/exec directives — RCE on the lab host. Constraining
+    it to a canonical CIDR (no whitespace, no newlines) closes that path.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(ipaddress.ip_network(text, strict=False))
+    except ValueError as exc:
+        raise ValueError(f"mgmt_subnet must be a valid CIDR (e.g. 172.20.20.0/24): {exc}")
+
+
 # ── Models ──────────────────────────────────────────────────────────────────
 
 
 class TopologyCreate(BaseModel):
-    name: str
-    description: str = ""
-    mgmt_subnet: str = ""
+    name: str = Field(max_length=200)
+    description: str = Field(default="", max_length=2000)
+    mgmt_subnet: str = Field(default="", max_length=64)
+
+    @field_validator("mgmt_subnet")
+    @classmethod
+    def _check_mgmt_subnet(cls, v: str) -> str:
+        return _normalize_mgmt_subnet(v)
 
 
 class TopologyMembershipRequest(BaseModel):
@@ -109,9 +133,13 @@ def build_topology_yaml(topology: dict, devices: list[dict], links: list[dict]) 
     lines: list[str] = [f"name: {lab_name}", "topology:"]
 
     if topology.get("mgmt_subnet"):
-        lines.append("  mgmt:")
-        lines.append("    network: clab-mgmt")
-        lines.append(f"    ipv4-subnet: {topology['mgmt_subnet']}")
+        # Defense in depth: re-validate before interpolation so a row written
+        # before mgmt_subnet validation existed can't inject YAML.
+        mgmt_subnet = _normalize_mgmt_subnet(str(topology["mgmt_subnet"]))
+        if mgmt_subnet:
+            lines.append("  mgmt:")
+            lines.append("    network: clab-mgmt")
+            lines.append(f"    ipv4-subnet: {mgmt_subnet}")
 
     lines.append("  nodes:")
     for d in devices:

@@ -44,6 +44,7 @@ from netcontrol.routes.shared import (
     _compute_config_diff,
     _corr_id,
     _get_session,
+    require_credential_access,
 )
 from netcontrol.telemetry import configure_logging
 
@@ -621,6 +622,12 @@ async def promote_run(run_id: int, body: PromoteRequest, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
+
+    # Enforce credential ownership before binding it to a production deployment —
+    # otherwise a user could promote a lab run with another user's credential id
+    # and have it run against production hosts. Mirrors the deployments create path.
+    if body.credential_id:
+        await require_credential_access(body.credential_id, session=session, allow_service=True)
 
     # Resolve target group: explicit, or fall back to the source host's group.
     group_id = body.target_group_id

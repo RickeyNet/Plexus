@@ -1000,10 +1000,11 @@ async def get_sla_summary(
         host_count = len(hosts) or 1
 
         # MTTR / MTTD from alerts
+        mttr_expr = _dbcore._minutes_between_expr("a.acknowledged_at", "a.created_at")
         cursor = await db.execute(
             f"""SELECT
                    AVG(CASE WHEN a.acknowledged = 1 AND a.acknowledged_at IS NOT NULL
-                        THEN (julianday(a.acknowledged_at) - julianday(a.created_at)) * 1440
+                        THEN {mttr_expr}
                         ELSE NULL END) AS avg_mttr_minutes,
                    COUNT(CASE WHEN a.acknowledged = 1 THEN 1 END) AS resolved_alerts,
                    COUNT(*) AS total_alerts
@@ -1019,16 +1020,17 @@ async def get_sla_summary(
         total_alerts = alert_row[2] if alert_row else 0
 
         # MTTD: time from first failed poll to alert creation
+        mttd_earlier = (
+            "COALESCE("
+            "(SELECT MIN(p2.polled_at) FROM monitoring_polls p2 "
+            "WHERE p2.host_id = a.host_id AND p2.poll_status = 'error' "
+            "AND p2.polled_at <= a.created_at "
+            "AND p2.polled_at >= datetime(a.created_at, '-1 day')), "
+            "a.created_at)"
+        )
+        mttd_expr = _dbcore._minutes_between_expr("a.created_at", mttd_earlier)
         cursor = await db.execute(
-            f"""SELECT AVG(
-                    (julianday(a.created_at) -
-                     julianday(COALESCE(
-                        (SELECT MIN(p2.polled_at) FROM monitoring_polls p2
-                         WHERE p2.host_id = a.host_id AND p2.poll_status = 'error'
-                           AND p2.polled_at <= a.created_at
-                           AND p2.polled_at >= datetime(a.created_at, '-1 day')),
-                        a.created_at))
-                    ) * 1440) AS avg_mttd_minutes
+            f"""SELECT AVG({mttd_expr}) AS avg_mttd_minutes
                 FROM monitoring_alerts a
                 JOIN hosts h ON h.id = a.host_id
                 WHERE a.created_at >= datetime('now', '-' || ? || ' days')
@@ -1102,10 +1104,11 @@ async def get_sla_host_detail(
             })
 
         # MTTR for this host
+        host_mttr_expr = _dbcore._minutes_between_expr("a.acknowledged_at", "a.created_at")
         cursor = await db.execute(
-            """SELECT
+            f"""SELECT
                    AVG(CASE WHEN a.acknowledged = 1 AND a.acknowledged_at IS NOT NULL
-                        THEN (julianday(a.acknowledged_at) - julianday(a.created_at)) * 1440
+                        THEN {host_mttr_expr}
                         ELSE NULL END) AS avg_mttr_minutes,
                    COUNT(CASE WHEN a.acknowledged = 1 THEN 1 END) AS resolved,
                    COUNT(*) AS total

@@ -215,7 +215,9 @@ async def _probe_discovery_target(
         return None
 
     try:
-        hostname = socket.gethostbyaddr(ip_address)[0]
+        # Reverse DNS blocks for the resolver timeout; run it off the event
+        # loop so a large discovery sweep can't freeze every other request.
+        hostname = (await asyncio.to_thread(socket.gethostbyaddr, ip_address))[0]
     except Exception:
         hostname = f"{hostname_prefix}-{ip_address.replace('.', '-')}"
 
