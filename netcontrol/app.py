@@ -1662,22 +1662,28 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     # CSP: restrict resource origins while allowing the SPA to function.
-    # 'unsafe-inline' is kept for style-src (dynamic style= attrs from the
-    # React app and ECharts). script-src 'unsafe-inline' is now a candidate
-    # for removal - the legacy index.html onclick= handlers it covered are
-    # gone after the React migration; verify no inline <script> remains in
-    # the Vite bundle before tightening.
-    # The CDN entry is for graph export embed pages (ECharts).
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: blob:; "
-        "font-src 'self'; "
-        "connect-src 'self' ws: wss:; "
-        "frame-ancestors 'none'; "
-        "base-uri 'self'; "
-        "form-action 'self'"
+    # script-src is 'self' only: the React bundle ships as external hashed
+    # modules from /frontend/assets, so no inline <script> or CDN is needed
+    # (the legacy index.html onclick= handlers were removed in the React
+    # migration). 'unsafe-inline' is kept for style-src alone (dynamic style=
+    # attrs from the React app and ECharts).
+    # setdefault (not assignment) so a single-purpose endpoint that needs a
+    # looser policy - e.g. the graph-export embed page, which renders only
+    # escaped JSON and pulls ECharts from a CDN - can set its own CSP without
+    # this middleware clobbering it.
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "font-src 'self'; "
+            "connect-src 'self' ws: wss:; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        ),
     )
     return response
 

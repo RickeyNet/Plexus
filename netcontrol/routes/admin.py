@@ -684,6 +684,10 @@ async def admin_test_syslog_config(request: Request):
 
 from netcontrol.routes import siem_forwarder  # noqa: E402
 
+# Serializes read-modify-write of the shared `state.SIEM_SINKS` global across
+# concurrent admin requests (same rationale as _channel_mutation_lock below).
+_sink_mutation_lock = asyncio.Lock()
+
 
 async def _persist_and_apply_sinks() -> list[dict]:
     """Persist `state.SIEM_SINKS` to auth_settings and reconcile the
@@ -729,13 +733,14 @@ async def admin_create_siem_sink(body: SiemSinkRequest, request: Request):
     data = body.model_dump()
     if not data.get("id"):
         data["id"] = secrets.token_hex(8)
-    if _sink_index(data["id"]) >= 0:
-        raise HTTPException(status_code=409, detail="Sink id already exists")
     sc = siem_forwarder.sanitize_sink(data)
     if sc is None:
         raise HTTPException(status_code=400, detail="Invalid sink configuration")
-    state.SIEM_SINKS.append(sc)
-    redacted = await _persist_and_apply_sinks()
+    async with _sink_mutation_lock:
+        if _sink_index(sc.id) >= 0:
+            raise HTTPException(status_code=409, detail="Sink id already exists")
+        state.SIEM_SINKS.append(sc)
+        redacted = await _persist_and_apply_sinks()
     session = _get_session(request)
     await _audit(
         "system",
@@ -749,17 +754,18 @@ async def admin_create_siem_sink(body: SiemSinkRequest, request: Request):
 
 @router.put("/api/admin/siem-sinks/{sink_id}")
 async def admin_update_siem_sink(sink_id: str, body: SiemSinkRequest, request: Request):
-    idx = _sink_index(sink_id)
-    if idx < 0:
-        raise HTTPException(status_code=404, detail="Sink not found")
-    data = body.model_dump()
-    data["id"] = sink_id
-    data = _merge_secrets(data, state.SIEM_SINKS[idx])
-    sc = siem_forwarder.sanitize_sink(data)
-    if sc is None:
-        raise HTTPException(status_code=400, detail="Invalid sink configuration")
-    state.SIEM_SINKS[idx] = sc
-    redacted = await _persist_and_apply_sinks()
+    async with _sink_mutation_lock:
+        idx = _sink_index(sink_id)
+        if idx < 0:
+            raise HTTPException(status_code=404, detail="Sink not found")
+        data = body.model_dump()
+        data["id"] = sink_id
+        data = _merge_secrets(data, state.SIEM_SINKS[idx])
+        sc = siem_forwarder.sanitize_sink(data)
+        if sc is None:
+            raise HTTPException(status_code=400, detail="Invalid sink configuration")
+        state.SIEM_SINKS[idx] = sc
+        redacted = await _persist_and_apply_sinks()
     session = _get_session(request)
     await _audit(
         "system",
@@ -773,11 +779,12 @@ async def admin_update_siem_sink(sink_id: str, body: SiemSinkRequest, request: R
 
 @router.delete("/api/admin/siem-sinks/{sink_id}")
 async def admin_delete_siem_sink(sink_id: str, request: Request):
-    idx = _sink_index(sink_id)
-    if idx < 0:
-        raise HTTPException(status_code=404, detail="Sink not found")
-    state.SIEM_SINKS.pop(idx)
-    await _persist_and_apply_sinks()
+    async with _sink_mutation_lock:
+        idx = _sink_index(sink_id)
+        if idx < 0:
+            raise HTTPException(status_code=404, detail="Sink not found")
+        state.SIEM_SINKS.pop(idx)
+        await _persist_and_apply_sinks()
     session = _get_session(request)
     await _audit(
         "system",
@@ -811,6 +818,14 @@ async def admin_test_siem_sink(sink_id: str, request: Request):
 # ── Alert notification channels ────────────────────────────────────────────
 
 from netcontrol.routes import notification_channels  # noqa: E402
+
+# Serializes read-modify-write of the shared `state.NOTIFICATION_CHANNELS` /
+# NOTIFICATION_DEFAULT_CHANNEL_IDS globals across concurrent admin requests.
+# Without it, two interleaved create/update/delete calls each rebuild the DB
+# payload from the shared list at different points, so the last set_auth_setting
+# to land can clobber a concurrent change (lost update) or the id-uniqueness
+# check can race the append.
+_channel_mutation_lock = asyncio.Lock()
 
 
 async def _persist_and_apply_channels() -> list[dict]:
@@ -854,13 +869,14 @@ async def admin_create_notification_channel(body: NotificationChannelRequest, re
     data = body.model_dump()
     if not data.get("id"):
         data["id"] = secrets.token_hex(8)
-    if _channel_index(data["id"]) >= 0:
-        raise HTTPException(status_code=409, detail="Channel id already exists")
     cfg = notification_channels.sanitize_channel(data)
     if cfg is None:
         raise HTTPException(status_code=400, detail="Invalid channel configuration")
-    state.NOTIFICATION_CHANNELS.append(cfg)
-    redacted = await _persist_and_apply_channels()
+    async with _channel_mutation_lock:
+        if _channel_index(cfg.id) >= 0:
+            raise HTTPException(status_code=409, detail="Channel id already exists")
+        state.NOTIFICATION_CHANNELS.append(cfg)
+        redacted = await _persist_and_apply_channels()
     session = _get_session(request)
     await _audit(
         "system",
@@ -876,17 +892,18 @@ async def admin_create_notification_channel(body: NotificationChannelRequest, re
 async def admin_update_notification_channel(
     channel_id: str, body: NotificationChannelRequest, request: Request,
 ):
-    idx = _channel_index(channel_id)
-    if idx < 0:
-        raise HTTPException(status_code=404, detail="Channel not found")
-    data = body.model_dump()
-    data["id"] = channel_id
-    data = notification_channels.merge_secrets(data, state.NOTIFICATION_CHANNELS[idx])
-    cfg = notification_channels.sanitize_channel(data)
-    if cfg is None:
-        raise HTTPException(status_code=400, detail="Invalid channel configuration")
-    state.NOTIFICATION_CHANNELS[idx] = cfg
-    redacted = await _persist_and_apply_channels()
+    async with _channel_mutation_lock:
+        idx = _channel_index(channel_id)
+        if idx < 0:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        data = body.model_dump()
+        data["id"] = channel_id
+        data = notification_channels.merge_secrets(data, state.NOTIFICATION_CHANNELS[idx])
+        cfg = notification_channels.sanitize_channel(data)
+        if cfg is None:
+            raise HTTPException(status_code=400, detail="Invalid channel configuration")
+        state.NOTIFICATION_CHANNELS[idx] = cfg
+        redacted = await _persist_and_apply_channels()
     session = _get_session(request)
     await _audit(
         "system",
@@ -900,15 +917,16 @@ async def admin_update_notification_channel(
 
 @router.delete("/api/admin/notification-channels/{channel_id}")
 async def admin_delete_notification_channel(channel_id: str, request: Request):
-    idx = _channel_index(channel_id)
-    if idx < 0:
-        raise HTTPException(status_code=404, detail="Channel not found")
-    state.NOTIFICATION_CHANNELS.pop(idx)
-    # Drop the deleted channel from the default set too.
-    state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
-        c for c in state.NOTIFICATION_DEFAULT_CHANNEL_IDS if c != channel_id
-    ]
-    await _persist_and_apply_channels()
+    async with _channel_mutation_lock:
+        idx = _channel_index(channel_id)
+        if idx < 0:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        state.NOTIFICATION_CHANNELS.pop(idx)
+        # Drop the deleted channel from the default set too.
+        state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
+            c for c in state.NOTIFICATION_DEFAULT_CHANNEL_IDS if c != channel_id
+        ]
+        await _persist_and_apply_channels()
     session = _get_session(request)
     await _audit(
         "system",
@@ -923,11 +941,12 @@ async def admin_delete_notification_channel(channel_id: str, request: Request):
 @router.put("/api/admin/notification-channels-defaults")
 async def admin_set_notification_defaults(body: NotificationDefaultsRequest, request: Request):
     """Set the default channel set used for alerts not tied to a user rule."""
-    valid_ids = {c.id for c in state.NOTIFICATION_CHANNELS}
-    state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
-        cid for cid in body.default_channel_ids if cid in valid_ids
-    ]
-    await _persist_and_apply_channels()
+    async with _channel_mutation_lock:
+        valid_ids = {c.id for c in state.NOTIFICATION_CHANNELS}
+        state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
+            cid for cid in body.default_channel_ids if cid in valid_ids
+        ]
+        await _persist_and_apply_channels()
     session = _get_session(request)
     await _audit(
         "system",
