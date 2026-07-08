@@ -137,7 +137,7 @@ async def get_latest_monitoring_polls(
 ) -> list[dict]:
     """Return the most recent poll per host, with host info joined."""
     detail_cols = ", p.if_details, p.vpn_details, p.route_snapshot" if include_details else ""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
         params: list = []
@@ -176,11 +176,23 @@ async def get_latest_monitoring_polls(
 
 async def get_monitoring_poll_history(
     host_id: int, limit: int = 100,
+    include_details: bool = False,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    """Poll history for a host, newest first. The large per-poll blobs
+    (if_details, vpn_details, route_snapshot) are only selected when
+    include_details is set — history tables just need the lean columns."""
+    detail_cols = ", p.if_details, p.vpn_details, p.route_snapshot" if include_details else ""
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """SELECT p.*, h.hostname, h.ip_address
+            f"""SELECT p.id, p.host_id, p.cpu_percent, p.memory_percent,
+                       p.memory_used_mb, p.memory_total_mb, p.uptime_seconds,
+                       p.if_up_count, p.if_down_count, p.if_admin_down,
+                       p.vpn_tunnels_up, p.vpn_tunnels_down, p.route_count,
+                       p.poll_status, p.poll_error, p.response_time_ms,
+                       p.packet_loss_pct, p.icmp_alive, p.icmp_rtt_ms, p.polled_at
+                       {detail_cols},
+                       h.hostname, h.ip_address
                FROM monitoring_polls p
                JOIN hosts h ON h.id = p.host_id
                WHERE p.host_id = ?
@@ -207,7 +219,7 @@ async def delete_old_monitoring_polls(retention_days: int) -> int:
 
 
 async def get_monitoring_summary(group_id: int | None = None) -> dict:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
         params: list = []
@@ -417,7 +429,7 @@ async def get_monitoring_alerts(
     severity: str | None = None,
     limit: int = 200,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = []
         params: list = []
@@ -532,7 +544,7 @@ async def get_route_snapshots(
 
 
 async def get_latest_route_snapshot(host_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM route_snapshots WHERE host_id = ? ORDER BY id DESC LIMIT 1",
@@ -597,7 +609,7 @@ async def create_alert_rule(
 
 
 async def get_alert_rules(enabled_only: bool = False) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE r.enabled = 1" if enabled_only else ""
         cursor = await db.execute(
@@ -723,7 +735,7 @@ async def get_active_alert_suppressions() -> list[dict]:
     monitoring poll loop, which preloads these once per cycle instead of issuing
     one is_alert_suppressed() query per firing check per host.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT host_id, group_id, metric FROM alert_suppressions

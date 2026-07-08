@@ -70,6 +70,7 @@ __all__ = [
     "delete_config_baseline",
     "create_config_snapshot",
     "get_config_snapshot",
+    "get_config_snapshots_by_ids",
     "get_config_snapshots_for_host",
     "get_latest_config_snapshot",
     "delete_config_snapshot",
@@ -78,6 +79,7 @@ __all__ = [
     "create_config_drift_event_history",
     "get_config_drift_event_history",
     "get_config_drift_event",
+    "get_config_drift_events_by_ids",
     "get_config_drift_events",
     "get_config_drift_summary",
     "update_config_drift_event_status",
@@ -181,7 +183,7 @@ async def upsert_topology_link(
 
 async def get_topology_links(group_id: int | None = None) -> list[dict]:
     """Return topology links, optionally filtered by source host group."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if group_id is not None:
             cursor = await db.execute(
@@ -373,7 +375,7 @@ async def get_interface_stats_by_hosts(host_ids: list[int]) -> list[dict]:
     """Return interface stats for multiple hosts."""
     if not host_ids:
         return []
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" for _ in host_ids)
         cursor = await db.execute(
@@ -1189,6 +1191,22 @@ async def get_config_snapshot(snapshot_id: int) -> dict | None:
         await db.close()
 
 
+async def get_config_snapshots_by_ids(snapshot_ids: list[int]) -> list[dict]:
+    """Return config snapshots (including config_text) for a set of IDs in one query."""
+    if not snapshot_ids:
+        return []
+    db = await _dbcore.get_db()
+    try:
+        placeholders = ",".join("?" for _ in snapshot_ids)
+        cursor = await db.execute(
+            f"SELECT * FROM config_snapshots WHERE id IN ({placeholders})",
+            tuple(snapshot_ids),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def get_config_snapshots_for_host(
     host_id: int, limit: int = 50
 ) -> list[dict]:
@@ -1337,6 +1355,25 @@ async def get_config_drift_event(event_id: int) -> dict | None:
         )
         row = await cursor.fetchone()
         return row_to_dict(row)
+    finally:
+        await db.close()
+
+
+async def get_config_drift_events_by_ids(event_ids: list[int]) -> list[dict]:
+    """Return drift events (with host info) for a set of IDs in one query."""
+    if not event_ids:
+        return []
+    db = await _dbcore.get_db()
+    try:
+        placeholders = ",".join("?" for _ in event_ids)
+        cursor = await db.execute(
+            f"""SELECT e.*, h.hostname, h.ip_address, h.device_type
+                FROM config_drift_events e
+                JOIN hosts h ON h.id = e.host_id
+                WHERE e.id IN ({placeholders})""",
+            tuple(event_ids),
+        )
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
@@ -1666,6 +1703,89 @@ def _compile_config_backup_regex(pattern: str) -> re.Pattern:
         raise ValueError("invalid_regex") from exc
 
 
+_CONFIG_BACKUP_REGEX_MIN_LITERAL = 3
+
+# Escaped alphanumerics are class shorthands / anchors / backrefs, never literals.
+_REGEX_NON_LITERAL_ESCAPES = frozenset(
+    "dDwWsSbBAZ0123456789nrtvfaux"
+)
+
+
+def _regex_required_literal(pattern: str) -> str:
+    """Longest literal substring every match of `pattern` must contain.
+
+    Single-pass scanner in the style of _has_redos_shape (no regex, no
+    backtracking). Conservative: group contents, classes, wildcards, and
+    class-shorthand escapes break literal runs; a quantifier keeps its
+    atom only when the minimum repeat is >= 1; a top-level alternation
+    means nothing is required, so the result is ''. Used to derive a cheap
+    substring pre-filter for regex-mode backup search.
+    """
+    runs: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    i = 0
+    n = len(pattern)
+
+    def _end_run() -> None:
+        if cur:
+            runs.append("".join(cur))
+            cur.clear()
+
+    while i < n:
+        ch = pattern[i]
+        if ch == "\\":
+            if i + 1 >= n:
+                _end_run()
+                break
+            nxt = pattern[i + 1]
+            i += 2
+            if depth == 0:
+                if nxt in _REGEX_NON_LITERAL_ESCAPES:
+                    _end_run()
+                else:
+                    cur.append(nxt)
+            continue
+        if ch == "[":
+            _end_run()
+            i += 1
+            if i < n and pattern[i] == "^":
+                i += 1
+            if i < n and pattern[i] == "]":
+                i += 1
+            while i < n and pattern[i] != "]":
+                i += 2 if pattern[i] == "\\" else 1
+            i += 1
+            continue
+        if ch == "(":
+            _end_run()
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if ch == "|":
+                return ""  # top-level alternation: no substring is required
+            if ch in "*+?{":
+                if ch == "{":
+                    j = i
+                    while j < n and pattern[j] != "}":
+                        j += 1
+                    min_part = pattern[i + 1 : j].split(",", 1)[0].strip()
+                    if cur and not (min_part.isdigit() and int(min_part) >= 1):
+                        cur.pop()
+                    i = j
+                elif ch in "*?" and cur:
+                    cur.pop()
+                _end_run()
+            elif ch in ".^$":
+                _end_run()
+            else:
+                cur.append(ch)
+        i += 1
+    _end_run()
+    return max(runs, key=len, default="")
+
+
 def _build_sqlite_fts_query(search_query: str) -> str:
     tokens = [tok for tok in re.findall(r"[A-Za-z0-9_.:/-]+", search_query or "") if tok]
     if not tokens:
@@ -1961,19 +2081,28 @@ async def search_config_backups(
                 )
 
         if cursor is None and effective_mode == "regex":
+            # Cheap substring pre-filter so regex search never full-scans
+            # (SQLite would otherwise load every blob into Python). Patterns
+            # with no required literal must use substring/fulltext instead.
+            literal = _regex_required_literal(query).lower()
+            if len(literal) < _CONFIG_BACKUP_REGEX_MIN_LITERAL:
+                raise ValueError("regex_needs_literal")
             if _dbcore.DB_ENGINE == "postgres":
                 cursor = await db.execute(
                     f"""{base_select}
                         WHERE b.status = 'success'
+                          AND POSITION(? IN LOWER(COALESCE(b.config_text, ''))) > 0
                           AND COALESCE(b.config_text, '') ~* ?
                         ORDER BY b.captured_at DESC, b.id DESC""",
-                    (query,),
+                    (literal, query),
                 )
             else:
                 cursor = await db.execute(
                     f"""{base_select}
                         WHERE b.status = 'success'
-                        ORDER BY b.captured_at DESC, b.id DESC"""
+                          AND instr(LOWER(COALESCE(b.config_text, '')), ?) > 0
+                        ORDER BY b.captured_at DESC, b.id DESC""",
+                    (literal,),
                 )
 
         if cursor is None:

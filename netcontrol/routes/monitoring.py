@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import random
 import time
 from datetime import datetime, timedelta
 
@@ -91,6 +92,61 @@ async def _track_availability_from_poll(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+# Per-host route-poll cadence state: host_id -> (monotonic ts of the last full
+# `show ip route` pull, route count from the last summary). The full table is
+# only pulled when the summary count changes or route_full_interval_seconds
+# has elapsed; the cheap summary runs every tick.
+_ROUTE_POLL_STATE: dict[int, tuple[float, int | None]] = {}
+
+# Exponential backoff for hosts whose polls raise or time out. Such hosts
+# produce no poll row or availability transition anyway, but each attempt
+# holds a semaphore slot and an executor thread for the full per-host timeout;
+# without backoff a dead host burns that every cycle. host_id ->
+# [consecutive_failures, cycles_to_skip]. Manual polls (force=True) bypass the
+# skip; any successful poll clears the entry.
+_POLL_BACKOFF: dict[int, list[int]] = {}
+_POLL_BACKOFF_MAX_SKIP = 8
+
+
+def _poll_backoff_should_skip(host_id: int) -> bool:
+    entry = _POLL_BACKOFF.get(host_id)
+    if not entry or entry[1] <= 0:
+        return False
+    entry[1] -= 1
+    return True
+
+
+def _poll_backoff_record(host_id: int, *, ok: bool) -> None:
+    if ok:
+        _POLL_BACKOFF.pop(host_id, None)
+        return
+    failures = _POLL_BACKOFF.get(host_id, [0, 0])[0] + 1
+    # 1st failure retries next cycle; from the 2nd on skip 1, 2, 4, ... cycles.
+    skip = 0 if failures < 2 else min(2 ** (failures - 2), _POLL_BACKOFF_MAX_SKIP)
+    _POLL_BACKOFF[host_id] = [failures, skip]
+
+
+def _parse_route_summary_count(summary_text: str) -> int | None:
+    """Best-effort total route count from `show ip route summary` output.
+
+    Handles IOS/IOS-XE ("Total  <networks> <subnets> ...") and NX-OS
+    ("Total number of routes: N"). Returns None when the format is
+    unrecognized so the caller falls back to pulling the full table.
+    """
+    for line in (summary_text or "").splitlines():
+        parts = line.split()
+        if not parts or parts[0].lower() != "total":
+            continue
+        if "route" in line.lower():
+            try:
+                return int(parts[-1])
+            except ValueError:
+                continue
+        if len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
+            return int(parts[1]) + int(parts[2])
+    return None
 
 
 async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
@@ -428,10 +484,31 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     else:
                         outputs["vpn"] = net_connect.send_command("show crypto isakmp sa", read_timeout=read_timeout)
 
-                # Route table
+                # Route table: the cheap summary runs every tick; the full
+                # table (route_snapshot + churn hash) is only pulled when the
+                # summary count moves or the slow cadence elapses. Unparseable
+                # summaries fall back to pulling the full table every tick.
                 if state.MONITORING_CONFIG.get("collect_routes", True):
                     outputs["routes"] = net_connect.send_command("show ip route summary", read_timeout=read_timeout)
-                    outputs["routes_full"] = net_connect.send_command("show ip route", read_timeout=read_timeout)
+                    summary_count = _parse_route_summary_count(outputs["routes"])
+                    outputs["route_summary_count"] = summary_count
+                    full_interval = float(state.MONITORING_CONFIG.get(
+                        "route_full_interval_seconds", 900))
+                    last_full_ts, last_count = _ROUTE_POLL_STATE.get(
+                        host["id"], (0.0, None))
+                    now = time.monotonic()
+                    need_full = (
+                        summary_count is None
+                        or last_count is None
+                        or summary_count != last_count
+                        or full_interval <= 0
+                        or (now - last_full_ts) >= full_interval
+                    )
+                    if need_full:
+                        outputs["routes_full"] = net_connect.send_command("show ip route", read_timeout=read_timeout)
+                        _ROUTE_POLL_STATE[host["id"]] = (now, summary_count)
+                    else:
+                        _ROUTE_POLL_STATE[host["id"]] = (last_full_ts, summary_count)
 
                 net_connect.disconnect()
                 return outputs
@@ -469,13 +546,18 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                             pass
                 result["vpn_details"] = vpn_details
 
-            # Parse route output
+            # Parse route output. route_count prefers the summary total so the
+            # metric stays in one domain across lean and full ticks; the
+            # snapshot (and churn hashing downstream) only exists on full ticks.
+            summary_count = ssh_outputs.get("route_summary_count")
             routes_full = ssh_outputs.get("routes_full", "")
             if routes_full:
                 route_lines = [line for line in routes_full.strip().splitlines()
                                if line.strip() and not line.strip().startswith(("Codes:", "Gateway", "---"))]
-                result["route_count"] = len(route_lines)
+                result["route_count"] = summary_count if summary_count is not None else len(route_lines)
                 result["route_snapshot"] = routes_full.strip()
+            elif summary_count is not None:
+                result["route_count"] = summary_count
 
         except Exception as exc:
             LOGGER.warning("monitoring: SSH poll failed for %s: %s",
@@ -860,10 +942,14 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     # lets the shared semaphore stay saturated across the whole fleet. Each
     # host keeps its own group's resolved SNMP config and carries its group_id.
     targets: list[tuple[dict, dict | None, dict]] = []
+    backed_off = 0
     for group in groups:
         snmp_cfg = _resolve_snmp_discovery_config(group["id"])
         hosts = await db.get_hosts_for_group(group["id"])
         for h in hosts:
+            if not force and _poll_backoff_should_skip(h["id"]):
+                backed_off += 1
+                continue
             targets.append((h, default_cred, snmp_cfg))
 
     async def _poll_one(h, c, s):
@@ -899,10 +985,12 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
 
         if err is not None:
             errors += 1
+            _poll_backoff_record(h["id"], ok=False)
             LOGGER.warning("monitoring: poll exception for %s: %s",
                            h.get("hostname", "?"), redact_value(_exc_text(err)))
             continue
 
+        _poll_backoff_record(h["id"], ok=True)
         hosts_polled += 1
         try:
             alerts_created += await _process_poll_result(
@@ -931,18 +1019,23 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
         except Exception as exc:
             LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
 
-    LOGGER.info("monitoring: poll complete - %d hosts, %d alerts, %d errors",
-                hosts_polled, alerts_created, errors)
+    LOGGER.info("monitoring: poll complete - %d hosts, %d alerts, %d errors, %d backed off",
+                hosts_polled, alerts_created, errors, backed_off)
     return {"enabled": True, "hosts_polled": hosts_polled,
-            "alerts_created": alerts_created, "errors": errors}
+            "alerts_created": alerts_created, "errors": errors,
+            "backed_off": backed_off}
 
 
 async def _monitoring_poll_loop() -> None:
     """Infinite loop that polls device health at configurable intervals."""
     while True:
         try:
-            await asyncio.sleep(int(state.MONITORING_CONFIG.get(
-                "interval_seconds", state.MONITORING_DEFAULTS["interval_seconds"])))
+            interval = int(state.MONITORING_CONFIG.get(
+                "interval_seconds", state.MONITORING_DEFAULTS["interval_seconds"]))
+            # Small positive jitter so poll ticks don't stay phase-locked with
+            # the other background loops (escalation, drift, federation, FDM)
+            # that all start at the same instant on app startup.
+            await asyncio.sleep(interval + random.uniform(0, max(1.0, interval * 0.05)))
             await _run_monitoring_poll_once()
         except asyncio.CancelledError:
             raise
@@ -1004,8 +1097,16 @@ async def monitoring_polls(
 
 
 @router.get("/api/monitoring/polls/{host_id}/history")
-async def monitoring_poll_history(host_id: int, limit: int = Query(default=100, ge=1, le=10000)):
-    return await db.get_monitoring_poll_history(host_id, limit)
+async def monitoring_poll_history(
+    host_id: int,
+    limit: int = Query(default=100, ge=1, le=10000),
+    include_details: bool = Query(default=False),
+):
+    # Same blob gating as /api/monitoring/polls: history tables only need the
+    # lean columns; the device-detail page opts in for the latest poll's blobs.
+    if include_details:
+        limit = min(limit, 500)
+    return await db.get_monitoring_poll_history(host_id, limit, include_details)
 
 
 @router.get("/api/monitoring/alerts")

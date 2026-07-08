@@ -513,38 +513,45 @@ reuse; device-scoped query-key decouple; federation concurrent fetch; geolocatio
 off-loop write; compliance regex cache; `get_baselined_host_ids`; monitoring
 `include_details` cap; `compliance_scan_results` index (migration 0058)). Tests:
 `tests/test_interface_ts_multi.py`, `tests/test_perf_batch.py`, plus the topology
-suite's new cache-clearing fixture. Deferred (behavioral / architectural — not
-safe to bundle into a mechanical pass without staging validation):
+suite's new cache-clearing fixture. The six deferred behavioral / architectural
+items were implemented 2026-07-08 in a follow-up pass:
 
-- [ ] **SQLite global-access-lock read pool** - every `get_db()` takes one
-  process-wide exclusive lock held until `close()`, so reads never overlap even
-  though WAL supports concurrent readers. A pool of read-only connections for
-  read helpers (keeping the single writer + lock for writes) is the biggest
-  architectural win but changes the connection/locking model app-wide; needs its
-  own design + load-test pass. `netcontrol`/`routes/database.py:~2817`.
-- [ ] **Route-table poll cadence** - the health poll runs `show ip route` (full
-  table) every cycle to compute route_count + a churn hash, and opens a fresh
-  netmiko session each tick (`monitoring.py:_ssh_poll`). Poll routes on a slower,
-  separate cadence and derive the count from `show ip route summary`, only
-  pulling the full table when the summary count changes. Deferred: changes route
-  churn-detection semantics; wants a config knob + staging validation.
-- [ ] **Adaptive backoff/jitter for dead hosts** - the poll loop burns each
-  unreachable host's full `per_host_timeout_seconds` every cycle with no backoff,
-  and loop sleeps have no jitter (synchronized ticks). Add exponential backoff on
-  consecutive failures + small sleep jitter. Deferred: changes poll scheduling
-  semantics near availability tracking.
-- [ ] **Batch the bulk drift-accept reads** (`config_drift.py:bulk_accept_drift_events`)
-  - fetches event + snapshot + host per event id in a Python loop (~5-6 helper
-  calls x N). Batch the reads (`IN (...)`) up front, keep the per-event baseline
-  writes. Low frequency (admin bulk action); needs new plural DB helpers.
-- [ ] **Regex config-backup search pre-filter** (`routes/db/topology.py`
-  `search_config_backups` SQLite regex branch) - full-scans and loads every
-  successful backup's config into Python before regex matching. Require a cheap
-  substring/FTS pre-filter first. Admin-only and rare.
-- [ ] **`get_monitoring_poll_history` blob gate** (`routes/db/monitoring.py`) -
-  selects the large per-poll blobs unconditionally; add an opt-in
-  `include_details` flag like `get_latest_monitoring_polls` has, and plumb it
-  through the caller.
+- [x] **SQLite global-access-lock read pool** — `get_db(read_only=True)` borrows
+  a `PRAGMA query_only=ON` connection from a bounded pool (`APP_SQLITE_READ_POOL`,
+  default 4; 0 disables) so read helpers overlap each other and the writer under
+  WAL. Writes keep the single connection + exclusive lock. Nested acquisition
+  reuses the held connection (a read helper inside a write transaction sees its
+  uncommitted rows); requesting write access while holding a read-only
+  connection raises immediately. Hot read helpers converted (monitoring polls/
+  alerts/summary/rules/suppressions, inventory groups/hosts, topology links/
+  interface stats, `query_interface_ts_multi`); the rest can migrate
+  incrementally. Tests: `tests/test_sqlite_read_pool.py`.
+- [x] **Route-table poll cadence** — `_ssh_poll` now parses `show ip route
+  summary` (IOS + NX-OS formats) every tick and only pulls the full
+  `show ip route` when the summary count changes or
+  `route_full_interval_seconds` (default 900; 0 = legacy every-tick) elapses.
+  `route_count` prefers the summary total; churn hashing/snapshots happen on
+  full ticks only. Equal-count table changes are caught at most one full
+  interval late — accepted tradeoff.
+- [x] **Adaptive backoff/jitter for dead hosts** — polls that raise/time out
+  (which never produced a poll row or availability transition anyway) back off
+  exponentially: retry next cycle after the 1st failure, then skip 1/2/4/8
+  (capped) cycles; any success or a manual `force` poll resets. The poll-loop
+  sleep gained 0–5% positive jitter to de-phase the background loops.
+- [x] **Batch the bulk drift-accept reads** — `bulk_accept_drift_events` now
+  loads all events (`get_config_drift_events_by_ids`) and snapshots
+  (`get_config_snapshots_by_ids`) in two `IN (...)` queries and drops the
+  per-event `get_host` (the event join already carries hostname); per-event
+  baseline/status/history writes unchanged.
+- [x] **Regex config-backup search pre-filter** — `_regex_required_literal()`
+  derives a literal every match must contain; the SQLite regex branch
+  pre-filters with `instr()` (Postgres additionally with `POSITION`) instead of
+  loading every blob. Patterns with no ≥3-char required literal are rejected
+  with a 400 (`regex_needs_literal`) pointing at substring/fulltext mode.
+- [x] **`get_monitoring_poll_history` blob gate** — lean column list by default
+  with an opt-in `include_details` flag (capped at 500 rows), plumbed through
+  `/api/monitoring/polls/{host_id}/history`; the device-detail page opts in for
+  the latest poll's `if_details`, history tables stay lean.
 
 ### Batch 6 - The Big One
 

@@ -407,7 +407,7 @@ async def query_interface_ts_multi(
     for host_id, if_index in pairs:
         params.extend((host_id, if_index))
     params.append(limit_per)
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             f"""SELECT host_id, if_index, sampled_at, in_rate_bps, out_rate_bps

@@ -61,7 +61,7 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def get_all_groups() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("""
             SELECT g.*, COUNT(h.id) AS host_count
@@ -76,7 +76,7 @@ async def get_all_groups() -> list[dict]:
 
 async def get_all_groups_with_hosts() -> list[dict]:
     """Return all groups with embedded host arrays using a single query."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("""
             SELECT
@@ -311,7 +311,7 @@ async def delete_group(group_id: int):
 
 async def get_host(host_id: int) -> dict | None:
     """Get a single host by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM hosts WHERE id = ?", (host_id,))
         return row_to_dict(await cursor.fetchone())
@@ -320,7 +320,7 @@ async def get_host(host_id: int) -> dict | None:
 
 
 async def get_hosts_for_group(group_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM hosts WHERE group_id = ? ORDER BY ip_address", (group_id,)

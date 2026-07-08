@@ -185,6 +185,15 @@ async def search_config_backup_records(
         code = (exc.args[0] if exc.args else "").strip().lower()
         if code == "invalid_regex":
             raise HTTPException(status_code=400, detail="Invalid regex pattern") from exc
+        if code == "regex_needs_literal":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Regex search needs at least 3 literal characters in the pattern "
+                    "(e.g. 'snmp-server .*public'); use substring or fulltext mode "
+                    "for broader queries"
+                ),
+            ) from exc
         if code == "invalid_mode":
             raise HTTPException(status_code=400, detail="Unsupported search mode") from exc
         raise HTTPException(status_code=400, detail="Invalid search query") from exc

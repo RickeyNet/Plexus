@@ -189,6 +189,11 @@ MONITORING_DEFAULTS = {
     "cpu_threshold": 90,
     "memory_threshold": 90,
     "collect_routes": True,
+    # Pull the full `show ip route` (route snapshot + churn hash) at most this
+    # often; between pulls only the cheap `show ip route summary` runs, with an
+    # immediate full pull whenever the summary route count changes. 0 restores
+    # the legacy full-table-every-tick behavior.
+    "route_full_interval_seconds": 900,
     "collect_vpn": True,
     "escalation_enabled": True,
     "escalation_after_minutes": 30,
@@ -804,6 +809,8 @@ def _sanitize_monitoring_config(data: dict | None) -> dict:
         cfg["cpu_threshold"] = max(1, min(100, int(data.get("cpu_threshold", cfg["cpu_threshold"]))))
         cfg["memory_threshold"] = max(1, min(100, int(data.get("memory_threshold", cfg["memory_threshold"]))))
         cfg["collect_routes"] = bool(data.get("collect_routes", cfg["collect_routes"]))
+        cfg["route_full_interval_seconds"] = max(0, min(86400, int(
+            data.get("route_full_interval_seconds", cfg["route_full_interval_seconds"]))))
         cfg["collect_vpn"] = bool(data.get("collect_vpn", cfg["collect_vpn"]))
         cfg["escalation_enabled"] = bool(data.get("escalation_enabled", cfg["escalation_enabled"]))
         cfg["escalation_after_minutes"] = max(5, min(1440, int(data.get("escalation_after_minutes", cfg["escalation_after_minutes"]))))

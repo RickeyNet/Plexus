@@ -61,6 +61,28 @@ current upgrade verification fix in the working tree.
   are bounded so a wide limit can't serialise thousands of full blobs.
 - Added a `compliance_scan_results(host_id, profile_id, id)` index so the
   compliance dashboard/summary no longer full-scans that table.
+- SQLite reads can now run concurrently: read helpers borrow a read-only
+  (`PRAGMA query_only`) connection from a small pool (`APP_SQLITE_READ_POOL`,
+  default 4; 0 restores the old behavior) instead of serializing behind the
+  process-wide writer lock, so list/detail reads overlap each other and the
+  writer under WAL. Writes keep the single-writer lock and semantics.
+- Route-table polling runs on a slower cadence: the cheap `show ip route
+  summary` runs every tick and the full `show ip route` (snapshot + churn
+  hash) is only pulled when the summary route count changes or
+  `route_full_interval_seconds` (default 15 min, 0 = every tick) elapses.
+- Hosts whose polls time out or raise now back off exponentially (skip
+  1/2/4/8 cycles, reset on success or manual poll) instead of burning the
+  full per-host timeout every cycle, and the poll loop sleep is jittered so
+  background loops don't tick in lockstep.
+- Bulk drift-accept loads all selected events and snapshots in two batched
+  queries instead of ~5 queries per event.
+- Regex config-backup search derives a required literal from the pattern and
+  pre-filters in SQL instead of loading every backup blob into Python;
+  patterns with no 3+ character literal are rejected with guidance to use
+  substring/fulltext mode.
+- Per-host poll history omits the large per-poll blobs unless
+  `include_details=true` is requested (the device-detail page opts in for the
+  latest poll; history tables stay lean).
 
 ### Compliance and UI
 - Replaced native compliance confirm/alert prompts with shared themed dialogs.

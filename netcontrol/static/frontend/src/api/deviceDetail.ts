@@ -209,8 +209,10 @@ export function useMonitoringPollHistory(hostId: number | null, limit = 1) {
     // invalidations don't refetch this (differently-shaped) device query.
     queryKey: ['device-poll-history', hostId, limit],
     queryFn: async () => {
+      // include_details: the interface/VLAN tables parse if_details from the
+      // latest poll; the API omits the blob columns unless asked.
       const data = await apiRequest<MonitoringPoll[] | PollHistoryResult>(
-        `/monitoring/polls/${hostId}/history?limit=${limit}`,
+        `/monitoring/polls/${hostId}/history?limit=${limit}&include_details=true`,
       );
       return Array.isArray(data) ? { polls: data } : data;
     },
