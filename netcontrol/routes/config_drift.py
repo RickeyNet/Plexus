@@ -957,27 +957,28 @@ async def bulk_accept_drift_events(body: ConfigDriftBulkAcceptRequest, request: 
         raise HTTPException(status_code=400, detail="event_ids required")
     session = _get_session(request)
     user = session["user"] if session else ""
+    events = await db.get_config_drift_events_by_ids(list(dict.fromkeys(body.event_ids)))
+    open_events = [e for e in events if e.get("status") == "open"]
+    snapshot_ids = [e["snapshot_id"] for e in open_events if e.get("snapshot_id")]
+    snapshots_by_id = {
+        s["id"]: s for s in await db.get_config_snapshots_by_ids(snapshot_ids)
+    }
     accepted = 0
-    for event_id in body.event_ids:
-        event = await db.get_config_drift_event(event_id)
-        if not event or event.get("status") != "open":
-            continue
+    for event in open_events:
         from_status = event.get("status", "")
-        await db.update_config_drift_event_status(event_id, "accepted", resolved_by=user)
-        if event.get("snapshot_id"):
-            snapshot = await db.get_config_snapshot(event["snapshot_id"])
-            if snapshot and snapshot.get("config_text"):
-                host = await db.get_host(event["host_id"])
-                hostname = host["hostname"] if host else f"host-{event['host_id']}"
-                await db.create_config_baseline(
-                    host_id=event["host_id"],
-                    name=f"{hostname} baseline",
-                    config_text=snapshot["config_text"],
-                    source="accepted-drift",
-                    created_by=user,
-                )
+        await db.update_config_drift_event_status(event["id"], "accepted", resolved_by=user)
+        snapshot = snapshots_by_id.get(event.get("snapshot_id"))
+        if snapshot and snapshot.get("config_text"):
+            hostname = event.get("hostname") or f"host-{event['host_id']}"
+            await db.create_config_baseline(
+                host_id=event["host_id"],
+                name=f"{hostname} baseline",
+                config_text=snapshot["config_text"],
+                source="accepted-drift",
+                created_by=user,
+            )
         await db.create_config_drift_event_history(
-            event_id=event_id,
+            event_id=event["id"],
             host_id=event["host_id"],
             action="status_change",
             from_status=from_status,
