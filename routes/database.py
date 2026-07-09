@@ -107,6 +107,11 @@ def _migrate_legacy_sqlite_path() -> None:
 _migrate_legacy_sqlite_path()
 SQLITE_CONNECT_TIMEOUT = float(os.getenv("APP_SQLITE_CONNECT_TIMEOUT", "30"))
 SQLITE_BUSY_TIMEOUT_MS = int(os.getenv("APP_SQLITE_BUSY_TIMEOUT_MS", "5000"))
+# Size of the read-only SQLite connection pool used by get_db(read_only=True).
+# WAL supports many concurrent readers alongside the single writer; each pooled
+# connection costs one aiosqlite worker thread. 0 disables the pool (reads then
+# take the exclusive writer path, the pre-pool behavior).
+SQLITE_READ_POOL_SIZE = max(0, int(os.getenv("APP_SQLITE_READ_POOL", "4")))
 
 _INSERT_ID_TABLES = {
     "users",
@@ -2626,6 +2631,80 @@ _sqlite_access_lock = asyncio.Lock()    # serializes each critical section
 _pg_pool = None
 _pg_pool_lock = asyncio.Lock()
 
+# ── SQLite read-only pool ────────────────────────────────────────────────────
+# WAL allows any number of readers concurrent with the single writer, but the
+# exclusive _sqlite_access_lock above serializes *everything*. get_db(
+# read_only=True) sidesteps the lock: it borrows a PRAGMA query_only=ON
+# connection from this bounded pool, so read helpers overlap each other and
+# the writer. Same (DB_PATH, loop) binding rules as the singleton; the pool
+# is torn down and rebuilt when either changes (tests), and released
+# connections from a stale generation are stopped instead of re-pooled.
+_sqlite_read_pool: list = []            # idle read connections
+_sqlite_read_pool_key: tuple | None = None   # (DB_PATH, loop) the pool is bound to
+_sqlite_read_sem: asyncio.Semaphore | None = None
+_sqlite_read_rebuild_lock = asyncio.Lock()
+
+
+def _stop_sqlite_read_pool() -> None:
+    """Stop every idle pooled read connection (loop-independent)."""
+    global _sqlite_read_pool, _sqlite_read_pool_key, _sqlite_read_sem
+    for conn in _sqlite_read_pool:
+        try:
+            conn.stop()
+        except Exception as exc:
+            _LOGGER.debug("Failed to stop pooled SQLite read connection: %s", exc)
+    _sqlite_read_pool = []
+    _sqlite_read_pool_key = None
+    _sqlite_read_sem = None
+
+
+async def _acquire_sqlite_read_conn():
+    """Borrow a read-only connection; returns (conn, sem, pool_key)."""
+    global _sqlite_read_pool, _sqlite_read_pool_key, _sqlite_read_sem
+    running = asyncio.get_running_loop()
+    key = (DB_PATH, running)
+    if _sqlite_read_pool_key != key:
+        async with _sqlite_read_rebuild_lock:
+            if _sqlite_read_pool_key != key:
+                _stop_sqlite_read_pool()
+                _sqlite_read_pool_key = key
+                _sqlite_read_sem = asyncio.Semaphore(SQLITE_READ_POOL_SIZE)
+    sem = _sqlite_read_sem
+    await sem.acquire()
+    try:
+        if _sqlite_read_pool:
+            return _sqlite_read_pool.pop(), sem, key
+        conn = await aiosqlite.connect(DB_PATH, timeout=SQLITE_CONNECT_TIMEOUT)
+        try:
+            conn.row_factory = aiosqlite.Row
+            await conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+            await conn.execute("PRAGMA query_only=ON")
+        except BaseException:
+            try:
+                conn.stop()
+            except Exception as exc:
+                _LOGGER.debug("Failed to stop half-built read connection: %s", exc)
+            raise
+        return conn, sem, key
+    except BaseException:
+        sem.release()
+        raise
+
+
+def _return_sqlite_read_conn(conn, sem, pool_key) -> None:
+    """Return a borrowed read connection to the pool (or drop it if stale)."""
+    if pool_key == _sqlite_read_pool_key:
+        _sqlite_read_pool.append(conn)
+    else:
+        # The pool was rebuilt (DB_PATH/loop change) while this connection was
+        # out on loan — it belongs to a dead generation, so close it.
+        try:
+            conn.stop()
+        except Exception as exc:
+            _LOGGER.debug("Failed to stop stale read connection: %s", exc)
+    sem.release()
+
+
 # Per-task held connection + depth, so nested get_db() is re-entrant.
 _held: contextvars.ContextVar = contextvars.ContextVar("_db_held", default=None)
 
@@ -2729,13 +2808,15 @@ def _dispose_sqlite_singleton_sync():
     test (see tests/conftest.py).
     """
     global _sqlite_conn, _sqlite_conn_path, _sqlite_conn_loop
-    global _sqlite_conn_lock, _sqlite_access_lock
+    global _sqlite_conn_lock, _sqlite_access_lock, _sqlite_read_rebuild_lock
     conn = _sqlite_conn
     _sqlite_conn = None
     _sqlite_conn_path = None
     _sqlite_conn_loop = None
     _sqlite_conn_lock = asyncio.Lock()
     _sqlite_access_lock = asyncio.Lock()
+    _sqlite_read_rebuild_lock = asyncio.Lock()
+    _stop_sqlite_read_pool()
     _held.set(None)
     if conn is not None:
         try:
@@ -2778,15 +2859,25 @@ async def close_db_pool() -> None:
             conn.stop()
         except Exception as exc:
             _LOGGER.debug("close_db_pool: failed to stop sqlite connection: %s", exc)
+    _stop_sqlite_read_pool()
 
 
-async def get_db():
+async def get_db(*, read_only: bool = False):
     """Return a backend connection (reused, not opened per call).
 
     The returned object behaves exactly like the old per-call
     connection: ``execute``/``executemany``/``executescript``/``commit``/
     ``rollback``/``row_factory`` all work, and the mandatory
     ``await db.close()`` in each caller's ``finally`` releases it.
+
+    ``read_only=True`` is for helpers that only SELECT: on SQLite they
+    borrow a PRAGMA query_only connection from a small pool instead of
+    taking the exclusive writer lock, so reads overlap each other and the
+    writer (WAL). On Postgres the flag is a no-op (the asyncpg pool is
+    already concurrent). A nested get_db() inside a held section reuses
+    the held connection regardless of the flag, so a read helper called
+    from inside a write transaction still sees that transaction's
+    uncommitted rows.
     """
     if DB_ENGINE not in _VALID_DB_ENGINES:
         raise RuntimeError(
@@ -2795,7 +2886,16 @@ async def get_db():
 
     state = _held.get()
     if state is not None:
-        # Nested acquisition in the same task: reuse, bump depth.
+        # Nested acquisition in the same task: reuse, bump depth. Requesting a
+        # write while holding only a read-only connection can't work (the
+        # borrowed connection is query_only), so fail loudly instead of
+        # letting the write die mid-helper with an opaque OperationalError.
+        if not read_only and state.get("readonly"):
+            raise RuntimeError(
+                "get_db(): write access requested while this task holds a "
+                "read-only connection; the outer helper must use get_db() "
+                "without read_only=True"
+            )
         state["depth"] += 1
         return _ConnProxy(state["conn"])
 
@@ -2811,8 +2911,14 @@ async def get_db():
                    "pool": pool, "raw": raw})
         return _ConnProxy(conn)
 
-    # SQLite: acquire the exclusive access lock for this critical section,
-    # then hand back the shared singleton.
+    if read_only and SQLITE_READ_POOL_SIZE > 0:
+        conn, sem, pool_key = await _acquire_sqlite_read_conn()
+        _held.set({"conn": conn, "depth": 1, "engine": "sqlite",
+                   "readonly": True, "sem": sem, "pool_key": pool_key})
+        return _ConnProxy(conn)
+
+    # SQLite write (or read with the pool disabled): acquire the exclusive
+    # access lock for this critical section, then hand back the singleton.
     conn = await _get_sqlite_singleton()
     await _sqlite_access_lock.acquire()
     _held.set({"conn": conn, "depth": 1, "engine": "sqlite"})
@@ -2830,6 +2936,8 @@ async def _release_db():
     _held.set(None)
     if state["engine"] == "postgres":
         await state["pool"].release(state["raw"])
+    elif state.get("readonly"):
+        _return_sqlite_read_conn(state["conn"], state["sem"], state["pool_key"])
     else:
         _sqlite_access_lock.release()
 

@@ -101,6 +101,33 @@ async def test_search_config_backups_invalid_regex_raises(backup_search_db):
 
 
 @pytest.mark.asyncio
+async def test_search_config_backups_regex_without_literal_rejected(backup_search_db):
+    """Regex patterns with no required literal must be rejected (no full scan)."""
+    for pattern in (r"\d+\.\d+", r".*", r"foo|bar", r"ab"):
+        with pytest.raises(ValueError) as exc:
+            await db_module.search_config_backups(pattern, mode="regex", limit=10)
+        assert (exc.value.args[0] if exc.value.args else "") == "regex_needs_literal"
+
+
+def test_regex_required_literal_extraction():
+    """The pre-filter literal must be a substring every match contains."""
+    from routes.db.topology import _regex_required_literal as lit
+
+    assert lit(r"snmp-server community\s+public") == "snmp-server community"
+    assert lit(r"interface Gig.*shutdown") == "interface Gig"
+    assert lit(r"ab+c") == "ab"          # 'c' run is shorter; 'b' required once
+    assert lit(r"ab?cdef") == "cdef"     # optional 'b' breaks the run
+    assert lit(r"a{0,3}bcd") == "bcd"    # min-0 repeat drops its atom
+    assert lit(r"a{2}bc") == "bc"        # 'a' kept but shorter than 'bc'
+    assert lit(r"foo|bar") == ""         # top-level alternation: nothing required
+    assert lit(r"(foo|bar)baz") == "baz"  # group contents skipped conservatively
+    assert lit(r"\d+\.\d+\.\d+") == "."  # only escaped dots are literal
+    assert lit(r"escaped\.dot") == "escaped.dot"
+    assert lit(r"^hostname sw-") == "hostname sw-"
+    assert lit(r"[Pp]ermit any") == "ermit any"
+
+
+@pytest.mark.asyncio
 async def test_get_previous_successful_config_backup(backup_search_db):
     """Previous-backup helper should return the prior successful backup for host."""
     previous = await db_module.get_previous_successful_config_backup(backup_search_db["third_id"])

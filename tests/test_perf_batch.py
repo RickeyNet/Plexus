@@ -46,6 +46,69 @@ def test_no_rows_not_suppressed():
     assert match([], host_id=5, metric="cpu", group_id=2) is False
 
 
+# ── route summary parsing + poll cadence ────────────────────────────────────
+
+import netcontrol.routes.monitoring as mon
+
+
+def test_parse_route_summary_count_ios():
+    text = (
+        "IP routing table name is default (0x0)\n"
+        "Route Source    Networks    Subnets     Replicates  Overhead    Memory (bytes)\n"
+        "connected       0           2           0           128         608\n"
+        "static          0           1           0           64          304\n"
+        "ospf 1          0           5           0           320         1520\n"
+        "  Intra-area: 5 Inter-area: 0 External-1: 0 External-2: 0\n"
+        "internal        3                                               1476\n"
+        "Total           3           8           0           512         3908\n"
+    )
+    assert mon._parse_route_summary_count(text) == 11  # networks + subnets
+
+
+def test_parse_route_summary_count_nxos():
+    text = (
+        "IP Route Table for VRF \"default\"\n"
+        "Total number of routes: 42\n"
+        "Total number of paths:  44\n"
+    )
+    assert mon._parse_route_summary_count(text) == 42
+
+
+def test_parse_route_summary_count_unrecognized():
+    assert mon._parse_route_summary_count("") is None
+    assert mon._parse_route_summary_count("% Invalid input detected") is None
+    assert mon._parse_route_summary_count("Total garbage here") is None
+
+
+# ── dead-host poll backoff ───────────────────────────────────────────────────
+
+
+def test_poll_backoff_schedule():
+    mon._POLL_BACKOFF.clear()
+    hid = 7001
+    try:
+        # first failure: retry next cycle
+        mon._poll_backoff_record(hid, ok=False)
+        assert mon._poll_backoff_should_skip(hid) is False
+        # second failure: skip one cycle, then eligible again
+        mon._poll_backoff_record(hid, ok=False)
+        assert mon._poll_backoff_should_skip(hid) is True
+        assert mon._poll_backoff_should_skip(hid) is False
+        # third failure: skip two cycles
+        mon._poll_backoff_record(hid, ok=False)
+        assert [mon._poll_backoff_should_skip(hid) for _ in range(3)] == [True, True, False]
+        # skip count caps at _POLL_BACKOFF_MAX_SKIP no matter how many failures
+        for _ in range(20):
+            mon._poll_backoff_record(hid, ok=False)
+        assert mon._POLL_BACKOFF[hid][1] == mon._POLL_BACKOFF_MAX_SKIP
+        # a successful poll clears the entry entirely
+        mon._poll_backoff_record(hid, ok=True)
+        assert hid not in mon._POLL_BACKOFF
+        assert mon._poll_backoff_should_skip(hid) is False
+    finally:
+        mon._POLL_BACKOFF.clear()
+
+
 # ── OID resolution cache ─────────────────────────────────────────────────────
 
 import netcontrol.routes.metrics_engine as me
