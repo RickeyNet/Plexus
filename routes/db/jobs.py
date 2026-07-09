@@ -194,15 +194,20 @@ async def delete_expired_jobs(retention_days: int) -> int:
         await db.close()
 
 
-async def start_job(job_id: int) -> None:
-    """Transition a queued job to running status with started_at timestamp."""
+async def start_job(job_id: int) -> bool:
+    """Transition a queued job to running with started_at timestamp.
+
+    Returns True only when this call won the queued→running transition; a
+    False return means another path (a concurrent queue kick, a cancel)
+    already moved the job, and the caller must NOT launch the runner."""
     db = await _dbcore.get_db()
     try:
-        await db.execute(
+        cursor = await db.execute(
             "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'",
             (datetime.now(UTC).isoformat(), job_id),
         )
         await db.commit()
+        return cursor.rowcount == 1
     finally:
         await db.close()
 

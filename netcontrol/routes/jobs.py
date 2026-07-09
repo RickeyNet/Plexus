@@ -182,7 +182,23 @@ class _JobEventWriter:
                     batch.append(item)
 
             if batch:
-                await db.add_job_events(self.job_id, batch)
+                try:
+                    await db.add_job_events(self.job_id, batch)
+                except Exception as exc:
+                    # A transient write failure must not kill this task:
+                    # enqueue() re-raises a dead writer's exception inside the
+                    # playbook's event callback, aborting the live device job.
+                    # Retry once, then drop the batch and keep the job alive.
+                    LOGGER.warning("job %s: event batch write failed (%s); retrying once",
+                                   self.job_id, type(exc).__name__)
+                    try:
+                        await asyncio.sleep(0.5)
+                        await db.add_job_events(self.job_id, batch)
+                    except Exception as exc2:
+                        LOGGER.error(
+                            "job %s: dropping %d job event(s) after retry failed: %s",
+                            self.job_id, len(batch), type(exc2).__name__,
+                        )
                 batch = []
 
 
@@ -306,10 +322,18 @@ async def _reprobe_hosts_after_job(hosts: list[dict], credentials: dict, dry_run
 
 # ── Background job processor ─────────────────────────────────────────────────
 
+# Serializes the dequeue→launch critical section. Queue kicks fire from many
+# places (launch endpoints, done-callbacks, boot reconciliation); without this
+# two concurrent kicks can both read the same 'queued' row during the long
+# await chain before start_job() and both launch it against live devices.
+_queue_dispatch_lock = asyncio.Lock()
+
+
 async def _process_job_queue():
     """Dequeue and run the next eligible job if concurrency allows."""
     try:
-        await _process_job_queue_inner()
+        async with _queue_dispatch_lock:
+            await _process_job_queue_inner()
     except Exception as exc:
         LOGGER.exception("Queue processor error: %s", exc)
 
@@ -546,7 +570,11 @@ async def _process_job_queue_inner():
             return
         group = await db.get_group(next_job["inventory_group_id"])
         group_name = group["name"] if group else "plexus_targets"
-        await db.start_job(job_id)
+        if not await db.start_job(job_id):
+            # Lost the queued→running transition (concurrent kick or cancel):
+            # someone else owns this job now — do not launch a second runner.
+            LOGGER.warning("Queue: job %d was no longer queued at start; skipping launch", job_id)
+            return
         task = asyncio.create_task(
             _run_ansible_job(job_id, playbook["content"], hosts, credentials, group_name, dry_run)
         )
@@ -557,7 +585,9 @@ async def _process_job_queue_inner():
             await db.finish_job(job_id, status="failed")
             await db.add_job_event(job_id, "error", f"No runner for '{playbook['filename']}'")
             return
-        await db.start_job(job_id)
+        if not await db.start_job(job_id):
+            LOGGER.warning("Queue: job %d was no longer queued at start; skipping launch", job_id)
+            return
         # Deserialize stored job parameters (JSON in DB) for the runner.
         params_raw = next_job.get("parameters")
         if isinstance(params_raw, str) and params_raw:
