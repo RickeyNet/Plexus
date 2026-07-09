@@ -472,46 +472,54 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 # netmiko retry cycle.
                 read_timeout = 20
                 net_connect = netmiko.ConnectHandler(**device)
-                if device["secret"]:
-                    net_connect.enable()
-                outputs = {}
+                try:
+                    if device["secret"]:
+                        net_connect.enable()
+                    outputs = {}
 
-                # VPN health
-                if state.MONITORING_CONFIG.get("collect_vpn", True):
-                    dtype = host.get("device_type", "cisco_ios")
-                    if dtype.startswith("cisco_asa") or dtype == "asa":
-                        outputs["vpn"] = net_connect.send_command("show vpn-sessiondb summary", read_timeout=read_timeout)
-                    else:
-                        outputs["vpn"] = net_connect.send_command("show crypto isakmp sa", read_timeout=read_timeout)
+                    # VPN health
+                    if state.MONITORING_CONFIG.get("collect_vpn", True):
+                        dtype = host.get("device_type", "cisco_ios")
+                        if dtype.startswith("cisco_asa") or dtype == "asa":
+                            outputs["vpn"] = net_connect.send_command("show vpn-sessiondb summary", read_timeout=read_timeout)
+                        else:
+                            outputs["vpn"] = net_connect.send_command("show crypto isakmp sa", read_timeout=read_timeout)
 
-                # Route table: the cheap summary runs every tick; the full
-                # table (route_snapshot + churn hash) is only pulled when the
-                # summary count moves or the slow cadence elapses. Unparseable
-                # summaries fall back to pulling the full table every tick.
-                if state.MONITORING_CONFIG.get("collect_routes", True):
-                    outputs["routes"] = net_connect.send_command("show ip route summary", read_timeout=read_timeout)
-                    summary_count = _parse_route_summary_count(outputs["routes"])
-                    outputs["route_summary_count"] = summary_count
-                    full_interval = float(state.MONITORING_CONFIG.get(
-                        "route_full_interval_seconds", 900))
-                    last_full_ts, last_count = _ROUTE_POLL_STATE.get(
-                        host["id"], (0.0, None))
-                    now = time.monotonic()
-                    need_full = (
-                        summary_count is None
-                        or last_count is None
-                        or summary_count != last_count
-                        or full_interval <= 0
-                        or (now - last_full_ts) >= full_interval
-                    )
-                    if need_full:
-                        outputs["routes_full"] = net_connect.send_command("show ip route", read_timeout=read_timeout)
-                        _ROUTE_POLL_STATE[host["id"]] = (now, summary_count)
-                    else:
-                        _ROUTE_POLL_STATE[host["id"]] = (last_full_ts, summary_count)
+                    # Route table: the cheap summary runs every tick; the full
+                    # table (route_snapshot + churn hash) is only pulled when the
+                    # summary count moves or the slow cadence elapses. Unparseable
+                    # summaries fall back to pulling the full table every tick.
+                    if state.MONITORING_CONFIG.get("collect_routes", True):
+                        outputs["routes"] = net_connect.send_command("show ip route summary", read_timeout=read_timeout)
+                        summary_count = _parse_route_summary_count(outputs["routes"])
+                        outputs["route_summary_count"] = summary_count
+                        full_interval = float(state.MONITORING_CONFIG.get(
+                            "route_full_interval_seconds", 900))
+                        last_full_ts, last_count = _ROUTE_POLL_STATE.get(
+                            host["id"], (0.0, None))
+                        now = time.monotonic()
+                        need_full = (
+                            summary_count is None
+                            or last_count is None
+                            or summary_count != last_count
+                            or full_interval <= 0
+                            or (now - last_full_ts) >= full_interval
+                        )
+                        if need_full:
+                            outputs["routes_full"] = net_connect.send_command("show ip route", read_timeout=read_timeout)
+                            _ROUTE_POLL_STATE[host["id"]] = (now, summary_count)
+                        else:
+                            _ROUTE_POLL_STATE[host["id"]] = (last_full_ts, summary_count)
 
-                net_connect.disconnect()
-                return outputs
+                    return outputs
+                finally:
+                    # A read-timeout mid-command otherwise abandons the SSH
+                    # socket + paramiko transport thread until GC — one leaked
+                    # session per failing host per poll cycle on a flaky fleet.
+                    try:
+                        net_connect.disconnect()
+                    except Exception:
+                        pass
 
             ssh_outputs = await asyncio.to_thread(_ssh_poll)
 
@@ -802,6 +810,53 @@ async def _run_alert_escalation() -> int:
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
+async def _build_poll_targets() -> list[tuple[dict, dict | None, dict]]:
+    """(host, credential, snmp_cfg) for every host in every group.
+
+    Shared by the scheduled cycle and the manual SSE stream so credential
+    resolution and target building can't drift apart. Prefers the dedicated
+    service credential; falls back to the legacy default_credential_id for
+    deployments that haven't migrated yet."""
+    from netcontrol.routes.state import _resolve_snmp_discovery_config
+
+    cred_id = (
+        state.AUTH_CONFIG.get("service_credential_id")
+        or state.AUTH_CONFIG.get("default_credential_id")
+    )
+    default_cred = await db.get_credential_raw(cred_id) if cred_id else None
+    targets: list[tuple[dict, dict | None, dict]] = []
+    for group in await db.get_all_groups():
+        snmp_cfg = _resolve_snmp_discovery_config(group["id"])
+        for h in await db.get_hosts_for_group(group["id"]):
+            targets.append((h, default_cred, snmp_cfg))
+    return targets
+
+
+async def _run_retention_cleanup_throttled() -> None:
+    """Aged-row cleanup (polls/alerts/snapshots/suppressions/metrics).
+
+    These are full-table DELETE scans, so run at most once per
+    retention_interval_seconds no matter who triggers a poll (scheduled
+    cycle or manual stream)."""
+    global _last_retention_cleanup
+    retention_interval = float(state.MONITORING_CONFIG.get(
+        "retention_interval_seconds",
+        state.MONITORING_DEFAULTS["retention_interval_seconds"]))
+    now_mono = time.monotonic()
+    if now_mono - _last_retention_cleanup < retention_interval:
+        return
+    _last_retention_cleanup = now_mono
+    retention_days = state.MONITORING_CONFIG.get("retention_days", 30)
+    try:
+        await db.delete_old_monitoring_polls(retention_days)
+        await db.delete_old_monitoring_alerts(retention_days)
+        await db.delete_old_route_snapshots(retention_days)
+        await db.delete_expired_suppressions()
+        await metrics_retention_cleanup()
+    except Exception as exc:
+        LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
+
+
 async def _process_poll_result(
     h: dict, res: dict, alert_rules_cache: list,
     suppressions: list[dict] | None = None,
@@ -905,12 +960,9 @@ async def _process_poll_result(
 
 async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     """Run one monitoring poll cycle across all groups with SNMP enabled."""
-    from netcontrol.routes.state import _resolve_snmp_discovery_config
-
     if not force and not state.MONITORING_CONFIG.get("enabled"):
         return {"enabled": False, "hosts_polled": 0, "alerts_created": 0, "errors": 0}
 
-    groups = await db.get_all_groups()
     hosts_polled = 0
     alerts_created = 0
     errors = 0
@@ -925,32 +977,19 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     alert_rules_cache = await db.get_alert_rules(enabled_only=True)
     suppressions_cache = await db.get_active_alert_suppressions()
 
-    # Resolve the credential used for SSH polling. Prefer the dedicated
-    # service credential (Plexus internal account); fall back to the legacy
-    # default_credential_id for deployments that haven't migrated yet.
-    cred_id = (
-        state.AUTH_CONFIG.get("service_credential_id")
-        or state.AUTH_CONFIG.get("default_credential_id")
-    )
-    default_cred = await db.get_credential_raw(cred_id) if cred_id else None
-
     poll_timeout = float(state.MONITORING_CONFIG.get("per_host_timeout_seconds", 90))
 
-    # Build one flat work list across every group, then poll it as a single
-    # concurrent batch. Previously the gather lived inside the per-group loop,
-    # so one slow host in an early group delayed every later group; flattening
-    # lets the shared semaphore stay saturated across the whole fleet. Each
-    # host keeps its own group's resolved SNMP config and carries its group_id.
+    # One flat work list across every group, polled as a single concurrent
+    # batch (a per-group gather would let one slow host in an early group
+    # delay every later group). Backed-off hosts are skipped unless this is
+    # a manual (force) poll.
     targets: list[tuple[dict, dict | None, dict]] = []
     backed_off = 0
-    for group in groups:
-        snmp_cfg = _resolve_snmp_discovery_config(group["id"])
-        hosts = await db.get_hosts_for_group(group["id"])
-        for h in hosts:
-            if not force and _poll_backoff_should_skip(h["id"]):
-                backed_off += 1
-                continue
-            targets.append((h, default_cred, snmp_cfg))
+    for h, cred, snmp_cfg in await _build_poll_targets():
+        if not force and _poll_backoff_should_skip(h["id"]):
+            backed_off += 1
+            continue
+        targets.append((h, cred, snmp_cfg))
 
     async def _poll_one(h, c, s):
         # Returns (host, result, error) so as_completed can attribute each
@@ -999,25 +1038,7 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
             LOGGER.warning("monitoring: post-process error for %s: %s",
                            h.get("hostname", "?"), redact_value(_exc_text(exc)))
 
-    # Retention cleanup - throttled. These are full-table DELETE scans; running
-    # them every cycle (as often as every 60s) is wasteful, so only run once
-    # per retention_interval_seconds.
-    global _last_retention_cleanup
-    retention_interval = float(state.MONITORING_CONFIG.get(
-        "retention_interval_seconds",
-        state.MONITORING_DEFAULTS["retention_interval_seconds"]))
-    now_mono = time.monotonic()
-    if now_mono - _last_retention_cleanup >= retention_interval:
-        _last_retention_cleanup = now_mono
-        retention_days = state.MONITORING_CONFIG.get("retention_days", 30)
-        try:
-            await db.delete_old_monitoring_polls(retention_days)
-            await db.delete_old_monitoring_alerts(retention_days)
-            await db.delete_old_route_snapshots(retention_days)
-            await db.delete_expired_suppressions()
-            await metrics_retention_cleanup()
-        except Exception as exc:
-            LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
+    await _run_retention_cleanup_throttled()
 
     LOGGER.info("monitoring: poll complete - %d hosts, %d alerts, %d errors, %d backed off",
                 hosts_polled, alerts_created, errors, backed_off)
@@ -1176,26 +1197,13 @@ async def monitoring_poll_now_stream(request: Request):
     user = session["user"] if session else ""
 
     async def _event_generator():
-        from netcontrol.routes.state import _resolve_snmp_discovery_config
-
-        groups = await db.get_all_groups()
-        # Count total hosts across all groups
-        all_hosts: list[tuple[dict, dict, dict | None]] = []  # (host, snmp_cfg, cred)
-        # Prefer the service credential; fall back to the legacy default
-        # for deployments that haven't migrated yet.
-        cred_id = (
-            state.AUTH_CONFIG.get("service_credential_id")
-            or state.AUTH_CONFIG.get("default_credential_id")
-        )
-        default_cred = await db.get_credential_raw(cred_id) if cred_id else None
+        # Same target building, persistence, and post-processing as the
+        # scheduled cycle (_build_poll_targets/_process_poll_result) — this
+        # stream previously carried an inline copy that silently drifted
+        # (it skipped interface-error metrics and baseline alerting).
+        all_hosts = await _build_poll_targets()
         alert_rules_cache = await db.get_alert_rules(enabled_only=True)
         suppressions_cache = await db.get_active_alert_suppressions()
-
-        for group in groups:
-            snmp_cfg = _resolve_snmp_discovery_config(group["id"])
-            hosts = await db.get_hosts_for_group(group["id"])
-            for h in hosts:
-                all_hosts.append((h, snmp_cfg, default_cred))
 
         total = len(all_hosts)
         yield f"data: {json.dumps({'type': 'start', 'total_hosts': total})}\n\n"
@@ -1235,121 +1243,59 @@ async def monitoring_poll_now_stream(request: Request):
                     return h, None, exc
 
         tasks = [asyncio.create_task(_poll_one(h, cred, snmp_cfg))
-                 for h, snmp_cfg, cred in all_hosts]
+                 for h, cred, snmp_cfg in all_hosts]
 
-        for coro in asyncio.as_completed(tasks):
-            try:
-                h, res, err = await coro
-            except Exception as exc:  # task itself crashed (no host context)
-                errors += 1
-                completed += 1
-                LOGGER.warning("monitoring: poll exception: %s", redact_value(_exc_text(exc)))
-                yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': '(unknown)', 'error': 'Poll failed for host.'})}\n\n"
-                continue
-
-            if err is not None:
-                hostname = h.get("hostname", h.get("ip_address", "unknown"))
-                errors += 1
-                completed += 1
-                LOGGER.warning("monitoring: poll failed for %s: %s",
-                               hostname, redact_value(_exc_text(err)))
-                detail = (
-                    "Timed out - device unresponsive."
-                    if isinstance(err, TimeoutError)
-                    else "Poll failed for host."
-                )
-                yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': hostname, 'error': detail})}\n\n"
-                continue
-
-            hostname = h.get("hostname", h.get("ip_address", "unknown"))
-            hosts_polled += 1
-            completed += 1
-
-            # Store poll result
-            poll_id = await db.create_monitoring_poll(
-                host_id=res["host_id"],
-                cpu_percent=res["cpu_percent"],
-                memory_percent=res["memory_percent"],
-                memory_used_mb=res["memory_used_mb"],
-                memory_total_mb=res["memory_total_mb"],
-                uptime_seconds=res["uptime_seconds"],
-                if_up_count=res["if_up_count"],
-                if_down_count=res["if_down_count"],
-                if_admin_down=res["if_admin_down"],
-                if_details=json.dumps(res["if_details"]),
-                vpn_tunnels_up=res["vpn_tunnels_up"],
-                vpn_tunnels_down=res["vpn_tunnels_down"],
-                vpn_details=json.dumps(res["vpn_details"]),
-                route_count=res["route_count"],
-                route_snapshot=res["route_snapshot"][:5000],
-                poll_status=res["poll_status"],
-                poll_error=res["poll_error"],
-                response_time_ms=res.get("response_time_ms"),
-                packet_loss_pct=res.get("packet_loss_pct"),
-                icmp_alive=res.get("icmp_alive"),
-                icmp_rtt_ms=res.get("icmp_rtt_ms"),
-            )
-
-            # Availability tracking
-            try:
-                await _track_availability_from_poll(
-                    res, poll_id,
-                    hostname=h.get("hostname"),
-                    ip_address=h.get("ip_address"),
-                )
-            except Exception as exc:
-                LOGGER.debug("availability: tracking error for host %s: %s",
-                             res["host_id"], str(exc))
-
-            # Alerting
-            host_alerts = await _evaluate_alerts_for_poll(
-                res, poll_id, h.get("group_id"), alert_rules_cache,
-                hostname=h.get("hostname", ""), suppressions=suppressions_cache)
-            alerts_created += host_alerts
-
-            # Metrics
-            try:
-                await emit_metric_samples_from_poll(res)
-                await store_interface_ts_from_poll(res["host_id"], res.get("if_details", []))
-            except Exception as exc:
-                LOGGER.debug("metrics: emission error for host %s: %s",
-                             res["host_id"], redact_value(str(exc)))
-
-            # Route churn
-            if res["route_snapshot"]:
-                route_hash = hashlib.sha256(res["route_snapshot"].encode()).hexdigest()[:16]
-                prev_snap = await db.get_latest_route_snapshot(res["host_id"])
-                if prev_snap is None or prev_snap["routes_hash"] != route_hash:
-                    await db.create_route_snapshot(
-                        host_id=res["host_id"], route_count=res["route_count"],
-                        routes_text=res["route_snapshot"][:10000], routes_hash=route_hash)
-                    if prev_snap is not None:
-                        delta = abs(res["route_count"] - prev_snap["route_count"])
-                        suppressed = await db.is_alert_suppressed(
-                            res["host_id"], "route_churn", h.get("group_id"))
-                        if not suppressed:
-                            await db.create_monitoring_alert(
-                                host_id=res["host_id"], poll_id=poll_id,
-                                alert_type="churn", metric="route_churn",
-                                message=f"Route table changed: {prev_snap['route_count']} -> {res['route_count']} routes (delta: {delta})",
-                                severity="warning" if delta < 10 else "critical",
-                                value=float(delta),
-                                dedup_key=f"{res['host_id']}:route_churn:churn")
-                            alerts_created += 1
-
-            status_icon = "ok" if res["poll_status"] == "ok" else "error"
-            yield f"data: {json.dumps({'type': 'host_done', 'completed': completed, 'total_hosts': total, 'hostname': hostname, 'status': status_icon, 'cpu': res.get('cpu_percent'), 'memory': res.get('memory_percent'), 'alerts': host_alerts})}\n\n"
-
-        # Retention cleanup
-        retention_days = state.MONITORING_CONFIG.get("retention_days", 30)
         try:
-            await db.delete_old_monitoring_polls(retention_days)
-            await db.delete_old_monitoring_alerts(retention_days)
-            await db.delete_old_route_snapshots(retention_days)
-            await db.delete_expired_suppressions()
-            await metrics_retention_cleanup()
-        except Exception as exc:
-            LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    h, res, err = await coro
+                except Exception as exc:  # task itself crashed (no host context)
+                    errors += 1
+                    completed += 1
+                    LOGGER.warning("monitoring: poll exception: %s", redact_value(_exc_text(exc)))
+                    yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': '(unknown)', 'error': 'Poll failed for host.'})}\n\n"
+                    continue
+
+                if err is not None:
+                    hostname = h.get("hostname", h.get("ip_address", "unknown"))
+                    errors += 1
+                    completed += 1
+                    _poll_backoff_record(h["id"], ok=False)
+                    LOGGER.warning("monitoring: poll failed for %s: %s",
+                                   hostname, redact_value(_exc_text(err)))
+                    detail = (
+                        "Timed out - device unresponsive."
+                        if isinstance(err, TimeoutError)
+                        else "Poll failed for host."
+                    )
+                    yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': hostname, 'error': detail})}\n\n"
+                    continue
+
+                hostname = h.get("hostname", h.get("ip_address", "unknown"))
+                hosts_polled += 1
+                completed += 1
+                _poll_backoff_record(h["id"], ok=True)
+
+                try:
+                    host_alerts = await _process_poll_result(
+                        h, res, alert_rules_cache, suppressions=suppressions_cache)
+                except Exception as exc:  # one host's persistence must not kill the stream
+                    host_alerts = 0
+                    LOGGER.warning("monitoring: post-process error for %s: %s",
+                                   hostname, redact_value(_exc_text(exc)))
+                alerts_created += host_alerts
+
+                status_icon = "ok" if res["poll_status"] == "ok" else "error"
+                yield f"data: {json.dumps({'type': 'host_done', 'completed': completed, 'total_hosts': total, 'hostname': hostname, 'status': status_icon, 'cpu': res.get('cpu_percent'), 'memory': res.get('memory_percent'), 'alerts': host_alerts})}\n\n"
+        finally:
+            # Client disconnect lands GeneratorExit at a yield above: cancel
+            # the outstanding polls instead of letting the whole fleet sweep
+            # run to completion with nobody consuming (or persisting) it.
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+
+        await _run_retention_cleanup_throttled()
 
         await _audit("monitoring", "poll.manual", user=user,
                      detail=f"hosts={hosts_polled} alerts={alerts_created}")

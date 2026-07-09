@@ -354,6 +354,7 @@ def _open_netmiko_session(host: dict, credentials: dict):
     # Autodetect when the stored type is a generic Cisco default
     # that may be wrong (e.g. IOS-XE devices mis-classified as IOS).
     if device["device_type"] in ("cisco_ios", "unknown"):
+        guesser = None
         try:
             detect_device = {**device, "device_type": "autodetect"}
             guesser = SSHDetect(**detect_device)
@@ -362,10 +363,17 @@ def _open_netmiko_session(host: dict, credentials: dict):
                 LOGGER.info("Autodetected device_type %s for %s (was %s)",
                             best, device["host"], device["device_type"])
                 device["device_type"] = best
-            guesser.connection.disconnect()
         except Exception:
             LOGGER.debug("SSHDetect failed for %s, using %s",
                          device["host"], device["device_type"])
+        finally:
+            # Disconnect even when autodetect() raised, or the probe session
+            # (socket + paramiko transport thread) leaks until GC.
+            if guesser is not None:
+                try:
+                    guesser.connection.disconnect()
+                except Exception:
+                    LOGGER.debug("SSHDetect disconnect failed for %s", device["host"])
 
     net_connect = netmiko.ConnectHandler(**device)
     if device["secret"]:

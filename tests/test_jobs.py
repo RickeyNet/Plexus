@@ -149,6 +149,21 @@ async def test_queue_orders_by_priority_then_fifo(tmp_path, monkeypatch):
     assert nxt["id"] == normal_second
 
 
+async def test_start_job_wins_transition_only_once(tmp_path, monkeypatch):
+    """start_job must report whether it won queued→running: a second caller
+    (concurrent queue kick, or a cancel racing the launch) gets False and
+    must not launch a duplicate runner."""
+    pb = await _init_clean_db(tmp_path, monkeypatch)
+    job = await db_module.create_job(pb, None)
+
+    assert await db_module.start_job(job) is True
+    assert await db_module.start_job(job) is False  # already running
+
+    cancelled = await db_module.create_job(pb, None)
+    await db_module.cancel_job(cancelled)
+    assert await db_module.start_job(cancelled) is False  # cancel won first
+
+
 async def test_dependencies_gate_until_success(tmp_path, monkeypatch):
     pb = await _init_clean_db(tmp_path, monkeypatch)
     dep = await db_module.create_job(pb, None)

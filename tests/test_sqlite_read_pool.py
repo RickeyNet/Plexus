@@ -156,6 +156,30 @@ async def test_read_only_with_pool_disabled_uses_writer_path(pool_db, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_abandoned_transaction_rolled_back_on_release(pool_db):
+    """A helper that raises between DML and commit() must not leak its open
+    transaction into the next caller's critical section — the next caller's
+    commit() would otherwise persist the stranger's partial writes."""
+    db = await db_module.get_db()
+    try:
+        await db.execute("INSERT INTO inventory_groups (id, name) VALUES (5, 'orphan')")
+        # simulate the helper raising before commit: close without commit
+    finally:
+        await db.close()
+
+    db = await db_module.get_db()
+    try:
+        # an unrelated caller committing must not persist the orphan row
+        await db.commit()
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM inventory_groups WHERE name = 'orphan'"
+        )
+        assert (await cursor.fetchone())[0] == 0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_connections_are_reused_by_the_pool(pool_db):
     """Sequential read sections should reuse the pooled connection object."""
     db = await db_module.get_db(read_only=True)

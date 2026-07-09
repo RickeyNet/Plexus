@@ -174,10 +174,30 @@ COMPLIANCE_ASSIGNMENT_MAX_INTERVAL = 604800
 
 DEVICE_OP_CONCURRENCY = max(1, int(os.getenv("APP_DEVICE_OP_CONCURRENCY", "4") or "4"))
 
+_DEVICE_OP_SEM: asyncio.Semaphore | None = None
+_DEVICE_OP_SEM_LOOP = None
+
 
 def device_op_semaphore() -> asyncio.Semaphore:
-    """Fresh semaphore sized to the configured device-operation fan-out."""
-    return asyncio.Semaphore(DEVICE_OP_CONCURRENCY)
+    """Process-wide semaphore capping concurrent bulk device CLI/SSH work.
+
+    Shared by every fleet fan-out (backups, drift, compliance, deployments,
+    MAC collection, discovery, risk analysis) so N simultaneous operations
+    contend for ONE cap of DEVICE_OP_CONCURRENCY. Handing each operation its
+    own semaphore (the old behavior) let 4×N blocking SSH threads pile onto
+    the shared executor and starve the monitoring poll into false timeouts.
+
+    Never acquire this from code that can run inside a section already
+    holding it (nested acquisition deadlocks once the permits are exhausted)
+    — inner per-device bounds like MAC collection's per-VLAN cap must use
+    their own local semaphore. Rebuilt when the event loop changes (tests
+    create a loop per case)."""
+    global _DEVICE_OP_SEM, _DEVICE_OP_SEM_LOOP
+    loop = asyncio.get_running_loop()
+    if _DEVICE_OP_SEM is None or _DEVICE_OP_SEM_LOOP is not loop:
+        _DEVICE_OP_SEM = asyncio.Semaphore(DEVICE_OP_CONCURRENCY)
+        _DEVICE_OP_SEM_LOOP = loop
+    return _DEVICE_OP_SEM
 
 
 # ── Monitoring defaults ─────────────────────────────────────────────────────

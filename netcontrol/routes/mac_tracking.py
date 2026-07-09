@@ -408,7 +408,11 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         #      threshold on every device class we've tested.
         # A wall-clock deadline guards against pathological cases (huge VTP
         # domain on a slow agent) so the collector never hangs forever.
-        per_vlan_sem = state.device_op_semaphore()
+        # Local semaphore, NOT the shared device_op_semaphore(): this runs
+        # inside collect_mac_arp_tables, whose callers already hold a permit
+        # of the shared one — nested acquisition there would deadlock once
+        # all permits are held by outer per-host tasks.
+        per_vlan_sem = asyncio.Semaphore(state.DEVICE_OP_CONCURRENCY)
         deadline = time.monotonic() + 60.0
 
         async def _walk_one_vlan(vid: int) -> dict:
