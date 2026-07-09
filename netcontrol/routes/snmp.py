@@ -29,6 +29,7 @@ try:
         SnmpEngine,
         UdpTransportTarget,
         UsmUserData,
+        bulk_walk_cmd,
         get_cmd,
         usmAesCfb128Protocol,
         usmAesCfb192Protocol,
@@ -51,6 +52,7 @@ except Exception:
     UsmUserData = None
     get_cmd = None
     walk_cmd = None
+    bulk_walk_cmd = None
     usmAesCfb128Protocol = None
     usmAesCfb192Protocol = None
     usmAesCfb256Protocol = None
@@ -520,6 +522,11 @@ def _build_snmp_auth(snmp_config: dict):
     return auth_data, version, port, timeout, retries
 
 
+# GETBULK max-repetitions: varbinds requested per PDU on the v2c/v3 bulk walk.
+# 25 balances fewer round-trips against oversized responses / UDP fragmentation.
+_SNMP_BULK_MAX_REPETITIONS = 25
+
+
 async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
                      base_oid: str, max_rows: int = 500,
                      return_errors: bool = False):
@@ -537,7 +544,7 @@ async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
     auth_tuple = _build_snmp_auth(snmp_config)
     if auth_tuple is None:
         return ({}, "SNMP not configured") if return_errors else {}
-    auth_data, _version, port, timeout, retries = auth_tuple
+    auth_data, version, port, timeout, retries = auth_tuple
     timeout = max(timeout, timeout_seconds)
 
     engine = SnmpEngine()
@@ -551,12 +558,26 @@ async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
     # FDB walks work over SNMPv3 (otherwise every MAC lands in VLAN 0).
     context_name = str(snmp_config.get("snmp_context", "") or "").strip()
     context_data = ContextData(contextName=context_name) if context_name else ContextData()
-    try:
-        async for error_indication, error_status, _error_index, var_binds in walk_cmd(
+    # GETBULK (bulk_walk_cmd) fetches up to _SNMP_BULK_MAX_REPETITIONS varbinds
+    # per PDU instead of one-per-round-trip GETNEXT (walk_cmd), cutting round
+    # trips ~25x on large tables (interface counters, FDB/ARP). GETBULK is a
+    # v2c/v3-only PDU, so fall back to GETNEXT for v1. Both generators yield the
+    # same (errInd, errStat, errIdx, varBinds) rows, so the loop is unchanged.
+    if version == "1" or bulk_walk_cmd is None:
+        walker = walk_cmd(
             engine, auth_data, transport, context_data,
             ObjectType(ObjectIdentity(base_oid)),
             lexicographicMode=False,
-        ):
+        )
+    else:
+        walker = bulk_walk_cmd(
+            engine, auth_data, transport, context_data,
+            0, _SNMP_BULK_MAX_REPETITIONS,
+            ObjectType(ObjectIdentity(base_oid)),
+            lexicographicMode=False,
+        )
+    try:
+        async for error_indication, error_status, _error_index, var_binds in walker:
             if error_indication:
                 error_text = str(error_indication)
                 break

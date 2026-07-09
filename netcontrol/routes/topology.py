@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import re
+import time
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query
@@ -94,6 +95,9 @@ async def _write_links_and_stats(host_id: int, neighbors: list[dict], if_stats: 
              s["in_octets"], s["out_octets"])
             for s in if_stats
         ])
+    # Links/stats changed → drop the assembled-topology cache so the next
+    # /api/topology load reflects this discovery instead of a stale snapshot.
+    invalidate_topology_cache()
 
 
 def _normalize_ip_text(raw_ip: str) -> str:
@@ -929,15 +933,25 @@ async def _apply_inferred_topology(
         if not walked_hosts:
             return walk_results, 0
 
-        refresh_tasks = []
-        for h in walked_hosts:
-            refresh_tasks.append(collect_mac_arp_tables(
-                h["id"], h["ip_address"], snmp_cfg,
-                device_type=h.get("device_type", ""),
-                host=h,
-            ))
-            refresh_tasks.append(auto_discover_data_sources(h["id"], h["ip_address"], snmp_cfg))
-        await asyncio.gather(*refresh_tasks, return_exceptions=True)
+        # Bound the fleet-wide fan-out with the shared device-op semaphore so a
+        # large subnet can't fire 2*N heavy SNMP/CLI collectors at once (each
+        # collect_mac_arp_tables only bounds its own per-VLAN work, not across
+        # hosts). Mirrors the semaphore pattern in mac_tracking / config_backups.
+        sem = state.device_op_semaphore()
+
+        async def _refresh_one(h: dict) -> None:
+            async with sem:
+                await collect_mac_arp_tables(
+                    h["id"], h["ip_address"], snmp_cfg,
+                    device_type=h.get("device_type", ""),
+                    host=h,
+                )
+            async with sem:
+                await auto_discover_data_sources(h["id"], h["ip_address"], snmp_cfg)
+
+        await asyncio.gather(
+            *(_refresh_one(h) for h in walked_hosts), return_exceptions=True
+        )
 
         existing_by_host: dict[int, list[dict]] = {
             h["id"]: (n or []) for h, n, _ in walk_results
@@ -1232,9 +1246,47 @@ async def admin_delete_topology_stp_root_policy(policy_id: int):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+# Assembled-graph cache. Building the topology graph is the heaviest handler on
+# the request path (~9 DB round-trips + O(nodes*subnets) IPAM prefix matching +
+# dedup passes), and on SQLite it serializes behind the global access lock. The
+# frontend loads it per Topology view and the util SSE re-pulls related data;
+# caching the finished {nodes, edges, unacknowledged_changes} per group_id for a
+# few seconds removes almost all of that cost. A coalescing lock collapses
+# concurrent misses (e.g. several tabs opening at once) into one build.
+# invalidate_topology_cache() is called when discovery rewrites links or a user
+# acknowledges changes; the short TTL bounds staleness otherwise.
+_TOPOLOGY_CACHE: dict[int | None, tuple[float, dict]] = {}
+_TOPOLOGY_CACHE_TTL = 15.0  # seconds
+_topology_cache_lock = asyncio.Lock()
+
+
+def invalidate_topology_cache() -> None:
+    """Drop the assembled-topology cache (called on link/change writes)."""
+    _TOPOLOGY_CACHE.clear()
+
+
 @router.get("/api/topology")
 async def get_topology(group_id: int | None = Query(default=None)):
-    """Return topology graph data (nodes + edges) for vis-network rendering."""
+    """Return topology graph data (nodes + edges) for vis-network rendering.
+
+    Served from a short-TTL per-group cache (see _TOPOLOGY_CACHE)."""
+    now = time.monotonic()
+    hit = _TOPOLOGY_CACHE.get(group_id)
+    if hit is not None and now - hit[0] < _TOPOLOGY_CACHE_TTL:
+        return hit[1]
+    async with _topology_cache_lock:
+        # Re-check: a request that held the lock ahead of us may have just built it.
+        hit = _TOPOLOGY_CACHE.get(group_id)
+        if hit is not None and time.monotonic() - hit[0] < _TOPOLOGY_CACHE_TTL:
+            return hit[1]
+        result = await _build_topology(group_id)
+        _TOPOLOGY_CACHE[group_id] = (time.monotonic(), result)
+        return result
+
+
+async def _build_topology(group_id: int | None) -> dict:
+    """Assemble the topology graph (nodes + edges + change count) from the DB.
+    Uncached; called by get_topology behind the TTL cache."""
     try:
         links = await db.get_topology_links(group_id)
 
@@ -1492,26 +1544,55 @@ async def get_topology(group_id: int | None = Query(default=None)):
         raise HTTPException(status_code=500, detail="Failed to build topology graph")
 
 
-@router.get("/api/topology/utilization")
-async def get_topology_utilization(group_id: int | None = Query(None)):
-    """Return lightweight utilization data for all topology edges."""
+# Utilization map cache. Both the on-demand /utilization endpoint and the
+# per-client /utilization/stream SSE recompute the same links + interface-stats
+# + _calc_interface_utilization map every call/tick. With N open Topology tabs
+# that's N* the DB+compute work per tick, all through the global SQLite lock.
+# Caching the (links, util_map) briefly coalesces concurrent streams onto one
+# computation without meaningfully staling a 5-300s SSE cadence. Each endpoint
+# still builds its own edge list (they filter edges differently).
+_UTIL_CACHE: dict[int | None, tuple[float, tuple[list, dict]]] = {}
+_UTIL_CACHE_TTL = 4.0  # seconds
+_util_cache_lock = asyncio.Lock()
+
+
+async def _compute_util_map_and_links(group_id: int | None) -> tuple[list, dict]:
     all_host_ids = set()
     links = await db.get_topology_links()
     for link in links:
         all_host_ids.add(link["source_host_id"])
         if link.get("target_host_id"):
             all_host_ids.add(link["target_host_id"])
-
     if group_id is not None:
         hosts = await db.get_hosts_for_group(group_id)
         all_host_ids = {h["id"] for h in hosts}
-
     all_stats = await db.get_interface_stats_by_hosts(list(all_host_ids)) if all_host_ids else []
     util_map: dict[tuple[int, str], dict] = {}
     for stat in all_stats:
         util = _calc_interface_utilization(stat)
         if util:
             util_map[(stat["host_id"], stat["if_name"])] = util
+    return links, util_map
+
+
+async def _get_util_map_and_links(group_id: int | None) -> tuple[list, dict]:
+    now = time.monotonic()
+    hit = _UTIL_CACHE.get(group_id)
+    if hit is not None and now - hit[0] < _UTIL_CACHE_TTL:
+        return hit[1]
+    async with _util_cache_lock:
+        hit = _UTIL_CACHE.get(group_id)
+        if hit is not None and time.monotonic() - hit[0] < _UTIL_CACHE_TTL:
+            return hit[1]
+        data = await _compute_util_map_and_links(group_id)
+        _UTIL_CACHE[group_id] = (time.monotonic(), data)
+        return data
+
+
+@router.get("/api/topology/utilization")
+async def get_topology_utilization(group_id: int | None = Query(None)):
+    """Return lightweight utilization data for all topology edges."""
+    links, util_map = await _get_util_map_and_links(group_id)
 
     edges = []
     for link in links:
@@ -1537,23 +1618,10 @@ async def stream_topology_utilization(
     async def _event_gen():
         try:
             while True:
-                all_host_ids = set()
-                links = await db.get_topology_links()
-                for link in links:
-                    all_host_ids.add(link["source_host_id"])
-                    if link.get("target_host_id"):
-                        all_host_ids.add(link["target_host_id"])
-
-                if group_id is not None:
-                    hosts = await db.get_hosts_for_group(group_id)
-                    all_host_ids = {h["id"] for h in hosts}
-
-                all_stats = await db.get_interface_stats_by_hosts(list(all_host_ids)) if all_host_ids else []
-                util_map: dict[tuple[int, str], dict] = {}
-                for stat in all_stats:
-                    util = _calc_interface_utilization(stat)
-                    if util:
-                        util_map[(stat["host_id"], stat["if_name"])] = util
+                # Shared short-TTL cache so concurrent streams (multiple open
+                # tabs) reuse one computation per tick instead of each doing the
+                # full links+stats+util recompute.
+                links, util_map = await _get_util_map_and_links(group_id)
 
                 edges = []
                 for link in links:
@@ -2001,6 +2069,7 @@ async def acknowledge_topology_changes():
     """Mark all topology changes as acknowledged."""
     try:
         count = await db.acknowledge_topology_changes()
+        invalidate_topology_cache()  # refresh the unacknowledged_changes badge now
         return {"acknowledged": count}
     except Exception as exc:
         LOGGER.error("topology: acknowledge error: %s", exc, exc_info=True)

@@ -26,6 +26,19 @@ import pytest
 import routes.database as db_module
 from fastapi import Request
 
+
+@pytest.fixture(autouse=True)
+def _clear_topology_caches():
+    """get_topology / utilization now use short-TTL module caches keyed by
+    group_id. Clear them around each test so a cached result from one case
+    can't leak into the next (they mostly use group_id=None)."""
+    topology_module.invalidate_topology_cache()
+    topology_module._UTIL_CACHE.clear()
+    yield
+    topology_module.invalidate_topology_cache()
+    topology_module._UTIL_CACHE.clear()
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 

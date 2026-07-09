@@ -543,9 +543,19 @@ async def federation_sync_loop() -> None:
             finally:
                 await cur.close()
 
-            for peer in peers:
+            # Fetch every peer concurrently — the remote HTTPS round-trips are
+            # independent, so a slow/timing-out peer no longer delays the rest.
+            # The per-peer DB writes below stay sequential (they serialize on
+            # the DB lock regardless) and keep their own error handling.
+            fetched = await asyncio.gather(
+                *(_fetch_peer_data(peer) for peer in peers),
+                return_exceptions=True,
+            )
+
+            for peer, data in zip(peers, fetched):
                 try:
-                    data = await _fetch_peer_data(peer)
+                    if isinstance(data, BaseException):
+                        raise data
                     now = datetime.now(UTC).isoformat()
                     cur = await db.get_db()
                     try:
