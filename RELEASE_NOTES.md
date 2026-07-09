@@ -19,6 +19,49 @@ current upgrade verification fix in the working tree.
 - Fixed image upload/delete handling and replaced native browser dialogs with
   Plexus-themed dialogs.
 
+### Reliability and Correctness
+- Fixed a job-queue race where two concurrent queue kicks could both dequeue
+  and launch the same queued job (a live config push running twice): the
+  dispatch section is now serialized and the queued→running transition is
+  atomic — only the caller that wins it launches the runner.
+- Fixed the Alerts, Compliance, and Syslog tabs on the device detail page,
+  which always rendered empty (the API returns bare arrays; the hooks
+  expected wrapped objects).
+- Database sections abandoned mid-write (a helper raising between a DML
+  statement and its commit) are now rolled back on release on both engines,
+  so a failed helper can no longer bleed partial writes into the next
+  caller's commit.
+- Postgres writes now run in real transactions mirroring SQLite's implicit
+  model — BEGIN on first write, commit()/rollback() honored, per-statement
+  savepoints so expected failures (upsert fallbacks) don't poison the
+  transaction. Multi-statement writes are atomic on both backends.
+- The scheduled drift check no longer opens a duplicate drift event (plus a
+  history row) for the same unchanged diff every interval; it reuses the
+  existing open event and only creates a new one when the drift changes.
+- The manual poll-now stream now runs the exact same post-processing as the
+  scheduled cycle (its inline copy had drifted: it skipped interface-error
+  metrics and baseline alerting, and never recorded poll backoff), and it
+  cancels in-flight device polls when the client disconnects.
+- `/api/health` now probes the database (bounded, read-only) and returns 503
+  when it fails, so the Docker healthchecks and `deploy/upgrade.sh` — which
+  gate on this endpoint — stop treating a wedged database as healthy.
+  `?probe=live` keeps the shallow process-liveness check.
+- Background sync loops (IPAM, DHCP, cloud flow/traffic) no longer die
+  permanently when the status-recording write in their error handler itself
+  fails; all lifespan loops now log loudly at death time instead of failing
+  silently until shutdown.
+- Monitoring SSH sessions and SSH autodetect probes disconnect in `finally`,
+  so a mid-command timeout no longer leaks a socket and paramiko thread per
+  failing host per cycle.
+- The job event writer survives transient DB errors (retry once, then drop
+  the batch) instead of aborting the whole running job on the next event.
+- The device-operation concurrency cap is now process-wide: simultaneous
+  backup/drift/compliance/discovery sweeps share one cap instead of each
+  getting their own (which piled 4×N blocking SSH threads onto the executor
+  and starved monitoring polls into false timeouts).
+- Login attempt/lockout maps are pruned periodically instead of growing for
+  the process lifetime.
+
 ### Performance
 - Added monitoring poll indexes and batched post-poll database writes.
 - Folded the SLA-summary per-host jitter calculation into the main grouped

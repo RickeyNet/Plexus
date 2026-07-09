@@ -295,6 +295,20 @@ async def _analyze_drift_for_host(host_id: int) -> dict:
     if not diff_text:
         return {"drifted": False, "event_id": None, "diff_summary": "In compliance"}
 
+    # The scheduled check re-analyzes the same baseline/snapshot every
+    # interval; without this guard one drifted host opens a duplicate event
+    # (plus a history row) per cycle forever. Reuse the existing open event
+    # when the drift is unchanged; a different diff is genuinely new drift.
+    open_events = await db.get_config_drift_events(status="open", host_id=host_id, limit=20)
+    for existing in open_events:
+        if (existing.get("baseline_id") == baseline["id"]
+                and existing.get("diff_text") == diff_text):
+            return {
+                "drifted": True,
+                "event_id": existing["id"],
+                "diff_summary": f"+{added} -{removed} lines changed (already reported)",
+            }
+
     event_id = await db.create_config_drift_event(
         host_id=host_id,
         snapshot_id=snapshot["id"],

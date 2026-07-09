@@ -316,6 +316,29 @@ async def test_analyze_drifted(drift_db, monkeypatch):
     assert ev["diff_lines_added"] >= 1
 
 
+@pytest.mark.asyncio
+async def test_analyze_unchanged_drift_reuses_open_event(drift_db, monkeypatch):
+    """Re-analyzing the same unchanged drift (the scheduled loop does this
+    every interval) must reuse the open event, not open a duplicate per cycle."""
+    monkeypatch.setattr(app_module, "db", db_module)
+    await db_module.create_config_baseline(host_id=100, config_text="hostname sw1\n")
+    await db_module.create_config_snapshot(host_id=100, config_text="hostname sw1-changed\n")
+
+    first = await app_module._analyze_drift_for_host(100)
+    second = await app_module._analyze_drift_for_host(100)
+    assert second["drifted"] is True
+    assert second["event_id"] == first["event_id"]
+    events = await db_module.get_config_drift_events(status="open", host_id=100)
+    assert len(events) == 1
+
+    # New, different drift still opens a fresh event.
+    await db_module.create_config_snapshot(host_id=100, config_text="hostname sw1-changed-again\n")
+    third = await app_module._analyze_drift_for_host(100)
+    assert third["event_id"] != first["event_id"]
+    events = await db_module.get_config_drift_events(status="open", host_id=100)
+    assert len(events) == 2
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 4. API endpoint behavior (mocked DB)
 # ═════════════════════════════════════════════════════════════════════════════

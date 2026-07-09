@@ -143,17 +143,6 @@ export interface IpamAddressContext {
   conflict_groups?: string[];
 }
 
-export interface AnnotationEvent {
-  id: number;
-  category?: string;
-  occurred_at: string;
-  description?: string;
-}
-
-export interface AnnotationsResult {
-  annotations?: AnnotationEvent[];
-}
-
 // ── Hooks ──────────────────────────────────────────────────────────────────
 
 export function useMetricQuery(
@@ -194,7 +183,14 @@ export function useMonitoringAlerts(hostId: number | null, limit = 50, enabled =
     // Device-scoped: distinct prefix so page-level ['monitoring-alerts']
     // invalidations (poll-now / time-range refresh) don't refetch this shape.
     queryKey: ['device-alerts', hostId, limit],
-    queryFn: () => apiRequest(`/monitoring/alerts?host_id=${hostId}&limit=${limit}`),
+    // Bare-array endpoint; normalize to the declared wrapper shape (same
+    // bug class as the poll-history hooks below — the tab reads .alerts).
+    queryFn: async () => {
+      const data = await apiRequest<MonitoringAlert[] | MonitoringAlertsResult>(
+        `/monitoring/alerts?host_id=${hostId}&limit=${limit}`,
+      );
+      return Array.isArray(data) ? { alerts: data } : data;
+    },
     enabled: hostId != null && enabled,
   });
 }
@@ -238,7 +234,13 @@ export function useMonitoringPolls(limit = 100) {
 export function useComplianceResults(hostId: number | null, limit = 20, enabled = true) {
   return useQuery<{ results?: ComplianceResult[] }>({
     queryKey: ['compliance-results', hostId, limit],
-    queryFn: () => apiRequest(`/compliance/results?host_id=${hostId}&limit=${limit}`),
+    // Bare-array endpoint; the tab reads .results — normalize like the hooks above.
+    queryFn: async () => {
+      const data = await apiRequest<ComplianceResult[] | { results?: ComplianceResult[] }>(
+        `/compliance/results?host_id=${hostId}&limit=${limit}`,
+      );
+      return Array.isArray(data) ? { results: data } : data;
+    },
     enabled: hostId != null && enabled,
   });
 }
@@ -246,8 +248,13 @@ export function useComplianceResults(hostId: number | null, limit = 20, enabled 
 export function useSyslogEvents(hostId: number | null, limit = 100, enabled = true) {
   return useQuery<{ events?: SyslogEvent[] }>({
     queryKey: ['syslog-events', hostId, limit],
-    queryFn: () =>
-      apiRequest(`/metrics/events?host_id=${hostId}&limit=${limit}&event_type=syslog`),
+    // Bare-array endpoint; the tab reads .events — normalize like the hooks above.
+    queryFn: async () => {
+      const data = await apiRequest<SyslogEvent[] | { events?: SyslogEvent[] }>(
+        `/metrics/events?host_id=${hostId}&limit=${limit}&event_type=syslog`,
+      );
+      return Array.isArray(data) ? { events: data } : data;
+    },
     enabled: hostId != null && enabled,
   });
 }

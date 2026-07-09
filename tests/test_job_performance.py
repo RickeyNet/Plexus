@@ -74,7 +74,22 @@ async def test_add_job_events_uses_one_ordered_transaction(monkeypatch):
 async def test_postgres_compat_executemany_converts_parameters():
     calls = []
 
+    class FakeTx:
+        async def start(self):
+            pass
+
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            pass
+
     class FakePgConnection:
+        def transaction(self):
+            # executemany is a write, so the compat layer opens an implicit
+            # transaction (and a per-statement savepoint) around it.
+            return FakeTx()
+
         async def executemany(self, query, params):
             calls.append((query, params))
 

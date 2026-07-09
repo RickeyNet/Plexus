@@ -1124,11 +1124,15 @@ async def _ipam_sync_loop() -> None:
             except asyncio.CancelledError:
                 raise
             except IpamAdapterError as exc:
-                await db.set_ipam_source_sync_status(source_id, status="error", message=str(exc))
                 LOGGER.warning("IPAM scheduled sync: source_id=%s adapter error: %s", source_id, exc)
+                await _record_sync_status(
+                    db.set_ipam_source_sync_status(source_id, status="error", message=str(exc)),
+                    "IPAM scheduled sync")
             except Exception as exc:
-                await db.set_ipam_source_sync_status(source_id, status="error", message="Scheduled sync failed")
                 LOGGER.warning("IPAM scheduled sync: source_id=%s error: %s", source_id, type(exc).__name__)
+                await _record_sync_status(
+                    db.set_ipam_source_sync_status(source_id, status="error", message="Scheduled sync failed"),
+                    "IPAM scheduled sync")
 
 
 async def _dhcp_sync_loop() -> None:
@@ -1172,11 +1176,27 @@ async def _dhcp_sync_loop() -> None:
             except asyncio.CancelledError:
                 raise
             except DhcpAdapterError as exc:
-                await db.set_dhcp_server_sync_status(server_id, status="error", message=str(exc))
                 LOGGER.warning("DHCP scheduled sync: server_id=%s adapter error: %s", server_id, exc)
+                await _record_sync_status(
+                    db.set_dhcp_server_sync_status(server_id, status="error", message=str(exc)),
+                    "DHCP scheduled sync")
             except Exception as exc:
-                await db.set_dhcp_server_sync_status(server_id, status="error", message="Scheduled sync failed")
                 LOGGER.warning("DHCP scheduled sync: server_id=%s error: %s", server_id, type(exc).__name__)
+                await _record_sync_status(
+                    db.set_dhcp_server_sync_status(server_id, status="error", message="Scheduled sync failed"),
+                    "DHCP scheduled sync")
+
+
+async def _record_sync_status(coro, what: str) -> None:
+    """Await a status-recording DB write from a sync loop's error path.
+
+    These writes run inside except handlers; if one raises (e.g. a transient
+    'database is locked') it would kill the whole sync loop until restart, so
+    failures here are logged and swallowed."""
+    try:
+        await coro
+    except Exception as exc:
+        LOGGER.warning("%s: failed to record sync status: %s", what, type(exc).__name__)
 
 
 async def _cloud_flow_sync_loop() -> None:
@@ -1203,10 +1223,12 @@ async def _cloud_flow_sync_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            await persist_cloud_flow_sync_status(
-                build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
-            )
             LOGGER.warning("Cloud flow sync loop failed: %s", type(exc).__name__)
+            await _record_sync_status(
+                persist_cloud_flow_sync_status(
+                    build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
+                ),
+                "Cloud flow sync")
 
 
 async def _cloud_traffic_metric_sync_loop() -> None:
@@ -1234,10 +1256,12 @@ async def _cloud_traffic_metric_sync_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            await persist_cloud_traffic_sync_status(
-                build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
-            )
             LOGGER.warning("Cloud traffic sync loop failed: %s", type(exc).__name__)
+            await _record_sync_status(
+                persist_cloud_traffic_sync_status(
+                    build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
+                ),
+                "Cloud traffic sync")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1298,6 +1322,20 @@ async def lifespan(app: FastAPI):
         )
     )
 
+    def _on_background_loop_done(task: asyncio.Task) -> None:
+        # Every loop is written to be immortal (internal try/except); if one
+        # still dies, say so loudly at death time instead of the failure being
+        # discovered only at shutdown (or never).
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            LOGGER.error(
+                "background loop %s died with %s: %s — it will not run again "
+                "until the app restarts",
+                task.get_name(), type(exc).__name__, exc,
+            )
+
     background_tasks = [
         asyncio.create_task(loop(), name=loop.__name__)
         for loop in (
@@ -1326,6 +1364,8 @@ async def lifespan(app: FastAPI):
             lab_drift_scheduler_loop,
         )
     ]
+    for task in background_tasks:
+        task.add_done_callback(_on_background_loop_done)
 
     # SIEM forwarder: start the per-sink dispatcher tasks and register the
     # hook that fans audit events out to them. Done before the rest of the
@@ -1406,18 +1446,40 @@ async def lifespan(app: FastAPI):
 
 
 async def _rate_limit_cleanup_loop() -> None:
-    """Periodically prune stale entries from the API rate-limit tracker."""
+    """Periodically prune stale entries from the API rate-limit tracker and
+    the login attempt/lockout maps (all keyed by client IP; without pruning,
+    every IP that ever failed a login stays in memory for the process life)."""
     while True:
         await asyncio.sleep(300)  # every 5 minutes
-        window = max(1, int(state.API_RATE_LIMIT.get("window", 60)))
-        now = time.time()
-        lock = state.API_RATE_LIMIT_LOCK
-        if lock:
-            async with lock:
-                tracker = state.API_RATE_LIMIT_TRACKER
-                stale_keys = [ip for ip, ts in tracker.items() if not ts or (now - ts[-1]) > window]
-                for key in stale_keys:
-                    tracker.pop(key, None)
+        try:
+            window = max(1, int(state.API_RATE_LIMIT.get("window", 60)))
+            now = time.time()
+            lock = state.API_RATE_LIMIT_LOCK
+            if lock:
+                async with lock:
+                    tracker = state.API_RATE_LIMIT_TRACKER
+                    stale_keys = [ip for ip, ts in tracker.items() if not ts or (now - ts[-1]) > window]
+                    for key in stale_keys:
+                        tracker.pop(key, None)
+
+            # Login state: drop lockouts that have expired and attempt lists
+            # whose newest entry is older than any window that still matters.
+            for ip, unlock_at in list(state.LOCKED_OUT.items()):
+                if now >= unlock_at:
+                    state.LOCKED_OUT.pop(ip, None)
+            attempt_ttl = max(
+                int(state.LOGIN_RULES.get("lockout_time", 900)),
+                int(state.LOGIN_RULES.get("rate_limit_window", 60)),
+            )
+            for ip, attempts in list(state.LOGIN_ATTEMPTS.items()):
+                if ip in state.LOCKED_OUT:
+                    continue  # still relevant to the active lockout
+                if not attempts or (now - max(attempts)) > attempt_ttl:
+                    state.LOGIN_ATTEMPTS.pop(ip, None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("rate-limit cleanup loop error: %s", type(exc).__name__)
 
 
 async def _migrate_auth_json_users():
@@ -1763,13 +1825,42 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 @app.get("/api/health")
-async def health():
-    return {
+async def health(probe: str = ""):
+    body = {
         "ok": True,
         "status": "healthy",
         "uptime_seconds": int(time.time() - APP_START_TIME),
         "metrics": snapshot_metrics(),
     }
+    if probe == "live":
+        # Liveness only: the process is up and serving requests. Use this
+        # where a briefly busy database must not restart the container.
+        return body
+
+    # Readiness: every deploy gate (Dockerfile/compose healthchecks,
+    # deploy/upgrade.sh) urlopen()s this path and treats non-2xx as
+    # unhealthy, so an unreachable or wedged database must become a 503
+    # here rather than reporting healthy while every real request fails.
+    # Bounded under the callers' 4s urlopen timeout; read-only so the
+    # probe can't block behind (or interfere with) a long write.
+    async def _db_probe():
+        conn = await db.get_db(read_only=True)
+        try:
+            cursor = await conn.execute("SELECT 1")
+            await cursor.fetchone()
+        finally:
+            await conn.close()
+
+    try:
+        await asyncio.wait_for(_db_probe(), timeout=3.0)
+        body["db"] = "ok"
+    except Exception as exc:
+        LOGGER.error("health: database probe failed: %s", type(exc).__name__)
+        body["ok"] = False
+        body["status"] = "degraded"
+        body["db"] = f"error: {type(exc).__name__}"
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @app.get("/api/version")

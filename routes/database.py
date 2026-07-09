@@ -2522,9 +2522,45 @@ def _strip_nuls_from_params(params: tuple) -> tuple:
 
 
 class _PostgresConnectionCompat:
+    """sqlite3-shaped facade over an asyncpg connection.
+
+    Transactions mirror sqlite3's implicit model so multi-statement writes
+    are atomic on Postgres exactly like they are on SQLite: the first
+    data/schema-modifying statement opens a real transaction (BEGIN), and
+    ``commit()``/``rollback()`` end it. Inside an open transaction every
+    statement runs in a savepoint, so an expected failure (e.g. the
+    unique-violation branch of a try/except upsert) doesn't poison the
+    transaction — in SQLite a failed statement never aborts the implicit
+    transaction, and callers rely on that. A section released with the
+    transaction still open is rolled back (see ``_release_db``)."""
+
     def __init__(self, conn):
         self._conn = conn
+        self._tx = None  # open implicit transaction, if any
         self.row_factory = None
+
+    async def _ensure_tx(self):
+        if self._tx is None:
+            self._tx = self._conn.transaction()
+            await self._tx.start()
+
+    async def _run_statement(self, fn):
+        """Run one statement; wrap it in a savepoint when a transaction is
+        open (asyncpg nests transaction() as SAVEPOINT automatically)."""
+        if self._tx is None:
+            return await fn()
+        sub = self._conn.transaction()
+        await sub.start()
+        try:
+            result = await fn()
+        except BaseException:
+            try:
+                await sub.rollback()
+            except Exception as exc:
+                _LOGGER.debug("pg compat: savepoint rollback failed: %s", exc)
+            raise
+        await sub.commit()
+        return result
 
     async def execute(self, query: str, params=()):
         params = _strip_nuls_from_params(tuple(params or ()))
@@ -2540,8 +2576,11 @@ class _PostgresConnectionCompat:
         converted = _convert_qmark_to_dollar_params(query)
 
         if query_upper.startswith("SELECT") or query_upper.startswith("WITH"):
-            rows = await self._conn.fetch(converted, *params)
+            rows = await self._run_statement(
+                lambda: self._conn.fetch(converted, *params))
             return _PostgresCursorCompat(rows=rows, rowcount=len(rows))
+
+        await self._ensure_tx()
 
         has_returning = "RETURNING" in query_upper
         if query_upper.startswith("INSERT") and not has_returning:
@@ -2557,36 +2596,41 @@ class _PostgresConnectionCompat:
             # lastrowid emulation — must run through fetch(), otherwise asyncpg's
             # execute() discards the rows and callers doing fetchone()/lastrowid
             # get None and crash.
-            rows = await self._conn.fetch(converted, *params)
+            rows = await self._run_statement(
+                lambda: self._conn.fetch(converted, *params))
             lastrowid = None
             if rows and "id" in rows[0].keys():
                 lastrowid = rows[0]["id"]
             return _PostgresCursorCompat(rows=rows, lastrowid=lastrowid, rowcount=len(rows))
 
-        status = await self._conn.execute(converted, *params)
+        status = await self._run_statement(
+            lambda: self._conn.execute(converted, *params))
         return _PostgresCursorCompat(rowcount=_parse_rowcount(status))
 
     async def executescript(self, script: str):
+        await self._ensure_tx()
         for stmt in _split_sql_statements(script):
-            await self._conn.execute(stmt)
+            await self._run_statement(lambda s=stmt: self._conn.execute(s))
 
     async def executemany(self, query: str, params):
         converted = _convert_qmark_to_dollar_params(query)
         cleaned = [_strip_nuls_from_params(tuple(row)) for row in params]
-        await self._conn.executemany(converted, cleaned)
+        await self._ensure_tx()
+        await self._run_statement(
+            lambda: self._conn.executemany(converted, cleaned))
         return _PostgresCursorCompat(rowcount=len(cleaned))
 
     async def commit(self):
-        # asyncpg uses autocommit when no explicit transaction is active.
-        return None
+        if self._tx is not None:
+            tx, self._tx = self._tx, None
+            await tx.commit()
 
     async def rollback(self):
-        # No explicit transaction is opened (every statement autocommits), so
-        # there is nothing to undo. The method must exist so error-path
-        # ``await db.rollback()`` calls don't AttributeError on the pg backend
-        # — that previously masked expected integrity errors (e.g. a duplicate
-        # name surfaced as a 500 instead of a clean ValueError/409).
-        return None
+        # No-op when no write opened a transaction, so error-path
+        # ``await db.rollback()`` calls stay safe on read-only sections.
+        if self._tx is not None:
+            tx, self._tx = self._tx, None
+            await tx.rollback()
 
     async def close(self):
         await self._conn.close()
@@ -2935,11 +2979,38 @@ async def _release_db():
         return
     _held.set(None)
     if state["engine"] == "postgres":
-        await state["pool"].release(state["raw"])
+        # Same hygiene as the SQLite branch below: a helper that raised
+        # between DML and commit() leaves the implicit transaction open —
+        # roll it back before the connection returns to the pool.
+        try:
+            if state["conn"]._tx is not None:
+                _LOGGER.warning(
+                    "get_db(): pg section released with an uncommitted transaction; rolling back"
+                )
+                await state["conn"].rollback()
+        except Exception as exc:
+            _LOGGER.warning("get_db(): pg rollback of abandoned transaction failed: %s", exc)
+        finally:
+            await state["pool"].release(state["raw"])
     elif state.get("readonly"):
         _return_sqlite_read_conn(state["conn"], state["sem"], state["pool_key"])
     else:
-        _sqlite_access_lock.release()
+        # The writer connection is shared by every caller in turn. If a helper
+        # raised between a DML statement and its commit(), an implicit
+        # transaction is still open here — and the next caller would inherit
+        # it: their commit() would persist this caller's partial writes, or
+        # their rollback() would wipe them along with their own. Roll back
+        # before handing the lock over.
+        try:
+            if getattr(state["conn"], "in_transaction", False):
+                _LOGGER.warning(
+                    "get_db(): section released with an uncommitted transaction; rolling back"
+                )
+                await state["conn"].rollback()
+        except Exception as exc:
+            _LOGGER.warning("get_db(): rollback of abandoned transaction failed: %s", exc)
+        finally:
+            _sqlite_access_lock.release()
 
 
 async def _init_postgres(db) -> None:
