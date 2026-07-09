@@ -4,7 +4,9 @@ admin scheduling, and background compliance check loop.
 """
 from __future__ import annotations
 
+import functools
 import json
+import re
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -128,6 +130,14 @@ def _config_has_directive(config_text: str, pattern: str) -> bool:
     return False
 
 
+@functools.lru_cache(maxsize=512)
+def _compile_rule_regex(pattern: str) -> re.Pattern:
+    """Compile (and cache) a compliance regex. A bulk scan evaluates the same
+    rule against every host, so caching avoids recompiling the pattern per host.
+    Raises re.error for invalid patterns (not cached); callers handle it."""
+    return re.compile(pattern, re.MULTILINE | re.IGNORECASE)
+
+
 def _evaluate_rule(rule: dict, config_text: str) -> dict:
     """Evaluate a single compliance rule against running config.
 
@@ -136,7 +146,7 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
       - must_not_contain: config must NOT contain the pattern
       - regex_match: config must match the regex pattern
     """
-    import re as _re
+    _re = re
 
     rule_type = rule.get("type", "must_contain")
     pattern = rule.get("pattern", "")
@@ -160,7 +170,7 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
         result["detail"] = "Pattern absent (good)" if not found else f"Prohibited pattern found: {pattern}"
     elif rule_type == "regex_match":
         try:
-            compiled = _re.compile(pattern, _re.MULTILINE | _re.IGNORECASE)
+            compiled = _compile_rule_regex(pattern)
             # Guard against catastrophic backtracking by capping the searched
             # length. 2MB comfortably covers large chassis configs while still
             # bounding worst-case regex cost.

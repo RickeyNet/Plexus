@@ -504,6 +504,48 @@ Remaining low-value tail:
   concurrent create/update/delete calls can no longer duplicate an id or lose an
   update via a stale payload winning the last write.
 
+### Performance audit (2026-07-08 four-agent sweep)
+
+Most findings were implemented the same day (see `RELEASE_NOTES.md` Performance:
+SNMP GETBULK; topology graph + utilization-map caches; dashboard bandwidth N+1;
+suppression + vendor-OID caches; discovery-fan-out semaphore; chart `setOption`
+reuse; device-scoped query-key decouple; federation concurrent fetch; geolocation
+off-loop write; compliance regex cache; `get_baselined_host_ids`; monitoring
+`include_details` cap; `compliance_scan_results` index (migration 0058)). Tests:
+`tests/test_interface_ts_multi.py`, `tests/test_perf_batch.py`, plus the topology
+suite's new cache-clearing fixture. Deferred (behavioral / architectural — not
+safe to bundle into a mechanical pass without staging validation):
+
+- [ ] **SQLite global-access-lock read pool** - every `get_db()` takes one
+  process-wide exclusive lock held until `close()`, so reads never overlap even
+  though WAL supports concurrent readers. A pool of read-only connections for
+  read helpers (keeping the single writer + lock for writes) is the biggest
+  architectural win but changes the connection/locking model app-wide; needs its
+  own design + load-test pass. `netcontrol`/`routes/database.py:~2817`.
+- [ ] **Route-table poll cadence** - the health poll runs `show ip route` (full
+  table) every cycle to compute route_count + a churn hash, and opens a fresh
+  netmiko session each tick (`monitoring.py:_ssh_poll`). Poll routes on a slower,
+  separate cadence and derive the count from `show ip route summary`, only
+  pulling the full table when the summary count changes. Deferred: changes route
+  churn-detection semantics; wants a config knob + staging validation.
+- [ ] **Adaptive backoff/jitter for dead hosts** - the poll loop burns each
+  unreachable host's full `per_host_timeout_seconds` every cycle with no backoff,
+  and loop sleeps have no jitter (synchronized ticks). Add exponential backoff on
+  consecutive failures + small sleep jitter. Deferred: changes poll scheduling
+  semantics near availability tracking.
+- [ ] **Batch the bulk drift-accept reads** (`config_drift.py:bulk_accept_drift_events`)
+  - fetches event + snapshot + host per event id in a Python loop (~5-6 helper
+  calls x N). Batch the reads (`IN (...)`) up front, keep the per-event baseline
+  writes. Low frequency (admin bulk action); needs new plural DB helpers.
+- [ ] **Regex config-backup search pre-filter** (`routes/db/topology.py`
+  `search_config_backups` SQLite regex branch) - full-scans and loads every
+  successful backup's config into Python before regex matching. Require a cheap
+  substring/FTS pre-filter first. Admin-only and rare.
+- [ ] **`get_monitoring_poll_history` blob gate** (`routes/db/monitoring.py`) -
+  selects the large per-poll blobs unconditionally; add an opt-in
+  `include_details` flag like `get_latest_monitoring_polls` has, and plumb it
+  through the caller.
+
 ### Batch 6 - The Big One
 
 - [x] **Split `routes/database.py` (16,795 lines) into domain modules** (hosts, credentials, monitoring, audit, mac-tracking, lab, etc.) while preserving the `routes.database` API surface. *Prerequisite: batches 1 and 4 - the suite must be green and fast before a refactor this wide.* Done 2026-06: core (connection singleton, pragmas, schema, init_db) stays in `routes/database.py` (~2,800 lines); 20 domain modules live in `routes/db/*` and are star re-exported through the facade, so all `import routes.database as db` callsites and test monkeypatches (`DB_PATH`, `DB_ENGINE`, `get_db`) work unchanged — moved code reads those names late-bound via the facade. Public API surface verified byte-identical (606 names) against a pre-split snapshot.
