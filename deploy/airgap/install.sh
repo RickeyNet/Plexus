@@ -84,6 +84,7 @@ if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
     ufw allow 443/tcp  || true
     ufw allow 80/tcp   || true
     ufw allow 2055/udp || true
+    ufw allow 6343/udp || true
     ufw allow 162/udp  || true
     ufw allow 1514/udp || true
 fi
@@ -94,7 +95,9 @@ echo ""
 echo "═══════════════════════════════════════════════════"
 echo "  Done. Browse to: https://$VM_HOST"
 echo ""
-echo "  - First login: admin / netcontrol (forced password change)"
+echo "  - First login: 'admin' with the one-time password printed in the"
+echo "    app log. Retrieve it (forced change at first login):"
+echo "      docker compose -f $INSTALL_DIR/docker-compose.yml logs plexus | grep -A3 'default admin'"
 echo "  - Edit $INSTALL_DIR/.env then 'docker compose restart'"
 echo "  - Logs:    docker compose -f $INSTALL_DIR/docker-compose.yml logs -f plexus"
 echo "  - Stop:    docker compose -f $INSTALL_DIR/docker-compose.yml down"
