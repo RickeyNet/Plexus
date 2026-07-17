@@ -21,10 +21,19 @@ export interface CloudAccount {
   account_identifier?: string | null;
   region_scope?: string | null;
   auth_type?: string | null;
-  auth_config?: Record<string, unknown> | string | null;
+  /** Credentials are write-only: the API never returns auth_config, only this flag. */
+  has_auth_config?: boolean;
+  /** Server-computed flow/traffic sync readiness (frontend can't see auth_config). */
+  sync_readiness?: {
+    flow_ready: boolean;
+    traffic_ready: boolean;
+    flow_missing: string[];
+    traffic_missing: string[];
+  };
   notes?: string | null;
   enabled?: number | boolean;
   last_sync_status?: string | null;
+  last_sync_message?: string | null;
   last_sync_at?: string | null;
   resource_count?: number;
   connection_count?: number;
@@ -186,7 +195,10 @@ export interface CloudValidateResult {
 }
 
 export interface CloudDiscoverResult {
+  ok?: boolean;
   message?: string;
+  requested_mode?: string;
+  effective_mode?: string;
   fallback_used?: boolean;
 }
 
@@ -216,6 +228,11 @@ export interface CloudFilter {
 
 // ── Query hooks ───────────────────────────────────────────────────────────
 
+// Scheduled sync writes new data in the background; without periodic refetch
+// (focus-refetch is globally disabled) an open dashboard stays frozen forever.
+// Interval refetches pause automatically while the tab is not focused.
+const MONITOR_REFETCH_MS = 60_000;
+
 export function useCloudProviders() {
   return useQuery({
     queryKey: ['cloud-providers'],
@@ -228,6 +245,7 @@ export function useCloudAccounts(provider?: string) {
     queryKey: ['cloud-accounts', provider ?? ''],
     queryFn: () =>
       apiRequest<{ accounts: CloudAccount[] }>(`/cloud/accounts${qs({ provider })}`),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -235,6 +253,7 @@ export function useCloudTopology(filter: CloudFilter) {
   return useQuery({
     queryKey: ['cloud-topology', filter.provider ?? '', filter.account_id ?? ''],
     queryFn: () => apiRequest<CloudTopology>(`/cloud/topology${qs(filter)}`),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -250,6 +269,7 @@ export function useCloudFlowSummary(params: FlowAnalyticsParams) {
     queryKey: ['cloud-flow-summary', params],
     queryFn: () =>
       apiRequest<{ summary: CloudFlowSummary }>(`/cloud/flow-logs/summary${qs(params)}`),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -258,6 +278,7 @@ export function useCloudFlowTopTalkers(params: FlowAnalyticsParams) {
     queryKey: ['cloud-flow-talkers', params],
     queryFn: () =>
       apiRequest<{ talkers: CloudFlowTalker[] }>(`/cloud/flow-logs/top-talkers${qs(params)}`),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -266,6 +287,7 @@ export function useCloudFlowTimeline(params: FlowAnalyticsParams) {
     queryKey: ['cloud-flow-timeline', params],
     queryFn: () =>
       apiRequest<{ timeline: CloudFlowTimelinePoint[] }>(`/cloud/flow-logs/timeline${qs(params)}`),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -276,6 +298,7 @@ export function useCloudTrafficMetricSummary(params: FlowAnalyticsParams) {
       apiRequest<{ summary: CloudTrafficMetricSummary }>(
         `/cloud/traffic-metrics/summary${qs(params)}`,
       ),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -286,6 +309,7 @@ export function useCloudTrafficMetricTopResources(params: FlowAnalyticsParams) {
       apiRequest<{ resources: CloudTrafficMetricResource[] }>(
         `/cloud/traffic-metrics/top-resources${qs(params)}`,
       ),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -296,6 +320,7 @@ export function useCloudTrafficMetricTimeline(params: FlowAnalyticsParams) {
       apiRequest<{ timeline: CloudTrafficMetricTimelinePoint[] }>(
         `/cloud/traffic-metrics/timeline${qs(params)}`,
       ),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -328,6 +353,7 @@ export function useCloudFlowSyncConfig() {
   return useQuery({
     queryKey: ['cloud-flow-sync-config'],
     queryFn: () => apiRequest<CloudSyncConfigResponse>('/cloud/flow-sync/config'),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -335,6 +361,7 @@ export function useCloudFlowSyncCursors() {
   return useQuery({
     queryKey: ['cloud-flow-sync-cursors'],
     queryFn: () => apiRequest<{ cursors: CloudSyncCursor[] }>('/cloud/flow-sync/cursors'),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -342,6 +369,7 @@ export function useCloudTrafficSyncConfig() {
   return useQuery({
     queryKey: ['cloud-traffic-sync-config'],
     queryFn: () => apiRequest<CloudSyncConfigResponse>('/cloud/traffic-sync/config'),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -349,6 +377,7 @@ export function useCloudTrafficSyncCursors() {
   return useQuery({
     queryKey: ['cloud-traffic-sync-cursors'],
     queryFn: () => apiRequest<{ cursors: CloudSyncCursor[] }>('/cloud/traffic-sync/cursors'),
+    refetchInterval: MONITOR_REFETCH_MS,
   });
 }
 
@@ -360,16 +389,24 @@ interface AccountPayload {
   account_identifier?: string;
   region_scope?: string;
   auth_type?: string;
+  /** Omit on update to keep the stored (write-only) credentials. */
   auth_config?: Record<string, unknown>;
+  /** Set true on update to explicitly wipe stored credentials. */
+  clear_auth_config?: boolean;
   notes?: string;
   enabled?: boolean;
+}
+
+interface AccountMutationResult {
+  ok: boolean;
+  account: CloudAccount;
 }
 
 export function useCreateCloudAccount() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: AccountPayload) =>
-      apiRequest<CloudAccount>('/cloud/accounts', { method: 'POST', body: data }),
+      apiRequest<AccountMutationResult>('/cloud/accounts', { method: 'POST', body: data }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['cloud-accounts'] });
     },
@@ -380,7 +417,7 @@ export function useUpdateCloudAccount() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, data }: { id: number; data: AccountPayload }) =>
-      apiRequest<CloudAccount>(`/cloud/accounts/${id}`, { method: 'PUT', body: data }),
+      apiRequest<AccountMutationResult>(`/cloud/accounts/${id}`, { method: 'PUT', body: data }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['cloud-accounts'] });
     },

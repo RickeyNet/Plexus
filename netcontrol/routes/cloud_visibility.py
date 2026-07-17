@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from netcontrol.routes.cloud_collectors import (
     CloudCollectorAuthError,
+    CloudCollectorError,
     CloudCollectorExecutionError,
     CloudCollectorUnavailable,
     collect_provider_snapshot,
@@ -30,6 +32,10 @@ from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.cloud_visibility")
+
+# Strong references to fire-and-forget manual pull tasks (background=true) so
+# the event loop can't garbage-collect them mid-run.
+_BACKGROUND_PULL_TASKS: set[asyncio.Task] = set()
 
 _require_admin = None
 
@@ -171,6 +177,53 @@ async def persist_cloud_traffic_sync_status(status: dict) -> dict:
     return sanitized
 
 
+def _has_non_empty_list(value) -> bool:
+    if isinstance(value, list):
+        return any(str(item or "").strip() for item in value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return False
+        if text.startswith("["):
+            parsed = _json_loads_safe(text, None)
+            return isinstance(parsed, list) and any(str(item or "").strip() for item in parsed)
+        return any(part.strip() for part in text.split(","))
+    return False
+
+
+def _compute_sync_readiness(provider: str, auth: dict) -> dict:
+    """Which flow/traffic sync auth_config keys are configured for an account.
+
+    Computed server-side because the credential blob is write-only: the
+    frontend never sees auth_config and cannot derive readiness itself.
+    """
+    provider = str(provider or "").strip().lower()
+    flow_missing: list[str] = []
+    traffic_missing: list[str] = []
+    if provider == "aws":
+        if not str(auth.get("log_group_name") or "").strip():
+            flow_missing.append("log_group_name")
+        if not _has_non_empty_list(auth.get("resource_ids")):
+            traffic_missing.append("resource_ids")
+    elif provider == "azure":
+        if not str(auth.get("storage_account_name") or "").strip():
+            flow_missing.append("storage_account_name")
+        if not str(auth.get("container_name") or "").strip():
+            flow_missing.append("container_name")
+        if not _has_non_empty_list(auth.get("resource_ids")):
+            traffic_missing.append("resource_ids")
+    elif provider == "gcp":
+        if not str(auth.get("project_id") or "").strip():
+            flow_missing.append("project_id")
+            traffic_missing.append("project_id")
+    return {
+        "flow_ready": not flow_missing,
+        "traffic_ready": not traffic_missing,
+        "flow_missing": flow_missing,
+        "traffic_missing": traffic_missing,
+    }
+
+
 def _serialize_account(account: dict) -> dict:
     item = dict(account)
     # Never expose stored cloud credentials (AWS secret keys, Azure client
@@ -179,7 +232,11 @@ def _serialize_account(account: dict) -> dict:
     # available internally to collectors via the account dict / DB accessor.
     raw = item.pop("auth_config_json", None)
     item.pop("auth_config", None)
-    item["has_auth_config"] = bool(_json_loads_safe(raw, {}))
+    auth = _json_loads_safe(raw, {})
+    if not isinstance(auth, dict):
+        auth = {}
+    item["has_auth_config"] = bool(auth)
+    item["sync_readiness"] = _compute_sync_readiness(item.get("provider"), auth)
     return item
 
 
@@ -227,6 +284,10 @@ class CloudAccountUpdate(BaseModel):
     auth_config: dict | None = None
     notes: str | None = None
     enabled: bool | None = None
+    # Credentials are write-only (never echoed by the API), so an empty
+    # auth_config on update means "keep the stored one". Set this flag to
+    # explicitly wipe stored credentials.
+    clear_auth_config: bool = False
 
 
 class CloudDiscoveryRequest(BaseModel):
@@ -692,13 +753,25 @@ def _normalize_aws_traffic_metric_records(records: list[dict]) -> list[dict]:
             continue
         timestamp = _normalize_timestamp_iso(item.get("Timestamp") or item.get("timestamp"))
         value = _safe_float(item.get("Value"), None)
+        statistic = str(item.get("Statistic") or item.get("statistic") or "").strip().lower()
         if value is None:
             for alt in ("Sum", "Average", "Maximum", "Minimum", "SampleCount"):
                 value = _safe_float(item.get(alt), None)
                 if value is not None:
+                    statistic = statistic or alt.lower()
                     break
         if value is None:
             continue
+        # A CloudWatch timestamp marks the start of the aggregation period;
+        # keep the period width so downstream rate math can normalize.
+        interval_end = timestamp
+        period_seconds = _safe_int(item.get("PeriodSeconds"))
+        if period_seconds and timestamp:
+            try:
+                start_dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                interval_end = (start_dt + timedelta(seconds=period_seconds)).isoformat()
+            except ValueError:
+                interval_end = timestamp
         dimensions = item.get("Dimensions")
         metadata = {
             "dimensions": dimensions if isinstance(dimensions, list) else [],
@@ -709,11 +782,11 @@ def _normalize_aws_traffic_metric_records(records: list[dict]) -> list[dict]:
                 "metric_namespace": str(item.get("Namespace") or item.get("namespace") or "").strip(),
                 "resource_uid": _extract_resource_uid_from_dimensions(dimensions),
                 "direction": str(item.get("direction") or "").strip().lower(),
-                "statistic": str(item.get("Statistic") or item.get("statistic") or "").strip().lower(),
+                "statistic": statistic,
                 "unit": str(item.get("Unit") or item.get("unit") or "").strip(),
                 "value": value,
                 "interval_start": timestamp,
-                "interval_end": timestamp,
+                "interval_end": interval_end,
                 "metadata": metadata,
             }
         )
@@ -1150,9 +1223,12 @@ async def _build_hybrid_links(
                 "host_label": host.get("hostname") or host.get("ip_address") or f"host-{host.get('id')}",
                 "cloud_resource_uid": entry_uid,
                 "connection_type": entry_link_type,
-                "state": "up",
+                # These edges are inferred from inventory pairing, not measured
+                # tunnel state — never claim "up" for a link nothing verified.
+                "state": "unverified",
                 "metadata": {
                     "source": source,
+                    "synthetic": True,
                     "host_ip": host.get("ip_address"),
                 },
             }
@@ -1183,6 +1259,54 @@ async def _build_live_discovery_snapshot(
         return resources, connections, []
     hybrid_links = await _build_hybrid_links(account, resources, connect_host_ids, source="live")
     return resources, connections, hybrid_links
+
+
+async def run_scheduled_discovery() -> dict:
+    """Refresh live topology snapshots for all enabled cloud accounts.
+
+    Called from the scheduled discovery loop. Failures keep the last
+    known-good snapshot and mark the account's sync status instead.
+    """
+    accounts = await db.list_cloud_accounts(enabled_only=True)
+    refreshed = 0
+    errors: list[str] = []
+    for account in accounts:
+        account_id = int(account["id"])
+        try:
+            existing_links = await db.get_cloud_hybrid_links(account_id=account_id)
+            host_ids = sorted(
+                {int(link.get("host_id")) for link in existing_links if link.get("host_id")}
+            )
+            resources, connections, hybrid_links = await _build_live_discovery_snapshot(
+                account, host_ids, bool(host_ids),
+            )
+            await db.replace_cloud_discovery_snapshot(
+                account_id,
+                resources=resources,
+                connections=connections,
+                hybrid_links=hybrid_links,
+                sync_status="success",
+                sync_message="Scheduled live discovery refresh",
+            )
+            refreshed += 1
+        except CloudCollectorError as exc:
+            message = str(exc) or type(exc).__name__
+            LOGGER.warning(
+                "scheduled cloud discovery failed account_id=%s: %s", account_id, message,
+            )
+            await db.set_cloud_account_sync_status(account_id, status="error", message=message)
+            errors.append(f"account {account_id}: {message}")
+        except Exception:
+            LOGGER.error(
+                "scheduled cloud discovery unexpected failure account_id=%s",
+                account_id,
+                exc_info=True,
+            )
+            await db.set_cloud_account_sync_status(
+                account_id, status="error", message="Scheduled discovery failed",
+            )
+            errors.append(f"account {account_id}: unexpected error")
+    return {"accounts": len(accounts), "refreshed": refreshed, "errors": errors}
 
 
 @router.get("/api/cloud/providers")
@@ -1258,13 +1382,20 @@ async def update_cloud_account_api(account_id: int, body: CloudAccountUpdate, re
         raise HTTPException(status_code=404, detail="Cloud account not found")
 
     updates = body.model_dump(exclude_none=True)
+    clear_auth_config = bool(updates.pop("clear_auth_config", False))
     if "provider" in updates:
         try:
             updates["provider"] = _normalize_provider(updates.get("provider"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
     if "auth_config" in updates:
-        updates["auth_config_json"] = updates.pop("auth_config")
+        auth_config = updates.pop("auth_config")
+        # Stored credentials are write-only, so the edit form can't re-submit
+        # them: an empty dict here means "unchanged", not "erase".
+        if auth_config:
+            updates["auth_config_json"] = auth_config
+    if clear_auth_config:
+        updates["auth_config_json"] = {}
 
     updated = await db.update_cloud_account(account_id, **updates)
     if not updated:
@@ -1542,6 +1673,8 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
     sync_status = "success"
     sync_message = ""
 
+    failure_status_code = 502
+
     try:
         if requested_mode == "sample":
             resources, connections, hybrid_links = await _build_sample_discovery_snapshot(
@@ -1560,44 +1693,52 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
                 effective_mode = "live"
                 sync_message = "Live provider discovery snapshot refreshed"
             except CloudCollectorUnavailable:
-                if requested_mode == "live":
-                    raise HTTPException(status_code=503, detail="Live discovery dependencies are not installed") from None
-                LOGGER.warning("cloud live discovery unavailable account_id=%s; falling back to sample mode", account_id)
-                resources, connections, hybrid_links = await _build_sample_discovery_snapshot(
-                    account,
-                    payload.connect_host_ids,
-                    payload.include_hybrid_links,
-                )
-                effective_mode = "sample"
-                fallback_used = True
-                sync_status = "warning"
-                sync_message = "Live discovery unavailable; sample snapshot used"
+                sync_status = "error"
+                sync_message = "Live discovery dependencies are not installed"
+                failure_status_code = 503
             except CloudCollectorAuthError:
-                if requested_mode == "live":
-                    raise HTTPException(status_code=400, detail="Live discovery authentication/configuration failed") from None
-                LOGGER.warning("cloud live discovery auth failure account_id=%s; falling back to sample mode", account_id)
-                resources, connections, hybrid_links = await _build_sample_discovery_snapshot(
-                    account,
-                    payload.connect_host_ids,
-                    payload.include_hybrid_links,
-                )
-                effective_mode = "sample"
-                fallback_used = True
-                sync_status = "warning"
-                sync_message = "Live discovery authentication failed; sample snapshot used"
+                sync_status = "error"
+                sync_message = "Live discovery authentication/configuration failed"
+                failure_status_code = 400
             except CloudCollectorExecutionError:
-                if requested_mode == "live":
-                    raise HTTPException(status_code=502, detail="Live provider discovery failed") from None
-                LOGGER.warning("cloud live discovery execution failure account_id=%s; falling back to sample mode", account_id)
-                resources, connections, hybrid_links = await _build_sample_discovery_snapshot(
-                    account,
-                    payload.connect_host_ids,
-                    payload.include_hybrid_links,
-                )
-                effective_mode = "sample"
-                fallback_used = True
-                sync_status = "warning"
-                sync_message = "Live discovery failed; sample snapshot used"
+                sync_status = "error"
+                sync_message = "Live provider discovery failed"
+                failure_status_code = 502
+
+        if sync_status == "error":
+            # Live discovery failed: keep the last-known-good snapshot and
+            # report the failure. Replacing real discovered topology with
+            # fabricated sample data would make the dashboard show fiction;
+            # sample data is only ever written when explicitly requested
+            # (mode="sample").
+            LOGGER.warning(
+                "cloud live discovery failed account_id=%s mode=%s: %s",
+                account_id,
+                requested_mode,
+                sync_message,
+            )
+            await db.set_cloud_account_sync_status(
+                account_id, status="error", message=sync_message,
+            )
+            if requested_mode == "live":
+                raise HTTPException(status_code=failure_status_code, detail=sync_message) from None
+            session = _get_session(request) or {}
+            await _audit(
+                "cloud_visibility",
+                "discover_snapshot",
+                user=session.get("user", ""),
+                detail=f"account_id={account_id} requested_mode={requested_mode} effective_mode=live status=error",
+                correlation_id=_corr_id(request),
+            )
+            return {
+                "ok": False,
+                "account_id": account_id,
+                "requested_mode": requested_mode,
+                "effective_mode": "live",
+                "fallback_used": False,
+                "message": f"{sync_message}; existing snapshot kept",
+                "summary": None,
+            }
 
         summary = await db.replace_cloud_discovery_snapshot(
             account_id,
@@ -1950,6 +2091,42 @@ class CloudTrafficSyncConfigUpdate(BaseModel):
     lookback_minutes: int | None = None
 
 
+class CloudDiscoverySyncConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
+
+
+@router.get("/api/cloud/discovery-sync/config")
+async def get_cloud_discovery_sync_config_api():
+    import netcontrol.routes.state as state
+    return {"config": dict(state.CLOUD_DISCOVERY_SYNC_CONFIG)}
+
+
+@router.put("/api/cloud/discovery-sync/config", dependencies=[Depends(_require_admin_dep)])
+async def update_cloud_discovery_sync_config_api(request: Request, body: CloudDiscoverySyncConfigUpdate):
+    import netcontrol.routes.state as state
+
+    current = dict(state.CLOUD_DISCOVERY_SYNC_CONFIG)
+    if body.enabled is not None:
+        current["enabled"] = body.enabled
+    if body.interval_seconds is not None:
+        current["interval_seconds"] = body.interval_seconds
+
+    sanitized = state._sanitize_cloud_discovery_sync_config(current)
+    state.CLOUD_DISCOVERY_SYNC_CONFIG = sanitized
+    await db.set_auth_setting("cloud_discovery_sync", sanitized)
+
+    session = _get_session(request) or {}
+    await _audit(
+        "cloud_visibility",
+        "update_discovery_sync_config",
+        user=session.get("user", ""),
+        detail=f"enabled={sanitized['enabled']} interval={sanitized['interval_seconds']}s",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "config": sanitized}
+
+
 @router.get("/api/cloud/flow-sync/config")
 async def get_cloud_flow_sync_config_api():
     import netcontrol.routes.state as state
@@ -1987,48 +2164,90 @@ async def update_cloud_flow_sync_config_api(request: Request, body: CloudFlowSyn
 async def trigger_cloud_flow_sync_api(
     request: Request,
     account_id: int | None = Query(default=None),
+    background: bool = Query(default=False),
 ):
-    """Manually trigger cloud flow-log pull for one or all accounts."""
+    """Manually trigger cloud flow-log pull for one or all accounts.
+
+    With ``background=true`` the pull runs as a fire-and-forget task and the
+    endpoint returns 202 immediately; poll the sync status for the outcome.
+    A provider pull can poll for minutes, which would otherwise hold the HTTP
+    request past typical reverse-proxy timeouts.
+    """
+    import netcontrol.routes.state as state
     from netcontrol.routes.cloud_flow_pullers import (
         pull_flow_logs_all_accounts,
         pull_flow_logs_for_account,
     )
 
+    lookback = int(state.CLOUD_FLOW_SYNC_CONFIG.get("lookback_minutes", 15))
+
+    account = None
     if account_id is not None:
         account = await db.get_cloud_account(account_id)
         if not account:
             raise HTTPException(status_code=404, detail="Cloud account not found")
-        result = await pull_flow_logs_for_account(account)
-        result["account_id"] = account_id
-        status = await persist_cloud_flow_sync_status(
-            build_cloud_sync_status(
-                result,
-                source="manual",
-                scope="account",
-                account_id=account_id,
-                account_name=str(account.get("name") or "").strip(),
+
+    async def _run() -> tuple[dict, dict]:
+        if account is not None:
+            result = await pull_flow_logs_for_account(account, lookback_minutes=lookback)
+            result["account_id"] = account_id
+            status = await persist_cloud_flow_sync_status(
+                build_cloud_sync_status(
+                    result,
+                    source="manual",
+                    scope="account",
+                    account_id=account_id,
+                    account_name=str(account.get("name") or "").strip(),
+                )
             )
-        )
-    else:
-        result = await pull_flow_logs_all_accounts()
-        status = await persist_cloud_flow_sync_status(
-            build_cloud_sync_status(result, source="manual", scope="all")
-        )
+        else:
+            result = await pull_flow_logs_all_accounts(lookback_minutes=lookback)
+            status = await persist_cloud_flow_sync_status(
+                build_cloud_sync_status(result, source="manual", scope="all")
+            )
+        return result, status
 
     session = _get_session(request) or {}
+    correlation_id = _corr_id(request)
+
+    # `is True` so direct (non-HTTP) invocation with the Query default object
+    # stays on the synchronous path.
+    if background is True:
+        async def _run_logged() -> None:
+            try:
+                await _run()
+            except Exception:
+                LOGGER.error("background cloud flow pull failed", exc_info=True)
+
+        task = asyncio.create_task(_run_logged())
+        _BACKGROUND_PULL_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_PULL_TASKS.discard)
+        await _audit(
+            "cloud_visibility",
+            "manual_flow_sync_pull",
+            user=session.get("user", ""),
+            detail=f"account_id={account_id} background=true",
+            correlation_id=correlation_id,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={"ok": True, "started": True, "account_id": account_id},
+        )
+
+    result, status = await _run()
     await _audit(
         "cloud_visibility",
         "manual_flow_sync_pull",
         user=session.get("user", ""),
         detail=f"account_id={account_id} ingested={result.get('ingested', result.get('total_ingested', 0))}",
-        correlation_id=_corr_id(request),
+        correlation_id=correlation_id,
     )
     return {"ok": True, **result, "status": status}
 
 
-@router.get("/api/cloud/flow-sync/cursors")
+@router.get("/api/cloud/flow-sync/cursors", dependencies=[Depends(_require_admin_dep)])
 async def get_cloud_flow_sync_cursors_api():
-    """Return per-account flow-log sync watermarks."""
+    """Return per-account flow-log sync watermarks (operational internals; admin only)."""
     cursors = await db.list_cloud_flow_sync_cursors()
     for c in cursors:
         c["extra"] = _json_loads_safe(c.get("extra_json"), {})
@@ -2078,8 +2297,13 @@ async def update_cloud_traffic_sync_config_api(request: Request, body: CloudTraf
 async def trigger_cloud_traffic_sync_api(
     request: Request,
     account_id: int | None = Query(default=None),
+    background: bool = Query(default=False),
 ):
-    """Manually trigger cloud traffic-metric pull for one or all accounts."""
+    """Manually trigger cloud traffic-metric pull for one or all accounts.
+
+    With ``background=true`` the pull runs as a fire-and-forget task and the
+    endpoint returns 202 immediately; poll the sync status for the outcome.
+    """
     import netcontrol.routes.state as state
     from netcontrol.routes.cloud_metric_pullers import (
         pull_traffic_metrics_all_accounts,
@@ -2088,41 +2312,73 @@ async def trigger_cloud_traffic_sync_api(
 
     lookback = int(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG.get("lookback_minutes", 15))
 
+    account = None
     if account_id is not None:
         account = await db.get_cloud_account(account_id)
         if not account:
             raise HTTPException(status_code=404, detail="Cloud account not found")
-        result = await pull_traffic_metrics_for_account(account, lookback_minutes=lookback)
-        result["account_id"] = account_id
-        status = await persist_cloud_traffic_sync_status(
-            build_cloud_sync_status(
-                result,
-                source="manual",
-                scope="account",
-                account_id=account_id,
-                account_name=str(account.get("name") or "").strip(),
+
+    async def _run() -> tuple[dict, dict]:
+        if account is not None:
+            result = await pull_traffic_metrics_for_account(account, lookback_minutes=lookback)
+            result["account_id"] = account_id
+            status = await persist_cloud_traffic_sync_status(
+                build_cloud_sync_status(
+                    result,
+                    source="manual",
+                    scope="account",
+                    account_id=account_id,
+                    account_name=str(account.get("name") or "").strip(),
+                )
             )
-        )
-    else:
-        result = await pull_traffic_metrics_all_accounts(lookback_minutes=lookback)
-        status = await persist_cloud_traffic_sync_status(
-            build_cloud_sync_status(result, source="manual", scope="all")
-        )
+        else:
+            result = await pull_traffic_metrics_all_accounts(lookback_minutes=lookback)
+            status = await persist_cloud_traffic_sync_status(
+                build_cloud_sync_status(result, source="manual", scope="all")
+            )
+        return result, status
 
     session = _get_session(request) or {}
+    correlation_id = _corr_id(request)
+
+    # `is True` so direct (non-HTTP) invocation with the Query default object
+    # stays on the synchronous path.
+    if background is True:
+        async def _run_logged() -> None:
+            try:
+                await _run()
+            except Exception:
+                LOGGER.error("background cloud traffic pull failed", exc_info=True)
+
+        task = asyncio.create_task(_run_logged())
+        _BACKGROUND_PULL_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_PULL_TASKS.discard)
+        await _audit(
+            "cloud_visibility",
+            "manual_traffic_sync_pull",
+            user=session.get("user", ""),
+            detail=f"account_id={account_id} background=true",
+            correlation_id=correlation_id,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={"ok": True, "started": True, "account_id": account_id},
+        )
+
+    result, status = await _run()
     await _audit(
         "cloud_visibility",
         "manual_traffic_sync_pull",
         user=session.get("user", ""),
         detail=f"account_id={account_id} ingested={result.get('ingested', result.get('total_ingested', 0))}",
-        correlation_id=_corr_id(request),
+        correlation_id=correlation_id,
     )
     return {"ok": True, **result, "status": status}
 
 
-@router.get("/api/cloud/traffic-sync/cursors")
+@router.get("/api/cloud/traffic-sync/cursors", dependencies=[Depends(_require_admin_dep)])
 async def get_cloud_traffic_sync_cursors_api():
-    """Return per-account traffic-metric sync watermarks."""
+    """Return per-account traffic-metric sync watermarks (operational internals; admin only)."""
     cursors = await db.list_cloud_traffic_metric_sync_cursors()
     for c in cursors:
         c["extra"] = _json_loads_safe(c.get("extra_json"), {})

@@ -11,7 +11,7 @@ import {
   useValidateCloudAccount,
 } from '@/api/cloud';
 import { Modal } from '@/components/Modal';
-import { authHintContent, computeSyncReadiness, formatTimestamp, providerLabel } from './helpers';
+import { authHintContent, formatTimestamp, providerLabel } from './helpers';
 
 interface Props {
   accounts: CloudAccount[];
@@ -66,7 +66,13 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
   async function runDiscover(a: CloudAccount) {
     try {
       const result = await discover.mutateAsync(a.id);
-      showMsg('success', result?.message ?? 'Discovery completed');
+      if (result && result.ok === false) {
+        showMsg('error', `${a.name}: ${result.message ?? 'Discovery failed'}`);
+      } else if (result?.fallback_used || result?.effective_mode === 'sample') {
+        showMsg('error', `${a.name}: showing SAMPLE data, not live topology (${result?.message ?? ''})`);
+      } else {
+        showMsg('success', result?.message ?? 'Discovery completed');
+      }
     } catch (e) {
       showMsg('error', `Discovery failed: ${(e as Error).message}`);
     } finally {
@@ -145,6 +151,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
                 <th>Provider</th>
                 <th>Account</th>
                 <th>Scope</th>
+                <th>Enabled</th>
                 <th>Last Sync</th>
                 <th>Sync Readiness</th>
                 <th>Resources</th>
@@ -153,7 +160,12 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
             </thead>
             <tbody>
               {accounts.map((a) => {
-                const readiness = computeSyncReadiness(a);
+                const readiness = {
+                  flowReady: a.sync_readiness?.flow_ready ?? false,
+                  trafficReady: a.sync_readiness?.traffic_ready ?? false,
+                  flowMissing: a.sync_readiness?.flow_missing ?? [],
+                  trafficMissing: a.sync_readiness?.traffic_missing ?? [],
+                };
                 return (
                   <tr key={a.id}>
                     <td>{a.name}</td>
@@ -161,7 +173,22 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
                     <td>{a.account_identifier ?? '-'}</td>
                     <td>{a.region_scope ?? '-'}</td>
                     <td>
-                      <div>{a.last_sync_status ?? 'never'}</div>
+                      <span className={`badge badge-${a.enabled ? 'success' : 'secondary'}`}>
+                        {a.enabled ? 'enabled' : 'disabled'}
+                      </span>
+                    </td>
+                    <td>
+                      <div
+                        title={a.last_sync_message || undefined}
+                        style={a.last_sync_status === 'error' ? { color: 'var(--danger)' } : undefined}
+                      >
+                        {a.last_sync_status ?? 'never'}
+                      </div>
+                      {a.last_sync_status === 'error' && a.last_sync_message && (
+                        <small style={{ color: 'var(--danger)', display: 'block', maxWidth: '16rem' }}>
+                          {a.last_sync_message}
+                        </small>
+                      )}
                       <small className="text-muted">{a.last_sync_at ? formatTimestamp(a.last_sync_at) : 'Never'}</small>
                     </td>
                     <td>
@@ -253,7 +280,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
         {confirmDiscover && (
           <div>
             <p>
-              Refresh cloud topology snapshot for <strong>{confirmDiscover.name}</strong>? Auto mode tries live provider APIs first, then falls back to sample data if dependencies/credentials are missing.
+              Refresh cloud topology snapshot for <strong>{confirmDiscover.name}</strong>? Live provider APIs are used; if discovery fails, the last known snapshot is kept and the error is reported.
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setConfirmDiscover(null)}>Cancel</button>
@@ -283,12 +310,9 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
   const [accountIdentifier, setAccountIdentifier] = useState(account?.account_identifier ?? '');
   const [regionScope, setRegionScope] = useState(account?.region_scope ?? '');
   const [authType, setAuthType] = useState(account?.auth_type ?? 'manual');
-  const [authConfigText, setAuthConfigText] = useState(() => {
-    const cfg = account?.auth_config;
-    if (cfg && typeof cfg === 'object') return JSON.stringify(cfg, null, 2);
-    if (typeof cfg === 'string') return cfg;
-    return '';
-  });
+  // The API never returns the stored auth_config (write-only credentials),
+  // so on edit this always starts blank; blank means "keep stored config".
+  const [authConfigText, setAuthConfigText] = useState('');
   const [notes, setNotes] = useState(account?.notes ?? '');
   const [enabled, setEnabled] = useState(account ? Boolean(account.enabled) : true);
   const [error, setError] = useState<string | null>(null);
@@ -319,7 +343,7 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
       setError('Account name is required');
       return;
     }
-    let authConfig: Record<string, unknown> = {};
+    let authConfig: Record<string, unknown> | undefined;
     const text = authConfigText.trim();
     if (text) {
       try {
@@ -335,16 +359,20 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
       account_identifier: accountIdentifier.trim(),
       region_scope: regionScope.trim(),
       auth_type: authType || 'manual',
-      auth_config: authConfig,
       notes: notes.trim(),
       enabled,
     };
     try {
       if (account?.id) {
-        await update.mutateAsync({ id: account.id, data: payload });
+        // Omit auth_config when the field was left blank so stored
+        // credentials are kept (they are write-only and can't be re-shown).
+        await update.mutateAsync({
+          id: account.id,
+          data: authConfig ? { ...payload, auth_config: authConfig } : payload,
+        });
         onSaved(`Cloud account "${payload.name}" updated`);
       } else {
-        await create.mutateAsync(payload);
+        await create.mutateAsync({ ...payload, auth_config: authConfig ?? {} });
         onSaved(`Cloud account "${payload.name}" created`);
       }
     } catch (err) {
@@ -384,8 +412,23 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
           </select>
         </label>
         <label>
-          Auth Config (JSON references, non-secret)
-          <textarea className="form-input" rows={4} value={authConfigText} onChange={(e) => setAuthConfigText(e.target.value)} placeholder='{"secret_ref":"aws-prod-readonly"}' />
+          Auth Config (JSON, stored encrypted and write-only)
+          <textarea
+            className="form-input"
+            rows={4}
+            value={authConfigText}
+            onChange={(e) => setAuthConfigText(e.target.value)}
+            placeholder={account?.id && account?.has_auth_config
+              ? 'Credentials are stored. Leave blank to keep them; paste a full config to replace.'
+              : '{"log_group_name":"/aws/vpc/flow-logs"}'}
+          />
+          {account?.id && (
+            <small className="text-muted">
+              {account?.has_auth_config
+                ? 'A credential config is stored for this account (never shown). Leave blank to keep it unchanged.'
+                : 'No credential config stored yet.'}
+            </small>
+          )}
         </label>
         <div className="card" style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)' }}>
           <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Provider Sync Requirements</div>

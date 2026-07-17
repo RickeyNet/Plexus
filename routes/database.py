@@ -1366,6 +1366,7 @@ CREATE INDEX IF NOT EXISTS idx_flow_received ON flow_records(received_at);
 CREATE INDEX IF NOT EXISTS idx_flow_exporter ON flow_records(exporter_ip, received_at);
 CREATE INDEX IF NOT EXISTS idx_flow_src ON flow_records(src_ip, received_at);
 CREATE INDEX IF NOT EXISTS idx_flow_dst ON flow_records(dst_ip, received_at);
+CREATE INDEX IF NOT EXISTS idx_flow_records_flow_type_received ON flow_records(flow_type, received_at);
 
 CREATE TABLE IF NOT EXISTS flow_summaries (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1761,6 +1762,8 @@ CREATE INDEX IF NOT EXISTS idx_cloud_traffic_metrics_lookup
     ON cloud_traffic_metrics (account_id, provider, metric_name, interval_end);
 CREATE INDEX IF NOT EXISTS idx_cloud_traffic_metrics_resource
     ON cloud_traffic_metrics (resource_uid, interval_end);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_traffic_metrics_sample_identity
+    ON cloud_traffic_metrics (account_id, metric_name, resource_uid, statistic, interval_start);
 
 -- 0016: cloud traffic metric sync cursors
 CREATE TABLE IF NOT EXISTS cloud_traffic_metric_sync_cursors (

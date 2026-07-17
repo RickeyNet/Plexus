@@ -375,9 +375,21 @@ def _aws_tag_name(tags: list[dict] | None) -> str:
     return ""
 
 
+def _aws_list_all(client, operation: str, result_key: str, **kwargs) -> list[dict]:
+    """Return all pages of an AWS list/describe call (paginated when supported)."""
+    if client.can_paginate(operation):
+        items: list[dict] = []
+        for page in client.get_paginator(operation).paginate(**kwargs):
+            items.extend(page.get(result_key) or [])
+        return items
+    resp = getattr(client, operation)(**kwargs)
+    return list(resp.get(result_key) or [])
+
+
 def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
     try:
         import boto3
+        from botocore.config import Config
         from botocore.exceptions import BotoCoreError, ClientError
     except Exception as exc:
         raise CloudCollectorUnavailable("AWS collector requires boto3/botocore") from exc
@@ -398,11 +410,13 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
     except Exception as exc:
         raise CloudCollectorAuthError("Failed to initialize AWS session") from exc
 
+    _cfg = Config(connect_timeout=10, read_timeout=60, retries={"max_attempts": 4, "mode": "adaptive"})
+
     role_arn = str(auth.get("role_arn") or "").strip()
     external_id = str(auth.get("external_id") or "").strip()
     if role_arn:
         try:
-            sts = session.client("sts")
+            sts = session.client("sts", config=_cfg)
             assume_args = {
                 "RoleArn": role_arn,
                 "RoleSessionName": str(auth.get("role_session_name") or "plexus-cloud-visibility"),
@@ -424,7 +438,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
 
     # Validate credentials early.
     try:
-        session.client("sts").get_caller_identity()
+        session.client("sts", config=_cfg).get_caller_identity()
     except (BotoCoreError, ClientError) as exc:
         raise CloudCollectorAuthError("AWS credentials are invalid or unauthorized") from exc
     except Exception as exc:
@@ -432,12 +446,12 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
 
     resources: list[dict] = []
     connections: list[dict] = []
-    subnet_to_vnet: dict[str, str] = {}
+    section_errors: list[str] = []
 
     for region in regions:
-        ec2 = session.client("ec2", region_name=region)
+        ec2 = session.client("ec2", region_name=region, config=_cfg)
         try:
-            vpcs = ec2.describe_vpcs().get("Vpcs", [])
+            vpcs = _aws_list_all(ec2, "describe_vpcs", "Vpcs")
             for vpc in vpcs:
                 vpc_id = str(vpc.get("VpcId") or "").strip()
                 if not vpc_id:
@@ -455,10 +469,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                     )
                 )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed vpc list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed vpc list region=%s", region, exc_info=True)
+            section_errors.append(f"vpcs:{region}")
 
         try:
-            igws = ec2.describe_internet_gateways().get("InternetGateways", [])
+            igws = _aws_list_all(ec2, "describe_internet_gateways", "InternetGateways")
             for gateway in igws:
                 igw_id = str(gateway.get("InternetGatewayId") or "").strip()
                 if not igw_id:
@@ -491,10 +506,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         )
                     )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed internet gateway list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed internet gateway list region=%s", region, exc_info=True)
+            section_errors.append(f"internet_gateways:{region}")
 
         try:
-            nat_gateways = ec2.describe_nat_gateways().get("NatGateways", [])
+            nat_gateways = _aws_list_all(ec2, "describe_nat_gateways", "NatGateways")
             for gateway in nat_gateways:
                 nat_id = str(gateway.get("NatGatewayId") or "").strip()
                 if not nat_id:
@@ -526,10 +542,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         )
                     )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed nat gateway list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed nat gateway list region=%s", region, exc_info=True)
+            section_errors.append(f"nat_gateways:{region}")
 
         try:
-            sec_groups = ec2.describe_security_groups().get("SecurityGroups", [])
+            sec_groups = _aws_list_all(ec2, "describe_security_groups", "SecurityGroups")
             for group in sec_groups:
                 gid = str(group.get("GroupId") or "").strip()
                 if not gid:
@@ -549,10 +566,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                     )
                 )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed security group list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed security group list region=%s", region, exc_info=True)
+            section_errors.append(f"security_groups:{region}")
 
         try:
-            tgws = ec2.describe_transit_gateways().get("TransitGateways", [])
+            tgws = _aws_list_all(ec2, "describe_transit_gateways", "TransitGateways")
             for tgw in tgws:
                 tgw_id = str(tgw.get("TransitGatewayId") or "").strip()
                 if not tgw_id:
@@ -568,10 +586,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                     )
                 )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed tgw list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed tgw list region=%s", region, exc_info=True)
+            section_errors.append(f"transit_gateways:{region}")
 
         try:
-            attachments = ec2.describe_transit_gateway_attachments().get("TransitGatewayAttachments", [])
+            attachments = _aws_list_all(ec2, "describe_transit_gateway_attachments", "TransitGatewayAttachments")
             for attachment in attachments:
                 tgw_id = str(attachment.get("TransitGatewayId") or "").strip()
                 res_type = str(attachment.get("ResourceType") or "").strip().lower()
@@ -590,10 +609,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                     )
                 )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed tgw attachment list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed tgw attachment list region=%s", region, exc_info=True)
+            section_errors.append(f"transit_gateway_attachments:{region}")
 
         try:
-            peerings = ec2.describe_vpc_peering_connections().get("VpcPeeringConnections", [])
+            peerings = _aws_list_all(ec2, "describe_vpc_peering_connections", "VpcPeeringConnections")
             for peering in peerings:
                 req = peering.get("RequesterVpcInfo") or {}
                 acc = peering.get("AccepterVpcInfo") or {}
@@ -612,10 +632,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                     )
                 )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed vpc peering list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed vpc peering list region=%s", region, exc_info=True)
+            section_errors.append(f"vpc_peering_connections:{region}")
 
         try:
-            vpn_gateways = ec2.describe_vpn_gateways().get("VpnGateways", [])
+            vpn_gateways = _aws_list_all(ec2, "describe_vpn_gateways", "VpnGateways")
             for gateway in vpn_gateways:
                 gateway_id = str(gateway.get("VpnGatewayId") or "").strip()
                 if not gateway_id:
@@ -649,10 +670,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         )
                     )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed vpn gateway list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed vpn gateway list region=%s", region, exc_info=True)
+            section_errors.append(f"vpn_gateways:{region}")
 
         try:
-            route_tables = ec2.describe_route_tables().get("RouteTables", [])
+            route_tables = _aws_list_all(ec2, "describe_route_tables", "RouteTables")
             for route_table in route_tables:
                 route_table_id = str(route_table.get("RouteTableId") or "").strip()
                 vpc_id = str(route_table.get("VpcId") or "").strip()
@@ -710,10 +732,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         )
                     )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed route table list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed route table list region=%s", region, exc_info=True)
+            section_errors.append(f"route_tables:{region}")
 
         try:
-            vpns = ec2.describe_vpn_connections().get("VpnConnections", [])
+            vpns = _aws_list_all(ec2, "describe_vpn_connections", "VpnConnections")
             for vpn in vpns:
                 vpn_id = str(vpn.get("VpnConnectionId") or "").strip()
                 if not vpn_id:
@@ -752,30 +775,38 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         )
                     )
         except (BotoCoreError, ClientError):
-            LOGGER.debug("aws collector: failed vpn list region=%s", region, exc_info=True)
+            LOGGER.warning("aws collector: failed vpn list region=%s", region, exc_info=True)
+            section_errors.append(f"vpn_connections:{region}")
 
-    # Direct Connect API is region-bound but global data plane is in us-east-1.
-    try:
-        dx_region = regions[0] if regions else "us-east-1"
-        dx = session.client("directconnect", region_name=dx_region)
-        dx_connections = dx.describe_connections().get("connections", [])
-        for dx_conn in dx_connections:
-            conn_id = str(dx_conn.get("connectionId") or "").strip()
-            if not conn_id:
-                continue
-            resources.append(
-                _normalize_resource(
-                    "aws",
-                    f"aws:direct_connect:{conn_id}",
-                    "direct_connect",
-                    name=str(dx_conn.get("connectionName") or ""),
-                    region=str(dx_conn.get("region") or dx_region),
-                    status=str(dx_conn.get("connectionState") or ""),
-                    metadata={"bandwidth": str(dx_conn.get("bandwidth") or "")},
+        # Direct Connect is region-bound; query every configured region.
+        try:
+            dx = session.client("directconnect", region_name=region, config=_cfg)
+            dx_connections = _aws_list_all(dx, "describe_connections", "connections")
+            for dx_conn in dx_connections:
+                conn_id = str(dx_conn.get("connectionId") or "").strip()
+                if not conn_id:
+                    continue
+                resources.append(
+                    _normalize_resource(
+                        "aws",
+                        f"aws:direct_connect:{conn_id}",
+                        "direct_connect",
+                        name=str(dx_conn.get("connectionName") or ""),
+                        region=str(dx_conn.get("region") or region),
+                        status=str(dx_conn.get("connectionState") or ""),
+                        metadata={"bandwidth": str(dx_conn.get("bandwidth") or "")},
+                    )
                 )
-            )
-    except Exception:
-        LOGGER.debug("aws collector: failed direct connect list", exc_info=True)
+        except Exception:
+            LOGGER.warning("aws collector: failed direct connect list region=%s", region, exc_info=True)
+            section_errors.append(f"direct_connect:{region}")
+
+    # A partial snapshot must not silently replace the last known-good one; the
+    # discover endpoint keeps the previous snapshot and surfaces this message on failure.
+    if section_errors:
+        raise CloudCollectorExecutionError(
+            "Partial provider discovery; failed sections: " + ", ".join(sorted(set(section_errors)))
+        )
 
     return _dedupe_resources(resources), _dedupe_connections(connections)
 
@@ -860,6 +891,7 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
     resources: list[dict] = []
     connections: list[dict] = []
     subnet_to_vnet: dict[str, str] = {}
+    section_errors: list[str] = []
 
     try:
         for vnet in network_client.virtual_networks.list_all():
@@ -910,7 +942,8 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                             )
                         )
             except Exception:
-                LOGGER.debug("azure collector: failed to list peerings for vnet=%s", name, exc_info=True)
+                LOGGER.warning("azure collector: failed to list peerings for vnet=%s", name, exc_info=True)
+                section_errors.append("vnet_peerings")
     except Exception as exc:
         raise CloudCollectorAuthError("Azure network API access failed") from exc
 
@@ -931,7 +964,8 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                 )
             )
     except Exception:
-        LOGGER.debug("azure collector: failed to list expressroute circuits", exc_info=True)
+        LOGGER.warning("azure collector: failed to list expressroute circuits", exc_info=True)
+        section_errors.append("expressroute_circuits")
 
     try:
         for gateway in network_client.virtual_network_gateways.list_all():
@@ -973,7 +1007,8 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                 )
                 break
     except Exception:
-        LOGGER.debug("azure collector: failed to list virtual network gateways", exc_info=True)
+        LOGGER.warning("azure collector: failed to list virtual network gateways", exc_info=True)
+        section_errors.append("virtual_network_gateways")
 
     try:
         for gateway in network_client.local_network_gateways.list_all():
@@ -1001,7 +1036,8 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                 )
             )
     except Exception:
-        LOGGER.debug("azure collector: failed to list local network gateways", exc_info=True)
+        LOGGER.warning("azure collector: failed to list local network gateways", exc_info=True)
+        section_errors.append("local_network_gateways")
 
     try:
         for route_table in network_client.route_tables.list_all():
@@ -1050,7 +1086,8 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                     )
                 )
     except Exception:
-        LOGGER.debug("azure collector: failed to list route tables", exc_info=True)
+        LOGGER.warning("azure collector: failed to list route tables", exc_info=True)
+        section_errors.append("route_tables")
 
     try:
         for nsg in network_client.network_security_groups.list_all():
@@ -1073,7 +1110,8 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                 )
             )
     except Exception:
-        LOGGER.debug("azure collector: failed to list nsgs", exc_info=True)
+        LOGGER.warning("azure collector: failed to list nsgs", exc_info=True)
+        section_errors.append("network_security_groups")
 
     try:
         gateway_connections = getattr(network_client, "virtual_network_gateway_connections", None)
@@ -1101,7 +1139,15 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                     )
                 )
     except Exception:
-        LOGGER.debug("azure collector: failed to list gateway connections", exc_info=True)
+        LOGGER.warning("azure collector: failed to list gateway connections", exc_info=True)
+        section_errors.append("gateway_connections")
+
+    # A partial snapshot must not silently replace the last known-good one; the
+    # discover endpoint keeps the previous snapshot and surfaces this message on failure.
+    if section_errors:
+        raise CloudCollectorExecutionError(
+            "Partial provider discovery; failed sections: " + ", ".join(sorted(set(section_errors)))
+        )
 
     return _dedupe_resources(resources), _dedupe_connections(connections)
 
@@ -1158,6 +1204,7 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
 
     resources: list[dict] = []
     connections: list[dict] = []
+    section_errors: list[str] = []
 
     # Networks
     try:
@@ -1231,7 +1278,8 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
                         )
             req = compute.routers().aggregatedList_next(previous_request=req, previous_response=resp)
     except Exception:
-        LOGGER.debug("gcp collector: failed router list", exc_info=True)
+        LOGGER.warning("gcp collector: failed router list", exc_info=True)
+        section_errors.append("routers")
 
     # VPN gateways
     try:
@@ -1268,7 +1316,8 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
                         )
             req = compute.vpnGateways().aggregatedList_next(previous_request=req, previous_response=resp)
     except Exception:
-        LOGGER.debug("gcp collector: failed vpn gateway list", exc_info=True)
+        LOGGER.warning("gcp collector: failed vpn gateway list", exc_info=True)
+        section_errors.append("vpn_gateways")
 
     try:
         req = compute.vpnTunnels().aggregatedList(project=project_id)
@@ -1318,7 +1367,8 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
                         )
             req = compute.vpnTunnels().aggregatedList_next(previous_request=req, previous_response=resp)
     except Exception:
-        LOGGER.debug("gcp collector: failed vpn tunnel list", exc_info=True)
+        LOGGER.warning("gcp collector: failed vpn tunnel list", exc_info=True)
+        section_errors.append("vpn_tunnels")
 
     try:
         req = compute.interconnectAttachments().aggregatedList(project=project_id)
@@ -1359,7 +1409,8 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
                         )
             req = compute.interconnectAttachments().aggregatedList_next(previous_request=req, previous_response=resp)
     except Exception:
-        LOGGER.debug("gcp collector: failed interconnect attachment list", exc_info=True)
+        LOGGER.warning("gcp collector: failed interconnect attachment list", exc_info=True)
+        section_errors.append("interconnect_attachments")
 
     try:
         req = compute.routes().list(project=project_id)
@@ -1443,7 +1494,8 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
                     )
             req = compute.routes().list_next(previous_request=req, previous_response=resp)
     except Exception:
-        LOGGER.debug("gcp collector: failed route list", exc_info=True)
+        LOGGER.warning("gcp collector: failed route list", exc_info=True)
+        section_errors.append("routes")
 
     # Firewall policies (network firewalls)
     try:
@@ -1481,7 +1533,15 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
                     )
             req = compute.firewalls().list_next(previous_request=req, previous_response=resp)
     except Exception:
-        LOGGER.debug("gcp collector: failed firewall list", exc_info=True)
+        LOGGER.warning("gcp collector: failed firewall list", exc_info=True)
+        section_errors.append("firewalls")
+
+    # A partial snapshot must not silently replace the last known-good one; the
+    # discover endpoint keeps the previous snapshot and surfaces this message on failure.
+    if section_errors:
+        raise CloudCollectorExecutionError(
+            "Partial provider discovery; failed sections: " + ", ".join(sorted(set(section_errors)))
+        )
 
     return _dedupe_resources(resources), _dedupe_connections(connections)
 
@@ -1497,30 +1557,54 @@ def collect_provider_snapshot(account: dict) -> tuple[list[dict], list[dict]]:
     return _collect_gcp(account)
 
 
+def _importable(module_name: str) -> bool:
+    import importlib
+
+    try:
+        importlib.import_module(module_name)
+        return True
+    except Exception:
+        return False
+
+
+# module to check -> pip distribution name, per provider feature area.
+_PROVIDER_DEPENDENCIES: dict[str, dict[str, dict[str, str]]] = {
+    "aws": {
+        "topology": {"boto3": "boto3"},
+        "flow_logs": {"boto3": "boto3"},
+        "traffic_metrics": {"boto3": "boto3"},
+    },
+    "azure": {
+        "topology": {"azure.identity": "azure-identity", "azure.mgmt.network": "azure-mgmt-network"},
+        "flow_logs": {"azure.storage.blob": "azure-storage-blob"},
+        "traffic_metrics": {"azure.monitor.query": "azure-monitor-query"},
+    },
+    "gcp": {
+        "topology": {"google.auth": "google-auth", "googleapiclient.discovery": "google-api-python-client"},
+        "flow_logs": {"google.cloud.logging": "google-cloud-logging"},
+        "traffic_metrics": {"google.cloud.monitoring_v3": "google-cloud-monitoring"},
+    },
+}
+
+
 def get_provider_capabilities() -> dict[str, dict]:
     capabilities: dict[str, dict] = {}
     for provider in sorted(VALID_PROVIDERS):
-        missing_dependencies: list[str] = []
-        if provider == "aws":
-            try:
-                import boto3  # noqa: F401
-            except Exception:
-                missing_dependencies = ["boto3", "botocore"]
-        elif provider == "azure":
-            try:
-                import azure.identity  # noqa: F401
-                import azure.mgmt.network  # noqa: F401
-            except Exception:
-                missing_dependencies = ["azure-identity", "azure-mgmt-network"]
-        else:
-            try:
-                import google.auth  # noqa: F401
-                import googleapiclient.discovery  # noqa: F401
-            except Exception:
-                missing_dependencies = ["google-auth", "google-api-python-client"]
+        deps = _PROVIDER_DEPENDENCIES.get(provider, {})
+        features: dict[str, dict] = {}
+        all_missing: list[str] = []
+        for feature, modules in deps.items():
+            missing = sorted(
+                {dist for module, dist in modules.items() if not _importable(module)}
+            )
+            features[feature] = {"supported": not missing, "missing_dependencies": missing}
+            all_missing.extend(missing)
 
+        topology_missing = features.get("topology", {}).get("missing_dependencies", [])
         capabilities[provider] = {
-            "live_supported": not missing_dependencies,
-            "missing_dependencies": missing_dependencies,
+            # Kept for backward compatibility: "live" refers to topology discovery.
+            "live_supported": not topology_missing,
+            "missing_dependencies": topology_missing,
+            "features": features,
         }
     return capabilities

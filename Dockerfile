@@ -29,9 +29,17 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
     libldap2-dev libsasl2-dev libssl-dev gcc gosu \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY requirements.txt requirements-cloud.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
+
+# Cloud Visibility provider SDKs (AWS/Azure/GCP). Off by default to keep the
+# base image small; build with --build-arg INSTALL_CLOUD_SDKS=true to enable
+# live cloud collection.
+ARG INSTALL_CLOUD_SDKS=false
+RUN if [ "$INSTALL_CLOUD_SDKS" = "true" ]; then \
+        pip install --no-cache-dir -r requirements-cloud.txt; \
+    fi
 
 COPY . .
 

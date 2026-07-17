@@ -21,7 +21,7 @@ export function TrafficTab({ filter }: Props) {
   const [hours, setHours] = useState(24);
   const [limit, setLimit] = useState(20);
   const [bucketMinutes, setBucketMinutes] = useState(5);
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
   const params = {
     provider: filter.provider || undefined,
@@ -48,13 +48,23 @@ export function TrafficTab({ filter }: Props) {
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
   }, []);
 
-  function flash(msg: string) {
-    setActionMsg(msg);
+  function flash(kind: 'success' | 'error', text: string) {
+    setActionMsg({ kind, text });
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     flashTimerRef.current = setTimeout(() => {
       flashTimerRef.current = null;
       setActionMsg(null);
-    }, 6000);
+    }, 8000);
+  }
+
+  function pullOutcome(label: string, r: { ok?: boolean; ingested?: number; total_ingested?: number; errors?: unknown[] } | undefined) {
+    const ingested = Number(r?.ingested ?? r?.total_ingested ?? 0).toLocaleString();
+    const errors = Array.isArray(r?.errors) ? r?.errors : [];
+    if (r?.ok === false || errors.length) {
+      flash('error', `${label} finished with ${errors.length || 'unknown'} error(s); ingested ${ingested}. ${errors.slice(0, 3).map(String).join(' | ')}`);
+    } else {
+      flash('success', `${label} complete: ${ingested} ingested`);
+    }
   }
 
   return (
@@ -95,26 +105,43 @@ export function TrafficTab({ filter }: Props) {
         isSaving={updateConfig.isPending}
         isPulling={triggerPull.isPending}
         onSave={async (cfg) => {
-          await updateConfig.mutateAsync(cfg);
-          flash('Cloud traffic sync config saved');
+          try {
+            await updateConfig.mutateAsync(cfg);
+            flash('success', 'Cloud traffic sync config saved');
+          } catch (e) {
+            flash('error', `Saving traffic sync config failed: ${(e as Error).message}`);
+          }
         }}
         onPullAll={async () => {
-          const r = await triggerPull.mutateAsync(null);
-          flash(`Traffic pull complete: ${Number(r?.ingested ?? r?.total_ingested ?? 0).toLocaleString()} ingested`);
+          try {
+            pullOutcome('Traffic pull', await triggerPull.mutateAsync(null));
+          } catch (e) {
+            flash('error', `Traffic pull failed: ${(e as Error).message}`);
+          }
         }}
         onPullSelected={async () => {
           if (!filter.accountId) return;
-          const r = await triggerPull.mutateAsync(filter.accountId);
-          flash(`Traffic pull complete for selected account: ${Number(r?.ingested ?? r?.total_ingested ?? 0).toLocaleString()} ingested`);
+          try {
+            pullOutcome('Traffic pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
+          } catch (e) {
+            flash('error', `Traffic pull failed: ${(e as Error).message}`);
+          }
         }}
       />
       {actionMsg && (
-        <div className="card" style={{ padding: '0.6rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--success)' }}>
-          {actionMsg}
+        <div className="card" style={{ padding: '0.6rem 0.85rem', marginBottom: '0.6rem', borderLeft: `3px solid var(--${actionMsg.kind === 'success' ? 'success' : 'danger'})` }}>
+          {actionMsg.text}
         </div>
       )}
 
-      <h3 style={{ margin: '0.25rem 0 0.5rem' }}>Cloud Traffic Metrics</h3>
+      <h3 style={{ margin: '0.25rem 0 0.5rem' }}>
+        Cloud Traffic Metrics
+        {summary.dataUpdatedAt > 0 && (
+          <small className="text-muted" style={{ marginLeft: '0.6rem', fontWeight: 400 }}>
+            Updated {new Date(summary.dataUpdatedAt).toLocaleTimeString()}
+          </small>
+        )}
+      </h3>
       {summary.isPending && <div className="text-muted">Loading…</div>}
       {summary.error && <div style={{ color: 'var(--danger)' }}>Error: {(summary.error as Error).message}</div>}
       <div className="drift-summary-grid" style={{ marginBottom: '1rem' }}>
@@ -129,7 +156,11 @@ export function TrafficTab({ filter }: Props) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Top Resources</h4>
-          {!rList.length ? (
+          {resources.isPending ? (
+            <div className="card" style={{ padding: '1rem' }}><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
+          ) : resources.error ? (
+            <div className="card" style={{ padding: '1rem' }}><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load top resources: {(resources.error as Error).message}</p></div>
+          ) : !rList.length ? (
             <div className="card" style={{ padding: '1rem' }}><p className="text-muted" style={{ margin: 0 }}>No traffic metric resources for current filters.</p></div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -153,7 +184,11 @@ export function TrafficTab({ filter }: Props) {
         </div>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Metric Timeline</h4>
-          {!tlList.length ? (
+          {timeline.isPending ? (
+            <div className="card" style={{ padding: '1rem' }}><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
+          ) : timeline.error ? (
+            <div className="card" style={{ padding: '1rem' }}><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load timeline: {(timeline.error as Error).message}</p></div>
+          ) : !tlList.length ? (
             <div className="card" style={{ padding: '1rem' }}><p className="text-muted" style={{ margin: 0 }}>No timeline data available for current filters.</p></div>
           ) : (
             <div style={{ overflowX: 'auto' }}>

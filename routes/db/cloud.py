@@ -31,6 +31,7 @@ __all__ = [
     "list_cloud_accounts",
     "update_cloud_account",
     "delete_cloud_account",
+    "reencrypt_legacy_cloud_auth_configs",
     "set_cloud_account_sync_status",
     "replace_cloud_discovery_snapshot",
     "get_cloud_policy_rules",
@@ -46,6 +47,7 @@ __all__ = [
     "upsert_cloud_traffic_metric_sync_cursor",
     "list_cloud_traffic_metric_sync_cursors",
     "create_cloud_traffic_metrics_batch",
+    "cleanup_old_cloud_traffic_metrics",
     "get_cloud_traffic_metric_summary",
     "get_cloud_traffic_metric_timeline",
     "get_cloud_traffic_metric_top_resources",
@@ -95,6 +97,34 @@ def _cloud_auth_encrypt(value) -> str:
         return ""
     from routes.crypto import encrypt as _enc
     return _enc(text)
+
+
+async def reencrypt_legacy_cloud_auth_configs() -> int:
+    """One-time startup pass: re-encrypt legacy plaintext auth_config rows.
+
+    Accounts created before at-rest encryption keep cleartext credentials in
+    the DB until their next save; run this at startup so they don't linger.
+    Returns the number of rows rewritten.
+    """
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("SELECT id, auth_config_json FROM cloud_accounts")
+        rows = await cursor.fetchall()
+        fixed = 0
+        for row in rows:
+            stored = str(row["auth_config_json"] or "")
+            if not stored or stored == "{}" or _looks_encrypted(stored):
+                continue
+            await db.execute(
+                "UPDATE cloud_accounts SET auth_config_json = ? WHERE id = ?",
+                (_cloud_auth_encrypt(stored), row["id"]),
+            )
+            fixed += 1
+        if fixed:
+            await db.commit()
+        return fixed
+    finally:
+        await db.close()
 
 
 def _cloud_auth_decrypt(stored) -> str:
@@ -901,8 +931,11 @@ async def create_cloud_traffic_metrics_batch(rows: list[tuple]) -> int:
         return 0
     db = await _dbcore.get_db()
     try:
-        await db.executemany(
-            """INSERT INTO cloud_traffic_metrics
+        # OR IGNORE + the unique sample-identity index (migration 0059) makes
+        # ingestion idempotent: overlapping manual/scheduled pull windows
+        # re-submit the same samples instead of double counting them.
+        cursor = await db.executemany(
+            """INSERT OR IGNORE INTO cloud_traffic_metrics
                (account_id, provider, metric_name, metric_namespace, resource_uid,
                 direction, statistic, unit, metric_value, interval_start, interval_end,
                 metadata_json, source)
@@ -910,7 +943,27 @@ async def create_cloud_traffic_metrics_batch(rows: list[tuple]) -> int:
             rows,
         )
         await db.commit()
-        return len(rows)
+        inserted = getattr(cursor, "rowcount", -1) if cursor is not None else -1
+        return inserted if isinstance(inserted, int) and inserted >= 0 else len(rows)
+    finally:
+        await db.close()
+
+
+async def cleanup_old_cloud_traffic_metrics(hours: int = 168) -> int:
+    """Delete cloud traffic metric samples older than ``hours``.
+
+    Without this the table grows without bound (up to 10k rows per account
+    per sync cycle); it is called from the traffic-metric sync loop.
+    """
+    cutoff = _cloud_metric_window_cutoff(hours)
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM cloud_traffic_metrics WHERE interval_end < ?",
+            (cutoff,),
+        )
+        await db.commit()
+        return cursor.rowcount
     finally:
         await db.close()
 

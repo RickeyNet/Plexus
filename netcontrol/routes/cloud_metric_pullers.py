@@ -12,7 +12,9 @@ Records are normalized and fed into the existing traffic-metric ingest pipeline
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -31,6 +33,31 @@ LOGGER = configure_logging("plexus.cloud_metric_pullers")
 _DEFAULT_LOOKBACK_MINUTES = 15
 _MAX_RECORDS_PER_PULL = 10_000
 
+# Accounts pulled concurrently per cycle (one hung provider must not stall
+# the rest, but don't hammer every provider at once either).
+_MAX_CONCURRENT_ACCOUNTS = 4
+
+# Serializes manual triggers against the scheduled loop per account so two
+# pulls can't race the same watermark cursor and double-ingest a window.
+_ACCOUNT_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _account_lock(account_id: int) -> asyncio.Lock:
+    lock = _ACCOUNT_LOCKS.get(account_id)
+    if lock is None:
+        lock = _ACCOUNT_LOCKS[account_id] = asyncio.Lock()
+    return lock
+
+
+def _boto3_client_config():
+    from botocore.config import Config
+
+    return Config(
+        connect_timeout=10,
+        read_timeout=60,
+        retries={"max_attempts": 4, "mode": "adaptive"},
+    )
+
 
 async def _get_cursor(account_id: int) -> dict:
     row = await db.get_cloud_traffic_metric_sync_cursor(account_id)
@@ -43,6 +70,29 @@ async def _set_cursor(account_id: int, *, last_pull_end: str, extra: dict | None
         last_pull_end=last_pull_end,
         extra_json=extra,
     )
+
+
+def _parse_cursor_extra(cursor: dict) -> dict:
+    raw = cursor.get("extra_json")
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _parse_watermark(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except Exception:
+        return None
 
 
 def _window(cursor: dict, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> tuple[datetime, datetime]:
@@ -95,37 +145,50 @@ async def pull_aws_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
     session = await asyncio.to_thread(_build_boto3_session, auth)
     regions = _parse_regions(account)
     cursor = await _get_cursor(account_id)
-    start_dt, end_dt = _window(cursor, lookback_minutes=lookback_minutes)
+    extra = _parse_cursor_extra(cursor)
+    regions_set = set(regions)
+    region_marks: dict[str, str] = {
+        k: v
+        for k, v in (extra.get("regions") or {}).items()
+        if isinstance(v, str) and k in regions_set
+    }
+    global_start, end_dt = _window(cursor, lookback_minutes=lookback_minutes)
 
     period = max(60, min(3600, int(auth.get("period_seconds") or 300)))
+    statistic = str(auth.get("statistic") or "Sum").strip() or "Sum"
     total_ingested = 0
     errors: list[str] = []
 
     for region in regions:
+        # Each region keeps its own watermark so a failure in one region
+        # doesn't force re-pulling (and duplicating) the others.
+        region_start = _parse_watermark(region_marks.get(region)) or global_start
+        if region_start >= end_dt:
+            continue
         try:
-            client = session.client("cloudwatch", region_name=region)
+            client = session.client("cloudwatch", region_name=region, config=_boto3_client_config())
             records = await _aws_cloudwatch_fetch(
                 client,
                 namespace=namespace,
                 metric_names=metric_names,
                 resource_dimension_name=resource_dimension_name,
                 resource_ids=resource_ids,
-                start=start_dt,
+                start=region_start,
                 end=end_dt,
                 period_seconds=period,
+                statistic=statistic,
             )
-            if not records:
-                continue
-            normalized = _normalize_aws_traffic_metric_records(records[:_MAX_RECORDS_PER_PULL])
-            if not normalized:
-                continue
-            rows = _build_traffic_metric_rows_for_ingest(
-                account_id,
-                "aws",
-                normalized,
-                source="scheduled_pull",
-            )
-            total_ingested += await db.create_cloud_traffic_metrics_batch(rows)
+            if records:
+                normalized = _normalize_aws_traffic_metric_records(records[:_MAX_RECORDS_PER_PULL])
+                if normalized:
+                    rows = _build_traffic_metric_rows_for_ingest(
+                        account_id,
+                        "aws",
+                        normalized,
+                        source="scheduled_pull",
+                    )
+                    total_ingested += await db.create_cloud_traffic_metrics_batch(rows)
+            region_marks[region] = end_dt.isoformat()
         except (BotoCoreError, ClientError) as exc:
             msg = f"AWS traffic pull failed region={region}: {type(exc).__name__}"
             LOGGER.warning(msg)
@@ -135,13 +198,38 @@ async def pull_aws_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
             LOGGER.warning(msg, exc_info=True)
             errors.append(msg)
 
-    await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
+    # Failed regions keep their old watermark (or the global one) so the
+    # missed window is retried next cycle instead of silently skipped.
+    watermarks = [_parse_watermark(v) for v in region_marks.values()]
+    if errors:
+        watermarks.append(_parse_watermark(cursor.get("last_pull_end")) or global_start)
+    valid_marks = [w for w in watermarks if w]
+    if valid_marks:
+        await _set_cursor(
+            account_id,
+            last_pull_end=min(valid_marks).isoformat(),
+            extra={"regions": region_marks},
+        )
+
     return {
-        "ok": not errors or total_ingested > 0,
+        "ok": not errors,
+        "partial": bool(errors) and total_ingested > 0,
         "ingested": total_ingested,
         "regions": regions,
         "errors": errors,
     }
+
+
+# GetMetricData does not return units; known units for the default EC2 metrics.
+_AWS_DEFAULT_METRIC_UNITS = {
+    "NetworkIn": "Bytes",
+    "NetworkOut": "Bytes",
+    "NetworkPacketsIn": "Count",
+    "NetworkPacketsOut": "Count",
+}
+
+# GetMetricData accepts up to 500 queries per call.
+_AWS_METRIC_DATA_BATCH = 500
 
 
 async def _aws_cloudwatch_fetch(
@@ -154,41 +242,82 @@ async def _aws_cloudwatch_fetch(
     start: datetime,
     end: datetime,
     period_seconds: int,
+    statistic: str = "Sum",
 ) -> list[dict]:
+    """Fetch datapoints via batched ``GetMetricData``.
+
+    One call covers up to 500 metric x resource series, versus one
+    ``GetMetricStatistics`` call per series — the dominant recurring API cost
+    of AWS metric polling.
+    """
     import asyncio
 
     def _run() -> list[dict]:
-        records: list[dict] = []
-        for metric_name in metric_names:
-            for resource_id in resource_ids:
-                if len(records) >= _MAX_RECORDS_PER_PULL:
-                    return records
-                resp = client.get_metric_statistics(
-                    Namespace=namespace,
-                    MetricName=metric_name,
-                    Dimensions=[{"Name": resource_dimension_name, "Value": resource_id}],
-                    StartTime=start,
-                    EndTime=end,
-                    Period=period_seconds,
-                    Statistics=["Average", "Sum", "Maximum"],
+        queries: list[dict] = []
+        query_meta: dict[str, tuple[str, str]] = {}
+        for mi, metric_name in enumerate(metric_names):
+            for ri, resource_id in enumerate(resource_ids):
+                qid = f"q{mi}_{ri}"
+                query_meta[qid] = (metric_name, resource_id)
+                queries.append(
+                    {
+                        "Id": qid,
+                        "MetricStat": {
+                            "Metric": {
+                                "Namespace": namespace,
+                                "MetricName": metric_name,
+                                "Dimensions": [
+                                    {"Name": resource_dimension_name, "Value": resource_id}
+                                ],
+                            },
+                            "Period": period_seconds,
+                            "Stat": statistic,
+                        },
+                        "ReturnData": True,
+                    }
                 )
-                datapoints = resp.get("Datapoints", [])
-                for dp in datapoints:
-                    records.append(
-                        {
-                            "MetricName": metric_name,
-                            "Namespace": namespace,
-                            "Dimensions": [{"Name": resource_dimension_name, "Value": resource_id}],
-                            "Timestamp": dp.get("Timestamp"),
-                            "Average": dp.get("Average"),
-                            "Sum": dp.get("Sum"),
-                            "Maximum": dp.get("Maximum"),
-                            "Unit": dp.get("Unit") or "Count",
-                            "direction": _metric_direction(metric_name),
-                        }
-                    )
-                    if len(records) >= _MAX_RECORDS_PER_PULL:
-                        return records
+
+        records: list[dict] = []
+        for batch_start in range(0, len(queries), _AWS_METRIC_DATA_BATCH):
+            batch = queries[batch_start:batch_start + _AWS_METRIC_DATA_BATCH]
+            token: str | None = None
+            while True:
+                kwargs: dict[str, Any] = {
+                    "MetricDataQueries": batch,
+                    "StartTime": start,
+                    "EndTime": end,
+                    "ScanBy": "TimestampAscending",
+                }
+                if token:
+                    kwargs["NextToken"] = token
+                resp = client.get_metric_data(**kwargs)
+                for result in resp.get("MetricDataResults", []):
+                    metric_name, resource_id = query_meta.get(str(result.get("Id")), ("", ""))
+                    if not metric_name:
+                        continue
+                    timestamps = result.get("Timestamps") or []
+                    values = result.get("Values") or []
+                    for ts, value in zip(timestamps, values):
+                        records.append(
+                            {
+                                "MetricName": metric_name,
+                                "Namespace": namespace,
+                                "Dimensions": [
+                                    {"Name": resource_dimension_name, "Value": resource_id}
+                                ],
+                                "Timestamp": ts,
+                                "Value": value,
+                                "Statistic": statistic,
+                                "Unit": _AWS_DEFAULT_METRIC_UNITS.get(metric_name, ""),
+                                "PeriodSeconds": period_seconds,
+                                "direction": _metric_direction(metric_name),
+                            }
+                        )
+                        if len(records) >= _MAX_RECORDS_PER_PULL:
+                            return records
+                token = resp.get("NextToken")
+                if not token:
+                    break
         return records
 
     return await asyncio.to_thread(_run)
@@ -234,14 +363,16 @@ async def pull_azure_traffic_metrics(account: dict, *, lookback_minutes: int = _
                     source="scheduled_pull",
                 )
                 total_ingested = await db.create_cloud_traffic_metrics_batch(rows)
+        # Advance the watermark only on success so a failed window is
+        # retried next cycle instead of silently skipped.
+        await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
     except Exception as exc:
         msg = f"Azure traffic pull failed: {type(exc).__name__}"
         LOGGER.warning(msg, exc_info=True)
         errors.append(msg)
 
-    await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
     return {
-        "ok": not errors or total_ingested > 0,
+        "ok": not errors,
         "ingested": total_ingested,
         "errors": errors,
     }
@@ -370,14 +501,16 @@ async def pull_gcp_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
                     source="scheduled_pull",
                 )
                 total_ingested = await db.create_cloud_traffic_metrics_batch(rows)
+        # Advance the watermark only on success so a failed window is
+        # retried next cycle instead of silently skipped.
+        await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
     except Exception as exc:
         msg = f"GCP traffic pull failed: {type(exc).__name__}"
         LOGGER.warning(msg, exc_info=True)
         errors.append(msg)
 
-    await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
     return {
-        "ok": not errors or total_ingested > 0,
+        "ok": not errors,
         "ingested": total_ingested,
         "errors": errors,
     }
@@ -504,16 +637,14 @@ async def pull_traffic_metrics_for_account(account: dict, *, lookback_minutes: i
     puller = _PULLERS.get(provider)
     if not puller:
         return {"ok": False, "error": f"unsupported_provider:{provider}", "ingested": 0}
-    return await puller(account, lookback_minutes=lookback_minutes)
+    async with _account_lock(int(account["id"])):
+        return await puller(account, lookback_minutes=lookback_minutes)
 
 
 async def pull_traffic_metrics_all_accounts(*, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     accounts = await db.list_cloud_accounts(enabled_only=True)
-    results: dict[int, dict] = {}
-    total_ingested = 0
-
+    eligible: list[dict] = []
     for account in accounts:
-        account_id = int(account["id"])
         provider = str(account.get("provider") or "").strip().lower()
         auth = _parse_auth_config(account)
 
@@ -523,19 +654,30 @@ async def pull_traffic_metrics_all_accounts(*, lookback_minutes: int = _DEFAULT_
             continue
         if provider == "gcp" and not str(auth.get("project_id") or "").strip():
             continue
+        eligible.append(account)
 
-        try:
-            result = await pull_traffic_metrics_for_account(account, lookback_minutes=lookback_minutes)
-            results[account_id] = result
-            total_ingested += result.get("ingested", 0)
-        except Exception as exc:
-            LOGGER.warning(
-                "cloud traffic metric pull failed account_id=%s: %s",
-                account_id,
-                type(exc).__name__,
-                exc_info=True,
-            )
-            results[account_id] = {"ok": False, "error": str(type(exc).__name__), "ingested": 0}
+    # Bounded concurrency: one hung provider must not stall every other account.
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_ACCOUNTS)
+
+    async def _pull_one(account: dict) -> tuple[int, dict]:
+        account_id = int(account["id"])
+        async with semaphore:
+            try:
+                return account_id, await pull_traffic_metrics_for_account(
+                    account, lookback_minutes=lookback_minutes,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "cloud traffic metric pull failed account_id=%s: %s",
+                    account_id,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                return account_id, {"ok": False, "error": str(type(exc).__name__), "ingested": 0}
+
+    gathered = await asyncio.gather(*(_pull_one(account) for account in eligible))
+    results: dict[int, dict] = dict(gathered)
+    total_ingested = sum(result.get("ingested", 0) for result in results.values())
 
     return {
         "accounts_processed": len(results),
@@ -600,6 +742,10 @@ def _parse_auth_config(account: dict) -> dict:
 def _parse_regions(account: dict) -> list[str]:
     raw = str(account.get("region_scope") or "").strip()
     if not raw:
+        LOGGER.warning(
+            "cloud account %s has no region_scope; defaulting to us-east-1 only",
+            account.get("id"),
+        )
         return ["us-east-1"]
     return [r.strip() for r in raw.split(",") if r.strip()]
 
@@ -624,8 +770,25 @@ def _parse_list(value: Any) -> list[str]:
 
 def _metric_direction(metric_name: str) -> str:
     name = str(metric_name or "").strip().lower()
-    if any(token in name for token in ("in", "ingress", "received", "rx")):
+    if not name:
+        return ""
+    # Match only the leaf segment with word/suffix checks: a bare substring
+    # test over a full GCP metric type ("…/instance/network/sent_bytes_count")
+    # matches the "in" inside "instance" and tags every metric as inbound.
+    leaf = name.rsplit("/", 1)[-1]
+    tokens = set(re.split(r"[^a-z0-9]+", leaf))
+    if tokens & {"in", "inbound", "ingress", "received", "rx"}:
         return "in"
-    if any(token in name for token in ("out", "egress", "sent", "tx")):
+    if tokens & {"out", "outbound", "egress", "sent", "tx"}:
+        return "out"
+    if leaf.endswith(("in", "inbound", "ingress", "rx")):
+        return "in"
+    if leaf.endswith(("out", "outbound", "egress", "tx")):
+        return "out"
+    # Longer direction words are unambiguous even as substrings
+    # (unlike "in", which appears inside "instance").
+    if any(word in leaf for word in ("ingress", "received", "inbound")):
+        return "in"
+    if any(word in leaf for word in ("egress", "sent", "outbound")):
         return "out"
     return ""

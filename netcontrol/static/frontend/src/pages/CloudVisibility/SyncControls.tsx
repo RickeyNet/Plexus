@@ -95,6 +95,18 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
         Current config: {cfgEnabled ? 'enabled' : 'disabled'}, interval {cfgInterval}s, lookback {cfgLookback}m.
       </div>
       <div className="text-muted" style={{ marginTop: '0.35rem' }}>{statusLabel()}</div>
+      {Array.isArray(status?.errors) && status.errors.length > 0 && (
+        <details style={{ marginTop: '0.35rem' }}>
+          <summary style={{ color: 'var(--danger)', cursor: 'pointer' }}>
+            {status.errors.length} sync error(s) — expand for details
+          </summary>
+          <ul style={{ margin: '0.35rem 0 0 1rem', padding: 0 }}>
+            {status.errors.map((err, i) => (
+              <li key={i} style={{ color: 'var(--danger)', fontSize: '0.9em' }}>{String(err)}</li>
+            ))}
+          </ul>
+        </details>
+      )}
       {cursors.length > 0 ? (
         <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>
           <table className="chart-table">
