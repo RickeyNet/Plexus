@@ -174,11 +174,36 @@ async def test_sample_discovery_snapshot_builds_hybrid_links(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_discover_auto_falls_back_to_sample_when_live_unavailable(tmp_path, monkeypatch):
+async def test_discover_auto_keeps_snapshot_when_live_fails(tmp_path, monkeypatch):
+    """Auto mode must never replace real topology with fabricated sample data."""
     await _init(tmp_path, monkeypatch)
     host_id = await _add_host(hostname="wan-edge-1", ip="10.0.0.30")
     account = await db_module.create_cloud_account(provider="aws", name="AWS Shared")
     assert account is not None
+    account_id = int(account["id"])
+
+    def _collector(_account):
+        return (
+            [
+                {
+                    "provider": "aws",
+                    "resource_uid": "aws:vpc:vpc-real",
+                    "resource_type": "vpc",
+                    "name": "real-vpc",
+                    "region": "us-east-1",
+                    "status": "active",
+                }
+            ],
+            [],
+        )
+
+    monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _collector)
+    seeded = await cloud_visibility_module.discover_cloud_account_api(
+        account_id,
+        _DummyRequest(),
+        CloudDiscoveryRequest(mode="live", connect_host_ids=[host_id], include_hybrid_links=False),
+    )
+    assert seeded["ok"] is True
 
     def _raise_unavailable(_account):
         raise cloud_visibility_module.CloudCollectorUnavailable("missing")
@@ -186,19 +211,42 @@ async def test_discover_auto_falls_back_to_sample_when_live_unavailable(tmp_path
     monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _raise_unavailable)
 
     result = await cloud_visibility_module.discover_cloud_account_api(
-        int(account["id"]),
+        account_id,
         _DummyRequest(),
         CloudDiscoveryRequest(mode="auto", connect_host_ids=[host_id], include_hybrid_links=True),
     )
 
+    assert result["ok"] is False
+    assert result["effective_mode"] == "live"
+    assert result["fallback_used"] is False
+    assert "kept" in result["message"].lower()
+
+    # Last-known-good snapshot is preserved, not replaced with sample data
+    snapshot = await db_module.get_cloud_topology_snapshot(account_id=account_id)
+    uids = {r["resource_uid"] for r in snapshot["resources"]}
+    assert uids == {"aws:vpc:vpc-real"}
+
+    refreshed = await db_module.get_cloud_account(account_id)
+    assert refreshed["last_sync_status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_discover_sample_mode_still_writes_sample_snapshot(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(provider="aws", name="AWS Sample Explicit")
+    assert account is not None
+    account_id = int(account["id"])
+
+    result = await cloud_visibility_module.discover_cloud_account_api(
+        account_id,
+        _DummyRequest(),
+        CloudDiscoveryRequest(mode="sample"),
+    )
+
     assert result["ok"] is True
     assert result["effective_mode"] == "sample"
-    assert result["fallback_used"] is True
-    assert "sample" in result["message"].lower()
-
-    snapshot = await db_module.get_cloud_topology_snapshot(account_id=int(account["id"]))
+    snapshot = await db_module.get_cloud_topology_snapshot(account_id=account_id)
     assert snapshot["summary"]["resource_count"] > 0
-    assert snapshot["summary"]["connection_count"] > 0
 
 
 @pytest.mark.asyncio

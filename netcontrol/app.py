@@ -987,6 +987,8 @@ async def _load_persisted_security_settings():
     state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG = _sanitize_cloud_traffic_metric_sync_config(cloud_traffic_metric_sync)
     cloud_traffic_metric_sync_status = await db.get_auth_setting("cloud_traffic_metric_sync_status")
     state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS = state._sanitize_cloud_sync_status(cloud_traffic_metric_sync_status)
+    cloud_discovery_sync = await db.get_auth_setting("cloud_discovery_sync")
+    state.CLOUD_DISCOVERY_SYNC_CONFIG = state._sanitize_cloud_discovery_sync_config(cloud_discovery_sync)
     feature_visibility = await db.get_auth_setting("feature_visibility")
     if isinstance(feature_visibility, dict):
         state.FEATURE_VISIBILITY_HIDDEN = state._sanitize_feature_visibility(feature_visibility.get("hidden") or [])
@@ -1208,7 +1210,8 @@ async def _cloud_flow_sync_loop() -> None:
         if not cfg.get("enabled"):
             continue
         try:
-            result = await pull_flow_logs_all_accounts()
+            lookback = max(5, int(cfg.get("lookback_minutes", 15)))
+            result = await pull_flow_logs_all_accounts(lookback_minutes=lookback)
             await persist_cloud_flow_sync_status(
                 build_cloud_sync_status(result, source="scheduled", scope="all")
             )
@@ -1220,6 +1223,14 @@ async def _cloud_flow_sync_loop() -> None:
                     total,
                     processed,
                 )
+            # Prune old flow records here as well: the NetFlow collector's
+            # aggregation cycle only runs when that collector is enabled, so
+            # a cloud-only deployment would otherwise grow flow_records
+            # without bound.
+            retention_hours = int(FLOW_COLLECTOR_CONFIG.get("retention_hours", 48))
+            cleaned = await db.cleanup_old_flow_records(retention_hours)
+            if cleaned > 0:
+                LOGGER.info("Cloud flow sync: pruned %s old flow records", cleaned)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1229,6 +1240,34 @@ async def _cloud_flow_sync_loop() -> None:
                     build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
                 ),
                 "Cloud flow sync")
+
+
+async def _cloud_discovery_sync_loop() -> None:
+    """Periodically refresh live cloud topology snapshots for enabled accounts.
+
+    Without this, topology and policy-rule data only change on manual
+    discovery and silently go stale.
+    """
+    from netcontrol.routes.cloud_visibility import run_scheduled_discovery
+
+    while True:
+        cfg = state.CLOUD_DISCOVERY_SYNC_CONFIG
+        interval = max(300, int(cfg.get("interval_seconds", 3600)))
+        await asyncio.sleep(interval)
+        if not cfg.get("enabled"):
+            continue
+        try:
+            result = await run_scheduled_discovery()
+            if result.get("refreshed"):
+                LOGGER.info(
+                    "Cloud discovery sync: refreshed %s of %s account snapshot(s)",
+                    result.get("refreshed"),
+                    result.get("accounts"),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("Cloud discovery sync loop failed: %s", type(exc).__name__)
 
 
 async def _cloud_traffic_metric_sync_loop() -> None:
@@ -1253,6 +1292,10 @@ async def _cloud_traffic_metric_sync_loop() -> None:
                     total,
                     processed,
                 )
+            retention_hours = int(cfg.get("retention_hours", 168))
+            cleaned = await db.cleanup_old_cloud_traffic_metrics(retention_hours)
+            if cleaned > 0:
+                LOGGER.info("Cloud traffic sync: pruned %s old metric samples", cleaned)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1278,6 +1321,14 @@ async def lifespan(app: FastAPI):
     # Migrate users from auth.json if it exists
     await _migrate_auth_json_users()
     await _load_persisted_security_settings()
+    # Re-encrypt any cloud account credentials stored as plaintext before
+    # at-rest encryption existed; without this they linger until next save.
+    try:
+        reencrypted = await db.reencrypt_legacy_cloud_auth_configs()
+        if reencrypted:
+            LOGGER.info("Re-encrypted %s legacy cloud account credential row(s)", reencrypted)
+    except Exception as exc:
+        LOGGER.warning("cloud auth_config re-encryption pass failed: %s", type(exc).__name__)
     # Auto-seed if empty
     check = await db.get_all_groups()
     if not check:
@@ -1357,6 +1408,7 @@ async def lifespan(app: FastAPI):
             _audit_run_loop,
             _cloud_flow_sync_loop,
             _cloud_traffic_metric_sync_loop,
+            _cloud_discovery_sync_loop,
             federation_sync_loop,
             _ipam_sync_loop,
             _dhcp_sync_loop,

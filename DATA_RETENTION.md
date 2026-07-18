@@ -24,6 +24,8 @@ or the corresponding API endpoint without a restart.
 | Route snapshots                  | 30 days           | `Settings > Monitoring`                                       |
 | SNMP trap / syslog events        | 30 days           | `Settings > Monitoring`                                       |
 | IP history (IPAM)                | 365 days          | API-only - `routes.database.prune_ip_history(retention_days)` |
+| **Cloud flow records**           | **48 hours**      | Shares `flow_records` + NetFlow `retention_hours`; pruned by the cloud flow sync loop even when the NetFlow collector is disabled |
+| **Cloud traffic metrics**        | **7 days (168h)** | `PUT /api/cloud/traffic-sync/config` `retention_hours`; pruned by the cloud traffic sync loop |
 
 Minimums are enforced at the API layer (e.g. job history can't go below
 30 days). Increase a value freely; the next cleanup pass will simply
@@ -83,6 +85,24 @@ The persisted config lives in `auth_settings("flow_collector")`. On first
 boot only, that row is seeded from the legacy `APP_NETFLOW_*` env vars;
 after that the database row is authoritative and env-var changes are
 ignored.
+
+## Cloud visibility data
+
+Cloud flow-log pulls (AWS CloudWatch Logs, Azure NSG blobs, GCP Cloud
+Logging) land in the shared **`flow_records`** table and follow the same
+NetFlow `retention_hours` value. The cloud flow sync loop runs the cleanup
+itself each cycle, so retention applies even on cloud-only deployments
+where the NetFlow collector is disabled.
+
+Cloud traffic metrics (CloudWatch / Azure Monitor / Cloud Monitoring
+samples) live in **`cloud_traffic_metrics`** with a default retention of
+**168 hours (7 days)**, tunable 1-8760 via `retention_hours` on
+`PUT /api/cloud/traffic-sync/config`. Ingestion is idempotent (unique
+sample-identity index), so overlapping pull windows don't inflate storage.
+
+Topology snapshots (`cloud_resources`, `cloud_connections`,
+`cloud_policy_rules`, `cloud_hybrid_links`) are replaced wholesale on each
+successful discovery and are small; they have no time-based retention.
 
 ## Job history
 

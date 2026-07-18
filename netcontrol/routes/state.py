@@ -473,6 +473,7 @@ CLOUD_TRAFFIC_METRIC_SYNC_DEFAULTS = {
     "enabled": False,
     "interval_seconds": 300,  # 5 minutes
     "lookback_minutes": 15,
+    "retention_hours": 168,  # 7 days of metric samples
 }
 
 CLOUD_TRAFFIC_METRIC_SYNC_MIN_INTERVAL = 60
@@ -480,6 +481,19 @@ CLOUD_TRAFFIC_METRIC_SYNC_MAX_INTERVAL = 3600
 
 CLOUD_TRAFFIC_METRIC_SYNC_CONFIG: dict = dict(CLOUD_TRAFFIC_METRIC_SYNC_DEFAULTS)
 CLOUD_TRAFFIC_METRIC_SYNC_STATUS: dict = dict(CLOUD_SYNC_STATUS_DEFAULTS)
+
+# Scheduled topology discovery refresh: without it, topology and policy-rule
+# snapshots go stale the moment infrastructure changes (discovery is otherwise
+# manual-only). Inventory describe/list calls are free on all three providers.
+CLOUD_DISCOVERY_SYNC_DEFAULTS = {
+    "enabled": False,
+    "interval_seconds": 3600,  # hourly
+}
+
+CLOUD_DISCOVERY_SYNC_MIN_INTERVAL = 300
+CLOUD_DISCOVERY_SYNC_MAX_INTERVAL = 86400
+
+CLOUD_DISCOVERY_SYNC_CONFIG: dict = dict(CLOUD_DISCOVERY_SYNC_DEFAULTS)
 
 IPAM_SYNC_DEFAULTS = {
     "enabled": True,
@@ -893,6 +907,18 @@ def _sanitize_cloud_traffic_metric_sync_config(data: dict | None) -> dict:
             min(CLOUD_TRAFFIC_METRIC_SYNC_MAX_INTERVAL, cfg["interval_seconds"]),
         )
         cfg["lookback_minutes"] = max(5, min(1440, int(data.get("lookback_minutes", cfg["lookback_minutes"]))))
+        cfg["retention_hours"] = max(1, min(8760, int(data.get("retention_hours", cfg["retention_hours"]))))
+    return cfg
+
+
+def _sanitize_cloud_discovery_sync_config(data: dict | None) -> dict:
+    cfg = dict(CLOUD_DISCOVERY_SYNC_DEFAULTS)
+    if isinstance(data, dict):
+        cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
+        cfg["interval_seconds"] = max(
+            CLOUD_DISCOVERY_SYNC_MIN_INTERVAL,
+            min(CLOUD_DISCOVERY_SYNC_MAX_INTERVAL, int(data.get("interval_seconds", cfg["interval_seconds"]))),
+        )
     return cfg
 
 

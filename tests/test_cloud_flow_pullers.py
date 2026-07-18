@@ -162,7 +162,7 @@ async def test_aws_puller_success_with_mock(tmp_path, monkeypatch):
     ]
 
     async def _mock_cw_query(client, log_group, start, end):
-        return mock_records
+        return mock_records, False
 
     monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
 
@@ -172,6 +172,7 @@ async def test_aws_puller_success_with_mock(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     monkeypatch.setitem(sys.modules, "botocore", MagicMock())
     monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
     monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
 
     result = await pullers_mod.pull_aws_flow_logs(account)
@@ -184,9 +185,171 @@ async def test_aws_puller_success_with_mock(tmp_path, monkeypatch):
     assert cursor["last_pull_end"] != ""
 
 
+@pytest.mark.asyncio
+async def test_aws_puller_failure_keeps_cursor(tmp_path, monkeypatch):
+    """A failed pull must NOT advance the watermark — the window is retried."""
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(
+        provider="aws", name="AWS Fail",
+        auth_config_json={"log_group_name": "/aws/vpc/flow-logs", "access_key_id": "AKIA", "secret_access_key": "secret"},
+        region_scope="us-east-1",
+    )
+    account_id = int(account["id"])
+    old_mark = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
+    await db_module.upsert_cloud_flow_sync_cursor(account_id, last_pull_end=old_mark)
+
+    async def _mock_cw_query(client, log_group, start, end):
+        raise RuntimeError("insights_query_timeout")
+
+    monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
+
+    fake_boto3 = MagicMock()
+    fake_botocore_exc = type("module", (), {"BotoCoreError": Exception, "ClientError": Exception})()
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "botocore", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
+    monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
+
+    result = await pullers_mod.pull_aws_flow_logs(account)
+    assert result["ok"] is False
+    assert result["errors"]
+
+    cursor = await db_module.get_cloud_flow_sync_cursor(account_id)
+    # 24h-clamped watermark stays at (or before) the failed window's start
+    assert cursor["last_pull_end"] <= old_mark
+
+
+@pytest.mark.asyncio
+async def test_aws_puller_success_advances_per_region_cursor(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(
+        provider="aws", name="AWS Region Marks",
+        auth_config_json={"log_group_name": "/aws/vpc/flow-logs", "access_key_id": "AKIA", "secret_access_key": "secret"},
+        region_scope="us-east-1,us-west-2",
+    )
+    account_id = int(account["id"])
+
+    async def _mock_cw_query(client, log_group, start, end):
+        return [], False
+
+    monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
+
+    fake_boto3 = MagicMock()
+    fake_botocore_exc = type("module", (), {"BotoCoreError": Exception, "ClientError": Exception})()
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "botocore", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
+    monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
+
+    result = await pullers_mod.pull_aws_flow_logs(account)
+    assert result["ok"] is True
+
+    cursor = await db_module.get_cloud_flow_sync_cursor(account_id)
+    assert cursor is not None
+    import json as _json
+    extra = _json.loads(cursor["extra_json"])
+    assert set(extra["regions"].keys()) == {"us-east-1", "us-west-2"}
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # Azure puller
 # ───────────────────────────────────────────────────────────────────────────
+
+
+class _FakeBlobProps:
+    def __init__(self, name, last_modified):
+        self.name = name
+        self.last_modified = last_modified
+
+
+class _FakeDownload:
+    def __init__(self, payload: bytes):
+        self._payload = payload
+
+    def readall(self):
+        return self._payload
+
+
+class _FakeContainerClient:
+    def __init__(self, blobs: dict[str, tuple[object, bytes]]):
+        self._blobs = blobs
+
+    def list_blobs(self, name_starts_with: str = ""):
+        return [props for _name, (props, _data) in self._blobs.items()
+                if props.name.startswith(name_starts_with)]
+
+    def download_blob(self, name):
+        return _FakeDownload(self._blobs[name][1])
+
+
+def _nsg_blob_json(tuples: list[str]) -> bytes:
+    import json as _json
+    return _json.dumps({
+        "records": [{
+            "location": "eastus",
+            "resourceId": "/SUBSCRIPTIONS/S/RESOURCEGROUPS/RG/PROVIDERS/MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/NSG1",
+            "properties": {"flows": [{
+                "rule": "AllowHTTPS",
+                "flows": [{"mac": "AABBCC", "flowTuples": tuples}],
+            }]},
+        }],
+    }).encode()
+
+
+def test_read_azure_blobs_matches_real_nsg_blob_names():
+    """Blob names embed the full NSG resource path before the date partition —
+    the old day-prefix could never match them."""
+    now = datetime.now(UTC)
+    start = now - timedelta(minutes=15)
+    in_window = int(now.timestamp()) - 300
+    out_of_window = int((now - timedelta(hours=3)).timestamp())
+
+    day = now
+    blob_name = (
+        "resourceId=/SUBSCRIPTIONS/S/RESOURCEGROUPS/RG/PROVIDERS/MICROSOFT.NETWORK"
+        f"/NETWORKSECURITYGROUPS/NSG1/y={day.year}/m={day.month:02d}/d={day.day:02d}"
+        "/h=03/m=00/macAddress=AABBCC/PT1H.json"
+    )
+    tuples = [
+        f"{in_window},10.0.0.1,10.0.0.2,4444,443,T,I,A",
+        f"{out_of_window},10.0.0.3,10.0.0.4,5555,80,T,I,A",
+    ]
+    container = _FakeContainerClient({
+        blob_name: (_FakeBlobProps(blob_name, now), _nsg_blob_json(tuples)),
+    })
+
+    records, truncated = pullers_mod._read_azure_blobs(container, start, now)
+    assert truncated is False
+    # Only the in-window tuple survives the epoch filter
+    assert len(records) == 1
+    assert records[0]["flow_tuples"] == [tuples[0]]
+    assert records[0]["rule_name"] == "AllowHTTPS"
+
+
+def test_read_azure_blobs_skips_stale_blobs():
+    now = datetime.now(UTC)
+    start = now - timedelta(minutes=15)
+    day = now
+    blob_name = (
+        "resourceId=/SUBSCRIPTIONS/S/RESOURCEGROUPS/RG/PROVIDERS/MICROSOFT.NETWORK"
+        f"/NETWORKSECURITYGROUPS/NSG1/y={day.year}/m={day.month:02d}/d={day.day:02d}"
+        "/h=00/m=00/macAddress=AABBCC/PT1H.json"
+    )
+    stale = _FakeBlobProps(blob_name, now - timedelta(hours=6))
+    container = _FakeContainerClient({blob_name: (stale, _nsg_blob_json([]))})
+
+    records, truncated = pullers_mod._read_azure_blobs(container, start, now)
+    assert records == []
+    assert truncated is False
+
+
+def test_azure_day_partitions_cross_midnight():
+    start = datetime(2026, 7, 16, 23, 50, tzinfo=UTC)
+    end = datetime(2026, 7, 17, 0, 10, tzinfo=UTC)
+    partitions = pullers_mod._azure_day_partitions(start, end)
+    assert partitions == ["/y=2026/m=07/d=16/", "/y=2026/m=07/d=17/"]
 
 
 @pytest.mark.asyncio
@@ -250,7 +413,7 @@ async def test_pull_all_processes_configured_accounts(tmp_path, monkeypatch):
             {"srcaddr": "10.0.0.5", "dstaddr": "10.0.0.6", "srcport": "22", "dstport": "9999",
              "protocol": "6", "bytes": "500", "packets": "5", "action": "ACCEPT",
              "start": str(int(datetime.now(UTC).timestamp()))},
-        ]
+        ], False
 
     monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
 
@@ -259,6 +422,7 @@ async def test_pull_all_processes_configured_accounts(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     monkeypatch.setitem(sys.modules, "botocore", MagicMock())
     monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
     monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
 
     result = await pullers_mod.pull_flow_logs_all_accounts()
@@ -323,7 +487,7 @@ async def test_manual_pull_single_account(tmp_path, monkeypatch):
         return [{"srcaddr": "10.1.0.1", "dstaddr": "10.1.0.2", "srcport": "443",
                  "dstport": "11111", "protocol": "6", "bytes": "3000",
                  "packets": "30", "action": "ACCEPT",
-                 "start": str(int(datetime.now(UTC).timestamp()))}]
+                 "start": str(int(datetime.now(UTC).timestamp()))}], False
 
     monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
 
@@ -332,6 +496,7 @@ async def test_manual_pull_single_account(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     monkeypatch.setitem(sys.modules, "botocore", MagicMock())
     monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
     monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
 
     result = await cloud_visibility_module.trigger_cloud_flow_sync_api(

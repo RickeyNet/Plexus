@@ -25,6 +25,32 @@ class _DummyRequest:
         self.state = type("State", (), {"correlation_id": correlation_id})()
 
 
+@pytest.mark.parametrize(
+    ("metric_name", "expected"),
+    [
+        # GCP full metric types: "instance" must not match as "in"
+        ("compute.googleapis.com/instance/network/sent_bytes_count", "out"),
+        ("compute.googleapis.com/instance/network/received_bytes_count", "in"),
+        ("compute.googleapis.com/instance/network/sent_packets_count", "out"),
+        ("compute.googleapis.com/instance/network/received_packets_count", "in"),
+        # AWS CloudWatch names
+        ("NetworkIn", "in"),
+        ("NetworkOut", "out"),
+        ("NetworkPacketsIn", "in"),
+        ("NetworkPacketsOut", "out"),
+        # Azure Monitor names
+        ("BytesIn", "in"),
+        ("BytesOut", "out"),
+        ("IfEgressBytes", "out"),
+        ("IfIngressBytes", "in"),
+        ("CPUUtilization", ""),
+        ("", ""),
+    ],
+)
+def test_metric_direction(metric_name, expected):
+    assert pullers_mod._metric_direction(metric_name) == expected
+
+
 def test_window_defaults_to_lookback_when_no_cursor():
     start, end = pullers_mod._window({}, lookback_minutes=10)
     now = datetime.now(UTC)
@@ -119,6 +145,7 @@ async def test_aws_metric_puller_success_with_mock(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     monkeypatch.setitem(sys.modules, "botocore", MagicMock())
     monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
     monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
 
     result = await pullers_mod.pull_aws_traffic_metrics(account)
@@ -212,6 +239,7 @@ async def test_manual_traffic_pull_single_account(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     monkeypatch.setitem(sys.modules, "botocore", MagicMock())
     monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
     monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: MagicMock())
 
     result = await cloud_visibility_module.trigger_cloud_traffic_sync_api(
