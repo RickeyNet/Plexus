@@ -12,6 +12,7 @@ Records are normalised and fed into the existing flow-log ingest pipeline
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -36,6 +37,31 @@ _DEFAULT_LOOKBACK_MINUTES = 15
 # Maximum records per pull cycle to avoid memory pressure.
 _MAX_RECORDS_PER_PULL = 10_000
 
+# Accounts pulled concurrently per cycle (one hung provider must not stall
+# the rest, but don't hammer every provider at once either).
+_MAX_CONCURRENT_ACCOUNTS = 4
+
+# Serializes manual triggers against the scheduled loop per account so two
+# pulls can't race the same watermark cursor and double-ingest a window.
+_ACCOUNT_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _account_lock(account_id: int) -> asyncio.Lock:
+    lock = _ACCOUNT_LOCKS.get(account_id)
+    if lock is None:
+        lock = _ACCOUNT_LOCKS[account_id] = asyncio.Lock()
+    return lock
+
+
+def _boto3_client_config():
+    from botocore.config import Config
+
+    return Config(
+        connect_timeout=10,
+        read_timeout=60,
+        retries={"max_attempts": 4, "mode": "adaptive"},
+    )
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Watermark helpers - per-account cursor stored in cloud_flow_sync_cursors
@@ -52,6 +78,29 @@ async def _set_cursor(account_id: int, *, last_pull_end: str, extra: dict | None
         last_pull_end=last_pull_end,
         extra_json=extra,
     )
+
+
+def _parse_cursor_extra(cursor: dict) -> dict:
+    raw = cursor.get("extra_json")
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _parse_watermark(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except Exception:
+        return None
 
 
 def _window(cursor: dict, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> tuple[datetime, datetime]:
@@ -79,7 +128,7 @@ def _window(cursor: dict, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> 
 # AWS puller - CloudWatch Logs Insights or S3
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def pull_aws_flow_logs(account: dict) -> dict:
+async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     """Pull VPC Flow Logs from AWS CloudWatch Logs Insights.
 
     Required auth_config keys:
@@ -107,27 +156,46 @@ async def pull_aws_flow_logs(account: dict) -> dict:
     session = await asyncio.to_thread(_build_boto3_session, auth)
     regions = _parse_regions(account)
     cursor = await _get_cursor(account_id)
-    start_dt, end_dt = _window(cursor)
+    extra = _parse_cursor_extra(cursor)
+    regions_set = set(regions)
+    region_marks: dict[str, str] = {
+        k: v
+        for k, v in (extra.get("regions") or {}).items()
+        if isinstance(v, str) and k in regions_set
+    }
+    global_start, end_dt = _window(cursor, lookback_minutes=lookback_minutes)
 
     total_ingested = 0
     errors: list[str] = []
+    warnings: list[str] = []
 
     for region in regions:
+        # Each region keeps its own watermark so a failure in one region
+        # doesn't force re-pulling (and duplicating) the others.
+        region_start = _parse_watermark(region_marks.get(region)) or global_start
+        if region_start >= end_dt:
+            continue
         try:
-            client = session.client("logs", region_name=region)
-            records = await _cw_insights_query(
-                client, log_group, start_dt, end_dt,
+            client = session.client("logs", region_name=region, config=_boto3_client_config())
+            records, truncated = await _cw_insights_query(
+                client, log_group, region_start, end_dt,
             )
-            if not records:
-                continue
-            normalized = _normalize_aws_flow_records(records)
-            if not normalized:
-                continue
-            # Cap per region
-            normalized = normalized[:_MAX_RECORDS_PER_PULL]
-            rows = _build_flow_rows_for_ingest(account_id, "aws", normalized)
-            count = await db.create_flow_records_batch(rows)
-            total_ingested += count
+            region_end = end_dt
+            if truncated:
+                # Advance only to the last returned record (results are sorted
+                # ascending) so the remainder is picked up next cycle.
+                last_ts = _parse_insights_timestamp(records[-1].get("start")) if records else None
+                if last_ts and region_start < last_ts < end_dt:
+                    region_end = last_ts
+                warnings.append(
+                    f"region={region}: results truncated at {_MAX_RECORDS_PER_PULL}"
+                )
+            if records:
+                normalized = _normalize_aws_flow_records(records)
+                if normalized:
+                    rows = _build_flow_rows_for_ingest(account_id, "aws", normalized)
+                    total_ingested += await db.create_flow_records_batch(rows)
+            region_marks[region] = region_end.isoformat()
         except (BotoCoreError, ClientError) as exc:
             msg = f"AWS flow pull failed region={region}: {type(exc).__name__}"
             LOGGER.warning(msg)
@@ -137,13 +205,26 @@ async def pull_aws_flow_logs(account: dict) -> dict:
             LOGGER.warning(msg, exc_info=True)
             errors.append(msg)
 
-    await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
+    # Failed regions keep their old watermark (or the global one) so the
+    # missed window is retried next cycle instead of silently skipped.
+    watermarks = [_parse_watermark(v) for v in region_marks.values()]
+    if errors:
+        watermarks.append(_parse_watermark(cursor.get("last_pull_end")) or global_start)
+    valid_marks = [w for w in watermarks if w]
+    if valid_marks:
+        await _set_cursor(
+            account_id,
+            last_pull_end=min(valid_marks).isoformat(),
+            extra={"regions": region_marks},
+        )
 
     return {
-        "ok": not errors or total_ingested > 0,
+        "ok": not errors,
+        "partial": bool(errors) and total_ingested > 0,
         "ingested": total_ingested,
         "regions": regions,
         "errors": errors,
+        "warnings": warnings,
     }
 
 
@@ -189,8 +270,11 @@ async def _cw_insights_query(
     log_group: str,
     start: datetime,
     end: datetime,
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """Run a CloudWatch Logs Insights query for VPC Flow Log fields.
+
+    Returns ``(records, truncated)``. Raises on query failure or timeout so
+    the caller can keep the watermark and retry the window.
 
     This is executed in the calling event loop via ``asyncio.to_thread``
     because the boto3 SDK is synchronous.
@@ -222,8 +306,16 @@ async def _cw_insights_query(
                 break
             _time.sleep(1)
 
-        if result.get("status") != "Complete":
-            return []
+        status = str(result.get("status") or "")
+        if status != "Complete":
+            if status == "Running" or not status:
+                # Still running after the poll budget: cancel so we don't leak
+                # toward the 30-concurrent-Insights-queries account limit.
+                try:
+                    client.stop_query(queryId=query_id)
+                except Exception:
+                    LOGGER.debug("stop_query failed for %s", query_id, exc_info=True)
+            raise RuntimeError(f"insights_query_{(status or 'timeout').lower()}")
 
         rows: list[dict] = []
         for row_fields in result.get("results", []):
@@ -251,16 +343,34 @@ async def _cw_insights_query(
                 "start": record.get("timestamp", ""),
             }
             rows.append(mapped)
-        return rows
+        return rows, len(rows) >= _MAX_RECORDS_PER_PULL
 
     return await asyncio.to_thread(_run)
+
+
+def _parse_insights_timestamp(value) -> datetime | None:
+    """Parse a CloudWatch Insights @timestamp value (``YYYY-MM-DD HH:MM:SS.mmm``,
+    UTC) or an epoch-seconds string."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        try:
+            return datetime.fromtimestamp(int(text), tz=UTC)
+        except (ValueError, OSError, OverflowError):
+            return None
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Azure puller - Blob Storage NSG Flow Logs
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def pull_azure_flow_logs(account: dict) -> dict:
+async def pull_azure_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     """Pull NSG Flow Logs from Azure Blob Storage.
 
     Required auth_config keys:
@@ -282,45 +392,47 @@ async def pull_azure_flow_logs(account: dict) -> dict:
         return {"ok": False, "error": "azure_storage_blob_not_installed", "ingested": 0}
 
     cursor = await _get_cursor(account_id)
-    start_dt, end_dt = _window(cursor)
+    start_dt, end_dt = _window(cursor, lookback_minutes=lookback_minutes)
 
     total_ingested = 0
     errors: list[str] = []
+    warnings: list[str] = []
 
     try:
         blob_client = _build_azure_blob_client(auth, storage_account)
         container_client = blob_client.get_container_client(container)
 
-        # NSG flow logs are stored with time-partitioned blob names.
-        # List blobs modified within the window.
-        prefix = _azure_flow_log_prefix(start_dt)
-        records: list[dict] = []
-
         async def _list_and_read():
             import asyncio
             return await asyncio.to_thread(
-                _read_azure_blobs, container_client, prefix, start_dt, end_dt,
+                _read_azure_blobs, container_client, start_dt, end_dt,
             )
 
-        records = await _list_and_read()
+        records, truncated = await _list_and_read()
+        if truncated:
+            warnings.append(f"results truncated at {_MAX_RECORDS_PER_PULL}")
 
         if records:
-            normalized = _normalize_azure_flow_records(records[:_MAX_RECORDS_PER_PULL])
+            normalized = _normalize_azure_flow_records(records)
             if normalized:
                 rows = _build_flow_rows_for_ingest(account_id, "azure", normalized)
                 total_ingested = await db.create_flow_records_batch(rows)
+
+        # Advance the watermark only on success so a failed window is
+        # retried next cycle instead of silently skipped.
+        await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
 
     except Exception as exc:
         msg = f"Azure flow pull failed: {type(exc).__name__}"
         LOGGER.warning(msg, exc_info=True)
         errors.append(msg)
 
-    await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
-
     return {
-        "ok": not errors or total_ingested > 0,
+        "ok": not errors,
+        "partial": False,
         "ingested": total_ingested,
         "errors": errors,
+        "warnings": warnings,
     }
 
 
@@ -328,63 +440,104 @@ def _build_azure_blob_client(auth: dict, storage_account: str):
     from azure.storage.blob import BlobServiceClient
 
     account_key = str(auth.get("storage_account_key") or "").strip()
+    account_url = f"https://{storage_account}.blob.core.windows.net"
+    timeouts = {"connection_timeout": 10, "read_timeout": 60}
     if account_key:
-        account_url = f"https://{storage_account}.blob.core.windows.net"
-        return BlobServiceClient(account_url=account_url, credential=account_key)
+        return BlobServiceClient(account_url=account_url, credential=account_key, **timeouts)
 
     # Fall back to DefaultAzureCredential (managed identity / env vars).
     try:
         from azure.identity import DefaultAzureCredential
         credential = DefaultAzureCredential()
-        account_url = f"https://{storage_account}.blob.core.windows.net"
-        return BlobServiceClient(account_url=account_url, credential=credential)
+        return BlobServiceClient(account_url=account_url, credential=credential, **timeouts)
     except ImportError:
         raise ImportError("azure-identity is required when storage_account_key is not provided")
 
 
-def _azure_flow_log_prefix(dt: datetime) -> str:
-    """Build a blob name prefix for the given date partition."""
-    return f"resourceId=/y={dt.year}/m={dt.month:02d}/d={dt.day:02d}/"
+def _azure_day_partitions(start: datetime, end: datetime) -> list[str]:
+    """Date-partition path segments (``/y=…/m=…/d=…/``) covered by the window.
+
+    NSG flow-log blob names embed the full NSG resource ID between
+    ``resourceId=`` and the date partition, so the partition can only be
+    matched as a substring, not as a name prefix.
+    """
+    segments: list[str] = []
+    day = start.date()
+    while day <= end.date():
+        segments.append(f"/y={day.year}/m={day.month:02d}/d={day.day:02d}/")
+        day += timedelta(days=1)
+    return segments
 
 
-def _read_azure_blobs(container_client, prefix: str, start: datetime, end: datetime) -> list[dict]:
-    """Read and parse NSG flow log JSON blobs within the time window."""
-    records: list[dict] = []
+def _azure_tuple_epoch(flow_tuple) -> int | None:
+    """Epoch seconds from an NSG flow tuple (first comma-separated field)."""
     try:
-        blobs = container_client.list_blobs(name_starts_with=prefix)
-        for blob_props in blobs:
-            if len(records) >= _MAX_RECORDS_PER_PULL:
-                break
-            blob_data = container_client.download_blob(blob_props.name).readall()
-            try:
-                parsed = json.loads(blob_data)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
+        return int(str(flow_tuple).split(",", 1)[0])
+    except (ValueError, IndexError):
+        return None
 
-            # NSG flow log JSON structure: { records: [ { properties: { flows: [...] } } ] }
-            for log_record in parsed.get("records", []):
-                props = log_record.get("properties", {})
-                for flow_group in props.get("flows", []):
-                    rule_name = str(flow_group.get("rule") or "")
-                    for flow_set in flow_group.get("flows", []):
-                        mac = str(flow_set.get("mac") or "")
-                        for flow_tuple in flow_set.get("flowTuples", []):
-                            records.append({
-                                "flow_tuples": [flow_tuple],
-                                "rule_name": rule_name,
-                                "region": str(log_record.get("location") or ""),
-                                "resource_id": str(log_record.get("resourceId") or ""),
-                            })
-    except Exception:
-        LOGGER.debug("Azure blob list/read failed", exc_info=True)
-    return records
+
+def _read_azure_blobs(container_client, start: datetime, end: datetime) -> tuple[list[dict], bool]:
+    """Read and parse NSG flow log JSON blobs within the time window.
+
+    Blobs are hourly and appended to in place, so selection is by the date
+    partition in the blob name plus ``last_modified``; individual flow tuples
+    are then filtered by their embedded epoch timestamp to keep exactly the
+    [start, end) window and avoid re-ingesting tuples from earlier pulls.
+
+    Returns ``(records, truncated)``. Errors propagate to the caller so the
+    watermark is not advanced past a failed window.
+    """
+    partitions = _azure_day_partitions(start, end)
+    start_epoch = int(start.timestamp())
+    end_epoch = int(end.timestamp())
+    records: list[dict] = []
+    truncated = False
+
+    blobs = container_client.list_blobs(name_starts_with="resourceId=")
+    for blob_props in blobs:
+        if len(records) >= _MAX_RECORDS_PER_PULL:
+            truncated = True
+            break
+        name = str(blob_props.name or "")
+        if not any(seg in name for seg in partitions):
+            continue
+        last_modified = getattr(blob_props, "last_modified", None)
+        if last_modified is not None and last_modified < start:
+            continue
+        blob_data = container_client.download_blob(blob_props.name).readall()
+        try:
+            parsed = json.loads(blob_data)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+
+        # NSG flow log JSON structure: { records: [ { properties: { flows: [...] } } ] }
+        for log_record in parsed.get("records", []):
+            props = log_record.get("properties", {})
+            for flow_group in props.get("flows", []):
+                rule_name = str(flow_group.get("rule") or "")
+                for flow_set in flow_group.get("flows", []):
+                    for flow_tuple in flow_set.get("flowTuples", []):
+                        epoch = _azure_tuple_epoch(flow_tuple)
+                        if epoch is not None and not (start_epoch <= epoch < end_epoch):
+                            continue
+                        if len(records) >= _MAX_RECORDS_PER_PULL:
+                            truncated = True
+                            break
+                        records.append({
+                            "flow_tuples": [flow_tuple],
+                            "rule_name": rule_name,
+                            "region": str(log_record.get("location") or ""),
+                            "resource_id": str(log_record.get("resourceId") or ""),
+                        })
+    return records, truncated
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GCP puller - Cloud Logging export
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def pull_gcp_flow_logs(account: dict) -> dict:
+async def pull_gcp_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     """Pull VPC Flow Logs from GCP Cloud Logging.
 
     Required auth_config keys:
@@ -403,32 +556,39 @@ async def pull_gcp_flow_logs(account: dict) -> dict:
         return {"ok": False, "error": "google_cloud_logging_not_installed", "ingested": 0}
 
     cursor = await _get_cursor(account_id)
-    start_dt, end_dt = _window(cursor)
+    start_dt, end_dt = _window(cursor, lookback_minutes=lookback_minutes)
 
     total_ingested = 0
     errors: list[str] = []
+    warnings: list[str] = []
 
     try:
         client = _build_gcp_logging_client(auth, project_id)
         records = await _gcp_logging_query(client, project_id, start_dt, end_dt)
+        if len(records) >= _MAX_RECORDS_PER_PULL:
+            warnings.append(f"results truncated at {_MAX_RECORDS_PER_PULL}")
 
         if records:
-            normalized = _normalize_gcp_flow_records(records[:_MAX_RECORDS_PER_PULL])
+            normalized = _normalize_gcp_flow_records(records)
             if normalized:
                 rows = _build_flow_rows_for_ingest(account_id, "gcp", normalized)
                 total_ingested = await db.create_flow_records_batch(rows)
+
+        # Advance the watermark only on success so a failed window is
+        # retried next cycle instead of silently skipped.
+        await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
 
     except Exception as exc:
         msg = f"GCP flow pull failed: {type(exc).__name__}"
         LOGGER.warning(msg, exc_info=True)
         errors.append(msg)
 
-    await _set_cursor(account_id, last_pull_end=end_dt.isoformat())
-
     return {
-        "ok": not errors or total_ingested > 0,
+        "ok": not errors,
+        "partial": False,
         "ingested": total_ingested,
         "errors": errors,
+        "warnings": warnings,
     }
 
 
@@ -524,26 +684,24 @@ _PULLERS = {
 }
 
 
-async def pull_flow_logs_for_account(account: dict) -> dict:
+async def pull_flow_logs_for_account(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     """Pull flow logs for a single cloud account using the correct provider puller."""
     provider = str(account.get("provider") or "").strip().lower()
     puller = _PULLERS.get(provider)
     if not puller:
         return {"ok": False, "error": f"unsupported_provider:{provider}", "ingested": 0}
-    return await puller(account)
+    async with _account_lock(int(account["id"])):
+        return await puller(account, lookback_minutes=lookback_minutes)
 
 
-async def pull_flow_logs_all_accounts() -> dict:
+async def pull_flow_logs_all_accounts(*, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     """Iterate all enabled cloud accounts and pull flow logs.
 
     Returns a summary dict with per-account results.
     """
     accounts = await db.list_cloud_accounts(enabled_only=True)
-    results: dict[int, dict] = {}
-    total_ingested = 0
-
+    eligible: list[dict] = []
     for account in accounts:
-        account_id = int(account["id"])
         provider = str(account.get("provider") or "").strip().lower()
         flow_config = _parse_auth_config(account)
 
@@ -556,19 +714,30 @@ async def pull_flow_logs_all_accounts() -> dict:
             continue
         if provider == "gcp" and not flow_config.get("project_id"):
             continue
+        eligible.append(account)
 
-        try:
-            result = await pull_flow_logs_for_account(account)
-            results[account_id] = result
-            total_ingested += result.get("ingested", 0)
-        except Exception as exc:
-            LOGGER.warning(
-                "cloud flow pull failed account_id=%s: %s",
-                account_id,
-                type(exc).__name__,
-                exc_info=True,
-            )
-            results[account_id] = {"ok": False, "error": str(type(exc).__name__), "ingested": 0}
+    # Bounded concurrency: one hung provider must not stall every other account.
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_ACCOUNTS)
+
+    async def _pull_one(account: dict) -> tuple[int, dict]:
+        account_id = int(account["id"])
+        async with semaphore:
+            try:
+                return account_id, await pull_flow_logs_for_account(
+                    account, lookback_minutes=lookback_minutes,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "cloud flow pull failed account_id=%s: %s",
+                    account_id,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                return account_id, {"ok": False, "error": str(type(exc).__name__), "ingested": 0}
+
+    gathered = await asyncio.gather(*(_pull_one(account) for account in eligible))
+    results: dict[int, dict] = dict(gathered)
+    total_ingested = sum(result.get("ingested", 0) for result in results.values())
 
     return {
         "accounts_processed": len(results),
@@ -600,5 +769,9 @@ def _parse_auth_config(account: dict) -> dict:
 def _parse_regions(account: dict) -> list[str]:
     raw = str(account.get("region_scope") or "").strip()
     if not raw:
+        LOGGER.warning(
+            "cloud account %s has no region_scope; defaulting to us-east-1 only",
+            account.get("id"),
+        )
         return ["us-east-1"]
     return [r.strip() for r in raw.split(",") if r.strip()]

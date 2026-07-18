@@ -127,68 +127,6 @@ export function connectionMetadataSummary(connection?: { metadata?: unknown }): 
   return parts.length ? parts.join(' | ') : '-';
 }
 
-export interface SyncReadiness {
-  flowReady: boolean;
-  trafficReady: boolean;
-  flowMissing: string[];
-  trafficMissing: string[];
-}
-
-export function computeSyncReadiness(account: {
-  provider?: string;
-  auth_config?: unknown;
-}): SyncReadiness {
-  const provider = String(account.provider ?? '').toLowerCase();
-  const raw = account.auth_config;
-  let auth: Record<string, unknown> = {};
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) auth = raw as Record<string, unknown>;
-  else if (typeof raw === 'string' && raw.trim()) {
-    try {
-      auth = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const hasNonEmptyList = (v: unknown): boolean => {
-    if (Array.isArray(v)) return v.some((i) => String(i ?? '').trim());
-    if (typeof v === 'string') {
-      const t = v.trim();
-      if (!t) return false;
-      if (t.startsWith('[')) {
-        try {
-          const parsed = JSON.parse(t);
-          return Array.isArray(parsed) && parsed.some((i) => String(i ?? '').trim());
-        } catch {
-          return false;
-        }
-      }
-      return t.split(',').some((i) => i.trim());
-    }
-    return false;
-  };
-
-  const flowMissing: string[] = [];
-  const trafficMissing: string[] = [];
-  if (provider === 'aws') {
-    if (!String(auth.log_group_name ?? '').trim()) flowMissing.push('log_group_name');
-    if (!hasNonEmptyList(auth.resource_ids)) trafficMissing.push('resource_ids');
-  } else if (provider === 'azure') {
-    if (!String(auth.storage_account_name ?? '').trim()) flowMissing.push('storage_account_name');
-    if (!String(auth.container_name ?? '').trim()) flowMissing.push('container_name');
-    if (!hasNonEmptyList(auth.resource_ids)) trafficMissing.push('resource_ids');
-  } else if (provider === 'gcp') {
-    if (!String(auth.project_id ?? '').trim()) flowMissing.push('project_id');
-    if (!String(auth.project_id ?? '').trim()) trafficMissing.push('project_id');
-  }
-  return {
-    flowReady: flowMissing.length === 0,
-    trafficReady: trafficMissing.length === 0,
-    flowMissing,
-    trafficMissing,
-  };
-}
-
 export function authHintContent(provider: string): { flow: string; traffic: string; example: Record<string, unknown> } {
   const n = provider.toLowerCase();
   if (n === 'aws') {

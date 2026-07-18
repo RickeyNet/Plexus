@@ -119,6 +119,64 @@ The compose file maps two named volumes:
 For PostgreSQL deployments, the SQLite file isn't used but the Fernet key
 still lives in `/app/state`.
 
+## Cloud Visibility (AWS / Azure / GCP)
+
+The Cloud Visibility feature (topology discovery, flow-log pulls, traffic
+metrics) is disabled-by-dependency out of the box: the provider SDKs are
+**not** in `requirements.txt`. To enable live collection:
+
+```bash
+pip install -r requirements-cloud.txt
+# or in Docker:
+docker build --build-arg INSTALL_CLOUD_SDKS=true .
+```
+
+Without the SDKs, account validation reports `unavailable` and the pullers
+return `<sdk>_not_installed`; nothing silently pretends to work.
+
+### Credentials
+
+- Prefer **keyless auth**: on AWS use an instance profile or `role_arn`
+  (+ optional `external_id`) in the account's auth config; on Azure,
+  DefaultAzureCredential / managed identity is used when no client secret
+  is provided; on GCP, Application Default Credentials are used when no
+  service-account JSON is given. No secret at rest at all.
+- Stored auth configs are AES-256-GCM encrypted and **write-only** — the
+  API never returns them. Editing an account with a blank auth-config field
+  keeps the stored credentials; pass `clear_auth_config: true` to wipe.
+- Keep the encryption key (`APP_ENCRYPTION_KEY_FILE`) on a separate secret
+  mount from the DB volume; co-locating them defeats at-rest encryption.
+- Grant read-only IAM: AWS `ec2:Describe*`, `directconnect:Describe*`,
+  `logs:StartQuery/GetQueryResults/StopQuery`, `cloudwatch:GetMetricData`,
+  `sts:GetCallerIdentity`; Azure `Reader` on the subscription +
+  `Storage Blob Data Reader` on the NSG flow-log storage account +
+  `Monitoring Reader`; GCP `roles/compute.networkViewer`,
+  `roles/logging.viewer`, `roles/monitoring.viewer`.
+
+### Scheduling and scale
+
+All three sync loops (flow, traffic metrics, topology discovery) run
+inside the single app process with no leader election. **Do not run
+multiple replicas/workers** with cloud sync enabled — every replica would
+pull and ingest independently. Config changes made via the API propagate
+to the running loops in the same process only.
+
+### Cost expectations
+
+- Flow pulls use CloudWatch Logs Insights, billed per GB scanned per
+  query. At the default 300s interval that is 288 queries/day/region —
+  scope `log_group_name` narrowly and prefer longer intervals on busy log
+  groups. (An S3-based flow-log path is not yet implemented; S3 delivery
+  is roughly half the CloudWatch ingestion price if cost becomes an issue.)
+- Traffic metrics use batched `GetMetricData` (up to 500 series per call),
+  so API-call cost stays low even with hundreds of `resource_ids`.
+- Topology discovery uses free describe/list APIs; the scheduled refresh
+  (`PUT /api/cloud/discovery-sync/config`, default hourly when enabled)
+  costs nothing on the provider side.
+- Local growth is bounded: cloud flow records share the NetFlow 48h
+  retention (pruned by the cloud loop itself) and cloud traffic metrics
+  default to 7-day retention. See DATA_RETENTION.md.
+
 ## Process supervision (non-Docker)
 
 When running directly from a venv on a server, supervise the process with
