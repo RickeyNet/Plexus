@@ -16,7 +16,7 @@ boto3>=1.34,<2
 
 # ── Azure (topology + NSG flow-log blobs + Azure Monitor metrics)
 azure-identity>=1.16,<2
-azure-mgmt-network>=25,<30
+azure-mgmt-network>=25,<32
 azure-storage-blob>=12.19,<13
 azure-monitor-query>=1.3,<2
 
