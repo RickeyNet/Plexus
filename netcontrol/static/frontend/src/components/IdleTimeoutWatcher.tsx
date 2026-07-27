@@ -20,26 +20,17 @@ export function IdleTimeoutWatcher() {
 
   const data = auth.data;
 
-  const clockOffset = useMemo(() => {
-    if (!data?.server_time) return 0;
-    // Date.now() at the moment server_time changes is the intended (impure)
-    // read used to compute the client/server clock skew.
-    return data.server_time - Math.floor(Date.now() / 1000);
-  }, [data?.server_time]);
+  const serverTime = data?.server_time;
+  const authenticated = data?.authenticated ?? false;
+  const neverExpires = data?.session_never_expires ?? false;
+  const idleTimeout = data?.idle_timeout_seconds ?? 0;
+  const lastActivity = data?.session_last_activity ?? 0;
 
   const deadline = useMemo(() => {
-    if (!data?.authenticated) return null;
-    if (data.session_never_expires) return null;
-    const timeout = data.idle_timeout_seconds ?? 0;
-    const lastActivity = data.session_last_activity ?? 0;
-    if (timeout <= 0 || lastActivity <= 0) return null;
-    return lastActivity + timeout;
-  }, [
-    data?.authenticated,
-    data?.session_never_expires,
-    data?.idle_timeout_seconds,
-    data?.session_last_activity,
-  ]);
+    if (!authenticated || neverExpires) return null;
+    if (idleTimeout <= 0 || lastActivity <= 0) return null;
+    return lastActivity + idleTimeout;
+  }, [authenticated, neverExpires, idleTimeout, lastActivity]);
 
   // Advance `now` on a self-adjusting timer instead of a fixed 1s interval.
   // The countdown UI only shows inside the final WARNING_WINDOW_SECONDS, so
@@ -47,13 +38,20 @@ export function IdleTimeoutWatcher() {
   // re-renders to null. When the deadline is far off we sleep until we're
   // about to enter the warning window; only then do we tick per-second so the
   // countdown stays accurate. When there's no deadline we don't tick at all.
+  //
+  // `now` tracks the *server's* clock: each tick stamps local time plus the
+  // client/server skew captured when the effect (re)starts. The skew is
+  // computed here rather than during render because Date.now() is impure.
   useEffect(() => {
-    if (!data?.authenticated || deadline === null) return;
+    if (!authenticated || deadline === null) return;
+    const clockOffset = serverTime
+      ? serverTime - Math.floor(Date.now() / 1000)
+      : 0;
     let timer = 0;
     const tick = () => {
-      const nowLocal = Math.floor(Date.now() / 1000);
-      setNow(nowLocal);
-      const remaining = deadline - (nowLocal + clockOffset);
+      const nowServer = Math.floor(Date.now() / 1000) + clockOffset;
+      setNow(nowServer);
+      const remaining = deadline - nowServer;
       const delayMs =
         remaining > WARNING_WINDOW_SECONDS
           ? Math.min(Math.max((remaining - WARNING_WINDOW_SECONDS) * 1000, 1000), 60_000)
@@ -62,12 +60,12 @@ export function IdleTimeoutWatcher() {
     };
     tick();
     return () => window.clearTimeout(timer);
-  }, [data?.authenticated, deadline, clockOffset]);
+  }, [authenticated, deadline, serverTime]);
 
   const remaining = useMemo(() => {
     if (deadline === null) return Infinity;
-    return deadline - (now + clockOffset);
-  }, [deadline, now, clockOffset]);
+    return deadline - now;
+  }, [deadline, now]);
 
   useEffect(() => {
     if (!data?.authenticated || loggedOutRef.current) return;
