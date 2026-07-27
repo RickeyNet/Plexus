@@ -49,6 +49,12 @@ jobs:
             requirements.txt
             requirements-dev.txt
 
+      # python-ldap has no Linux wheels and compiles against OpenLDAP headers,
+      # which the ubuntu runners don't ship (the Dockerfile installs the same
+      # packages for its image build).
+      - name: Install system dependencies (python-ldap build headers)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libldap2-dev libsasl2-dev libssl-dev
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -118,6 +124,9 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+
+      - name: Install system dependencies (python-ldap build headers)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libldap2-dev libsasl2-dev libssl-dev
 
       - name: Install dependencies
         run: |
