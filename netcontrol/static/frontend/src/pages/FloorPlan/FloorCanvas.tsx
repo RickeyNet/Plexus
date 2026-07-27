@@ -1,4 +1,4 @@
-import { CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, useEffect, useRef, useState } from 'react';
 
 import {
   FloorPlacement,
@@ -37,13 +37,25 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   // Cache-bust the image URL when the floor changes so a fresh upload is
   // visible without forcing the browser to disregard cache for unrelated
-  // requests. floor.id / floor.image_filename are intentional triggers, and
-  // Date.now() is the intended (impure) cache-buster.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const cacheKey = useMemo(() => Date.now(), [floor.id, floor.image_filename]);
+  // requests. Regenerated in an effect (Date.now() is impure and can't run
+  // during render); the identity guard keeps the mount-time key so the image
+  // isn't fetched twice on first render.
+  const [cacheKey, setCacheKey] = useState(() => Date.now());
+  const floorIdentityRef = useRef<string | null>(null);
+  useEffect(() => {
+    const identity = `${floor.id}:${floor.image_filename ?? ''}`;
+    if (floorIdentityRef.current !== null && floorIdentityRef.current !== identity) {
+      setCacheKey(Date.now());
+    }
+    floorIdentityRef.current = identity;
+  }, [floor.id, floor.image_filename]);
   const upsert = useUpsertFloorPlacement();
   const [draggedHostId, setDraggedHostId] = useState<number | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
+  // Latest drag position for the mouseup handler, which would otherwise close
+  // over the initial (null) state. Written alongside setDragPos in the drag
+  // listeners, never during render.
+  const dragPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Drag of an existing pin: track on document so the cursor can leave the
   // pin element without breaking the gesture.
@@ -56,12 +68,14 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
       const rect = img.getBoundingClientRect();
       const x = clamp01((e.clientX - rect.left) / rect.width);
       const y = clamp01((e.clientY - rect.top) / rect.height);
+      dragPosRef.current = { x, y };
       setDragPos({ x, y });
     };
 
     const onUp = async () => {
       const finalPos = dragPosRef.current;
       const hostId = draggedHostId;
+      dragPosRef.current = null;
       setDraggedHostId(null);
       setDragPos(null);
       if (finalPos && hostId !== null) {
@@ -91,13 +105,6 @@ export function FloorCanvas({ floor, placements, placeMode }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draggedHostId, floor.id]);
-
-  // Mirror dragPos into a ref so the mouseup handler reads the latest value.
-  // (Closure captures the initial state, which is null.)
-  const dragPosRef = useRef<{ x: number; y: number } | null>(null);
-  useEffect(() => {
-    dragPosRef.current = dragPos;
-  }, [dragPos]);
 
   if (!floor.image_filename) {
     return <EmptyCanvas message='No floor plan image. Use "Upload Floor Plan" to add one.' />;

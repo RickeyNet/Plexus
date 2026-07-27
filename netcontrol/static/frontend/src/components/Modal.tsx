@@ -31,9 +31,13 @@ export interface ModalProps {
 
 export function Modal({ isOpen, onClose, title, children, size = 'default' }: ModalProps) {
   // Latest onClose without making it an effect dependency, so a parent
-  // re-render can't churn the escape-stack ordering.
+  // re-render can't churn the escape-stack ordering. Synced in a dep-less
+  // effect rather than during render; the keydown handler only reads it at
+  // event time, after effects have run.
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
   // Stable identity for this modal instance's escape-stack entry.
   const tokenRef = useRef<symbol | null>(null);
   if (tokenRef.current === null) tokenRef.current = Symbol('modal');
