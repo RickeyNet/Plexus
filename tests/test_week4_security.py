@@ -61,9 +61,11 @@ async def test_default_admin_creation_sets_must_change_password(monkeypatch):
         created["must_change_password"] = must_change_password
         return 1
 
-    with patch.object(app_module.db, "get_all_users", fake_get_all_users), \
-         patch.object(app_module.db, "get_user_by_username", fake_get_user_by_username), \
-         patch.object(app_module.db, "create_user", fake_create_user):
+    with (
+        patch.object(app_module.db, "get_all_users", fake_get_all_users),
+        patch.object(app_module.db, "get_user_by_username", fake_get_user_by_username),
+        patch.object(app_module.db, "create_user", fake_create_user),
+    ):
         await app_module._ensure_default_admin()
 
     assert created.get("must_change_password") is True
@@ -158,6 +160,7 @@ async def test_register_allowed_when_opted_in(monkeypatch):
     resp = await app_module.register(body)
     assert resp.status_code == 200
     import json
+
     data = json.loads(resp.body.decode())
     assert data["ok"] is True
     assert "csrf_token" in data
@@ -294,8 +297,13 @@ def test_csrf_token_rejects_garbage():
 async def test_login_response_includes_csrf_token(monkeypatch):
     """The login endpoint must return a csrf_token in the response body."""
     user_row = {
-        "id": 1, "username": "admin", "password_hash": "", "salt": "",
-        "display_name": "Admin", "role": "admin", "must_change_password": 0,
+        "id": 1,
+        "username": "admin",
+        "password_hash": "",
+        "salt": "",
+        "display_name": "Admin",
+        "role": "admin",
+        "must_change_password": 0,
     }
 
     async def fake_authenticate(u, p):
@@ -320,6 +328,7 @@ async def test_login_response_includes_csrf_token(monkeypatch):
     resp = await app_module.login(body, cast(Request, req))
 
     import json
+
     data = json.loads(resp.body.decode())
     assert data["ok"] is True
     assert "csrf_token" in data
@@ -330,8 +339,13 @@ async def test_login_response_includes_csrf_token(monkeypatch):
 async def test_login_response_includes_must_change_password(monkeypatch):
     """Login response must surface must_change_password flag."""
     user_row = {
-        "id": 1, "username": "admin", "password_hash": "", "salt": "",
-        "display_name": "Admin", "role": "admin", "must_change_password": 1,
+        "id": 1,
+        "username": "admin",
+        "password_hash": "",
+        "salt": "",
+        "display_name": "Admin",
+        "role": "admin",
+        "must_change_password": 1,
     }
 
     async def fake_authenticate(u, p):
@@ -356,6 +370,7 @@ async def test_login_response_includes_must_change_password(monkeypatch):
     resp = await app_module.login(body, cast(Request, req))
 
     import json
+
     data = json.loads(resp.body.decode())
     assert data["must_change_password"] is True
 

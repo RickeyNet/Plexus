@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -65,6 +66,7 @@ __all__ = [
 # Digital Twin / Lab Mode (migration 0029)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def create_lab_environment(
     name: str,
     description: str = "",
@@ -115,7 +117,8 @@ async def get_lab_environment(env_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM lab_environments WHERE id = ?", (env_id,),
+            "SELECT * FROM lab_environments WHERE id = ?",
+            (env_id,),
         )
         return row_to_dict(await cursor.fetchone())
     finally:
@@ -148,7 +151,11 @@ async def update_lab_environment(
     fields.append("updated_at = ?")
     values.append(datetime.now(UTC).isoformat())
     sql, params = _safe_dynamic_update(
-        "lab_environments", fields, values, "id = ?", env_id,
+        "lab_environments",
+        fields,
+        values,
+        "id = ?",
+        env_id,
     )
     db = await _dbcore.get_db()
     try:
@@ -163,7 +170,8 @@ async def delete_lab_environment(env_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "DELETE FROM lab_environments WHERE id = ?", (env_id,),
+            "DELETE FROM lab_environments WHERE id = ?",
+            (env_id,),
         )
         await db.commit()
         return cursor.rowcount > 0
@@ -188,8 +196,7 @@ async def create_lab_device(
                (environment_id, hostname, ip_address, device_type, model,
                 source_host_id, running_config, notes)
                VALUES (?,?,?,?,?,?,?,?)""",
-            (environment_id, hostname, ip_address, device_type, model,
-             source_host_id, running_config, notes),
+            (environment_id, hostname, ip_address, device_type, model, source_host_id, running_config, notes),
         )
         await db.commit()
         return cursor.lastrowid
@@ -222,7 +229,8 @@ async def get_lab_device(device_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM lab_devices WHERE id = ?", (device_id,),
+            "SELECT * FROM lab_devices WHERE id = ?",
+            (device_id,),
         )
         return row_to_dict(await cursor.fetchone())
     finally:
@@ -263,7 +271,11 @@ async def update_lab_device(
     fields.append("updated_at = ?")
     values.append(datetime.now(UTC).isoformat())
     sql, params = _safe_dynamic_update(
-        "lab_devices", fields, values, "id = ?", device_id,
+        "lab_devices",
+        fields,
+        values,
+        "id = ?",
+        device_id,
     )
     db = await _dbcore.get_db()
     try:
@@ -278,7 +290,8 @@ async def delete_lab_device(device_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "DELETE FROM lab_devices WHERE id = ?", (device_id,),
+            "DELETE FROM lab_devices WHERE id = ?",
+            (device_id,),
         )
         await db.commit()
         return cursor.rowcount > 0
@@ -309,10 +322,16 @@ async def create_lab_run(
                 risk_detail, status)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                lab_device_id, submitted_by,
+                lab_device_id,
+                submitted_by,
                 json.dumps(commands or []),
-                pre_config, post_config, diff_text, diff_added, diff_removed,
-                float(risk_score), risk_level,
+                pre_config,
+                post_config,
+                diff_text,
+                diff_added,
+                diff_removed,
+                float(risk_score),
+                risk_level,
                 json.dumps(risk_detail or {}),
                 status,
             ),
@@ -344,7 +363,8 @@ async def get_lab_run(run_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM lab_runs WHERE id = ?", (run_id,),
+            "SELECT * FROM lab_runs WHERE id = ?",
+            (run_id,),
         )
         return row_to_dict(await cursor.fetchone())
     finally:
@@ -433,7 +453,11 @@ async def update_lab_device_runtime(
     fields.append("updated_at = ?")
     values.append(datetime.now(UTC).isoformat())
     sql, params = _safe_dynamic_update(
-        "lab_devices", fields, values, "id = ?", device_id,
+        "lab_devices",
+        fields,
+        values,
+        "id = ?",
+        device_id,
     )
     db = await _dbcore.get_db()
     try:
@@ -542,7 +566,8 @@ async def get_lab_topology(topology_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM lab_topologies WHERE id = ?", (topology_id,),
+            "SELECT * FROM lab_topologies WHERE id = ?",
+            (topology_id,),
         )
         return row_to_dict(await cursor.fetchone())
     finally:
@@ -580,7 +605,11 @@ async def update_lab_topology_status(
     fields.append("updated_at = ?")
     values.append(datetime.now(UTC).isoformat())
     sql, params = _safe_dynamic_update(
-        "lab_topologies", fields, values, "id = ?", topology_id,
+        "lab_topologies",
+        fields,
+        values,
+        "id = ?",
+        topology_id,
     )
     db = await _dbcore.get_db()
     try:
@@ -595,7 +624,8 @@ async def delete_lab_topology(topology_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "DELETE FROM lab_topologies WHERE id = ?", (topology_id,),
+            "DELETE FROM lab_topologies WHERE id = ?",
+            (topology_id,),
         )
         await db.commit()
         return cursor.rowcount > 0
@@ -667,7 +697,8 @@ async def delete_lab_topology_link(link_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "DELETE FROM lab_topology_links WHERE id = ?", (link_id,),
+            "DELETE FROM lab_topology_links WHERE id = ?",
+            (link_id,),
         )
         await db.commit()
         return cursor.rowcount > 0
@@ -709,8 +740,18 @@ async def create_lab_drift_run(
                (lab_device_id, source_host_id, status, diff_text,
                 diff_added, diff_removed, twin_bytes, prod_bytes, actor, error)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (lab_device_id, source_host_id, status, diff_text,
-             diff_added, diff_removed, twin_bytes, prod_bytes, actor, error),
+            (
+                lab_device_id,
+                source_host_id,
+                status,
+                diff_text,
+                diff_added,
+                diff_removed,
+                twin_bytes,
+                prod_bytes,
+                actor,
+                error,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -739,7 +780,8 @@ async def get_lab_drift_run(run_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM lab_drift_runs WHERE id = ?", (run_id,),
+            "SELECT * FROM lab_drift_runs WHERE id = ?",
+            (run_id,),
         )
         return row_to_dict(await cursor.fetchone())
     finally:
@@ -778,5 +820,3 @@ async def list_drift_eligible_devices() -> list[dict]:
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
-
-

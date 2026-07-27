@@ -8,6 +8,7 @@ Provides:
   - Integration with the monitoring poll loop for live deviation checks
   - Background loop for periodic baseline recomputation
 """
+
 from __future__ import annotations
 
 import math
@@ -28,6 +29,7 @@ LOGGER = configure_logging("plexus.baseline_alerting")
 # Pydantic Models
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 class BaselineAlertRuleCreate(BaseModel):
     name: str
     description: str = ""
@@ -40,6 +42,7 @@ class BaselineAlertRuleCreate(BaseModel):
     enabled: bool = True
     severity: str = "warning"
     cooldown_minutes: int = 30
+
 
 class BaselineAlertRuleUpdate(BaseModel):
     name: str | None = None
@@ -84,8 +87,7 @@ def _compute_stats(values: list[float]) -> dict:
     }
 
 
-async def compute_baselines_for_host(host_id: int, metric_name: str,
-                                       learning_days: int = 14) -> int:
+async def compute_baselines_for_host(host_id: int, metric_name: str, learning_days: int = 14) -> int:
     """Compute baselines for a host/metric, grouped by day-of-week and hour-of-day.
 
     Queries metric_samples for the past N days and aggregates by
@@ -120,7 +122,7 @@ async def compute_baselines_for_host(host_id: int, metric_name: str,
             hod = ts.hour
             val = float(r["value"])
             buckets.setdefault((dow, hod), []).append(val)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
 
     # Also compute an "any day" baseline (day_of_week = -1) for each hour
@@ -136,11 +138,16 @@ async def compute_baselines_for_host(host_id: int, metric_name: str,
         if stats["count"] < 3:
             continue
         await db.upsert_metric_baseline(
-            host_id=host_id, metric_name=metric_name,
-            day_of_week=dow, hour_of_day=hod,
-            baseline_avg=stats["avg"], baseline_stddev=stats["stddev"],
-            baseline_min=stats["min"], baseline_max=stats["max"],
-            baseline_p95=stats["p95"], sample_count=stats["count"],
+            host_id=host_id,
+            metric_name=metric_name,
+            day_of_week=dow,
+            hour_of_day=hod,
+            baseline_avg=stats["avg"],
+            baseline_stddev=stats["stddev"],
+            baseline_min=stats["min"],
+            baseline_max=stats["max"],
+            baseline_p95=stats["p95"],
+            sample_count=stats["count"],
             learning_window_days=learning_days,
         )
         updated += 1
@@ -151,17 +158,23 @@ async def compute_baselines_for_host(host_id: int, metric_name: str,
         if stats["count"] < 3:
             continue
         await db.upsert_metric_baseline(
-            host_id=host_id, metric_name=metric_name,
-            day_of_week=-1, hour_of_day=hod,
-            baseline_avg=stats["avg"], baseline_stddev=stats["stddev"],
-            baseline_min=stats["min"], baseline_max=stats["max"],
-            baseline_p95=stats["p95"], sample_count=stats["count"],
+            host_id=host_id,
+            metric_name=metric_name,
+            day_of_week=-1,
+            hour_of_day=hod,
+            baseline_avg=stats["avg"],
+            baseline_stddev=stats["stddev"],
+            baseline_min=stats["min"],
+            baseline_max=stats["max"],
+            baseline_p95=stats["p95"],
+            sample_count=stats["count"],
             learning_window_days=learning_days,
         )
         updated += 1
 
-    LOGGER.info("baseline: computed %d entries for host=%d metric=%s (window=%dd)",
-                updated, host_id, metric_name, learning_days)
+    LOGGER.info(
+        "baseline: computed %d entries for host=%d metric=%s (window=%dd)", updated, host_id, metric_name, learning_days
+    )
     return updated
 
 
@@ -170,9 +183,9 @@ async def compute_baselines_for_host(host_id: int, metric_name: str,
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def check_baseline_deviation(host_id: int, metric_name: str,
-                                     current_value: float,
-                                     sensitivity: float = 2.0) -> dict | None:
+async def check_baseline_deviation(
+    host_id: int, metric_name: str, current_value: float, sensitivity: float = 2.0
+) -> dict | None:
     """Check if current_value deviates from the baseline.
 
     Returns deviation info dict if a deviation is detected, else None.
@@ -255,13 +268,11 @@ async def evaluate_baseline_alerts_for_poll(poll_result: dict, poll_id: int) -> 
 
         try:
             current_value = float(current_value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
 
         # Check deviation
-        deviation = await check_baseline_deviation(
-            host_id, metric_name, current_value, sensitivity
-        )
+        deviation = await check_baseline_deviation(host_id, metric_name, current_value, sensitivity)
         if not deviation:
             continue
 
@@ -335,12 +346,10 @@ async def run_baseline_computation_cycle():
             count = await compute_baselines_for_host(host_id, metric, days)
             total += count
         except Exception as exc:
-            LOGGER.debug("baseline: computation error for host=%d metric=%s: %s",
-                         host_id, metric, str(exc))
+            LOGGER.debug("baseline: computation error for host=%d metric=%s: %s", host_id, metric, str(exc))
 
     if total > 0:
-        LOGGER.info("baseline: recomputed %d baseline entries across %d host-metric pairs",
-                     total, len(unique_tasks))
+        LOGGER.info("baseline: recomputed %d baseline entries across %d host-metric pairs", total, len(unique_tasks))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -366,7 +375,8 @@ async def create_rule(body: BaselineAlertRuleCreate, request: Request):
     user = getattr(request.state, "user", None)
     username = user.get("username", "") if user else ""
     rule_id = await db.create_baseline_alert_rule(
-        **body.dict(), created_by=username,
+        **body.dict(),
+        created_by=username,
     )
     return {"id": rule_id}
 
@@ -430,22 +440,32 @@ async def get_baseline_chart_data(host_id: int, metric: str):
     for hour in range(24):
         b = hourly.get(hour)
         if b:
-            chart_data.append({
-                "hour": hour,
-                "avg": b["baseline_avg"],
-                "stddev": b["baseline_stddev"],
-                "min": b["baseline_min"],
-                "max": b["baseline_max"],
-                "p95": b["baseline_p95"],
-                "upper_band": round(b["baseline_avg"] + 2 * b["baseline_stddev"], 2),
-                "lower_band": round(max(0, b["baseline_avg"] - 2 * b["baseline_stddev"]), 2),
-                "sample_count": b["sample_count"],
-            })
+            chart_data.append(
+                {
+                    "hour": hour,
+                    "avg": b["baseline_avg"],
+                    "stddev": b["baseline_stddev"],
+                    "min": b["baseline_min"],
+                    "max": b["baseline_max"],
+                    "p95": b["baseline_p95"],
+                    "upper_band": round(b["baseline_avg"] + 2 * b["baseline_stddev"], 2),
+                    "lower_band": round(max(0, b["baseline_avg"] - 2 * b["baseline_stddev"]), 2),
+                    "sample_count": b["sample_count"],
+                }
+            )
         else:
-            chart_data.append({
-                "hour": hour, "avg": None, "stddev": None,
-                "min": None, "max": None, "p95": None,
-                "upper_band": None, "lower_band": None, "sample_count": 0,
-            })
+            chart_data.append(
+                {
+                    "hour": hour,
+                    "avg": None,
+                    "stddev": None,
+                    "min": None,
+                    "max": None,
+                    "p95": None,
+                    "upper_band": None,
+                    "lower_band": None,
+                    "sample_count": 0,
+                }
+            )
 
     return chart_data

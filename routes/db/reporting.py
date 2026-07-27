@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -49,8 +50,10 @@ __all__ = [
 
 
 async def create_report_definition(
-    name: str, report_type: str = "availability",
-    parameters_json: str = "{}", schedule: str = "",
+    name: str,
+    report_type: str = "availability",
+    parameters_json: str = "{}",
+    schedule: str = "",
     created_by: str = "",
 ) -> dict:
     db = await _dbcore.get_db()
@@ -71,9 +74,7 @@ async def create_report_definition(
 async def get_report_definition(report_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM report_definitions WHERE id = ?", (report_id,)
-        )
+        cursor = await db.execute("SELECT * FROM report_definitions WHERE id = ?", (report_id,))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -83,9 +84,7 @@ async def get_report_definition(report_id: int) -> dict | None:
 async def list_report_definitions() -> list[dict]:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM report_definitions ORDER BY updated_at DESC"
-        )
+        cursor = await db.execute("SELECT * FROM report_definitions ORDER BY updated_at DESC")
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -94,9 +93,7 @@ async def list_report_definitions() -> list[dict]:
 async def delete_report_definition(report_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM report_definitions WHERE id = ?", (report_id,)
-        )
+        cursor = await db.execute("DELETE FROM report_definitions WHERE id = ?", (report_id,))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -120,7 +117,8 @@ async def update_report_definition_last_run(report_id: int) -> None:
 
 
 async def create_report_run(
-    report_id: int | None, report_type: str,
+    report_id: int | None,
+    report_type: str,
     parameters_json: str = "{}",
 ) -> dict:
     db = await _dbcore.get_db()
@@ -141,7 +139,10 @@ async def create_report_run(
 
 
 async def complete_report_run(
-    run_id: int, result_json: str, row_count: int, status: str = "completed",
+    run_id: int,
+    result_json: str,
+    row_count: int,
+    status: str = "completed",
 ) -> None:
     db = await _dbcore.get_db()
     try:
@@ -265,9 +266,7 @@ async def get_report_runs(report_id: int | None = None, limit: int = 50) -> list
 async def get_report_run(run_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM report_runs WHERE id = ?", (run_id,)
-        )
+        cursor = await db.execute("SELECT * FROM report_runs WHERE id = ?", (run_id,))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -567,9 +566,7 @@ async def generate_network_documentation_report_data(
             ]
 
         group_name_by_host = {
-            int(h.get("host_id")): str(h.get("group_name") or "")
-            for h in hosts
-            if h.get("host_id") is not None
+            int(h.get("host_id")): str(h.get("group_name") or "") for h in hosts if h.get("host_id") is not None
         }
 
         circuits_by_host_iface: dict[tuple[int, str], dict] = {}
@@ -650,9 +647,7 @@ async def generate_network_documentation_report_data(
             row = _row("topology_link")
             src_host_id = int(link.get("source_host_id") or 0)
             src_iface = str(link.get("source_interface") or "")
-            circuit = circuits_by_host_iface.get(
-                (src_host_id, _normalize_iface_for_doc(src_iface))
-            )
+            circuit = circuits_by_host_iface.get((src_host_id, _normalize_iface_for_doc(src_iface)))
             details = ""
             if circuit:
                 commit_mbps = round(float(circuit.get("commit_rate_bps") or 0) / 1_000_000, 3)
@@ -676,8 +671,12 @@ async def generate_network_documentation_report_data(
                     "circuit_customer": circuit.get("circuit_customer") if circuit else "",
                     "circuit_if_index": circuit.get("circuit_if_index") if circuit else "",
                     "circuit_if_name": circuit.get("circuit_if_name") if circuit else "",
-                    "circuit_commit_mbps": round(float(circuit.get("commit_rate_bps") or 0) / 1_000_000, 3) if circuit else "",
-                    "circuit_burst_mbps": round(float(circuit.get("burst_limit_bps") or 0) / 1_000_000, 3) if circuit else "",
+                    "circuit_commit_mbps": round(float(circuit.get("commit_rate_bps") or 0) / 1_000_000, 3)
+                    if circuit
+                    else "",
+                    "circuit_burst_mbps": round(float(circuit.get("burst_limit_bps") or 0) / 1_000_000, 3)
+                    if circuit
+                    else "",
                     "circuit_enabled": int(circuit.get("circuit_enabled") or 0) if circuit else "",
                     "details": details,
                 }
@@ -755,5 +754,3 @@ async def generate_network_documentation_report_data(
         return rows
     finally:
         await db.close()
-
-

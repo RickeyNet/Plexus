@@ -29,16 +29,12 @@ async def _column_exists_sqlite(db) -> bool:
 async def _up_sqlite(db) -> None:
     if await _column_exists_sqlite(db):
         return
-    await db.execute(
-        "ALTER TABLE jobs ADD COLUMN parameters TEXT DEFAULT NULL"
-    )
+    await db.execute("ALTER TABLE jobs ADD COLUMN parameters TEXT DEFAULT NULL")
     await db.commit()
 
 
 async def _up_postgres(db) -> None:
-    await db.execute(
-        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS parameters TEXT DEFAULT NULL"
-    )
+    await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS parameters TEXT DEFAULT NULL")
     await db.commit()
 
 

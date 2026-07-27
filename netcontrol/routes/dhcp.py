@@ -224,8 +224,7 @@ async def sync_dhcp_server(server_id: int, *, triggered_by: str = "manual") -> d
         raise HTTPException(status_code=502, detail=f"adapter_error: {exc}") from exc
     summary = snapshot.get("summary") or {}
     message = (
-        f"{triggered_by}: {int(summary.get('scope_count', 0))} scopes, "
-        f"{int(summary.get('lease_count', 0))} leases"
+        f"{triggered_by}: {int(summary.get('scope_count', 0))} scopes, {int(summary.get('lease_count', 0))} leases"
     )
     await db.replace_dhcp_server_snapshot(
         server_id,
@@ -346,11 +345,7 @@ async def dhcp_exhaustion_api():
     rows = await db.list_dhcp_scopes()
     scopes = [_serialize_scope(r) for r in rows]
     exhausted = [s for s in scopes if s["exhausted"]]
-    near = [
-        s
-        for s in scopes
-        if not s["exhausted"] and s["utilization_pct"] >= (SCOPE_EXHAUSTION_PCT - 10.0)
-    ]
+    near = [s for s in scopes if not s["exhausted"] and s["utilization_pct"] >= (SCOPE_EXHAUSTION_PCT - 10.0)]
     return {
         "threshold_pct": SCOPE_EXHAUSTION_PCT,
         "exhausted": exhausted,

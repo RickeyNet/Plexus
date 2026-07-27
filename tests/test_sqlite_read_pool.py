@@ -76,9 +76,7 @@ async def test_writer_not_blocked_by_held_reader(pool_db):
             reader_holding.set()
             await asyncio.wait_for(writer_done.wait(), timeout=5)
             # WAL: a fresh read (new implicit transaction) sees the commit.
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM inventory_groups WHERE name = 'edge'"
-            )
+            cursor = await db.execute("SELECT COUNT(*) FROM inventory_groups WHERE name = 'edge'")
             assert (await cursor.fetchone())[0] == 1
         finally:
             await db.close()
@@ -117,9 +115,7 @@ async def test_nested_read_inside_write_sees_uncommitted(pool_db):
         await outer.execute("INSERT INTO inventory_groups (id, name) VALUES (3, 'wip')")
         nested = await db_module.get_db(read_only=True)
         try:
-            cursor = await nested.execute(
-                "SELECT COUNT(*) FROM inventory_groups WHERE name = 'wip'"
-            )
+            cursor = await nested.execute("SELECT COUNT(*) FROM inventory_groups WHERE name = 'wip'")
             assert (await cursor.fetchone())[0] == 1  # same conn: uncommitted visible
         finally:
             await nested.close()
@@ -171,9 +167,7 @@ async def test_abandoned_transaction_rolled_back_on_release(pool_db):
     try:
         # an unrelated caller committing must not persist the orphan row
         await db.commit()
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM inventory_groups WHERE name = 'orphan'"
-        )
+        cursor = await db.execute("SELECT COUNT(*) FROM inventory_groups WHERE name = 'orphan'")
         assert (await cursor.fetchone())[0] == 0
     finally:
         await db.close()

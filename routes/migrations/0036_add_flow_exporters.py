@@ -38,9 +38,7 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_flow_exporters_host ON flow_exporters(host_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_flow_exporters_host ON flow_exporters(host_id)")
     await db.commit()
 
 
@@ -61,9 +59,7 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_flow_exporters_host ON flow_exporters(host_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_flow_exporters_host ON flow_exporters(host_id)")
     await db.commit()
 
 

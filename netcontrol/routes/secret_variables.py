@@ -5,6 +5,7 @@ Secret variables are referenced in config templates via {{secret.NAME}}
 and resolved at job execution time.  Values are AES-256-GCM encrypted at rest.
 Only admins can create/update/delete secret variables.
 """
+
 from __future__ import annotations
 
 import re
@@ -29,6 +30,7 @@ async def _require_admin_session(request: Request) -> dict:
     if not user or user.get("role") != "admin":
         raise HTTPException(403, "Admin access required")
     return session
+
 
 LOGGER = configure_logging("plexus.secret_variables")
 
@@ -125,7 +127,8 @@ async def create_secret_variable(body: SecretVariableCreate, request: Request):
         created_by=session["user"],
     )
     await _audit(
-        "config", "secret_variable.create",
+        "config",
+        "secret_variable.create",
         user=session["user"],
         detail=f"created secret variable '{name}'",
         correlation_id=_corr_id(request),
@@ -157,7 +160,8 @@ async def update_secret_variable(var_id: int, body: SecretVariableUpdate, reques
     if body.description is not None:
         what.append("description")
     await _audit(
-        "config", "secret_variable.update",
+        "config",
+        "secret_variable.update",
         user=session["user"],
         detail=f"updated secret variable '{sv['name']}' ({', '.join(what)})",
         correlation_id=_corr_id(request),
@@ -176,7 +180,8 @@ async def delete_secret_variable(var_id: int, request: Request):
 
     await db.delete_secret_variable(var_id)
     await _audit(
-        "config", "secret_variable.delete",
+        "config",
+        "secret_variable.delete",
         user=session["user"],
         detail=f"deleted secret variable '{sv['name']}'",
         correlation_id=_corr_id(request),

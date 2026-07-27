@@ -17,16 +17,12 @@ DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 
 async def _up_sqlite(db) -> None:
-    await db.execute(
-        "ALTER TABLE hosts ADD COLUMN serial_number TEXT NOT NULL DEFAULT ''"
-    )
+    await db.execute("ALTER TABLE hosts ADD COLUMN serial_number TEXT NOT NULL DEFAULT ''")
     await db.commit()
 
 
 async def _up_postgres(db) -> None:
-    await db.execute(
-        "ALTER TABLE hosts ADD COLUMN serial_number TEXT NOT NULL DEFAULT ''"
-    )
+    await db.execute("ALTER TABLE hosts ADD COLUMN serial_number TEXT NOT NULL DEFAULT ''")
     await db.commit()
 
 

@@ -41,9 +41,7 @@ async def test_same_name_different_device_type_allowed(db):
     that is the whole point of "by template name across vendors".
     """
     base = await db.create_template("SNMPv3 Std", "generic body", "", "")
-    pa = await db.create_template(
-        "SNMPv3 Std", "set deviceconfig system snmp-setting", "", "paloalto_panos"
-    )
+    pa = await db.create_template("SNMPv3 Std", "set deviceconfig system snmp-setting", "", "paloalto_panos")
     assert base != pa
     rows = await db.get_template_variants("SNMPv3 Std")
     assert {r["device_type"] for r in rows} == {"", "paloalto_panos"}

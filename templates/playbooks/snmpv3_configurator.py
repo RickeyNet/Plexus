@@ -64,9 +64,7 @@ class Snmpv3Configurator(BasePlaybook):
         # only bail if there's no body anywhere (checked per host below).
         per_vendor = self.template_by_device_type or {}
         if not template_commands and not per_vendor:
-            yield self.log_error(
-                "No template selected; this playbook requires SNMPv3 commands."
-            )
+            yield self.log_error("No template selected; this playbook requires SNMPv3 commands.")
             return
 
         yield self.log_info(f"SNMPv3 Configurator - targeting {len(hosts)} device(s)")
@@ -75,8 +73,7 @@ class Snmpv3Configurator(BasePlaybook):
             # whole resolution map so a mixed-vendor run is auditable
             # up front (which body each platform will receive).
             yield self.log_info(
-                f"Per-vendor template bodies resolved for: "
-                f"{', '.join(sorted(k or '(generic)' for k in per_vendor))}"
+                f"Per-vendor template bodies resolved for: {', '.join(sorted(k or '(generic)' for k in per_vendor))}"
             )
         elif template_commands:
             yield self.log_info(f"Template commands ({len(template_commands)}):")
@@ -132,13 +129,22 @@ class Snmpv3Configurator(BasePlaybook):
             # Real or simulated execution path; identical event shape either way.
             if NETMIKO_AVAILABLE:
                 async for event in self._process_real_device(
-                    ip, hostname, device_type, driver, credentials,
-                    host_commands, dry_run,
+                    ip,
+                    hostname,
+                    device_type,
+                    driver,
+                    credentials,
+                    host_commands,
+                    dry_run,
                 ):
                     yield event
             else:
                 async for event in self._process_simulated_device(
-                    ip, hostname, driver, host_commands, dry_run,
+                    ip,
+                    hostname,
+                    driver,
+                    host_commands,
+                    dry_run,
                 ):
                     yield event
 
@@ -160,9 +166,7 @@ class Snmpv3Configurator(BasePlaybook):
     ) -> AsyncGenerator[LogEvent]:
         # connect_device builds the device dict, opens the SSH session,
         # promotes to enable mode, and disconnects on exit.
-        async with connect_device(
-            self, ip, hostname, device_type, credentials
-        ) as (conn, events):
+        async with connect_device(self, ip, hostname, device_type, credentials) as (conn, events):
             for ev in events:
                 yield ev
             if conn is None:
@@ -207,23 +211,17 @@ class Snmpv3Configurator(BasePlaybook):
                 try:
                     verify_cmd = driver.snmpv3_verify_users_command()
                 except DriverCapabilityError as exc:
-                    yield self.log_warn(
-                        f"Skipping verification: {exc}", host=hostname
-                    )
+                    yield self.log_warn(f"Skipping verification: {exc}", host=hostname)
                 else:
                     verify = await asyncio.to_thread(conn.send_command, verify_cmd)
-                    yield self.log_info(
-                        f"SNMPv3 user verification:\n{verify}", host=hostname
-                    )
+                    yield self.log_info(f"SNMPv3 user verification:\n{verify}", host=hostname)
 
                 # Step 5 - persist running-config so it survives a reload.
                 yield self.log_info("Saving running config to startup ...", host=hostname)
                 await asyncio.to_thread(conn.save_config)
                 yield self.log_success("Config saved.", host=hostname)
 
-            yield self.log_success(
-                f"Finished processing {hostname} ({ip}).", host=hostname
-            )
+            yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
 
     async def _process_simulated_device(
         self,
@@ -246,8 +244,7 @@ class Snmpv3Configurator(BasePlaybook):
         # Pretend there's already an SNMP config so the verify-style
         # output renders something realistic in the UI.
         fake_existing = (
-            "snmp-server group SECURE v3 priv\n"
-            "snmp-server user netops SECURE v3 auth sha *** priv aes 256 ***"
+            "snmp-server group SECURE v3 priv\nsnmp-server user netops SECURE v3 auth sha *** priv aes 256 ***"
         )
         yield self.log_info(f"Current SNMP config:\n{fake_existing}", host=hostname)
 
@@ -264,6 +261,4 @@ class Snmpv3Configurator(BasePlaybook):
             )
             yield self.log_success("Config saved.", host=hostname)
 
-        yield self.log_success(
-            f"Finished processing {hostname} ({ip}).", host=hostname
-        )
+        yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)

@@ -86,10 +86,7 @@ class CiscoXRDriver(Driver):
         for intf in cfg.interfaces:
             cmds.append(f"interface {intf}")
             if cfg.sampling_rate > 1:
-                cmds.append(
-                    f" flow ipv4 monitor {cfg.monitor_name} sampler "
-                    f"{cfg.sampler_name} ingress"
-                )
+                cmds.append(f" flow ipv4 monitor {cfg.monitor_name} sampler {cfg.sampler_name} ingress")
             else:
                 cmds.append(f" flow ipv4 monitor {cfg.monitor_name} ingress")
             cmds.append("exit")

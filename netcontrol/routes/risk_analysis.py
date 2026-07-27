@@ -1,6 +1,7 @@
 """
 risk_analysis.py -- Pre-change risk analysis engine and API routes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +32,7 @@ LOGGER = configure_logging("plexus.risk_analysis")
 
 class RiskAnalysisRequest(BaseModel):
     """Request to analyze risk of proposed configuration changes."""
+
     change_type: str = "template"  # template, manual, policy, route, nat
     host_id: int | None = None
     group_id: int | None = None
@@ -46,42 +48,75 @@ class RiskAnalysisRequest(BaseModel):
 _CRITICAL_PATTERNS = {
     "routing": {
         "keywords": [
-            "router ospf", "router bgp", "router eigrp", "router rip",
-            "ip route", "ipv6 route", "network ", "redistribute",
-            "route-map", "prefix-list", "as-path",
+            "router ospf",
+            "router bgp",
+            "router eigrp",
+            "router rip",
+            "ip route",
+            "ipv6 route",
+            "network ",
+            "redistribute",
+            "route-map",
+            "prefix-list",
+            "as-path",
         ],
         "label": "Routing",
         "weight": 0.25,
     },
     "acl_policy": {
         "keywords": [
-            "access-list", "ip access-list", "permit ", "deny ",
-            "access-group", "policy-map", "class-map", "service-policy",
+            "access-list",
+            "ip access-list",
+            "permit ",
+            "deny ",
+            "access-group",
+            "policy-map",
+            "class-map",
+            "service-policy",
         ],
         "label": "ACL / Policy",
         "weight": 0.20,
     },
     "nat": {
         "keywords": [
-            "ip nat ", "nat ", "object network", "nat (", "static (",
-            "pat-pool", "xlate",
+            "ip nat ",
+            "nat ",
+            "object network",
+            "nat (",
+            "static (",
+            "pat-pool",
+            "xlate",
         ],
         "label": "NAT",
         "weight": 0.20,
     },
     "interface": {
         "keywords": [
-            "interface ", "shutdown", "no shutdown", "ip address",
-            "switchport", "channel-group", "vlan ",
+            "interface ",
+            "shutdown",
+            "no shutdown",
+            "ip address",
+            "switchport",
+            "channel-group",
+            "vlan ",
         ],
         "label": "Interface",
         "weight": 0.15,
     },
     "security": {
         "keywords": [
-            "crypto ", "ipsec ", "ikev2", "tunnel ", "aaa ",
-            "radius", "tacacs", "enable secret", "username ",
-            "snmp-server community", "line vty", "ssh ",
+            "crypto ",
+            "ipsec ",
+            "ikev2",
+            "tunnel ",
+            "aaa ",
+            "radius",
+            "tacacs",
+            "enable secret",
+            "username ",
+            "snmp-server community",
+            "line vty",
+            "ssh ",
         ],
         "label": "Security / AAA",
         "weight": 0.20,
@@ -105,13 +140,15 @@ def _classify_change_areas(commands: list[str]) -> list[dict]:
                     matched_commands.append(commands[i])
                     break
         if matched_commands:
-            areas.append({
-                "area": area_key,
-                "label": area_def["label"],
-                "weight": area_def["weight"],
-                "matched_count": len(matched_commands),
-                "matched_commands": matched_commands[:10],  # cap for storage
-            })
+            areas.append(
+                {
+                    "area": area_key,
+                    "label": area_def["label"],
+                    "weight": area_def["weight"],
+                    "matched_count": len(matched_commands),
+                    "matched_commands": matched_commands[:10],  # cap for storage
+                }
+            )
     return areas
 
 
@@ -132,10 +169,7 @@ def _simulate_config_change(current_config: str, commands: list[str]) -> str:
         if stripped.lower().startswith("no "):
             # Try to remove the matching positive form
             positive = stripped[3:].strip()
-            result_lines = [
-                line for line in result_lines
-                if positive.lower() not in line.lower().strip()
-            ]
+            result_lines = [line for line in result_lines if positive.lower() not in line.lower().strip()]
         else:
             # Append the command (simplified - real IOS merges into sections)
             result_lines.append(stripped)
@@ -247,8 +281,10 @@ async def _run_risk_analysis_for_host(
 
     # 4. Compute diff
     diff_text, diff_added, diff_removed = _compute_config_diff(
-        current_config, simulated_config,
-        baseline_label="current", actual_label="after-change",
+        current_config,
+        simulated_config,
+        baseline_label="current",
+        actual_label="after-change",
     )
 
     # 5. Check compliance impact
@@ -294,29 +330,37 @@ async def _run_risk_analysis_for_host(
                     before = findings_before[i]["passed"]
                     after = findings_after[i]["passed"]
                     if before != after:
-                        changed_rules.append({
-                            "name": rule.get("name", rule.get("pattern", "?")),
-                            "before": "pass" if before else "fail",
-                            "after": "pass" if after else "fail",
-                            "impact": "regression" if before and not after else "improvement",
-                        })
+                        changed_rules.append(
+                            {
+                                "name": rule.get("name", rule.get("pattern", "?")),
+                                "before": "pass" if before else "fail",
+                                "after": "pass" if after else "fail",
+                                "impact": "regression" if before and not after else "improvement",
+                            }
+                        )
 
                 if changed_rules:
-                    compliance_impact.append({
-                        "profile_name": profile["name"],
-                        "profile_id": profile["id"],
-                        "before_failures": before_failures,
-                        "after_failures": after_failures,
-                        "new_violations": max(0, new_violations),
-                        "improvements": sum(1 for c in changed_rules if c["impact"] == "improvement"),
-                        "changed_rules": changed_rules,
-                    })
+                    compliance_impact.append(
+                        {
+                            "profile_name": profile["name"],
+                            "profile_id": profile["id"],
+                            "before_failures": before_failures,
+                            "after_failures": after_failures,
+                            "new_violations": max(0, new_violations),
+                            "improvements": sum(1 for c in changed_rules if c["impact"] == "improvement"),
+                            "changed_rules": changed_rules,
+                        }
+                    )
     except Exception as exc:
         LOGGER.warning("risk-analysis: compliance impact check failed for host %s: %s", host["id"], exc)
 
     # 6. Calculate risk score
     risk_score, risk_level = _compute_risk_score(
-        commands, affected_areas, diff_added, diff_removed, compliance_violations,
+        commands,
+        affected_areas,
+        diff_added,
+        diff_removed,
+        compliance_violations,
     )
 
     analysis_detail = {
@@ -381,8 +425,7 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
         if not tpl:
             raise HTTPException(status_code=404, detail="Template not found")
         commands = [
-            line.rstrip() for line in tpl["content"].splitlines()
-            if line.strip() and not line.strip().startswith("#")
+            line.rstrip() for line in tpl["content"].splitlines() if line.strip() and not line.strip().startswith("#")
         ]
     if not commands:
         raise HTTPException(status_code=400, detail="No proposed commands provided")
@@ -425,7 +468,9 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
     for r in host_results:
         if isinstance(r, Exception):
             LOGGER.warning("risk-analysis: host analysis failed: %s", r)
-            results.append({"status": "error", "error": "Analysis failed for host", "risk_level": "unknown", "risk_score": 0.0})
+            results.append(
+                {"status": "error", "error": "Analysis failed for host", "risk_level": "unknown", "risk_score": 0.0}
+            )
         else:
             results.append(r)
             if r.get("risk_score", 0) > max_risk_score:
@@ -455,7 +500,8 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
     )
 
     await _audit(
-        "risk-analysis", "analysis.created",
+        "risk-analysis",
+        "analysis.created",
         user=session["user"] if session else "",
         detail=f"id={analysis_id} hosts={len(hosts)} risk={max_risk_level} score={max_risk_score}",
         correlation_id=_corr_id(request),
@@ -504,7 +550,8 @@ async def approve_risk_analysis(analysis_id: int, request: Request):
     user = session["user"] if session else ""
     await db.approve_risk_analysis(analysis_id, approved_by=user)
     await _audit(
-        "risk-analysis", "analysis.approved",
+        "risk-analysis",
+        "analysis.approved",
         user=user,
         detail=f"id={analysis_id} risk_level={analysis['risk_level']}",
         correlation_id=_corr_id(request),
@@ -520,7 +567,8 @@ async def delete_risk_analysis(analysis_id: int, request: Request):
     await db.delete_risk_analysis(analysis_id)
     session = _get_session(request)
     await _audit(
-        "risk-analysis", "analysis.deleted",
+        "risk-analysis",
+        "analysis.deleted",
         user=session["user"] if session else "",
         detail=f"id={analysis_id}",
         correlation_id=_corr_id(request),
@@ -545,12 +593,18 @@ async def run_offline_risk_analysis(request: Request):
     affected_areas = _classify_change_areas(commands)
     simulated_config = _simulate_config_change(current_config, commands)
     diff_text, diff_added, diff_removed = _compute_config_diff(
-        current_config, simulated_config,
-        baseline_label="current", actual_label="after-change",
+        current_config,
+        simulated_config,
+        baseline_label="current",
+        actual_label="after-change",
     )
 
     risk_score, risk_level = _compute_risk_score(
-        commands, affected_areas, diff_added, diff_removed, 0,
+        commands,
+        affected_areas,
+        diff_added,
+        diff_removed,
+        0,
     )
 
     analysis = {
@@ -585,7 +639,8 @@ async def run_offline_risk_analysis(request: Request):
     )
 
     await _audit(
-        "risk-analysis", "analysis.offline",
+        "risk-analysis",
+        "analysis.offline",
         user=session["user"] if session else "",
         detail=f"id={analysis_id} risk={risk_level} score={risk_score}",
         correlation_id=_corr_id(request),

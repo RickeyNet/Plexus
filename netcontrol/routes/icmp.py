@@ -10,6 +10,7 @@ icmplib runs unprivileged on both Linux (via SOCK_DGRAM) and Windows
 to use it.  When elevated, callers can opt into raw-socket mode for a
 small latency improvement by passing privileged=True.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +22,7 @@ LOGGER = configure_logging("plexus.icmp")
 
 try:
     from icmplib import async_ping
+
     ICMP_AVAILABLE = True
 except Exception:
     async_ping = None

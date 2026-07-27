@@ -38,6 +38,7 @@ _HTTP_TIMEOUT_SECONDS = 30
 
 # ── Late-binding init ────────────────────────────────────────────────────────
 
+
 def init_federation(require_admin):
     global _require_admin
     _require_admin = require_admin
@@ -50,6 +51,7 @@ async def _require_admin_dep(request: Request):
 
 
 # ── Pydantic models ─────────────────────────────────────────────────────────
+
 
 class PeerCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -70,6 +72,7 @@ class PeerUpdate(BaseModel):
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _validate_url(url: str) -> str:
     """Validate and normalize a peer URL (scheme, hostname, SSRF guard)."""
@@ -104,7 +107,9 @@ def _peer_row_to_dict(row) -> dict:
     """Convert a DB row to a peer dict (never expose encrypted token)."""
     d = dict(row) if not isinstance(row, dict) else row
     d.pop("api_token_enc", None)
-    has_token = bool(row["api_token_enc"]) if "api_token_enc" in (row.keys() if hasattr(row, "keys") else row) else False
+    has_token = (
+        bool(row["api_token_enc"]) if "api_token_enc" in (row.keys() if hasattr(row, "keys") else row) else False
+    )
     d["has_token"] = has_token
     return d
 
@@ -112,13 +117,8 @@ def _peer_row_to_dict(row) -> dict:
 def _is_missing_federation_table_error(exc: Exception) -> bool:
     """Return True when the backing federation tables are not available yet."""
     message = str(exc).lower()
-    return (
-        "federation_" in message
-        and (
-            "no such table" in message
-            or "does not exist" in message
-            or "undefined table" in message
-        )
+    return "federation_" in message and (
+        "no such table" in message or "does not exist" in message or "undefined table" in message
     )
 
 
@@ -126,9 +126,7 @@ async def _get_peer_or_404(peer_id: int) -> dict:
     """Fetch a peer by ID or raise 404."""
     cur = await db.get_db()
     try:
-        c = await cur.execute(
-            "SELECT * FROM federation_peers WHERE id = ?", (peer_id,)
-        )
+        c = await cur.execute("SELECT * FROM federation_peers WHERE id = ?", (peer_id,))
         row = await c.fetchone()
     finally:
         await cur.close()
@@ -183,8 +181,7 @@ async def _fetch_peer_data(peer) -> dict:
                 return resp.json()
             except Exception as exc:
                 result["errors"][section] = f"{path}: {exc}"
-                LOGGER.warning("Federation peer %s: %s fetch failed: %s",
-                               peer["name"], section, exc)
+                LOGGER.warning("Federation peer %s: %s fetch failed: %s", peer["name"], section, exc)
                 return None
 
         groups = await _get_json("groups", "/api/inventory/groups")
@@ -202,12 +199,8 @@ async def _fetch_peer_data(peer) -> dict:
             alerts = data if isinstance(data, list) else data.get("alerts", [])
             active = [a for a in alerts if a.get("state") == "active"]
             result["alerts"]["active"] = len(active)
-            result["alerts"]["critical"] = sum(
-                1 for a in active if a.get("severity") == "critical"
-            )
-            result["alerts"]["warning"] = sum(
-                1 for a in active if a.get("severity") == "warning"
-            )
+            result["alerts"]["critical"] = sum(1 for a in active if a.get("severity") == "critical")
+            result["alerts"]["warning"] = sum(1 for a in active if a.get("severity") == "warning")
 
         profiles = await _get_json("compliance", "/api/compliance/profiles")
         if isinstance(profiles, list):
@@ -230,14 +223,13 @@ def _sync_status_from(data: dict) -> tuple[str, str]:
 
 # ── CRUD Routes ──────────────────────────────────────────────────────────────
 
+
 @router.get("/api/federation/peers")
 async def list_peers(request: Request, _user=Depends(_require_admin_dep)):
     """List all registered federation peers."""
     cur = await db.get_db()
     try:
-        c = await cur.execute(
-            "SELECT * FROM federation_peers ORDER BY name"
-        )
+        c = await cur.execute("SELECT * FROM federation_peers ORDER BY name")
         rows = await c.fetchall()
     finally:
         await cur.close()
@@ -269,9 +261,13 @@ async def create_peer(
     finally:
         await cur.close()
 
-    await _audit("federation", "peer_created", user=username,
-                 detail=f"Peer '{body.name}' ({url}) id={new_id}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "federation",
+        "peer_created",
+        user=username,
+        detail=f"Peer '{body.name}' ({url}) id={new_id}",
+        correlation_id=_corr_id(request),
+    )
 
     peer = await _get_peer_or_404(new_id)
     return _peer_row_to_dict(peer)
@@ -326,9 +322,13 @@ async def update_peer(
 
     session = _get_session(request)
     username = session.get("user", "") if session else ""
-    await _audit("federation", "peer_updated", user=username,
-                 detail=f"Peer id={peer_id} updated fields={list(updates.keys())}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "federation",
+        "peer_updated",
+        user=username,
+        detail=f"Peer id={peer_id} updated fields={list(updates.keys())}",
+        correlation_id=_corr_id(request),
+    )
 
     peer = await _get_peer_or_404(peer_id)
     return _peer_row_to_dict(peer)
@@ -349,13 +349,18 @@ async def delete_peer(peer_id: int, request: Request, _user=Depends(_require_adm
 
     session = _get_session(request)
     username = session.get("user", "") if session else ""
-    await _audit("federation", "peer_deleted", user=username,
-                 detail=f"Peer id={peer_id} deleted",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "federation",
+        "peer_deleted",
+        user=username,
+        detail=f"Peer id={peer_id} deleted",
+        correlation_id=_corr_id(request),
+    )
     return {"status": "deleted", "id": peer_id}
 
 
 # ── Connectivity & Sync ─────────────────────────────────────────────────────
+
 
 @router.post("/api/federation/peers/{peer_id}/test")
 async def test_peer(peer_id: int, request: Request, _user=Depends(_require_admin_dep)):
@@ -447,29 +452,26 @@ async def sync_peer(peer_id: int, request: Request, _user=Depends(_require_admin
 
     session = _get_session(request)
     username = session.get("user", "") if session else ""
-    await _audit("federation", "peer_synced", user=username,
-                 detail=f"Peer id={peer_id} synced",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "federation", "peer_synced", user=username, detail=f"Peer id={peer_id} synced", correlation_id=_corr_id(request)
+    )
 
     return {"status": "ok", "peer_id": peer_id, "data": data}
 
 
 # ── Federated Overview ───────────────────────────────────────────────────────
 
+
 @router.get("/api/federation/overview")
 async def federation_overview(request: Request, _user=Depends(_require_admin_dep)):
     """Aggregated overview across all federation peers."""
     cur = await db.get_db()
     try:
-        c = await cur.execute(
-            "SELECT * FROM federation_peers WHERE enabled = 1 ORDER BY name"
-        )
+        c = await cur.execute("SELECT * FROM federation_peers WHERE enabled = 1 ORDER BY name")
         peers = await c.fetchall()
 
         # Load latest snapshots
-        c = await cur.execute(
-            "SELECT * FROM federation_snapshots ORDER BY captured_at DESC"
-        )
+        c = await cur.execute("SELECT * FROM federation_snapshots ORDER BY captured_at DESC")
         all_snapshots = await c.fetchall()
     finally:
         await cur.close()
@@ -484,7 +486,7 @@ async def federation_overview(request: Request, _user=Depends(_require_admin_dep
         if cat not in snap_by_peer[pid]:
             try:
                 snap_by_peer[pid][cat] = json.loads(s["data_json"])
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 snap_by_peer[pid][cat] = {}
 
     totals = {
@@ -510,23 +512,26 @@ async def federation_overview(request: Request, _user=Depends(_require_admin_dep
         totals["total_alerts"] += alerts.get("active", 0)
         totals["critical_alerts"] += alerts.get("critical", 0)
 
-        peer_summaries.append({
-            "id": pid,
-            "name": p["name"],
-            "url": p["url"],
-            "enabled": bool(p["enabled"]),
-            "last_sync_at": p["last_sync_at"],
-            "last_sync_status": p["last_sync_status"],
-            "version": meta.get("version", ""),
-            "devices": devices,
-            "alerts": alerts,
-            "compliance": snap.get("compliance", {}),
-        })
+        peer_summaries.append(
+            {
+                "id": pid,
+                "name": p["name"],
+                "url": p["url"],
+                "enabled": bool(p["enabled"]),
+                "last_sync_at": p["last_sync_at"],
+                "last_sync_status": p["last_sync_status"],
+                "version": meta.get("version", ""),
+                "devices": devices,
+                "alerts": alerts,
+                "compliance": snap.get("compliance", {}),
+            }
+        )
 
     return {"totals": totals, "peers": peer_summaries}
 
 
 # ── Background sync loop (launched from app.py lifespan) ─────────────────────
+
 
 async def federation_sync_loop() -> None:
     """Periodically sync data from all enabled federation peers."""
@@ -536,9 +541,7 @@ async def federation_sync_loop() -> None:
             await asyncio.sleep(_SYNC_INTERVAL_SECONDS)
             cur = await db.get_db()
             try:
-                c = await cur.execute(
-                    "SELECT * FROM federation_peers WHERE enabled = 1"
-                )
+                c = await cur.execute("SELECT * FROM federation_peers WHERE enabled = 1")
                 peers = await c.fetchall()
             finally:
                 await cur.close()

@@ -49,25 +49,52 @@ async def seed():
 
     # ── Inventory Groups & Hosts ─────────────────────────────────────────
     groups = [
-        ("Core Switches", "Spine/core layer Catalyst 9500s", [
-            ("CORE-SW1", "10.0.1.1"), ("CORE-SW2", "10.0.1.2"),
-            ("CORE-SW3", "10.0.1.3"), ("CORE-SW4", "10.0.1.4"),
-        ]),
-        ("Distribution Layer", "Distribution Catalyst 9300s", [
-            ("DIST-SW1", "10.0.2.1"), ("DIST-SW2", "10.0.2.2"),
-            ("DIST-SW3", "10.0.2.3"),
-        ]),
-        ("Access - Building A", "Building A access switches", [
-            ("ACC-A1", "10.0.10.1"), ("ACC-A2", "10.0.10.2"),
-            ("ACC-A3", "10.0.10.3"), ("ACC-A4", "10.0.10.4"),
-            ("ACC-A5", "10.0.10.5"),
-        ]),
-        ("Access - Building B", "Building B access switches", [
-            ("ACC-B1", "10.0.11.1"), ("ACC-B2", "10.0.11.2"),
-        ]),
-        ("WAN Routers", "Edge routers for WAN links", [
-            ("WAN-RTR1", "10.0.0.1"), ("WAN-RTR2", "10.0.0.2"),
-        ]),
+        (
+            "Core Switches",
+            "Spine/core layer Catalyst 9500s",
+            [
+                ("CORE-SW1", "10.0.1.1"),
+                ("CORE-SW2", "10.0.1.2"),
+                ("CORE-SW3", "10.0.1.3"),
+                ("CORE-SW4", "10.0.1.4"),
+            ],
+        ),
+        (
+            "Distribution Layer",
+            "Distribution Catalyst 9300s",
+            [
+                ("DIST-SW1", "10.0.2.1"),
+                ("DIST-SW2", "10.0.2.2"),
+                ("DIST-SW3", "10.0.2.3"),
+            ],
+        ),
+        (
+            "Access - Building A",
+            "Building A access switches",
+            [
+                ("ACC-A1", "10.0.10.1"),
+                ("ACC-A2", "10.0.10.2"),
+                ("ACC-A3", "10.0.10.3"),
+                ("ACC-A4", "10.0.10.4"),
+                ("ACC-A5", "10.0.10.5"),
+            ],
+        ),
+        (
+            "Access - Building B",
+            "Building B access switches",
+            [
+                ("ACC-B1", "10.0.11.1"),
+                ("ACC-B2", "10.0.11.2"),
+            ],
+        ),
+        (
+            "WAN Routers",
+            "Edge routers for WAN links",
+            [
+                ("WAN-RTR1", "10.0.0.1"),
+                ("WAN-RTR2", "10.0.0.2"),
+            ],
+        ),
     ]
 
     for group_name, desc, hosts in groups:
@@ -79,10 +106,12 @@ async def seed():
             if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
                 db2 = await get_db()
                 try:
-                    row = await (await db2.execute(
-                        "SELECT id FROM inventory_groups WHERE name = ?",
-                        (group_name,),
-                    )).fetchone()
+                    row = await (
+                        await db2.execute(
+                            "SELECT id FROM inventory_groups WHERE name = ?",
+                            (group_name,),
+                        )
+                    ).fetchone()
                     if not row:
                         raise
                     gid = row[0]
@@ -109,6 +138,7 @@ async def seed():
 
     # ── Playbooks (from registry) ────────────────────────────────────────
     from routes.database import sync_playbook_filename
+
     registered = list_registered_playbooks()
     for pb in registered:
         try:
@@ -127,41 +157,43 @@ async def seed():
 
     # ── Templates ────────────────────────────────────────────────────────
     templates = [
-        ("Access Port Standard",
-         "Standard access port hardening config",
-         "switchport mode access\n"
-         "switchport access vlan 100\n"
-         "spanning-tree portfast\n"
-         "spanning-tree bpduguard enable\n"
-         "storm-control broadcast level 20\n"
-         "no shutdown"),
-        ("Trunk Port Standard",
-         "Standard trunk port config",
-         "switchport mode trunk\n"
-         "switchport trunk allowed vlan 100,200,300\n"
-         "switchport trunk native vlan 999\n"
-         "spanning-tree guard root"),
-        ("NTP Config",
-         "Standard NTP configuration",
-         "ntp server 10.0.0.50 prefer\n"
-         "ntp server 10.0.0.51\n"
-         "clock timezone EST -5\n"
-         "clock summer-time EDT recurring"),
-        ("Login Banner",
-         "Standard login/MOTD banner",
-         "banner login ^\n"
-         "*** AUTHORIZED ACCESS ONLY ***\n"
-         "All activity is monitored and logged.\n"
-         "Disconnect immediately if you are not authorized.\n"
-         "^"),
+        (
+            "Access Port Standard",
+            "Standard access port hardening config",
+            "switchport mode access\n"
+            "switchport access vlan 100\n"
+            "spanning-tree portfast\n"
+            "spanning-tree bpduguard enable\n"
+            "storm-control broadcast level 20\n"
+            "no shutdown",
+        ),
+        (
+            "Trunk Port Standard",
+            "Standard trunk port config",
+            "switchport mode trunk\n"
+            "switchport trunk allowed vlan 100,200,300\n"
+            "switchport trunk native vlan 999\n"
+            "spanning-tree guard root",
+        ),
+        (
+            "NTP Config",
+            "Standard NTP configuration",
+            "ntp server 10.0.0.50 prefer\nntp server 10.0.0.51\nclock timezone EST -5\nclock summer-time EDT recurring",
+        ),
+        (
+            "Login Banner",
+            "Standard login/MOTD banner",
+            "banner login ^\n"
+            "*** AUTHORIZED ACCESS ONLY ***\n"
+            "All activity is monitored and logged.\n"
+            "Disconnect immediately if you are not authorized.\n"
+            "^",
+        ),
     ]
 
     def _is_unique_violation(exc: Exception) -> bool:
         msg = str(exc).lower()
-        return (
-            "unique constraint" in msg
-            or "duplicate key value" in msg
-        )
+        return "unique constraint" in msg or "duplicate key value" in msg
 
     for name, desc, content in templates:
         try:
@@ -178,6 +210,7 @@ async def seed():
 
     for name, description, severity, rules in BUILTIN_PROFILES:
         import json
+
         try:
             await create_compliance_profile(
                 name=name,
@@ -215,6 +248,7 @@ async def seed():
         # seed but never passes through Python's logging or print machinery
         # (which static analysers flag as CWE-532).
         import os as _os
+
         _msg = (
             f"  + Credential 'Default SSH'\n"
             f"    Username: netadmin\n"

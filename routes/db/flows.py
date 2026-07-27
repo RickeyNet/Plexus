@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -70,8 +71,9 @@ async def create_flow_records_batch(rows: list[tuple]) -> int:
         await db.close()
 
 
-async def get_flow_top_talkers(host_id: int | None = None, hours: int = 1,
-                                direction: str = "src", limit: int = 20) -> list[dict]:
+async def get_flow_top_talkers(
+    host_id: int | None = None, hours: int = 1, direction: str = "src", limit: int = 20
+) -> list[dict]:
     db = await _dbcore.get_db()
     try:
         col = "src_ip" if direction == "src" else "dst_ip"
@@ -93,8 +95,7 @@ async def get_flow_top_talkers(host_id: int | None = None, hours: int = 1,
         await db.close()
 
 
-async def get_flow_top_applications(host_id: int | None = None, hours: int = 1,
-                                     limit: int = 20) -> list[dict]:
+async def get_flow_top_applications(host_id: int | None = None, hours: int = 1, limit: int = 20) -> list[dict]:
     db = await _dbcore.get_db()
     try:
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
@@ -115,8 +116,7 @@ async def get_flow_top_applications(host_id: int | None = None, hours: int = 1,
         await db.close()
 
 
-async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1,
-                                      limit: int = 20) -> list[dict]:
+async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1, limit: int = 20) -> list[dict]:
     db = await _dbcore.get_db()
     try:
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
@@ -137,8 +137,7 @@ async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1,
         await db.close()
 
 
-async def get_flow_timeline(host_id: int | None = None, hours: int = 6,
-                             bucket_minutes: int = 5) -> list[dict]:
+async def get_flow_timeline(host_id: int | None = None, hours: int = 6, bucket_minutes: int = 5) -> list[dict]:
     """Aggregate flow data into time buckets."""
     # Validate bucket_minutes to prevent SQL injection via f-string
     bucket_minutes = max(1, min(int(bucket_minutes), 60))
@@ -165,9 +164,9 @@ async def get_flow_timeline(host_id: int | None = None, hours: int = 6,
         await db.close()
 
 
-async def create_flow_summary(host_id: int | None, summary_type: str,
-                               time_window: str, period_start: str,
-                               period_end: str, data_json: str) -> int:
+async def create_flow_summary(
+    host_id: int | None, summary_type: str, time_window: str, period_start: str, period_end: str, data_json: str
+) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
@@ -205,9 +204,7 @@ async def get_exporter_host_map() -> dict[str, int]:
     """
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT id, ip_address FROM hosts WHERE ip_address IS NOT NULL AND ip_address != ''"
-        )
+        cursor = await db.execute("SELECT id, ip_address FROM hosts WHERE ip_address IS NOT NULL AND ip_address != ''")
         rows = await cursor.fetchall()
         mapping: dict[str, int] = {}
         for r in rows:
@@ -453,5 +450,3 @@ async def get_cloud_flow_timeline(
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
-
-

@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -68,9 +69,22 @@ async def create_billing_circuit(
                 commit_rate_bps, burst_limit_bps, billing_day, billing_cycle,
                 cost_per_mbps, currency, overage_enabled, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, description, customer, host_id, if_index, if_name,
-             commit_rate_bps, burst_limit_bps, billing_day, billing_cycle,
-             cost_per_mbps, currency, overage_enabled, created_by),
+            (
+                name,
+                description,
+                customer,
+                host_id,
+                if_index,
+                if_name,
+                commit_rate_bps,
+                burst_limit_bps,
+                billing_day,
+                billing_cycle,
+                cost_per_mbps,
+                currency,
+                overage_enabled,
+                created_by,
+            ),
         )
         await db.commit()
         return await get_billing_circuit(cursor.lastrowid)
@@ -81,9 +95,7 @@ async def create_billing_circuit(
 async def get_billing_circuit(circuit_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM billing_circuits WHERE id = ?", (circuit_id,)
-        )
+        cursor = await db.execute("SELECT * FROM billing_circuits WHERE id = ?", (circuit_id,))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -125,10 +137,18 @@ async def update_billing_circuit(circuit_id: int, **kwargs) -> dict | None:
     db = await _dbcore.get_db()
     try:
         allowed = {
-            "name", "description", "customer", "if_name",
-            "commit_rate_bps", "burst_limit_bps", "billing_day",
-            "billing_cycle", "cost_per_mbps", "currency",
-            "overage_enabled", "enabled",
+            "name",
+            "description",
+            "customer",
+            "if_name",
+            "commit_rate_bps",
+            "burst_limit_bps",
+            "billing_day",
+            "billing_cycle",
+            "cost_per_mbps",
+            "currency",
+            "overage_enabled",
+            "enabled",
         }
         sets = []
         vals = []
@@ -150,9 +170,7 @@ async def update_billing_circuit(circuit_id: int, **kwargs) -> dict | None:
 async def delete_billing_circuit(circuit_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM billing_circuits WHERE id = ?", (circuit_id,)
-        )
+        cursor = await db.execute("DELETE FROM billing_circuits WHERE id = ?", (circuit_id,))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -186,10 +204,24 @@ async def create_billing_period(
                 max_in_bps, max_out_bps, avg_in_bps, avg_out_bps,
                 commit_rate_bps, overage_bps, overage_cost, total_cost, status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (circuit_id, period_start, period_end, total_samples,
-             p95_in_bps, p95_out_bps, p95_billing_bps,
-             max_in_bps, max_out_bps, avg_in_bps, avg_out_bps,
-             commit_rate_bps, overage_bps, overage_cost, total_cost, status),
+            (
+                circuit_id,
+                period_start,
+                period_end,
+                total_samples,
+                p95_in_bps,
+                p95_out_bps,
+                p95_billing_bps,
+                max_in_bps,
+                max_out_bps,
+                avg_in_bps,
+                avg_out_bps,
+                commit_rate_bps,
+                overage_bps,
+                overage_cost,
+                total_cost,
+                status,
+            ),
         )
         await db.commit()
         return await get_billing_period(cursor.lastrowid)
@@ -255,9 +287,7 @@ async def list_billing_periods(
 async def delete_billing_period(period_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM billing_periods WHERE id = ?", (period_id,)
-        )
+        cursor = await db.execute("DELETE FROM billing_periods WHERE id = ?", (period_id,))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -324,5 +354,3 @@ async def get_billing_customers() -> list[str]:
         return [r[0] for r in await cursor.fetchall()]
     finally:
         await db.close()
-
-

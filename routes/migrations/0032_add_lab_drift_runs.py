@@ -48,8 +48,7 @@ async def _up_sqlite(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_drift_runs_device "
-        "ON lab_drift_runs (lab_device_id, checked_at)"
+        "CREATE INDEX IF NOT EXISTS idx_lab_drift_runs_device ON lab_drift_runs (lab_device_id, checked_at)"
     )
     await db.commit()
 
@@ -74,8 +73,7 @@ async def _up_postgres(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_drift_runs_device "
-        "ON lab_drift_runs (lab_device_id, checked_at)"
+        "CREATE INDEX IF NOT EXISTS idx_lab_drift_runs_device ON lab_drift_runs (lab_device_id, checked_at)"
     )
     await db.commit()
 

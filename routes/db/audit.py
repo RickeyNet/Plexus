@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -67,8 +68,6 @@ def set_audit_event_hook(hook) -> None:
     _audit_event_hook = hook
 
 
-
-
 def _audit_canonical_bytes(
     timestamp: str,
     category: str,
@@ -104,9 +103,7 @@ def _audit_row_hash(
     prev_hash: str,
 ) -> str:
     return hashlib.sha256(
-        _audit_canonical_bytes(
-            timestamp, category, action, user, detail, correlation_id, prev_hash
-        )
+        _audit_canonical_bytes(timestamp, category, action, user, detail, correlation_id, prev_hash)
     ).hexdigest()
 
 
@@ -144,7 +141,13 @@ async def verify_audit_chain() -> dict:
                 row_id = row[0]
                 ts = row[1] if isinstance(row[1], str) else str(row[1])
                 cat, act, usr, det, corr, stored_prev, stored_hash = (
-                    row[2], row[3], row[4], row[5], row[6], row[7], row[8]
+                    row[2],
+                    row[3],
+                    row[4],
+                    row[5],
+                    row[6],
+                    row[7],
+                    row[8],
                 )
                 total += 1
 
@@ -199,19 +202,13 @@ async def add_audit_event(
         pg_locked = False
         try:
             if _dbcore.DB_ENGINE == "postgres":
-                await conn.execute(
-                    "SELECT pg_advisory_lock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,)
-                )
+                await conn.execute("SELECT pg_advisory_lock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,))
                 pg_locked = True
-            cursor = await conn.execute(
-                "SELECT row_hash FROM audit_events ORDER BY id DESC LIMIT 1"
-            )
+            cursor = await conn.execute("SELECT row_hash FROM audit_events ORDER BY id DESC LIMIT 1")
             tail = await cursor.fetchone()
             prev_hash = (tail[0] if tail else "") or ""
 
-            row_hash = _audit_row_hash(
-                timestamp, category, action, user, detail, correlation_id, prev_hash
-            )
+            row_hash = _audit_row_hash(timestamp, category, action, user, detail, correlation_id, prev_hash)
 
             cursor = await conn.execute(
                 """INSERT INTO audit_events
@@ -219,8 +216,14 @@ async def add_audit_event(
                     prev_hash, row_hash)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    timestamp, category, action, user, detail, correlation_id,
-                    prev_hash, row_hash,
+                    timestamp,
+                    category,
+                    action,
+                    user,
+                    detail,
+                    correlation_id,
+                    prev_hash,
+                    row_hash,
                 ),
             )
             new_id = cursor.lastrowid
@@ -228,14 +231,9 @@ async def add_audit_event(
         finally:
             if pg_locked:
                 try:
-                    await conn.execute(
-                        "SELECT pg_advisory_unlock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,)
-                    )
+                    await conn.execute("SELECT pg_advisory_unlock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,))
                 except Exception:
-                    _LOGGER.warning(
-                        "audit chain: failed to release pg advisory lock; "
-                        "pool reset will reclaim it"
-                    )
+                    _LOGGER.warning("audit chain: failed to release pg advisory lock; pool reset will reclaim it")
             await conn.close()
 
     if _audit_event_hook is not None:
@@ -258,7 +256,10 @@ async def add_audit_event(
             # but a dropped event must not be invisible.
             _LOGGER.warning(
                 "audit hook dropped event id=%s category=%s action=%s: %s",
-                new_id, category, action, type(exc).__name__,
+                new_id,
+                category,
+                action,
+                type(exc).__name__,
             )
     return new_id
 
@@ -283,5 +284,3 @@ async def get_audit_events(
         return rows_to_list(await cursor.fetchall())
     finally:
         await conn.close()
-
-

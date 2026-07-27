@@ -52,9 +52,7 @@ def _auth_client(tmp_path, monkeypatch, request):
         await db_module.init_db()
         db = await db_module.get_db()
         try:
-            await db.execute(
-                "INSERT INTO inventory_groups (name) VALUES ('bootstrap-sentinel')"
-            )
+            await db.execute("INSERT INTO inventory_groups (name) VALUES ('bootstrap-sentinel')")
             await db.commit()
         finally:
             await db.close()
@@ -93,15 +91,9 @@ def _seed_ipam_data():
     async def _seed():
         db = await db_module.get_db()
         try:
-            core_cursor = await db.execute(
-                "INSERT INTO inventory_groups (name) VALUES ('IPAM Core')"
-            )
-            access_cursor = await db.execute(
-                "INSERT INTO inventory_groups (name) VALUES ('IPAM Access')"
-            )
-            remote_cursor = await db.execute(
-                "INSERT INTO inventory_groups (name) VALUES ('IPAM Remote')"
-            )
+            core_cursor = await db.execute("INSERT INTO inventory_groups (name) VALUES ('IPAM Core')")
+            access_cursor = await db.execute("INSERT INTO inventory_groups (name) VALUES ('IPAM Access')")
+            remote_cursor = await db.execute("INSERT INTO inventory_groups (name) VALUES ('IPAM Remote')")
             core_group_id = int(core_cursor.lastrowid)
             access_group_id = int(access_cursor.lastrowid)
             remote_group_id = int(remote_cursor.lastrowid)
@@ -288,6 +280,7 @@ def test_ipam_subnet_detail_reports_available_capacity_and_allocations(tmp_path,
 def test_ipam_source_sync_updates_overview_contract(tmp_path, monkeypatch, request):
     client = _auth_client(tmp_path, monkeypatch, request)
     try:
+
         async def _fake_collect_ipam_snapshot(source, auth_config):
             assert source["provider"] == "netbox"
             assert auth_config["token"] == "netbox-token"
@@ -382,6 +375,7 @@ def test_ipam_sync_config_get_and_update(tmp_path, monkeypatch, request):
         assert clamped_response.json()["config"]["interval_seconds"] == state_module.IPAM_SYNC_MIN_INTERVAL
     finally:
         import netcontrol.routes.state as sm
+
         sm.IPAM_SYNC_CONFIG = dict(sm.IPAM_SYNC_DEFAULTS)
         client._client.__exit__(None, None, None)
 

@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -52,9 +53,15 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def upsert_mac_entry(host_id: int, mac_address: str, vlan: int,
-                            port_name: str = "", port_index: int = 0,
-                            ip_address: str = "", entry_type: str = "dynamic") -> int:
+async def upsert_mac_entry(
+    host_id: int,
+    mac_address: str,
+    vlan: int,
+    port_name: str = "",
+    port_index: int = 0,
+    ip_address: str = "",
+    entry_type: str = "dynamic",
+) -> int:
     """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE."""
     db = await _dbcore.get_db()
     try:
@@ -89,8 +96,9 @@ async def upsert_mac_entry(host_id: int, mac_address: str, vlan: int,
         await db.close()
 
 
-async def upsert_arp_entry(host_id: int, ip_address: str, mac_address: str,
-                            interface_name: str = "", vrf: str = "") -> int:
+async def upsert_arp_entry(
+    host_id: int, ip_address: str, mac_address: str, interface_name: str = "", vrf: str = ""
+) -> int:
     """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE."""
     db = await _dbcore.get_db()
     try:
@@ -145,9 +153,9 @@ async def enrich_mac_ip(mac_address: str, ip_address: str) -> int:
         await db.close()
 
 
-async def record_mac_history(mac_address: str, host_id: int, port_name: str,
-                              vlan: int = 0, ip_address: str = "",
-                              is_uplink: bool = False) -> int | None:
+async def record_mac_history(
+    mac_address: str, host_id: int, port_name: str, vlan: int = 0, ip_address: str = "", is_uplink: bool = False
+) -> int | None:
     """Record a MAC sighting on a switch, but only when its location changed.
 
     Change detection is **per switch**: the comparison is against the last
@@ -181,8 +189,7 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
         prev = await cursor.fetchone()
 
         if prev is not None:
-            p = prev if isinstance(prev, tuple) else (
-                prev["port_name"], prev["vlan"], prev["ip_address"])
+            p = prev if isinstance(prev, tuple) else (prev["port_name"], prev["vlan"], prev["ip_address"])
             prev_port, prev_vlan, prev_ip = p[0] or "", p[1] or 0, p[2] or ""
 
             changed = []
@@ -211,9 +218,18 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
                     from_host_id, from_port, from_vlan, from_ip,
                     to_host_id, to_port, to_vlan, to_ip)
                    VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (mac_address, ",".join(changed),
-                 host_id, prev_port, prev_vlan, prev_ip,
-                 host_id, port_name, vlan, ip_address),
+                (
+                    mac_address,
+                    ",".join(changed),
+                    host_id,
+                    prev_port,
+                    prev_vlan,
+                    prev_ip,
+                    host_id,
+                    port_name,
+                    vlan,
+                    ip_address,
+                ),
             )
             event_id = cursor.lastrowid
             await db.execute(
@@ -221,10 +237,13 @@ async def record_mac_history(mac_address: str, host_id: int, port_name: str,
                    (event_id, mac_address, action, from_status, to_status,
                     actor, details)
                    VALUES (?, ?, 'detected', '', 'open', 'system', ?)""",
-                (event_id, mac_address,
-                 f"{'+'.join(changed)} changed on switch {host_id}: "
-                 f"port {prev_port or '-'}->{port_name or '-'}, "
-                 f"vlan {prev_vlan}->{vlan}"),
+                (
+                    event_id,
+                    mac_address,
+                    f"{'+'.join(changed)} changed on switch {host_id}: "
+                    f"port {prev_port or '-'}->{port_name or '-'}, "
+                    f"vlan {prev_vlan}->{vlan}",
+                ),
             )
             await db.commit()
             return event_id
@@ -280,9 +299,18 @@ async def record_mac_sightings_batch(host_id: int, sightings: list[dict]) -> dic
                 END,
                 entry_type = excluded.entry_type,
                 last_seen = datetime('now')""",
-            [(host_id, s["mac"], s["vlan"], s.get("port_name", ""),
-              s.get("port_index", 0), "", s.get("entry_type", "dynamic"))
-             for s in sightings],
+            [
+                (
+                    host_id,
+                    s["mac"],
+                    s["vlan"],
+                    s.get("port_name", ""),
+                    s.get("port_index", 0),
+                    "",
+                    s.get("entry_type", "dynamic"),
+                )
+                for s in sightings
+            ],
         )
 
         # Latest known location per MAC on this switch, one query for the
@@ -299,8 +327,11 @@ async def record_mac_sightings_batch(host_id: int, sightings: list[dict]) -> dic
         rows = await cursor.fetchall()
         last: dict[str, tuple[str, int, str]] = {}
         for row in rows:
-            r = row if isinstance(row, tuple) else (
-                row["mac_address"], row["port_name"], row["vlan"], row["ip_address"])
+            r = (
+                row
+                if isinstance(row, tuple)
+                else (row["mac_address"], row["port_name"], row["vlan"], row["ip_address"])
+            )
             last[r[0]] = (r[1] or "", r[2] or 0, r[3] or "")
 
         history_rows: list[tuple] = []
@@ -334,9 +365,7 @@ async def record_mac_sightings_batch(host_id: int, sightings: list[dict]) -> dic
                     from_host_id, from_port, from_vlan, from_ip,
                     to_host_id, to_port, to_vlan, to_ip)
                    VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (mac, ",".join(changed),
-                 host_id, prev_port, prev_vlan, prev_ip,
-                 host_id, port_name, vlan, ""),
+                (mac, ",".join(changed), host_id, prev_port, prev_vlan, prev_ip, host_id, port_name, vlan, ""),
             )
             event_id = cursor.lastrowid
             await db.execute(
@@ -344,10 +373,13 @@ async def record_mac_sightings_batch(host_id: int, sightings: list[dict]) -> dic
                    (event_id, mac_address, action, from_status, to_status,
                     actor, details)
                    VALUES (?, ?, 'detected', '', 'open', 'system', ?)""",
-                (event_id, mac,
-                 f"{'+'.join(changed)} changed on switch {host_id}: "
-                 f"port {prev_port or '-'}->{port_name or '-'}, "
-                 f"vlan {prev_vlan}->{vlan}"),
+                (
+                    event_id,
+                    mac,
+                    f"{'+'.join(changed)} changed on switch {host_id}: "
+                    f"port {prev_port or '-'}->{port_name or '-'}, "
+                    f"vlan {prev_vlan}->{vlan}",
+                ),
             )
             moves += 1
             last[mac] = (port_name, vlan, prev_ip)
@@ -391,12 +423,12 @@ async def upsert_arp_entries_batch(host_id: int, entries: list[dict]) -> int:
                 mac_address = excluded.mac_address,
                 interface_name = excluded.interface_name,
                 last_seen = datetime('now')""",
-            [(host_id, e["ip_address"], e["mac_address"],
-              e.get("interface_name", ""), e.get("vrf", ""))
-             for e in entries],
+            [
+                (host_id, e["ip_address"], e["mac_address"], e.get("interface_name", ""), e.get("vrf", ""))
+                for e in entries
+            ],
         )
-        enrich_rows = [(e["ip_address"], e["mac_address"])
-                       for e in entries if e["ip_address"] and e["mac_address"]]
+        enrich_rows = [(e["ip_address"], e["mac_address"]) for e in entries if e["ip_address"] and e["mac_address"]]
         if enrich_rows:
             await db.executemany(
                 """UPDATE mac_address_table
@@ -415,8 +447,8 @@ async def upsert_arp_entries_batch(host_id: int, entries: list[dict]) -> int:
 
 # ── MAC move events (drift-style) ───────────────────────────────────────────
 
-async def get_mac_move_events(status: str = "", limit: int = 200,
-                               host_id: int | None = None) -> list[dict]:
+
+async def get_mac_move_events(status: str = "", limit: int = 200, host_id: int | None = None) -> list[dict]:
     """List MAC move events, newest first.
 
     Optionally filter by status, and by a switch "involved" in the move -
@@ -454,9 +486,7 @@ async def get_mac_move_event_summary() -> dict:
     """Counts by status for the summary cards."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT status, COUNT(*) AS n FROM mac_move_events GROUP BY status"
-        )
+        cursor = await db.execute("SELECT status, COUNT(*) AS n FROM mac_move_events GROUP BY status")
         rows = rows_to_list(await cursor.fetchall())
         by_status = {r["status"]: r["n"] for r in rows}
         return {
@@ -526,9 +556,7 @@ async def acknowledge_open_mac_move_events(actor: str = "") -> int:
     """Bulk-acknowledge every open event. Returns the number acknowledged."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT id, mac_address FROM mac_move_events WHERE status = 'open'"
-        )
+        cursor = await db.execute("SELECT id, mac_address FROM mac_move_events WHERE status = 'open'")
         open_rows = rows_to_list(await cursor.fetchall())
         for ev in open_rows:
             await db.execute(
@@ -560,8 +588,7 @@ async def delete_old_mac_move_events(retention_days: int) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "DELETE FROM mac_move_events "
-            "WHERE detected_at < datetime('now', ? || ' days')",
+            "DELETE FROM mac_move_events WHERE detected_at < datetime('now', ? || ' days')",
             (f"-{int(retention_days)}",),
         )
         await db.commit()
@@ -580,8 +607,7 @@ async def delete_old_mac_history(retention_days: int) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "DELETE FROM mac_tracking_history "
-            "WHERE seen_at < datetime('now', ? || ' days')",
+            "DELETE FROM mac_tracking_history WHERE seen_at < datetime('now', ? || ' days')",
             (f"-{int(retention_days)}",),
         )
         await db.commit()
@@ -606,13 +632,7 @@ async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
         raw = query.strip()
         if raw:
             ip_port_pattern = f"%{raw}%"
-            normalized = (
-                raw.lower()
-                .replace(":", "")
-                .replace("-", "")
-                .replace(".", "")
-                .replace(" ", "")
-            )
+            normalized = raw.lower().replace(":", "").replace("-", "").replace(".", "").replace(" ", "")
             hex_only = normalized and all(c in "0123456789abcdef" for c in normalized)
             if hex_only and len(normalized) >= 6:
                 mac_pattern = f"%{normalized}%"
@@ -794,5 +814,3 @@ async def cleanup_stale_mac_entries(days: int = 30) -> int:
         return cursor.rowcount if cursor.rowcount is not None else 0
     finally:
         await db.close()
-
-

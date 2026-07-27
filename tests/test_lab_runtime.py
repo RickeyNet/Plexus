@@ -41,6 +41,7 @@ def _auth_client(tmp_path, monkeypatch, request):
 
     # Disable rate limiting and clear any leftover counts from a previous test.
     from netcontrol.routes import state as _state
+
     _state.API_RATE_LIMIT["enabled"] = False
     _state.API_RATE_LIMIT_TRACKER.clear()
 
@@ -73,16 +74,21 @@ async def test_runtime_columns_exist_after_init(tmp_path, monkeypatch):
         rows = await cur.fetchall()
         cols = {r[1] for r in rows}
         for required in (
-            "runtime_kind", "runtime_node_kind", "runtime_image",
-            "runtime_status", "runtime_lab_name", "runtime_node_name",
-            "runtime_mgmt_address", "runtime_credential_id", "runtime_error",
-            "runtime_workdir", "runtime_started_at",
+            "runtime_kind",
+            "runtime_node_kind",
+            "runtime_image",
+            "runtime_status",
+            "runtime_lab_name",
+            "runtime_node_name",
+            "runtime_mgmt_address",
+            "runtime_credential_id",
+            "runtime_error",
+            "runtime_workdir",
+            "runtime_started_at",
         ):
             assert required in cols, f"missing lab_devices.{required}"
 
-        cur = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='lab_runtime_events'"
-        )
+        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='lab_runtime_events'")
         assert await cur.fetchone() is not None
     finally:
         await conn.close()
@@ -106,7 +112,9 @@ def test_runtime_status_unavailable_when_binary_missing(monkeypatch):
 
 def test_runtime_status_available_parses_version(monkeypatch):
     monkeypatch.setattr(
-        lab_runtime.shutil, "which", lambda _name: "/usr/local/bin/containerlab",
+        lab_runtime.shutil,
+        "which",
+        lambda _name: "/usr/local/bin/containerlab",
     )
 
     async def _fake_run(args, cwd=None):
@@ -208,7 +216,8 @@ def test_deploy_rejects_disallowed_node_kind(tmp_path, monkeypatch, request):
     # Pretend containerlab is available so the request hits validation.
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     monkeypatch.setattr(
-        lab_runtime, "_run_containerlab",
+        lab_runtime,
+        "_run_containerlab",
         AsyncMock(return_value=(0, "version 0.50\n", "")),
     )
     client = _auth_client(tmp_path, monkeypatch, request)
@@ -234,9 +243,7 @@ def test_deploy_happy_path_records_state_and_event(tmp_path, monkeypatch, reques
     #   1. version (status check)        → rc=0
     #   2. deploy ... --reconfigure       → rc=0
     #   3. inspect ... --format json      → rc=0 with mgmt IP json
-    inspect_json = (
-        '{"containers": [{"name": "clab-plx-rtr-1", "ipv4_address": "172.20.20.5/24"}]}'
-    )
+    inspect_json = '{"containers": [{"name": "clab-plx-rtr-1", "ipv4_address": "172.20.20.5/24"}]}'
 
     call_log: list[list[str]] = []
 
@@ -288,9 +295,7 @@ def test_deploy_happy_path_records_state_and_event(tmp_path, monkeypatch, reques
 
 def test_destroy_clears_state(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
-    inspect_json = (
-        '{"containers": [{"name": "clab-plx-rtr-1", "ipv4_address": "172.20.20.5/24"}]}'
-    )
+    inspect_json = '{"containers": [{"name": "clab-plx-rtr-1", "ipv4_address": "172.20.20.5/24"}]}'
 
     async def _fake_run(args, cwd=None):
         if args[0] == "version":
@@ -329,9 +334,7 @@ def test_destroy_clears_state(tmp_path, monkeypatch, request):
 def test_simulate_live_runs_real_push(tmp_path, monkeypatch, request):
     """simulate-live should pull pre/post configs from the device via Netmiko mocks."""
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
-    inspect_json = (
-        '{"containers": [{"name": "clab-plx-rtr-l", "ipv4_address": "172.20.20.5/24"}]}'
-    )
+    inspect_json = '{"containers": [{"name": "clab-plx-rtr-l", "ipv4_address": "172.20.20.5/24"}]}'
 
     async def _fake_run(args, cwd=None):
         if args[0] == "version":
@@ -373,6 +376,7 @@ def test_simulate_live_runs_real_push(tmp_path, monkeypatch, request):
     # Seed a credential that the device will reference.
     async def _seed_cred():
         from routes.crypto import encrypt
+
         admin = await db_module.get_user_by_username("admin")
         return await db_module.create_credential(
             name="lab-cred",
@@ -421,9 +425,7 @@ def test_simulate_live_runs_real_push(tmp_path, monkeypatch, request):
 
 def test_destroy_removes_workdir(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
-    inspect_json = (
-        '{"containers": [{"name": "clab-plx-rtr-w", "ipv4_address": "172.20.20.5/24"}]}'
-    )
+    inspect_json = '{"containers": [{"name": "clab-plx-rtr-w", "ipv4_address": "172.20.20.5/24"}]}'
 
     async def _fake_run(args, cwd=None):
         if args[0] == "version":
@@ -525,7 +527,9 @@ def test_reconcile_skips_when_containerlab_unavailable(tmp_path, monkeypatch):
         await db_module.init_db()
         env_id = await db_module.create_lab_environment(name="rec-skip", shared=True)
         dev_id = await db_module.create_lab_device(
-            environment_id=env_id, hostname="ghost", running_config="",
+            environment_id=env_id,
+            hostname="ghost",
+            running_config="",
         )
         await db_module.update_lab_device_runtime(
             dev_id,
@@ -548,9 +552,7 @@ def test_reconcile_skips_when_containerlab_unavailable(tmp_path, monkeypatch):
 def test_reap_idle_runtimes_destroys_old_labs(tmp_path, monkeypatch, request):
     """Rows older than the configured TTL should be torn down."""
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
-    inspect_json = (
-        '{"containers": [{"name": "clab-plx-rtr-t", "ipv4_address": "172.20.20.9/24"}]}'
-    )
+    inspect_json = '{"containers": [{"name": "clab-plx-rtr-t", "ipv4_address": "172.20.20.9/24"}]}'
 
     destroy_calls: list[list[str]] = []
 
@@ -585,6 +587,7 @@ def test_reap_idle_runtimes_destroys_old_labs(tmp_path, monkeypatch, request):
     # Force runtime_started_at into the past so the TTL check catches it.
     async def _backdate():
         from datetime import UTC, datetime, timedelta
+
         await db_module.update_lab_device_runtime(
             dev_id,
             runtime_started_at=(datetime.now(UTC) - timedelta(hours=48)).isoformat(),
@@ -656,7 +659,9 @@ def test_simulate_offline_includes_compliance_impact(tmp_path, monkeypatch, requ
     async def _seed():
         gid = await db_module.create_group(name="comp-grp")
         hid = await db_module.add_host(
-            group_id=gid, hostname="prod-rtr-c", ip_address="10.5.5.1",
+            group_id=gid,
+            hostname="prod-rtr-c",
+            ip_address="10.5.5.1",
         )
         return gid, hid
 
@@ -664,6 +669,7 @@ def test_simulate_offline_includes_compliance_impact(tmp_path, monkeypatch, requ
     _seed_compliance_profile_blocking_snmp_public(gid)
 
     env_id = client.post("/api/lab/environments", json={"name": "comp-env"}).json()["id"]
+
     # Create lab device referencing source host so compliance lookup works.
     async def _seed_dev():
         return await db_module.create_lab_device(
@@ -683,7 +689,4 @@ def test_simulate_offline_includes_compliance_impact(tmp_path, monkeypatch, requ
     body = resp.json()
     detail = body.get("risk_detail", {})
     assert detail.get("compliance_violations_introduced", 0) >= 1
-    assert any(
-        "compliance" in (rf or "").lower()
-        for rf in detail.get("risk_factors", [])
-    )
+    assert any("compliance" in (rf or "").lower() for rf in detail.get("risk_factors", []))

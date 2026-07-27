@@ -727,12 +727,26 @@ async def test_sample_discovery_policy_rules_visible_via_api(tmp_path, monkeypat
 @pytest.mark.parametrize(
     ("provider", "resource_types", "connection_types"),
     [
-        ("aws", {"route_table", "internet_gateway", "nat_gateway"}, {"route_table_association", "route_next_hop", "internet_gateway_attachment"}),
-        ("azure", {"route_table", "virtual_network_gateway", "local_network_gateway"}, {"route_table_association", "virtual_network_gateway_attachment", "ipsec"}),
-        ("gcp", {"route_entry", "interconnect_attachment"}, {"route_table_association", "interconnect_attachment", "vpc_peering"}),
+        (
+            "aws",
+            {"route_table", "internet_gateway", "nat_gateway"},
+            {"route_table_association", "route_next_hop", "internet_gateway_attachment"},
+        ),
+        (
+            "azure",
+            {"route_table", "virtual_network_gateway", "local_network_gateway"},
+            {"route_table_association", "virtual_network_gateway_attachment", "ipsec"},
+        ),
+        (
+            "gcp",
+            {"route_entry", "interconnect_attachment"},
+            {"route_table_association", "interconnect_attachment", "vpc_peering"},
+        ),
     ],
 )
-async def test_sample_discovery_snapshot_includes_phase_d_topology(tmp_path, monkeypatch, provider, resource_types, connection_types):
+async def test_sample_discovery_snapshot_includes_phase_d_topology(
+    tmp_path, monkeypatch, provider, resource_types, connection_types
+):
     await _init(tmp_path, monkeypatch)
     account = await db_module.create_cloud_account(provider=provider, name=f"{provider} Sample Topology")
     assert account is not None

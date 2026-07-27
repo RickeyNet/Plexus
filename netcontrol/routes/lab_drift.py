@@ -23,6 +23,7 @@ Status values written to lab_drift_runs:
                       snapshot exists yet for that host
   - error           - diff/eval blew up; never raised, only persisted
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -138,8 +139,10 @@ async def run_drift_check_for_device(
     prod_config = snapshot["config_text"] or ""
     try:
         diff_text, diff_added, diff_removed = _compute_config_diff(
-            twin_config, prod_config,
-            baseline_label="twin", actual_label="production",
+            twin_config,
+            prod_config,
+            baseline_label="twin",
+            actual_label="production",
         )
     except Exception as exc:
         run_id = await db.create_lab_drift_run(
@@ -254,7 +257,8 @@ async def drift_check_endpoint(device_id: int, request: Request):
     actor = session["user"] if session else ""
     result = await run_drift_check_for_device(device, actor=actor)
     await _audit(
-        "lab", "drift.check",
+        "lab",
+        "drift.check",
         user=actor,
         detail=f"device={device_id} status={result['status']} +{result['diff_added']}/-{result['diff_removed']}",
         correlation_id=_corr_id(request),

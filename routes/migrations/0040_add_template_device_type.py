@@ -74,23 +74,13 @@ async def _up_sqlite(db) -> None:
 
 
 async def _up_postgres(db) -> None:
-    await db.execute(
-        "ALTER TABLE templates ADD COLUMN IF NOT EXISTS "
-        "device_type TEXT NOT NULL DEFAULT ''"
-    )
+    await db.execute("ALTER TABLE templates ADD COLUMN IF NOT EXISTS device_type TEXT NOT NULL DEFAULT ''")
     # The original column-level UNIQUE was auto-named templates_name_key
     # by Postgres.  Drop it (IF EXISTS so a re-run is a no-op) and add
     # the composite constraint in its place.
-    await db.execute(
-        "ALTER TABLE templates DROP CONSTRAINT IF EXISTS templates_name_key"
-    )
-    await db.execute(
-        "ALTER TABLE templates DROP CONSTRAINT IF EXISTS templates_name_device_type_key"
-    )
-    await db.execute(
-        "ALTER TABLE templates ADD CONSTRAINT templates_name_device_type_key "
-        "UNIQUE (name, device_type)"
-    )
+    await db.execute("ALTER TABLE templates DROP CONSTRAINT IF EXISTS templates_name_key")
+    await db.execute("ALTER TABLE templates DROP CONSTRAINT IF EXISTS templates_name_device_type_key")
+    await db.execute("ALTER TABLE templates ADD CONSTRAINT templates_name_device_type_key UNIQUE (name, device_type)")
     await db.commit()
 
 

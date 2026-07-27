@@ -225,11 +225,7 @@ async def run_reconciliation(
             run_id,
             status="completed",
             diff_count=len(drifts),
-            message=(
-                f"{len(drifts)} drift(s) detected"
-                if drifts
-                else "No drift detected"
-            ),
+            message=(f"{len(drifts)} drift(s) detected" if drifts else "No drift detected"),
         )
 
         return {
@@ -290,15 +286,10 @@ async def resolve_diff(
         if not source:
             raise ValueError("IPAM source not found")
         if not source.get("push_enabled"):
-            raise ValueError(
-                "Push is not enabled on this IPAM source -- enable push or pick a different resolution"
-            )
+            raise ValueError("Push is not enabled on this IPAM source -- enable push or pick a different resolution")
 
         if drift_type == DRIFT_MISSING_IN_PLEXUS:
-            raise ValueError(
-                "accept_plexus is not valid for missing_in_plexus -- "
-                "Plexus has no record to push"
-            )
+            raise ValueError("accept_plexus is not valid for missing_in_plexus -- Plexus has no record to push")
 
         hostname = plexus_state.get("hostname") or ""
         try:
@@ -322,10 +313,7 @@ async def resolve_diff(
             # Plexus had a record IPAM did not -- accepting IPAM means we are
             # acknowledging that Plexus inventory is wrong. We do not delete
             # hosts automatically; flag it for the operator instead.
-            message = (
-                f"Acknowledged: IPAM has no record for {address}; "
-                "Plexus host should be reviewed"
-            )
+            message = f"Acknowledged: IPAM has no record for {address}; Plexus host should be reviewed"
         else:
             message = f"Accepted IPAM state for {address}"
 

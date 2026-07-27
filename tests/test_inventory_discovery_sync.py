@@ -16,8 +16,14 @@ def _norm(raw: dict) -> dict:
 
 
 def test_normalize_entry_identity():
-    snmp = _norm({"hostname": "core-rtr", "ip_address": "10.0.0.1",
-                  "serial_number": "FOC123", "discovery": {"protocol": "snmpv2c"}})
+    snmp = _norm(
+        {
+            "hostname": "core-rtr",
+            "ip_address": "10.0.0.1",
+            "serial_number": "FOC123",
+            "discovery": {"protocol": "snmpv2c"},
+        }
+    )
     assert snmp["sys_name_norm"] == "core-rtr"
     assert snmp["serial"] == "FOC123"
     assert snmp["snmp_reachable"] is True
@@ -60,10 +66,20 @@ def test_plan_pingonly_secondary_grouped_via_interface_table():
 
 
 def test_plan_matches_existing_by_serial():
-    d = [_norm({"hostname": "rtr-new", "ip_address": "10.0.0.9", "sys_name": "rtr-new",
-                "serial_number": "S1", "discovery": {"protocol": "snmpv2c"}})]
-    existing = [{"id": 1, "hostname": "rtr-old", "ip_address": "10.0.0.1",
-                 "serial_number": "S1", "device_type": "cisco_ios"}]
+    d = [
+        _norm(
+            {
+                "hostname": "rtr-new",
+                "ip_address": "10.0.0.9",
+                "sys_name": "rtr-new",
+                "serial_number": "S1",
+                "discovery": {"protocol": "snmpv2c"},
+            }
+        )
+    ]
+    existing = [
+        {"id": 1, "hostname": "rtr-old", "ip_address": "10.0.0.1", "serial_number": "S1", "device_type": "cisco_ios"}
+    ]
     plan = inventory_module._build_discovery_plan(d, existing, {"10.0.0.1": 1}, {})
     assert plan["add"] == []
     assert [u["host_id"] for u in plan["update"]] == [1]
@@ -74,8 +90,7 @@ def test_plan_matches_existing_by_serial():
 def test_plan_suppresses_existing_duplicate_in_interface_table():
     """The classic bug: a second host row whose IP is really a secondary
     interface of the canonical device is deleted (strong evidence)."""
-    d = [_norm({"hostname": "rtr", "ip_address": "10.0.0.1", "sys_name": "rtr",
-                "discovery": {"protocol": "snmpv2c"}})]
+    d = [_norm({"hostname": "rtr", "ip_address": "10.0.0.1", "sys_name": "rtr", "discovery": {"protocol": "snmpv2c"}})]
     existing = [
         {"id": 1, "hostname": "rtr", "ip_address": "10.0.0.1", "serial_number": "", "device_type": "cisco_ios"},
         {"id": 2, "hostname": "host-10-0-0-2", "ip_address": "10.0.0.2", "serial_number": "", "device_type": "unknown"},
@@ -89,8 +104,11 @@ def test_plan_suppresses_existing_duplicate_in_interface_table():
 def test_plan_sysname_match_alone_never_deletes_existing():
     """Without serial or interface-table evidence, sysName similarity must not
     delete a host (default 'Router' names would wrongly merge real devices)."""
-    d = [_norm({"hostname": "Router", "ip_address": "10.0.0.1", "sys_name": "Router",
-                "discovery": {"protocol": "snmpv2c"}})]
+    d = [
+        _norm(
+            {"hostname": "Router", "ip_address": "10.0.0.1", "sys_name": "Router", "discovery": {"protocol": "snmpv2c"}}
+        )
+    ]
     existing = [
         {"id": 1, "hostname": "Router", "ip_address": "10.0.0.1", "serial_number": "", "device_type": "cisco_ios"},
         {"id": 2, "hostname": "Router", "ip_address": "10.9.9.9", "serial_number": "", "device_type": "cisco_ios"},
@@ -121,25 +139,31 @@ async def test_sync_suppresses_secondary_interface_duplicate(inv_db, monkeypatch
         return None
 
     monkeypatch.setattr(inventory_module, "push_inventory_host_allocation", fake_noop)
-    monkeypatch.setattr(
-        inventory_module.state, "_resolve_snmp_discovery_config", lambda _g: {"enabled": False}
-    )
+    monkeypatch.setattr(inventory_module.state, "_resolve_snmp_discovery_config", lambda _g: {"enabled": False})
 
     async def resolver(_ip):
         return ["10.0.0.1", "10.0.0.2"]
 
-    discovered = [{
-        "hostname": "rtr", "ip_address": "10.0.0.1", "device_type": "cisco_ios",
-        "status": "online", "sys_name": "rtr", "serial_number": "",
-        "discovery": {"protocol": "snmpv2c"},
-    }]
+    discovered = [
+        {
+            "hostname": "rtr",
+            "ip_address": "10.0.0.1",
+            "device_type": "cisco_ios",
+            "status": "online",
+            "sys_name": "rtr",
+            "serial_number": "",
+            "discovery": {"protocol": "snmpv2c"},
+        }
+    ]
     result = await inventory_module._sync_group_hosts(
-        gid, discovered, interface_ip_resolver=resolver,
+        gid,
+        discovered,
+        interface_ip_resolver=resolver,
     )
 
     assert result["removed"] == 1
     hosts = await db_module.get_hosts_for_group(gid)
-    assert [h["id"] for h in hosts] == [canonical]   # duplicate gone
+    assert [h["id"] for h in hosts] == [canonical]  # duplicate gone
     assert dup not in {h["id"] for h in hosts}
     # The duplicate's IP is now resolvable to the canonical host via its alias.
     index = await db_module.get_host_ip_index(gid)
@@ -230,9 +254,7 @@ async def test_sync_group_hosts_adds_updates_and_removes(monkeypatch):
     monkeypatch.setattr(app_module.db, "set_host_ip_aliases", fake_noop)
     monkeypatch.setattr(app_module.db, "update_host_serial", fake_noop)
     monkeypatch.setattr(inventory_module, "push_inventory_host_allocation", fake_noop)
-    monkeypatch.setattr(
-        state_module, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False}
-    )
+    monkeypatch.setattr(state_module, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False})
     monkeypatch.setattr(inventory_module, "db", app_module.db)
 
     result = await inventory_module._sync_group_hosts(77, discovered_hosts, remove_absent=True)
@@ -271,23 +293,56 @@ async def test_ssh_fallback_does_not_clobber_snmp_confirmed_device_type(monkeypa
              -> accept cisco_xe (SNMP is authoritative; real upgrades)
     """
     existing_hosts = [
-        {"id": 1, "group_id": 5, "hostname": "cat9k-1", "ip_address": "10.2.2.1",
-         "device_type": "cisco_xe", "status": "online"},
-        {"id": 2, "group_id": 5, "hostname": "edge-2", "ip_address": "10.2.2.2",
-         "device_type": "unknown", "status": "online"},
-        {"id": 3, "group_id": 5, "hostname": "cat9k-3", "ip_address": "10.2.2.3",
-         "device_type": "cisco_ios", "status": "online"},
+        {
+            "id": 1,
+            "group_id": 5,
+            "hostname": "cat9k-1",
+            "ip_address": "10.2.2.1",
+            "device_type": "cisco_xe",
+            "status": "online",
+        },
+        {
+            "id": 2,
+            "group_id": 5,
+            "hostname": "edge-2",
+            "ip_address": "10.2.2.2",
+            "device_type": "unknown",
+            "status": "online",
+        },
+        {
+            "id": 3,
+            "group_id": 5,
+            "hostname": "cat9k-3",
+            "ip_address": "10.2.2.3",
+            "device_type": "cisco_ios",
+            "status": "online",
+        },
     ]
     discovered_hosts = [
         # SNMP down -> SSH banner guessed cisco_ios. Must be ignored.
-        {"hostname": "cat9k-1", "ip_address": "10.2.2.1", "device_type": "cisco_ios",
-         "status": "online", "discovery": {"protocol": "ssh"}},
+        {
+            "hostname": "cat9k-1",
+            "ip_address": "10.2.2.1",
+            "device_type": "cisco_ios",
+            "status": "online",
+            "discovery": {"protocol": "ssh"},
+        },
         # SSH guess is allowed to resolve a previously-unknown host.
-        {"hostname": "edge-2", "ip_address": "10.2.2.2", "device_type": "cisco_ios",
-         "status": "online", "discovery": {"protocol": "ssh"}},
+        {
+            "hostname": "edge-2",
+            "ip_address": "10.2.2.2",
+            "device_type": "cisco_ios",
+            "status": "online",
+            "discovery": {"protocol": "ssh"},
+        },
         # SNMP came back and authoritatively says XE - must apply.
-        {"hostname": "cat9k-3", "ip_address": "10.2.2.3", "device_type": "cisco_xe",
-         "status": "online", "discovery": {"protocol": "snmpv2c"}},
+        {
+            "hostname": "cat9k-3",
+            "ip_address": "10.2.2.3",
+            "device_type": "cisco_xe",
+            "status": "online",
+            "discovery": {"protocol": "snmpv2c"},
+        },
     ]
 
     updates: list[tuple] = []
@@ -312,16 +367,13 @@ async def test_ssh_fallback_does_not_clobber_snmp_confirmed_device_type(monkeypa
     monkeypatch.setattr(inventory_module.db, "set_host_ip_aliases", fake_noop)
     monkeypatch.setattr(inventory_module.db, "update_host_serial", fake_noop)
     monkeypatch.setattr(inventory_module, "push_inventory_host_allocation", fake_noop)
-    monkeypatch.setattr(
-        state_module, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False}
-    )
+    monkeypatch.setattr(state_module, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False})
 
     await inventory_module._sync_group_hosts(5, discovered_hosts, remove_absent=False)
 
     by_id = dict(updates)
     # The bug: .1 must stay cisco_xe (no downgrade to the ssh guess).
-    assert by_id.get(1, "cisco_xe") == "cisco_xe", (
-        "SSH-banner cisco_ios guess clobbered an SNMP-confirmed cisco_xe")
+    assert by_id.get(1, "cisco_xe") == "cisco_xe", "SSH-banner cisco_ios guess clobbered an SNMP-confirmed cisco_xe"
     # .2 was unknown - ssh is allowed to fill it in.
     assert by_id.get(2) == "cisco_ios"
     # .3 - authoritative SNMP reclassification still applies.

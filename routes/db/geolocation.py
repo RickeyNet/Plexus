@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,6 +46,7 @@ __all__ = [
 # Geolocation - Sites, Floors, Placements
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def list_geo_sites() -> list:
     db = await _dbcore.get_db()
     try:
@@ -72,9 +74,14 @@ async def get_geo_site(site_id: int) -> dict:
         await db.close()
 
 
-async def create_geo_site(name: str, description: str = "", address: str = "",
-                          lat: float | None = None, lng: float | None = None,
-                          created_by: str = "") -> dict:
+async def create_geo_site(
+    name: str,
+    description: str = "",
+    address: str = "",
+    lat: float | None = None,
+    lng: float | None = None,
+    created_by: str = "",
+) -> dict:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
@@ -229,8 +236,7 @@ async def get_geo_placements(floor_id: int) -> list:
         await db.close()
 
 
-async def upsert_geo_placement(floor_id: int, host_id: int,
-                               x_pct: float, y_pct: float) -> dict:
+async def upsert_geo_placement(floor_id: int, host_id: int, x_pct: float, y_pct: float) -> dict:
     db = await _dbcore.get_db()
     try:
         await db.execute(
@@ -288,5 +294,3 @@ async def get_geo_overview() -> list:
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
-
-

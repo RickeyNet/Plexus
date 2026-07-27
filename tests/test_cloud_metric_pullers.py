@@ -273,8 +273,6 @@ def test_sanitize_cloud_traffic_sync_config():
     assert cfg["interval_seconds"] == 120
     assert cfg["lookback_minutes"] == 30
 
-    cfg = state._sanitize_cloud_traffic_metric_sync_config(
-        {"interval_seconds": 10, "lookback_minutes": 1}
-    )
+    cfg = state._sanitize_cloud_traffic_metric_sync_config({"interval_seconds": 10, "lookback_minutes": 1})
     assert cfg["interval_seconds"] == 60
     assert cfg["lookback_minutes"] == 5

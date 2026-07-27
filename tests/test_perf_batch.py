@@ -1,9 +1,9 @@
 """Unit tests for the performance-batch helpers:
 
-  * monitoring._suppression_active_local — in-memory equivalent of
-    db.is_alert_suppressed used to preload suppressions once per poll cycle.
-  * metrics_engine OID resolution cache — resolve_oids_for_device caches per
-    device_type and clear_oid_cache() drops it (wired to vendor-OID writes).
+* monitoring._suppression_active_local — in-memory equivalent of
+  db.is_alert_suppressed used to preload suppressions once per poll cycle.
+* metrics_engine OID resolution cache — resolve_oids_for_device caches per
+  device_type and clear_oid_cache() drops it (wired to vendor-OID writes).
 """
 
 from __future__ import annotations
@@ -66,11 +66,7 @@ def test_parse_route_summary_count_ios():
 
 
 def test_parse_route_summary_count_nxos():
-    text = (
-        "IP Route Table for VRF \"default\"\n"
-        "Total number of routes: 42\n"
-        "Total number of paths:  44\n"
-    )
+    text = 'IP Route Table for VRF "default"\nTotal number of routes: 42\nTotal number of paths:  44\n'
     assert mon._parse_route_summary_count(text) == 42
 
 
@@ -128,14 +124,14 @@ def test_resolve_oids_caches_per_device_type(monkeypatch):
         a = await me.resolve_oids_for_device("cisco_ios")
         b = await me.resolve_oids_for_device("cisco_ios")
         assert a == b
-        assert calls["n"] == 1                     # second call served from cache
+        assert calls["n"] == 1  # second call served from cache
         # mutating the returned dict must not poison the cache
         a["cpu_oid"] = "TAINT"
         c = await me.resolve_oids_for_device("cisco_ios")
         assert c.get("cpu_oid") != "TAINT"
         me.clear_oid_cache()
         await me.resolve_oids_for_device("cisco_ios")
-        assert calls["n"] == 2                      # cache cleared -> re-queried
+        assert calls["n"] == 2  # cache cleared -> re-queried
 
     asyncio.run(_go())
     me.clear_oid_cache()

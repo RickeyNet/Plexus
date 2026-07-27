@@ -168,15 +168,15 @@ async def test_full_collection_aggregates_per_host_diagnostics(mac_db, monkeypat
     import netcontrol.routes.state as state_module
 
     monkeypatch.setattr(
-        state_module, "_resolve_snmp_discovery_config",
+        state_module,
+        "_resolve_snmp_discovery_config",
         lambda _gid: {"enabled": True},
     )
 
     async def fake_collect(host_id, ip, cfg, **kwargs):
         # host 100 returns a diagnostic, host 200 is clean
         if host_id == 100:
-            return {"macs_found": 3, "arps_found": 1,
-                    "errors": ["per-VLAN walks hit 60s budget"]}
+            return {"macs_found": 3, "arps_found": 1, "errors": ["per-VLAN walks hit 60s budget"]}
         return {"macs_found": 5, "arps_found": 2, "errors": []}
 
     monkeypatch.setattr(mac_tracking, "collect_mac_arp_tables", fake_collect)
@@ -221,7 +221,8 @@ async def test_collection_job_endpoint_roundtrip(mac_db, monkeypatch):
     from fastapi import HTTPException
 
     monkeypatch.setattr(
-        state_module, "_resolve_snmp_discovery_config",
+        state_module,
+        "_resolve_snmp_discovery_config",
         lambda _gid: {"enabled": True},
     )
 
@@ -251,33 +252,69 @@ async def test_batch_sightings_match_sequential_move_semantics(mac_db):
     port change, uplinks skipped for history."""
     a = mac_db["host_a"]
 
-    counts = await db_module.record_mac_sightings_batch(a, [
-        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/1", "port_index": 1,
-         "entry_type": "dynamic", "is_uplink": False},
-    ])
+    counts = await db_module.record_mac_sightings_batch(
+        a,
+        [
+            {
+                "mac": MAC,
+                "vlan": 10,
+                "port_name": "Gi1/0/1",
+                "port_index": 1,
+                "entry_type": "dynamic",
+                "is_uplink": False,
+            },
+        ],
+    )
     assert counts == {"macs": 1, "history": 1, "moves": 0}
     assert await _open_move_count() == 0
 
     # Same location again - history no-op.
-    counts = await db_module.record_mac_sightings_batch(a, [
-        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/1", "port_index": 1,
-         "entry_type": "dynamic", "is_uplink": False},
-    ])
+    counts = await db_module.record_mac_sightings_batch(
+        a,
+        [
+            {
+                "mac": MAC,
+                "vlan": 10,
+                "port_name": "Gi1/0/1",
+                "port_index": 1,
+                "entry_type": "dynamic",
+                "is_uplink": False,
+            },
+        ],
+    )
     assert counts == {"macs": 1, "history": 0, "moves": 0}
 
     # Port change - opens a move event.
-    counts = await db_module.record_mac_sightings_batch(a, [
-        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/5", "port_index": 5,
-         "entry_type": "dynamic", "is_uplink": False},
-    ])
+    counts = await db_module.record_mac_sightings_batch(
+        a,
+        [
+            {
+                "mac": MAC,
+                "vlan": 10,
+                "port_name": "Gi1/0/5",
+                "port_index": 5,
+                "entry_type": "dynamic",
+                "is_uplink": False,
+            },
+        ],
+    )
     assert counts == {"macs": 1, "history": 1, "moves": 1}
     assert await _open_move_count() == 1
 
     # Uplink sighting - FDB row written, history/move skipped.
-    counts = await db_module.record_mac_sightings_batch(a, [
-        {"mac": "11:22:33:44:55:66", "vlan": 10, "port_name": "Po1",
-         "port_index": 99, "entry_type": "dynamic", "is_uplink": True},
-    ])
+    counts = await db_module.record_mac_sightings_batch(
+        a,
+        [
+            {
+                "mac": "11:22:33:44:55:66",
+                "vlan": 10,
+                "port_name": "Po1",
+                "port_index": 99,
+                "entry_type": "dynamic",
+                "is_uplink": True,
+            },
+        ],
+    )
     assert counts == {"macs": 1, "history": 0, "moves": 0}
     assert await _open_move_count() == 1
 
@@ -288,12 +325,27 @@ async def test_batch_sightings_same_mac_twice_in_one_batch(mac_db):
     sequentially, exactly as two record_mac_history calls would have."""
     a = mac_db["host_a"]
 
-    counts = await db_module.record_mac_sightings_batch(a, [
-        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/1", "port_index": 1,
-         "entry_type": "dynamic", "is_uplink": False},
-        {"mac": MAC, "vlan": 20, "port_name": "Gi1/0/1", "port_index": 1,
-         "entry_type": "dynamic", "is_uplink": False},
-    ])
+    counts = await db_module.record_mac_sightings_batch(
+        a,
+        [
+            {
+                "mac": MAC,
+                "vlan": 10,
+                "port_name": "Gi1/0/1",
+                "port_index": 1,
+                "entry_type": "dynamic",
+                "is_uplink": False,
+            },
+            {
+                "mac": MAC,
+                "vlan": 20,
+                "port_name": "Gi1/0/1",
+                "port_index": 1,
+                "entry_type": "dynamic",
+                "is_uplink": False,
+            },
+        ],
+    )
     # First is the baseline; second differs in VLAN → move, same as the old
     # sequential per-sighting calls.
     assert counts["history"] == 2
@@ -307,18 +359,29 @@ async def test_batch_arp_upsert_and_cross_host_enrichment(mac_db):
     a, b = mac_db["host_a"], mac_db["host_b"]
 
     # FDB rows live on switch A (no IP) and switch B (already enriched).
-    await db_module.record_mac_sightings_batch(a, [
-        {"mac": MAC, "vlan": 10, "port_name": "Gi1/0/1", "port_index": 1,
-         "entry_type": "dynamic", "is_uplink": False},
-    ])
-    await db_module.upsert_mac_entry(host_id=b, mac_address=MAC, vlan=10,
-                                     port_name="Gi1/0/2", ip_address="10.9.9.9")
+    await db_module.record_mac_sightings_batch(
+        a,
+        [
+            {
+                "mac": MAC,
+                "vlan": 10,
+                "port_name": "Gi1/0/1",
+                "port_index": 1,
+                "entry_type": "dynamic",
+                "is_uplink": False,
+            },
+        ],
+    )
+    await db_module.upsert_mac_entry(host_id=b, mac_address=MAC, vlan=10, port_name="Gi1/0/2", ip_address="10.9.9.9")
 
     # ARP learned on switch B (the L3 device).
-    written = await db_module.upsert_arp_entries_batch(b, [
-        {"ip_address": "10.0.50.5", "mac_address": MAC, "interface_name": "Vlan10"},
-        {"ip_address": "", "mac_address": "ff:ee:dd:cc:bb:aa", "interface_name": ""},
-    ])
+    written = await db_module.upsert_arp_entries_batch(
+        b,
+        [
+            {"ip_address": "10.0.50.5", "mac_address": MAC, "interface_name": "Vlan10"},
+            {"ip_address": "", "mac_address": "ff:ee:dd:cc:bb:aa", "interface_name": ""},
+        ],
+    )
     assert written == 2
 
     rows = await db_module.search_mac_tracking(MAC)

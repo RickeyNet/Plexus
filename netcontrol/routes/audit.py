@@ -13,6 +13,7 @@ The orchestrator is patterned on ``reporting._report_scheduler_loop``:
 a single background task polls for due runs (cron-style schedule) and
 also services on-demand ``POST /api/audit/runs`` triggers.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -92,6 +93,7 @@ class Rule:
 
 # ── Rule pack: configuration drift ──────────────────────────────────────────
 
+
 class ConfigDriftRule(Rule):
     """Diff each host's most recent running-config snapshot against its
     baseline. Any added/removed lines (after volatile-metadata stripping
@@ -113,37 +115,38 @@ class ConfigDriftRule(Rule):
             if not baseline or not (baseline.get("config_text") or "").strip():
                 # No baseline yet -> informational finding so the user
                 # knows this host is unaudited.
-                findings.append(Finding(
-                    rule_id=self.rule_id,
-                    category=self.category,
-                    severity="info",
-                    title="No config baseline captured",
-                    detail=(
-                        "This host has no config baseline; drift cannot "
-                        "be evaluated until one is captured."
-                    ),
-                    host_id=host_id,
-                    cis_control=self.cis_control,
-                    evidence={"hostname": host.get("hostname", "")},
-                ))
+                findings.append(
+                    Finding(
+                        rule_id=self.rule_id,
+                        category=self.category,
+                        severity="info",
+                        title="No config baseline captured",
+                        detail=("This host has no config baseline; drift cannot be evaluated until one is captured."),
+                        host_id=host_id,
+                        cis_control=self.cis_control,
+                        evidence={"hostname": host.get("hostname", "")},
+                    )
+                )
                 continue
 
             snapshot = await db.get_latest_config_snapshot(host_id)
             if not snapshot or not (snapshot.get("config_text") or "").strip():
-                findings.append(Finding(
-                    rule_id=self.rule_id,
-                    category=self.category,
-                    severity="medium",
-                    title="No recent config snapshot",
-                    detail=(
-                        "Baseline exists but no running-config has been "
-                        "captured. Run a config backup so drift can be "
-                        "checked."
-                    ),
-                    host_id=host_id,
-                    cis_control=self.cis_control,
-                    evidence={"hostname": host.get("hostname", "")},
-                ))
+                findings.append(
+                    Finding(
+                        rule_id=self.rule_id,
+                        category=self.category,
+                        severity="medium",
+                        title="No recent config snapshot",
+                        detail=(
+                            "Baseline exists but no running-config has been "
+                            "captured. Run a config backup so drift can be "
+                            "checked."
+                        ),
+                        host_id=host_id,
+                        cis_control=self.cis_control,
+                        evidence={"hostname": host.get("hostname", "")},
+                    )
+                )
                 continue
 
             diff_text, lines_added, lines_removed = _compute_config_diff(
@@ -155,26 +158,25 @@ class ConfigDriftRule(Rule):
             if lines_added == 0 and lines_removed == 0:
                 continue  # in compliance
 
-            findings.append(Finding(
-                rule_id=self.rule_id,
-                category=self.category,
-                severity=self.default_severity,
-                title=self.title,
-                detail=(
-                    f"{lines_added} line(s) added, {lines_removed} line(s) "
-                    f"removed vs. baseline."
-                ),
-                host_id=host_id,
-                cis_control=self.cis_control,
-                evidence={
-                    "hostname": host.get("hostname", ""),
-                    "lines_added": lines_added,
-                    "lines_removed": lines_removed,
-                    # Cap evidence size; the full diff is also accessible
-                    # via the existing config-drift endpoints.
-                    "diff_excerpt": diff_text[:8000],
-                },
-            ))
+            findings.append(
+                Finding(
+                    rule_id=self.rule_id,
+                    category=self.category,
+                    severity=self.default_severity,
+                    title=self.title,
+                    detail=(f"{lines_added} line(s) added, {lines_removed} line(s) removed vs. baseline."),
+                    host_id=host_id,
+                    cis_control=self.cis_control,
+                    evidence={
+                        "hostname": host.get("hostname", ""),
+                        "lines_added": lines_added,
+                        "lines_removed": lines_removed,
+                        # Cap evidence size; the full diff is also accessible
+                        # via the existing config-drift endpoints.
+                        "diff_excerpt": diff_text[:8000],
+                    },
+                )
+            )
         return findings
 
 
@@ -185,9 +187,7 @@ class ConfigDriftRule(Rule):
 # (b) connected port without a description, (c) speed/duplex mismatch
 # against the resolved topology peer.
 
-PORT_HYGIENE_UNUSED_DAYS = max(1, int(
-    os.getenv("APP_AUDIT_UNUSED_PORT_DAYS", "30")
-))
+PORT_HYGIENE_UNUSED_DAYS = max(1, int(os.getenv("APP_AUDIT_UNUSED_PORT_DAYS", "30")))
 
 
 def _ticks_to_days(ticks_str: str) -> float | None:
@@ -202,7 +202,7 @@ def _ticks_to_days(ticks_str: str) -> float | None:
     """
     try:
         ticks = int(ticks_str)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
     if ticks <= 0:
         return None
@@ -254,50 +254,51 @@ class PortHygieneRule(Rule):
                 if admin == "up" and oper == "down":
                     age_days = _ticks_to_days(p.get("last_change") or "")
                     if age_days is not None and age_days >= PORT_HYGIENE_UNUSED_DAYS:
-                        findings.append(Finding(
-                            rule_id="port.unused",
-                            category=self.category,
-                            severity="low",
-                            title="Port admin-up but oper-down",
-                            detail=(
-                                f"{hostname} {name}: admin-up but oper-down for "
-                                f"~{int(age_days)} days. Disable unused ports per "
-                                f"hardening guidance."
-                            ),
-                            host_id=host_id,
-                            cis_control=self.cis_control,
-                            evidence={
-                                "hostname": hostname,
-                                "port": name,
-                                "approx_days_inactive": int(age_days),
-                                "threshold_days": PORT_HYGIENE_UNUSED_DAYS,
-                            },
-                        ))
+                        findings.append(
+                            Finding(
+                                rule_id="port.unused",
+                                category=self.category,
+                                severity="low",
+                                title="Port admin-up but oper-down",
+                                detail=(
+                                    f"{hostname} {name}: admin-up but oper-down for "
+                                    f"~{int(age_days)} days. Disable unused ports per "
+                                    f"hardening guidance."
+                                ),
+                                host_id=host_id,
+                                cis_control=self.cis_control,
+                                evidence={
+                                    "hostname": hostname,
+                                    "port": name,
+                                    "approx_days_inactive": int(age_days),
+                                    "threshold_days": PORT_HYGIENE_UNUSED_DAYS,
+                                },
+                            )
+                        )
 
                 # (b) Connected port with no description
                 if is_connected and not description:
-                    findings.append(Finding(
-                        rule_id="port.missing_description",
-                        category=self.category,
-                        severity="info",
-                        title="Connected port missing description",
-                        detail=(
-                            f"{hostname} {name}: port is connected (per "
-                            f"topology) but has no interface description."
-                        ),
-                        host_id=host_id,
-                        cis_control=self.cis_control,
-                        evidence={"hostname": hostname, "port": name},
-                    ))
+                    findings.append(
+                        Finding(
+                            rule_id="port.missing_description",
+                            category=self.category,
+                            severity="info",
+                            title="Connected port missing description",
+                            detail=(
+                                f"{hostname} {name}: port is connected (per topology) but has no interface description."
+                            ),
+                            host_id=host_id,
+                            cis_control=self.cis_control,
+                            evidence={"hostname": hostname, "port": name},
+                        )
+                    )
 
                 # (c) Speed/duplex mismatch with peer (only on connected ports
                 #     with a resolved peer ifIndex we have inventory for)
                 if is_connected:
                     ln = connected_ports[(host_id, name)]
                     peer_host_id = (
-                        ln.get("target_host_id")
-                        if ln.get("source_host_id") == host_id
-                        else ln.get("source_host_id")
+                        ln.get("target_host_id") if ln.get("source_host_id") == host_id else ln.get("source_host_id")
                     )
                     peer_if = (
                         ln.get("target_interface")
@@ -305,9 +306,7 @@ class PortHygieneRule(Rule):
                         else ln.get("source_interface")
                     )
                     if peer_host_id and peer_if:
-                        peer = await db.get_interface_inventory_by_name(
-                            int(peer_host_id), peer_if
-                        )
+                        peer = await db.get_interface_inventory_by_name(int(peer_host_id), peer_if)
                         if peer:
                             peer_speed = int(peer.get("speed_mbps") or 0)
                             peer_duplex = (peer.get("duplex") or "").lower()
@@ -316,35 +315,38 @@ class PortHygieneRule(Rule):
                             # answer that OID and shouldn't masquerade as a
                             # mismatch.
                             if (speed and peer_speed and speed != peer_speed) or (
-                                duplex and peer_duplex
+                                duplex
+                                and peer_duplex
                                 and duplex not in ("unknown", "")
                                 and peer_duplex not in ("unknown", "")
                                 and duplex != peer_duplex
                             ):
-                                findings.append(Finding(
-                                    rule_id="port.speed_duplex_mismatch",
-                                    category=self.category,
-                                    severity="medium",
-                                    title="Speed/duplex mismatch with peer",
-                                    detail=(
-                                        f"{hostname} {name} "
-                                        f"({speed}Mbps/{duplex or '?'}) "
-                                        f"vs peer {peer_if} "
-                                        f"({peer_speed}Mbps/{peer_duplex or '?'})."
-                                    ),
-                                    host_id=host_id,
-                                    cis_control=self.cis_control,
-                                    evidence={
-                                        "hostname": hostname,
-                                        "port": name,
-                                        "local_speed_mbps": speed,
-                                        "local_duplex": duplex,
-                                        "peer_host_id": int(peer_host_id),
-                                        "peer_port": peer_if,
-                                        "peer_speed_mbps": peer_speed,
-                                        "peer_duplex": peer_duplex,
-                                    },
-                                ))
+                                findings.append(
+                                    Finding(
+                                        rule_id="port.speed_duplex_mismatch",
+                                        category=self.category,
+                                        severity="medium",
+                                        title="Speed/duplex mismatch with peer",
+                                        detail=(
+                                            f"{hostname} {name} "
+                                            f"({speed}Mbps/{duplex or '?'}) "
+                                            f"vs peer {peer_if} "
+                                            f"({peer_speed}Mbps/{peer_duplex or '?'})."
+                                        ),
+                                        host_id=host_id,
+                                        cis_control=self.cis_control,
+                                        evidence={
+                                            "hostname": hostname,
+                                            "port": name,
+                                            "local_speed_mbps": speed,
+                                            "local_duplex": duplex,
+                                            "peer_host_id": int(peer_host_id),
+                                            "peer_port": peer_if,
+                                            "peer_speed_mbps": peer_speed,
+                                            "peer_duplex": peer_duplex,
+                                        },
+                                    )
+                                )
         return findings
 
 
@@ -354,6 +356,7 @@ class PortHygieneRule(Rule):
 # the VLANs they're allowed to carry. Missing definitions on one side
 # show up as "VLAN X allowed on trunk but not defined on peer", which is
 # a common cause of black-holed traffic across switch boundaries.
+
 
 class VlanConsistencyRule(Rule):
     rule_id = "vlan.consistency"
@@ -370,9 +373,7 @@ class VlanConsistencyRule(Rule):
         for host in ctx.hosts:
             host_id = int(host["id"])
             defs = await db.get_vlan_definitions_for_host(host_id)
-            defined_by_host[host_id] = {
-                int(d["vlan_id"]) for d in defs if d.get("vlan_id") is not None
-            }
+            defined_by_host[host_id] = {int(d["vlan_id"]) for d in defs if d.get("vlan_id") is not None}
 
         host_by_id = {int(h["id"]): h for h in ctx.hosts}
 
@@ -404,52 +405,56 @@ class VlanConsistencyRule(Rule):
 
             if src_orphans:
                 src_host = host_by_id.get(int(src_id), {})
-                findings.append(Finding(
-                    rule_id=self.rule_id,
-                    category=self.category,
-                    severity=self.default_severity,
-                    title="Trunk carries VLANs not defined on peer",
-                    detail=(
-                        f"{src_host.get('hostname', '')} {src_if} -> peer "
-                        f"{tgt_if}: VLAN(s) "
-                        f"{','.join(str(v) for v in src_orphans[:20])}"
-                        f"{'...' if len(src_orphans) > 20 else ''} "
-                        f"allowed on trunk but not defined on peer."
-                    ),
-                    host_id=int(src_id),
-                    cis_control=self.cis_control,
-                    evidence={
-                        "hostname": src_host.get("hostname", ""),
-                        "port": src_if,
-                        "peer_host_id": int(tgt_id),
-                        "peer_port": tgt_if,
-                        "orphan_vlans": src_orphans,
-                    },
-                ))
+                findings.append(
+                    Finding(
+                        rule_id=self.rule_id,
+                        category=self.category,
+                        severity=self.default_severity,
+                        title="Trunk carries VLANs not defined on peer",
+                        detail=(
+                            f"{src_host.get('hostname', '')} {src_if} -> peer "
+                            f"{tgt_if}: VLAN(s) "
+                            f"{','.join(str(v) for v in src_orphans[:20])}"
+                            f"{'...' if len(src_orphans) > 20 else ''} "
+                            f"allowed on trunk but not defined on peer."
+                        ),
+                        host_id=int(src_id),
+                        cis_control=self.cis_control,
+                        evidence={
+                            "hostname": src_host.get("hostname", ""),
+                            "port": src_if,
+                            "peer_host_id": int(tgt_id),
+                            "peer_port": tgt_if,
+                            "orphan_vlans": src_orphans,
+                        },
+                    )
+                )
             if tgt_orphans:
                 tgt_host = host_by_id.get(int(tgt_id), {})
-                findings.append(Finding(
-                    rule_id=self.rule_id,
-                    category=self.category,
-                    severity=self.default_severity,
-                    title="Trunk carries VLANs not defined on peer",
-                    detail=(
-                        f"{tgt_host.get('hostname', '')} {tgt_if} -> peer "
-                        f"{src_if}: VLAN(s) "
-                        f"{','.join(str(v) for v in tgt_orphans[:20])}"
-                        f"{'...' if len(tgt_orphans) > 20 else ''} "
-                        f"allowed on trunk but not defined on peer."
-                    ),
-                    host_id=int(tgt_id),
-                    cis_control=self.cis_control,
-                    evidence={
-                        "hostname": tgt_host.get("hostname", ""),
-                        "port": tgt_if,
-                        "peer_host_id": int(src_id),
-                        "peer_port": src_if,
-                        "orphan_vlans": tgt_orphans,
-                    },
-                ))
+                findings.append(
+                    Finding(
+                        rule_id=self.rule_id,
+                        category=self.category,
+                        severity=self.default_severity,
+                        title="Trunk carries VLANs not defined on peer",
+                        detail=(
+                            f"{tgt_host.get('hostname', '')} {tgt_if} -> peer "
+                            f"{src_if}: VLAN(s) "
+                            f"{','.join(str(v) for v in tgt_orphans[:20])}"
+                            f"{'...' if len(tgt_orphans) > 20 else ''} "
+                            f"allowed on trunk but not defined on peer."
+                        ),
+                        host_id=int(tgt_id),
+                        cis_control=self.cis_control,
+                        evidence={
+                            "hostname": tgt_host.get("hostname", ""),
+                            "port": tgt_if,
+                            "peer_host_id": int(src_id),
+                            "peer_port": src_if,
+                            "orphan_vlans": tgt_orphans,
+                        },
+                    )
+                )
         return findings
 
 
@@ -461,7 +466,7 @@ def _parse_vlan_csv(csv_value: str) -> set[int]:
             continue
         try:
             out.add(int(part))
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
     return out
 
@@ -563,9 +568,7 @@ class SecurityPostureRule(Rule):
                 # double-report. Just skip posture checks for this host.
                 continue
 
-            for suffix, (severity, title, pattern, requires_absence) in (
-                _SECURITY_PATTERNS.items()
-            ):
+            for suffix, (severity, title, pattern, requires_absence) in _SECURITY_PATTERNS.items():
                 match = pattern.search(config_text)
                 hit = (match is None) if requires_absence else (match is not None)
                 if not hit:
@@ -581,26 +584,26 @@ class SecurityPostureRule(Rule):
                         line_end = len(config_text)
                     # Redact the matched line so credentials/community
                     # strings don't leak into the findings table.
-                    evidence_line = redact_value(
-                        config_text[line_start:line_end].strip()
-                    )
+                    evidence_line = redact_value(config_text[line_start:line_end].strip())
 
-                findings.append(Finding(
-                    rule_id=f"{self.rule_id}.{suffix}",
-                    category=self.category,
-                    severity=severity,
-                    title=title,
-                    detail=(
-                        f"{host.get('hostname', '')}: {title.lower()}."
-                        + (f" Example: `{evidence_line}`" if evidence_line else "")
-                    ),
-                    host_id=host_id,
-                    cis_control=self.cis_control,
-                    evidence={
-                        "hostname": host.get("hostname", ""),
-                        "match_line": evidence_line,
-                    },
-                ))
+                findings.append(
+                    Finding(
+                        rule_id=f"{self.rule_id}.{suffix}",
+                        category=self.category,
+                        severity=severity,
+                        title=title,
+                        detail=(
+                            f"{host.get('hostname', '')}: {title.lower()}."
+                            + (f" Example: `{evidence_line}`" if evidence_line else "")
+                        ),
+                        host_id=host_id,
+                        cis_control=self.cis_control,
+                        evidence={
+                            "hostname": host.get("hostname", ""),
+                            "match_line": evidence_line,
+                        },
+                    )
+                )
         return findings
 
 
@@ -615,6 +618,7 @@ _RULE_REGISTRY: list[type[Rule]] = [
 
 
 # ── Orchestrator ────────────────────────────────────────────────────────────
+
 
 async def _persist_finding(run_id: int, finding: Finding) -> None:
     """Insert one finding row."""
@@ -729,13 +733,9 @@ async def run_audit(trigger: str = "manual", schedule_id: int | None = None) -> 
                 for f in findings:
                     ovr = _finding_is_overridden(f, overrides, now_utc)
                     if ovr is not None:
-                        suppressed_by_rule[f.rule_id] = (
-                            suppressed_by_rule.get(f.rule_id, 0) + 1
-                        )
+                        suppressed_by_rule[f.rule_id] = suppressed_by_rule.get(f.rule_id, 0) + 1
                         mode = str(ovr.get("mode") or "mute")
-                        suppressed_by_mode[mode] = (
-                            suppressed_by_mode.get(mode, 0) + 1
-                        )
+                        suppressed_by_mode[mode] = suppressed_by_mode.get(mode, 0) + 1
                         continue
                     severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
                     await _persist_finding(run_id, f)
@@ -791,6 +791,7 @@ async def run_audit(trigger: str = "manual", schedule_id: int | None = None) -> 
 
 # ── Background loop ─────────────────────────────────────────────────────────
 
+
 async def _audit_run_loop() -> None:
     """Background polling loop for on-demand and scheduled audit runs.
 
@@ -810,9 +811,7 @@ async def _audit_run_loop() -> None:
             try:
                 await _enqueue_due_scheduled_runs()
             except Exception as exc:
-                LOGGER.warning(
-                    "audit schedule sweep failed: %s", redact_value(str(exc))
-                )
+                LOGGER.warning("audit schedule sweep failed: %s", redact_value(str(exc)))
                 increment_metric("audit.schedule.failed")
             queued = await _claim_queued_run()
             if queued is not None:
@@ -831,17 +830,13 @@ async def _claim_queued_run() -> int | None:
     """Atomically grab the oldest queued audit run, transition to running."""
     conn = await db.get_db()
     try:
-        cursor = await conn.execute(
-            "SELECT id FROM audit_runs WHERE status = 'queued' "
-            "ORDER BY id ASC LIMIT 1"
-        )
+        cursor = await conn.execute("SELECT id FROM audit_runs WHERE status = 'queued' ORDER BY id ASC LIMIT 1")
         row = await cursor.fetchone()
         if row is None:
             return None
         run_id = int(row[0])
         update_cursor = await conn.execute(
-            "UPDATE audit_runs SET status = 'running', started_at = datetime('now') "
-            "WHERE id = ? AND status = 'queued'",
+            "UPDATE audit_runs SET status = 'running', started_at = datetime('now') WHERE id = ? AND status = 'queued'",
             (run_id,),
         )
         await conn.commit()
@@ -857,8 +852,14 @@ async def _claim_queued_run() -> int | None:
 # ── Schedule helpers ────────────────────────────────────────────────────────
 
 _SCHEDULE_COLS = (
-    "id", "name", "schedule", "enabled",
-    "last_run_at", "created_by", "created_at", "updated_at",
+    "id",
+    "name",
+    "schedule",
+    "enabled",
+    "last_run_at",
+    "created_by",
+    "created_at",
+    "updated_at",
 )
 
 
@@ -886,10 +887,7 @@ def _is_schedule_due(schedule_row: dict, now_utc: datetime) -> bool:
 async def _list_schedules() -> list[dict]:
     conn = await db.get_db()
     try:
-        cursor = await conn.execute(
-            f"SELECT {', '.join(_SCHEDULE_COLS)} FROM audit_schedules "
-            "ORDER BY id DESC"
-        )
+        cursor = await conn.execute(f"SELECT {', '.join(_SCHEDULE_COLS)} FROM audit_schedules ORDER BY id DESC")
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         return [_row_to_schedule(r, cols) for r in rows]
@@ -901,8 +899,7 @@ async def _get_schedule(schedule_id: int) -> dict | None:
     conn = await db.get_db()
     try:
         cursor = await conn.execute(
-            f"SELECT {', '.join(_SCHEDULE_COLS)} FROM audit_schedules "
-            "WHERE id = ?",
+            f"SELECT {', '.join(_SCHEDULE_COLS)} FROM audit_schedules WHERE id = ?",
             (schedule_id,),
         )
         row = await cursor.fetchone()
@@ -914,9 +911,7 @@ async def _get_schedule(schedule_id: int) -> dict | None:
         await conn.close()
 
 
-async def _create_schedule(
-    name: str, schedule: str, enabled: bool, created_by: str
-) -> dict:
+async def _create_schedule(name: str, schedule: str, enabled: bool, created_by: str) -> dict:
     conn = await db.get_db()
     try:
         cursor = await conn.execute(
@@ -967,9 +962,7 @@ async def _update_schedule(
 async def _delete_schedule(schedule_id: int) -> bool:
     conn = await db.get_db()
     try:
-        cursor = await conn.execute(
-            "DELETE FROM audit_schedules WHERE id = ?", (schedule_id,)
-        )
+        cursor = await conn.execute("DELETE FROM audit_schedules WHERE id = ?", (schedule_id,))
         await conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -980,8 +973,7 @@ async def _mark_schedule_ran(schedule_id: int, when: datetime) -> None:
     conn = await db.get_db()
     try:
         await conn.execute(
-            "UPDATE audit_schedules SET last_run_at = ?, "
-            "updated_at = datetime('now') WHERE id = ?",
+            "UPDATE audit_schedules SET last_run_at = ?, updated_at = datetime('now') WHERE id = ?",
             (when.strftime("%Y-%m-%d %H:%M:%S"), schedule_id),
         )
         await conn.commit()
@@ -1024,7 +1016,8 @@ async def _enqueue_due_scheduled_runs() -> int:
         enqueued += 1
         LOGGER.info(
             "audit schedule %d (%s) due; enqueued run",
-            sid, sched.get("name") or "",
+            sid,
+            sched.get("name") or "",
         )
     if enqueued:
         increment_metric("audit.schedule.enqueued")
@@ -1051,20 +1044,18 @@ async def _execute_existing_run(run_id: int, trigger: str) -> None:
                 for f in findings:
                     ovr = _finding_is_overridden(f, overrides, now_utc)
                     if ovr is not None:
-                        suppressed_by_rule[f.rule_id] = (
-                            suppressed_by_rule.get(f.rule_id, 0) + 1
-                        )
+                        suppressed_by_rule[f.rule_id] = suppressed_by_rule.get(f.rule_id, 0) + 1
                         mode = str(ovr.get("mode") or "mute")
-                        suppressed_by_mode[mode] = (
-                            suppressed_by_mode.get(mode, 0) + 1
-                        )
+                        suppressed_by_mode[mode] = suppressed_by_mode.get(mode, 0) + 1
                         continue
                     severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
                     await _persist_finding(run_id, f)
             except Exception as exc:
                 LOGGER.warning(
                     "audit rule %s failed in run %d: %s",
-                    rule.rule_id, run_id, redact_value(str(exc)),
+                    rule.rule_id,
+                    run_id,
+                    redact_value(str(exc)),
                 )
                 rules_failed[rule.rule_id] = str(exc)[:500]
         suppressed_total = sum(suppressed_by_rule.values())
@@ -1138,10 +1129,19 @@ async def list_audit_runs(
         )
         rows = await cursor.fetchall()
         cols = [
-            "id", "status", "trigger", "schedule_id", "started_at",
-            "finished_at", "host_count",
-            "findings_total", "findings_critical", "findings_high",
-            "findings_medium", "findings_low", "findings_info",
+            "id",
+            "status",
+            "trigger",
+            "schedule_id",
+            "started_at",
+            "finished_at",
+            "host_count",
+            "findings_total",
+            "findings_critical",
+            "findings_high",
+            "findings_medium",
+            "findings_low",
+            "findings_info",
         ]
         return {"runs": [dict(zip(cols, r)) for r in rows]}
     finally:
@@ -1152,9 +1152,7 @@ async def list_audit_runs(
 async def get_audit_run_detail(run_id: int):
     conn = await db.get_db()
     try:
-        cursor = await conn.execute(
-            "SELECT * FROM audit_runs WHERE id = ?", (run_id,)
-        )
+        cursor = await conn.execute("SELECT * FROM audit_runs WHERE id = ?", (run_id,))
         row = await cursor.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="audit run not found")
@@ -1190,8 +1188,7 @@ async def list_audit_findings(
         sql = (
             "SELECT id, run_id, host_id, rule_id, category, severity, "
             "cis_control, title, detail, evidence_json, created_at "
-            "FROM audit_findings WHERE " + " AND ".join(clauses) +
-            " ORDER BY CASE severity "
+            "FROM audit_findings WHERE " + " AND ".join(clauses) + " ORDER BY CASE severity "
             "  WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
             "  WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, id ASC"
         )
@@ -1224,8 +1221,7 @@ def _validate_schedule_payload(name: str, schedule: str) -> None:
     if sch and _parse_schedule_interval_seconds(sch) is None:
         raise HTTPException(
             status_code=400,
-            detail="schedule must be one of @hourly|@daily|@weekly|@monthly "
-                   "or '<N><s|m|h|d|w>' (e.g. 30m, 6h, 1d)",
+            detail="schedule must be one of @hourly|@daily|@weekly|@monthly or '<N><s|m|h|d|w>' (e.g. 30m, 6h, 1d)",
         )
 
 
@@ -1263,9 +1259,7 @@ async def update_audit_schedule(schedule_id: int, payload: dict = Body(...)):
     # Validate the resulting state (use existing values for fields the
     # client didn't send).
     eff_name = str(new_name if new_name is not None else existing["name"])
-    eff_schedule = str(
-        new_schedule if new_schedule is not None else existing["schedule"]
-    )
+    eff_schedule = str(new_schedule if new_schedule is not None else existing["schedule"])
     _validate_schedule_payload(eff_name, eff_schedule)
     return await _update_schedule(
         schedule_id,
@@ -1306,8 +1300,14 @@ async def run_schedule_now(schedule_id: int):
 _OVERRIDE_MODES = ("mute", "accept_risk")
 
 _OVERRIDE_COLS = (
-    "id", "rule_id", "host_id", "mode", "reason",
-    "created_by", "created_at", "expires_at",
+    "id",
+    "rule_id",
+    "host_id",
+    "mode",
+    "reason",
+    "created_by",
+    "created_at",
+    "expires_at",
 )
 
 
@@ -1329,7 +1329,9 @@ def _override_is_active(ovr: dict, now_utc: datetime) -> bool:
 
 
 def _finding_is_overridden(
-    finding: Finding, overrides: list[dict], now_utc: datetime,
+    finding: Finding,
+    overrides: list[dict],
+    now_utc: datetime,
 ) -> dict | None:
     """Return the active override matching this finding, if any.
 
@@ -1353,10 +1355,7 @@ def _finding_is_overridden(
 async def _list_overrides() -> list[dict]:
     conn = await db.get_db()
     try:
-        cursor = await conn.execute(
-            f"SELECT {', '.join(_OVERRIDE_COLS)} FROM audit_rule_overrides "
-            "ORDER BY id DESC"
-        )
+        cursor = await conn.execute(f"SELECT {', '.join(_OVERRIDE_COLS)} FROM audit_rule_overrides ORDER BY id DESC")
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         return [_row_to_override(r, cols) for r in rows]
@@ -1368,8 +1367,7 @@ async def _get_override(override_id: int) -> dict | None:
     conn = await db.get_db()
     try:
         cursor = await conn.execute(
-            f"SELECT {', '.join(_OVERRIDE_COLS)} FROM audit_rule_overrides "
-            "WHERE id = ?",
+            f"SELECT {', '.join(_OVERRIDE_COLS)} FROM audit_rule_overrides WHERE id = ?",
             (override_id,),
         )
         row = await cursor.fetchone()
@@ -1407,9 +1405,7 @@ async def _create_override(
 async def _delete_override(override_id: int) -> bool:
     conn = await db.get_db()
     try:
-        cursor = await conn.execute(
-            "DELETE FROM audit_rule_overrides WHERE id = ?", (override_id,)
-        )
+        cursor = await conn.execute("DELETE FROM audit_rule_overrides WHERE id = ?", (override_id,))
         await conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -1417,11 +1413,14 @@ async def _delete_override(override_id: int) -> bool:
 
 
 def _validate_override_payload(
-    rule_id: str, mode: str, expires_at: str | None,
+    rule_id: str,
+    mode: str,
+    expires_at: str | None,
 ) -> None:
     if not rule_id or len(rule_id) > 200:
         raise HTTPException(
-            status_code=400, detail="rule_id must be 1-200 chars",
+            status_code=400,
+            detail="rule_id must be 1-200 chars",
         )
     if mode not in _OVERRIDE_MODES:
         raise HTTPException(
@@ -1432,8 +1431,7 @@ def _validate_override_payload(
         if _parse_db_datetime_utc(expires_at) is None:
             raise HTTPException(
                 status_code=400,
-                detail="expires_at must be ISO-8601 ('YYYY-MM-DD HH:MM:SS' or "
-                       "'YYYY-MM-DDTHH:MM:SSZ')",
+                detail="expires_at must be ISO-8601 ('YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DDTHH:MM:SSZ')",
             )
 
 
@@ -1494,6 +1492,7 @@ async def delete_audit_override(override_id: int):
 # collector (folded into the topology discovery loop). The data is general-
 # purpose -- exposing it via thin GETs lets the topology view's NodeDetails
 # pane render the same data without joining through a rule run.
+
 
 @router.get("/api/hosts/{host_id}/interface-inventory")
 async def list_host_interface_inventory(host_id: int):
@@ -1563,9 +1562,7 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
         )
         for row in await cursor.fetchall():
             hid = row[0]
-            entry = roles.setdefault(
-                hid, {"host_id": hid, "hostname": row[2], "roles": [], "ports": []}
-            )
+            entry = roles.setdefault(hid, {"host_id": hid, "hostname": row[2], "roles": [], "ports": []})
             if "definition" not in entry["roles"]:
                 entry["roles"].append("definition")
             if row[1]:
@@ -1579,9 +1576,7 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
         )
         for row in await cursor.fetchall():
             hid = row[0]
-            entry = roles.setdefault(
-                hid, {"host_id": hid, "hostname": row[2], "roles": [], "ports": []}
-            )
+            entry = roles.setdefault(hid, {"host_id": hid, "hostname": row[2], "roles": [], "ports": []})
             if "access" not in entry["roles"]:
                 entry["roles"].append("access")
             entry["ports"].append({"name": row[1], "kind": "access"})
@@ -1598,9 +1593,7 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
             if target not in members:
                 continue
             hid = row[0]
-            entry = roles.setdefault(
-                hid, {"host_id": hid, "hostname": row[3], "roles": [], "ports": []}
-            )
+            entry = roles.setdefault(hid, {"host_id": hid, "hostname": row[3], "roles": [], "ports": []})
             if "trunk" not in entry["roles"]:
                 entry["roles"].append("trunk")
             entry["ports"].append({"name": row[1], "kind": "trunk"})
@@ -1617,6 +1610,7 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
 # (drift events, audit findings, interface error events). Bundling avoids
 # N+1 round-trips when the graph has 50+ nodes.
 
+
 @router.get("/api/topology/overlay/status")
 async def topology_overlay_status():
     """Return per-host status badges for the topology status overlay.
@@ -1632,10 +1626,7 @@ async def topology_overlay_status():
     try:
         # Latest audit run -- findings from earlier runs are stale for badge
         # purposes (a fix in a later run should clear the badge).
-        cursor = await conn.execute(
-            "SELECT id FROM audit_runs WHERE status = 'completed' "
-            "ORDER BY id DESC LIMIT 1"
-        )
+        cursor = await conn.execute("SELECT id FROM audit_runs WHERE status = 'completed' ORDER BY id DESC LIMIT 1")
         row = await cursor.fetchone()
         latest_run_id = row[0] if row else None
 
@@ -1655,8 +1646,7 @@ async def topology_overlay_status():
             )
 
         cursor = await conn.execute(
-            "SELECT host_id, COUNT(*) FROM config_drift_events "
-            "WHERE status = 'open' GROUP BY host_id"
+            "SELECT host_id, COUNT(*) FROM config_drift_events WHERE status = 'open' GROUP BY host_id"
         )
         for hid, n in await cursor.fetchall():
             slot(hid)["drift_open"] = n
@@ -1669,7 +1659,11 @@ async def topology_overlay_status():
                 (latest_run_id,),
             )
             severity_rank = {
-                "critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4,
+                "critical": 0,
+                "high": 1,
+                "medium": 2,
+                "low": 3,
+                "info": 4,
             }
             for hid, sev, n in await cursor.fetchall():
                 entry = slot(hid)

@@ -71,7 +71,7 @@ def _first(obj: Any, *paths: Any, cast: Any = None) -> Any:
             return val
         try:
             return cast(val)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
     return None
 
@@ -79,7 +79,7 @@ def _first(obj: Any, *paths: Any, cast: Any = None) -> Any:
 def _to_float(val: Any) -> float | None:
     try:
         return float(val)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -168,10 +168,12 @@ def _extract_interfaces(metrics: dict) -> tuple[int, int, int, list[dict]]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        name = (item.get("name") or item.get("ifName")
-                or item.get("hardwareName") or item.get("interface") or "")
-        oper = str(item.get("operStatus") or item.get("linkState")
-                   or item.get("linkStatus") or item.get("status") or "").strip().lower()
+        name = item.get("name") or item.get("ifName") or item.get("hardwareName") or item.get("interface") or ""
+        oper = (
+            str(item.get("operStatus") or item.get("linkState") or item.get("linkStatus") or item.get("status") or "")
+            .strip()
+            .lower()
+        )
         admin_raw = item.get("adminStatus")
         if admin_raw is None:
             admin_raw = item.get("enabled")
@@ -184,11 +186,13 @@ def _extract_interfaces(metrics: dict) -> tuple[int, int, int, list[dict]]:
             up += 1
         else:
             down += 1
-        details.append({
-            "name": str(name),
-            "oper_status": "up" if is_up else "down",
-            "admin_status": "up" if admin_up is not False else "down",
-        })
+        details.append(
+            {
+                "name": str(name),
+                "oper_status": "up" if is_up else "down",
+                "admin_status": "up" if admin_up is not False else "down",
+            }
+        )
     return up, down, admin_down, details
 
 

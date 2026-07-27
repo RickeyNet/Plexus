@@ -27,6 +27,7 @@ Endpoints exposed (registered by app.py):
     GET  /api/lab/devices/{id}/runtime/events
     POST /api/lab/devices/{id}/simulate-live
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -70,21 +71,23 @@ LOGGER = configure_logging("plexus.lab_runtime")
 # operators to use. Extending this list is intentional: every entry must be a
 # known containerlab kind so the generated topology validates without shelling
 # out additional syntax.
-ALLOWED_NODE_KINDS = frozenset({
-    "linux",
-    "ceos",            # Arista cEOS-Lab (free with Arista account)
-    "srl",             # Nokia SR Linux
-    "nokia_srlinux",   # alias accepted by containerlab
-    "arista_ceos",     # alias accepted by containerlab
-    "cvx",             # Cumulus VX
-    "frr",             # FRRouting
-    "sonic-vs",        # SONiC virtual switch
-    "vr-veos",         # vrnetlab Arista vEOS
-    "vr-csr",          # vrnetlab Cisco CSR
-    "vr-xrv9k",        # vrnetlab Cisco XRv9k
-    "vr-vmx",          # vrnetlab Juniper vMX
-    "vr-sros",         # vrnetlab Nokia SR OS
-})
+ALLOWED_NODE_KINDS = frozenset(
+    {
+        "linux",
+        "ceos",  # Arista cEOS-Lab (free with Arista account)
+        "srl",  # Nokia SR Linux
+        "nokia_srlinux",  # alias accepted by containerlab
+        "arista_ceos",  # alias accepted by containerlab
+        "cvx",  # Cumulus VX
+        "frr",  # FRRouting
+        "sonic-vs",  # SONiC virtual switch
+        "vr-veos",  # vrnetlab Arista vEOS
+        "vr-csr",  # vrnetlab Cisco CSR
+        "vr-xrv9k",  # vrnetlab Cisco XRv9k
+        "vr-vmx",  # vrnetlab Juniper vMX
+        "vr-sros",  # vrnetlab Nokia SR OS
+    }
+)
 
 # Container image references: registry/path[:tag][@digest] limited to a safe
 # subset (no spaces, shell metacharacters, or relative path tricks).
@@ -127,7 +130,8 @@ def _slug(value: str, fallback: str) -> str:
 async def _run_containerlab(args: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
     """Run `containerlab <args>` and return (returncode, stdout, stderr)."""
     proc = await asyncio.create_subprocess_exec(
-        "containerlab", *args,
+        "containerlab",
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(cwd) if cwd else None,
@@ -176,14 +180,7 @@ def _build_topology_yaml(*, lab_name: str, node_name: str, kind: str, image: str
     """Render a minimal single-node containerlab topology file."""
     # Nothing here is operator-controlled in a way that escapes YAML syntax -
     # all four fields have already been validated against strict regex/allowlist.
-    return (
-        f"name: {lab_name}\n"
-        "topology:\n"
-        "  nodes:\n"
-        f"    {node_name}:\n"
-        f"      kind: {kind}\n"
-        f"      image: {image}\n"
-    )
+    return f"name: {lab_name}\ntopology:\n  nodes:\n    {node_name}:\n      kind: {kind}\n      image: {image}\n"
 
 
 async def _inspect_lab(workdir: Path) -> dict | None:
@@ -192,7 +189,8 @@ async def _inspect_lab(workdir: Path) -> dict | None:
     if not topo.is_file():
         return None
     rc, stdout, stderr = await _run_containerlab(
-        ["inspect", "-t", str(topo), "--format", "json"], cwd=workdir,
+        ["inspect", "-t", str(topo), "--format", "json"],
+        cwd=workdir,
     )
     if rc != 0:
         LOGGER.debug("inspect failed (rc=%s): %s", rc, stderr.strip())
@@ -265,9 +263,14 @@ async def deploy_lab_device(
     workdir = _device_workdir(device)
     workdir.mkdir(parents=True, exist_ok=True)
     topo = workdir / "topology.clab.yml"
-    topo.write_text(_build_topology_yaml(
-        lab_name=lab_name, node_name=node_name, kind=node_kind, image=image,
-    ))
+    topo.write_text(
+        _build_topology_yaml(
+            lab_name=lab_name,
+            node_name=node_name,
+            kind=node_kind,
+            image=image,
+        )
+    )
 
     await db.update_lab_device_runtime(
         device["id"],
@@ -290,10 +293,16 @@ async def deploy_lab_device(
         if rc != 0:
             msg = (stderr or stdout).strip()[:500] or f"containerlab deploy exited rc={rc}"
             await db.update_lab_device_runtime(
-                device["id"], runtime_status="error", runtime_error=msg,
+                device["id"],
+                runtime_status="error",
+                runtime_error=msg,
             )
             await db.add_lab_runtime_event(
-                device["id"], action="deploy", status="error", actor=actor, detail=msg,
+                device["id"],
+                action="deploy",
+                status="error",
+                actor=actor,
+                detail=msg,
             )
             raise HTTPException(status_code=500, detail=msg)
 
@@ -316,14 +325,23 @@ async def deploy_lab_device(
         # deploys via the topology file.
         msg = f"deploy failed: {exc}"[:500]
         await db.update_lab_device_runtime(
-            device["id"], runtime_status="error", runtime_error=msg,
+            device["id"],
+            runtime_status="error",
+            runtime_error=msg,
         )
         await db.add_lab_runtime_event(
-            device["id"], action="deploy", status="error", actor=actor, detail=msg,
+            device["id"],
+            action="deploy",
+            status="error",
+            actor=actor,
+            detail=msg,
         )
         raise HTTPException(status_code=500, detail=msg) from exc
     await db.add_lab_runtime_event(
-        device["id"], action="deploy", status="ok", actor=actor,
+        device["id"],
+        action="deploy",
+        status="ok",
+        actor=actor,
         detail=f"node={node_name} mgmt={mgmt_ipv4 or 'unknown'}",
     )
     return {
@@ -354,10 +372,15 @@ async def destroy_lab_device(device: dict, *, actor: str = "") -> dict:
     if not topo.is_file():
         # Nothing on disk to destroy. Just clear status.
         await db.update_lab_device_runtime(
-            device["id"], runtime_status="destroyed", runtime_mgmt_address="",
+            device["id"],
+            runtime_status="destroyed",
+            runtime_mgmt_address="",
         )
         await db.add_lab_runtime_event(
-            device["id"], action="destroy", status="ok", actor=actor,
+            device["id"],
+            action="destroy",
+            status="ok",
+            actor=actor,
             detail="no topology on disk; cleared runtime state",
         )
         return {"status": "destroyed", "reason": "no_topology"}
@@ -367,10 +390,15 @@ async def destroy_lab_device(device: dict, *, actor: str = "") -> dict:
         # Mark as destroyed locally even if we can't reach the binary, so the
         # operator can manually clean up. Surface a warning event.
         await db.update_lab_device_runtime(
-            device["id"], runtime_status="destroyed", runtime_mgmt_address="",
+            device["id"],
+            runtime_status="destroyed",
+            runtime_mgmt_address="",
         )
         await db.add_lab_runtime_event(
-            device["id"], action="destroy", status="error", actor=actor,
+            device["id"],
+            action="destroy",
+            status="error",
+            actor=actor,
             detail=f"containerlab unavailable; manual cleanup required: {runtime_status.get('reason')}",
         )
         return {"status": "destroyed", "reason": "containerlab_unavailable"}
@@ -382,10 +410,16 @@ async def destroy_lab_device(device: dict, *, actor: str = "") -> dict:
     if rc != 0:
         msg = (stderr or stdout).strip()[:500] or f"containerlab destroy exited rc={rc}"
         await db.update_lab_device_runtime(
-            device["id"], runtime_status="error", runtime_error=msg,
+            device["id"],
+            runtime_status="error",
+            runtime_error=msg,
         )
         await db.add_lab_runtime_event(
-            device["id"], action="destroy", status="error", actor=actor, detail=msg,
+            device["id"],
+            action="destroy",
+            status="error",
+            actor=actor,
+            detail=msg,
         )
         raise HTTPException(status_code=500, detail=msg)
 
@@ -398,7 +432,10 @@ async def destroy_lab_device(device: dict, *, actor: str = "") -> dict:
     )
     removed = await _remove_workdir(workdir)
     await db.add_lab_runtime_event(
-        device["id"], action="destroy", status="ok", actor=actor,
+        device["id"],
+        action="destroy",
+        status="ok",
+        actor=actor,
         detail="destroyed; workdir removed" if removed else "destroyed",
     )
     return {"status": "destroyed", "workdir_removed": removed}
@@ -410,14 +447,19 @@ async def refresh_lab_device(device: dict, *, actor: str = "") -> dict:
     topo = workdir / "topology.clab.yml"
     if not topo.is_file():
         await db.update_lab_device_runtime(
-            device["id"], runtime_status="destroyed", runtime_mgmt_address="",
+            device["id"],
+            runtime_status="destroyed",
+            runtime_mgmt_address="",
         )
         return {"status": "destroyed", "reason": "no_topology"}
 
     runtime_status = await get_runtime_status()
     if not runtime_status["available"]:
         await db.add_lab_runtime_event(
-            device["id"], action="refresh", status="error", actor=actor,
+            device["id"],
+            action="refresh",
+            status="error",
+            actor=actor,
             detail=f"containerlab unavailable: {runtime_status.get('reason')}",
         )
         return {"status": device.get("runtime_status") or "unknown", "reason": "containerlab_unavailable"}
@@ -425,10 +467,15 @@ async def refresh_lab_device(device: dict, *, actor: str = "") -> dict:
     inspect_doc = await _inspect_lab(workdir)
     if not inspect_doc:
         await db.update_lab_device_runtime(
-            device["id"], runtime_status="stopped", runtime_mgmt_address="",
+            device["id"],
+            runtime_status="stopped",
+            runtime_mgmt_address="",
         )
         await db.add_lab_runtime_event(
-            device["id"], action="refresh", status="ok", actor=actor,
+            device["id"],
+            action="refresh",
+            status="ok",
+            actor=actor,
             detail="no containers running for this topology",
         )
         return {"status": "stopped"}
@@ -436,10 +483,15 @@ async def refresh_lab_device(device: dict, *, actor: str = "") -> dict:
     node_name = device.get("runtime_node_name") or _slug(device.get("hostname") or "node", "node")
     mgmt_ipv4 = _extract_mgmt_ipv4(inspect_doc, node_name)
     await db.update_lab_device_runtime(
-        device["id"], runtime_status="running", runtime_mgmt_address=mgmt_ipv4,
+        device["id"],
+        runtime_status="running",
+        runtime_mgmt_address=mgmt_ipv4,
     )
     await db.add_lab_runtime_event(
-        device["id"], action="refresh", status="ok", actor=actor,
+        device["id"],
+        action="refresh",
+        status="ok",
+        actor=actor,
         detail=f"mgmt={mgmt_ipv4 or 'unknown'}",
     )
     return {"status": "running", "mgmt_ipv4": mgmt_ipv4}
@@ -511,7 +563,8 @@ async def deploy_endpoint(device_id: int, body: DeployRequest, request: Request)
         actor=actor,
     )
     await _audit(
-        "lab", "runtime.deploy",
+        "lab",
+        "runtime.deploy",
         user=actor,
         detail=f"device={device_id} kind={body.node_kind} image={body.image}",
         correlation_id=_corr_id(request),
@@ -525,8 +578,10 @@ async def destroy_endpoint(device_id: int, request: Request):
     actor = session["user"] if session else ""
     result = await destroy_lab_device(device, actor=actor)
     await _audit(
-        "lab", "runtime.destroy",
-        user=actor, detail=f"device={device_id}",
+        "lab",
+        "runtime.destroy",
+        user=actor,
+        detail=f"device={device_id}",
         correlation_id=_corr_id(request),
     )
     return result
@@ -547,7 +602,9 @@ async def events_endpoint(device_id: int, request: Request, limit: int = 50):
 
 @router.post("/api/lab/devices/{device_id}/simulate-live")
 async def simulate_live_endpoint(
-    device_id: int, body: SimulateLiveRequest, request: Request,
+    device_id: int,
+    body: SimulateLiveRequest,
+    request: Request,
 ):
     """Push commands to a running containerlab device, capture real running-config back.
 
@@ -584,15 +641,23 @@ async def simulate_live_endpoint(
     push_output, post_config = await push_commands_live(device, commands, credentials)
 
     diff_text, diff_added, diff_removed = _compute_config_diff(
-        pre_config, post_config,
-        baseline_label="lab-pre", actual_label="lab-post-live",
+        pre_config,
+        post_config,
+        baseline_label="lab-pre",
+        actual_label="lab-post-live",
     )
     affected_areas = _classify_change_areas(commands)
     compliance_violations, compliance_impact = await _evaluate_compliance_impact(
-        device, pre_config, post_config,
+        device,
+        pre_config,
+        post_config,
     )
     risk_score, risk_level = _compute_risk_score(
-        commands, affected_areas, diff_added, diff_removed, compliance_violations,
+        commands,
+        affected_areas,
+        diff_added,
+        diff_removed,
+        compliance_violations,
     )
     risk_detail = {
         "change_volume": {
@@ -607,9 +672,7 @@ async def simulate_live_endpoint(
         "live": True,
     }
     if compliance_violations > 0:
-        risk_detail["risk_factors"].append(
-            f"Introduces {compliance_violations} new compliance violation(s)"
-        )
+        risk_detail["risk_factors"].append(f"Introduces {compliance_violations} new compliance violation(s)")
 
     # Persist the new running-config back to the twin's snapshot so subsequent
     # Phase A simulations operate against the real post-state.
@@ -630,11 +693,15 @@ async def simulate_live_endpoint(
         status="applied-live",
     )
     await db.add_lab_runtime_event(
-        device["id"], action="simulate-live", status="ok", actor=actor,
+        device["id"],
+        action="simulate-live",
+        status="ok",
+        actor=actor,
         detail=f"run={run_id} +{diff_added}/-{diff_removed}",
     )
     await _audit(
-        "lab", "runtime.simulate_live",
+        "lab",
+        "runtime.simulate_live",
         user=actor,
         detail=f"device={device_id} run={run_id} risk={risk_level}",
         correlation_id=_corr_id(request),
@@ -729,10 +796,15 @@ async def reconcile_running_labs() -> dict:
         topo = workdir / "topology.clab.yml"
         if not topo.is_file():
             await db.update_lab_device_runtime(
-                row["id"], runtime_status="stopped", runtime_mgmt_address="",
+                row["id"],
+                runtime_status="stopped",
+                runtime_mgmt_address="",
             )
             await db.add_lab_runtime_event(
-                row["id"], action="reconcile", status="ok", actor="system",
+                row["id"],
+                action="reconcile",
+                status="ok",
+                actor="system",
                 detail="topology workdir missing; marked stopped",
             )
             summary["marked_stopped"] += 1
@@ -742,15 +814,22 @@ async def reconcile_running_labs() -> dict:
         mgmt_ipv4 = _extract_mgmt_ipv4(inspect_doc or {}, node_name)
         if inspect_doc and mgmt_ipv4:
             await db.update_lab_device_runtime(
-                row["id"], runtime_status="running", runtime_mgmt_address=mgmt_ipv4,
+                row["id"],
+                runtime_status="running",
+                runtime_mgmt_address=mgmt_ipv4,
             )
             summary["still_running"] += 1
         else:
             await db.update_lab_device_runtime(
-                row["id"], runtime_status="stopped", runtime_mgmt_address="",
+                row["id"],
+                runtime_status="stopped",
+                runtime_mgmt_address="",
             )
             await db.add_lab_runtime_event(
-                row["id"], action="reconcile", status="ok", actor="system",
+                row["id"],
+                action="reconcile",
+                status="ok",
+                actor="system",
                 detail="containerlab no longer reports the node",
             )
             summary["marked_stopped"] += 1
@@ -784,15 +863,20 @@ async def reap_idle_runtimes(now: datetime | None = None) -> dict:
         except HTTPException as exc:
             summary["errors"] += 1
             await db.add_lab_runtime_event(
-                row["id"], action="ttl-destroy", status="error",
+                row["id"],
+                action="ttl-destroy",
+                status="error",
                 actor="system-ttl",
                 detail=str(exc.detail)[:300] if hasattr(exc, "detail") else str(exc),
             )
         except Exception as exc:
             summary["errors"] += 1
             await db.add_lab_runtime_event(
-                row["id"], action="ttl-destroy", status="error",
-                actor="system-ttl", detail=str(exc)[:300],
+                row["id"],
+                action="ttl-destroy",
+                status="error",
+                actor="system-ttl",
+                detail=str(exc)[:300],
             )
     return summary
 

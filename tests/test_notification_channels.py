@@ -15,6 +15,7 @@ Covers:
   * email delivery builds a MIME message and calls the SMTP path
   * send_test_event delivers a synthetic probe
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +34,7 @@ async def _clean_dispatcher():
 
 
 # ── Local HTTP capture listener ──────────────────────────────────────────────
+
 
 class _HttpCapture:
     """Minimal HTTP/1.1 server that captures one JSON body per request and
@@ -73,10 +75,7 @@ class _HttpCapture:
         except Exception as exc:  # pragma: no cover - defensive
             self.bodies.append({"_err": str(exc)})
         finally:
-            writer.write(
-                f"HTTP/1.1 {self.status} OK\r\nContent-Length: 1\r\n"
-                f"Connection: close\r\n\r\n1".encode()
-            )
+            writer.write(f"HTTP/1.1 {self.status} OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n1".encode())
             try:
                 await writer.drain()
             except Exception:
@@ -110,6 +109,7 @@ async def _wait(predicate, timeout_s: float = 3.0) -> bool:
 
 # ── Validation / sanitization ────────────────────────────────────────────────
 
+
 def test_sanitize_rejects_unknown_type():
     assert nc.sanitize_channel({"id": "x", "type": "carrier-pigeon"}) is None
 
@@ -123,9 +123,9 @@ def test_sanitize_rejects_pagerduty_without_key():
 
 
 def test_sanitize_rejects_email_without_recipients():
-    assert nc.sanitize_channel(
-        {"id": "x", "type": "email", "smtp_host": "h", "mail_from": "a@b.c", "mail_to": ""}
-    ) is None
+    assert (
+        nc.sanitize_channel({"id": "x", "type": "email", "smtp_host": "h", "mail_from": "a@b.c", "mail_to": ""}) is None
+    )
 
 
 def test_sanitize_rejects_teams_without_url():
@@ -136,37 +136,45 @@ def test_sanitize_accepts_each_type():
     assert nc.sanitize_channel({"id": "w", "type": "webhook", "webhook_url": "https://x/h"})
     assert nc.sanitize_channel({"id": "p", "type": "pagerduty", "routing_key": "k"})
     assert nc.sanitize_channel({"id": "t", "type": "teams", "teams_webhook_url": "https://t/h"})
-    assert nc.sanitize_channel(
-        {"id": "e", "type": "email", "smtp_host": "h", "mail_from": "a@b.c", "mail_to": "x@y.z"}
-    )
+    assert nc.sanitize_channel({"id": "e", "type": "email", "smtp_host": "h", "mail_from": "a@b.c", "mail_to": "x@y.z"})
 
 
 def test_sanitize_clamps_numeric_ranges():
-    cfg = nc.sanitize_channel({
-        "id": "w", "type": "webhook", "webhook_url": "https://x/h",
-        "queue_size": 1, "max_retries": 999, "backoff_base": 0.001,
-    })
+    cfg = nc.sanitize_channel(
+        {
+            "id": "w",
+            "type": "webhook",
+            "webhook_url": "https://x/h",
+            "queue_size": 1,
+            "max_retries": 999,
+            "backoff_base": 0.001,
+        }
+    )
     assert cfg.queue_size == 10
     assert cfg.max_retries == 20
     assert cfg.backoff_base == 0.1
 
 
 def test_sanitize_falls_back_on_bad_severity():
-    cfg = nc.sanitize_channel({"id": "w", "type": "webhook", "webhook_url": "https://x/h",
-                               "severity_floor": "ALARMING"})
+    cfg = nc.sanitize_channel(
+        {"id": "w", "type": "webhook", "webhook_url": "https://x/h", "severity_floor": "ALARMING"}
+    )
     assert cfg.severity_floor == "warning"
 
 
 def test_sanitize_channels_dedupes_ids():
-    out = nc.sanitize_channels([
-        {"id": "w", "type": "webhook", "webhook_url": "https://x/h"},
-        {"id": "w", "type": "webhook", "webhook_url": "https://y/h"},
-        {"id": "bad", "type": "webhook"},
-    ])
+    out = nc.sanitize_channels(
+        [
+            {"id": "w", "type": "webhook", "webhook_url": "https://x/h"},
+            {"id": "w", "type": "webhook", "webhook_url": "https://y/h"},
+            {"id": "bad", "type": "webhook"},
+        ]
+    )
     assert [c.id for c in out] == ["w"]
 
 
 # ── Secret handling ──────────────────────────────────────────────────────────
+
 
 def test_redaction_masks_secrets():
     cfg = nc.sanitize_channel({"id": "p", "type": "pagerduty", "routing_key": "supersecret"})
@@ -191,6 +199,7 @@ def test_merge_secrets_overwrites_when_provided():
 
 # ── parse_channel_ids ────────────────────────────────────────────────────────
 
+
 def test_parse_channel_ids_variants():
     assert nc.parse_channel_ids('["a","b"]') == ["a", "b"]
     assert nc.parse_channel_ids("a, b ,c") == ["a", "b", "c"]
@@ -200,6 +209,7 @@ def test_parse_channel_ids_variants():
 
 
 # ── Formatters ───────────────────────────────────────────────────────────────
+
 
 def test_format_pagerduty_shape():
     cfg = nc.sanitize_channel({"id": "p", "type": "pagerduty", "routing_key": "rk"})
@@ -237,10 +247,15 @@ def test_format_teams_shape():
 
 
 def test_build_email_headers_and_body():
-    cfg = nc.sanitize_channel({
-        "id": "e", "type": "email", "smtp_host": "h",
-        "mail_from": "alerts@x.com", "mail_to": "a@y.com, b@y.com",
-    })
+    cfg = nc.sanitize_channel(
+        {
+            "id": "e",
+            "type": "email",
+            "smtp_host": "h",
+            "mail_from": "alerts@x.com",
+            "mail_to": "a@y.com, b@y.com",
+        }
+    )
     msg = nc.build_email(_ALERT, cfg)
     assert "CRITICAL" in msg["Subject"]
     assert "core-sw1" in msg["Subject"]
@@ -251,11 +266,17 @@ def test_build_email_headers_and_body():
 
 # ── Severity floor ───────────────────────────────────────────────────────────
 
+
 async def test_severity_floor_drops_below_threshold():
     async with _HttpCapture() as cap:
-        cfg = nc.sanitize_channel({
-            "id": "w", "type": "webhook", "webhook_url": cap.url, "severity_floor": "critical",
-        })
+        cfg = nc.sanitize_channel(
+            {
+                "id": "w",
+                "type": "webhook",
+                "webhook_url": cap.url,
+                "severity_floor": "critical",
+            }
+        )
         await nc.start_dispatcher([cfg], default_channel_ids=["w"])
         # warning < critical floor -> dropped, never enqueued
         await nc.on_alert_created({**_ALERT, "severity": "warning", "channel_ids": ""})
@@ -266,6 +287,7 @@ async def test_severity_floor_drops_below_threshold():
 
 
 # ── Dispatcher fan-out + defaults + per-rule selection ───────────────────────
+
 
 async def test_default_channels_used_when_no_rule_assignment():
     async with _HttpCapture() as cap:
@@ -291,8 +313,7 @@ async def test_per_rule_assignment_overrides_defaults():
 
 async def test_disabled_channel_not_delivered():
     async with _HttpCapture() as cap:
-        w = nc.sanitize_channel({"id": "w", "type": "webhook", "webhook_url": cap.url,
-                                 "enabled": False})
+        w = nc.sanitize_channel({"id": "w", "type": "webhook", "webhook_url": cap.url, "enabled": False})
         await nc.start_dispatcher([w], default_channel_ids=["w"])
         await nc.on_alert_created({**_ALERT, "channel_ids": ""})
         await asyncio.sleep(0.2)
@@ -310,12 +331,18 @@ async def test_teams_delivers_messagecard():
 
 # ── Bounded queue (drop oldest) ──────────────────────────────────────────────
 
+
 async def test_bounded_queue_drops_oldest():
     # No listener: deliveries hang/fail, so the queue fills. queue_size floor=10.
-    cfg = nc.sanitize_channel({
-        "id": "w", "type": "webhook", "webhook_url": "http://127.0.0.1:1/never",
-        "queue_size": 10, "max_retries": 0,
-    })
+    cfg = nc.sanitize_channel(
+        {
+            "id": "w",
+            "type": "webhook",
+            "webhook_url": "http://127.0.0.1:1/never",
+            "queue_size": 10,
+            "max_retries": 0,
+        }
+    )
     # Don't start the loop task draining; manipulate the runtime directly.
     rt = nc.ChannelRuntime(config=cfg, queue=asyncio.Queue(maxsize=10))
     for i in range(15):
@@ -331,6 +358,7 @@ async def test_bounded_queue_drops_oldest():
 
 # ── Retry / backoff exhaustion ───────────────────────────────────────────────
 
+
 async def test_retry_gives_up_after_max_retries(monkeypatch):
     attempts = {"n": 0}
 
@@ -339,10 +367,16 @@ async def test_retry_gives_up_after_max_retries(monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(nc, "deliver", always_fail)
-    cfg = nc.sanitize_channel({
-        "id": "w", "type": "webhook", "webhook_url": "http://127.0.0.1:1/x",
-        "max_retries": 2, "backoff_base": 0.1, "backoff_cap": 0.1,
-    })
+    cfg = nc.sanitize_channel(
+        {
+            "id": "w",
+            "type": "webhook",
+            "webhook_url": "http://127.0.0.1:1/x",
+            "max_retries": 2,
+            "backoff_base": 0.1,
+            "backoff_cap": 0.1,
+        }
+    )
     await nc.start_dispatcher([cfg], default_channel_ids=["w"])
     await nc.on_alert_created({**_ALERT, "channel_ids": ""})
     # 1 initial attempt + 2 retries = 3 total
@@ -356,6 +390,7 @@ async def test_retry_gives_up_after_max_retries(monkeypatch):
 
 # ── Email delivery path ──────────────────────────────────────────────────────
 
+
 async def test_email_delivery_calls_smtp(monkeypatch):
     sent: list = []
 
@@ -363,10 +398,15 @@ async def test_email_delivery_calls_smtp(monkeypatch):
         sent.append((cfg.id, msg["To"], msg["Subject"]))
 
     monkeypatch.setattr(nc, "_send_email_blocking", fake_send)
-    cfg = nc.sanitize_channel({
-        "id": "e", "type": "email", "smtp_host": "mail", "mail_from": "a@b.c",
-        "mail_to": "oncall@x.com",
-    })
+    cfg = nc.sanitize_channel(
+        {
+            "id": "e",
+            "type": "email",
+            "smtp_host": "mail",
+            "mail_from": "a@b.c",
+            "mail_to": "oncall@x.com",
+        }
+    )
     await nc.start_dispatcher([cfg], default_channel_ids=["e"])
     await nc.on_alert_created({**_ALERT, "channel_ids": ""})
     assert await _wait(lambda: len(sent) >= 1)
@@ -376,6 +416,7 @@ async def test_email_delivery_calls_smtp(monkeypatch):
 
 
 # ── Reconcile + test event ───────────────────────────────────────────────────
+
 
 async def test_apply_channels_reconciles():
     async with _HttpCapture() as cap:

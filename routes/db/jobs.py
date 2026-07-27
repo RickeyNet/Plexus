@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,16 +48,20 @@ __all__ = [
 # Jobs
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def get_all_jobs(limit: int = 50) -> list[dict]:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute("""
+        cursor = await db.execute(
+            """
             SELECT j.*, p.name AS playbook_name, g.name AS group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
             LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
             ORDER BY j.id DESC LIMIT ?
-        """, (limit,))
+        """,
+            (limit,),
+        )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -65,28 +70,34 @@ async def get_all_jobs(limit: int = 50) -> list[dict]:
 async def get_job(job_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute("""
+        cursor = await db.execute(
+            """
             SELECT j.*, p.name AS playbook_name, g.name AS group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
             LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
             WHERE j.id = ?
-        """, (job_id,))
+        """,
+            (job_id,),
+        )
         return row_to_dict(await cursor.fetchone())
     finally:
         await db.close()
 
 
-async def create_job(playbook_id: int, inventory_group_id: int | None,
-                     credential_id: int | None = None,
-                     template_id: int | None = None,
-                     dry_run: bool = True,
-                     launched_by: str = "admin",
-                     priority: int = 2,
-                     depends_on: list[int] | None = None,
-                     host_ids: list[int] | None = None,
-                     ad_hoc_ips: list[str] | None = None,
-                     parameters: dict | None = None) -> int:
+async def create_job(
+    playbook_id: int,
+    inventory_group_id: int | None,
+    credential_id: int | None = None,
+    template_id: int | None = None,
+    dry_run: bool = True,
+    launched_by: str = "admin",
+    priority: int = 2,
+    depends_on: list[int] | None = None,
+    host_ids: list[int] | None = None,
+    ad_hoc_ips: list[str] | None = None,
+    parameters: dict | None = None,
+) -> int:
     db = await _dbcore.get_db()
     try:
         deps_json = json.dumps(depends_on or [])
@@ -100,9 +111,21 @@ async def create_job(playbook_id: int, inventory_group_id: int | None,
                 dry_run, status, priority, depends_on, queued_at, launched_by,
                 host_ids, ad_hoc_ips, parameters)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (playbook_id, inventory_group_id, credential_id, template_id,
-             1 if dry_run else 0, "queued", priority, deps_json, now, launched_by,
-             host_ids_json, ad_hoc_json, params_json),
+            (
+                playbook_id,
+                inventory_group_id,
+                credential_id,
+                template_id,
+                1 if dry_run else 0,
+                "queued",
+                priority,
+                deps_json,
+                now,
+                launched_by,
+                host_ids_json,
+                ad_hoc_json,
+                params_json,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -110,15 +133,13 @@ async def create_job(playbook_id: int, inventory_group_id: int | None,
         await db.close()
 
 
-async def finish_job(job_id: int, status: str, hosts_ok: int = 0,
-                     hosts_failed: int = 0, hosts_skipped: int = 0):
+async def finish_job(job_id: int, status: str, hosts_ok: int = 0, hosts_failed: int = 0, hosts_skipped: int = 0):
     db = await _dbcore.get_db()
     try:
         await db.execute(
             """UPDATE jobs SET status=?, finished_at=?, hosts_ok=?,
                hosts_failed=?, hosts_skipped=? WHERE id=?""",
-            (status, datetime.now(UTC).isoformat(),
-             hosts_ok, hosts_failed, hosts_skipped, job_id),
+            (status, datetime.now(UTC).isoformat(), hosts_ok, hosts_failed, hosts_skipped, job_id),
         )
         await db.commit()
     finally:
@@ -154,8 +175,7 @@ async def get_job_events(job_id: int, limit: int = 10000) -> list[dict]:
     try:
         safe_limit = max(1, int(limit))
         cursor = await db.execute(
-            "SELECT * FROM (SELECT * FROM job_events WHERE job_id = ? "
-            "ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
+            "SELECT * FROM (SELECT * FROM job_events WHERE job_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
             (job_id, safe_limit),
         )
         return rows_to_list(await cursor.fetchall())
@@ -338,6 +358,7 @@ async def reap_orphaned_running_jobs() -> list[int]:
 # Dashboard Stats
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def get_dashboard_stats() -> dict:
     db = await _dbcore.get_db()
     try:
@@ -345,15 +366,11 @@ async def get_dashboard_stats() -> dict:
         total_groups = (await (await db.execute("SELECT COUNT(*) FROM inventory_groups")).fetchone())[0]
         total_playbooks = (await (await db.execute("SELECT COUNT(*) FROM playbooks")).fetchone())[0]
         total_jobs = (await (await db.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
-        running_jobs = (await (await db.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status='running'"
-        )).fetchone())[0]
-        successful_jobs = (await (await db.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status='success'"
-        )).fetchone())[0]
-        completed_jobs = (await (await db.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status IN ('success','failed')"
-        )).fetchone())[0]
+        running_jobs = (await (await db.execute("SELECT COUNT(*) FROM jobs WHERE status='running'")).fetchone())[0]
+        successful_jobs = (await (await db.execute("SELECT COUNT(*) FROM jobs WHERE status='success'")).fetchone())[0]
+        completed_jobs = (
+            await (await db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('success','failed')")).fetchone()
+        )[0]
         success_rate = round(successful_jobs / completed_jobs * 100) if completed_jobs > 0 else 0
 
         return {
@@ -366,5 +383,3 @@ async def get_dashboard_stats() -> dict:
         }
     finally:
         await db.close()
-
-

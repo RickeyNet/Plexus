@@ -12,6 +12,7 @@ Covers the logic layer that runs on every poll cycle:
 Endpoint-level tests (auth, HTTP shapes) are a follow-up; this file targets
 the background machinery that previously had zero coverage.
 """
+
 from __future__ import annotations
 
 import netcontrol.routes.state as state
@@ -29,18 +30,21 @@ from netcontrol.routes.monitoring import (
 # ── Pure helpers (no DB) ─────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("value,op,threshold,expected", [
-    (90.0, ">=", 90.0, True),
-    (89.9, ">=", 90.0, False),
-    (91.0, ">", 90.0, True),
-    (90.0, ">", 90.0, False),
-    (10.0, "<=", 10.0, True),
-    (9.0, "<", 10.0, True),
-    (10.0, "<", 10.0, False),
-    (5.0, "==", 5.0, True),
-    (5.0, "!=", 5.0, False),
-    (6.0, "!=", 5.0, True),
-])
+@pytest.mark.parametrize(
+    "value,op,threshold,expected",
+    [
+        (90.0, ">=", 90.0, True),
+        (89.9, ">=", 90.0, False),
+        (91.0, ">", 90.0, True),
+        (90.0, ">", 90.0, False),
+        (10.0, "<=", 10.0, True),
+        (9.0, "<", 10.0, True),
+        (10.0, "<", 10.0, False),
+        (5.0, "==", 5.0, True),
+        (5.0, "!=", 5.0, False),
+        (6.0, "!=", 5.0, True),
+    ],
+)
 def test_check_threshold_operators(value, op, threshold, expected):
     assert _check_threshold(value, op, threshold) is expected
 
@@ -74,14 +78,17 @@ def test_metric_value_from_poll_mapping():
     assert _metric_value_from_poll(res, "no_such_metric") is None
 
 
-@pytest.mark.parametrize("raw,expected", [
-    (None, "[]"),
-    ("", "[]"),
-    ("1,2, 3", '["1", "2", "3"]'),
-    ([1, 2], '["1", "2"]'),
-    ({"not": "a list"}, "[]"),
-    (["  7  ", ""], '["7"]'),
-])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, "[]"),
+        ("", "[]"),
+        ("1,2, 3", '["1", "2", "3"]'),
+        ([1, 2], '["1", "2"]'),
+        ({"not": "a list"}, "[]"),
+        (["  7  ", ""], '["7"]'),
+    ],
+)
 def test_normalize_channel_ids(raw, expected):
     assert _normalize_channel_ids(raw) == expected
 
@@ -139,12 +146,20 @@ async def _backdate_alert(alert_id: int, minutes: int) -> None:
 async def test_alert_dedup_bumps_existing_unacked(tmp_path, monkeypatch):
     _, host_id = await _init_clean_db(tmp_path, monkeypatch)
     first = await db_module.create_monitoring_alert(
-        host_id=host_id, poll_id=None, alert_type="threshold", metric="cpu",
-        message="cpu 91%", dedup_key=f"{host_id}:cpu:threshold",
+        host_id=host_id,
+        poll_id=None,
+        alert_type="threshold",
+        metric="cpu",
+        message="cpu 91%",
+        dedup_key=f"{host_id}:cpu:threshold",
     )
     second = await db_module.create_monitoring_alert(
-        host_id=host_id, poll_id=None, alert_type="threshold", metric="cpu",
-        message="cpu 93%", dedup_key=f"{host_id}:cpu:threshold",
+        host_id=host_id,
+        poll_id=None,
+        alert_type="threshold",
+        metric="cpu",
+        message="cpu 93%",
+        dedup_key=f"{host_id}:cpu:threshold",
     )
     assert second == first
     alerts = await db_module.get_monitoring_alerts(host_id=host_id)
@@ -158,13 +173,21 @@ async def test_alert_dedup_resets_after_acknowledge(tmp_path, monkeypatch):
     _, host_id = await _init_clean_db(tmp_path, monkeypatch)
     key = f"{host_id}:cpu:threshold"
     first = await db_module.create_monitoring_alert(
-        host_id=host_id, poll_id=None, alert_type="threshold", metric="cpu",
-        message="cpu 91%", dedup_key=key,
+        host_id=host_id,
+        poll_id=None,
+        alert_type="threshold",
+        metric="cpu",
+        message="cpu 91%",
+        dedup_key=key,
     )
     await db_module.acknowledge_monitoring_alert(first, "operator")
     second = await db_module.create_monitoring_alert(
-        host_id=host_id, poll_id=None, alert_type="threshold", metric="cpu",
-        message="cpu 92%", dedup_key=key,
+        host_id=host_id,
+        poll_id=None,
+        alert_type="threshold",
+        metric="cpu",
+        message="cpu 92%",
+        dedup_key=key,
     )
     assert second != first
     alerts = await db_module.get_monitoring_alerts(host_id=host_id)
@@ -178,7 +201,9 @@ async def test_suppression_host_scoped(tmp_path, monkeypatch):
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     other_host = await db_module.add_host(group_id, "sw2", "10.0.0.2")
     await db_module.create_alert_suppression(
-        name="quiet sw1", ends_at="2099-01-01T00:00:00", host_id=host_id,
+        name="quiet sw1",
+        ends_at="2099-01-01T00:00:00",
+        host_id=host_id,
     )
     assert await db_module.is_alert_suppressed(host_id, "cpu") is True
     assert await db_module.is_alert_suppressed(other_host, "cpu") is False
@@ -187,8 +212,10 @@ async def test_suppression_host_scoped(tmp_path, monkeypatch):
 async def test_suppression_metric_scoped(tmp_path, monkeypatch):
     _, host_id = await _init_clean_db(tmp_path, monkeypatch)
     await db_module.create_alert_suppression(
-        name="quiet cpu only", ends_at="2099-01-01T00:00:00",
-        host_id=host_id, metric="cpu",
+        name="quiet cpu only",
+        ends_at="2099-01-01T00:00:00",
+        host_id=host_id,
+        metric="cpu",
     )
     assert await db_module.is_alert_suppressed(host_id, "cpu") is True
     assert await db_module.is_alert_suppressed(host_id, "memory") is False
@@ -197,7 +224,9 @@ async def test_suppression_metric_scoped(tmp_path, monkeypatch):
 async def test_suppression_group_scoped(tmp_path, monkeypatch):
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     await db_module.create_alert_suppression(
-        name="quiet group", ends_at="2099-01-01T00:00:00", group_id=group_id,
+        name="quiet group",
+        ends_at="2099-01-01T00:00:00",
+        group_id=group_id,
     )
     assert await db_module.is_alert_suppressed(host_id, "cpu", group_id) is True
     # Without group context the group-scoped suppression does not apply.
@@ -207,7 +236,8 @@ async def test_suppression_group_scoped(tmp_path, monkeypatch):
 async def test_suppression_global_blankets_everything(tmp_path, monkeypatch):
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     await db_module.create_alert_suppression(
-        name="maintenance", ends_at="2099-01-01T00:00:00",
+        name="maintenance",
+        ends_at="2099-01-01T00:00:00",
     )
     assert await db_module.is_alert_suppressed(host_id, "cpu", group_id) is True
     assert await db_module.is_alert_suppressed(9999, "anything") is True
@@ -216,7 +246,9 @@ async def test_suppression_global_blankets_everything(tmp_path, monkeypatch):
 async def test_suppression_expired_does_not_apply(tmp_path, monkeypatch):
     _, host_id = await _init_clean_db(tmp_path, monkeypatch)
     await db_module.create_alert_suppression(
-        name="ended yesterday", ends_at="2000-01-01T00:00:00", host_id=host_id,
+        name="ended yesterday",
+        ends_at="2000-01-01T00:00:00",
+        host_id=host_id,
     )
     assert await db_module.is_alert_suppressed(host_id, "cpu") is False
 
@@ -224,8 +256,10 @@ async def test_suppression_expired_does_not_apply(tmp_path, monkeypatch):
 async def test_suppression_future_start_does_not_apply(tmp_path, monkeypatch):
     _, host_id = await _init_clean_db(tmp_path, monkeypatch)
     await db_module.create_alert_suppression(
-        name="next week", ends_at="2099-01-02T00:00:00",
-        starts_at="2099-01-01T00:00:00", host_id=host_id,
+        name="next week",
+        ends_at="2099-01-02T00:00:00",
+        starts_at="2099-01-01T00:00:00",
+        host_id=host_id,
     )
     assert await db_module.is_alert_suppressed(host_id, "cpu") is False
 
@@ -268,7 +302,9 @@ async def test_builtin_alert_respects_suppression(tmp_path, monkeypatch):
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     monkeypatch.setitem(state.MONITORING_CONFIG, "cpu_threshold", 90)
     await db_module.create_alert_suppression(
-        name="quiet", ends_at="2099-01-01T00:00:00", host_id=host_id,
+        name="quiet",
+        ends_at="2099-01-01T00:00:00",
+        host_id=host_id,
     )
     res = _poll_result(host_id, cpu_percent=99.0)
     created = await _evaluate_alerts_for_poll(res, poll_id=await _make_poll(host_id), group_id=group_id, rules=[])
@@ -279,7 +315,8 @@ async def test_builtin_alert_respects_suppression(tmp_path, monkeypatch):
 async def test_interface_down_builtin_alert(tmp_path, monkeypatch):
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     res = _poll_result(
-        host_id, if_down_count=1,
+        host_id,
+        if_down_count=1,
         if_details=[{"if_index": 1, "name": "Gi0/1", "status": "down"}],
     )
     created = await _evaluate_alerts_for_poll(res, poll_id=await _make_poll(host_id), group_id=group_id, rules=[])
@@ -291,9 +328,15 @@ async def test_interface_down_builtin_alert(tmp_path, monkeypatch):
 
 def _rule(host_id=None, group_id=None, **overrides) -> dict:
     base = {
-        "id": 1, "name": "high route count", "metric": "route_count",
-        "operator": ">=", "value": 100.0, "severity": "warning",
-        "rule_type": "threshold", "host_id": host_id, "group_id": group_id,
+        "id": 1,
+        "name": "high route count",
+        "metric": "route_count",
+        "operator": ">=",
+        "value": 100.0,
+        "severity": "warning",
+        "rule_type": "threshold",
+        "host_id": host_id,
+        "group_id": group_id,
         "channel_ids": "",
     }
     base.update(overrides)
@@ -304,11 +347,16 @@ async def test_user_rule_fires_when_triggered(tmp_path, monkeypatch):
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     # The alert row FK-references alert_rules, so the rule must really exist.
     rule_id = await db_module.create_alert_rule(
-        name="high route count", metric="route_count", operator=">=", value=100.0,
+        name="high route count",
+        metric="route_count",
+        operator=">=",
+        value=100.0,
     )
     res = _poll_result(host_id, route_count=150)
     created = await _evaluate_alerts_for_poll(
-        res, poll_id=await _make_poll(host_id), group_id=group_id,
+        res,
+        poll_id=await _make_poll(host_id),
+        group_id=group_id,
         rules=[_rule(id=rule_id)],
     )
     assert created == 1
@@ -321,7 +369,10 @@ async def test_user_rule_scoped_to_other_host_is_skipped(tmp_path, monkeypatch):
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     res = _poll_result(host_id, route_count=150)
     created = await _evaluate_alerts_for_poll(
-        res, poll_id=await _make_poll(host_id), group_id=group_id, rules=[_rule(host_id=host_id + 1)],
+        res,
+        poll_id=await _make_poll(host_id),
+        group_id=group_id,
+        rules=[_rule(host_id=host_id + 1)],
     )
     assert created == 0
 
@@ -330,7 +381,10 @@ async def test_user_rule_scoped_to_other_group_is_skipped(tmp_path, monkeypatch)
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     res = _poll_result(host_id, route_count=150)
     created = await _evaluate_alerts_for_poll(
-        res, poll_id=await _make_poll(host_id), group_id=group_id, rules=[_rule(group_id=group_id + 1)],
+        res,
+        poll_id=await _make_poll(host_id),
+        group_id=group_id,
+        rules=[_rule(group_id=group_id + 1)],
     )
     assert created == 0
 
@@ -339,7 +393,10 @@ async def test_user_rule_not_triggered_below_threshold(tmp_path, monkeypatch):
     group_id, host_id = await _init_clean_db(tmp_path, monkeypatch)
     res = _poll_result(host_id, route_count=50)
     created = await _evaluate_alerts_for_poll(
-        res, poll_id=await _make_poll(host_id), group_id=group_id, rules=[_rule()],
+        res,
+        poll_id=await _make_poll(host_id),
+        group_id=group_id,
+        rules=[_rule()],
     )
     assert created == 0
 
@@ -368,7 +425,8 @@ async def test_host_down_records_up_to_down(tmp_path, monkeypatch):
     _, host_id = await _init_clean_db(tmp_path, monkeypatch)
     await _track_availability_from_poll(_poll_result(host_id), poll_id=await _make_poll(host_id))
     await _track_availability_from_poll(
-        _poll_result(host_id, poll_status="error"), poll_id=await _make_poll(host_id),
+        _poll_result(host_id, poll_status="error"),
+        poll_id=await _make_poll(host_id),
     )
     transitions = await db_module.get_availability_transitions(host_id=host_id)
     states = [(t["old_state"], t["new_state"]) for t in transitions]
@@ -382,7 +440,8 @@ async def test_interface_flap_records_transitions(tmp_path, monkeypatch):
     await _track_availability_from_poll(up, poll_id=await _make_poll(host_id))
     await _track_availability_from_poll(down, poll_id=await _make_poll(host_id))
     transitions = await db_module.get_availability_transitions(
-        host_id=host_id, entity_type="interface",
+        host_id=host_id,
+        entity_type="interface",
     )
     states = [(t["old_state"], t["new_state"]) for t in transitions]
     assert ("unknown", "up") in states
@@ -397,8 +456,12 @@ async def test_stale_warning_escalates_to_critical(tmp_path, monkeypatch):
     monkeypatch.setitem(state.MONITORING_CONFIG, "escalation_enabled", True)
     monkeypatch.setitem(state.MONITORING_CONFIG, "escalation_after_minutes", 30)
     alert_id = await db_module.create_monitoring_alert(
-        host_id=host_id, poll_id=None, alert_type="threshold", metric="cpu",
-        message="cpu 91%", severity="warning",
+        host_id=host_id,
+        poll_id=None,
+        alert_type="threshold",
+        metric="cpu",
+        message="cpu 91%",
+        severity="warning",
     )
     await _backdate_alert(alert_id, minutes=60)
     escalated = await _run_alert_escalation()
@@ -413,8 +476,12 @@ async def test_fresh_warning_is_not_escalated(tmp_path, monkeypatch):
     monkeypatch.setitem(state.MONITORING_CONFIG, "escalation_enabled", True)
     monkeypatch.setitem(state.MONITORING_CONFIG, "escalation_after_minutes", 30)
     await db_module.create_monitoring_alert(
-        host_id=host_id, poll_id=None, alert_type="threshold", metric="cpu",
-        message="cpu 91%", severity="warning",
+        host_id=host_id,
+        poll_id=None,
+        alert_type="threshold",
+        metric="cpu",
+        message="cpu 91%",
+        severity="warning",
     )
     assert await _run_alert_escalation() == 0
 
@@ -424,8 +491,12 @@ async def test_acknowledged_alert_is_not_escalated(tmp_path, monkeypatch):
     monkeypatch.setitem(state.MONITORING_CONFIG, "escalation_enabled", True)
     monkeypatch.setitem(state.MONITORING_CONFIG, "escalation_after_minutes", 30)
     alert_id = await db_module.create_monitoring_alert(
-        host_id=host_id, poll_id=None, alert_type="threshold", metric="cpu",
-        message="cpu 91%", severity="warning",
+        host_id=host_id,
+        poll_id=None,
+        alert_type="threshold",
+        metric="cpu",
+        message="cpu 91%",
+        severity="warning",
     )
     await _backdate_alert(alert_id, minutes=60)
     await db_module.acknowledge_monitoring_alert(alert_id, "operator")
@@ -436,8 +507,12 @@ async def test_escalation_disabled_does_nothing(tmp_path, monkeypatch):
     _, host_id = await _init_clean_db(tmp_path, monkeypatch)
     monkeypatch.setitem(state.MONITORING_CONFIG, "escalation_enabled", False)
     alert_id = await db_module.create_monitoring_alert(
-        host_id=host_id, poll_id=None, alert_type="threshold", metric="cpu",
-        message="cpu 91%", severity="warning",
+        host_id=host_id,
+        poll_id=None,
+        alert_type="threshold",
+        metric="cpu",
+        message="cpu 91%",
+        severity="warning",
     )
     await _backdate_alert(alert_id, minutes=600)
     assert await _run_alert_escalation() == 0

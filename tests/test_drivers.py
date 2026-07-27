@@ -219,15 +219,9 @@ def test_cisco_ios_snmpv3_capability_surface() -> None:
 def test_cisco_ios_health_check_capability_surface() -> None:
     drv = get_driver("cisco_ios")
     assert drv.show_version_command() == "show version"
-    assert (
-        drv.serial_number_show_command()
-        == "show version | include System Serial Number"
-    )
+    assert drv.serial_number_show_command() == "show version | include System Serial Number"
     # Full-line shape from a real device.
-    assert (
-        drv.parse_serial_number("System Serial Number              : FCW2346L0AJ")
-        == "FCW2346L0AJ"
-    )
+    assert drv.parse_serial_number("System Serial Number              : FCW2346L0AJ") == "FCW2346L0AJ"
     # Multi-line input with surrounding noise still resolves the right field.
     multi = (
         "Cisco IOS Software, ...\n"
@@ -277,10 +271,7 @@ def test_cisco_xe_emits_sampler_when_sampling_gt_1() -> None:
 
 
 def test_cisco_xe_verify_command() -> None:
-    assert (
-        get_driver("cisco_xe").netflow_verify_command()
-        == "show flow exporter PLEXUS-EXPORT"
-    )
+    assert get_driver("cisco_xe").netflow_verify_command() == "show flow exporter PLEXUS-EXPORT"
 
 
 def test_cisco_xe_config_capture_and_save() -> None:
@@ -306,14 +297,8 @@ def test_cisco_xe_health_check_capability_surface() -> None:
     # guard against XE drifting away from IOS.
     drv = get_driver("cisco_xe")
     assert drv.show_version_command() == "show version"
-    assert (
-        drv.serial_number_show_command()
-        == "show version | include System Serial Number"
-    )
-    assert (
-        drv.parse_serial_number("System Serial Number : ABC1234WXYZ")
-        == "ABC1234WXYZ"
-    )
+    assert drv.serial_number_show_command() == "show version | include System Serial Number"
+    assert drv.parse_serial_number("System Serial Number : ABC1234WXYZ") == "ABC1234WXYZ"
 
 
 # ── cisco_nxos output ───────────────────────────────────────────────────────
@@ -346,10 +331,7 @@ def test_cisco_nxos_ssh_uses_same_driver_class() -> None:
 
 
 def test_cisco_nxos_verify_command() -> None:
-    assert (
-        get_driver("cisco_nxos").netflow_verify_command()
-        == "show flow exporter PLEXUS-EXPORT"
-    )
+    assert get_driver("cisco_nxos").netflow_verify_command() == "show flow exporter PLEXUS-EXPORT"
 
 
 def test_cisco_nxos_config_capture_and_save() -> None:
@@ -384,20 +366,11 @@ def test_cisco_nxos_health_check_uses_processor_board_id() -> None:
     # parser would never find a serial - this test guards that gap.
     drv = get_driver("cisco_nxos")
     assert drv.show_version_command() == "show version"
-    assert (
-        drv.serial_number_show_command()
-        == 'show version | include "Processor Board ID"'
-    )
+    assert drv.serial_number_show_command() == 'show version | include "Processor Board ID"'
     # Real-world NX-OS output uses a space, not a colon, after the label.
-    assert (
-        drv.parse_serial_number("Processor Board ID FOX1234ABCD")
-        == "FOX1234ABCD"
-    )
+    assert drv.parse_serial_number("Processor Board ID FOX1234ABCD") == "FOX1234ABCD"
     # Some NX-OS releases print a colon variant; both shapes parse.
-    assert (
-        drv.parse_serial_number("Processor Board ID: FOX9999ZZZZ")
-        == "FOX9999ZZZZ"
-    )
+    assert drv.parse_serial_number("Processor Board ID: FOX9999ZZZZ") == "FOX9999ZZZZ"
     # And the "System Serial Number" wording from IOS must NOT match
     # the NX-OS parser - mixing parsers across vendors is the bug we're
     # guarding against.
@@ -538,10 +511,7 @@ def test_juniper_junos_verify_command() -> None:
     # Junos has no direct analogue of "show flow exporter X"; the
     # closest "is my sampling configured and accepted?" check is
     # show forwarding-options sampling.
-    assert (
-        get_driver("juniper_junos").netflow_verify_command()
-        == "show forwarding-options sampling"
-    )
+    assert get_driver("juniper_junos").netflow_verify_command() == "show forwarding-options sampling"
 
 
 def test_juniper_junos_config_capture_and_save() -> None:
@@ -560,10 +530,7 @@ def test_juniper_junos_snmpv3_capability_surface() -> None:
     drv = get_driver("juniper_junos")
     # Existing-config dump uses the Junos config form (set lines under
     # the snmp stanza), not the Cisco include-snmp-server filter.
-    assert (
-        drv.snmpv3_show_existing_command()
-        == "show configuration snmp | display set"
-    )
+    assert drv.snmpv3_show_existing_command() == "show configuration snmp | display set"
     # Engine ID is platform-managed on Junos (same model as NX-OS): both
     # show and pin return empty strings so pin_snmp_engine_id() emits its
     # short-circuit info event instead of running a Cisco-shaped command
@@ -720,8 +687,7 @@ def test_cisco_nxos_ssh_alias_shares_upgrade_methods() -> None:
     # instead of cisco_nxos could silently change the upgrade flow.
     a = get_driver("cisco_nxos")
     b = get_driver("cisco_nxos_ssh")
-    assert a.upgrade_activate_commands("bootflash:image.bin") == \
-        b.upgrade_activate_commands("bootflash:image.bin")
+    assert a.upgrade_activate_commands("bootflash:image.bin") == b.upgrade_activate_commands("bootflash:image.bin")
     assert a.upgrade_commit_command() == b.upgrade_commit_command()
     assert a.upgrade_has_discrete_prestage() == b.upgrade_has_discrete_prestage()
 
@@ -754,10 +720,7 @@ def test_juniper_junos_activate_uses_single_combined_command() -> None:
     # and every Junos upgrade hangs at a prompt.
     drv = get_driver("juniper_junos")
     cmds = drv.upgrade_activate_commands("/var/tmp/jinstall-host-arm-22.4R3.tgz")
-    assert cmds == [
-        "request system software add /var/tmp/jinstall-host-arm-22.4R3.tgz "
-        "no-validate reboot"
-    ]
+    assert cmds == ["request system software add /var/tmp/jinstall-host-arm-22.4R3.tgz no-validate reboot"]
 
 
 def test_juniper_junos_commit_is_no_op() -> None:
@@ -835,9 +798,7 @@ def test_arista_eos_netflow_includes_each_interface() -> None:
     # A regression where only the first interface is bound would
     # silently lose visibility on every other monitored port.
     drv = get_driver("arista_eos")
-    cmds = drv.build_netflow_config(
-        _cfg(interfaces=["Ethernet1", "Ethernet2", "Ethernet48"])
-    )
+    cmds = drv.build_netflow_config(_cfg(interfaces=["Ethernet1", "Ethernet2", "Ethernet48"]))
     joined = "\n".join(cmds)
     assert "interface Ethernet1" in joined
     assert "interface Ethernet2" in joined
@@ -864,10 +825,7 @@ def test_arista_eos_verify_command() -> None:
     # ``show flow tracking hardware`` is EOS's analogue to Cisco's
     # ``show flow exporter`` - the latter does not exist on EOS and
     # would parse-error.
-    assert (
-        get_driver("arista_eos").netflow_verify_command()
-        == "show flow tracking hardware"
-    )
+    assert get_driver("arista_eos").netflow_verify_command() == "show flow tracking hardware"
 
 
 def test_arista_eos_config_capture_and_save() -> None:
@@ -931,11 +889,7 @@ def test_arista_eos_parse_serial_rejects_unrelated_lines() -> None:
     # parser anchors on the leading "Serial number" phrase so those
     # lines must not match.
     drv = get_driver("arista_eos")
-    noise = (
-        "Hardware version:    01.00\n"
-        "Software image version: 4.30.5M\n"
-        "Internal build version: 4.30.5M-12345\n"
-    )
+    noise = "Hardware version:    01.00\nSoftware image version: 4.30.5M\nInternal build version: 4.30.5M-12345\n"
     assert drv.parse_serial_number(noise) is None
 
 
@@ -1026,9 +980,7 @@ def test_cisco_xr_netflow_includes_each_interface() -> None:
     # A regression where only the first interface is bound would
     # silently lose visibility on every other monitored port.
     drv = get_driver("cisco_xr")
-    cmds = drv.build_netflow_config(
-        _cfg(interfaces=["GigabitEthernet0/0/0/0", "GigabitEthernet0/0/0/1"])
-    )
+    cmds = drv.build_netflow_config(_cfg(interfaces=["GigabitEthernet0/0/0/0", "GigabitEthernet0/0/0/1"]))
     joined = "\n".join(cmds)
     assert "interface GigabitEthernet0/0/0/0" in joined
     assert "interface GigabitEthernet0/0/0/1" in joined
@@ -1053,10 +1005,7 @@ def test_cisco_xr_verify_command() -> None:
     # ``show flow exporter-map`` is the XR analogue to XE's ``show
     # flow exporter``.  The XE wording (no ``-map`` suffix) does not
     # exist on XR and parse-errors.
-    assert (
-        get_driver("cisco_xr").netflow_verify_command()
-        == "show flow exporter-map PLEXUS-EXPORT"
-    )
+    assert get_driver("cisco_xr").netflow_verify_command() == "show flow exporter-map PLEXUS-EXPORT"
 
 
 def test_cisco_xr_config_capture_and_save() -> None:
@@ -1250,14 +1199,8 @@ def test_paloalto_panos_parse_serial_extracts_value() -> None:
     # Representative PAN-OS ``show system info | match serial`` output.
     # PAN-OS prints several keys whose names *contain* "serial"; the
     # parser must pick only the bare ``serial:`` line.
-    sample = (
-        "serial: 015351000123\n"
-        "serial-number-status: ok\n"
-        "cloud-serial-id: 015351000123-abcd\n"
-    )
-    assert (
-        get_driver("paloalto_panos").parse_serial_number(sample) == "015351000123"
-    )
+    sample = "serial: 015351000123\nserial-number-status: ok\ncloud-serial-id: 015351000123-abcd\n"
+    assert get_driver("paloalto_panos").parse_serial_number(sample) == "015351000123"
 
 
 def test_paloalto_panos_parse_serial_anchors_on_exact_key() -> None:
@@ -1267,10 +1210,7 @@ def test_paloalto_panos_parse_serial_anchors_on_exact_key() -> None:
     # the word "serial" alone would pick up ``serial-number-status: ok``
     # and return ``ok`` as the serial - this regression guard makes
     # sure the strict ``serial:`` (with colon) anchor stays in place.
-    sample = (
-        "serial-number-status: ok\n"
-        "cloud-serial-id: 015351000123-abcd\n"
-    )
+    sample = "serial-number-status: ok\ncloud-serial-id: 015351000123-abcd\n"
     assert get_driver("paloalto_panos").parse_serial_number(sample) is None
 
 
@@ -1281,12 +1221,7 @@ def test_paloalto_panos_parse_serial_returns_none_when_missing() -> None:
     # surface a clean 422 instead of mistakenly storing an empty
     # string or a neighbouring field value as the device serial.
     assert get_driver("paloalto_panos").parse_serial_number("") is None
-    assert (
-        get_driver("paloalto_panos").parse_serial_number(
-            "hostname: fw-edge-01\nip-address: 10.0.0.1\n"
-        )
-        is None
-    )
+    assert get_driver("paloalto_panos").parse_serial_number("hostname: fw-edge-01\nip-address: 10.0.0.1\n") is None
 
 
 def test_paloalto_panos_unsupported_capabilities_raise() -> None:
@@ -1329,14 +1264,12 @@ def test_paloalto_panos_snmpv3_capability_surface() -> None:
     # command (which would parse-error at the firewall).
     drv = get_driver("paloalto_panos")
     assert drv.snmpv3_show_existing_command() == (
-        "show config running xpath "
-        "devices/entry/deviceconfig/system/snmp-setting"
+        "show config running xpath devices/entry/deviceconfig/system/snmp-setting"
     )
     assert drv.snmpv3_engine_id_show_command() == ""
     assert drv.snmpv3_engine_id_pin_command("8000304404ABCD") == ""
     assert drv.snmpv3_verify_users_command() == (
-        "show config running xpath "
-        "devices/entry/deviceconfig/system/snmp-setting/access-setting/version/v3"
+        "show config running xpath devices/entry/deviceconfig/system/snmp-setting/access-setting/version/v3"
     )
     # Defensive guard: the Cisco include-filter form must never leak
     # into the PAN-OS show command via a copy-paste from cisco_ios.py.
@@ -1413,9 +1346,7 @@ def test_fortinet_fortios_parse_serial_extracts_value() -> None:
         "BIOS version: 04000016\n"
         "System Part-Number: P09373-04\n"
     )
-    assert (
-        get_driver("fortinet").parse_serial_number(sample) == "FGT60E1234567890"
-    )
+    assert get_driver("fortinet").parse_serial_number(sample) == "FGT60E1234567890"
 
 
 def test_fortinet_fortios_parse_serial_is_case_sensitive_vs_xr() -> None:
@@ -1431,21 +1362,14 @@ def test_fortinet_fortios_parse_serial_is_case_sensitive_vs_xr() -> None:
     # And lowercase ``serial number:`` (no capital ``S`` at all) also
     # must not match - that is neither FortiOS nor XR, but a stricter
     # parser is the right default.
-    assert get_driver("fortinet").parse_serial_number(
-        "serial number: foo\n"
-    ) is None
+    assert get_driver("fortinet").parse_serial_number("serial number: foo\n") is None
 
 
 def test_fortinet_fortios_parse_serial_returns_none_when_missing() -> None:
     # As with PAN-OS, an empty or filtered output must return ``None``
     # so the inventory route can surface a clean 422.
     assert get_driver("fortinet").parse_serial_number("") is None
-    assert (
-        get_driver("fortinet").parse_serial_number(
-            "Model name: FortiGate-60E\nBIOS version: 04000016\n"
-        )
-        is None
-    )
+    assert get_driver("fortinet").parse_serial_number("Model name: FortiGate-60E\nBIOS version: 04000016\n") is None
 
 
 def test_fortinet_fortios_unsupported_capabilities_raise() -> None:

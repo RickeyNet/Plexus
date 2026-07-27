@@ -32,31 +32,17 @@ async def backup_search_db(tmp_path, monkeypatch):
     first_id = await db_module.create_config_backup(
         policy_id=None,
         host_id=100,
-        config_text=(
-            "hostname sw-core-01\n"
-            "snmp-server community public RO\n"
-            "line vty 0 4\n"
-            " transport input ssh\n"
-        ),
+        config_text=("hostname sw-core-01\nsnmp-server community public RO\nline vty 0 4\n transport input ssh\n"),
     )
     second_id = await db_module.create_config_backup(
         policy_id=None,
         host_id=200,
-        config_text=(
-            "hostname r-edge-01\n"
-            "ip access-list standard MGMT\n"
-            " permit 10.0.0.0 0.0.0.255\n"
-            " deny any\n"
-        ),
+        config_text=("hostname r-edge-01\nip access-list standard MGMT\n permit 10.0.0.0 0.0.0.255\n deny any\n"),
     )
     third_id = await db_module.create_config_backup(
         policy_id=None,
         host_id=100,
-        config_text=(
-            "hostname sw-core-01\n"
-            "snmp-server community public RO\n"
-            "snmp-server community secure RW\n"
-        ),
+        config_text=("hostname sw-core-01\nsnmp-server community public RO\nsnmp-server community secure RW\n"),
     )
     return {"first_id": first_id, "second_id": second_id, "third_id": third_id}
 
@@ -115,11 +101,11 @@ def test_regex_required_literal_extraction():
 
     assert lit(r"snmp-server community\s+public") == "snmp-server community"
     assert lit(r"interface Gig.*shutdown") == "interface Gig"
-    assert lit(r"ab+c") == "ab"          # 'c' run is shorter; 'b' required once
-    assert lit(r"ab?cdef") == "cdef"     # optional 'b' breaks the run
-    assert lit(r"a{0,3}bcd") == "bcd"    # min-0 repeat drops its atom
-    assert lit(r"a{2}bc") == "bc"        # 'a' kept but shorter than 'bc'
-    assert lit(r"foo|bar") == ""         # top-level alternation: nothing required
+    assert lit(r"ab+c") == "ab"  # 'c' run is shorter; 'b' required once
+    assert lit(r"ab?cdef") == "cdef"  # optional 'b' breaks the run
+    assert lit(r"a{0,3}bcd") == "bcd"  # min-0 repeat drops its atom
+    assert lit(r"a{2}bc") == "bc"  # 'a' kept but shorter than 'bc'
+    assert lit(r"foo|bar") == ""  # top-level alternation: nothing required
     assert lit(r"(foo|bar)baz") == "baz"  # group contents skipped conservatively
     assert lit(r"\d+\.\d+\.\d+") == "."  # only escaped dots are literal
     assert lit(r"escaped\.dot") == "escaped.dot"

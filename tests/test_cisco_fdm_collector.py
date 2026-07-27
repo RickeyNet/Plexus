@@ -38,6 +38,7 @@ def _patch_creds(monkeypatch, *, is_service=True):
     monkeypatch.setattr(collector.db, "get_credential_raw", _fake_cred)
     # decrypt is imported inside collect_host from routes.crypto
     import routes.crypto as crypto
+
     monkeypatch.setattr(crypto, "decrypt", lambda c: "secret")
 
 
@@ -124,6 +125,7 @@ async def test_run_fdm_poll_once_polls_each_host_and_processes(monkeypatch):
         return 1  # one alert each
 
     import netcontrol.routes.monitoring as monitoring
+
     monkeypatch.setattr(monitoring, "_process_poll_result", _fake_process)
 
     out = await collector.run_fdm_poll_once(force=True)
@@ -136,4 +138,5 @@ async def test_run_fdm_poll_once_polls_each_host_and_processes(monkeypatch):
 def _coro(value):
     async def _inner():
         return value
+
     return _inner()

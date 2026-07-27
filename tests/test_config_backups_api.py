@@ -102,7 +102,9 @@ async def test_get_config_backup_diff_success(monkeypatch):
         "captured_at": "2026-01-01 10:00:00",
     }
     monkeypatch.setattr(config_backups_module.db, "get_config_backup", AsyncMock(return_value=current))
-    monkeypatch.setattr(config_backups_module.db, "get_previous_successful_config_backup", AsyncMock(return_value=previous))
+    monkeypatch.setattr(
+        config_backups_module.db, "get_previous_successful_config_backup", AsyncMock(return_value=previous)
+    )
 
     captured = {}
 

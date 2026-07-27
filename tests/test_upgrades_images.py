@@ -53,10 +53,13 @@ def image_client(tmp_path, monkeypatch):
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
 
-    resp = client.post("/api/auth/login", json={
-        "username": "admin",
-        "password": "netcontrol",
-    })
+    resp = client.post(
+        "/api/auth/login",
+        json={
+            "username": "admin",
+            "password": "netcontrol",
+        },
+    )
     csrf_token = resp.json().get("csrf_token", "")
     try:
         yield _AuthClient(client, csrf_token), images_dir
@@ -182,4 +185,3 @@ def test_find_existing_image_path_rejects_traversal(tmp_path, monkeypatch):
 
     # os.path.basename strips the traversal, so it never escapes the roots.
     assert upgrades._find_existing_image_path("../secret.bin") is None
-

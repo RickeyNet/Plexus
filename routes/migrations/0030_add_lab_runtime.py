@@ -53,17 +53,13 @@ _RUNTIME_COLUMNS = [
 async def _column_exists(db, table: str, column: str, *, engine: str) -> bool:
     if engine == "postgres":
         cur = await db.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = ? AND column_name = ?",
+            "SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
             (table, column),
         )
         return await cur.fetchone() is not None
     cur = await db.execute(f"PRAGMA table_info({table})")
     rows = await cur.fetchall()
-    return any(
-        (row[1] if not isinstance(row, dict) else row.get("name")) == column
-        for row in rows
-    )
+    return any((row[1] if not isinstance(row, dict) else row.get("name")) == column for row in rows)
 
 
 async def _add_columns(db, *, engine: str) -> None:
@@ -90,8 +86,7 @@ async def _up_sqlite(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_runtime_events_device "
-        "ON lab_runtime_events (lab_device_id, created_at)"
+        "CREATE INDEX IF NOT EXISTS idx_lab_runtime_events_device ON lab_runtime_events (lab_device_id, created_at)"
     )
     await db.commit()
 
@@ -112,8 +107,7 @@ async def _up_postgres(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_runtime_events_device "
-        "ON lab_runtime_events (lab_device_id, created_at)"
+        "CREATE INDEX IF NOT EXISTS idx_lab_runtime_events_device ON lab_runtime_events (lab_device_id, created_at)"
     )
     await db.commit()
 

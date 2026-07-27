@@ -52,29 +52,47 @@ def test_kea_adapter_normalizes_scopes_and_leases():
     async def _fake_fetch(url, *, method="GET", headers=None, params=None, json_body=None, auth=None, verify=True):
         cmd = (json_body or {}).get("command")
         if cmd == "config-get":
-            return [{
-                "result": 0,
-                "arguments": {
-                    "Dhcp4": {
-                        "subnet4": [
-                            {"id": 1, "subnet": "10.0.0.0/24", "comment": "wired",
-                             "pools": [{"pool": "10.0.0.10 - 10.0.0.200"}]},
-                        ]
-                    }
+            return [
+                {
+                    "result": 0,
+                    "arguments": {
+                        "Dhcp4": {
+                            "subnet4": [
+                                {
+                                    "id": 1,
+                                    "subnet": "10.0.0.0/24",
+                                    "comment": "wired",
+                                    "pools": [{"pool": "10.0.0.10 - 10.0.0.200"}],
+                                },
+                            ]
+                        }
+                    },
                 }
-            }]
+            ]
         if cmd == "lease4-get-all":
-            return [{
-                "result": 0,
-                "arguments": {
-                    "leases": [
-                        {"ip-address": "10.0.0.10", "hw-address": "aa:bb:cc:dd:ee:01",
-                         "hostname": "host1", "subnet-id": 1, "state": 0},
-                        {"ip-address": "10.0.0.11", "hw-address": "aabbccddee02",
-                         "hostname": "host2", "subnet-id": 1, "state": 0},
-                    ]
+            return [
+                {
+                    "result": 0,
+                    "arguments": {
+                        "leases": [
+                            {
+                                "ip-address": "10.0.0.10",
+                                "hw-address": "aa:bb:cc:dd:ee:01",
+                                "hostname": "host1",
+                                "subnet-id": 1,
+                                "state": 0,
+                            },
+                            {
+                                "ip-address": "10.0.0.11",
+                                "hw-address": "aabbccddee02",
+                                "hostname": "host2",
+                                "subnet-id": 1,
+                                "state": 0,
+                            },
+                        ]
+                    },
                 }
-            }]
+            ]
         return {}
 
     snapshot = asyncio.run(collect_dhcp_snapshot(server, {}, fetch_json=_fake_fetch))
@@ -98,23 +116,27 @@ def test_windows_adapter_calculates_utilization_from_inuse_free():
 
     async def _fake_fetch(url, *, method="GET", headers=None, params=None, json_body=None, auth=None, verify=True):
         if url.endswith("/scopes"):
-            return [{
-                "ScopeId": "192.168.1.0",
-                "SubnetMask": "255.255.255.0",
-                "Name": "office",
-                "StartRange": "192.168.1.10",
-                "EndRange": "192.168.1.250",
-                "AddressesInUse": 200,
-                "AddressesFree": 41,
-                "State": "Active",
-            }]
+            return [
+                {
+                    "ScopeId": "192.168.1.0",
+                    "SubnetMask": "255.255.255.0",
+                    "Name": "office",
+                    "StartRange": "192.168.1.10",
+                    "EndRange": "192.168.1.250",
+                    "AddressesInUse": 200,
+                    "AddressesFree": 41,
+                    "State": "Active",
+                }
+            ]
         if url.endswith("/leases"):
-            return [{
-                "IPAddress": "192.168.1.50",
-                "ClientId": "11-22-33-44-55-66",
-                "HostName": "laptop",
-                "AddressState": "Active",
-            }]
+            return [
+                {
+                    "IPAddress": "192.168.1.50",
+                    "ClientId": "11-22-33-44-55-66",
+                    "HostName": "laptop",
+                    "AddressState": "Active",
+                }
+            ]
         return {}
 
     snapshot = asyncio.run(collect_dhcp_snapshot(server, {}, fetch_json=_fake_fetch))
@@ -137,11 +159,15 @@ def test_infoblox_adapter_falls_back_to_subnet_size_when_total_missing():
         if url.endswith("/network"):
             return [{"_ref": "network/abc", "network": "172.16.0.0/24", "comment": "lab"}]
         if url.endswith("/lease"):
-            return [{
-                "address": "172.16.0.5", "binding_state": "ACTIVE",
-                "client_hostname": "tester", "hardware": "ab:cd:ef:01:02:03",
-                "network": "172.16.0.0/24",
-            }]
+            return [
+                {
+                    "address": "172.16.0.5",
+                    "binding_state": "ACTIVE",
+                    "client_hostname": "tester",
+                    "hardware": "ab:cd:ef:01:02:03",
+                    "network": "172.16.0.0/24",
+                }
+            ]
         return {}
 
     snapshot = asyncio.run(collect_dhcp_snapshot(server, {}, fetch_json=_fake_fetch))
@@ -196,21 +222,42 @@ def test_create_and_get_dhcp_server(dhcp_db):
 def test_replace_dhcp_server_snapshot_persists_scopes_and_leases(dhcp_db):
     async def _go():
         server = await db_module.create_dhcp_server(
-            provider="kea", name="Kea-Test", base_url="http://x", auth_type="none",
-            auth_config={}, enabled=True,
+            provider="kea",
+            name="Kea-Test",
+            base_url="http://x",
+            auth_type="none",
+            auth_config={},
+            enabled=True,
         )
         sid = int(server["id"])
         result = await db_module.replace_dhcp_server_snapshot(
             sid,
             scopes=[
-                {"external_id": "1", "subnet": "10.0.0.0/24", "name": "a",
-                 "total_addresses": 254, "used_addresses": 240, "free_addresses": 14},
-                {"external_id": "2", "subnet": "10.0.1.0/24", "name": "b",
-                 "total_addresses": 254, "used_addresses": 50, "free_addresses": 204},
+                {
+                    "external_id": "1",
+                    "subnet": "10.0.0.0/24",
+                    "name": "a",
+                    "total_addresses": 254,
+                    "used_addresses": 240,
+                    "free_addresses": 14,
+                },
+                {
+                    "external_id": "2",
+                    "subnet": "10.0.1.0/24",
+                    "name": "b",
+                    "total_addresses": 254,
+                    "used_addresses": 50,
+                    "free_addresses": 204,
+                },
             ],
             leases=[
-                {"address": "10.0.0.5", "scope_subnet": "10.0.0.0/24",
-                 "mac_address": "aa:bb:cc:dd:ee:ff", "hostname": "h1", "state": "active"},
+                {
+                    "address": "10.0.0.5",
+                    "scope_subnet": "10.0.0.0/24",
+                    "mac_address": "aa:bb:cc:dd:ee:ff",
+                    "hostname": "h1",
+                    "state": "active",
+                },
             ],
         )
         assert result == {"scopes": 2, "leases": 1}
@@ -231,8 +278,12 @@ def test_replace_dhcp_server_snapshot_persists_scopes_and_leases(dhcp_db):
 def test_replace_dhcp_snapshot_clears_previous_rows(dhcp_db):
     async def _go():
         server = await db_module.create_dhcp_server(
-            provider="kea", name="Kea-X", base_url="http://x", auth_type="none",
-            auth_config={}, enabled=True,
+            provider="kea",
+            name="Kea-X",
+            base_url="http://x",
+            auth_type="none",
+            auth_config={},
+            enabled=True,
         )
         sid = int(server["id"])
         await db_module.replace_dhcp_server_snapshot(
@@ -265,10 +316,18 @@ def test_correlate_leases_to_inventory_classifies_known_and_unknown(dhcp_db):
             await d.close()
 
         leases = [
-            {"address": "10.0.0.5", "mac_address": "aa:bb:cc:dd:ee:01", "hostname": "known-host",
-             "scope_subnet": "10.0.0.0/24"},
-            {"address": "10.0.0.99", "mac_address": "aa:bb:cc:dd:ee:99", "hostname": "rogue",
-             "scope_subnet": "10.0.0.0/24"},
+            {
+                "address": "10.0.0.5",
+                "mac_address": "aa:bb:cc:dd:ee:01",
+                "hostname": "known-host",
+                "scope_subnet": "10.0.0.0/24",
+            },
+            {
+                "address": "10.0.0.99",
+                "mac_address": "aa:bb:cc:dd:ee:99",
+                "hostname": "rogue",
+                "scope_subnet": "10.0.0.0/24",
+            },
         ]
         result = await _correlate_leases_to_inventory(leases)
         assert len(result["known"]) == 1
@@ -283,8 +342,12 @@ def test_correlate_leases_to_inventory_classifies_known_and_unknown(dhcp_db):
 def test_delete_dhcp_server_cascades_to_scopes_and_leases(dhcp_db):
     async def _go():
         server = await db_module.create_dhcp_server(
-            provider="kea", name="Cascade", base_url="http://x", auth_type="none",
-            auth_config={}, enabled=True,
+            provider="kea",
+            name="Cascade",
+            base_url="http://x",
+            auth_type="none",
+            auth_config={},
+            enabled=True,
         )
         sid = int(server["id"])
         await db_module.replace_dhcp_server_snapshot(

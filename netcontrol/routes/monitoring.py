@@ -2,6 +2,7 @@
 monitoring.py -- Real-time device monitoring, alerting, SLA dashboards,
 and background poll/escalation loops.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -189,12 +190,14 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
     icmp_cfg = state.MONITORING_CONFIG
     icmp_task = None
     if ICMP_AVAILABLE and icmp_cfg.get("icmp_enabled", True):
-        icmp_task = asyncio.create_task(ping_host(
-            host["ip_address"],
-            count=int(icmp_cfg.get("icmp_count", 3)),
-            timeout=float(icmp_cfg.get("icmp_timeout_seconds", 2.0)),
-            privileged=bool(icmp_cfg.get("icmp_privileged", False)),
-        ))
+        icmp_task = asyncio.create_task(
+            ping_host(
+                host["ip_address"],
+                count=int(icmp_cfg.get("icmp_count", 3)),
+                timeout=float(icmp_cfg.get("icmp_timeout_seconds", 2.0)),
+                privileged=bool(icmp_cfg.get("icmp_privileged", False)),
+            )
+        )
 
     # ── SNMP polling for CPU, memory, interfaces ──
     # Skip SNMP entirely for icmp_only hosts: they're declared at onboarding
@@ -204,6 +207,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
     if PYSMNP_AVAILABLE and snmp_cfg.get("enabled") and not is_icmp_only_host:
         try:
             from netcontrol.routes.metrics_engine import resolve_oids_for_device
+
             def _walk(oid):
                 return _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid)
 
@@ -211,26 +215,26 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             device_type = host.get("device_type", "cisco_ios")
             oid_map = await resolve_oids_for_device(device_type)
             cpu_oid = oid_map.get("cpu_oid", "1.3.6.1.4.1.9.9.109.1.1.1.1.8")
-            cpu_old_oid = "1.3.6.1.4.1.9.2.1.58.0"               # avgBusy5 (Cisco legacy fallback)
+            cpu_old_oid = "1.3.6.1.4.1.9.2.1.58.0"  # avgBusy5 (Cisco legacy fallback)
             mem_used_oid = oid_map.get("mem_used_oid", "1.3.6.1.4.1.9.9.48.1.1.1.5")
             mem_free_oid = oid_map.get("mem_free_oid", "1.3.6.1.4.1.9.9.48.1.1.1.6")
             mem_total_oid = oid_map.get("mem_total_oid", "")
             uptime_oid = oid_map.get("uptime_oid", "1.3.6.1.2.1.1.3")
 
             # Interface OIDs are standard MIB-II / IF-MIB - vendor-independent
-            if_oper_status_oid = "1.3.6.1.2.1.2.2.1.8"           # ifOperStatus
-            if_admin_status_oid = "1.3.6.1.2.1.2.2.1.7"          # ifAdminStatus
-            if_name_oid = "1.3.6.1.2.1.31.1.1.1.1"               # ifName
-            if_descr_oid = "1.3.6.1.2.1.2.2.1.2"                 # ifDescr
-            if_high_speed_oid = "1.3.6.1.2.1.31.1.1.1.15"        # ifHighSpeed
-            if_hc_in_oid = "1.3.6.1.2.1.31.1.1.1.6"              # ifHCInOctets
-            if_hc_out_oid = "1.3.6.1.2.1.31.1.1.1.10"            # ifHCOutOctets
+            if_oper_status_oid = "1.3.6.1.2.1.2.2.1.8"  # ifOperStatus
+            if_admin_status_oid = "1.3.6.1.2.1.2.2.1.7"  # ifAdminStatus
+            if_name_oid = "1.3.6.1.2.1.31.1.1.1.1"  # ifName
+            if_descr_oid = "1.3.6.1.2.1.2.2.1.2"  # ifDescr
+            if_high_speed_oid = "1.3.6.1.2.1.31.1.1.1.15"  # ifHighSpeed
+            if_hc_in_oid = "1.3.6.1.2.1.31.1.1.1.6"  # ifHCInOctets
+            if_hc_out_oid = "1.3.6.1.2.1.31.1.1.1.10"  # ifHCOutOctets
 
             # Interface error/discard counter OIDs (IF-MIB)
-            if_in_errors_oid = "1.3.6.1.2.1.2.2.1.14"            # ifInErrors
-            if_out_errors_oid = "1.3.6.1.2.1.2.2.1.20"           # ifOutErrors
-            if_in_discards_oid = "1.3.6.1.2.1.2.2.1.13"          # ifInDiscards
-            if_out_discards_oid = "1.3.6.1.2.1.2.2.1.19"         # ifOutDiscards
+            if_in_errors_oid = "1.3.6.1.2.1.2.2.1.14"  # ifInErrors
+            if_out_errors_oid = "1.3.6.1.2.1.2.2.1.20"  # ifOutErrors
+            if_in_discards_oid = "1.3.6.1.2.1.2.2.1.13"  # ifInDiscards
+            if_out_discards_oid = "1.3.6.1.2.1.2.2.1.19"  # ifOutDiscards
 
             # Build walk list - skip empty OIDs
             async def _empty_walk():
@@ -241,12 +245,18 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 _walk(cpu_old_oid),
                 _walk(mem_used_oid) if mem_used_oid else _empty_walk(),
                 _walk(mem_free_oid) if mem_free_oid else _empty_walk(),
-                _walk(if_oper_status_oid), _walk(if_admin_status_oid),
-                _walk(if_name_oid), _walk(if_descr_oid), _walk(if_high_speed_oid),
-                _walk(if_hc_in_oid), _walk(if_hc_out_oid),
+                _walk(if_oper_status_oid),
+                _walk(if_admin_status_oid),
+                _walk(if_name_oid),
+                _walk(if_descr_oid),
+                _walk(if_high_speed_oid),
+                _walk(if_hc_in_oid),
+                _walk(if_hc_out_oid),
                 _walk(uptime_oid),
-                _walk(if_in_errors_oid), _walk(if_out_errors_oid),
-                _walk(if_in_discards_oid), _walk(if_out_discards_oid),
+                _walk(if_in_errors_oid),
+                _walk(if_out_errors_oid),
+                _walk(if_in_discards_oid),
+                _walk(if_out_discards_oid),
             ]
             # Also walk mem_total if the vendor provides a total OID
             if mem_total_oid:
@@ -279,16 +289,24 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     try:
                         result["cpu_percent"] = float(int(cpu_val))
                     except (ValueError, TypeError) as exc:
-                        LOGGER.warning("monitoring: bad CPU value from %s (oid %s): %s",
-                                       host["ip_address"], cpu_oid, redact_value(str(exc)))
+                        LOGGER.warning(
+                            "monitoring: bad CPU value from %s (oid %s): %s",
+                            host["ip_address"],
+                            cpu_oid,
+                            redact_value(str(exc)),
+                        )
             elif cpu_old_vals:
                 cpu_val = next(iter(cpu_old_vals.values()), None)
                 if cpu_val is not None:
                     try:
                         result["cpu_percent"] = float(int(cpu_val))
                     except (ValueError, TypeError) as exc:
-                        LOGGER.warning("monitoring: bad CPU value from %s (oid %s): %s",
-                                       host["ip_address"], cpu_old_oid, redact_value(str(exc)))
+                        LOGGER.warning(
+                            "monitoring: bad CPU value from %s (oid %s): %s",
+                            host["ip_address"],
+                            cpu_old_oid,
+                            redact_value(str(exc)),
+                        )
 
             # Memory - supports two patterns:
             #   Cisco:  used + free OIDs (bytes) → compute total
@@ -303,9 +321,13 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         result["memory_total_mb"] = round(total / 1048576, 1)
                         result["memory_percent"] = round(used / total * 100, 1)
                 except (ValueError, TypeError, StopIteration) as exc:
-                    LOGGER.warning("monitoring: bad memory values from %s (oids %s/%s): %s",
-                                   host["ip_address"], mem_used_oid, mem_free_oid,
-                                   redact_value(str(exc)))
+                    LOGGER.warning(
+                        "monitoring: bad memory values from %s (oids %s/%s): %s",
+                        host["ip_address"],
+                        mem_used_oid,
+                        mem_free_oid,
+                        redact_value(str(exc)),
+                    )
             elif mem_used_vals and mem_total_vals:
                 try:
                     used = int(next(iter(mem_used_vals.values())))
@@ -315,9 +337,13 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         result["memory_total_mb"] = round(total / 1048576, 1)
                         result["memory_percent"] = round(used / total * 100, 1)
                 except (ValueError, TypeError, StopIteration) as exc:
-                    LOGGER.warning("monitoring: bad memory values from %s (oids %s/%s): %s",
-                                   host["ip_address"], mem_used_oid, mem_total_oid,
-                                   redact_value(str(exc)))
+                    LOGGER.warning(
+                        "monitoring: bad memory values from %s (oids %s/%s): %s",
+                        host["ip_address"],
+                        mem_used_oid,
+                        mem_total_oid,
+                        redact_value(str(exc)),
+                    )
             elif mem_used_vals:
                 # Fortinet fgSysMemUsage returns usage as a percentage directly
                 try:
@@ -325,8 +351,12 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     if 0 <= pct <= 100:
                         result["memory_percent"] = pct
                 except (ValueError, TypeError, StopIteration) as exc:
-                    LOGGER.warning("monitoring: bad memory usage value from %s (oid %s): %s",
-                                   host["ip_address"], mem_used_oid, redact_value(str(exc)))
+                    LOGGER.warning(
+                        "monitoring: bad memory usage value from %s (oid %s): %s",
+                        host["ip_address"],
+                        mem_used_oid,
+                        redact_value(str(exc)),
+                    )
 
             # Uptime
             if uptime_vals:
@@ -334,8 +364,12 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     ticks = int(next(iter(uptime_vals.values())))
                     result["uptime_seconds"] = ticks // 100
                 except (ValueError, TypeError, StopIteration) as exc:
-                    LOGGER.warning("monitoring: bad uptime value from %s (oid %s): %s",
-                                   host["ip_address"], uptime_oid, redact_value(str(exc)))
+                    LOGGER.warning(
+                        "monitoring: bad uptime value from %s (oid %s): %s",
+                        host["ip_address"],
+                        uptime_oid,
+                        redact_value(str(exc)),
+                    )
 
             # Interface details
             effective_names = if_names or if_descrs
@@ -362,8 +396,12 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         try:
                             speed_mbps = int(s_val)
                         except (ValueError, TypeError) as exc:
-                            LOGGER.debug("monitoring: bad ifHighSpeed value from %s for ifIndex %s: %s",
-                                         host["ip_address"], idx, str(exc))
+                            LOGGER.debug(
+                                "monitoring: bad ifHighSpeed value from %s for ifIndex %s: %s",
+                                host["ip_address"],
+                                idx,
+                                str(exc),
+                            )
                         break
 
                 in_octets = 0
@@ -373,16 +411,24 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         try:
                             in_octets = int(i_val)
                         except (ValueError, TypeError) as exc:
-                            LOGGER.debug("monitoring: bad ifHCInOctets value from %s for ifIndex %s: %s",
-                                         host["ip_address"], idx, str(exc))
+                            LOGGER.debug(
+                                "monitoring: bad ifHCInOctets value from %s for ifIndex %s: %s",
+                                host["ip_address"],
+                                idx,
+                                str(exc),
+                            )
                         break
                 for o_oid, o_val in hc_out.items():
                     if o_oid.endswith("." + idx):
                         try:
                             out_octets = int(o_val)
                         except (ValueError, TypeError) as exc:
-                            LOGGER.debug("monitoring: bad ifHCOutOctets value from %s for ifIndex %s: %s",
-                                         host["ip_address"], idx, str(exc))
+                            LOGGER.debug(
+                                "monitoring: bad ifHCOutOctets value from %s for ifIndex %s: %s",
+                                host["ip_address"],
+                                idx,
+                                str(exc),
+                            )
                         break
 
                 status_str = "up" if oper == 1 else ("admin_down" if admin == 2 else "down")
@@ -403,56 +449,78 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         try:
                             in_errors = int(e_val)
                         except (ValueError, TypeError) as exc:
-                            LOGGER.debug("monitoring: bad ifInErrors value from %s for ifIndex %s: %s",
-                                         host["ip_address"], idx, str(exc))
+                            LOGGER.debug(
+                                "monitoring: bad ifInErrors value from %s for ifIndex %s: %s",
+                                host["ip_address"],
+                                idx,
+                                str(exc),
+                            )
                         break
                 for e_oid, e_val in if_out_errs.items():
                     if e_oid.endswith("." + idx):
                         try:
                             out_errors = int(e_val)
                         except (ValueError, TypeError) as exc:
-                            LOGGER.debug("monitoring: bad ifOutErrors value from %s for ifIndex %s: %s",
-                                         host["ip_address"], idx, str(exc))
+                            LOGGER.debug(
+                                "monitoring: bad ifOutErrors value from %s for ifIndex %s: %s",
+                                host["ip_address"],
+                                idx,
+                                str(exc),
+                            )
                         break
                 for e_oid, e_val in if_in_disc.items():
                     if e_oid.endswith("." + idx):
                         try:
                             in_discards = int(e_val)
                         except (ValueError, TypeError) as exc:
-                            LOGGER.debug("monitoring: bad ifInDiscards value from %s for ifIndex %s: %s",
-                                         host["ip_address"], idx, str(exc))
+                            LOGGER.debug(
+                                "monitoring: bad ifInDiscards value from %s for ifIndex %s: %s",
+                                host["ip_address"],
+                                idx,
+                                str(exc),
+                            )
                         break
                 for e_oid, e_val in if_out_disc.items():
                     if e_oid.endswith("." + idx):
                         try:
                             out_discards = int(e_val)
                         except (ValueError, TypeError) as exc:
-                            LOGGER.debug("monitoring: bad ifOutDiscards value from %s for ifIndex %s: %s",
-                                         host["ip_address"], idx, str(exc))
+                            LOGGER.debug(
+                                "monitoring: bad ifOutDiscards value from %s for ifIndex %s: %s",
+                                host["ip_address"],
+                                idx,
+                                str(exc),
+                            )
                         break
 
-                if_details.append({
-                    "if_index": int(idx),
-                    "name": iface_name,
-                    "status": status_str,
-                    "speed_mbps": speed_mbps,
-                    "in_octets": in_octets,
-                    "out_octets": out_octets,
-                    "in_errors": in_errors,
-                    "out_errors": out_errors,
-                    "in_discards": in_discards,
-                    "out_discards": out_discards,
-                })
+                if_details.append(
+                    {
+                        "if_index": int(idx),
+                        "name": iface_name,
+                        "status": status_str,
+                        "speed_mbps": speed_mbps,
+                        "in_octets": in_octets,
+                        "out_octets": out_octets,
+                        "in_errors": in_errors,
+                        "out_errors": out_errors,
+                        "in_discards": in_discards,
+                        "out_discards": out_discards,
+                    }
+                )
 
             result["if_details"] = if_details
 
         except Exception as exc:
-            LOGGER.warning("monitoring: SNMP poll failed for %s: %s",
-                           host.get("hostname", host["ip_address"]), redact_value(str(exc)))
+            LOGGER.warning(
+                "monitoring: SNMP poll failed for %s: %s",
+                host.get("hostname", host["ip_address"]),
+                redact_value(str(exc)),
+            )
 
     # ── SSH polling for VPN and routes ──
     if cred and not is_icmp_only_host:
         try:
+
             def _ssh_poll():
                 device = {
                     "device_type": host.get("device_type", "cisco_ios"),
@@ -481,9 +549,13 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     if state.MONITORING_CONFIG.get("collect_vpn", True):
                         dtype = host.get("device_type", "cisco_ios")
                         if dtype.startswith("cisco_asa") or dtype == "asa":
-                            outputs["vpn"] = net_connect.send_command("show vpn-sessiondb summary", read_timeout=read_timeout)
+                            outputs["vpn"] = net_connect.send_command(
+                                "show vpn-sessiondb summary", read_timeout=read_timeout
+                            )
                         else:
-                            outputs["vpn"] = net_connect.send_command("show crypto isakmp sa", read_timeout=read_timeout)
+                            outputs["vpn"] = net_connect.send_command(
+                                "show crypto isakmp sa", read_timeout=read_timeout
+                            )
 
                     # Route table: the cheap summary runs every tick; the full
                     # table (route_snapshot + churn hash) is only pulled when the
@@ -493,10 +565,8 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         outputs["routes"] = net_connect.send_command("show ip route summary", read_timeout=read_timeout)
                         summary_count = _parse_route_summary_count(outputs["routes"])
                         outputs["route_summary_count"] = summary_count
-                        full_interval = float(state.MONITORING_CONFIG.get(
-                            "route_full_interval_seconds", 900))
-                        last_full_ts, last_count = _ROUTE_POLL_STATE.get(
-                            host["id"], (0.0, None))
+                        full_interval = float(state.MONITORING_CONFIG.get("route_full_interval_seconds", 900))
+                        last_full_ts, last_count = _ROUTE_POLL_STATE.get(host["id"], (0.0, None))
                         now = time.monotonic()
                         need_full = (
                             summary_count is None
@@ -506,7 +576,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                             or (now - last_full_ts) >= full_interval
                         )
                         if need_full:
-                            outputs["routes_full"] = net_connect.send_command("show ip route", read_timeout=read_timeout)
+                            outputs["routes_full"] = net_connect.send_command(
+                                "show ip route", read_timeout=read_timeout
+                            )
                             _ROUTE_POLL_STATE[host["id"]] = (now, summary_count)
                         else:
                             _ROUTE_POLL_STATE[host["id"]] = (last_full_ts, summary_count)
@@ -560,16 +632,22 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             summary_count = ssh_outputs.get("route_summary_count")
             routes_full = ssh_outputs.get("routes_full", "")
             if routes_full:
-                route_lines = [line for line in routes_full.strip().splitlines()
-                               if line.strip() and not line.strip().startswith(("Codes:", "Gateway", "---"))]
+                route_lines = [
+                    line
+                    for line in routes_full.strip().splitlines()
+                    if line.strip() and not line.strip().startswith(("Codes:", "Gateway", "---"))
+                ]
                 result["route_count"] = summary_count if summary_count is not None else len(route_lines)
                 result["route_snapshot"] = routes_full.strip()
             elif summary_count is not None:
                 result["route_count"] = summary_count
 
         except Exception as exc:
-            LOGGER.warning("monitoring: SSH poll failed for %s: %s",
-                           host.get("hostname", host["ip_address"]), redact_value(str(exc)))
+            LOGGER.warning(
+                "monitoring: SSH poll failed for %s: %s",
+                host.get("hostname", host["ip_address"]),
+                redact_value(str(exc)),
+            )
             if result["cpu_percent"] is None and result["if_up_count"] == 0:
                 result["poll_status"] = "error"
                 result["poll_error"] = str(exc)[:500]
@@ -580,8 +658,11 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
         try:
             icmp_result = await icmp_task
         except Exception as exc:
-            LOGGER.warning("monitoring: ICMP probe failed for %s: %s",
-                           host.get("hostname", host["ip_address"]), redact_value(str(exc)))
+            LOGGER.warning(
+                "monitoring: ICMP probe failed for %s: %s",
+                host.get("hostname", host["ip_address"]),
+                redact_value(str(exc)),
+            )
 
     if icmp_result is not None:
         result["icmp_alive"] = icmp_result["alive"]
@@ -636,7 +717,10 @@ def _check_threshold(value: float | None, operator: str, threshold: float) -> bo
 
 
 def _suppression_active_local(
-    rows: list[dict], host_id: int, metric: str, group_id: int | None,
+    rows: list[dict],
+    host_id: int,
+    metric: str,
+    group_id: int | None,
 ) -> bool:
     """In-memory equivalent of db.is_alert_suppressed against a preloaded set of
     active suppression rows (see db.get_active_alert_suppressions). Mirrors the
@@ -659,8 +743,12 @@ def _suppression_active_local(
 
 
 async def _evaluate_alerts_for_poll(
-    res: dict, poll_id: int, group_id: int | None, rules: list[dict],
-    hostname: str = "", suppressions: list[dict] | None = None,
+    res: dict,
+    poll_id: int,
+    group_id: int | None,
+    rules: list[dict],
+    hostname: str = "",
+    suppressions: list[dict] | None = None,
 ) -> int:
     """Evaluate built-in thresholds and user-defined rules against a poll result.
 
@@ -685,38 +773,56 @@ async def _evaluate_alerts_for_poll(
     mem_thresh = state.MONITORING_CONFIG.get("memory_threshold", 90)
 
     if res["cpu_percent"] is not None and res["cpu_percent"] >= cpu_thresh:
-        built_in_checks.append({
-            "metric": "cpu", "alert_type": "threshold",
-            "message": f"CPU utilization at {res['cpu_percent']}% (threshold: {cpu_thresh}%)",
-            "severity": "critical" if res["cpu_percent"] >= 95 else "warning",
-            "value": res["cpu_percent"], "threshold": float(cpu_thresh),
-        })
+        built_in_checks.append(
+            {
+                "metric": "cpu",
+                "alert_type": "threshold",
+                "message": f"CPU utilization at {res['cpu_percent']}% (threshold: {cpu_thresh}%)",
+                "severity": "critical" if res["cpu_percent"] >= 95 else "warning",
+                "value": res["cpu_percent"],
+                "threshold": float(cpu_thresh),
+            }
+        )
 
     if res["memory_percent"] is not None and res["memory_percent"] >= mem_thresh:
-        built_in_checks.append({
-            "metric": "memory", "alert_type": "threshold",
-            "message": f"Memory utilization at {res['memory_percent']}% (threshold: {mem_thresh}%)",
-            "severity": "critical" if res["memory_percent"] >= 95 else "warning",
-            "value": res["memory_percent"], "threshold": float(mem_thresh),
-        })
+        built_in_checks.append(
+            {
+                "metric": "memory",
+                "alert_type": "threshold",
+                "message": f"Memory utilization at {res['memory_percent']}% (threshold: {mem_thresh}%)",
+                "severity": "critical" if res["memory_percent"] >= 95 else "warning",
+                "value": res["memory_percent"],
+                "threshold": float(mem_thresh),
+            }
+        )
 
     if res["if_down_count"] > 0:
         down_names = [i["name"] for i in res["if_details"] if i.get("status") == "down"]
         if down_names:
-            built_in_checks.append({
-                "metric": "interface_down", "alert_type": "status",
-                "message": f"{len(down_names)} interface(s) down: {', '.join(down_names[:5])}",
-                "severity": "warning", "value": float(len(down_names)), "threshold": None,
-            })
+            built_in_checks.append(
+                {
+                    "metric": "interface_down",
+                    "alert_type": "status",
+                    "message": f"{len(down_names)} interface(s) down: {', '.join(down_names[:5])}",
+                    "severity": "warning",
+                    "value": float(len(down_names)),
+                    "threshold": None,
+                }
+            )
 
     if res["vpn_tunnels_down"] > 0:
         down_peers = [v["peer"] for v in res["vpn_details"] if v.get("status") == "down"]
-        built_in_checks.append({
-            "metric": "vpn_down", "alert_type": "status",
-            "message": f"{res['vpn_tunnels_down']} VPN tunnel(s) down" +
-                       (f": {', '.join(down_peers[:3])}" if down_peers else ""),
-            "severity": "warning", "value": float(res["vpn_tunnels_down"]), "threshold": None,
-        })
+        built_in_checks.append(
+            {
+                "metric": "vpn_down",
+                "alert_type": "status",
+                "message": f"{res['vpn_tunnels_down']} VPN tunnel(s) down"
+                + (f": {', '.join(down_peers[:3])}" if down_peers else ""),
+                "severity": "warning",
+                "value": float(res["vpn_tunnels_down"]),
+                "threshold": None,
+            }
+        )
 
     # Fire built-in checks with dedup + suppression
     for chk in built_in_checks:
@@ -724,11 +830,16 @@ async def _evaluate_alerts_for_poll(
             continue
         dedup_key = f"{host_id}:{chk['metric']}:{chk['alert_type']}"
         await db.create_monitoring_alert(
-            host_id=host_id, poll_id=poll_id,
-            alert_type=chk["alert_type"], metric=chk["metric"],
-            message=chk["message"], severity=chk["severity"],
-            value=chk["value"], threshold=chk.get("threshold"),
-            dedup_key=dedup_key, hostname=hostname,
+            host_id=host_id,
+            poll_id=poll_id,
+            alert_type=chk["alert_type"],
+            metric=chk["metric"],
+            message=chk["message"],
+            severity=chk["severity"],
+            value=chk["value"],
+            threshold=chk.get("threshold"),
+            dedup_key=dedup_key,
+            hostname=hostname,
         )
         alerts_created += 1
 
@@ -756,11 +867,14 @@ async def _evaluate_alerts_for_poll(
         msg = f"Rule '{rule['name']}': {rule['metric']} = {metric_val} {rule['operator']} {rule['value']}"
 
         await db.create_monitoring_alert(
-            host_id=host_id, poll_id=poll_id,
+            host_id=host_id,
+            poll_id=poll_id,
             alert_type=rule.get("rule_type", "threshold"),
             metric=rule["metric"],
-            message=msg, severity=rule.get("severity", "warning"),
-            value=metric_val, threshold=rule["value"],
+            message=msg,
+            severity=rule.get("severity", "warning"),
+            value=metric_val,
+            threshold=rule["value"],
             rule_id=rule["id"],
             dedup_key=dedup_key,
             channel_ids=rule.get("channel_ids", "") or "",
@@ -800,9 +914,13 @@ async def _run_alert_escalation() -> int:
             target = "critical"
         await db.escalate_alert(alert["id"], target)
         escalated += 1
-        LOGGER.info("monitoring: escalated alert %d (%s on %s) to %s",
-                     alert["id"], alert.get("metric", "?"),
-                     alert.get("hostname", "?"), target)
+        LOGGER.info(
+            "monitoring: escalated alert %d (%s on %s) to %s",
+            alert["id"],
+            alert.get("metric", "?"),
+            alert.get("hostname", "?"),
+            target,
+        )
 
     return escalated
 
@@ -819,10 +937,7 @@ async def _build_poll_targets() -> list[tuple[dict, dict | None, dict]]:
     deployments that haven't migrated yet."""
     from netcontrol.routes.state import _resolve_snmp_discovery_config
 
-    cred_id = (
-        state.AUTH_CONFIG.get("service_credential_id")
-        or state.AUTH_CONFIG.get("default_credential_id")
-    )
+    cred_id = state.AUTH_CONFIG.get("service_credential_id") or state.AUTH_CONFIG.get("default_credential_id")
     default_cred = await db.get_credential_raw(cred_id) if cred_id else None
     targets: list[tuple[dict, dict | None, dict]] = []
     for group in await db.get_all_groups():
@@ -839,9 +954,11 @@ async def _run_retention_cleanup_throttled() -> None:
     retention_interval_seconds no matter who triggers a poll (scheduled
     cycle or manual stream)."""
     global _last_retention_cleanup
-    retention_interval = float(state.MONITORING_CONFIG.get(
-        "retention_interval_seconds",
-        state.MONITORING_DEFAULTS["retention_interval_seconds"]))
+    retention_interval = float(
+        state.MONITORING_CONFIG.get(
+            "retention_interval_seconds", state.MONITORING_DEFAULTS["retention_interval_seconds"]
+        )
+    )
     now_mono = time.monotonic()
     if now_mono - _last_retention_cleanup < retention_interval:
         return
@@ -858,7 +975,9 @@ async def _run_retention_cleanup_throttled() -> None:
 
 
 async def _process_poll_result(
-    h: dict, res: dict, alert_rules_cache: list,
+    h: dict,
+    res: dict,
+    alert_rules_cache: list,
     suppressions: list[dict] | None = None,
 ) -> int:
     """Persist one poll result and run availability/alerting/metrics/baseline/
@@ -898,18 +1017,18 @@ async def _process_poll_result(
     # ── Availability Tracking: detect state transitions ──
     try:
         await _track_availability_from_poll(
-            res, poll_id,
+            res,
+            poll_id,
             hostname=h.get("hostname"),
             ip_address=h.get("ip_address"),
         )
     except Exception as exc:
-        LOGGER.debug("availability: tracking error for host %s: %s",
-                     res["host_id"], str(exc))
+        LOGGER.debug("availability: tracking error for host %s: %s", res["host_id"], str(exc))
 
     # ── Alerting Engine: evaluate built-in thresholds + user rules ──
     alerts_created += await _evaluate_alerts_for_poll(
-        res, poll_id, h.get("group_id"), alert_rules_cache,
-        hostname=h.get("hostname", ""), suppressions=suppressions)
+        res, poll_id, h.get("group_id"), alert_rules_cache, hostname=h.get("hostname", ""), suppressions=suppressions
+    )
 
     # ── Metrics Engine: emit flexible metric samples + interface TS ──
     try:
@@ -917,17 +1036,16 @@ async def _process_poll_result(
         await store_interface_ts_from_poll(res["host_id"], res.get("if_details", []))
         await store_interface_error_metrics_from_poll(res["host_id"], res.get("if_details", []))
     except Exception as exc:
-        LOGGER.debug("metrics: emission error for host %s: %s",
-                     res["host_id"], redact_value(str(exc)))
+        LOGGER.debug("metrics: emission error for host %s: %s", res["host_id"], redact_value(str(exc)))
 
     # ── Baseline Deviation Alerting ──
     try:
         from netcontrol.routes.baseline_alerting import evaluate_baseline_alerts_for_poll
+
         baseline_alerts = await evaluate_baseline_alerts_for_poll(res, poll_id)
         alerts_created += baseline_alerts
     except Exception as exc:
-        LOGGER.debug("baseline: evaluation error for host %s: %s",
-                     res["host_id"], redact_value(str(exc)))
+        LOGGER.debug("baseline: evaluation error for host %s: %s", res["host_id"], redact_value(str(exc)))
 
     # Route churn detection
     if res["route_snapshot"]:
@@ -942,12 +1060,13 @@ async def _process_poll_result(
             )
             if prev_snap is not None:
                 delta = abs(res["route_count"] - prev_snap["route_count"])
-                suppressed = await db.is_alert_suppressed(
-                    res["host_id"], "route_churn", h.get("group_id"))
+                suppressed = await db.is_alert_suppressed(res["host_id"], "route_churn", h.get("group_id"))
                 if not suppressed:
                     await db.create_monitoring_alert(
-                        host_id=res["host_id"], poll_id=poll_id,
-                        alert_type="churn", metric="route_churn",
+                        host_id=res["host_id"],
+                        poll_id=poll_id,
+                        alert_type="churn",
+                        metric="route_churn",
                         message=f"Route table changed: {prev_snap['route_count']} -> {res['route_count']} routes (delta: {delta})",
                         severity="warning" if delta < 10 else "critical",
                         value=float(delta),
@@ -967,8 +1086,9 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     alerts_created = 0
     errors = 0
 
-    max_concurrency = max(1, int(state.MONITORING_CONFIG.get(
-        "poll_concurrency", state.MONITORING_DEFAULTS["poll_concurrency"])))
+    max_concurrency = max(
+        1, int(state.MONITORING_CONFIG.get("poll_concurrency", state.MONITORING_DEFAULTS["poll_concurrency"]))
+    )
     sem = asyncio.Semaphore(max_concurrency)
 
     # Pre-load user-defined alert rules + active suppressions once for this
@@ -997,9 +1117,7 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
         # rather than raised (see streaming poll for details).
         async with sem:
             try:
-                res = await asyncio.wait_for(
-                    _poll_host_monitoring(h, c, s), timeout=poll_timeout
-                )
+                res = await asyncio.wait_for(_poll_host_monitoring(h, c, s), timeout=poll_timeout)
                 return h, res, None
             except TimeoutError:
                 # Bare TimeoutError stringifies to '' - name it like the
@@ -1025,34 +1143,45 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
         if err is not None:
             errors += 1
             _poll_backoff_record(h["id"], ok=False)
-            LOGGER.warning("monitoring: poll exception for %s: %s",
-                           h.get("hostname", "?"), redact_value(_exc_text(err)))
+            LOGGER.warning(
+                "monitoring: poll exception for %s: %s", h.get("hostname", "?"), redact_value(_exc_text(err))
+            )
             continue
 
         _poll_backoff_record(h["id"], ok=True)
         hosts_polled += 1
         try:
-            alerts_created += await _process_poll_result(
-                h, res, alert_rules_cache, suppressions=suppressions_cache)
+            alerts_created += await _process_poll_result(h, res, alert_rules_cache, suppressions=suppressions_cache)
         except Exception as exc:  # one host's persistence must not abort the cycle
-            LOGGER.warning("monitoring: post-process error for %s: %s",
-                           h.get("hostname", "?"), redact_value(_exc_text(exc)))
+            LOGGER.warning(
+                "monitoring: post-process error for %s: %s", h.get("hostname", "?"), redact_value(_exc_text(exc))
+            )
 
     await _run_retention_cleanup_throttled()
 
-    LOGGER.info("monitoring: poll complete - %d hosts, %d alerts, %d errors, %d backed off",
-                hosts_polled, alerts_created, errors, backed_off)
-    return {"enabled": True, "hosts_polled": hosts_polled,
-            "alerts_created": alerts_created, "errors": errors,
-            "backed_off": backed_off}
+    LOGGER.info(
+        "monitoring: poll complete - %d hosts, %d alerts, %d errors, %d backed off",
+        hosts_polled,
+        alerts_created,
+        errors,
+        backed_off,
+    )
+    return {
+        "enabled": True,
+        "hosts_polled": hosts_polled,
+        "alerts_created": alerts_created,
+        "errors": errors,
+        "backed_off": backed_off,
+    }
 
 
 async def _monitoring_poll_loop() -> None:
     """Infinite loop that polls device health at configurable intervals."""
     while True:
         try:
-            interval = int(state.MONITORING_CONFIG.get(
-                "interval_seconds", state.MONITORING_DEFAULTS["interval_seconds"]))
+            interval = int(
+                state.MONITORING_CONFIG.get("interval_seconds", state.MONITORING_DEFAULTS["interval_seconds"])
+            )
             # Small positive jitter so poll ticks don't stay phase-locked with
             # the other background loops (escalation, drift, federation, FDM)
             # that all start at the same instant on app startup.
@@ -1071,6 +1200,7 @@ async def _baseline_computation_loop() -> None:
         try:
             await asyncio.sleep(6 * 3600)  # Every 6 hours
             from netcontrol.routes.baseline_alerting import run_baseline_computation_cycle
+
             await run_baseline_computation_cycle()
         except asyncio.CancelledError:
             raise
@@ -1145,8 +1275,9 @@ async def acknowledge_alert(alert_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
     await db.acknowledge_monitoring_alert(alert_id, user)
-    await _audit("monitoring", "alert.acknowledged", user=user,
-                 detail=f"alert_id={alert_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring", "alert.acknowledged", user=user, detail=f"alert_id={alert_id}", correlation_id=_corr_id(request)
+    )
     return {"ok": True}
 
 
@@ -1161,10 +1292,16 @@ async def get_alert_correlation(alert_id: int):
     host_id = alert.get("host_id")
     window_start = (datetime.fromisoformat(alert_time) - timedelta(minutes=30)).isoformat() if alert_time else None
 
-    related_deployments = await db.get_deployments_for_host_in_range(
-        host_id, window_start, alert_time) if host_id and window_start else []
-    related_drift = await db.get_config_drift_events_in_range(
-        [host_id], window_start, alert_time) if host_id and window_start else []
+    related_deployments = (
+        await db.get_deployments_for_host_in_range(host_id, window_start, alert_time)
+        if host_id and window_start
+        else []
+    )
+    related_drift = (
+        await db.get_config_drift_events_in_range([host_id], window_start, alert_time)
+        if host_id and window_start
+        else []
+    )
 
     return {
         "alert": alert,
@@ -1184,9 +1321,13 @@ async def monitoring_poll_now(request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
     result = await _run_monitoring_poll_once(force=True)
-    await _audit("monitoring", "poll.manual", user=user,
-                 detail=f"hosts={result.get('hosts_polled', 0)} alerts={result.get('alerts_created', 0)}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring",
+        "poll.manual",
+        user=user,
+        detail=f"hosts={result.get('hosts_polled', 0)} alerts={result.get('alerts_created', 0)}",
+        correlation_id=_corr_id(request),
+    )
     return result
 
 
@@ -1216,8 +1357,9 @@ async def monitoring_poll_now_stream(request: Request):
         alerts_created = 0
         errors = 0
         completed = 0
-        max_concurrency = max(1, int(state.MONITORING_CONFIG.get(
-            "poll_concurrency", state.MONITORING_DEFAULTS["poll_concurrency"])))
+        max_concurrency = max(
+            1, int(state.MONITORING_CONFIG.get("poll_concurrency", state.MONITORING_DEFAULTS["poll_concurrency"]))
+        )
         sem = asyncio.Semaphore(max_concurrency)
 
         poll_timeout = float(state.MONITORING_CONFIG.get("per_host_timeout_seconds", 90))
@@ -1236,14 +1378,11 @@ async def monitoring_poll_now_stream(request: Request):
                     )
                     return h, res, None
                 except TimeoutError:
-                    return h, None, TimeoutError(
-                        f"poll exceeded {poll_timeout:.0f}s"
-                    )
+                    return h, None, TimeoutError(f"poll exceeded {poll_timeout:.0f}s")
                 except Exception as exc:  # noqa: BLE001 - surfaced to client
                     return h, None, exc
 
-        tasks = [asyncio.create_task(_poll_one(h, cred, snmp_cfg))
-                 for h, cred, snmp_cfg in all_hosts]
+        tasks = [asyncio.create_task(_poll_one(h, cred, snmp_cfg)) for h, cred, snmp_cfg in all_hosts]
 
         try:
             for coro in asyncio.as_completed(tasks):
@@ -1261,12 +1400,9 @@ async def monitoring_poll_now_stream(request: Request):
                     errors += 1
                     completed += 1
                     _poll_backoff_record(h["id"], ok=False)
-                    LOGGER.warning("monitoring: poll failed for %s: %s",
-                                   hostname, redact_value(_exc_text(err)))
+                    LOGGER.warning("monitoring: poll failed for %s: %s", hostname, redact_value(_exc_text(err)))
                     detail = (
-                        "Timed out - device unresponsive."
-                        if isinstance(err, TimeoutError)
-                        else "Poll failed for host."
+                        "Timed out - device unresponsive." if isinstance(err, TimeoutError) else "Poll failed for host."
                     )
                     yield f"data: {json.dumps({'type': 'host_error', 'completed': completed, 'total_hosts': total, 'hostname': hostname, 'error': detail})}\n\n"
                     continue
@@ -1277,12 +1413,10 @@ async def monitoring_poll_now_stream(request: Request):
                 _poll_backoff_record(h["id"], ok=True)
 
                 try:
-                    host_alerts = await _process_poll_result(
-                        h, res, alert_rules_cache, suppressions=suppressions_cache)
+                    host_alerts = await _process_poll_result(h, res, alert_rules_cache, suppressions=suppressions_cache)
                 except Exception as exc:  # one host's persistence must not kill the stream
                     host_alerts = 0
-                    LOGGER.warning("monitoring: post-process error for %s: %s",
-                                   hostname, redact_value(_exc_text(exc)))
+                    LOGGER.warning("monitoring: post-process error for %s: %s", hostname, redact_value(_exc_text(exc)))
                 alerts_created += host_alerts
 
                 status_icon = "ok" if res["poll_status"] == "ok" else "error"
@@ -1297,8 +1431,7 @@ async def monitoring_poll_now_stream(request: Request):
 
         await _run_retention_cleanup_throttled()
 
-        await _audit("monitoring", "poll.manual", user=user,
-                     detail=f"hosts={hosts_polled} alerts={alerts_created}")
+        await _audit("monitoring", "poll.manual", user=user, detail=f"hosts={hosts_polled} alerts={alerts_created}")
 
         yield f"data: {json.dumps({'type': 'done', 'hosts_polled': hosts_polled, 'alerts_created': alerts_created, 'errors': errors})}\n\n"
 
@@ -1319,7 +1452,8 @@ async def admin_update_monitoring_config(body: dict, request: Request):
     await db.set_auth_setting("monitoring", state.MONITORING_CONFIG)
     session = _get_session(request)
     await _audit(
-        "monitoring", "config.updated",
+        "monitoring",
+        "config.updated",
         user=session["user"] if session else "",
         detail=f"enabled={state.MONITORING_CONFIG['enabled']} interval={state.MONITORING_CONFIG['interval_seconds']}s",
         correlation_id=_corr_id(request),
@@ -1331,8 +1465,13 @@ async def admin_update_monitoring_config(body: dict, request: Request):
 async def admin_run_monitoring_now(request: Request):
     result = await _run_monitoring_poll_once(force=True)
     session = _get_session(request)
-    await _audit("monitoring", "poll.admin_triggered", user=session["user"] if session else "",
-                 detail=f"hosts={result.get('hosts_polled', 0)}", correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring",
+        "poll.admin_triggered",
+        user=session["user"] if session else "",
+        detail=f"hosts={result.get('hosts_polled', 0)}",
+        correlation_id=_corr_id(request),
+    )
     return result
 
 
@@ -1369,7 +1508,7 @@ async def create_alert_rule_endpoint(body: dict, request: Request):
         consecutive = int(body.get("consecutive", 1))
         cooldown_minutes = int(body.get("cooldown_minutes", 15))
         escalate_after_minutes = int(body.get("escalate_after_minutes", 0))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         raise HTTPException(status_code=400, detail="Numeric fields must be valid numbers")
     name = (body.get("name") or "").strip()
     metric = (body.get("metric") or "").strip()
@@ -1398,9 +1537,13 @@ async def create_alert_rule_endpoint(body: dict, request: Request):
         created_by=user,
         channel_ids=_normalize_channel_ids(body.get("channel_ids")),
     )
-    await _audit("monitoring", "rule.created", user=user,
-                 detail=f"rule_id={rule_id} name='{body.get('name', '')}' metric={body.get('metric', '')}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring",
+        "rule.created",
+        user=user,
+        detail=f"rule_id={rule_id} name='{body.get('name', '')}' metric={body.get('metric', '')}",
+        correlation_id=_corr_id(request),
+    )
     return {"id": rule_id}
 
 
@@ -1421,8 +1564,13 @@ async def update_alert_rule_endpoint(rule_id: int, body: dict, request: Request)
         body["channel_ids"] = _normalize_channel_ids(body.get("channel_ids"))
     await db.update_alert_rule(rule_id, **body)
     session = _get_session(request)
-    await _audit("monitoring", "rule.updated", user=session["user"] if session else "",
-                 detail=f"rule_id={rule_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring",
+        "rule.updated",
+        user=session["user"] if session else "",
+        detail=f"rule_id={rule_id}",
+        correlation_id=_corr_id(request),
+    )
     return await db.get_alert_rule(rule_id)
 
 
@@ -1433,9 +1581,13 @@ async def delete_alert_rule_endpoint(rule_id: int, request: Request):
         raise HTTPException(status_code=404, detail="Rule not found")
     await db.delete_alert_rule(rule_id)
     session = _get_session(request)
-    await _audit("monitoring", "rule.deleted", user=session["user"] if session else "",
-                 detail=f"rule_id={rule_id} name='{rule.get('name', '')}'",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring",
+        "rule.deleted",
+        user=session["user"] if session else "",
+        detail=f"rule_id={rule_id} name='{rule.get('name', '')}'",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -1463,9 +1615,13 @@ async def create_alert_suppression_endpoint(body: dict, request: Request):
         starts_at=body.get("starts_at", ""),
         created_by=user,
     )
-    await _audit("monitoring", "suppression.created", user=user,
-                 detail=f"suppression_id={sup_id} name='{body.get('name', '')}' ends_at={body['ends_at']}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring",
+        "suppression.created",
+        user=user,
+        detail=f"suppression_id={sup_id} name='{body.get('name', '')}' ends_at={body['ends_at']}",
+        correlation_id=_corr_id(request),
+    )
     return {"id": sup_id}
 
 
@@ -1473,9 +1629,13 @@ async def create_alert_suppression_endpoint(body: dict, request: Request):
 async def delete_alert_suppression_endpoint(suppression_id: int, request: Request):
     await db.delete_alert_suppression(suppression_id)
     session = _get_session(request)
-    await _audit("monitoring", "suppression.deleted", user=session["user"] if session else "",
-                 detail=f"suppression_id={suppression_id}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring",
+        "suppression.deleted",
+        user=session["user"] if session else "",
+        detail=f"suppression_id={suppression_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -1492,9 +1652,13 @@ async def bulk_acknowledge_alerts_endpoint(body: dict, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
     count = await db.bulk_acknowledge_alerts(alert_ids, user)
-    await _audit("monitoring", "alerts.bulk_acknowledged", user=user,
-                 detail=f"count={count} ids={alert_ids[:10]}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "monitoring",
+        "alerts.bulk_acknowledged",
+        user=user,
+        detail=f"count={count} ids={alert_ids[:10]}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True, "acknowledged": count}
 
 
@@ -1531,7 +1695,7 @@ async def sla_target_create(body: dict, request: Request):
     try:
         target_value = float(body.get("target_value", 99.9))
         warning_value = float(body.get("warning_value", 99.0))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         raise HTTPException(status_code=400, detail="target_value and warning_value must be valid numbers")
     target_id = await db.create_sla_target(
         name=body["name"],
@@ -1542,9 +1706,13 @@ async def sla_target_create(body: dict, request: Request):
         group_id=body.get("group_id"),
         created_by=user,
     )
-    await _audit("sla", "target.created", user=user,
-                 detail=f"target_id={target_id} name='{body['name']}' metric={body['metric']}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "sla",
+        "target.created",
+        user=user,
+        detail=f"target_id={target_id} name='{body['name']}' metric={body['metric']}",
+        correlation_id=_corr_id(request),
+    )
     return {"id": target_id}
 
 
@@ -1555,8 +1723,13 @@ async def sla_target_update(target_id: int, body: dict, request: Request):
         raise HTTPException(status_code=404, detail="Target not found")
     await db.update_sla_target(target_id, **body)
     session = _get_session(request)
-    await _audit("sla", "target.updated", user=session["user"] if session else "",
-                 detail=f"target_id={target_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "sla",
+        "target.updated",
+        user=session["user"] if session else "",
+        detail=f"target_id={target_id}",
+        correlation_id=_corr_id(request),
+    )
     return await db.get_sla_target(target_id)
 
 
@@ -1567,9 +1740,13 @@ async def sla_target_delete(target_id: int, request: Request):
         raise HTTPException(status_code=404, detail="Target not found")
     await db.delete_sla_target(target_id)
     session = _get_session(request)
-    await _audit("sla", "target.deleted", user=session["user"] if session else "",
-                 detail=f"target_id={target_id} name='{target.get('name', '')}'",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "sla",
+        "target.deleted",
+        user=session["user"] if session else "",
+        detail=f"target_id={target_id} name='{target.get('name', '')}'",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -1594,8 +1771,11 @@ async def availability_transitions_api(
 ):
     return {
         "transitions": await db.get_availability_transitions(
-            host_id=host_id, entity_type=entity_type,
-            start=start, end=end, limit=limit,
+            host_id=host_id,
+            entity_type=entity_type,
+            start=start,
+            end=end,
+            limit=limit,
         )
     }
 
@@ -1609,7 +1789,10 @@ async def availability_outages_api(
 ):
     return {
         "outages": await db.get_outage_history(
-            host_id=host_id, group_id=group_id, days=days, limit=limit,
+            host_id=host_id,
+            group_id=group_id,
+            days=days,
+            limit=limit,
         )
     }
 

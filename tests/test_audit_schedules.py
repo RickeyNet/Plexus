@@ -10,6 +10,7 @@ Covers:
     with `trigger='scheduled'` and the originating `schedule_id`, and
     advances `last_run_at` so the next sweep doesn't double-fire.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -39,29 +40,33 @@ async def _table_columns(table: str) -> list[str]:
 
 # ── Migration shape ────────────────────────────────────────────────────────
 
+
 async def test_migration_0043_creates_schedule_table(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
 
     cols = await _table_columns("audit_schedules")
     expected = {
-        "id", "name", "schedule", "enabled",
-        "last_run_at", "created_by", "created_at", "updated_at",
+        "id",
+        "name",
+        "schedule",
+        "enabled",
+        "last_run_at",
+        "created_by",
+        "created_at",
+        "updated_at",
     }
-    assert expected.issubset(set(cols)), (
-        f"audit_schedules missing columns: {expected - set(cols)}"
-    )
+    assert expected.issubset(set(cols)), f"audit_schedules missing columns: {expected - set(cols)}"
 
 
 async def test_migration_0043_adds_schedule_id_to_runs(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
 
     cols = await _table_columns("audit_runs")
-    assert "schedule_id" in cols, (
-        "audit_runs.schedule_id missing -- migration 0043 did not run"
-    )
+    assert "schedule_id" in cols, "audit_runs.schedule_id missing -- migration 0043 did not run"
 
 
 # ── CRUD round-trip ────────────────────────────────────────────────────────
+
 
 async def test_schedule_crud_roundtrip(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
@@ -76,7 +81,10 @@ async def test_schedule_crud_roundtrip(tmp_path, monkeypatch):
     assert created["schedule"] == "@daily"
     assert created["enabled"] is True
     assert created["created_by"] == "alice"
-    assert created["last_run_at"] in (None, "", )
+    assert created["last_run_at"] in (
+        None,
+        "",
+    )
 
     sid = int(created["id"])
     fetched = await audit_router._get_schedule(sid)
@@ -88,7 +96,10 @@ async def test_schedule_crud_roundtrip(tmp_path, monkeypatch):
     assert any(s["id"] == sid for s in listed)
 
     updated = await audit_router._update_schedule(
-        sid, name="Nightly compliance", schedule=None, enabled=False,
+        sid,
+        name="Nightly compliance",
+        schedule=None,
+        enabled=False,
     )
     assert updated is not None
     assert updated["name"] == "Nightly compliance"
@@ -105,9 +116,13 @@ async def test_schedule_crud_roundtrip(tmp_path, monkeypatch):
 
 # ── Due-detection ──────────────────────────────────────────────────────────
 
+
 def test_is_schedule_due_when_never_ran():
     sched = {
-        "id": 1, "name": "x", "schedule": "@daily", "enabled": True,
+        "id": 1,
+        "name": "x",
+        "schedule": "@daily",
+        "enabled": True,
         "last_run_at": None,
     }
     now = datetime.now(UTC)
@@ -119,7 +134,10 @@ def test_is_schedule_due_when_interval_elapsed():
     # @daily = 86400s. Last ran 25 hours ago -> elapsed > interval.
     last_run = (now - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S")
     sched = {
-        "id": 1, "name": "x", "schedule": "@daily", "enabled": True,
+        "id": 1,
+        "name": "x",
+        "schedule": "@daily",
+        "enabled": True,
         "last_run_at": last_run,
     }
     assert audit_router._is_schedule_due(sched, now) is True
@@ -129,7 +147,10 @@ def test_is_schedule_not_due_when_interval_recent():
     now = datetime.now(UTC)
     last_run = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     sched = {
-        "id": 1, "name": "x", "schedule": "@daily", "enabled": True,
+        "id": 1,
+        "name": "x",
+        "schedule": "@daily",
+        "enabled": True,
         "last_run_at": last_run,
     }
     assert audit_router._is_schedule_due(sched, now) is False
@@ -137,7 +158,10 @@ def test_is_schedule_not_due_when_interval_recent():
 
 def test_disabled_schedule_is_never_due():
     sched = {
-        "id": 1, "name": "x", "schedule": "@hourly", "enabled": False,
+        "id": 1,
+        "name": "x",
+        "schedule": "@hourly",
+        "enabled": False,
         "last_run_at": None,
     }
     assert audit_router._is_schedule_due(sched, datetime.now(UTC)) is False
@@ -145,7 +169,10 @@ def test_disabled_schedule_is_never_due():
 
 def test_unparseable_schedule_is_never_due():
     sched = {
-        "id": 1, "name": "x", "schedule": "garbage", "enabled": True,
+        "id": 1,
+        "name": "x",
+        "schedule": "garbage",
+        "enabled": True,
         "last_run_at": None,
     }
     assert audit_router._is_schedule_due(sched, datetime.now(UTC)) is False
@@ -153,7 +180,10 @@ def test_unparseable_schedule_is_never_due():
 
 def test_empty_schedule_is_never_due():
     sched = {
-        "id": 1, "name": "x", "schedule": "", "enabled": True,
+        "id": 1,
+        "name": "x",
+        "schedule": "",
+        "enabled": True,
         "last_run_at": None,
     }
     assert audit_router._is_schedule_due(sched, datetime.now(UTC)) is False
@@ -161,24 +191,20 @@ def test_empty_schedule_is_never_due():
 
 # ── Sweep / queue integration ──────────────────────────────────────────────
 
+
 async def _fetch_runs() -> list[dict]:
     conn = await db_module.get_db()
     try:
-        cursor = await conn.execute(
-            "SELECT id, status, trigger, schedule_id FROM audit_runs "
-            "ORDER BY id ASC"
-        )
+        cursor = await conn.execute("SELECT id, status, trigger, schedule_id FROM audit_runs ORDER BY id ASC")
         rows = await cursor.fetchall()
-        return [
-            {"id": r[0], "status": r[1], "trigger": r[2], "schedule_id": r[3]}
-            for r in rows
-        ]
+        return [{"id": r[0], "status": r[1], "trigger": r[2], "schedule_id": r[3]} for r in rows]
     finally:
         await conn.close()
 
 
 async def test_sweep_enqueues_due_schedule_and_advances_last_run(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     """A due schedule should produce exactly one queued audit_runs row
     and the schedule's last_run_at must advance so a second sweep is a
@@ -186,7 +212,10 @@ async def test_sweep_enqueues_due_schedule_and_advances_last_run(
     await _init_clean_db(tmp_path, monkeypatch)
 
     s = await audit_router._create_schedule(
-        name="Hourly check", schedule="@hourly", enabled=True, created_by="",
+        name="Hourly check",
+        schedule="@hourly",
+        enabled=True,
+        created_by="",
     )
     sid = int(s["id"])
 
@@ -215,7 +244,10 @@ async def test_sweep_skips_disabled_schedule(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
 
     await audit_router._create_schedule(
-        name="Paused", schedule="@hourly", enabled=False, created_by="",
+        name="Paused",
+        schedule="@hourly",
+        enabled=False,
+        created_by="",
     )
 
     enqueued = await audit_router._enqueue_due_scheduled_runs()
@@ -229,7 +261,10 @@ async def test_claim_queued_picks_up_scheduled_row(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
 
     s = await audit_router._create_schedule(
-        name="x", schedule="@hourly", enabled=True, created_by="",
+        name="x",
+        schedule="@hourly",
+        enabled=True,
+        created_by="",
     )
     await audit_router._enqueue_due_scheduled_runs()
     runs_before = await _fetch_runs()
@@ -253,7 +288,10 @@ async def test_enqueue_scheduled_run_records_schedule_id(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
 
     s = await audit_router._create_schedule(
-        name="x", schedule="@daily", enabled=True, created_by="",
+        name="x",
+        schedule="@daily",
+        enabled=True,
+        created_by="",
     )
     run_id = await audit_router._enqueue_scheduled_run(int(s["id"]))
     assert run_id > 0
@@ -266,6 +304,7 @@ async def test_enqueue_scheduled_run_records_schedule_id(tmp_path, monkeypatch):
 
 
 # ── Payload validation ─────────────────────────────────────────────────────
+
 
 def test_validate_schedule_payload_rejects_empty_name():
     with pytest.raises(Exception) as ei:

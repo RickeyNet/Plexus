@@ -61,10 +61,7 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_devices_env "
-        "ON lab_devices (environment_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_devices_env ON lab_devices (environment_id)")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS lab_runs (
@@ -87,10 +84,7 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_runs_device "
-        "ON lab_runs (lab_device_id, created_at)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_runs_device ON lab_runs (lab_device_id, created_at)")
     await db.commit()
 
 
@@ -126,10 +120,7 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_devices_env "
-        "ON lab_devices (environment_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_devices_env ON lab_devices (environment_id)")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS lab_runs (
@@ -151,10 +142,7 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_runs_device "
-        "ON lab_runs (lab_device_id, created_at)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_runs_device ON lab_runs (lab_device_id, created_at)")
     await db.commit()
 
 

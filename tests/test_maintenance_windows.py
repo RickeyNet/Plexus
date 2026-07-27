@@ -7,6 +7,7 @@ Covers:
   * scope filtering: a window scoped to group A does not block changes
     targeting group B
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta

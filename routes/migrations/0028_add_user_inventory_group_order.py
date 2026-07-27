@@ -31,8 +31,7 @@ async def _up_sqlite(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_user_inv_group_order_user "
-        "ON user_inventory_group_order (user_id, position)"
+        "CREATE INDEX IF NOT EXISTS idx_user_inv_group_order_user ON user_inventory_group_order (user_id, position)"
     )
     await db.commit()
 
@@ -49,8 +48,7 @@ async def _up_postgres(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_user_inv_group_order_user "
-        "ON user_inventory_group_order (user_id, position)"
+        "CREATE INDEX IF NOT EXISTS idx_user_inv_group_order_user ON user_inventory_group_order (user_id, position)"
     )
     await db.commit()
 

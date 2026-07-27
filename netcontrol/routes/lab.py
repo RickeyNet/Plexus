@@ -26,6 +26,7 @@ Endpoints:
     POST   /api/lab/runs/{id}/apply-to-device
     POST   /api/lab/runs/{id}/promote
 """
+
 from __future__ import annotations
 
 import json
@@ -178,22 +179,26 @@ async def _evaluate_compliance_impact(
                 before = findings_before[i]["passed"]
                 after = findings_after[i]["passed"]
                 if before != after:
-                    changed.append({
-                        "name": rule.get("name", rule.get("pattern", "?")),
-                        "before": "pass" if before else "fail",
-                        "after": "pass" if after else "fail",
-                        "impact": "regression" if before and not after else "improvement",
-                    })
+                    changed.append(
+                        {
+                            "name": rule.get("name", rule.get("pattern", "?")),
+                            "before": "pass" if before else "fail",
+                            "after": "pass" if after else "fail",
+                            "impact": "regression" if before and not after else "improvement",
+                        }
+                    )
             if changed:
-                impact.append({
-                    "profile_name": profile["name"],
-                    "profile_id": profile["id"],
-                    "before_failures": before_failures,
-                    "after_failures": after_failures,
-                    "new_violations": new_violations,
-                    "improvements": sum(1 for c in changed if c["impact"] == "improvement"),
-                    "changed_rules": changed,
-                })
+                impact.append(
+                    {
+                        "profile_name": profile["name"],
+                        "profile_id": profile["id"],
+                        "before_failures": before_failures,
+                        "after_failures": after_failures,
+                        "new_violations": new_violations,
+                        "improvements": sum(1 for c in changed if c["impact"] == "improvement"),
+                        "changed_rules": changed,
+                    }
+                )
         return violations, impact
     except Exception as exc:
         # Don't fail the simulation just because compliance evaluation broke.
@@ -210,8 +215,7 @@ async def _resolve_commands(
         if not tpl:
             raise HTTPException(status_code=404, detail="Template not found")
         commands = [
-            line.rstrip() for line in tpl["content"].splitlines()
-            if line.strip() and not line.strip().startswith("#")
+            line.rstrip() for line in tpl["content"].splitlines() if line.strip() and not line.strip().startswith("#")
         ]
     if not commands:
         raise HTTPException(status_code=400, detail="No proposed commands provided")
@@ -249,7 +253,8 @@ async def create_environment(body: EnvironmentCreate, request: Request):
         LOGGER.error("lab: create environment failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail="Failed to create lab environment") from exc
     await _audit(
-        "lab", "environment.created",
+        "lab",
+        "environment.created",
         user=session["user"] if session else "",
         detail=f"id={env_id} name={body.name}",
         correlation_id=_corr_id(request),
@@ -286,7 +291,8 @@ async def update_environment(env_id: int, body: EnvironmentUpdate, request: Requ
         active=body.active,
     )
     await _audit(
-        "lab", "environment.updated",
+        "lab",
+        "environment.updated",
         user=session["user"] if session else "",
         detail=f"id={env_id}",
         correlation_id=_corr_id(request),
@@ -304,7 +310,8 @@ async def delete_environment(env_id: int, request: Request):
         raise HTTPException(status_code=403, detail="Not allowed")
     await db.delete_lab_environment(env_id)
     await _audit(
-        "lab", "environment.deleted",
+        "lab",
+        "environment.deleted",
         user=session["user"] if session else "",
         detail=f"id={env_id}",
         correlation_id=_corr_id(request),
@@ -346,7 +353,8 @@ async def create_device(env_id: int, body: DeviceCreate, request: Request):
         notes=body.notes,
     )
     await _audit(
-        "lab", "device.created",
+        "lab",
+        "device.created",
         user=session["user"] if session else "",
         detail=f"env={env_id} device={device_id} hostname={body.hostname}",
         correlation_id=_corr_id(request),
@@ -380,12 +388,14 @@ async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
         source_host_id=body.host_id,
         running_config=config_text,
         notes=(
-            "Cloned from inventory host." if config_text
+            "Cloned from inventory host."
+            if config_text
             else "Cloned from inventory host (no config snapshot available - config is empty)."
         ),
     )
     await _audit(
-        "lab", "device.cloned",
+        "lab",
+        "device.cloned",
         user=session["user"] if session else "",
         detail=f"env={env_id} device={device_id} src_host={body.host_id} bytes={len(config_text)}",
         correlation_id=_corr_id(request),
@@ -428,7 +438,8 @@ async def update_device(device_id: int, body: DeviceUpdate, request: Request):
         notes=body.notes,
     )
     await _audit(
-        "lab", "device.updated",
+        "lab",
+        "device.updated",
         user=session["user"] if session else "",
         detail=f"id={device_id}",
         correlation_id=_corr_id(request),
@@ -447,7 +458,8 @@ async def delete_device(device_id: int, request: Request):
         raise HTTPException(status_code=403, detail="Not allowed")
     await db.delete_lab_device(device_id)
     await _audit(
-        "lab", "device.deleted",
+        "lab",
+        "device.deleted",
         user=session["user"] if session else "",
         detail=f"id={device_id}",
         correlation_id=_corr_id(request),
@@ -475,14 +487,22 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
     affected_areas = _classify_change_areas(commands)
     post_config = _simulate_config_change(pre_config, commands)
     diff_text, diff_added, diff_removed = _compute_config_diff(
-        pre_config, post_config,
-        baseline_label="lab-pre", actual_label="lab-post",
+        pre_config,
+        post_config,
+        baseline_label="lab-pre",
+        actual_label="lab-post",
     )
     compliance_violations, compliance_impact = await _evaluate_compliance_impact(
-        device, pre_config, post_config,
+        device,
+        pre_config,
+        post_config,
     )
     risk_score, risk_level = _compute_risk_score(
-        commands, affected_areas, diff_added, diff_removed, compliance_violations,
+        commands,
+        affected_areas,
+        diff_added,
+        diff_removed,
+        compliance_violations,
     )
     risk_detail = {
         "change_volume": {
@@ -496,15 +516,11 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
         "risk_factors": [],
     }
     if affected_areas:
-        risk_detail["risk_factors"].append(
-            f"Touches critical areas: {', '.join(a['label'] for a in affected_areas)}"
-        )
+        risk_detail["risk_factors"].append(f"Touches critical areas: {', '.join(a['label'] for a in affected_areas)}")
     if diff_removed > 0:
         risk_detail["risk_factors"].append(f"Removes {diff_removed} line(s) from config")
     if compliance_violations > 0:
-        risk_detail["risk_factors"].append(
-            f"Introduces {compliance_violations} new compliance violation(s)"
-        )
+        risk_detail["risk_factors"].append(f"Introduces {compliance_violations} new compliance violation(s)")
     if len(commands) > 20:
         risk_detail["risk_factors"].append(f"Large change set ({len(commands)} commands)")
 
@@ -527,7 +543,8 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
         status=status,
     )
     await _audit(
-        "lab", "device.simulated",
+        "lab",
+        "device.simulated",
         user=session["user"] if session else "",
         detail=f"device={device_id} run={run_id} risk={risk_level} score={risk_score} applied={body.apply_to_device}",
         correlation_id=_corr_id(request),
@@ -597,7 +614,8 @@ async def apply_run_to_device(run_id: int, request: Request):
     await db.update_lab_device(device["id"], running_config=run.get("post_config", ""))
     await db.update_lab_run_status(run_id, "applied")
     await _audit(
-        "lab", "run.applied",
+        "lab",
+        "run.applied",
         user=session["user"] if session else "",
         detail=f"run={run_id} device={device['id']}",
         correlation_id=_corr_id(request),
@@ -661,7 +679,8 @@ async def promote_run(run_id: int, body: PromoteRequest, request: Request):
     )
     await db.update_lab_run_status(run_id, "promoted", promoted_deployment_id=deployment_id)
     await _audit(
-        "lab", "run.promoted",
+        "lab",
+        "run.promoted",
         user=session["user"] if session else "",
         detail=f"run={run_id} deployment={deployment_id} group={group_id}",
         correlation_id=_corr_id(request),

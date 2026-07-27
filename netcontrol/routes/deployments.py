@@ -4,6 +4,7 @@ deployments.py -- Deployment orchestration with rollback support.
 Includes deployment creation, execution with pre/post checkpoints,
 rollback via pre-deployment snapshots, and WebSocket streaming.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,6 +61,7 @@ def init_deployments(verify_session_token_fn=None, get_user_features_fn=None):
 
 class DeploymentCreate(BaseModel):
     """Create a new deployment with rollback support."""
+
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=2000)
     group_id: int
@@ -68,8 +70,7 @@ class DeploymentCreate(BaseModel):
     # Bound both the number of commands and each command's length: these are
     # concatenated and pushed to devices, so an unbounded payload is a memory
     # and device-safety risk.
-    proposed_commands: list[Annotated[str, Field(max_length=4000)]] = Field(
-        default_factory=list, max_length=10000)
+    proposed_commands: list[Annotated[str, Field(max_length=4000)]] = Field(default_factory=list, max_length=10000)
     template_id: int | None = None
     risk_analysis_id: int | None = None
     host_ids: list[int] = Field(default_factory=list, max_length=100000)
@@ -77,16 +78,19 @@ class DeploymentCreate(BaseModel):
 
 class DeploymentExecute(BaseModel):
     """Execute a planned deployment."""
+
     deployment_id: int
 
 
 class DeploymentRollback(BaseModel):
     """Roll back a deployment to pre-deployment state."""
+
     deployment_id: int
 
 
 class DeploymentApprovalDecision(BaseModel):
     """Approve or reject a pending deployment approval."""
+
     comment: str = ""
 
 
@@ -230,23 +234,30 @@ async def _finish_deploy_job(job_id: str, status: str = "completed"):
             await asyncio.wait_for(ws.send_json({"type": "job_complete", "status": status}), timeout=5)
         except Exception:
             LOGGER.debug("deploy finish: dropping dead WS for job %s", job_id)
+
     # Schedule cleanup of in-memory job state after 5 minutes
     async def _deferred_cleanup():
         await asyncio.sleep(300)
         async with _deployment_jobs_lock:
             _deployment_jobs.pop(job_id, None)
+
     asyncio.ensure_future(_deferred_cleanup())
 
 
 async def _run_post_deployment_verification(
-    job_id: str, deployment_id: int, hosts: list[dict], user: str,
+    job_id: str,
+    deployment_id: int,
+    hosts: list[dict],
+    user: str,
 ):
     """Background task: wait, then run drift checks and metric health checks on deployed hosts."""
     try:
         await db.update_deployment_status(deployment_id, "verifying")
-        await _broadcast_deploy_line(job_id,
+        await _broadcast_deploy_line(
+            job_id,
             f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Post-deployment verification: "
-            f"waiting {VERIFICATION_DELAY_SECONDS}s for metrics to settle...\n")
+            f"waiting {VERIFICATION_DELAY_SECONDS}s for metrics to settle...\n",
+        )
         await asyncio.sleep(VERIFICATION_DELAY_SECONDS)
 
         # Retrieve pre-deployment metric baselines
@@ -257,8 +268,12 @@ async def _run_post_deployment_verification(
                 try:
                     baselines_by_host[cp["host_id"]] = json.loads(cp.get("result", "{}"))
                 except (json.JSONDecodeError, TypeError) as exc:
-                    LOGGER.warning("deployment %s: failed to parse metric baseline for host %s: %s",
-                                   deployment_id, cp.get("host_id"), exc)
+                    LOGGER.warning(
+                        "deployment %s: failed to parse metric baseline for host %s: %s",
+                        deployment_id,
+                        cp.get("host_id"),
+                        exc,
+                    )
 
         all_passed = True
         now_iso = datetime.now(UTC).isoformat()
@@ -272,8 +287,11 @@ async def _run_post_deployment_verification(
             drift_cp_id = None
             try:
                 drift_cp_id = await db.create_deployment_checkpoint(
-                    deployment_id, phase="verify", check_name=f"drift_check_{hostname}",
-                    check_type="drift_check", host_id=host["id"],
+                    deployment_id,
+                    phase="verify",
+                    check_name=f"drift_check_{hostname}",
+                    check_type="drift_check",
+                    host_id=host["id"],
                 )
                 drift_result = await _analyze_drift_for_host(host["id"])
                 status = "passed" if not drift_result.get("drifted") else "failed"
@@ -281,22 +299,26 @@ async def _run_post_deployment_verification(
                     host_passed = False
                 await db.update_deployment_checkpoint(drift_cp_id, status, json.dumps(drift_result))
                 label = "compliant" if status == "passed" else f"DRIFTED ({drift_result.get('diff_summary', '')})"
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift check for {hostname}: {label}\n")
+                await _broadcast_deploy_line(
+                    job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift check for {hostname}: {label}\n"
+                )
             except Exception as exc:
                 if drift_cp_id is not None:
-                    await db.update_deployment_checkpoint(drift_cp_id, "failed",
-                        json.dumps({"error": str(exc)}))
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift check failed for {hostname}: {exc}\n")
+                    await db.update_deployment_checkpoint(drift_cp_id, "failed", json.dumps({"error": str(exc)}))
+                await _broadcast_deploy_line(
+                    job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift check failed for {hostname}: {exc}\n"
+                )
                 host_passed = False
 
             # Metric health check
             mh_cp_id = None
             try:
                 mh_cp_id = await db.create_deployment_checkpoint(
-                    deployment_id, phase="verify", check_name=f"metric_health_{hostname}",
-                    check_type="metric_health", host_id=host["id"],
+                    deployment_id,
+                    phase="verify",
+                    check_name=f"metric_health_{hostname}",
+                    check_type="metric_health",
+                    host_id=host["id"],
                 )
                 baseline = baselines_by_host.get(host["id"], {})
                 post_metrics: dict[str, float | None] = {}
@@ -304,7 +326,11 @@ async def _run_post_deployment_verification(
 
                 for metric_name in VERIFICATION_METRICS:
                     samples = await db.query_metric_samples(
-                        metric_name, host_ids=[host["id"]], start=five_min_ago, end=now_iso, limit=50,
+                        metric_name,
+                        host_ids=[host["id"]],
+                        start=five_min_ago,
+                        end=now_iso,
+                        limit=50,
                     )
                     if samples:
                         avg_val = round(sum(s["value"] for s in samples) / len(samples), 2)
@@ -322,31 +348,46 @@ async def _run_post_deployment_verification(
                             concern = delta > 20
                         elif pre_val > 0:
                             concern = delta / pre_val > 0.5
-                    metric_details.append({
-                        "metric": metric_name, "pre": pre_val, "post": post_val,
-                        "delta": delta, "concern": concern,
-                    })
+                    metric_details.append(
+                        {
+                            "metric": metric_name,
+                            "pre": pre_val,
+                            "post": post_val,
+                            "delta": delta,
+                            "concern": concern,
+                        }
+                    )
 
                 any_concern = any(m["concern"] for m in metric_details)
                 if any_concern:
                     host_passed = False
                 mh_status = "passed" if not any_concern else "failed"
-                await db.update_deployment_checkpoint(mh_cp_id, mh_status,
-                    json.dumps({"baseline": baseline, "post": post_metrics, "details": metric_details}))
+                await db.update_deployment_checkpoint(
+                    mh_cp_id,
+                    mh_status,
+                    json.dumps({"baseline": baseline, "post": post_metrics, "details": metric_details}),
+                )
 
-                detail_str = ", ".join(
-                    f"{m['metric']}={m['post']}" + (f" (+{m['delta']}!)" if m["concern"] else "")
-                    for m in metric_details if m["post"] is not None
-                ) or "no metrics available"
+                detail_str = (
+                    ", ".join(
+                        f"{m['metric']}={m['post']}" + (f" (+{m['delta']}!)" if m["concern"] else "")
+                        for m in metric_details
+                        if m["post"] is not None
+                    )
+                    or "no metrics available"
+                )
                 icon = "OK" if not any_concern else "CONCERN"
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health for {hostname}: {icon} - {detail_str}\n")
+                await _broadcast_deploy_line(
+                    job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health for {hostname}: {icon} - {detail_str}\n",
+                )
             except Exception as exc:
                 if mh_cp_id is not None:
-                    await db.update_deployment_checkpoint(mh_cp_id, "failed",
-                        json.dumps({"error": str(exc)}))
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health check failed for {hostname}: {exc}\n")
+                    await db.update_deployment_checkpoint(mh_cp_id, "failed", json.dumps({"error": str(exc)}))
+                await _broadcast_deploy_line(
+                    job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Metric health check failed for {hostname}: {exc}\n",
+                )
                 host_passed = False
 
             if not host_passed:
@@ -356,45 +397,55 @@ async def _run_post_deployment_verification(
         await db.update_deployment_status(deployment_id, final_status)
 
         action = "deployment.verification.passed" if all_passed else "deployment.verification.failed"
-        await _audit("deployments", action, user=user,
-                     detail=f"id={deployment_id} hosts={len(hosts)}")
+        await _audit("deployments", action, user=user, detail=f"id={deployment_id} hosts={len(hosts)}")
 
         icon = "All checks passed" if all_passed else "Some checks flagged concerns"
-        await _broadcast_deploy_line(job_id,
+        await _broadcast_deploy_line(
+            job_id,
             f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Verification complete: {icon}. "
-            f"Status set to '{final_status}'.\n")
+            f"Status set to '{final_status}'.\n",
+        )
 
     except Exception as exc:
         LOGGER.error("post-deployment verification failed for deployment %d: %s", deployment_id, exc)
-        await _broadcast_deploy_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Verification error: {exc}\n")
+        await _broadcast_deploy_line(job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Verification error: {exc}\n")
         await db.update_deployment_status(deployment_id, "verification_failed")
 
 
 async def _run_deployment_job(
-    job_id: str, deployment_id: int, hosts: list[dict],
-    commands: list[str], credentials: dict, user: str,
+    job_id: str,
+    deployment_id: int,
+    hosts: list[dict],
+    commands: list[str],
+    credentials: dict,
+    user: str,
 ):
     """Background task: pre-check -> execute -> post-check deployment with checkpoint tracking."""
     try:
         await db.update_deployment_status(deployment_id, "pre-check")
-        await _broadcast_deploy_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Starting pre-deployment checks for {len(hosts)} host(s)...\n")
+        await _broadcast_deploy_line(
+            job_id,
+            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Starting pre-deployment checks for {len(hosts)} host(s)...\n",
+        )
 
         # ── Pre-deployment checkpoints: capture config snapshots ─────────
         for host in hosts:
             hostname = host.get("hostname", host["ip_address"])
             cp_id = await db.create_deployment_checkpoint(
-                deployment_id, phase="pre", check_name=f"config_capture_{hostname}",
-                check_type="config_capture", host_id=host["id"],
+                deployment_id,
+                phase="pre",
+                check_name=f"config_capture_{hostname}",
+                check_type="config_capture",
+                host_id=host["id"],
             )
             try:
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing pre-deployment config for {hostname}...\n")
+                await _broadcast_deploy_line(
+                    job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing pre-deployment config for {hostname}...\n",
+                )
                 config_text = await _capture_running_config(host, credentials)
                 await db.create_deployment_snapshot(deployment_id, host["id"], "pre", config_text)
-                await db.update_deployment_checkpoint(cp_id, "passed",
-                    json.dumps({"config_length": len(config_text)}))
+                await db.update_deployment_checkpoint(cp_id, "passed", json.dumps({"config_length": len(config_text)}))
 
                 # Capture metric baseline for post-deployment verification
                 try:
@@ -403,7 +454,11 @@ async def _run_deployment_job(
                     baseline_metrics: dict[str, float | None] = {}
                     for metric_name in VERIFICATION_METRICS:
                         samples = await db.query_metric_samples(
-                            metric_name, host_ids=[host["id"]], start=five_min_ago, end=now_iso, limit=50,
+                            metric_name,
+                            host_ids=[host["id"]],
+                            start=five_min_ago,
+                            end=now_iso,
+                            limit=50,
                         )
                         if samples:
                             avg_val = sum(s["value"] for s in samples) / len(samples)
@@ -411,33 +466,43 @@ async def _run_deployment_job(
                         else:
                             baseline_metrics[metric_name] = None
                     mb_cp_id = await db.create_deployment_checkpoint(
-                        deployment_id, phase="pre", check_name=f"metric_baseline_{hostname}",
-                        check_type="metric_baseline", host_id=host["id"],
+                        deployment_id,
+                        phase="pre",
+                        check_name=f"metric_baseline_{hostname}",
+                        check_type="metric_baseline",
+                        host_id=host["id"],
                     )
                     await db.update_deployment_checkpoint(mb_cp_id, "passed", json.dumps(baseline_metrics))
                 except Exception as mb_exc:
-                    LOGGER.warning("deployment %d: metric baseline capture failed for %s: %s",
-                                   deployment_id, hostname, mb_exc)
+                    LOGGER.warning(
+                        "deployment %d: metric baseline capture failed for %s: %s", deployment_id, hostname, mb_exc
+                    )
 
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pre-check passed for {hostname} ({len(config_text)} chars captured).\n")
+                await _broadcast_deploy_line(
+                    job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pre-check passed for {hostname} ({len(config_text)} chars captured).\n",
+                )
             except Exception as exc:
-                await db.update_deployment_checkpoint(cp_id, "failed",
-                    json.dumps({"error": str(exc)}))
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pre-check FAILED for {hostname}: {exc}\n")
+                await db.update_deployment_checkpoint(cp_id, "failed", json.dumps({"error": str(exc)}))
+                await _broadcast_deploy_line(
+                    job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pre-check FAILED for {hostname}: {exc}\n"
+                )
                 await db.update_deployment_status(deployment_id, "failed")
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Deployment aborted - pre-check failure.\n")
+                await _broadcast_deploy_line(
+                    job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Deployment aborted - pre-check failure.\n"
+                )
                 await _finish_deploy_job(job_id, "failed")
                 return
 
         # ── Execute deployment ───────────────────────────────────────────
         await db.update_deployment_status(deployment_id, "executing")
-        await _broadcast_deploy_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pre-checks passed. Pushing config to {len(hosts)} host(s)...\n")
-        await _broadcast_deploy_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Commands ({len(commands)}):\n")
+        await _broadcast_deploy_line(
+            job_id,
+            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pre-checks passed. Pushing config to {len(hosts)} host(s)...\n",
+        )
+        await _broadcast_deploy_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Commands ({len(commands)}):\n"
+        )
         for cmd in commands:
             await _broadcast_deploy_line(job_id, f"  {cmd}\n")
 
@@ -449,39 +514,50 @@ async def _run_deployment_job(
             async with sem:
                 hname = h.get("hostname", h["ip_address"])
                 try:
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pushing config to {hname}...\n")
+                    await _broadcast_deploy_line(
+                        job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Pushing config to {hname}...\n"
+                    )
                     await _push_config_to_device(h, credentials, commands)
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Config pushed successfully to {hname}.\n")
+                    await _broadcast_deploy_line(
+                        job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Config pushed successfully to {hname}.\n"
+                    )
                     successful_hosts.append(h)
                 except Exception as exc:
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] FAILED to push config to {hname}: {exc}\n")
+                    await _broadcast_deploy_line(
+                        job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] FAILED to push config to {hname}: {exc}\n"
+                    )
                     failed_hosts.append(h)
 
         tasks = [_deploy_one(h) for h in hosts]
         await asyncio.gather(*tasks)
 
         if failed_hosts:
-            await _broadcast_deploy_line(job_id,
-                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {len(failed_hosts)} host(s) failed during execution.\n")
+            await _broadcast_deploy_line(
+                job_id,
+                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {len(failed_hosts)} host(s) failed during execution.\n",
+            )
 
         # ── Post-deployment checkpoints: re-capture and diff ─────────────
         await db.update_deployment_status(deployment_id, "post-check")
-        await _broadcast_deploy_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Running post-deployment checks...\n")
+        await _broadcast_deploy_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Running post-deployment checks...\n"
+        )
 
         post_check_failures = 0
         for host in hosts:
             hostname = host.get("hostname", host["ip_address"])
             cp_id = await db.create_deployment_checkpoint(
-                deployment_id, phase="post", check_name=f"config_verify_{hostname}",
-                check_type="config_verify", host_id=host["id"],
+                deployment_id,
+                phase="post",
+                check_name=f"config_verify_{hostname}",
+                check_type="config_verify",
+                host_id=host["id"],
             )
             try:
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing post-deployment config for {hostname}...\n")
+                await _broadcast_deploy_line(
+                    job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing post-deployment config for {hostname}...\n",
+                )
                 post_config = await _capture_running_config(host, credentials)
                 await db.create_deployment_snapshot(deployment_id, host["id"], "post", post_config)
 
@@ -494,8 +570,10 @@ async def _run_deployment_job(
                         break
 
                 diff_text, diff_added, diff_removed = _compute_config_diff(
-                    pre_text, post_config,
-                    baseline_label="pre-deployment", actual_label="post-deployment",
+                    pre_text,
+                    post_config,
+                    baseline_label="pre-deployment",
+                    actual_label="post-deployment",
                 )
                 changes_detected = diff_added + diff_removed
                 result = {
@@ -506,31 +584,39 @@ async def _run_deployment_job(
                 }
                 if changes_detected > 0:
                     await db.update_deployment_checkpoint(cp_id, "passed", json.dumps(result))
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Post-check passed for {hostname}: +{diff_added}/-{diff_removed} lines changed.\n")
+                    await _broadcast_deploy_line(
+                        job_id,
+                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Post-check passed for {hostname}: +{diff_added}/-{diff_removed} lines changed.\n",
+                    )
                 else:
                     await db.update_deployment_checkpoint(cp_id, "passed", json.dumps(result))
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Post-check for {hostname}: no config diff detected (commands may already be present).\n")
+                    await _broadcast_deploy_line(
+                        job_id,
+                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Post-check for {hostname}: no config diff detected (commands may already be present).\n",
+                    )
             except Exception as exc:
                 post_check_failures += 1
-                await db.update_deployment_checkpoint(cp_id, "failed",
-                    json.dumps({"error": str(exc)}))
-                await _broadcast_deploy_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Post-check FAILED for {hostname}: {exc}\n")
+                await db.update_deployment_checkpoint(cp_id, "failed", json.dumps({"error": str(exc)}))
+                await _broadcast_deploy_line(
+                    job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Post-check FAILED for {hostname}: {exc}\n"
+                )
 
         # ── Final status ─────────────────────────────────────────────────
         if failed_hosts:
             final_status = "failed"
-            await _broadcast_deploy_line(job_id,
+            await _broadcast_deploy_line(
+                job_id,
                 f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Deployment completed with errors. "
                 f"{len(successful_hosts)} succeeded, {len(failed_hosts)} failed. "
-                f"Rollback available from the deployment detail view.\n")
+                f"Rollback available from the deployment detail view.\n",
+            )
         else:
             final_status = "completed"
-            await _broadcast_deploy_line(job_id,
+            await _broadcast_deploy_line(
+                job_id,
                 f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Deployment completed successfully. "
-                f"All {len(hosts)} host(s) updated. Pre/post snapshots saved for rollback.\n")
+                f"All {len(hosts)} host(s) updated. Pre/post snapshots saved for rollback.\n",
+            )
 
         await db.update_deployment_status(deployment_id, final_status)
         await _finish_deploy_job(job_id, final_status)
@@ -538,35 +624,46 @@ async def _run_deployment_job(
         # Schedule post-deployment verification for successful deployments
         if final_status == "completed" and successful_hosts:
             supervise_task(
-                asyncio.create_task(_run_post_deployment_verification(
-                    job_id, deployment_id, successful_hosts, user,
-                )),
+                asyncio.create_task(
+                    _run_post_deployment_verification(
+                        job_id,
+                        deployment_id,
+                        successful_hosts,
+                        user,
+                    )
+                ),
                 f"deployment post-verify {job_id}",
             )
 
     except Exception as exc:
         LOGGER.error("deployment job %s failed: %s", job_id, exc)
-        await _broadcast_deploy_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] DEPLOYMENT FAILED: {exc}\n")
+        await _broadcast_deploy_line(job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] DEPLOYMENT FAILED: {exc}\n")
         await db.update_deployment_status(deployment_id, "failed")
         await _finish_deploy_job(job_id, "failed")
 
 
 async def _run_rollback_job(
-    job_id: str, deployment_id: int, hosts: list[dict], credentials: dict, user: str,
+    job_id: str,
+    deployment_id: int,
+    hosts: list[dict],
+    credentials: dict,
+    user: str,
 ):
     """Background task: restore pre-deployment configs to roll back a deployment."""
     try:
         await db.update_deployment_status(deployment_id, "rolling-back", rollback_status="in_progress")
-        await _broadcast_deploy_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Starting rollback for deployment #{deployment_id}...\n")
+        await _broadcast_deploy_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Starting rollback for deployment #{deployment_id}...\n"
+        )
 
         pre_snapshots = await db.get_deployment_snapshots(deployment_id, phase="pre")
         snap_by_host = {s["host_id"]: s for s in pre_snapshots}
 
         if not pre_snapshots:
-            await _broadcast_deploy_line(job_id,
-                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] No pre-deployment snapshots found. Cannot rollback.\n")
+            await _broadcast_deploy_line(
+                job_id,
+                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] No pre-deployment snapshots found. Cannot rollback.\n",
+            )
             await db.update_deployment_status(deployment_id, "failed", rollback_status="failed")
             await _finish_deploy_job(job_id, "failed")
             return
@@ -580,80 +677,109 @@ async def _run_rollback_job(
                 hostname = host.get("hostname", host["ip_address"])
                 snap = snap_by_host.get(host["id"])
                 if not snap or not snap.get("config_text"):
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] No pre-deployment snapshot for {hostname}, skipping.\n")
+                    await _broadcast_deploy_line(
+                        job_id,
+                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] No pre-deployment snapshot for {hostname}, skipping.\n",
+                    )
                     return
 
                 cp_id = await db.create_deployment_checkpoint(
-                    deployment_id, phase="rollback", check_name=f"rollback_{hostname}",
-                    check_type="config_restore", host_id=host["id"],
+                    deployment_id,
+                    phase="rollback",
+                    check_name=f"rollback_{hostname}",
+                    check_type="config_restore",
+                    host_id=host["id"],
                 )
 
                 try:
                     # Capture current config and compute diff to find what to revert
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing current config for {hostname}...\n")
+                    await _broadcast_deploy_line(
+                        job_id,
+                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing current config for {hostname}...\n",
+                    )
                     current_config = await _capture_running_config(host, credentials)
 
                     diff_text, _, _ = _compute_config_diff(
-                        snap["config_text"], current_config,
-                        baseline_label="pre-deployment", actual_label="current",
+                        snap["config_text"],
+                        current_config,
+                        baseline_label="pre-deployment",
+                        actual_label="current",
                     )
                     revert_commands = _build_revert_commands(diff_text, snap.get("config_text", ""))
 
                     if not revert_commands:
-                        await _broadcast_deploy_line(job_id,
-                            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {hostname}: no differences to revert.\n")
-                        await db.update_deployment_checkpoint(cp_id, "passed",
-                            json.dumps({"message": "no changes needed"}))
+                        await _broadcast_deploy_line(
+                            job_id,
+                            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {hostname}: no differences to revert.\n",
+                        )
+                        await db.update_deployment_checkpoint(
+                            cp_id, "passed", json.dumps({"message": "no changes needed"})
+                        )
                         return
 
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Reverting {len(revert_commands)} line(s) on {hostname}...\n")
+                    await _broadcast_deploy_line(
+                        job_id,
+                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Reverting {len(revert_commands)} line(s) on {hostname}...\n",
+                    )
                     await _push_config_to_device(host, credentials, revert_commands)
 
                     # Verify rollback
                     verify_config = await _capture_running_config(host, credentials)
                     verify_diff, va, vr = _compute_config_diff(
-                        snap["config_text"], verify_config,
-                        baseline_label="pre-deployment", actual_label="after-rollback",
+                        snap["config_text"],
+                        verify_config,
+                        baseline_label="pre-deployment",
+                        actual_label="after-rollback",
                     )
                     remaining = va + vr
                     if remaining == 0:
-                        await _broadcast_deploy_line(job_id,
-                            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {hostname}: rollback verified - config matches pre-deployment state.\n")
-                        await db.update_deployment_checkpoint(cp_id, "passed",
-                            json.dumps({"reverted_lines": len(revert_commands), "verified": True}))
+                        await _broadcast_deploy_line(
+                            job_id,
+                            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {hostname}: rollback verified - config matches pre-deployment state.\n",
+                        )
+                        await db.update_deployment_checkpoint(
+                            cp_id, "passed", json.dumps({"reverted_lines": len(revert_commands), "verified": True})
+                        )
                     else:
-                        await _broadcast_deploy_line(job_id,
-                            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {hostname}: rollback applied but {remaining} diff line(s) remain.\n")
-                        await db.update_deployment_checkpoint(cp_id, "passed",
-                            json.dumps({"reverted_lines": len(revert_commands), "verified": False, "remaining_diff": remaining}))
+                        await _broadcast_deploy_line(
+                            job_id,
+                            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {hostname}: rollback applied but {remaining} diff line(s) remain.\n",
+                        )
+                        await db.update_deployment_checkpoint(
+                            cp_id,
+                            "passed",
+                            json.dumps(
+                                {"reverted_lines": len(revert_commands), "verified": False, "remaining_diff": remaining}
+                            ),
+                        )
                 except Exception as exc:
                     rollback_failures += 1
-                    await _broadcast_deploy_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ROLLBACK FAILED for {hostname}: {exc}\n")
-                    await db.update_deployment_checkpoint(cp_id, "failed",
-                        json.dumps({"error": str(exc)}))
+                    await _broadcast_deploy_line(
+                        job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ROLLBACK FAILED for {hostname}: {exc}\n"
+                    )
+                    await db.update_deployment_checkpoint(cp_id, "failed", json.dumps({"error": str(exc)}))
 
         tasks = [_rollback_one(h) for h in hosts]
         await asyncio.gather(*tasks)
 
         if rollback_failures > 0:
             await db.update_deployment_status(deployment_id, "failed", rollback_status="failed")
-            await _broadcast_deploy_line(job_id,
-                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Rollback completed with {rollback_failures} failure(s).\n")
+            await _broadcast_deploy_line(
+                job_id,
+                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Rollback completed with {rollback_failures} failure(s).\n",
+            )
             await _finish_deploy_job(job_id, "failed")
         else:
             await db.update_deployment_status(deployment_id, "rolled-back", rollback_status="completed")
-            await _broadcast_deploy_line(job_id,
-                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Rollback completed successfully. All hosts restored.\n")
+            await _broadcast_deploy_line(
+                job_id,
+                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Rollback completed successfully. All hosts restored.\n",
+            )
             await _finish_deploy_job(job_id, "completed")
 
     except Exception as exc:
         LOGGER.error("rollback job %s failed: %s", job_id, exc)
-        await _broadcast_deploy_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ROLLBACK FAILED: {exc}\n")
+        await _broadcast_deploy_line(job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ROLLBACK FAILED: {exc}\n")
         await db.update_deployment_status(deployment_id, "failed", rollback_status="failed")
         await _finish_deploy_job(job_id, "failed")
 
@@ -675,10 +801,14 @@ async def _resolve_deployment_credential(dep: dict, session: dict | None) -> dic
     created_by = (dep.get("created_by") or "").strip()
     if created_by and created_by.lower() != "unknown":
         return await require_credential_access(
-            dep["credential_id"], submitter_username=created_by, allow_service=True,
+            dep["credential_id"],
+            submitter_username=created_by,
+            allow_service=True,
         )
     return await require_credential_access(
-        dep["credential_id"], session=session, allow_service=True,
+        dep["credential_id"],
+        session=session,
+        allow_service=True,
     )
 
 
@@ -695,8 +825,7 @@ async def create_deployment(body: DeploymentCreate, request: Request):
         if not tpl:
             raise HTTPException(status_code=404, detail="Template not found")
         commands = [
-            line.rstrip() for line in tpl["content"].splitlines()
-            if line.strip() and not line.strip().startswith("#")
+            line.rstrip() for line in tpl["content"].splitlines() if line.strip() and not line.strip().startswith("#")
         ]
     if not commands:
         raise HTTPException(status_code=400, detail="No proposed commands provided")
@@ -741,7 +870,8 @@ async def create_deployment(body: DeploymentCreate, request: Request):
         )
 
     await _audit(
-        "deployments", "deployment.created",
+        "deployments",
+        "deployment.created",
         user=user,
         detail=(
             f"id={deployment_id} name={body.name} group_id={body.group_id}"
@@ -793,7 +923,11 @@ async def get_deployment_correlation(deployment_id: int, request: Request):
     started = dep.get("started_at") or dep.get("created_at")
     finished = dep.get("finished_at")
     window_start = (datetime.fromisoformat(started) - timedelta(minutes=5)).isoformat() if started else None
-    window_end = (datetime.fromisoformat(finished) + timedelta(minutes=30)).isoformat() if finished else datetime.now(UTC).isoformat()
+    window_end = (
+        (datetime.fromisoformat(finished) + timedelta(minutes=30)).isoformat()
+        if finished
+        else datetime.now(UTC).isoformat()
+    )
 
     host_ids: list[int] = []
     try:
@@ -802,9 +936,17 @@ async def get_deployment_correlation(deployment_id: int, request: Request):
         LOGGER.warning("deployment %s: failed to parse host_ids: %s", deployment_id, exc)
 
     checkpoints = await db.get_deployment_checkpoints(deployment_id)
-    drift_events = await db.get_config_drift_events_in_range(host_ids, window_start, window_end) if host_ids and window_start else []
-    alerts = await db.get_monitoring_alerts_in_range(host_ids, window_start, window_end) if host_ids and window_start else []
-    audit_trail = await db.get_audit_events_for_deployment(deployment_id, window_start, window_end) if window_start else []
+    drift_events = (
+        await db.get_config_drift_events_in_range(host_ids, window_start, window_end)
+        if host_ids and window_start
+        else []
+    )
+    alerts = (
+        await db.get_monitoring_alerts_in_range(host_ids, window_start, window_end) if host_ids and window_start else []
+    )
+    audit_trail = (
+        await db.get_audit_events_for_deployment(deployment_id, window_start, window_end) if window_start else []
+    )
 
     return {
         "deployment": dep,
@@ -834,7 +976,8 @@ async def execute_deployment(deployment_id: int, request: Request):
         status = dep.get("approval_status") or "pending"
         if status != "approved":
             await _audit(
-                "deployments", "deployment.execute_blocked",
+                "deployments",
+                "deployment.execute_blocked",
                 user=user,
                 detail=f"id={deployment_id} reason=approval_status={status}",
                 correlation_id=_corr_id(request),
@@ -848,7 +991,8 @@ async def execute_deployment(deployment_id: int, request: Request):
     verdict = await evaluate_change_gate([dep["group_id"]])
     if not verdict["allowed"]:
         await _audit(
-            "deployments", "deployment.execute_blocked",
+            "deployments",
+            "deployment.execute_blocked",
             user=user,
             detail=f"id={deployment_id} reason=maintenance_window window_id={verdict['window']['id'] if verdict.get('window') else ''}",
             correlation_id=_corr_id(request),
@@ -856,7 +1000,8 @@ async def execute_deployment(deployment_id: int, request: Request):
         raise HTTPException(status_code=409, detail=verdict["reason"])
     if verdict.get("warning"):
         await _audit(
-            "deployments", "deployment.execute_outside_window",
+            "deployments",
+            "deployment.execute_outside_window",
             user=user,
             detail=f"id={deployment_id} warning={verdict['warning']}",
             correlation_id=_corr_id(request),
@@ -891,7 +1036,10 @@ async def execute_deployment(deployment_id: int, request: Request):
 
     job_id = str(uuid.uuid4())
     _deployment_jobs[job_id] = {
-        "status": "running", "output": "", "deployment_id": deployment_id, "action": "execute",
+        "status": "running",
+        "output": "",
+        "deployment_id": deployment_id,
+        "action": "execute",
     }
     _deployment_job_sockets[job_id] = []
 
@@ -901,7 +1049,8 @@ async def execute_deployment(deployment_id: int, request: Request):
     )
 
     await _audit(
-        "deployments", "deployment.executed",
+        "deployments",
+        "deployment.executed",
         user=user,
         detail=f"id={deployment_id} job_id={job_id} hosts={len(hosts)}",
         correlation_id=_corr_id(request),
@@ -930,7 +1079,8 @@ async def request_deployment_approval(deployment_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
     await _audit(
-        "deployments", "deployment.approval_requested",
+        "deployments",
+        "deployment.approval_requested",
         user=user,
         detail=f"id={deployment_id}",
         correlation_id=_corr_id(request),
@@ -967,7 +1117,8 @@ async def approve_deployment(deployment_id: int, body: DeploymentApprovalDecisio
         approval_comment=body.comment,
     )
     await _audit(
-        "deployments", "deployment.approved",
+        "deployments",
+        "deployment.approved",
         user=user,
         detail=f"id={deployment_id}" + (f" comment={body.comment[:80]}" if body.comment else ""),
         correlation_id=_corr_id(request),
@@ -1000,7 +1151,8 @@ async def reject_deployment(deployment_id: int, body: DeploymentApprovalDecision
         approval_comment=body.comment,
     )
     await _audit(
-        "deployments", "deployment.approval_rejected",
+        "deployments",
+        "deployment.approval_rejected",
         user=user,
         detail=f"id={deployment_id}" + (f" comment={body.comment[:80]}" if body.comment else ""),
         correlation_id=_corr_id(request),
@@ -1038,7 +1190,10 @@ async def rollback_deployment(deployment_id: int, request: Request):
 
     job_id = str(uuid.uuid4())
     _deployment_jobs[job_id] = {
-        "status": "running", "output": "", "deployment_id": deployment_id, "action": "rollback",
+        "status": "running",
+        "output": "",
+        "deployment_id": deployment_id,
+        "action": "rollback",
     }
     _deployment_job_sockets[job_id] = []
 
@@ -1048,7 +1203,8 @@ async def rollback_deployment(deployment_id: int, request: Request):
     )
 
     await _audit(
-        "deployments", "deployment.rollback",
+        "deployments",
+        "deployment.rollback",
         user=user,
         detail=f"id={deployment_id} job_id={job_id} hosts={len(hosts)}",
         correlation_id=_corr_id(request),
@@ -1067,7 +1223,8 @@ async def delete_deployment_endpoint(deployment_id: int, request: Request):
     await db.delete_deployment(deployment_id)
     session = _get_session(request)
     await _audit(
-        "deployments", "deployment.deleted",
+        "deployments",
+        "deployment.deleted",
         user=session["user"] if session else "",
         detail=f"id={deployment_id}",
         correlation_id=_corr_id(request),

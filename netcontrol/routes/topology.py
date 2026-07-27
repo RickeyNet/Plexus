@@ -1,6 +1,7 @@
 """
 topology.py -- Topology visualization, discovery, and change-tracking routes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -75,26 +76,30 @@ async def _write_links_and_stats(host_id: int, neighbors: list[dict], if_stats: 
 
     Two batched writes instead of a delete plus one round-trip per row.
     """
-    await db.replace_topology_links_for_host(host_id, [
-        {
-            "source_host_id": n["source_host_id"],
-            "source_ip": n["source_ip"],
-            "source_interface": n["local_interface"],
-            "target_host_id": None,
-            "target_ip": n.get("remote_ip", ""),
-            "target_device_name": n["remote_device_name"],
-            "target_interface": n["remote_interface"],
-            "protocol": n["protocol"],
-            "target_platform": n.get("remote_platform", ""),
-        }
-        for n in neighbors
-    ])
+    await db.replace_topology_links_for_host(
+        host_id,
+        [
+            {
+                "source_host_id": n["source_host_id"],
+                "source_ip": n["source_ip"],
+                "source_interface": n["local_interface"],
+                "target_host_id": None,
+                "target_ip": n.get("remote_ip", ""),
+                "target_device_name": n["remote_device_name"],
+                "target_interface": n["remote_interface"],
+                "protocol": n["protocol"],
+                "target_platform": n.get("remote_platform", ""),
+            }
+            for n in neighbors
+        ],
+    )
     if if_stats:
-        await db.upsert_interface_stats_batch([
-            (s["host_id"], s["if_index"], s["if_name"], s["if_speed_mbps"],
-             s["in_octets"], s["out_octets"])
-            for s in if_stats
-        ])
+        await db.upsert_interface_stats_batch(
+            [
+                (s["host_id"], s["if_index"], s["if_name"], s["if_speed_mbps"], s["in_octets"], s["out_octets"])
+                for s in if_stats
+            ]
+        )
     # Links/stats changed → drop the assembled-topology cache so the next
     # /api/topology load reflects this discovery instead of a stale snapshot.
     invalidate_topology_cache()
@@ -169,8 +174,12 @@ async def _record_topology_changes(
         protocol = ""
         target_ip = ""
         for ol in old_links:
-            if _normalize_link_key(ol["source_host_id"], ol["source_interface"],
-                                   ol["target_device_name"], ol["target_interface"]) == key:
+            if (
+                _normalize_link_key(
+                    ol["source_host_id"], ol["source_interface"], ol["target_device_name"], ol["target_interface"]
+                )
+                == key
+            ):
                 protocol = ol.get("protocol", "")
                 target_ip = ol.get("target_ip", "")
                 break
@@ -192,8 +201,12 @@ async def _record_topology_changes(
         protocol = ""
         target_ip = ""
         for n in new_neighbors:
-            if _normalize_link_key(n["source_host_id"], n["local_interface"],
-                                   n["remote_device_name"], n["remote_interface"]) == key:
+            if (
+                _normalize_link_key(
+                    n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"]
+                )
+                == key
+            ):
                 protocol = n.get("protocol", "")
                 target_ip = n.get("remote_ip", "")
                 break
@@ -213,20 +226,20 @@ def _weathermap_color(utilization_pct: float) -> str:
     """Map utilization % to a hex color: green → yellow → orange → red."""
     pct = max(0, min(100, utilization_pct))
     if pct < 1:
-        return "#808080"    # grey - idle / no traffic
+        return "#808080"  # grey - idle / no traffic
     if pct < 25:
-        return "#00cc00"    # green
+        return "#00cc00"  # green
     if pct < 50:
-        return "#92d050"    # light green
+        return "#92d050"  # light green
     if pct < 60:
-        return "#ffff00"    # yellow
+        return "#ffff00"  # yellow
     if pct < 70:
-        return "#ffc000"    # amber
+        return "#ffc000"  # amber
     if pct < 80:
-        return "#ff8000"    # orange
+        return "#ff8000"  # orange
     if pct < 90:
-        return "#ff4000"    # red-orange
-    return "#ff0000"        # red - near saturation
+        return "#ff4000"  # red-orange
+    return "#ff0000"  # red - near saturation
 
 
 def _weathermap_width(utilization_pct: float) -> int:
@@ -270,6 +283,7 @@ def _calc_interface_utilization(stat: dict) -> dict | None:
         return None
     try:
         from datetime import datetime as _dt
+
         t1 = _dt.fromisoformat(stat["prev_polled_at"])
         t2 = _dt.fromisoformat(stat["polled_at"])
         delta_sec = (t2 - t1).total_seconds()
@@ -426,7 +440,7 @@ async def _discover_vlan_ids_for_host(
         return [1]
 
     for oid in rows.keys():
-        suffix = oid[len(base_oid):].lstrip(".")
+        suffix = oid[len(base_oid) :].lstrip(".")
         vid = _safe_int(suffix, default=-1)
         if 1 <= vid <= 4094:
             vlan_ids.add(vid)
@@ -492,7 +506,7 @@ async def _collect_stp_snapshot_for_host(
 
     bridge_port_to_ifindex: dict[int, int] = {}
     for oid, val in base_port_ifindex.items():
-        suffix = oid[len(dot1d_base_port_ifindex_oid):].lstrip(".")
+        suffix = oid[len(dot1d_base_port_ifindex_oid) :].lstrip(".")
         bridge_port = _safe_int(suffix, default=-1)
         if bridge_port < 0:
             continue
@@ -500,7 +514,7 @@ async def _collect_stp_snapshot_for_host(
 
     designated_bridge_by_port: dict[int, str] = {}
     for oid, val in stp_port_designated_bridge.items():
-        suffix = oid[len(dot1d_stp_port_designated_bridge_oid):].lstrip(".")
+        suffix = oid[len(dot1d_stp_port_designated_bridge_oid) :].lstrip(".")
         bridge_port = _safe_int(suffix, default=-1)
         if bridge_port < 0:
             continue
@@ -510,9 +524,7 @@ async def _collect_stp_snapshot_for_host(
         _extract_walk_scalar(designated_root_scalar, dot1d_stp_designated_root_oid)
     )
     root_port = _safe_int(_extract_walk_scalar(root_port_scalar, dot1d_stp_root_port_oid), default=0)
-    topology_change_count = _safe_int(
-        _extract_walk_scalar(top_changes_scalar, dot1d_stp_top_changes_oid), default=0
-    )
+    topology_change_count = _safe_int(_extract_walk_scalar(top_changes_scalar, dot1d_stp_top_changes_oid), default=0)
     time_since_topology_change = _safe_int(
         _extract_walk_scalar(time_since_change_scalar, dot1d_stp_time_since_change_oid), default=0
     )
@@ -520,7 +532,7 @@ async def _collect_stp_snapshot_for_host(
 
     port_rows: list[dict] = []
     for oid, raw_state in stp_port_states.items():
-        suffix = oid[len(dot1d_stp_port_state_oid):].lstrip(".")
+        suffix = oid[len(dot1d_stp_port_state_oid) :].lstrip(".")
         bridge_port = _safe_int(suffix, default=-1)
         if bridge_port < 0:
             continue
@@ -897,16 +909,18 @@ async def _correlate_fdb_topology(
                 continue
             target_iface = port_to_owner_iface[port].get(target_host_id, "")
 
-            inferred_by_host.setdefault(host_id, []).append({
-                "source_host_id": host_id,
-                "source_ip": host.get("ip_address", ""),
-                "local_interface": port,
-                "remote_device_name": target_host.get("hostname", "") or target_host.get("ip_address", ""),
-                "remote_ip": target_host.get("ip_address", ""),
-                "remote_interface": target_iface,
-                "protocol": "inferred-fdb",
-                "remote_platform": "inferred from FDB+ARP",
-            })
+            inferred_by_host.setdefault(host_id, []).append(
+                {
+                    "source_host_id": host_id,
+                    "source_ip": host.get("ip_address", ""),
+                    "local_interface": port,
+                    "remote_device_name": target_host.get("hostname", "") or target_host.get("ip_address", ""),
+                    "remote_ip": target_host.get("ip_address", ""),
+                    "remote_interface": target_iface,
+                    "protocol": "inferred-fdb",
+                    "remote_platform": "inferred from FDB+ARP",
+                }
+            )
 
     return inferred_by_host
 
@@ -942,20 +956,18 @@ async def _apply_inferred_topology(
         async def _refresh_one(h: dict) -> None:
             async with sem:
                 await collect_mac_arp_tables(
-                    h["id"], h["ip_address"], snmp_cfg,
+                    h["id"],
+                    h["ip_address"],
+                    snmp_cfg,
                     device_type=h.get("device_type", ""),
                     host=h,
                 )
             async with sem:
                 await auto_discover_data_sources(h["id"], h["ip_address"], snmp_cfg)
 
-        await asyncio.gather(
-            *(_refresh_one(h) for h in walked_hosts), return_exceptions=True
-        )
+        await asyncio.gather(*(_refresh_one(h) for h in walked_hosts), return_exceptions=True)
 
-        existing_by_host: dict[int, list[dict]] = {
-            h["id"]: (n or []) for h, n, _ in walk_results
-        }
+        existing_by_host: dict[int, list[dict]] = {h["id"]: (n or []) for h, n, _ in walk_results}
         inferred_by_host = await _correlate_fdb_topology(walked_hosts, existing_by_host)
 
         inferred_count = 0
@@ -1003,12 +1015,14 @@ async def _run_topology_discovery_once() -> dict:
             async with semaphore:
                 try:
                     neighbors, if_stats = await _discover_neighbors(
-                        host["id"], host["ip_address"], _cfg, timeout_seconds=5.0,
+                        host["id"],
+                        host["ip_address"],
+                        _cfg,
+                        timeout_seconds=5.0,
                     )
                     return host, neighbors, if_stats
                 except Exception as exc:
-                    LOGGER.warning("topology scheduled: discovery failed for %s: %s",
-                                   host["ip_address"], exc)
+                    LOGGER.warning("topology scheduled: discovery failed for %s: %s", host["ip_address"], exc)
                     return host, None, []
 
         walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
@@ -1022,13 +1036,19 @@ async def _run_topology_discovery_once() -> dict:
                 # Snapshot old links for change detection
                 old_links = await db.get_topology_links_for_host(host["id"])
                 old_link_keys = {
-                    _normalize_link_key(link["source_host_id"], link["source_interface"],
-                                        link["target_device_name"], link["target_interface"])
-                    for link in old_links if link["source_host_id"] == host["id"]
+                    _normalize_link_key(
+                        link["source_host_id"],
+                        link["source_interface"],
+                        link["target_device_name"],
+                        link["target_interface"],
+                    )
+                    for link in old_links
+                    if link["source_host_id"] == host["id"]
                 }
                 new_link_keys = {
-                    _normalize_link_key(n["source_host_id"], n["local_interface"],
-                                        n["remote_device_name"], n["remote_interface"])
+                    _normalize_link_key(
+                        n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"]
+                    )
                     for n in neighbors
                 }
 
@@ -1038,40 +1058,46 @@ async def _run_topology_discovery_once() -> dict:
                     try:
                         await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
                     except Exception as exc:
-                        LOGGER.warning("topology scheduled: graph template apply failed for %s: %s",
-                                       host["ip_address"], exc)
+                        LOGGER.warning(
+                            "topology scheduled: graph template apply failed for %s: %s", host["ip_address"], exc
+                        )
                 # Auto-discover SNMP data sources (interfaces, storage)
                 try:
                     from netcontrol.routes.snmp import auto_discover_data_sources
+
                     await auto_discover_data_sources(host["id"], host["ip_address"], snmp_cfg)
                 except Exception as exc:
-                    LOGGER.warning("topology scheduled: data source auto-discovery failed for %s: %s",
-                                   host["ip_address"], exc)
+                    LOGGER.warning(
+                        "topology scheduled: data source auto-discovery failed for %s: %s", host["ip_address"], exc
+                    )
                 # Collect MAC/ARP tables during topology discovery
                 try:
                     from netcontrol.routes.mac_tracking import collect_mac_arp_tables
+
                     await collect_mac_arp_tables(
-                        host["id"], host["ip_address"], snmp_cfg,
+                        host["id"],
+                        host["ip_address"],
+                        snmp_cfg,
                         device_type=host.get("device_type", ""),
                         host=host,
                     )
                 except Exception as exc:
-                    LOGGER.warning("topology scheduled: MAC/ARP collection failed for %s: %s",
-                                   host["ip_address"], exc)
+                    LOGGER.warning("topology scheduled: MAC/ARP collection failed for %s: %s", host["ip_address"], exc)
                 # Per-port inventory + VLAN definitions (feeds audit rules)
                 try:
                     from netcontrol.routes.mac_tracking import collect_interface_inventory
+
                     await collect_interface_inventory(host["id"], host["ip_address"], snmp_cfg)
                 except Exception as exc:
-                    LOGGER.warning("topology scheduled: interface inventory collection failed for %s: %s",
-                                   host["ip_address"], exc)
+                    LOGGER.warning(
+                        "topology scheduled: interface inventory collection failed for %s: %s", host["ip_address"], exc
+                    )
                 # Record topology changes (only if there were previous links)
                 if old_link_keys:
                     await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
                 total_links += len(neighbors)
             except Exception as exc:
-                LOGGER.warning("topology scheduled: DB write failed for %s: %s",
-                               host["ip_address"], exc)
+                LOGGER.warning("topology scheduled: DB write failed for %s: %s", host["ip_address"], exc)
                 total_errors += 1
 
     if groups_scanned > 0:
@@ -1079,8 +1105,12 @@ async def _run_topology_discovery_once() -> dict:
             await db.resolve_topology_target_host_ids()
         except Exception as exc:
             LOGGER.warning("topology scheduled: target host id resolution failed: %s", exc)
-        LOGGER.info("topology scheduled: scanned %d groups, %d links discovered, %d errors",
-                     groups_scanned, total_links, total_errors)
+        LOGGER.info(
+            "topology scheduled: scanned %d groups, %d links discovered, %d errors",
+            groups_scanned,
+            total_links,
+            total_errors,
+        )
         increment_metric("topology.discovery.scheduled.success")
 
     return {
@@ -1094,8 +1124,13 @@ async def _run_topology_discovery_once() -> dict:
 async def _topology_discovery_loop() -> None:
     while True:
         try:
-            await asyncio.sleep(int(state.TOPOLOGY_DISCOVERY_CONFIG.get(
-                "interval_seconds", state.TOPOLOGY_DISCOVERY_DEFAULTS["interval_seconds"])))
+            await asyncio.sleep(
+                int(
+                    state.TOPOLOGY_DISCOVERY_CONFIG.get(
+                        "interval_seconds", state.TOPOLOGY_DISCOVERY_DEFAULTS["interval_seconds"]
+                    )
+                )
+            )
             await _run_topology_discovery_once()
         except asyncio.CancelledError:
             raise
@@ -1310,9 +1345,7 @@ async def _build_topology(group_id: int | None) -> dict:
         # manually added (target_host_id is NULL but the host exists by IP).
         existing_ids = {h["id"] for h in hosts}
         ext_ips = {
-            link["target_ip"].strip()
-            for link in links
-            if link.get("target_ip") and not link.get("target_host_id")
+            link["target_ip"].strip() for link in links if link.get("target_ip") and not link.get("target_host_id")
         }
         if ext_ips:
             _db = await db.get_db()
@@ -1599,12 +1632,14 @@ async def get_topology_utilization(group_id: int | None = Query(None)):
         src_id = link["source_host_id"]
         src_iface = link.get("source_interface", "")
         util_data = util_map.get((src_id, src_iface))
-        edges.append({
-            "source_host_id": src_id,
-            "target_host_id": link.get("target_host_id"),
-            "source_interface": src_iface,
-            "utilization": util_data,
-        })
+        edges.append(
+            {
+                "source_host_id": src_id,
+                "target_host_id": link.get("target_host_id"),
+                "source_interface": src_iface,
+                "utilization": util_data,
+            }
+        )
 
     return {"edges": edges}
 
@@ -1615,6 +1650,7 @@ async def stream_topology_utilization(
     interval: int = Query(30, ge=5, le=300),
 ):
     """SSE endpoint that pushes utilization updates at regular intervals."""
+
     async def _event_gen():
         try:
             while True:
@@ -1629,12 +1665,14 @@ async def stream_topology_utilization(
                     src_iface = link.get("source_interface", "")
                     util_data = util_map.get((src_id, src_iface))
                     if util_data:
-                        edges.append({
-                            "source_host_id": src_id,
-                            "target_host_id": link.get("target_host_id"),
-                            "source_interface": src_iface,
-                            "utilization": util_data,
-                        })
+                        edges.append(
+                            {
+                                "source_host_id": src_id,
+                                "target_host_id": link.get("target_host_id"),
+                                "source_interface": src_iface,
+                                "utilization": util_data,
+                            }
+                        )
 
                 payload = json.dumps({"edges": edges})
                 yield f"data: {payload}\n\n"
@@ -1685,12 +1723,14 @@ async def discover_topology_stream():
                     async with semaphore:
                         try:
                             neighbors, if_stats = await _discover_neighbors(
-                                host["id"], host["ip_address"], _cfg, timeout_seconds=5.0,
+                                host["id"],
+                                host["ip_address"],
+                                _cfg,
+                                timeout_seconds=5.0,
                             )
                             return host, neighbors, if_stats
                         except Exception as exc:
-                            LOGGER.warning("topology: neighbor discovery failed for %s: %s",
-                                           host["ip_address"], exc)
+                            LOGGER.warning("topology: neighbor discovery failed for %s: %s", host["ip_address"], exc)
                             return host, None, []
 
                 tasks = [asyncio.create_task(_walk_host(h)) for h in hosts]
@@ -1718,13 +1758,22 @@ async def discover_topology_stream():
                     try:
                         old_links = await db.get_topology_links_for_host(host["id"])
                         old_link_keys = {
-                            _normalize_link_key(link["source_host_id"], link["source_interface"],
-                                                link["target_device_name"], link["target_interface"])
-                            for link in old_links if link["source_host_id"] == host["id"]
+                            _normalize_link_key(
+                                link["source_host_id"],
+                                link["source_interface"],
+                                link["target_device_name"],
+                                link["target_interface"],
+                            )
+                            for link in old_links
+                            if link["source_host_id"] == host["id"]
                         }
                         new_link_keys = {
-                            _normalize_link_key(n["source_host_id"], n["local_interface"],
-                                                n["remote_device_name"], n["remote_interface"])
+                            _normalize_link_key(
+                                n["source_host_id"],
+                                n["local_interface"],
+                                n["remote_device_name"],
+                                n["remote_interface"],
+                            )
                             for n in neighbors
                         }
                         await _write_links_and_stats(host["id"], neighbors, if_stats)
@@ -1732,8 +1781,7 @@ async def discover_topology_stream():
                             await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
                         group_links += len(neighbors)
                     except Exception as exc:
-                        LOGGER.warning("topology: DB write failed for %s: %s",
-                                       host["ip_address"], exc)
+                        LOGGER.warning("topology: DB write failed for %s: %s", host["ip_address"], exc)
                         total_errors += 1
 
                 total_links += group_links
@@ -1764,11 +1812,13 @@ async def discover_topology_for_group(group_id: int):
 
         snmp_cfg = state._resolve_snmp_discovery_config(group_id)
         if not snmp_cfg.get("enabled", False):
-            raise HTTPException(status_code=400,
-                                detail="SNMP is not enabled for this group. Configure an SNMP profile first.")
+            raise HTTPException(
+                status_code=400, detail="SNMP is not enabled for this group. Configure an SNMP profile first."
+            )
 
-        LOGGER.info("topology: starting discovery for group %d (%s) -- %d hosts",
-                     group_id, group.get("name", "?"), len(hosts))
+        LOGGER.info(
+            "topology: starting discovery for group %d (%s) -- %d hosts", group_id, group.get("name", "?"), len(hosts)
+        )
 
         semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
         errors = 0
@@ -1780,14 +1830,22 @@ async def discover_topology_for_group(group_id: int):
                 try:
                     LOGGER.info("topology: walking %s (%s)...", host["hostname"], host["ip_address"])
                     neighbors, if_stats = await _discover_neighbors(
-                        host["id"], host["ip_address"], snmp_cfg, timeout_seconds=5.0,
+                        host["id"],
+                        host["ip_address"],
+                        snmp_cfg,
+                        timeout_seconds=5.0,
                     )
-                    LOGGER.info("topology: %s done -- %d neighbors, %d if_stats",
-                                host["hostname"], len(neighbors), len(if_stats))
+                    LOGGER.info(
+                        "topology: %s done -- %d neighbors, %d if_stats",
+                        host["hostname"],
+                        len(neighbors),
+                        len(if_stats),
+                    )
                     return host, neighbors, if_stats
                 except Exception as exc:
-                    LOGGER.warning("topology: neighbor discovery failed for %s (%s): %s",
-                                   host["hostname"], host["ip_address"], exc)
+                    LOGGER.warning(
+                        "topology: neighbor discovery failed for %s (%s): %s", host["hostname"], host["ip_address"], exc
+                    )
                     return host, None, []
 
         walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
@@ -1803,13 +1861,19 @@ async def discover_topology_for_group(group_id: int):
                 # Snapshot old links for change detection
                 old_links = await db.get_topology_links_for_host(host["id"])
                 old_link_keys = {
-                    _normalize_link_key(link["source_host_id"], link["source_interface"],
-                                        link["target_device_name"], link["target_interface"])
-                    for link in old_links if link["source_host_id"] == host["id"]
+                    _normalize_link_key(
+                        link["source_host_id"],
+                        link["source_interface"],
+                        link["target_device_name"],
+                        link["target_interface"],
+                    )
+                    for link in old_links
+                    if link["source_host_id"] == host["id"]
                 }
                 new_link_keys = {
-                    _normalize_link_key(n["source_host_id"], n["local_interface"],
-                                        n["remote_device_name"], n["remote_interface"])
+                    _normalize_link_key(
+                        n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"]
+                    )
                     for n in neighbors
                 }
 
@@ -1819,21 +1883,25 @@ async def discover_topology_for_group(group_id: int):
                     try:
                         await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
                     except Exception as exc:
-                        LOGGER.warning("topology: graph template apply failed for %s: %s",
-                                       host["ip_address"], exc)
+                        LOGGER.warning("topology: graph template apply failed for %s: %s", host["ip_address"], exc)
                 # Record topology changes (only if there were previous links)
                 if old_link_keys:
                     await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
                 total_links += len(neighbors)
             except Exception as exc:
-                LOGGER.warning("topology: DB write failed for %s (%s): %s",
-                               host["hostname"], host["ip_address"], exc)
+                LOGGER.warning("topology: DB write failed for %s (%s): %s", host["hostname"], host["ip_address"], exc)
                 errors += 1
 
         # Resolve target host IDs against inventory
         resolved = await db.resolve_topology_target_host_ids()
-        LOGGER.info("topology: discovered %d links from %d hosts (group %d), resolved %d targets, %d errors",
-                     total_links, len(hosts), group_id, resolved, errors)
+        LOGGER.info(
+            "topology: discovered %d links from %d hosts (group %d), resolved %d targets, %d errors",
+            total_links,
+            len(hosts),
+            group_id,
+            resolved,
+            errors,
+        )
 
         return {
             "hosts_scanned": len(hosts),
@@ -1872,12 +1940,14 @@ async def discover_topology_all():
                 async with semaphore:
                     try:
                         neighbors, if_stats = await _discover_neighbors(
-                            host["id"], host["ip_address"], _cfg, timeout_seconds=5.0,
+                            host["id"],
+                            host["ip_address"],
+                            _cfg,
+                            timeout_seconds=5.0,
                         )
                         return host, neighbors, if_stats
                     except Exception as exc:
-                        LOGGER.warning("topology: neighbor discovery failed for %s: %s",
-                                       host["ip_address"], exc)
+                        LOGGER.warning("topology: neighbor discovery failed for %s: %s", host["ip_address"], exc)
                         return host, None, []
 
             walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
@@ -1892,13 +1962,19 @@ async def discover_topology_all():
                     # Snapshot old links for change detection
                     old_links = await db.get_topology_links_for_host(host["id"])
                     old_link_keys = {
-                        _normalize_link_key(link["source_host_id"], link["source_interface"],
-                                            link["target_device_name"], link["target_interface"])
-                        for link in old_links if link["source_host_id"] == host["id"]
+                        _normalize_link_key(
+                            link["source_host_id"],
+                            link["source_interface"],
+                            link["target_device_name"],
+                            link["target_interface"],
+                        )
+                        for link in old_links
+                        if link["source_host_id"] == host["id"]
                     }
                     new_link_keys = {
-                        _normalize_link_key(n["source_host_id"], n["local_interface"],
-                                            n["remote_device_name"], n["remote_interface"])
+                        _normalize_link_key(
+                            n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"]
+                        )
                         for n in neighbors
                     }
 
@@ -1908,15 +1984,13 @@ async def discover_topology_all():
                         try:
                             await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
                         except Exception as exc:
-                            LOGGER.warning("topology: graph template apply failed for %s: %s",
-                                           host["ip_address"], exc)
+                            LOGGER.warning("topology: graph template apply failed for %s: %s", host["ip_address"], exc)
                     # Record topology changes (only if there were previous links)
                     if old_link_keys:
                         await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
                     total_links += len(neighbors)
                 except Exception as exc:
-                    LOGGER.warning("topology: DB write failed for %s: %s",
-                                   host["ip_address"], exc)
+                    LOGGER.warning("topology: DB write failed for %s: %s", host["ip_address"], exc)
                     total_errors += 1
             total_hosts += len(hosts)
 
@@ -1942,8 +2016,9 @@ async def discover_topology_for_group_stream(group_id: int):
         raise HTTPException(status_code=404, detail="Group not found")
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
     if not snmp_cfg.get("enabled", False):
-        raise HTTPException(status_code=400,
-                            detail="SNMP is not enabled for this group. Configure an SNMP profile first.")
+        raise HTTPException(
+            status_code=400, detail="SNMP is not enabled for this group. Configure an SNMP profile first."
+        )
     hosts = await db.get_hosts_for_group(group_id)
 
     async def _event_generator():
@@ -1970,12 +2045,19 @@ async def discover_topology_for_group_stream(group_id: int):
                 async with semaphore:
                     try:
                         neighbors, if_stats = await _discover_neighbors(
-                            host["id"], host["ip_address"], snmp_cfg, timeout_seconds=5.0,
+                            host["id"],
+                            host["ip_address"],
+                            snmp_cfg,
+                            timeout_seconds=5.0,
                         )
                         return host, neighbors, if_stats
                     except Exception as exc:
-                        LOGGER.warning("topology: neighbor discovery failed for %s (%s): %s",
-                                       host["hostname"], host["ip_address"], exc)
+                        LOGGER.warning(
+                            "topology: neighbor discovery failed for %s (%s): %s",
+                            host["hostname"],
+                            host["ip_address"],
+                            exc,
+                        )
                         return host, None, []
 
             tasks = [asyncio.create_task(_walk_host(h)) for h in hosts]
@@ -2002,13 +2084,19 @@ async def discover_topology_for_group_stream(group_id: int):
                 try:
                     old_links = await db.get_topology_links_for_host(host["id"])
                     old_link_keys = {
-                        _normalize_link_key(link["source_host_id"], link["source_interface"],
-                                            link["target_device_name"], link["target_interface"])
-                        for link in old_links if link["source_host_id"] == host["id"]
+                        _normalize_link_key(
+                            link["source_host_id"],
+                            link["source_interface"],
+                            link["target_device_name"],
+                            link["target_interface"],
+                        )
+                        for link in old_links
+                        if link["source_host_id"] == host["id"]
                     }
                     new_link_keys = {
-                        _normalize_link_key(n["source_host_id"], n["local_interface"],
-                                            n["remote_device_name"], n["remote_interface"])
+                        _normalize_link_key(
+                            n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"]
+                        )
                         for n in neighbors
                     }
                     await _write_links_and_stats(host["id"], neighbors, if_stats)
@@ -2016,8 +2104,9 @@ async def discover_topology_for_group_stream(group_id: int):
                         await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
                     total_links += len(neighbors)
                 except Exception as exc:
-                    LOGGER.warning("topology: DB write failed for %s (%s): %s",
-                                   host["hostname"], host["ip_address"], exc)
+                    LOGGER.warning(
+                        "topology: DB write failed for %s (%s): %s", host["hostname"], host["ip_address"], exc
+                    )
                     errors += 1
 
             yield f"data: {json.dumps({'type': 'group_done', 'group': group_name, 'links': total_links})}\n\n"
@@ -2051,12 +2140,12 @@ async def get_host_topology(host_id: int):
 
 
 @router.get("/api/topology/changes")
-async def get_topology_changes(unacknowledged: bool = Query(default=True),
-                               limit: int = Query(default=100, ge=1, le=10000)):
+async def get_topology_changes(
+    unacknowledged: bool = Query(default=True), limit: int = Query(default=100, ge=1, le=10000)
+):
     """Return recent topology changes (added/removed links)."""
     try:
-        changes = await db.get_topology_changes(
-            unacknowledged_only=unacknowledged, limit=limit)
+        changes = await db.get_topology_changes(unacknowledged_only=unacknowledged, limit=limit)
         count = await db.get_topology_changes_count(unacknowledged_only=True)
         return {"changes": changes, "unacknowledged_count": count}
     except Exception as exc:
@@ -2117,8 +2206,7 @@ async def _run_stp_discovery_once(
     except Exception:
         policy_rows = []
     policy_by_group_vlan: dict[tuple[int, int], dict] = {
-        (int(row.get("group_id", 0)), int(row.get("vlan_id", 0))): row
-        for row in policy_rows
+        (int(row.get("group_id", 0)), int(row.get("vlan_id", 0))): row for row in policy_rows
     }
 
     total_hosts = 0
@@ -2158,9 +2246,7 @@ async def _run_stp_discovery_once(
                 host_errors = 0
                 for vid in target_vlans:
                     try:
-                        snap = await _collect_stp_snapshot_for_host(
-                            host, _cfg, vlan_id=vid, timeout_seconds=5.0
-                        )
+                        snap = await _collect_stp_snapshot_for_host(host, _cfg, vlan_id=vid, timeout_seconds=5.0)
                         snapshots.append(snap)
                     except Exception:
                         host_errors += 1

@@ -1,6 +1,7 @@
 """
 config_backups.py -- Config backup routes: policies, backup records, restore, admin schedule.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +35,7 @@ _running_policies: set[int] = set()
 
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
+
 
 class ConfigBackupPolicyCreate(BaseModel):
     name: str
@@ -71,17 +73,23 @@ async def create_config_backup_policy(body: ConfigBackupPolicyCreate, request: R
         raise HTTPException(status_code=404, detail="Inventory group not found")
     session = _get_session(request)
     await require_credential_access(body.credential_id, session=session, allow_service=True)
-    interval = max(state.CONFIG_BACKUP_POLICY_MIN_INTERVAL,
-                   min(state.CONFIG_BACKUP_POLICY_MAX_INTERVAL, body.interval_seconds))
-    retention = max(state.CONFIG_BACKUP_POLICY_MIN_RETENTION,
-                    min(state.CONFIG_BACKUP_POLICY_MAX_RETENTION, body.retention_days))
+    interval = max(
+        state.CONFIG_BACKUP_POLICY_MIN_INTERVAL, min(state.CONFIG_BACKUP_POLICY_MAX_INTERVAL, body.interval_seconds)
+    )
+    retention = max(
+        state.CONFIG_BACKUP_POLICY_MIN_RETENTION, min(state.CONFIG_BACKUP_POLICY_MAX_RETENTION, body.retention_days)
+    )
     policy_id = await db.create_config_backup_policy(
-        name=body.name, group_id=body.group_id, credential_id=body.credential_id,
-        interval_seconds=interval, retention_days=retention,
+        name=body.name,
+        group_id=body.group_id,
+        credential_id=body.credential_id,
+        interval_seconds=interval,
+        retention_days=retention,
         created_by=session["user"] if session else "",
     )
     await _audit(
-        "config-backups", "policy.created",
+        "config-backups",
+        "policy.created",
         user=session["user"] if session else "",
         detail=f"policy_id={policy_id} name={body.name}",
         correlation_id=_corr_id(request),
@@ -109,19 +117,24 @@ async def update_config_backup_policy(policy_id: int, body: ConfigBackupPolicyUp
         updates["enabled"] = 1 if body.enabled else 0
     if body.credential_id is not None:
         await require_credential_access(
-            body.credential_id, session=_get_session(request), allow_service=True,
+            body.credential_id,
+            session=_get_session(request),
+            allow_service=True,
         )
         updates["credential_id"] = body.credential_id
     if body.interval_seconds is not None:
-        updates["interval_seconds"] = max(state.CONFIG_BACKUP_POLICY_MIN_INTERVAL,
-                                          min(state.CONFIG_BACKUP_POLICY_MAX_INTERVAL, body.interval_seconds))
+        updates["interval_seconds"] = max(
+            state.CONFIG_BACKUP_POLICY_MIN_INTERVAL, min(state.CONFIG_BACKUP_POLICY_MAX_INTERVAL, body.interval_seconds)
+        )
     if body.retention_days is not None:
-        updates["retention_days"] = max(state.CONFIG_BACKUP_POLICY_MIN_RETENTION,
-                                       min(state.CONFIG_BACKUP_POLICY_MAX_RETENTION, body.retention_days))
+        updates["retention_days"] = max(
+            state.CONFIG_BACKUP_POLICY_MIN_RETENTION, min(state.CONFIG_BACKUP_POLICY_MAX_RETENTION, body.retention_days)
+        )
     await db.update_config_backup_policy(policy_id, **updates)
     session = _get_session(request)
     await _audit(
-        "config-backups", "policy.updated",
+        "config-backups",
+        "policy.updated",
         user=session["user"] if session else "",
         detail=f"policy_id={policy_id}",
         correlation_id=_corr_id(request),
@@ -137,7 +150,8 @@ async def delete_config_backup_policy_route(policy_id: int, request: Request):
     await db.delete_config_backup_policy(policy_id)
     session = _get_session(request)
     await _audit(
-        "config-backups", "policy.deleted",
+        "config-backups",
+        "policy.deleted",
         user=session["user"] if session else "",
         detail=f"policy_id={policy_id} name={policy['name']}",
         correlation_id=_corr_id(request),
@@ -308,7 +322,8 @@ async def download_config_backups_bulk(
 
     session = _get_session(request)
     await _audit(
-        "config-backups", "download.bulk",
+        "config-backups",
+        "download.bulk",
         user=session["user"] if session else "",
         detail=f"host_id={host_id} policy_id={policy_id} count={len(used_names)}",
         correlation_id=_corr_id(request),
@@ -332,7 +347,8 @@ async def download_config_backup(backup_id: int, request: Request):
     fname = _backup_filename(backup)
     session = _get_session(request)
     await _audit(
-        "config-backups", "download.single",
+        "config-backups",
+        "download.single",
         user=session["user"] if session else "",
         detail=f"backup_id={backup_id} host_id={backup.get('host_id')}",
         correlation_id=_corr_id(request),
@@ -360,7 +376,8 @@ async def delete_config_backup_route(backup_id: int, request: Request):
     await db.delete_config_backup(backup_id)
     session = _get_session(request)
     await _audit(
-        "config-backups", "backup.deleted",
+        "config-backups",
+        "backup.deleted",
         user=session["user"] if session else "",
         detail=f"backup_id={backup_id} host_id={backup['host_id']}",
         correlation_id=_corr_id(request),
@@ -385,7 +402,9 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
             raise HTTPException(status_code=404, detail="Policy not found")
         hosts = await db.get_hosts_for_group(policy["group_id"])
         cred = await require_credential_access(
-            policy["credential_id"], session=_get_session(request), allow_service=True,
+            policy["credential_id"],
+            session=_get_session(request),
+            allow_service=True,
         )
 
         backed_up = 0
@@ -404,16 +423,22 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
                         skipped += 1
                         return
                     await db.create_config_backup(
-                        policy_id=policy_id, host_id=host["id"],
-                        config_text=config_text, capture_method="manual",
-                        status="success", error_message="",
+                        policy_id=policy_id,
+                        host_id=host["id"],
+                        config_text=config_text,
+                        capture_method="manual",
+                        status="success",
+                        error_message="",
                     )
                     backed_up += 1
                 except Exception as exc:
                     await db.create_config_backup(
-                        policy_id=policy_id, host_id=host["id"],
-                        config_text="", capture_method="manual",
-                        status="error", error_message=str(exc)[:1000],
+                        policy_id=policy_id,
+                        host_id=host["id"],
+                        config_text="",
+                        capture_method="manual",
+                        status="error",
+                        error_message=str(exc)[:1000],
                     )
                     errs += 1
 
@@ -422,7 +447,8 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
 
         session = _get_session(request)
         await _audit(
-            "config-backups", "policy.run-now",
+            "config-backups",
+            "policy.run-now",
             user=session["user"] if session else "",
             detail=f"policy_id={policy_id} backed_up={backed_up} skipped={skipped} errors={errs}",
             correlation_id=_corr_id(request),
@@ -469,8 +495,7 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     try:
         await asyncio.to_thread(_push_config)
     except Exception as exc:
-        LOGGER.error("Config restore push failed for host %s backup %s: %s",
-                     host["ip_address"], body.backup_id, exc)
+        LOGGER.error("Config restore push failed for host %s backup %s: %s", host["ip_address"], body.backup_id, exc)
         raise HTTPException(status_code=502, detail="Config push failed - see server logs for details")
 
     # Re-capture and validate
@@ -480,8 +505,10 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     try:
         current_config = await _capture_running_config(host, cred)
         diff_text, added, removed = _compute_config_diff(
-            backup["config_text"], current_config,
-            baseline_label="backup", actual_label="current",
+            backup["config_text"],
+            current_config,
+            baseline_label="backup",
+            actual_label="current",
         )
         lines_changed = added + removed
         validated = lines_changed == 0
@@ -491,7 +518,8 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
 
     session = _get_session(request)
     await _audit(
-        "config-backups", "restore",
+        "config-backups",
+        "restore",
         user=session["user"] if session else "",
         detail=f"backup_id={body.backup_id} host={host['ip_address']} validated={validated} lines_changed={lines_changed}",
         correlation_id=_corr_id(request),
@@ -537,7 +565,10 @@ async def _run_config_backups_once() -> dict:
             except HTTPException as exc:
                 LOGGER.warning(
                     "config-backup: credential %s rejected for policy %s (created_by=%r): %s",
-                    policy["credential_id"], policy["id"], policy.get("created_by"), exc.detail,
+                    policy["credential_id"],
+                    policy["id"],
+                    policy.get("created_by"),
+                    exc.detail,
                 )
                 errors += 1
                 continue
@@ -551,16 +582,22 @@ async def _run_config_backups_once() -> dict:
                         if last and last.get("config_text") == config_text:
                             return "skipped"
                         await db.create_config_backup(
-                            policy_id=pol_id, host_id=host["id"],
-                            config_text=config_text, capture_method="scheduled",
-                            status="success", error_message="",
+                            policy_id=pol_id,
+                            host_id=host["id"],
+                            config_text=config_text,
+                            capture_method="scheduled",
+                            status="success",
+                            error_message="",
                         )
                         return True
                     except Exception as exc:
                         await db.create_config_backup(
-                            policy_id=pol_id, host_id=host["id"],
-                            config_text="", capture_method="scheduled",
-                            status="error", error_message=str(exc)[:1000],
+                            policy_id=pol_id,
+                            host_id=host["id"],
+                            config_text="",
+                            capture_method="scheduled",
+                            status="error",
+                            error_message=str(exc)[:1000],
                         )
                         return False
 
@@ -581,16 +618,16 @@ async def _run_config_backups_once() -> dict:
             try:
                 await db.delete_old_config_backups(policy["retention_days"])
             except Exception as exc:
-                LOGGER.warning("config-backup: retention cleanup failed for policy %s: %s",
-                               policy["id"], exc)
+                LOGGER.warning("config-backup: retention cleanup failed for policy %s: %s", policy["id"], exc)
 
         except Exception as exc:
             errors += 1
             LOGGER.warning("config-backup: policy %s failed: %s", policy["id"], exc)
 
     if policies_run > 0:
-        LOGGER.info("config-backup: ran %d policies, backed up %d hosts, %d errors",
-                     policies_run, hosts_backed_up, errors)
+        LOGGER.info(
+            "config-backup: ran %d policies, backed up %d hosts, %d errors", policies_run, hosts_backed_up, errors
+        )
         increment_metric("config_backup.scheduled.success")
 
     return {

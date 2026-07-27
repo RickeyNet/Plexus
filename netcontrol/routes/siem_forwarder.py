@@ -76,12 +76,19 @@ _DEFAULT_EVENT_SEVERITY = "info"
 # We pin facility = local0 (16) and severity = informational (6) by default.
 SYSLOG_FACILITY_LOCAL0 = 16
 SYSLOG_SEVERITY_BY_NAME = {
-    "emerg": 0, "alert": 1, "critical": 2, "error": 3,
-    "warning": 4, "notice": 5, "info": 6, "debug": 7,
+    "emerg": 0,
+    "alert": 1,
+    "critical": 2,
+    "error": 3,
+    "warning": 4,
+    "notice": 5,
+    "info": 6,
+    "debug": 7,
 }
 
 
 # ── Sink config + runtime stats ──────────────────────────────────────────────
+
 
 @dataclass
 class SinkConfig:
@@ -90,17 +97,17 @@ class SinkConfig:
     id: str
     name: str
     enabled: bool
-    protocol: str          # udp | tcp | tls | https
-    format: str            # cef | json
+    protocol: str  # udp | tcp | tls | https
+    format: str  # cef | json
     host: str
     port: int
-    url: str               # https only
-    bearer_token: str      # https only
-    tls_verify: bool       # tls + https
-    tls_ca_pem: str        # tls + https (optional)
+    url: str  # https only
+    bearer_token: str  # https only
+    tls_verify: bool  # tls + https
+    tls_ca_pem: str  # tls + https (optional)
     tls_client_cert_pem: str  # tls (optional)
-    tls_client_key_pem: str   # tls (optional)
-    severity_floor: str    # debug | info | notice | warning | error | critical
+    tls_client_key_pem: str  # tls (optional)
+    severity_floor: str  # debug | info | notice | warning | error | critical
     queue_size: int
     max_retries: int
     backoff_base: float
@@ -126,6 +133,7 @@ class SinkRuntime:
 
 # ── Validation / sanitization ────────────────────────────────────────────────
 
+
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -137,7 +145,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 def _coerce_int(value: Any, default: int, low: int, high: int) -> int:
     try:
         ival = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     if ival < low:
         return low
@@ -149,7 +157,7 @@ def _coerce_int(value: Any, default: int, low: int, high: int) -> int:
 def _coerce_float(value: Any, default: float, low: float, high: float) -> float:
     try:
         fval = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     if fval < low:
         return low
@@ -257,6 +265,7 @@ def sink_config_to_dict(sc: SinkConfig, *, redact_secrets: bool = True) -> dict:
 
 # ── Formatters ───────────────────────────────────────────────────────────────
 
+
 def _category_to_severity(category: str, action: str) -> str:
     """Map an audit category/action to a SIEM severity name.
 
@@ -280,30 +289,23 @@ def _category_to_severity(category: str, action: str) -> str:
 
 def _cef_escape(value: str) -> str:
     """CEF escapes backslashes and pipes; also escape newlines."""
-    return (
-        (value or "")
-        .replace("\\", "\\\\")
-        .replace("|", "\\|")
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
+    return (value or "").replace("\\", "\\\\").replace("|", "\\|").replace("\n", "\\n").replace("\r", "\\r")
 
 
 def _cef_extension_escape(value: str) -> str:
     """CEF extension fields escape backslash, equals, and newline."""
-    return (
-        (value or "")
-        .replace("\\", "\\\\")
-        .replace("=", "\\=")
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
+    return (value or "").replace("\\", "\\\\").replace("=", "\\=").replace("\n", "\\n").replace("\r", "\\r")
 
 
 def _cef_severity(name: str) -> int:
     """Map our severity name to CEF severity 0-10."""
     table = {
-        "debug": 1, "info": 3, "notice": 4, "warning": 6, "error": 8, "critical": 10,
+        "debug": 1,
+        "info": 3,
+        "notice": 4,
+        "warning": 6,
+        "error": 8,
+        "critical": 10,
     }
     return table.get(name, 3)
 
@@ -318,15 +320,17 @@ def format_cef(event: dict) -> str:
     severity_name = event.get("severity") or _category_to_severity(category, action)
     sev = _cef_severity(severity_name)
 
-    header = "|".join([
-        "CEF:0",
-        _cef_escape("Plexus"),
-        _cef_escape("NMS"),
-        _cef_escape("1.0"),
-        _cef_escape(f"{category}.{action}" or "audit.event"),
-        _cef_escape(action or "event"),
-        str(sev),
-    ])
+    header = "|".join(
+        [
+            "CEF:0",
+            _cef_escape("Plexus"),
+            _cef_escape("NMS"),
+            _cef_escape("1.0"),
+            _cef_escape(f"{category}.{action}" or "audit.event"),
+            _cef_escape(action or "event"),
+            str(sev),
+        ]
+    )
 
     extensions = {
         "rt": event.get("timestamp", ""),
@@ -386,6 +390,7 @@ def render_event(event: dict, fmt: str) -> str:
 
 # ── Syslog framing ───────────────────────────────────────────────────────────
 
+
 def _syslog_pri(severity_name: str) -> int:
     sev = SYSLOG_SEVERITY_BY_NAME.get(severity_name, 6)
     return SYSLOG_FACILITY_LOCAL0 * 8 + sev
@@ -405,9 +410,7 @@ def _syslog_header(severity_name: str, timestamp: str) -> str:
 
 
 def wrap_syslog(event: dict, payload: str) -> str:
-    severity_name = event.get("severity") or _category_to_severity(
-        event.get("category", ""), event.get("action", "")
-    )
+    severity_name = event.get("severity") or _category_to_severity(event.get("category", ""), event.get("action", ""))
     return f"{_syslog_header(severity_name, event.get('timestamp', ''))} {payload}"
 
 
@@ -418,6 +421,7 @@ def frame_octet_counting(message: str) -> bytes:
 
 
 # ── Sink drivers ─────────────────────────────────────────────────────────────
+
 
 async def _deliver_udp(sink: SinkConfig, message: str) -> None:
     """Best-effort UDP send. We don't open a long-lived socket because UDP is
@@ -468,6 +472,7 @@ def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
     if sink.tls_client_cert_pem.strip() and sink.tls_client_key_pem.strip():
         import os as _os
         import tempfile
+
         # SSLContext.load_cert_chain demands paths. Materialize PEMs into
         # temp files for the duration of context construction, then unlink.
         cert_fd, cert_path = tempfile.mkstemp(suffix=".pem")
@@ -532,9 +537,7 @@ async def _deliver_https(sink: SinkConfig, message: str) -> None:
     async with httpx.AsyncClient(timeout=DEFAULT_HTTPS_TIMEOUT, verify=verify) as client:
         resp = await client.post(sink.url, content=message.encode("utf-8"), headers=headers)
         if resp.status_code >= 400:
-            raise RuntimeError(
-                f"https sink {sink.id}: HTTP {resp.status_code} {resp.text[:200]}"
-            )
+            raise RuntimeError(f"https sink {sink.id}: HTTP {resp.status_code} {resp.text[:200]}")
 
 
 async def deliver(sink: SinkConfig, event: dict) -> None:
@@ -584,8 +587,14 @@ async def _sink_loop(rt: SinkRuntime) -> None:
     """One asyncio task per sink. Pulls events from the queue, formats,
     sends, and retries with exponential backoff. Bounded by max_retries."""
     sink = rt.config
-    LOGGER.info("siem sink %s: started (%s %s:%s, fmt=%s)",
-                sink.id, sink.protocol, sink.host or sink.url, sink.port, sink.format)
+    LOGGER.info(
+        "siem sink %s: started (%s %s:%s, fmt=%s)",
+        sink.id,
+        sink.protocol,
+        sink.host or sink.url,
+        sink.port,
+        sink.format,
+    )
     try:
         while True:
             event = await rt.queue.get()
@@ -605,7 +614,10 @@ async def _sink_loop(rt: SinkRuntime) -> None:
                         if attempt > sink.max_retries:
                             LOGGER.warning(
                                 "siem sink %s: giving up on event id=%s after %d attempts: %s",
-                                sink.id, event.get("id"), attempt, rt.last_error,
+                                sink.id,
+                                event.get("id"),
+                                attempt,
+                                rt.last_error,
                             )
                             break
                         delay = min(sink.backoff_cap, sink.backoff_base * (2 ** (attempt - 1)))
@@ -625,9 +637,7 @@ async def enqueue_event(event: dict) -> None:
         if not rt.config.enabled:
             continue
         # Severity floor - drop events below the per-sink threshold.
-        sev = event.get("severity") or _category_to_severity(
-            event.get("category", ""), event.get("action", "")
-        )
+        sev = event.get("severity") or _category_to_severity(event.get("category", ""), event.get("action", ""))
         if _SEVERITY_ORDER.get(sev, 1) < _SEVERITY_ORDER.get(rt.config.severity_floor, 1):
             rt.dropped_below_severity += 1
             continue
@@ -641,8 +651,7 @@ async def enqueue_event(event: dict) -> None:
                 rt.queue.task_done()
                 rt.dropped_queue_full += 1
             except asyncio.QueueEmpty as exc:
-                LOGGER.warning("siem sink %s: queue full, drop-oldest raced empty: %s",
-                               rt.config.id, exc)
+                LOGGER.warning("siem sink %s: queue full, drop-oldest raced empty: %s", rt.config.id, exc)
             try:
                 rt.queue.put_nowait(event)
             except asyncio.QueueFull:
@@ -691,10 +700,22 @@ def _config_changed(old: SinkConfig, new: SinkConfig) -> bool:
     being explicit guards against forgetting to refresh the loop on a new
     field."""
     for f in (
-        "enabled", "protocol", "format", "host", "port", "url",
-        "bearer_token", "tls_verify", "tls_ca_pem",
-        "tls_client_cert_pem", "tls_client_key_pem", "severity_floor",
-        "queue_size", "max_retries", "backoff_base", "backoff_cap",
+        "enabled",
+        "protocol",
+        "format",
+        "host",
+        "port",
+        "url",
+        "bearer_token",
+        "tls_verify",
+        "tls_ca_pem",
+        "tls_client_cert_pem",
+        "tls_client_key_pem",
+        "severity_floor",
+        "queue_size",
+        "max_retries",
+        "backoff_base",
+        "backoff_cap",
     ):
         if getattr(old, f) != getattr(new, f):
             return True
@@ -728,21 +749,23 @@ def get_stats() -> list[dict]:
     """Snapshot of per-sink runtime stats for the admin API."""
     out = []
     for rt in _sinks.values():
-        out.append({
-            "id": rt.config.id,
-            "name": rt.config.name,
-            "enabled": rt.config.enabled,
-            "protocol": rt.config.protocol,
-            "queue_depth": rt.queue.qsize(),
-            "queue_size": rt.config.queue_size,
-            "delivered": rt.delivered,
-            "delivery_failures": rt.delivery_failures,
-            "dropped_queue_full": rt.dropped_queue_full,
-            "dropped_below_severity": rt.dropped_below_severity,
-            "last_error": rt.last_error,
-            "last_delivery_at": rt.last_delivery_at,
-            "last_failure_at": rt.last_failure_at,
-        })
+        out.append(
+            {
+                "id": rt.config.id,
+                "name": rt.config.name,
+                "enabled": rt.config.enabled,
+                "protocol": rt.config.protocol,
+                "queue_depth": rt.queue.qsize(),
+                "queue_size": rt.config.queue_size,
+                "delivered": rt.delivered,
+                "delivery_failures": rt.delivery_failures,
+                "dropped_queue_full": rt.dropped_queue_full,
+                "dropped_below_severity": rt.dropped_below_severity,
+                "last_error": rt.last_error,
+                "last_delivery_at": rt.last_delivery_at,
+                "last_failure_at": rt.last_failure_at,
+            }
+        )
     return out
 
 

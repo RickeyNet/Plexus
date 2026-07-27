@@ -111,9 +111,7 @@ def _seed_source_and_inventory():
     async def _seed():
         db = await db_module.get_db()
         try:
-            cursor = await db.execute(
-                "INSERT INTO inventory_groups (name) VALUES ('Recon Core')"
-            )
+            cursor = await db.execute("INSERT INTO inventory_groups (name) VALUES ('Recon Core')")
             group_id = int(cursor.lastrowid)
             await db.execute(
                 "INSERT INTO hosts (group_id, hostname, ip_address, status) VALUES (?, ?, ?, ?)",
@@ -164,9 +162,7 @@ def _seed_source_and_inventory():
 
 def test_run_reconciliation_records_all_drift_types(ipam_db):
     source = _seed_source_and_inventory()
-    summary = asyncio.run(
-        reconcile_mod.run_reconciliation(int(source["id"]), triggered_by="tester")
-    )
+    summary = asyncio.run(reconcile_mod.run_reconciliation(int(source["id"]), triggered_by="tester"))
     assert summary["diff_count"] == 3  # missing_in_ipam (10.0.0.1), hostname (10.0.0.2), missing_in_plexus (10.0.0.99)
     counts = summary["counts_by_type"]
     assert counts.get(DRIFT_MISSING_IN_IPAM) == 1
@@ -213,9 +209,7 @@ def test_resolve_diff_accept_ipam_marks_resolved_without_push(ipam_db, monkeypat
     assert resolved["resolution"] == "accept_ipam"
     assert resolved["resolved_by"] == "alice"
 
-    open_diffs = asyncio.run(
-        db_module.list_reconciliation_diffs(source_id=int(source["id"]), open_only=True)
-    )
+    open_diffs = asyncio.run(db_module.list_reconciliation_diffs(source_id=int(source["id"]), open_only=True))
     assert all(d["id"] != target["id"] for d in open_diffs)
 
     runs = asyncio.run(db_module.list_reconciliation_runs(source_id=int(source["id"])))

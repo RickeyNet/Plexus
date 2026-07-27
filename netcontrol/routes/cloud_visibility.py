@@ -99,7 +99,7 @@ def _json_loads_safe(raw: str | None, fallback):
         return fallback
     try:
         return json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
+    except TypeError, json.JSONDecodeError:
         return fallback
 
 
@@ -388,11 +388,7 @@ def _normalize_generic_flow_records(records: list[dict]) -> list[dict]:
         if not isinstance(item, dict):
             continue
         src_ip = str(
-            item.get("src_ip")
-            or item.get("srcaddr")
-            or item.get("source_ip")
-            or item.get("srcIp")
-            or ""
+            item.get("src_ip") or item.get("srcaddr") or item.get("source_ip") or item.get("srcIp") or ""
         ).strip()
         dst_ip = str(
             item.get("dst_ip")
@@ -490,7 +486,9 @@ def _normalize_azure_flow_records(records: list[dict]) -> list[dict]:
                         "bytes": _safe_int(parts[9] if len(parts) > 9 else item.get("bytes")),
                         "packets": _safe_int(parts[8] if len(parts) > 8 else item.get("packets")),
                         "start_time": _normalize_timestamp_iso(parts[0] if len(parts) > 0 else item.get("start_time")),
-                        "end_time": _normalize_timestamp_iso(item.get("end_time") or parts[0] if len(parts) > 0 else None),
+                        "end_time": _normalize_timestamp_iso(
+                            item.get("end_time") or parts[0] if len(parts) > 0 else None
+                        ),
                         "action": str(parts[7] if len(parts) > 7 else item.get("action") or "").strip().lower(),
                         "direction": str(parts[6] if len(parts) > 6 else item.get("direction") or "").strip().lower(),
                         "region": str(item.get("region") or item.get("location") or "").strip(),
@@ -513,13 +511,7 @@ def _normalize_gcp_flow_records(records: list[dict]) -> list[dict]:
         if not isinstance(item, dict):
             continue
         conn = item.get("connection") if isinstance(item.get("connection"), dict) else {}
-        src_ip = str(
-            item.get("src_ip")
-            or item.get("srcIp")
-            or conn.get("src_ip")
-            or conn.get("srcIp")
-            or ""
-        ).strip()
+        src_ip = str(item.get("src_ip") or item.get("srcIp") or conn.get("src_ip") or conn.get("srcIp") or "").strip()
         dst_ip = str(
             item.get("dst_ip")
             or item.get("dest_ip")
@@ -686,12 +678,7 @@ def _normalize_generic_traffic_metric_records(records: list[dict]) -> list[dict]
     for item in records:
         if not isinstance(item, dict):
             continue
-        metric_name = str(
-            item.get("metric_name")
-            or item.get("metricName")
-            or item.get("name")
-            or ""
-        ).strip()
+        metric_name = str(item.get("metric_name") or item.get("metricName") or item.get("name") or "").strip()
         if not metric_name:
             continue
         interval_start = _normalize_timestamp_iso(
@@ -997,12 +984,50 @@ def _summarize_traffic_metric_records(records: list[dict]) -> dict:
 def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]]:
     if provider == "aws":
         resources = [
-            {"resource_uid": "aws:vpc:core", "resource_type": "vpc", "name": "prod-core-vpc", "region": "us-east-1", "cidr": "10.200.0.0/16", "status": "active"},
-            {"resource_uid": "aws:tgw:global", "resource_type": "transit_gateway", "name": "global-tgw", "region": "us-east-1", "status": "active"},
-            {"resource_uid": "aws:dx:primary", "resource_type": "direct_connect", "name": "dx-primary", "region": "us-east-1", "status": "up"},
-            {"resource_uid": "aws:internet_gateway:igw-core", "resource_type": "internet_gateway", "name": "igw-core", "region": "us-east-1", "status": "attached"},
-            {"resource_uid": "aws:nat_gateway:nat-core-a", "resource_type": "nat_gateway", "name": "nat-core-a", "region": "us-east-1", "status": "available"},
-            {"resource_uid": "aws:route_table:rtb-core", "resource_type": "route_table", "name": "rtb-core", "region": "us-east-1", "status": "active", "metadata": {"route_count": 3, "association_count": 2}},
+            {
+                "resource_uid": "aws:vpc:core",
+                "resource_type": "vpc",
+                "name": "prod-core-vpc",
+                "region": "us-east-1",
+                "cidr": "10.200.0.0/16",
+                "status": "active",
+            },
+            {
+                "resource_uid": "aws:tgw:global",
+                "resource_type": "transit_gateway",
+                "name": "global-tgw",
+                "region": "us-east-1",
+                "status": "active",
+            },
+            {
+                "resource_uid": "aws:dx:primary",
+                "resource_type": "direct_connect",
+                "name": "dx-primary",
+                "region": "us-east-1",
+                "status": "up",
+            },
+            {
+                "resource_uid": "aws:internet_gateway:igw-core",
+                "resource_type": "internet_gateway",
+                "name": "igw-core",
+                "region": "us-east-1",
+                "status": "attached",
+            },
+            {
+                "resource_uid": "aws:nat_gateway:nat-core-a",
+                "resource_type": "nat_gateway",
+                "name": "nat-core-a",
+                "region": "us-east-1",
+                "status": "available",
+            },
+            {
+                "resource_uid": "aws:route_table:rtb-core",
+                "resource_type": "route_table",
+                "name": "rtb-core",
+                "region": "us-east-1",
+                "status": "active",
+                "metadata": {"route_count": 3, "association_count": 2},
+            },
             {
                 "resource_uid": "aws:sg:app-edge",
                 "resource_type": "security_group",
@@ -1036,23 +1061,94 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
             },
         ]
         connections = [
-            {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:tgw:global", "connection_type": "transit_gateway_attachment", "state": "attached"},
-            {"source_resource_uid": "aws:tgw:global", "target_resource_uid": "aws:dx:primary", "connection_type": "direct_connect_gateway", "state": "up"},
-            {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:internet_gateway:igw-core", "connection_type": "internet_gateway_attachment", "state": "attached"},
-            {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:route_table:rtb-core", "connection_type": "route_table_association", "state": "attached"},
-            {"source_resource_uid": "aws:route_table:rtb-core", "target_resource_uid": "aws:nat_gateway:nat-core-a", "connection_type": "route_next_hop", "state": "active", "metadata": {"destination": "0.0.0.0/0"}},
-            {"source_resource_uid": "aws:vpc:core", "target_resource_uid": "aws:sg:app-edge", "connection_type": "security_boundary", "state": "enforced"},
+            {
+                "source_resource_uid": "aws:vpc:core",
+                "target_resource_uid": "aws:tgw:global",
+                "connection_type": "transit_gateway_attachment",
+                "state": "attached",
+            },
+            {
+                "source_resource_uid": "aws:tgw:global",
+                "target_resource_uid": "aws:dx:primary",
+                "connection_type": "direct_connect_gateway",
+                "state": "up",
+            },
+            {
+                "source_resource_uid": "aws:vpc:core",
+                "target_resource_uid": "aws:internet_gateway:igw-core",
+                "connection_type": "internet_gateway_attachment",
+                "state": "attached",
+            },
+            {
+                "source_resource_uid": "aws:vpc:core",
+                "target_resource_uid": "aws:route_table:rtb-core",
+                "connection_type": "route_table_association",
+                "state": "attached",
+            },
+            {
+                "source_resource_uid": "aws:route_table:rtb-core",
+                "target_resource_uid": "aws:nat_gateway:nat-core-a",
+                "connection_type": "route_next_hop",
+                "state": "active",
+                "metadata": {"destination": "0.0.0.0/0"},
+            },
+            {
+                "source_resource_uid": "aws:vpc:core",
+                "target_resource_uid": "aws:sg:app-edge",
+                "connection_type": "security_boundary",
+                "state": "enforced",
+            },
         ]
         return resources, connections
 
     if provider == "azure":
         resources = [
-            {"resource_uid": "azure:vnet:core", "resource_type": "vnet", "name": "corp-core-vnet", "region": "centralus", "cidr": "10.210.0.0/16", "status": "connected"},
-            {"resource_uid": "azure:vnet:shared", "resource_type": "vnet", "name": "shared-services-vnet", "region": "centralus", "cidr": "10.211.0.0/16", "status": "connected"},
-            {"resource_uid": "azure:er:primary", "resource_type": "expressroute", "name": "er-primary", "region": "centralus", "status": "provisioned"},
-            {"resource_uid": "azure:virtual_network_gateway:core", "resource_type": "virtual_network_gateway", "name": "vgw-core", "region": "centralus", "status": "active", "metadata": {"gateway_type": "Vpn"}},
-            {"resource_uid": "azure:local_network_gateway:hq", "resource_type": "local_network_gateway", "name": "lng-hq", "region": "centralus", "status": "active"},
-            {"resource_uid": "azure:route_table:core", "resource_type": "route_table", "name": "rt-core", "region": "centralus", "status": "active", "metadata": {"route_count": 2}},
+            {
+                "resource_uid": "azure:vnet:core",
+                "resource_type": "vnet",
+                "name": "corp-core-vnet",
+                "region": "centralus",
+                "cidr": "10.210.0.0/16",
+                "status": "connected",
+            },
+            {
+                "resource_uid": "azure:vnet:shared",
+                "resource_type": "vnet",
+                "name": "shared-services-vnet",
+                "region": "centralus",
+                "cidr": "10.211.0.0/16",
+                "status": "connected",
+            },
+            {
+                "resource_uid": "azure:er:primary",
+                "resource_type": "expressroute",
+                "name": "er-primary",
+                "region": "centralus",
+                "status": "provisioned",
+            },
+            {
+                "resource_uid": "azure:virtual_network_gateway:core",
+                "resource_type": "virtual_network_gateway",
+                "name": "vgw-core",
+                "region": "centralus",
+                "status": "active",
+                "metadata": {"gateway_type": "Vpn"},
+            },
+            {
+                "resource_uid": "azure:local_network_gateway:hq",
+                "resource_type": "local_network_gateway",
+                "name": "lng-hq",
+                "region": "centralus",
+                "status": "active",
+            },
+            {
+                "resource_uid": "azure:route_table:core",
+                "resource_type": "route_table",
+                "name": "rt-core",
+                "region": "centralus",
+                "status": "active",
+                "metadata": {"route_count": 2},
+            },
             {
                 "resource_uid": "azure:nsg:edge",
                 "resource_type": "network_security_group",
@@ -1088,22 +1184,93 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
             },
         ]
         connections = [
-            {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:vnet:shared", "connection_type": "vnet_peering", "state": "connected"},
-            {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:er:primary", "connection_type": "expressroute_gateway", "state": "up"},
-            {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:virtual_network_gateway:core", "connection_type": "virtual_network_gateway_attachment", "state": "attached"},
-            {"source_resource_uid": "azure:virtual_network_gateway:core", "target_resource_uid": "azure:local_network_gateway:hq", "connection_type": "ipsec", "state": "connected"},
-            {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:route_table:core", "connection_type": "route_table_association", "state": "attached", "metadata": {"subnet_name": "GatewaySubnet"}},
-            {"source_resource_uid": "azure:vnet:core", "target_resource_uid": "azure:nsg:edge", "connection_type": "security_boundary", "state": "enforced"},
+            {
+                "source_resource_uid": "azure:vnet:core",
+                "target_resource_uid": "azure:vnet:shared",
+                "connection_type": "vnet_peering",
+                "state": "connected",
+            },
+            {
+                "source_resource_uid": "azure:vnet:core",
+                "target_resource_uid": "azure:er:primary",
+                "connection_type": "expressroute_gateway",
+                "state": "up",
+            },
+            {
+                "source_resource_uid": "azure:vnet:core",
+                "target_resource_uid": "azure:virtual_network_gateway:core",
+                "connection_type": "virtual_network_gateway_attachment",
+                "state": "attached",
+            },
+            {
+                "source_resource_uid": "azure:virtual_network_gateway:core",
+                "target_resource_uid": "azure:local_network_gateway:hq",
+                "connection_type": "ipsec",
+                "state": "connected",
+            },
+            {
+                "source_resource_uid": "azure:vnet:core",
+                "target_resource_uid": "azure:route_table:core",
+                "connection_type": "route_table_association",
+                "state": "attached",
+                "metadata": {"subnet_name": "GatewaySubnet"},
+            },
+            {
+                "source_resource_uid": "azure:vnet:core",
+                "target_resource_uid": "azure:nsg:edge",
+                "connection_type": "security_boundary",
+                "state": "enforced",
+            },
         ]
         return resources, connections
 
     resources = [
-        {"resource_uid": "gcp:vpc:core", "resource_type": "vpc", "name": "gcp-core-vpc", "region": "us-central1", "cidr": "10.220.0.0/16", "status": "active"},
-        {"resource_uid": "gcp:vpc:shared", "resource_type": "vpc", "name": "gcp-shared-vpc", "region": "us-central1", "cidr": "10.221.0.0/16", "status": "active"},
-        {"resource_uid": "gcp:router:core", "resource_type": "cloud_router", "name": "cr-core", "region": "us-central1", "status": "running"},
-        {"resource_uid": "gcp:vpn:ha", "resource_type": "ha_vpn_gateway", "name": "ha-vpn-gw", "region": "us-central1", "status": "up"},
-        {"resource_uid": "gcp:interconnect_attachment:core", "resource_type": "interconnect_attachment", "name": "ia-core", "region": "us-central1", "status": "AVAILABLE"},
-        {"resource_uid": "gcp:route:default-egress", "resource_type": "route_entry", "name": "default-egress", "region": "global", "cidr": "0.0.0.0/0", "status": "active", "metadata": {"next_hop": "default-internet-gateway", "priority": 1000}},
+        {
+            "resource_uid": "gcp:vpc:core",
+            "resource_type": "vpc",
+            "name": "gcp-core-vpc",
+            "region": "us-central1",
+            "cidr": "10.220.0.0/16",
+            "status": "active",
+        },
+        {
+            "resource_uid": "gcp:vpc:shared",
+            "resource_type": "vpc",
+            "name": "gcp-shared-vpc",
+            "region": "us-central1",
+            "cidr": "10.221.0.0/16",
+            "status": "active",
+        },
+        {
+            "resource_uid": "gcp:router:core",
+            "resource_type": "cloud_router",
+            "name": "cr-core",
+            "region": "us-central1",
+            "status": "running",
+        },
+        {
+            "resource_uid": "gcp:vpn:ha",
+            "resource_type": "ha_vpn_gateway",
+            "name": "ha-vpn-gw",
+            "region": "us-central1",
+            "status": "up",
+        },
+        {
+            "resource_uid": "gcp:interconnect_attachment:core",
+            "resource_type": "interconnect_attachment",
+            "name": "ia-core",
+            "region": "us-central1",
+            "status": "AVAILABLE",
+        },
+        {
+            "resource_uid": "gcp:route:default-egress",
+            "resource_type": "route_entry",
+            "name": "default-egress",
+            "region": "global",
+            "cidr": "0.0.0.0/0",
+            "status": "active",
+            "metadata": {"next_hop": "default-internet-gateway", "priority": 1000},
+        },
         {
             "resource_uid": "gcp:fw:edge",
             "resource_type": "firewall_policy",
@@ -1139,12 +1306,42 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
         },
     ]
     connections = [
-        {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:router:core", "connection_type": "router_attachment", "state": "up"},
-        {"source_resource_uid": "gcp:router:core", "target_resource_uid": "gcp:vpn:ha", "connection_type": "vpn_tunnel", "state": "up"},
-        {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:vpc:shared", "connection_type": "vpc_peering", "state": "ACTIVE"},
-        {"source_resource_uid": "gcp:router:core", "target_resource_uid": "gcp:interconnect_attachment:core", "connection_type": "interconnect_attachment", "state": "AVAILABLE"},
-        {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:route:default-egress", "connection_type": "route_table_association", "state": "active"},
-        {"source_resource_uid": "gcp:vpc:core", "target_resource_uid": "gcp:fw:edge", "connection_type": "security_boundary", "state": "enforced"},
+        {
+            "source_resource_uid": "gcp:vpc:core",
+            "target_resource_uid": "gcp:router:core",
+            "connection_type": "router_attachment",
+            "state": "up",
+        },
+        {
+            "source_resource_uid": "gcp:router:core",
+            "target_resource_uid": "gcp:vpn:ha",
+            "connection_type": "vpn_tunnel",
+            "state": "up",
+        },
+        {
+            "source_resource_uid": "gcp:vpc:core",
+            "target_resource_uid": "gcp:vpc:shared",
+            "connection_type": "vpc_peering",
+            "state": "ACTIVE",
+        },
+        {
+            "source_resource_uid": "gcp:router:core",
+            "target_resource_uid": "gcp:interconnect_attachment:core",
+            "connection_type": "interconnect_attachment",
+            "state": "AVAILABLE",
+        },
+        {
+            "source_resource_uid": "gcp:vpc:core",
+            "target_resource_uid": "gcp:route:default-egress",
+            "connection_type": "route_table_association",
+            "state": "active",
+        },
+        {
+            "source_resource_uid": "gcp:vpc:core",
+            "target_resource_uid": "gcp:fw:edge",
+            "connection_type": "security_boundary",
+            "state": "enforced",
+        },
     ]
     return resources, connections
 
@@ -1274,11 +1471,11 @@ async def run_scheduled_discovery() -> dict:
         account_id = int(account["id"])
         try:
             existing_links = await db.get_cloud_hybrid_links(account_id=account_id)
-            host_ids = sorted(
-                {int(link.get("host_id")) for link in existing_links if link.get("host_id")}
-            )
+            host_ids = sorted({int(link.get("host_id")) for link in existing_links if link.get("host_id")})
             resources, connections, hybrid_links = await _build_live_discovery_snapshot(
-                account, host_ids, bool(host_ids),
+                account,
+                host_ids,
+                bool(host_ids),
             )
             await db.replace_cloud_discovery_snapshot(
                 account_id,
@@ -1292,7 +1489,9 @@ async def run_scheduled_discovery() -> dict:
         except CloudCollectorError as exc:
             message = str(exc) or type(exc).__name__
             LOGGER.warning(
-                "scheduled cloud discovery failed account_id=%s: %s", account_id, message,
+                "scheduled cloud discovery failed account_id=%s: %s",
+                account_id,
+                message,
             )
             await db.set_cloud_account_sync_status(account_id, status="error", message=message)
             errors.append(f"account {account_id}: {message}")
@@ -1303,7 +1502,9 @@ async def run_scheduled_discovery() -> dict:
                 exc_info=True,
             )
             await db.set_cloud_account_sync_status(
-                account_id, status="error", message="Scheduled discovery failed",
+                account_id,
+                status="error",
+                message="Scheduled discovery failed",
             )
             errors.append(f"account {account_id}: unexpected error")
     return {"accounts": len(accounts), "refreshed": refreshed, "errors": errors}
@@ -1531,10 +1732,7 @@ async def ingest_cloud_flow_logs_api(account_id: int, request: Request, body: Cl
     skipped = max(0, len(body.records) - len(normalized_records))
 
     if body.emit_event:
-        message = (
-            f"Cloud flow ingest account_id={account_id} provider={provider} "
-            f"ingested={inserted} skipped={skipped}"
-        )
+        message = f"Cloud flow ingest account_id={account_id} provider={provider} ingested={inserted} skipped={skipped}"
         raw_data = json.dumps(
             {
                 "account_id": account_id,
@@ -1559,8 +1757,7 @@ async def ingest_cloud_flow_logs_api(account_id: int, request: Request, body: Cl
         "ingest_flow_logs",
         user=session.get("user", ""),
         detail=(
-            f"account_id={account_id} provider={provider} format={flow_format} "
-            f"ingested={inserted} skipped={skipped}"
+            f"account_id={account_id} provider={provider} format={flow_format} ingested={inserted} skipped={skipped}"
         ),
         correlation_id=_corr_id(request),
     )
@@ -1595,7 +1792,9 @@ async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, bo
         normalized_records = _prepare_traffic_metric_ingest_records(provider, ingest_format, body.records)
     except ValueError as exc:
         if str(exc) == "mismatched_traffic_format_provider":
-            raise HTTPException(status_code=400, detail="Traffic metric format must match cloud account provider") from None
+            raise HTTPException(
+                status_code=400, detail="Traffic metric format must match cloud account provider"
+            ) from None
         raise HTTPException(status_code=400, detail="Unsupported cloud traffic metric ingestion format") from None
 
     if not normalized_records:
@@ -1640,8 +1839,7 @@ async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, bo
         "ingest_traffic_metrics",
         user=session.get("user", ""),
         detail=(
-            f"account_id={account_id} provider={provider} format={ingest_format} "
-            f"ingested={inserted} skipped={skipped}"
+            f"account_id={account_id} provider={provider} format={ingest_format} ingested={inserted} skipped={skipped}"
         ),
         correlation_id=_corr_id(request),
     )
@@ -1718,7 +1916,9 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
                 sync_message,
             )
             await db.set_cloud_account_sync_status(
-                account_id, status="error", message=sync_message,
+                account_id,
+                status="error",
+                message=sync_message,
             )
             if requested_mode == "live":
                 raise HTTPException(status_code=failure_status_code, detail=sync_message) from None
@@ -2099,6 +2299,7 @@ class CloudDiscoverySyncConfigUpdate(BaseModel):
 @router.get("/api/cloud/discovery-sync/config")
 async def get_cloud_discovery_sync_config_api():
     import netcontrol.routes.state as state
+
     return {"config": dict(state.CLOUD_DISCOVERY_SYNC_CONFIG)}
 
 
@@ -2130,6 +2331,7 @@ async def update_cloud_discovery_sync_config_api(request: Request, body: CloudDi
 @router.get("/api/cloud/flow-sync/config")
 async def get_cloud_flow_sync_config_api():
     import netcontrol.routes.state as state
+
     return {"config": dict(state.CLOUD_FLOW_SYNC_CONFIG), "status": dict(state.CLOUD_FLOW_SYNC_STATUS)}
 
 
@@ -2202,9 +2404,7 @@ async def trigger_cloud_flow_sync_api(
             )
         else:
             result = await pull_flow_logs_all_accounts(lookback_minutes=lookback)
-            status = await persist_cloud_flow_sync_status(
-                build_cloud_sync_status(result, source="manual", scope="all")
-            )
+            status = await persist_cloud_flow_sync_status(build_cloud_sync_status(result, source="manual", scope="all"))
         return result, status
 
     session = _get_session(request) or {}
@@ -2213,6 +2413,7 @@ async def trigger_cloud_flow_sync_api(
     # `is True` so direct (non-HTTP) invocation with the Query default object
     # stays on the synchronous path.
     if background is True:
+
         async def _run_logged() -> None:
             try:
                 await _run()
@@ -2263,7 +2464,10 @@ async def get_cloud_flow_sync_cursors_api():
 async def get_cloud_traffic_sync_config_api():
     import netcontrol.routes.state as state
 
-    return {"config": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG), "status": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS)}
+    return {
+        "config": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG),
+        "status": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS),
+    }
 
 
 @router.put("/api/cloud/traffic-sync/config", dependencies=[Depends(_require_admin_dep)])
@@ -2344,6 +2548,7 @@ async def trigger_cloud_traffic_sync_api(
     # `is True` so direct (non-HTTP) invocation with the Query default object
     # stays on the synchronous path.
     if background is True:
+
         async def _run_logged() -> None:
             try:
                 await _run()

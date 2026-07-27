@@ -59,14 +59,18 @@ def _auth_client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))
 
-    resp = client.post("/api/auth/login", json={
-        "username": "admin",
-        "password": "netcontrol",
-    })
+    resp = client.post(
+        "/api/auth/login",
+        json={
+            "username": "admin",
+            "password": "netcontrol",
+        },
+    )
     csrf_token = resp.json().get("csrf_token", "")
     return _CsrfClient(client, csrf_token), db_path
 
@@ -79,9 +83,7 @@ def _seed_alert(db_path: str, severity: str = "warning") -> int:
     """
     conn = sqlite3.connect(db_path)
     try:
-        cur = conn.execute(
-            "INSERT INTO inventory_groups (name) VALUES ('api-test')"
-        )
+        cur = conn.execute("INSERT INTO inventory_groups (name) VALUES ('api-test')")
         group_id = cur.lastrowid
         cur = conn.execute(
             "INSERT INTO hosts (group_id, hostname, ip_address) VALUES (?, 'sw1', '10.9.9.1')",
@@ -112,6 +114,7 @@ def test_monitoring_routes_require_auth(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))
@@ -124,9 +127,15 @@ def test_monitoring_routes_require_auth(tmp_path, monkeypatch, request):
 
 def test_rule_create_list_get(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/monitoring/rules", json={
-        "name": "high cpu", "metric": "cpu", "operator": ">=", "value": 85,
-    })
+    resp = client.post(
+        "/api/monitoring/rules",
+        json={
+            "name": "high cpu",
+            "metric": "cpu",
+            "operator": ">=",
+            "value": 85,
+        },
+    )
     assert resp.status_code == 201
     rule_id = resp.json()["id"]
 
@@ -141,35 +150,65 @@ def test_rule_create_list_get(tmp_path, monkeypatch, request):
 
 def test_rule_create_requires_name_and_metric(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
-    assert client.post("/api/monitoring/rules", json={
-        "metric": "cpu", "value": 85,
-    }).status_code == 400
-    assert client.post("/api/monitoring/rules", json={
-        "name": "no metric", "value": 85,
-    }).status_code == 400
+    assert (
+        client.post(
+            "/api/monitoring/rules",
+            json={
+                "metric": "cpu",
+                "value": 85,
+            },
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/monitoring/rules",
+            json={
+                "name": "no metric",
+                "value": 85,
+            },
+        ).status_code
+        == 400
+    )
 
 
 def test_rule_create_rejects_unknown_operator(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/monitoring/rules", json={
-        "name": "bad op", "metric": "cpu", "operator": "~=", "value": 1,
-    })
+    resp = client.post(
+        "/api/monitoring/rules",
+        json={
+            "name": "bad op",
+            "metric": "cpu",
+            "operator": "~=",
+            "value": 1,
+        },
+    )
     assert resp.status_code == 400
 
 
 def test_rule_create_rejects_non_numeric_value(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/monitoring/rules", json={
-        "name": "bad value", "metric": "cpu", "value": "not-a-number",
-    })
+    resp = client.post(
+        "/api/monitoring/rules",
+        json={
+            "name": "bad value",
+            "metric": "cpu",
+            "value": "not-a-number",
+        },
+    )
     assert resp.status_code == 400
 
 
 def test_rule_update_and_delete(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
-    rule_id = client.post("/api/monitoring/rules", json={
-        "name": "to update", "metric": "cpu", "value": 85,
-    }).json()["id"]
+    rule_id = client.post(
+        "/api/monitoring/rules",
+        json={
+            "name": "to update",
+            "metric": "cpu",
+            "value": 85,
+        },
+    ).json()["id"]
 
     updated = client.put(f"/api/monitoring/rules/{rule_id}", json={"value": 95})
     assert updated.status_code == 200
@@ -190,9 +229,14 @@ def test_rule_update_missing_returns_404(tmp_path, monkeypatch, request):
 
 def test_suppression_create_list_delete(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/monitoring/suppressions", json={
-        "name": "maintenance", "ends_at": "2099-01-01T00:00:00", "metric": "cpu",
-    })
+    resp = client.post(
+        "/api/monitoring/suppressions",
+        json={
+            "name": "maintenance",
+            "ends_at": "2099-01-01T00:00:00",
+            "metric": "cpu",
+        },
+    )
     assert resp.status_code == 201
     sup_id = resp.json()["id"]
 
@@ -212,20 +256,25 @@ def test_suppression_requires_ends_at(tmp_path, monkeypatch, request):
 
 def test_suppression_active_only_filter(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
-    active = client.post("/api/monitoring/suppressions", json={
-        "name": "active", "ends_at": "2099-01-01T00:00:00",
-    }).json()["id"]
-    expired = client.post("/api/monitoring/suppressions", json={
-        "name": "expired", "ends_at": "2000-01-01T00:00:00",
-    }).json()["id"]
+    active = client.post(
+        "/api/monitoring/suppressions",
+        json={
+            "name": "active",
+            "ends_at": "2099-01-01T00:00:00",
+        },
+    ).json()["id"]
+    expired = client.post(
+        "/api/monitoring/suppressions",
+        json={
+            "name": "expired",
+            "ends_at": "2000-01-01T00:00:00",
+        },
+    ).json()["id"]
 
     everything = {s["id"] for s in client.get("/api/monitoring/suppressions").json()}
     assert {active, expired} <= everything
 
-    active_only = {
-        s["id"]
-        for s in client.get("/api/monitoring/suppressions?active_only=true").json()
-    }
+    active_only = {s["id"] for s in client.get("/api/monitoring/suppressions?active_only=true").json()}
     assert active in active_only
     assert expired not in active_only
 
@@ -253,9 +302,12 @@ def test_bulk_acknowledge(tmp_path, monkeypatch, request):
     client, db_path = _auth_client(tmp_path, monkeypatch, request)
     a1 = _seed_alert(db_path)
 
-    resp = client.post("/api/monitoring/alerts/bulk-acknowledge", json={
-        "alert_ids": [a1],
-    })
+    resp = client.post(
+        "/api/monitoring/alerts/bulk-acknowledge",
+        json={
+            "alert_ids": [a1],
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["acknowledged"] == 1
 

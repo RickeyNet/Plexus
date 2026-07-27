@@ -40,12 +40,8 @@ async def _up_sqlite(db) -> None:
     if "vlan_id" not in alloc_cols:
         await db.execute("ALTER TABLE ipam_allocations ADD COLUMN vlan_id TEXT NOT NULL DEFAULT ''")
 
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_hosts_vrf_ip ON hosts (vrf_name, ip_address)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_allocations_vrf_addr ON ipam_allocations (vrf_name, address)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_hosts_vrf_ip ON hosts (vrf_name, ip_address)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_ipam_allocations_vrf_addr ON ipam_allocations (vrf_name, address)")
     await db.commit()
 
 
@@ -54,12 +50,8 @@ async def _up_postgres(db) -> None:
     await db.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS vlan_id TEXT NOT NULL DEFAULT ''")
     await db.execute("ALTER TABLE ipam_allocations ADD COLUMN IF NOT EXISTS vrf_name TEXT NOT NULL DEFAULT ''")
     await db.execute("ALTER TABLE ipam_allocations ADD COLUMN IF NOT EXISTS vlan_id TEXT NOT NULL DEFAULT ''")
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_hosts_vrf_ip ON hosts (vrf_name, ip_address)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_allocations_vrf_addr ON ipam_allocations (vrf_name, address)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_hosts_vrf_ip ON hosts (vrf_name, ip_address)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_ipam_allocations_vrf_addr ON ipam_allocations (vrf_name, address)")
     await db.commit()
 
 

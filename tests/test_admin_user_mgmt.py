@@ -1,9 +1,9 @@
 """Regression tests for admin user-management hardening.
 
-  * delete_user_guarded refuses to remove the last admin, with the check inside
-    the DELETE statement so concurrent deletes can't both slip through and lock
-    everyone out.
-  * create/update user reject an invalid role instead of silently coercing it.
+* delete_user_guarded refuses to remove the last admin, with the check inside
+  the DELETE statement so concurrent deletes can't both slip through and lock
+  everyone out.
+* create/update user reject an invalid role instead of silently coercing it.
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ def test_delete_user_guarded_not_found(user_db):
 
 # ── HTTP role validation ─────────────────────────────────────────────────────
 
+
 def _auth_client(tmp_path, monkeypatch, request):
     import netcontrol.app as app_module
 
@@ -66,6 +67,7 @@ def _auth_client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))

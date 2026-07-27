@@ -15,8 +15,8 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-
 # ── capacity-planning projection bound (HTTP) ────────────────────────────────
+
 
 def _auth_client(tmp_path, monkeypatch, request):
     import netcontrol.app as app_module
@@ -31,6 +31,7 @@ def _auth_client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))
@@ -52,6 +53,7 @@ def test_capacity_planning_accepts_default(tmp_path, monkeypatch, request):
 
 
 # ── vendor-OID admin gate (structural) ───────────────────────────────────────
+
 
 def _routes(router):
     out = set()
@@ -76,6 +78,7 @@ def test_vendor_oid_mutations_are_admin_gated():
 
 
 # ── dashboard GET ownership (wiring) ─────────────────────────────────────────
+
 
 class _Stop(Exception):
     pass
@@ -117,6 +120,7 @@ async def test_dashboard_missing_is_404_before_owner_check(monkeypatch):
 
 
 # ── lab promote_run credential wiring ────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_lab_promote_validates_credential(monkeypatch):

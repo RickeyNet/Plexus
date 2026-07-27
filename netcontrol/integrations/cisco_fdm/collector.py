@@ -67,8 +67,7 @@ async def _get_client(host: dict, cred: dict, password: str) -> FdmClient:
             try:
                 await existing[1].close()
             except Exception as exc:  # noqa: BLE001 - best-effort teardown
-                LOGGER.debug("cisco_fdm: error closing stale session for host %s: %s",
-                             host_id, exc)
+                LOGGER.debug("cisco_fdm: error closing stale session for host %s: %s", host_id, exc)
         client = FdmClient(
             host["ip_address"],
             cred.get("username") or "",
@@ -106,8 +105,7 @@ async def collect_host(host: dict) -> dict:
         # pointed at an attacker-controlled endpoint).
         return error_result(
             host_id,
-            f"FDM credential {cred_id} is not a service credential; "
-            "background polling requires one",
+            f"FDM credential {cred_id} is not a service credential; background polling requires one",
         )
     try:
         password = decrypt(cred["password"]) if cred.get("password") else ""
@@ -141,10 +139,8 @@ async def run_fdm_poll_once(*, force: bool = False) -> dict:
         return {"enabled": True, "hosts_polled": 0, "alerts_created": 0, "errors": 0}
 
     alert_rules_cache = await db.get_alert_rules(enabled_only=True)
-    max_concurrency = max(1, int(state.FDM_CONFIG.get(
-        "poll_concurrency", state.FDM_DEFAULTS["poll_concurrency"])))
-    timeout = float(state.FDM_CONFIG.get(
-        "per_host_timeout_seconds", state.FDM_DEFAULTS["per_host_timeout_seconds"]))
+    max_concurrency = max(1, int(state.FDM_CONFIG.get("poll_concurrency", state.FDM_DEFAULTS["poll_concurrency"])))
+    timeout = float(state.FDM_CONFIG.get("per_host_timeout_seconds", state.FDM_DEFAULTS["per_host_timeout_seconds"]))
     sem = asyncio.Semaphore(max_concurrency)
 
     polled = alerts = errors = 0
@@ -162,18 +158,15 @@ async def run_fdm_poll_once(*, force: bool = False) -> dict:
         h, res, err = await coro
         if err is not None:
             errors += 1
-            LOGGER.warning("cisco_fdm: poll failed for %s: %s",
-                           h.get("hostname", "?"), redact_value(str(err)))
+            LOGGER.warning("cisco_fdm: poll failed for %s: %s", h.get("hostname", "?"), redact_value(str(err)))
             continue
         polled += 1
         try:
             alerts += await _process_poll_result(h, res, alert_rules_cache)
         except Exception as exc:  # noqa: BLE001 - one host must not abort the cycle
-            LOGGER.warning("cisco_fdm: post-process error for %s: %s",
-                           h.get("hostname", "?"), redact_value(str(exc)))
+            LOGGER.warning("cisco_fdm: post-process error for %s: %s", h.get("hostname", "?"), redact_value(str(exc)))
 
-    LOGGER.info("cisco_fdm: poll complete - %d hosts, %d alerts, %d errors",
-                polled, alerts, errors)
+    LOGGER.info("cisco_fdm: poll complete - %d hosts, %d alerts, %d errors", polled, alerts, errors)
     return {"enabled": True, "hosts_polled": polled, "alerts_created": alerts, "errors": errors}
 
 
@@ -192,8 +185,7 @@ async def fdm_poll_loop() -> None:
     """Infinite loop that polls FDM-managed firewalls at configurable intervals."""
     while True:
         try:
-            await asyncio.sleep(int(state.FDM_CONFIG.get(
-                "interval_seconds", state.FDM_DEFAULTS["interval_seconds"])))
+            await asyncio.sleep(int(state.FDM_CONFIG.get("interval_seconds", state.FDM_DEFAULTS["interval_seconds"])))
             await run_fdm_poll_once()
         except asyncio.CancelledError:
             await close_all_clients()

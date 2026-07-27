@@ -106,7 +106,7 @@ async def test_401_mid_session_forces_single_reauth_and_retries():
     # First metrics call 401s -> forced re-auth -> retry succeeds.
     assert result == {"cpu": {"percentUsed": 12}}
     assert fake.metrics_calls == 2  # original + retry
-    assert fake.token_calls == 2    # initial grant + forced re-auth
+    assert fake.token_calls == 2  # initial grant + forced re-auth
 
 
 @pytest.mark.asyncio
@@ -123,9 +123,7 @@ async def test_token_response_without_access_token_is_an_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"refresh_token": "r"})  # no access_token
 
-    client = FdmClient(
-        "ftd.example.com", "u", "p", transport=httpx.MockTransport(handler)
-    )
+    client = FdmClient("ftd.example.com", "u", "p", transport=httpx.MockTransport(handler))
     try:
         with pytest.raises(FdmApiError, match="missing access_token"):
             await client.get_system_info()

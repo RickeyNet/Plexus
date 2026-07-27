@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     c = TestClient(app_module.app, raise_server_exceptions=False)
     c.__enter__()
     request.addfinalizer(lambda: c.__exit__(None, None, None))
@@ -39,11 +40,7 @@ def test_global_csp_has_no_inline_script(client):
     assert csp, "expected a CSP header on every response"
 
     # Isolate the script-src directive.
-    directives = {
-        d.strip().split(" ", 1)[0]: d.strip()
-        for d in csp.split(";")
-        if d.strip()
-    }
+    directives = {d.strip().split(" ", 1)[0]: d.strip() for d in csp.split(";") if d.strip()}
     script_src = directives.get("script-src", "")
     assert script_src == "script-src 'self'", script_src
     assert "'unsafe-inline'" not in script_src
@@ -56,9 +53,8 @@ def test_global_csp_has_no_inline_script(client):
 def test_middleware_does_not_clobber_endpoint_csp(monkeypatch, client):
     """A route that sets its own CSP (the graph-export embed page) keeps it;
     the middleware only fills in a default when none is present."""
-    from starlette.responses import HTMLResponse
-
     import netcontrol.app as app_module
+    from starlette.responses import HTMLResponse
 
     scoped = (
         "default-src 'self'; script-src 'self' 'unsafe-inline' "

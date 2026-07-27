@@ -29,16 +29,12 @@ async def _up_sqlite(db) -> None:
     # column from SCHEMA already; only existing v1.0.0 DBs need the alter.
     if await _column_exists_sqlite(db):
         return
-    await db.execute(
-        "ALTER TABLE users ADD COLUMN session_never_expires INTEGER NOT NULL DEFAULT 0"
-    )
+    await db.execute("ALTER TABLE users ADD COLUMN session_never_expires INTEGER NOT NULL DEFAULT 0")
     await db.commit()
 
 
 async def _up_postgres(db) -> None:
-    await db.execute(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_never_expires INTEGER NOT NULL DEFAULT 0"
-    )
+    await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS session_never_expires INTEGER NOT NULL DEFAULT 0")
     await db.commit()
 
 

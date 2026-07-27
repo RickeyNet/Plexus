@@ -67,6 +67,7 @@ def _boto3_client_config():
 # Watermark helpers - per-account cursor stored in cloud_flow_sync_cursors
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 async def _get_cursor(account_id: int) -> dict:
     row = await db.get_cloud_flow_sync_cursor(account_id)
     return row or {}
@@ -128,6 +129,7 @@ def _window(cursor: dict, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> 
 # AWS puller - CloudWatch Logs Insights or S3
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     """Pull VPC Flow Logs from AWS CloudWatch Logs Insights.
 
@@ -159,9 +161,7 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
     extra = _parse_cursor_extra(cursor)
     regions_set = set(regions)
     region_marks: dict[str, str] = {
-        k: v
-        for k, v in (extra.get("regions") or {}).items()
-        if isinstance(v, str) and k in regions_set
+        k: v for k, v in (extra.get("regions") or {}).items() if isinstance(v, str) and k in regions_set
     }
     global_start, end_dt = _window(cursor, lookback_minutes=lookback_minutes)
 
@@ -178,7 +178,10 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
         try:
             client = session.client("logs", region_name=region, config=_boto3_client_config())
             records, truncated = await _cw_insights_query(
-                client, log_group, region_start, end_dt,
+                client,
+                log_group,
+                region_start,
+                end_dt,
             )
             region_end = end_dt
             if truncated:
@@ -187,9 +190,7 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
                 last_ts = _parse_insights_timestamp(records[-1].get("start")) if records else None
                 if last_ts and region_start < last_ts < end_dt:
                     region_end = last_ts
-                warnings.append(
-                    f"region={region}: results truncated at {_MAX_RECORDS_PER_PULL}"
-                )
+                warnings.append(f"region={region}: results truncated at {_MAX_RECORDS_PER_PULL}")
             if records:
                 normalized = _normalize_aws_flow_records(records)
                 if normalized:
@@ -246,9 +247,14 @@ def _build_boto3_session(auth: dict):
     if role_arn:
         from botocore.config import Config
 
-        sts = session.client("sts", config=Config(
-            connect_timeout=10, read_timeout=30, retries={"max_attempts": 2},
-        ))
+        sts = session.client(
+            "sts",
+            config=Config(
+                connect_timeout=10,
+                read_timeout=30,
+                retries={"max_attempts": 2},
+            ),
+        )
         assume_args: dict[str, str] = {
             "RoleArn": role_arn,
             "RoleSessionName": str(auth.get("role_session_name") or "plexus-flow-puller"),
@@ -357,7 +363,7 @@ def _parse_insights_timestamp(value) -> datetime | None:
     if text.isdigit():
         try:
             return datetime.fromtimestamp(int(text), tz=UTC)
-        except (ValueError, OSError, OverflowError):
+        except ValueError, OSError, OverflowError:
             return None
     try:
         parsed = datetime.fromisoformat(text)
@@ -369,6 +375,7 @@ def _parse_insights_timestamp(value) -> datetime | None:
 # ═══════════════════════════════════════════════════════════════════════════
 # Azure puller - Blob Storage NSG Flow Logs
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 async def pull_azure_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     """Pull NSG Flow Logs from Azure Blob Storage.
@@ -404,8 +411,12 @@ async def pull_azure_flow_logs(account: dict, *, lookback_minutes: int = _DEFAUL
 
         async def _list_and_read():
             import asyncio
+
             return await asyncio.to_thread(
-                _read_azure_blobs, container_client, start_dt, end_dt,
+                _read_azure_blobs,
+                container_client,
+                start_dt,
+                end_dt,
             )
 
         records, truncated = await _list_and_read()
@@ -448,6 +459,7 @@ def _build_azure_blob_client(auth: dict, storage_account: str):
     # Fall back to DefaultAzureCredential (managed identity / env vars).
     try:
         from azure.identity import DefaultAzureCredential
+
         credential = DefaultAzureCredential()
         return BlobServiceClient(account_url=account_url, credential=credential, **timeouts)
     except ImportError:
@@ -473,7 +485,7 @@ def _azure_tuple_epoch(flow_tuple) -> int | None:
     """Epoch seconds from an NSG flow tuple (first comma-separated field)."""
     try:
         return int(str(flow_tuple).split(",", 1)[0])
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         return None
 
 
@@ -508,7 +520,7 @@ def _read_azure_blobs(container_client, start: datetime, end: datetime) -> tuple
         blob_data = container_client.download_blob(blob_props.name).readall()
         try:
             parsed = json.loads(blob_data)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except json.JSONDecodeError, UnicodeDecodeError:
             continue
 
         # NSG flow log JSON structure: { records: [ { properties: { flows: [...] } } ] }
@@ -524,18 +536,21 @@ def _read_azure_blobs(container_client, start: datetime, end: datetime) -> tuple
                         if len(records) >= _MAX_RECORDS_PER_PULL:
                             truncated = True
                             break
-                        records.append({
-                            "flow_tuples": [flow_tuple],
-                            "rule_name": rule_name,
-                            "region": str(log_record.get("location") or ""),
-                            "resource_id": str(log_record.get("resourceId") or ""),
-                        })
+                        records.append(
+                            {
+                                "flow_tuples": [flow_tuple],
+                                "rule_name": rule_name,
+                                "region": str(log_record.get("location") or ""),
+                                "resource_id": str(log_record.get("resourceId") or ""),
+                            }
+                        )
     return records, truncated
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GCP puller - Cloud Logging export
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 async def pull_gcp_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
     """Pull VPC Flow Logs from GCP Cloud Logging.
@@ -600,6 +615,7 @@ def _build_gcp_logging_client(auth: dict, project_id: str):
 
     if isinstance(sa_json, dict):
         from google.oauth2 import service_account
+
         credentials = service_account.Credentials.from_service_account_info(sa_json)
         return gcp_logging.Client(project=project_id, credentials=credentials)
     if isinstance(sa_json, str) and sa_json.strip():
@@ -607,12 +623,14 @@ def _build_gcp_logging_client(auth: dict, project_id: str):
             info = json.loads(sa_json)
             if isinstance(info, dict):
                 from google.oauth2 import service_account
+
                 credentials = service_account.Credentials.from_service_account_info(info)
                 return gcp_logging.Client(project=project_id, credentials=credentials)
         except json.JSONDecodeError as exc:
             LOGGER.warning("GCP logging: service_account_json is not valid JSON: %s", exc)
     if creds_file:
         from google.oauth2 import service_account
+
         credentials = service_account.Credentials.from_service_account_file(creds_file)
         return gcp_logging.Client(project=project_id, credentials=credentials)
 
@@ -621,7 +639,10 @@ def _build_gcp_logging_client(auth: dict, project_id: str):
 
 
 async def _gcp_logging_query(
-    client, project_id: str, start: datetime, end: datetime,
+    client,
+    project_id: str,
+    start: datetime,
+    end: datetime,
 ) -> list[dict]:
     """Query VPC Flow Logs from Cloud Logging."""
     import asyncio
@@ -708,9 +729,7 @@ async def pull_flow_logs_all_accounts(*, lookback_minutes: int = _DEFAULT_LOOKBA
         # Skip accounts that have no flow-log source configured
         if provider == "aws" and not flow_config.get("log_group_name"):
             continue
-        if provider == "azure" and not (
-            flow_config.get("storage_account_name") and flow_config.get("container_name")
-        ):
+        if provider == "azure" and not (flow_config.get("storage_account_name") and flow_config.get("container_name")):
             continue
         if provider == "gcp" and not flow_config.get("project_id"):
             continue
@@ -724,7 +743,8 @@ async def pull_flow_logs_all_accounts(*, lookback_minutes: int = _DEFAULT_LOOKBA
         async with semaphore:
             try:
                 return account_id, await pull_flow_logs_for_account(
-                    account, lookback_minutes=lookback_minutes,
+                    account,
+                    lookback_minutes=lookback_minutes,
                 )
             except Exception as exc:
                 LOGGER.warning(
@@ -749,6 +769,7 @@ async def pull_flow_logs_all_accounts(*, lookback_minutes: int = _DEFAULT_LOOKBA
 # ═══════════════════════════════════════════════════════════════════════════
 # Shared helpers
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def _parse_auth_config(account: dict) -> dict:
     raw = account.get("auth_config_json") or account.get("auth_config") or "{}"

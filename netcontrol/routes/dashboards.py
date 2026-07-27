@@ -1,6 +1,7 @@
 """
 dashboards.py -- User-defined dashboards with configurable panels
 """
+
 from __future__ import annotations
 
 import logging
@@ -53,6 +54,7 @@ class PanelUpdate(BaseModel):
 
 
 # ── Dashboard CRUD ────────────────────────────────────────────────────────────
+
 
 async def _is_admin_session(session: dict | None) -> bool:
     if session is None:
@@ -127,6 +129,7 @@ async def delete_dashboard_api(dashboard_id: int, request: Request):
 
 
 # ── Panel CRUD ────────────────────────────────────────────────────────────────
+
 
 @router.post("/api/dashboards/{dashboard_id}/panels", status_code=201)
 async def create_panel_api(dashboard_id: int, payload: PanelCreate, request: Request):
@@ -219,34 +222,35 @@ async def dashboard_top_interfaces_api(
     # old N+1 (one query_interface_ts per interface). Results come back grouped
     # by (host_id, if_index), already ascending by time for plotting.
     pairs = [(t["host_id"], t["if_index"]) for t in tops]
-    series_by_pair = await db.query_interface_ts_multi(
-        pairs, start=start_str, limit_per=series_limit
-    )
+    series_by_pair = await db.query_interface_ts_multi(pairs, start=start_str, limit_per=series_limit)
 
     interfaces = []
     for t in tops:
         series = series_by_pair.get((t["host_id"], t["if_index"]), [])
-        interfaces.append({
-            "host_id": t["host_id"],
-            "hostname": t.get("hostname") or "",
-            "if_index": t["if_index"],
-            "if_name": t.get("if_name") or "",
-            "if_speed_mbps": t.get("if_speed_mbps") or 0,
-            "peak_bps": t.get("peak_bps") or 0,
-            "samples": [
-                {
-                    "ts": s.get("sampled_at"),
-                    "in_bps": s.get("in_rate_bps"),
-                    "out_bps": s.get("out_rate_bps"),
-                }
-                for s in series
-            ],
-        })
+        interfaces.append(
+            {
+                "host_id": t["host_id"],
+                "hostname": t.get("hostname") or "",
+                "if_index": t["if_index"],
+                "if_name": t.get("if_name") or "",
+                "if_speed_mbps": t.get("if_speed_mbps") or 0,
+                "peak_bps": t.get("peak_bps") or 0,
+                "samples": [
+                    {
+                        "ts": s.get("sampled_at"),
+                        "in_bps": s.get("in_rate_bps"),
+                        "out_bps": s.get("out_rate_bps"),
+                    }
+                    for s in series
+                ],
+            }
+        )
 
     return {"range": range, "interfaces": interfaces}
 
 
 # ── Annotations ──────────────────────────────────────────────────────────────
+
 
 @router.get("/api/annotations")
 async def get_annotations_api(

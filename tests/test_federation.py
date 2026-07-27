@@ -64,6 +64,7 @@ def _auth_client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
 
     # Trigger lifespan (init_db + _ensure_default_admin)
@@ -71,10 +72,13 @@ def _auth_client(tmp_path, monkeypatch, request):
     request.addfinalizer(lambda: client.__exit__(None, None, None))
 
     # Login as the bootstrap admin created by _ensure_default_admin()
-    resp = client.post("/api/auth/login", json={
-        "username": "admin",
-        "password": "netcontrol",
-    })
+    resp = client.post(
+        "/api/auth/login",
+        json={
+            "username": "admin",
+            "password": "netcontrol",
+        },
+    )
     csrf_token = resp.json().get("csrf_token", "")
     return _FederationClient(client, csrf_token)
 
@@ -94,16 +98,12 @@ async def test_federation_tables_exist_after_init(tmp_path, monkeypatch, request
     conn = await db_module.get_db()
     try:
         # Check federation_peers exists
-        cur = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='federation_peers'"
-        )
+        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='federation_peers'")
         row = await cur.fetchone()
         assert row is not None, "federation_peers table should exist"
 
         # Check federation_snapshots exists
-        cur = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='federation_snapshots'"
-        )
+        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='federation_snapshots'")
         row = await cur.fetchone()
         assert row is not None, "federation_snapshots table should exist"
     finally:
@@ -141,9 +141,7 @@ async def test_federation_sync_loop_waits_for_tables(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await federation_module.federation_sync_loop()
 
-    warning_mock.assert_called_once_with(
-        "Federation sync loop waiting for federation tables to be available"
-    )
+    warning_mock.assert_called_once_with("Federation sync loop waiting for federation tables to be available")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -157,13 +155,16 @@ async def test_create_and_list_peers(tmp_path, monkeypatch, request):
     client = _auth_client(tmp_path, monkeypatch, request)
 
     # Create peer
-    resp = client.post("/api/federation/peers", json={
-        "name": "Site-B",
-        "url": "https://plexus-b.example.com",
-        "api_token": "secret-token-123",
-        "description": "Remote site B",
-        "enabled": True,
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "Site-B",
+            "url": "https://plexus-b.example.com",
+            "api_token": "secret-token-123",
+            "description": "Remote site B",
+            "enabled": True,
+        },
+    )
     assert resp.status_code == 201, resp.text
     peer = resp.json()
     assert peer["name"] == "Site-B"
@@ -183,10 +184,13 @@ async def test_create_and_list_peers(tmp_path, monkeypatch, request):
 async def test_get_single_peer(tmp_path, monkeypatch, request):
     """GET /api/federation/peers/{id} returns the peer."""
     client = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/federation/peers", json={
-        "name": "Site-C",
-        "url": "https://plexus-c.example.com",
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "Site-C",
+            "url": "https://plexus-c.example.com",
+        },
+    )
     peer_id = resp.json()["id"]
 
     resp = client.get(f"/api/federation/peers/{peer_id}")
@@ -198,17 +202,23 @@ async def test_get_single_peer(tmp_path, monkeypatch, request):
 async def test_update_peer(tmp_path, monkeypatch, request):
     """PUT /api/federation/peers/{id} updates fields."""
     client = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/federation/peers", json={
-        "name": "OldName",
-        "url": "https://old.example.com",
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "OldName",
+            "url": "https://old.example.com",
+        },
+    )
     peer_id = resp.json()["id"]
 
-    resp = client.put(f"/api/federation/peers/{peer_id}", json={
-        "name": "NewName",
-        "url": "https://new.example.com",
-        "enabled": False,
-    })
+    resp = client.put(
+        f"/api/federation/peers/{peer_id}",
+        json={
+            "name": "NewName",
+            "url": "https://new.example.com",
+            "enabled": False,
+        },
+    )
     assert resp.status_code == 200
     updated = resp.json()
     assert updated["name"] == "NewName"
@@ -219,10 +229,13 @@ async def test_update_peer(tmp_path, monkeypatch, request):
 async def test_delete_peer(tmp_path, monkeypatch, request):
     """DELETE /api/federation/peers/{id} removes the peer."""
     client = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/federation/peers", json={
-        "name": "ToDelete",
-        "url": "https://delete.example.com",
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "ToDelete",
+            "url": "https://delete.example.com",
+        },
+    )
     peer_id = resp.json()["id"]
 
     resp = client.delete(f"/api/federation/peers/{peer_id}")
@@ -247,10 +260,13 @@ async def test_peer_not_found(tmp_path, monkeypatch, request):
 async def test_peer_url_validation(tmp_path, monkeypatch, request):
     """Creating a peer with invalid URL scheme returns 422."""
     client = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/federation/peers", json={
-        "name": "BadURL",
-        "url": "ftp://bad.example.com",
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "BadURL",
+            "url": "ftp://bad.example.com",
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -263,10 +279,13 @@ async def test_peer_url_validation(tmp_path, monkeypatch, request):
 async def test_test_peer_connectivity(tmp_path, monkeypatch, request):
     """POST /api/federation/peers/{id}/test returns connectivity result."""
     client = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/federation/peers", json={
-        "name": "TestTarget",
-        "url": "https://unreachable.example.com",
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "TestTarget",
+            "url": "https://unreachable.example.com",
+        },
+    )
     peer_id = resp.json()["id"]
 
     # This will fail to connect (unreachable host) but should not 500
@@ -300,11 +319,14 @@ async def test_overview_with_cached_snapshots(tmp_path, monkeypatch, request):
     client = _auth_client(tmp_path, monkeypatch, request)
 
     # Create a peer
-    resp = client.post("/api/federation/peers", json={
-        "name": "Site-X",
-        "url": "https://sitex.example.com",
-        "enabled": True,
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "Site-X",
+            "url": "https://sitex.example.com",
+            "enabled": True,
+        },
+    )
     peer_id = resp.json()["id"]
 
     # Manually insert snapshot data (simulating a completed sync)
@@ -350,11 +372,14 @@ async def test_overview_with_cached_snapshots(tmp_path, monkeypatch, request):
 async def test_peer_token_encrypted_at_rest(tmp_path, monkeypatch, request):
     """The api_token should be stored encrypted, not in plaintext."""
     client = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/federation/peers", json={
-        "name": "SecureToken",
-        "url": "https://secure.example.com",
-        "api_token": "my-super-secret",
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "SecureToken",
+            "url": "https://secure.example.com",
+            "api_token": "my-super-secret",
+        },
+    )
     peer_id = resp.json()["id"]
 
     # Read raw DB row
@@ -362,9 +387,7 @@ async def test_peer_token_encrypted_at_rest(tmp_path, monkeypatch, request):
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     conn = await db_module.get_db()
     try:
-        cur = await conn.execute(
-            "SELECT api_token_enc FROM federation_peers WHERE id = ?", (peer_id,)
-        )
+        cur = await conn.execute("SELECT api_token_enc FROM federation_peers WHERE id = ?", (peer_id,))
         row = await cur.fetchone()
     finally:
         await conn.close()
@@ -377,6 +400,7 @@ async def test_peer_token_encrypted_at_rest(tmp_path, monkeypatch, request):
 
     # Verify it decrypts back
     from routes.crypto import decrypt
+
     assert decrypt(enc_value) == "my-super-secret"
 
 
@@ -389,10 +413,13 @@ async def test_peer_token_encrypted_at_rest(tmp_path, monkeypatch, request):
 async def test_sync_peer_with_mocked_remote(tmp_path, monkeypatch, request):
     """POST /api/federation/peers/{id}/sync stores snapshot data."""
     client = _auth_client(tmp_path, monkeypatch, request)
-    resp = client.post("/api/federation/peers", json={
-        "name": "MockRemote",
-        "url": "https://mock.example.com",
-    })
+    resp = client.post(
+        "/api/federation/peers",
+        json={
+            "name": "MockRemote",
+            "url": "https://mock.example.com",
+        },
+    )
     peer_id = resp.json()["id"]
 
     # Mock _fetch_peer_data to return fake aggregated data
@@ -447,6 +474,7 @@ def test_federation_module_imports():
         init_federation,
         router,
     )
+
     assert router is not None
     assert callable(init_federation)
     assert callable(federation_sync_loop)

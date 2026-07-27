@@ -215,9 +215,12 @@ async def test_create_and_get_drift_event(drift_db):
     sid = await db_module.create_config_snapshot(host_id=100, config_text="actual")
     bid = await db_module.create_config_baseline(host_id=100, config_text="baseline")
     eid = await db_module.create_config_drift_event(
-        host_id=100, snapshot_id=sid, baseline_id=bid,
+        host_id=100,
+        snapshot_id=sid,
+        baseline_id=bid,
         diff_text="@@ -1 +1 @@\n-baseline\n+actual\n",
-        diff_lines_added=1, diff_lines_removed=1,
+        diff_lines_added=1,
+        diff_lines_removed=1,
     )
     assert eid > 0
     ev = await db_module.get_config_drift_event(eid)
@@ -231,12 +234,8 @@ async def test_create_and_get_drift_event(drift_db):
 async def test_list_drift_events_filtered(drift_db):
     """List events with status filter."""
     sid = await db_module.create_config_snapshot(host_id=100, config_text="x")
-    eid1 = await db_module.create_config_drift_event(
-        host_id=100, snapshot_id=sid, baseline_id=None, diff_text="diff1"
-    )
-    eid2 = await db_module.create_config_drift_event(
-        host_id=100, snapshot_id=sid, baseline_id=None, diff_text="diff2"
-    )
+    eid1 = await db_module.create_config_drift_event(host_id=100, snapshot_id=sid, baseline_id=None, diff_text="diff1")
+    eid2 = await db_module.create_config_drift_event(host_id=100, snapshot_id=sid, baseline_id=None, diff_text="diff2")
     await db_module.update_config_drift_event_status(eid1, "resolved", "admin")
 
     open_events = await db_module.get_config_drift_events(status="open")
@@ -254,9 +253,7 @@ async def test_drift_summary(drift_db):
     await db_module.create_config_baseline(host_id=100, config_text="bl")
     await db_module.create_config_baseline(host_id=200, config_text="bl")
     sid = await db_module.create_config_snapshot(host_id=100, config_text="x")
-    await db_module.create_config_drift_event(
-        host_id=100, snapshot_id=sid, baseline_id=None, diff_text="diff"
-    )
+    await db_module.create_config_drift_event(host_id=100, snapshot_id=sid, baseline_id=None, diff_text="diff")
     summary = await db_module.get_config_drift_summary()
     assert summary["total_baselined"] == 2
     assert summary["drifted"] == 1

@@ -73,10 +73,7 @@ class PaloAltoPANOSDriver(Driver):
         # Read the SNMP config subtree.  Cisco's ``show running-config
         # | include snmp-server`` parse-errors on PAN-OS; scoping by
         # the config path is the idiomatic "filter to SNMP only" form.
-        return (
-            "show config running xpath "
-            "devices/entry/deviceconfig/system/snmp-setting"
-        )
+        return "show config running xpath devices/entry/deviceconfig/system/snmp-setting"
 
     def snmpv3_engine_id_show_command(self) -> str:
         # Platform-managed: PAN-OS auto-derives the engine ID from the
@@ -95,7 +92,4 @@ class PaloAltoPANOSDriver(Driver):
         # The v3 subtree of the same snmp-setting path is the "after"
         # verification view.  Cisco's ``show snmp user`` does not exist
         # on PAN-OS.
-        return (
-            "show config running xpath "
-            "devices/entry/deviceconfig/system/snmp-setting/access-setting/version/v3"
-        )
+        return "show config running xpath devices/entry/deviceconfig/system/snmp-setting/access-setting/version/v3"

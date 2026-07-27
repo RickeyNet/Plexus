@@ -15,6 +15,7 @@ via /api/lab/devices/{id}/runtime/deploy) or a topology member (Phase B-2,
 deployed via /api/lab/topologies/{id}/deploy). Mixing is rejected at
 deploy time.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -128,7 +129,8 @@ def build_topology_yaml(topology: dict, devices: list[dict], links: list[dict]) 
     runtime_node_kind / runtime_image and a slug-able hostname.
     """
     lab_name = topology["lab_name"] or _slug(
-        f"plx-env{topology['environment_id']}-topo{topology['id']}", "plx-topo",
+        f"plx-env{topology['environment_id']}-topo{topology['id']}",
+        "plx-topo",
     )
     lines: list[str] = [f"name: {lab_name}", "topology:"]
 
@@ -162,10 +164,7 @@ def build_topology_yaml(topology: dict, devices: list[dict], links: list[dict]) 
             b_name = name_by_id.get(link["b_device_id"])
             if not a_name or not b_name:
                 continue  # link references a device that's no longer a member
-            lines.append(
-                f"    - endpoints: [\"{a_name}:{link['a_endpoint']}\", "
-                f"\"{b_name}:{link['b_endpoint']}\"]"
-            )
+            lines.append(f'    - endpoints: ["{a_name}:{link["a_endpoint"]}", "{b_name}:{link["b_endpoint"]}"]')
 
     return "\n".join(lines) + "\n"
 
@@ -205,9 +204,13 @@ async def deploy_topology(topology: dict, *, actor: str = "") -> dict:
         _validate_member_for_deploy(d)
 
     # Reject if any member has a free-standing Phase B-1 runtime still running.
-    busy = [d for d in devices if d.get("runtime_kind") == "containerlab"
-            and d.get("runtime_status") in ("provisioning", "running")
-            and not d.get("topology_id")]
+    busy = [
+        d
+        for d in devices
+        if d.get("runtime_kind") == "containerlab"
+        and d.get("runtime_status") in ("provisioning", "running")
+        and not d.get("topology_id")
+    ]
     if busy:
         names = ", ".join(b["hostname"] for b in busy)
         raise HTTPException(
@@ -225,7 +228,8 @@ async def deploy_topology(topology: dict, *, actor: str = "") -> dict:
     links = await db.list_topology_links(topology["id"])
 
     lab_name = _slug(
-        f"plx-env{topology['environment_id']}-topo{topology['id']}", "plx-topo",
+        f"plx-env{topology['environment_id']}-topo{topology['id']}",
+        "plx-topo",
     )
     workdir = _topology_workdir(topology)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -252,27 +256,38 @@ async def deploy_topology(topology: dict, *, actor: str = "") -> dict:
         )
 
     rc, stdout, stderr = await lab_runtime._run_containerlab(
-        ["deploy", "-t", str(topo_path), "--reconfigure"], cwd=workdir,
+        ["deploy", "-t", str(topo_path), "--reconfigure"],
+        cwd=workdir,
     )
     if rc != 0:
         msg = (stderr or stdout).strip()[:500] or f"containerlab deploy exited rc={rc}"
         await db.update_lab_topology_status(
-            topology["id"], status="error", error=msg,
+            topology["id"],
+            status="error",
+            error=msg,
         )
         for d in devices:
             await db.update_lab_device_runtime(
-                d["id"], runtime_status="error", runtime_error=msg,
+                d["id"],
+                runtime_status="error",
+                runtime_error=msg,
             )
             await db.add_lab_runtime_event(
-                d["id"], action="topology-deploy", status="error",
-                actor=actor, detail=msg,
+                d["id"],
+                action="topology-deploy",
+                status="error",
+                actor=actor,
+                detail=msg,
             )
         raise HTTPException(status_code=500, detail=msg)
 
     inspect_doc = await lab_runtime._inspect_lab(workdir) or {}
     started_at = datetime.now(UTC).isoformat()
     await db.update_lab_topology_status(
-        topology["id"], status="running", error="", started_at=started_at,
+        topology["id"],
+        status="running",
+        error="",
+        started_at=started_at,
     )
 
     member_results = []
@@ -288,14 +303,19 @@ async def deploy_topology(topology: dict, *, actor: str = "") -> dict:
             runtime_error="",
         )
         await db.add_lab_runtime_event(
-            d["id"], action="topology-deploy", status="ok", actor=actor,
+            d["id"],
+            action="topology-deploy",
+            status="ok",
+            actor=actor,
             detail=f"topology={topology['id']} mgmt={mgmt_ipv4 or 'unknown'}",
         )
-        member_results.append({
-            "device_id": d["id"],
-            "node_name": node_name,
-            "mgmt_ipv4": mgmt_ipv4,
-        })
+        member_results.append(
+            {
+                "device_id": d["id"],
+                "node_name": node_name,
+                "mgmt_ipv4": mgmt_ipv4,
+            }
+        )
 
     return {
         "status": "running",
@@ -312,48 +332,65 @@ async def destroy_topology(topology: dict, *, actor: str = "") -> dict:
 
     if not topo_path.is_file():
         await db.update_lab_topology_status(
-            topology["id"], status="destroyed",
+            topology["id"],
+            status="destroyed",
         )
         for d in devices:
             await db.update_lab_device_runtime(
-                d["id"], runtime_status="destroyed", runtime_mgmt_address="",
+                d["id"],
+                runtime_status="destroyed",
+                runtime_mgmt_address="",
             )
         return {"status": "destroyed", "reason": "no_topology"}
 
     rt = await lab_runtime.get_runtime_status()
     if not rt["available"]:
         await db.update_lab_topology_status(
-            topology["id"], status="destroyed",
+            topology["id"],
+            status="destroyed",
             error=f"containerlab unavailable: {rt.get('reason')}",
         )
         for d in devices:
             await db.update_lab_device_runtime(
-                d["id"], runtime_status="destroyed", runtime_mgmt_address="",
+                d["id"],
+                runtime_status="destroyed",
+                runtime_mgmt_address="",
             )
             await db.add_lab_runtime_event(
-                d["id"], action="topology-destroy", status="error",
+                d["id"],
+                action="topology-destroy",
+                status="error",
                 actor=actor,
                 detail="containerlab unavailable; manual cleanup required",
             )
         return {"status": "destroyed", "reason": "containerlab_unavailable"}
 
     rc, stdout, stderr = await lab_runtime._run_containerlab(
-        ["destroy", "-t", str(topo_path), "--cleanup"], cwd=workdir,
+        ["destroy", "-t", str(topo_path), "--cleanup"],
+        cwd=workdir,
     )
     if rc != 0:
         msg = (stderr or stdout).strip()[:500] or f"containerlab destroy exited rc={rc}"
         await db.update_lab_topology_status(
-            topology["id"], status="error", error=msg,
+            topology["id"],
+            status="error",
+            error=msg,
         )
         for d in devices:
             await db.add_lab_runtime_event(
-                d["id"], action="topology-destroy", status="error",
-                actor=actor, detail=msg,
+                d["id"],
+                action="topology-destroy",
+                status="error",
+                actor=actor,
+                detail=msg,
             )
         raise HTTPException(status_code=500, detail=msg)
 
     await db.update_lab_topology_status(
-        topology["id"], status="destroyed", workdir="", error="",
+        topology["id"],
+        status="destroyed",
+        workdir="",
+        error="",
     )
     for d in devices:
         await db.update_lab_device_runtime(
@@ -364,7 +401,10 @@ async def destroy_topology(topology: dict, *, actor: str = "") -> dict:
             runtime_error="",
         )
         await db.add_lab_runtime_event(
-            d["id"], action="topology-destroy", status="ok", actor=actor,
+            d["id"],
+            action="topology-destroy",
+            status="ok",
+            actor=actor,
             detail=f"topology={topology['id']} destroyed",
         )
     removed = await lab_runtime._remove_workdir(workdir)
@@ -388,7 +428,9 @@ async def refresh_topology(topology: dict, *, actor: str = "") -> dict:
         await db.update_lab_topology_status(topology["id"], status="stopped")
         for d in devices:
             await db.update_lab_device_runtime(
-                d["id"], runtime_status="stopped", runtime_mgmt_address="",
+                d["id"],
+                runtime_status="stopped",
+                runtime_mgmt_address="",
             )
         return {"status": "stopped"}
 
@@ -396,11 +438,14 @@ async def refresh_topology(topology: dict, *, actor: str = "") -> dict:
     members = []
     for d in devices:
         node_name = d.get("runtime_node_name") or _slug(
-            d.get("hostname") or f"node-{d['id']}", f"node-{d['id']}",
+            d.get("hostname") or f"node-{d['id']}",
+            f"node-{d['id']}",
         )
         mgmt_ipv4 = lab_runtime._extract_mgmt_ipv4(inspect_doc, node_name)
         await db.update_lab_device_runtime(
-            d["id"], runtime_status="running", runtime_mgmt_address=mgmt_ipv4,
+            d["id"],
+            runtime_status="running",
+            runtime_mgmt_address=mgmt_ipv4,
         )
         members.append({"device_id": d["id"], "mgmt_ipv4": mgmt_ipv4})
     return {"status": "running", "members": members}
@@ -437,7 +482,8 @@ async def create_topology_endpoint(env_id: int, body: TopologyCreate, request: R
         mgmt_subnet=body.mgmt_subnet,
     )
     await _audit(
-        "lab", "topology.created",
+        "lab",
+        "topology.created",
         user=session["user"] if session else "",
         detail=f"env={env_id} topology={topo_id} name={body.name}",
         correlation_id=_corr_id(request),
@@ -465,7 +511,8 @@ async def delete_topology_endpoint(topology_id: int, request: Request):
         )
     await db.delete_lab_topology(topology_id)
     await _audit(
-        "lab", "topology.deleted",
+        "lab",
+        "topology.deleted",
         user=session["user"] if session else "",
         detail=f"topology={topology_id}",
         correlation_id=_corr_id(request),
@@ -475,7 +522,9 @@ async def delete_topology_endpoint(topology_id: int, request: Request):
 
 @router.post("/api/lab/topologies/{topology_id}/devices")
 async def add_member_endpoint(
-    topology_id: int, body: TopologyMembershipRequest, request: Request,
+    topology_id: int,
+    body: TopologyMembershipRequest,
+    request: Request,
 ):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     device = await db.get_lab_device(body.device_id)
@@ -491,17 +540,15 @@ async def add_member_endpoint(
             status_code=409,
             detail=f"Device is already a member of topology {device['topology_id']}",
         )
-    if (
-        device.get("runtime_kind") == "containerlab"
-        and device.get("runtime_status") in ("provisioning", "running")
-    ):
+    if device.get("runtime_kind") == "containerlab" and device.get("runtime_status") in ("provisioning", "running"):
         raise HTTPException(
             status_code=409,
             detail="Device has a free-standing runtime; destroy it before joining a topology",
         )
     await db.set_lab_device_topology(device["id"], topology_id)
     await _audit(
-        "lab", "topology.device.added",
+        "lab",
+        "topology.device.added",
         user=session["user"] if session else "",
         detail=f"topology={topology_id} device={device['id']}",
         correlation_id=_corr_id(request),
@@ -522,7 +569,8 @@ async def remove_member_endpoint(topology_id: int, device_id: int, request: Requ
         raise HTTPException(status_code=404, detail="Device is not a member")
     await db.set_lab_device_topology(device["id"], None)
     await _audit(
-        "lab", "topology.device.removed",
+        "lab",
+        "topology.device.removed",
         user=session["user"] if session else "",
         detail=f"topology={topology_id} device={device_id}",
         correlation_id=_corr_id(request),
@@ -532,7 +580,9 @@ async def remove_member_endpoint(topology_id: int, device_id: int, request: Requ
 
 @router.post("/api/lab/topologies/{topology_id}/links")
 async def add_link_endpoint(
-    topology_id: int, body: TopologyLinkCreate, request: Request,
+    topology_id: int,
+    body: TopologyLinkCreate,
+    request: Request,
 ):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     if topo.get("status") == "running":
@@ -558,7 +608,8 @@ async def add_link_endpoint(
         b_endpoint=body.b_endpoint,
     )
     await _audit(
-        "lab", "topology.link.added",
+        "lab",
+        "topology.link.added",
         user=session["user"] if session else "",
         detail=f"topology={topology_id} link={link_id}",
         correlation_id=_corr_id(request),
@@ -576,7 +627,8 @@ async def remove_link_endpoint(topology_id: int, link_id: int, request: Request)
         )
     await db.delete_lab_topology_link(link_id)
     await _audit(
-        "lab", "topology.link.removed",
+        "lab",
+        "topology.link.removed",
         user=session["user"] if session else "",
         detail=f"topology={topology_id} link={link_id}",
         correlation_id=_corr_id(request),
@@ -590,8 +642,10 @@ async def deploy_topology_endpoint(topology_id: int, request: Request):
     actor = session["user"] if session else ""
     result = await deploy_topology(topo, actor=actor)
     await _audit(
-        "lab", "topology.deploy",
-        user=actor, detail=f"topology={topology_id}",
+        "lab",
+        "topology.deploy",
+        user=actor,
+        detail=f"topology={topology_id}",
         correlation_id=_corr_id(request),
     )
     return result
@@ -603,8 +657,10 @@ async def destroy_topology_endpoint(topology_id: int, request: Request):
     actor = session["user"] if session else ""
     result = await destroy_topology(topo, actor=actor)
     await _audit(
-        "lab", "topology.destroy",
-        user=actor, detail=f"topology={topology_id}",
+        "lab",
+        "topology.destroy",
+        user=actor,
+        detail=f"topology={topology_id}",
         correlation_id=_corr_id(request),
     )
     return result

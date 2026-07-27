@@ -27,16 +27,12 @@ async def _column_exists_sqlite(db) -> bool:
 
 async def _up_sqlite(db) -> None:
     if not await _column_exists_sqlite(db):
-        await db.execute(
-            "ALTER TABLE alert_rules ADD COLUMN channel_ids TEXT NOT NULL DEFAULT ''"
-        )
+        await db.execute("ALTER TABLE alert_rules ADD COLUMN channel_ids TEXT NOT NULL DEFAULT ''")
     await db.commit()
 
 
 async def _up_postgres(db) -> None:
-    await db.execute(
-        "ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS channel_ids TEXT NOT NULL DEFAULT ''"
-    )
+    await db.execute("ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS channel_ids TEXT NOT NULL DEFAULT ''")
     await db.commit()
 
 

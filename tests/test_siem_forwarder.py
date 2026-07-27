@@ -11,6 +11,7 @@ Covers:
   * Severity floor filters events below the threshold
   * add_audit_event hook fires successfully after insert
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +23,7 @@ import routes.database as db_module
 from netcontrol.routes import siem_forwarder as sf
 
 # ── Validation ───────────────────────────────────────────────────────────────
+
 
 def test_sanitize_rejects_unknown_protocol():
     assert sf.sanitize_sink({"id": "x", "protocol": "carrier-pigeon", "host": "h"}) is None
@@ -36,12 +38,16 @@ def test_sanitize_rejects_syslog_without_host():
 
 
 def test_sanitize_clamps_numeric_ranges():
-    sc = sf.sanitize_sink({
-        "id": "x", "protocol": "udp", "host": "h",
-        "queue_size": 5,            # below floor
-        "max_retries": 999,         # above ceiling
-        "backoff_base": 0.01,       # below floor
-    })
+    sc = sf.sanitize_sink(
+        {
+            "id": "x",
+            "protocol": "udp",
+            "host": "h",
+            "queue_size": 5,  # below floor
+            "max_retries": 999,  # above ceiling
+            "backoff_base": 0.01,  # below floor
+        }
+    )
     assert sc.queue_size == 10
     assert sc.max_retries == 20
     assert sc.backoff_base == 0.1
@@ -79,7 +85,7 @@ def test_format_cef_header_and_extensions():
     assert "suser=alice" in line
     assert "cs1=cid-abc" in line
     assert "cs1Label=correlationId" in line
-    assert f"cs2={'r'*64}" in line
+    assert f"cs2={'r' * 64}" in line
     assert "externalId=42" in line
 
 
@@ -104,6 +110,7 @@ def test_format_json_is_ecs_shaped():
 
 # ── Syslog framing ───────────────────────────────────────────────────────────
 
+
 def test_syslog_pri_is_local0_info():
     # local0 (16) * 8 + info (6) = 134
     assert sf._syslog_pri("info") == 134
@@ -124,16 +131,23 @@ def test_frame_octet_counting():
 
 # ── UDP sink delivery (real socket) ──────────────────────────────────────────
 
+
 async def test_udp_sink_delivers_to_local_listener():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("127.0.0.1", 0))
     sock.setblocking(False)
     port = sock.getsockname()[1]
     try:
-        sink = sf.sanitize_sink({
-            "id": "udp1", "name": "udp1", "protocol": "udp",
-            "format": "json", "host": "127.0.0.1", "port": port,
-        })
+        sink = sf.sanitize_sink(
+            {
+                "id": "udp1",
+                "name": "udp1",
+                "protocol": "udp",
+                "format": "json",
+                "host": "127.0.0.1",
+                "port": port,
+            }
+        )
         await sf.deliver(sink, _EVENT)
         # Receive what we sent.
         loop = asyncio.get_running_loop()
@@ -158,6 +172,7 @@ async def test_udp_sink_delivers_to_local_listener():
 
 # ── TCP sink delivery (real listener) ────────────────────────────────────────
 
+
 async def test_tcp_sink_uses_octet_counting_frame():
     received: list[bytes] = []
     ready = asyncio.Event()
@@ -175,10 +190,15 @@ async def test_tcp_sink_uses_octet_counting_frame():
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     try:
-        sink = sf.sanitize_sink({
-            "id": "tcp1", "protocol": "tcp", "format": "cef",
-            "host": "127.0.0.1", "port": port,
-        })
+        sink = sf.sanitize_sink(
+            {
+                "id": "tcp1",
+                "protocol": "tcp",
+                "format": "cef",
+                "host": "127.0.0.1",
+                "port": port,
+            }
+        )
         await sf.deliver(sink, _EVENT)
         try:
             await asyncio.wait_for(ready.wait(), timeout=2.0)
@@ -188,7 +208,7 @@ async def test_tcp_sink_uses_octet_counting_frame():
         # RFC 6587 octet-counting frame: "<len> <message>"
         sep = raw.index(" ")
         length = int(raw[:sep])
-        body = raw[sep + 1:]
+        body = raw[sep + 1 :]
         assert len(body.encode("utf-8")) == length
         assert "CEF:0|Plexus|NMS|1.0|" in body
     finally:
@@ -197,6 +217,7 @@ async def test_tcp_sink_uses_octet_counting_frame():
 
 
 # ── Dispatcher fan-out + bounded queue ───────────────────────────────────────
+
 
 async def test_dispatcher_fans_out_to_multiple_sinks():
     # Two UDP sinks listening on different ports.
@@ -208,21 +229,25 @@ async def test_dispatcher_fans_out_to_multiple_sinks():
             s.bind(("127.0.0.1", 0))
             s.setblocking(False)
             socks.append(s)
-            sinks.append(sf.sanitize_sink({
-                "id": f"udp{i}", "protocol": "udp", "format": "json",
-                "host": "127.0.0.1", "port": s.getsockname()[1],
-                "max_retries": 0,
-            }))
+            sinks.append(
+                sf.sanitize_sink(
+                    {
+                        "id": f"udp{i}",
+                        "protocol": "udp",
+                        "format": "json",
+                        "host": "127.0.0.1",
+                        "port": s.getsockname()[1],
+                        "max_retries": 0,
+                    }
+                )
+            )
 
         await sf.start_dispatcher(sinks)
         try:
             await sf.enqueue_event(_EVENT)
             # Wait for both queues to drain.
             for _ in range(50):
-                drained = all(
-                    rt.queue.empty() and rt.delivered >= 1
-                    for rt in sf._sinks.values()
-                )
+                drained = all(rt.queue.empty() and rt.delivered >= 1 for rt in sf._sinks.values())
                 if drained:
                     break
                 await asyncio.sleep(0.02)
@@ -243,13 +268,24 @@ async def test_bounded_queue_drops_oldest_on_overflow():
     # Reserve a port and never accept - the connect itself will eventually
     # fail and retry, leaving items piled up in the queue.
     sink = sf.SinkConfig(
-        id="slow", name="slow", enabled=True, protocol="udp", format="json",
-        host="127.0.0.1", port=1,  # port 1 - anything sent here is dropped
-        url="", bearer_token="", tls_verify=True,
-        tls_ca_pem="", tls_client_cert_pem="", tls_client_key_pem="",
+        id="slow",
+        name="slow",
+        enabled=True,
+        protocol="udp",
+        format="json",
+        host="127.0.0.1",
+        port=1,  # port 1 - anything sent here is dropped
+        url="",
+        bearer_token="",
+        tls_verify=True,
+        tls_ca_pem="",
+        tls_client_cert_pem="",
+        tls_client_key_pem="",
         severity_floor="info",
-        queue_size=2, max_retries=0,
-        backoff_base=0.1, backoff_cap=1.0,
+        queue_size=2,
+        max_retries=0,
+        backoff_base=0.1,
+        backoff_cap=1.0,
     )
     # Build the runtime by hand so we don't have to start the loop.
     rt = sf.SinkRuntime(config=sink, queue=asyncio.Queue(maxsize=2))
@@ -274,17 +310,30 @@ async def test_bounded_queue_drops_oldest_on_overflow():
 
 # ── Retry + backoff ──────────────────────────────────────────────────────────
 
+
 async def test_sink_loop_gives_up_after_max_retries(monkeypatch):
     """Patch deliver() to always raise. Confirm delivery_failures grows
     monotonically, never exceeds max_retries + 1 per event, and the loop
     keeps consuming."""
     sink = sf.SinkConfig(
-        id="fail", name="fail", enabled=True, protocol="udp", format="json",
-        host="127.0.0.1", port=1, url="", bearer_token="", tls_verify=True,
-        tls_ca_pem="", tls_client_cert_pem="", tls_client_key_pem="",
+        id="fail",
+        name="fail",
+        enabled=True,
+        protocol="udp",
+        format="json",
+        host="127.0.0.1",
+        port=1,
+        url="",
+        bearer_token="",
+        tls_verify=True,
+        tls_ca_pem="",
+        tls_client_cert_pem="",
+        tls_client_key_pem="",
         severity_floor="info",
-        queue_size=10, max_retries=2,
-        backoff_base=0.01, backoff_cap=0.02,  # near-zero so the test is fast
+        queue_size=10,
+        max_retries=2,
+        backoff_base=0.01,
+        backoff_cap=0.02,  # near-zero so the test is fast
     )
 
     async def boom(*_a, **_kw):
@@ -315,12 +364,19 @@ async def test_sink_loop_gives_up_after_max_retries(monkeypatch):
 
 # ── Severity floor ───────────────────────────────────────────────────────────
 
+
 async def test_severity_floor_drops_lower_priority_events():
     """A sink with floor=warning must drop info-level events."""
-    sink = sf.sanitize_sink({
-        "id": "warn-only", "protocol": "udp", "host": "127.0.0.1", "port": 1,
-        "format": "json", "severity_floor": "warning",
-    })
+    sink = sf.sanitize_sink(
+        {
+            "id": "warn-only",
+            "protocol": "udp",
+            "host": "127.0.0.1",
+            "port": 1,
+            "format": "json",
+            "severity_floor": "warning",
+        }
+    )
     rt = sf.SinkRuntime(config=sink, queue=asyncio.Queue(maxsize=10))
     async with sf._runtime_lock:
         sf._sinks[sink.id] = rt
@@ -337,6 +393,7 @@ async def test_severity_floor_drops_lower_priority_events():
 
 
 # ── add_audit_event hook ─────────────────────────────────────────────────────
+
 
 async def test_audit_event_hook_fires(tmp_path, monkeypatch):
     """Registering a hook with set_audit_event_hook causes it to receive

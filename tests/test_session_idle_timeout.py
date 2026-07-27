@@ -36,28 +36,33 @@ class DummyRequest:
 def _make_expired_token(username: str, user_id: int, age_seconds: int) -> str:
     """Mint a session token with last_activity pushed `age_seconds` into the past."""
     now = int(time.time())
-    return app_module._serializer.dumps({
-        "user": username,
-        "user_id": user_id,
-        "originally_issued_at": now,
-        "last_activity": now - age_seconds,
-    })
+    return app_module._serializer.dumps(
+        {
+            "user": username,
+            "user_id": user_id,
+            "originally_issued_at": now,
+            "last_activity": now - age_seconds,
+        }
+    )
 
 
 # ── Audit-event capture helper ───────────────────────────────────────────────
+
 
 class AuditRecorder:
     def __init__(self):
         self.events: list[dict] = []
 
     async def record(self, category, action, *, user="", detail="", correlation_id=""):
-        self.events.append({
-            "category": category,
-            "action": action,
-            "user": user,
-            "detail": detail,
-            "correlation_id": correlation_id,
-        })
+        self.events.append(
+            {
+                "category": category,
+                "action": action,
+                "user": user,
+                "detail": detail,
+                "correlation_id": correlation_id,
+            }
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -71,8 +76,7 @@ async def test_require_auth_blocks_when_idle_exceeded(monkeypatch):
     monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 30)
 
     async def fake_get_user_by_id(uid):
-        return {"id": uid, "username": "alice", "role": "user", "must_change_password": 0,
-                "session_never_expires": 0}
+        return {"id": uid, "username": "alice", "role": "user", "must_change_password": 0, "session_never_expires": 0}
 
     monkeypatch.setattr(app_module.db, "get_user_by_id", fake_get_user_by_id)
 
@@ -103,8 +107,7 @@ async def test_kiosk_account_bypasses_idle_timeout(monkeypatch):
     monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 30)
 
     async def fake_get_user_by_id(uid):
-        return {"id": uid, "username": "kiosk", "role": "user", "must_change_password": 0,
-                "session_never_expires": 1}
+        return {"id": uid, "username": "kiosk", "role": "user", "must_change_password": 0, "session_never_expires": 1}
 
     monkeypatch.setattr(app_module.db, "get_user_by_id", fake_get_user_by_id)
 
@@ -126,8 +129,7 @@ async def test_idle_timeout_zero_disables_check(monkeypatch):
     monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 0)
 
     async def fake_get_user_by_id(uid):
-        return {"id": uid, "username": "bob", "role": "user", "must_change_password": 0,
-                "session_never_expires": 0}
+        return {"id": uid, "username": "bob", "role": "user", "must_change_password": 0, "session_never_expires": 0}
 
     monkeypatch.setattr(app_module.db, "get_user_by_id", fake_get_user_by_id)
 
@@ -149,8 +151,7 @@ async def test_active_session_refreshes_cookie(monkeypatch):
     monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 1800)
 
     async def fake_get_user_by_id(uid):
-        return {"id": uid, "username": "carol", "role": "user", "must_change_password": 0,
-                "session_never_expires": 0}
+        return {"id": uid, "username": "carol", "role": "user", "must_change_password": 0, "session_never_expires": 0}
 
     monkeypatch.setattr(app_module.db, "get_user_by_id", fake_get_user_by_id)
 
@@ -163,8 +164,9 @@ async def test_active_session_refreshes_cookie(monkeypatch):
     assert session["user"] == "carol"
     # The response should have set a refreshed session cookie.
     cookies = [h for h in resp.raw_headers if h[0].decode().lower() == "set-cookie"]
-    assert any(b"session=" in v for _, v in cookies), \
+    assert any(b"session=" in v for _, v in cookies), (
         f"expected refreshed session cookie, got headers: {resp.raw_headers}"
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -177,8 +179,14 @@ async def test_auth_status_emits_audit_on_idle_expiry(monkeypatch):
     monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 60)
 
     async def fake_get_user_by_id(uid):
-        return {"id": uid, "username": "dave", "role": "user", "display_name": "",
-                "must_change_password": 0, "session_never_expires": 0}
+        return {
+            "id": uid,
+            "username": "dave",
+            "role": "user",
+            "display_name": "",
+            "must_change_password": 0,
+            "session_never_expires": 0,
+        }
 
     monkeypatch.setattr(auth_module.db, "get_user_by_id", fake_get_user_by_id)
 
@@ -203,8 +211,14 @@ async def test_auth_status_returns_idle_fields_when_active(monkeypatch):
     monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 600)
 
     async def fake_get_user_by_id(uid):
-        return {"id": uid, "username": "eve", "role": "user", "display_name": "Eve",
-                "must_change_password": 0, "session_never_expires": 0}
+        return {
+            "id": uid,
+            "username": "eve",
+            "role": "user",
+            "display_name": "Eve",
+            "must_change_password": 0,
+            "session_never_expires": 0,
+        }
 
     async def fake_get_user_features(user):
         return []
@@ -235,8 +249,14 @@ async def test_auth_status_marks_kiosk_user(monkeypatch):
     monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 30)
 
     async def fake_get_user_by_id(uid):
-        return {"id": uid, "username": "screen", "role": "user", "display_name": "",
-                "must_change_password": 0, "session_never_expires": 1}
+        return {
+            "id": uid,
+            "username": "screen",
+            "role": "user",
+            "display_name": "",
+            "must_change_password": 0,
+            "session_never_expires": 1,
+        }
 
     async def fake_get_user_features(user):
         return []

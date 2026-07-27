@@ -12,6 +12,7 @@ The tests stub the device connection (`conn`) and `_emit` so they
 don't need Netmiko or the upgrade-events DB - the only contract
 under test is the platform-shape branch at the top of the helper.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -70,9 +71,7 @@ async def test_run_install_add_prestage_short_circuits_for_single_phase_driver(
     # supported" (which would mislead them into thinking the platform
     # is unsupported when it just doesn't need a separate stage).
     levels_and_messages = [(lvl, msg) for (lvl, msg, _h) in _stub_emit]
-    assert any(
-        lvl == "info" and "defer" in msg.lower() for (lvl, msg) in levels_and_messages
-    )
+    assert any(lvl == "info" and "defer" in msg.lower() for (lvl, msg) in levels_and_messages)
 
 
 @pytest.mark.asyncio
@@ -100,9 +99,7 @@ async def test_run_install_add_prestage_short_circuits_for_cisco_nxos(
     # "platform unsupported" - NX-OS is supported, it just doesn't have
     # a discrete prestage phase.
     levels_and_messages = [(lvl, msg) for (lvl, msg, _h) in _stub_emit]
-    assert any(
-        lvl == "info" and "defer" in msg.lower() for (lvl, msg) in levels_and_messages
-    )
+    assert any(lvl == "info" and "defer" in msg.lower() for (lvl, msg) in levels_and_messages)
 
 
 @pytest.mark.asyncio
@@ -131,9 +128,7 @@ async def test_run_install_add_prestage_short_circuits_for_arista_eos(
     # supported" - EOS is supported, it just doesn't have a discrete
     # prestage phase (same single-phase shape as Junos / NX-OS).
     levels_and_messages = [(lvl, msg) for (lvl, msg, _h) in _stub_emit]
-    assert any(
-        lvl == "info" and "defer" in msg.lower() for (lvl, msg) in levels_and_messages
-    )
+    assert any(lvl == "info" and "defer" in msg.lower() for (lvl, msg) in levels_and_messages)
 
 
 @pytest.mark.asyncio
@@ -188,10 +183,7 @@ async def test_run_install_add_prestage_runs_for_cisco_xr(
     assert err is None
     # The install-add command must be XR's ``install add source ...``,
     # not XE's ``install add file ...`` - the latter parse-errors on XR.
-    assert any(
-        c.startswith("install add source harddisk:asr9k-mini-x64-7.5.2.iso")
-        for c in conn.commands
-    )
+    assert any(c.startswith("install add source harddisk:asr9k-mini-x64-7.5.2.iso") for c in conn.commands)
     # And the XE wording must NOT appear - a regression where the
     # route fell back to XE syntax would silently break every XR
     # upgrade.
@@ -240,7 +232,4 @@ async def test_run_install_add_prestage_runs_for_cisco_xe(
     assert err is None
     # The install-add command must include the full device path so
     # IOS-XE finds the staged .bin.
-    assert any(
-        c.startswith("install add file flash:cat9k_iosxe.17.09.04a.SPA.bin")
-        for c in conn.commands
-    )
+    assert any(c.startswith("install add file flash:cat9k_iosxe.17.09.04a.SPA.bin") for c in conn.commands)

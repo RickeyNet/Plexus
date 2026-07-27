@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -117,13 +118,29 @@ async def create_monitoring_poll(
                 route_count, route_snapshot, poll_status, poll_error,
                 response_time_ms, packet_loss_pct, icmp_alive, icmp_rtt_ms, polled_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (host_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
-             uptime_seconds, if_up_count, if_down_count, if_admin_down, if_details,
-             vpn_tunnels_up, vpn_tunnels_down, vpn_details,
-             route_count, route_snapshot, poll_status, poll_error,
-             response_time_ms, packet_loss_pct,
-             None if icmp_alive is None else int(bool(icmp_alive)),
-             icmp_rtt_ms),
+            (
+                host_id,
+                cpu_percent,
+                memory_percent,
+                memory_used_mb,
+                memory_total_mb,
+                uptime_seconds,
+                if_up_count,
+                if_down_count,
+                if_admin_down,
+                if_details,
+                vpn_tunnels_up,
+                vpn_tunnels_down,
+                vpn_details,
+                route_count,
+                route_snapshot,
+                poll_status,
+                poll_error,
+                response_time_ms,
+                packet_loss_pct,
+                None if icmp_alive is None else int(bool(icmp_alive)),
+                icmp_rtt_ms,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -132,7 +149,8 @@ async def create_monitoring_poll(
 
 
 async def get_latest_monitoring_polls(
-    group_id: int | None = None, limit: int = 200,
+    group_id: int | None = None,
+    limit: int = 200,
     include_details: bool = False,
 ) -> list[dict]:
     """Return the most recent poll per host, with host info joined."""
@@ -175,7 +193,8 @@ async def get_latest_monitoring_polls(
 
 
 async def get_monitoring_poll_history(
-    host_id: int, limit: int = 100,
+    host_id: int,
+    limit: int = 100,
     include_details: bool = False,
 ) -> list[dict]:
     """Poll history for a host, newest first. The large per-poll blobs
@@ -384,8 +403,7 @@ async def create_monitoring_alert(
                 severity, original_severity, value, threshold,
                 dedup_key, occurrence_count, last_seen_at, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))""",
-            (host_id, poll_id, rule_id, alert_type, metric, message,
-             severity, severity, value, threshold, dedup_key),
+            (host_id, poll_id, rule_id, alert_type, metric, message, severity, severity, value, threshold, dedup_key),
         )
         await db.commit()
         new_id = cursor.lastrowid
@@ -418,7 +436,10 @@ async def create_monitoring_alert(
             # Notification delivery must never break alert ingestion.
             _LOGGER.warning(
                 "Notification delivery failed for alert %s (rule %s, host %s): %s",
-                new_id, rule_id, host_id, exc,
+                new_id,
+                rule_id,
+                host_id,
+                exc,
             )
     return new_id
 
@@ -475,7 +496,8 @@ async def get_monitoring_alert(alert_id: int) -> dict | None:
 
 
 async def acknowledge_monitoring_alert(
-    alert_id: int, acknowledged_by: str,
+    alert_id: int,
+    acknowledged_by: str,
 ) -> None:
     db = await _dbcore.get_db()
     try:
@@ -509,7 +531,10 @@ async def delete_old_monitoring_alerts(retention_days: int) -> int:
 
 
 async def create_route_snapshot(
-    host_id: int, route_count: int, routes_text: str, routes_hash: str,
+    host_id: int,
+    route_count: int,
+    routes_text: str,
+    routes_hash: str,
 ) -> int:
     db = await _dbcore.get_db()
     try:
@@ -526,7 +551,8 @@ async def create_route_snapshot(
 
 
 async def get_route_snapshots(
-    host_id: int, limit: int = 50,
+    host_id: int,
+    limit: int = 50,
 ) -> list[dict]:
     db = await _dbcore.get_db()
     try:
@@ -598,9 +624,23 @@ async def create_alert_rule(
                 consecutive, cooldown_minutes, escalate_after_minutes, escalate_to,
                 host_id, group_id, channel_ids, created_by, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-            (name, description, metric, rule_type, operator, value, severity,
-             consecutive, cooldown_minutes, escalate_after_minutes, escalate_to,
-             host_id, group_id, channel_ids, created_by),
+            (
+                name,
+                description,
+                metric,
+                rule_type,
+                operator,
+                value,
+                severity,
+                consecutive,
+                cooldown_minutes,
+                escalate_after_minutes,
+                escalate_to,
+                host_id,
+                group_id,
+                channel_ids,
+                created_by,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -642,10 +682,23 @@ async def get_alert_rule(rule_id: int) -> dict | None:
 
 
 async def update_alert_rule(rule_id: int, **kwargs) -> None:
-    allowed = {"name", "description", "metric", "rule_type", "operator", "value",
-               "severity", "enabled", "consecutive", "cooldown_minutes",
-               "escalate_after_minutes", "escalate_to", "host_id", "group_id",
-               "channel_ids"}
+    allowed = {
+        "name",
+        "description",
+        "metric",
+        "rule_type",
+        "operator",
+        "value",
+        "severity",
+        "enabled",
+        "consecutive",
+        "cooldown_minutes",
+        "escalate_after_minutes",
+        "escalate_to",
+        "host_id",
+        "group_id",
+        "channel_ids",
+    }
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
@@ -747,7 +800,9 @@ async def get_active_alert_suppressions() -> list[dict]:
 
 
 async def is_alert_suppressed(
-    host_id: int, metric: str, group_id: int | None = None,
+    host_id: int,
+    metric: str,
+    group_id: int | None = None,
 ) -> bool:
     """Check if alerts for this host+metric are currently suppressed."""
     db = await _dbcore.get_db()
@@ -875,7 +930,7 @@ async def get_sla_targets(
                 FROM sla_targets t
                 LEFT JOIN hosts h ON h.id = t.host_id
                 LEFT JOIN inventory_groups g ON g.id = t.group_id
-                WHERE {' AND '.join(where)}
+                WHERE {" AND ".join(where)}
                 ORDER BY t.name""",
             tuple(params),
         )
@@ -1002,7 +1057,7 @@ async def get_sla_summary(
             mean_rt = r["avg_latency"]
             mean_sq = r["mean_sq_rt"]
             if mean_rt is not None and mean_sq is not None:
-                variance = mean_sq - (mean_rt ** 2)
+                variance = mean_sq - (mean_rt**2)
                 jitter = round(max(0.0, variance) ** 0.5, 2)
             else:
                 jitter = None
@@ -1015,18 +1070,20 @@ async def get_sla_summary(
                 total_packet_loss += pkt
                 pkt_count += 1
 
-            hosts.append({
-                "host_id": r["host_id"],
-                "hostname": r["hostname"],
-                "ip_address": r["ip_address"],
-                "group_id": r["group_id"],
-                "total_polls": total,
-                "ok_polls": ok,
-                "uptime_pct": uptime_pct,
-                "avg_latency_ms": lat,
-                "avg_packet_loss_pct": pkt,
-                "jitter_ms": jitter,
-            })
+            hosts.append(
+                {
+                    "host_id": r["host_id"],
+                    "hostname": r["hostname"],
+                    "ip_address": r["ip_address"],
+                    "group_id": r["group_id"],
+                    "total_polls": total,
+                    "ok_polls": ok,
+                    "uptime_pct": uptime_pct,
+                    "avg_latency_ms": lat,
+                    "avg_packet_loss_pct": pkt,
+                    "jitter_ms": jitter,
+                }
+            )
 
         host_count = len(hosts) or 1
 
@@ -1122,17 +1179,19 @@ async def get_sla_host_detail(
             mean_sq = r["mean_sq_rt"]
             jitter = None
             if mean is not None and mean_sq is not None:
-                variance = mean_sq - (mean ** 2)
+                variance = mean_sq - (mean**2)
                 jitter = round(max(0, variance) ** 0.5, 2)
-            daily.append({
-                "day": r["day"],
-                "uptime_pct": round(ok / total * 100, 3),
-                "avg_latency_ms": round(r["avg_latency"], 2) if r["avg_latency"] is not None else None,
-                "avg_packet_loss_pct": round(r["avg_packet_loss"], 2) if r["avg_packet_loss"] is not None else None,
-                "jitter_ms": jitter,
-                "total_polls": total,
-                "ok_polls": ok,
-            })
+            daily.append(
+                {
+                    "day": r["day"],
+                    "uptime_pct": round(ok / total * 100, 3),
+                    "avg_latency_ms": round(r["avg_latency"], 2) if r["avg_latency"] is not None else None,
+                    "avg_packet_loss_pct": round(r["avg_packet_loss"], 2) if r["avg_packet_loss"] is not None else None,
+                    "jitter_ms": jitter,
+                    "total_polls": total,
+                    "ok_polls": ok,
+                }
+            )
 
         # MTTR for this host
         host_mttr_expr = _dbcore._minutes_between_expr("a.acknowledged_at", "a.created_at")
@@ -1184,5 +1243,3 @@ async def delete_old_sla_metrics(retention_days: int) -> int:
         return cursor.rowcount
     finally:
         await db.close()
-
-

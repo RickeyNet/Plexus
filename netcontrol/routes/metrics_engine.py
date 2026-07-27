@@ -7,6 +7,7 @@ metrics_engine.py -- Prometheus-style metrics infrastructure:
   - Structured metrics query API
   - SNMP trap / syslog UDP receiver
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,7 +61,8 @@ def _spawn_bg(coro) -> asyncio.Task:
 # HOST-RESOURCES-MIB OIDs are the universal fallback.
 VENDOR_OID_DEFAULTS: dict[str, dict] = {
     "cisco_ios": {
-        "vendor": "Cisco", "device_type": "cisco_ios",
+        "vendor": "Cisco",
+        "device_type": "cisco_ios",
         "cpu_oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.8",
         "cpu_walk": 1,
         "mem_used_oid": "1.3.6.1.4.1.9.9.48.1.1.1.5",
@@ -69,7 +71,8 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
     "cisco_nxos": {
-        "vendor": "Cisco", "device_type": "cisco_nxos",
+        "vendor": "Cisco",
+        "device_type": "cisco_nxos",
         "cpu_oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.8",
         "cpu_walk": 1,
         "mem_used_oid": "1.3.6.1.4.1.9.9.48.1.1.1.5",
@@ -78,8 +81,9 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
     "juniper": {
-        "vendor": "Juniper", "device_type": "juniper",
-        "cpu_oid": "1.3.6.1.4.1.2636.3.1.13.1.8",      # jnxOperatingCPU
+        "vendor": "Juniper",
+        "device_type": "juniper",
+        "cpu_oid": "1.3.6.1.4.1.2636.3.1.13.1.8",  # jnxOperatingCPU
         "cpu_walk": 1,
         "mem_used_oid": "1.3.6.1.4.1.2636.3.1.13.1.11",  # jnxOperatingBuffer
         "mem_free_oid": "",
@@ -87,17 +91,19 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
     "arista_eos": {
-        "vendor": "Arista", "device_type": "arista_eos",
-        "cpu_oid": "1.3.6.1.2.1.25.3.3.1.2",            # hrProcessorLoad (HOST-RESOURCES)
+        "vendor": "Arista",
+        "device_type": "arista_eos",
+        "cpu_oid": "1.3.6.1.2.1.25.3.3.1.2",  # hrProcessorLoad (HOST-RESOURCES)
         "cpu_walk": 1,
-        "mem_used_oid": "1.3.6.1.2.1.25.2.3.1.6",        # hrStorageUsed
+        "mem_used_oid": "1.3.6.1.2.1.25.2.3.1.6",  # hrStorageUsed
         "mem_free_oid": "",
-        "mem_total_oid": "1.3.6.1.2.1.25.2.3.1.5",       # hrStorageSize
+        "mem_total_oid": "1.3.6.1.2.1.25.2.3.1.5",  # hrStorageSize
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
     "fortinet": {
-        "vendor": "Fortinet", "device_type": "fortinet",
-        "cpu_oid": "1.3.6.1.4.1.12356.101.4.1.3.0",     # fgSysCpuUsage
+        "vendor": "Fortinet",
+        "device_type": "fortinet",
+        "cpu_oid": "1.3.6.1.4.1.12356.101.4.1.3.0",  # fgSysCpuUsage
         "cpu_walk": 0,
         "mem_used_oid": "1.3.6.1.4.1.12356.101.4.1.4.0",  # fgSysMemUsage (%)
         "mem_free_oid": "",
@@ -105,8 +111,9 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
     "paloalto": {
-        "vendor": "Palo Alto", "device_type": "paloalto",
-        "cpu_oid": "1.3.6.1.2.1.25.3.3.1.2",             # hrProcessorLoad
+        "vendor": "Palo Alto",
+        "device_type": "paloalto",
+        "cpu_oid": "1.3.6.1.2.1.25.3.3.1.2",  # hrProcessorLoad
         "cpu_walk": 1,
         "mem_used_oid": "1.3.6.1.2.1.25.2.3.1.6",
         "mem_free_oid": "",
@@ -120,8 +127,9 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
     # Substring match in resolve_oids_for_device() picks the longest
     # key, so "cisco_ftd" wins over "cisco_ios" / "cisco" automatically.
     "cisco_asa": {
-        "vendor": "Cisco", "device_type": "cisco_asa",
-        "cpu_oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7",      # cpmCPUTotal5secRev
+        "vendor": "Cisco",
+        "device_type": "cisco_asa",
+        "cpu_oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7",  # cpmCPUTotal5secRev
         "cpu_walk": 1,
         "mem_used_oid": "1.3.6.1.4.1.9.9.221.1.1.1.1.18",  # cempMemPoolHCUsed
         "mem_free_oid": "1.3.6.1.4.1.9.9.221.1.1.1.1.20",  # cempMemPoolHCFree
@@ -129,8 +137,9 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
     "cisco_ftd": {
-        "vendor": "Cisco", "device_type": "cisco_ftd",
-        "cpu_oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7",      # cpmCPUTotal5secRev
+        "vendor": "Cisco",
+        "device_type": "cisco_ftd",
+        "cpu_oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7",  # cpmCPUTotal5secRev
         "cpu_walk": 1,
         "mem_used_oid": "1.3.6.1.4.1.9.9.221.1.1.1.1.18",  # cempMemPoolHCUsed
         "mem_free_oid": "1.3.6.1.4.1.9.9.221.1.1.1.1.20",  # cempMemPoolHCFree
@@ -139,12 +148,13 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
     },
     # Universal fallback - HOST-RESOURCES-MIB works on most Linux/SNMP agents
     "_fallback": {
-        "vendor": "Generic", "device_type": "",
-        "cpu_oid": "1.3.6.1.2.1.25.3.3.1.2",             # hrProcessorLoad
+        "vendor": "Generic",
+        "device_type": "",
+        "cpu_oid": "1.3.6.1.2.1.25.3.3.1.2",  # hrProcessorLoad
         "cpu_walk": 1,
-        "mem_used_oid": "1.3.6.1.2.1.25.2.3.1.6",        # hrStorageUsed
+        "mem_used_oid": "1.3.6.1.2.1.25.2.3.1.6",  # hrStorageUsed
         "mem_free_oid": "",
-        "mem_total_oid": "1.3.6.1.2.1.25.2.3.1.5",       # hrStorageSize
+        "mem_total_oid": "1.3.6.1.2.1.25.2.3.1.5",  # hrStorageSize
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
 }
@@ -208,6 +218,7 @@ async def resolve_oids_for_device(device_type: str) -> dict:
 # 2.  INTERFACE TIME-SERIES  (rate calculation + historical storage)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _parse_db_time(value) -> datetime | None:
     """Parse a DB timestamp into an aware UTC datetime.
 
@@ -222,7 +233,7 @@ def _parse_db_time(value) -> datetime | None:
         return None
     try:
         parsed = datetime.fromisoformat(value)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
@@ -286,8 +297,9 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
                         utilization_pct = max(in_rate_bps, out_rate_bps) / max_bps * 100
                         utilization_pct = min(utilization_pct, 100.0)
 
-        rows.append((host_id, if_index, if_name, speed_mbps,
-                      in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct))
+        rows.append(
+            (host_id, if_index, if_name, speed_mbps, in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct)
+        )
 
     # Update interface_stats with current counters so the *next* poll
     # can calculate deltas.  Without this, rates stay null because
@@ -297,14 +309,16 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
         if_index = iface.get("if_index")
         if not if_index:
             continue
-        stat_rows.append((
-            host_id,
-            if_index,
-            iface.get("name", ""),
-            iface.get("speed_mbps", 0) or 0,
-            iface.get("in_octets", 0) or 0,
-            iface.get("out_octets", 0) or 0,
-        ))
+        stat_rows.append(
+            (
+                host_id,
+                if_index,
+                iface.get("name", ""),
+                iface.get("speed_mbps", 0) or 0,
+                iface.get("in_octets", 0) or 0,
+                iface.get("out_octets", 0) or 0,
+            )
+        )
     if stat_rows:
         await db.upsert_interface_stats_batch(stat_rows)
 
@@ -316,16 +330,17 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Spike detection thresholds
-_ERROR_SPIKE_FACTOR = 5.0       # current rate must be ≥5× baseline to trigger
-_ERROR_MIN_RATE = 1.0           # minimum errors/sec to consider a spike (ignore noise)
-_SPIKE_COOLDOWN_SECONDS = 900   # 15 min between duplicate events per interface+metric
+_ERROR_SPIKE_FACTOR = 5.0  # current rate must be ≥5× baseline to trigger
+_ERROR_MIN_RATE = 1.0  # minimum errors/sec to consider a spike (ignore noise)
+_SPIKE_COOLDOWN_SECONDS = 900  # 15 min between duplicate events per interface+metric
 
 # In-memory cooldown tracker: (host_id, if_index, metric_name) → last event timestamp
 _spike_cooldown: dict[tuple, float] = {}
 
 
 async def store_interface_error_metrics_from_poll(
-    host_id: int, if_details: list[dict],
+    host_id: int,
+    if_details: list[dict],
 ) -> int:
     """Store interface error/discard counters as metric_samples and detect spikes.
 
@@ -363,11 +378,7 @@ async def store_interface_error_metrics_from_poll(
             metric_rows.append((host_id, metric_name, labels, float(counter_val)))
 
             # Compute rate if we have a previous sample
-            t_prev = (
-                _parse_db_time(prev.get("polled_at"))
-                if prev and prev.get("prev_polled_at")
-                else None
-            )
+            t_prev = _parse_db_time(prev.get("polled_at")) if prev and prev.get("prev_polled_at") else None
             if t_prev is not None:
                 dt_sec = (datetime.now(UTC) - t_prev).total_seconds()
                 delta = _counter_delta(prev.get(field) or 0, counter_val)
@@ -389,9 +400,11 @@ async def store_interface_error_metrics_from_poll(
                         baseline_rate = prev_delta / pp_dt
 
                         # Check for spike
-                        if (rate >= _ERROR_MIN_RATE and
-                                baseline_rate >= 0 and
-                                (baseline_rate == 0 or rate / max(baseline_rate, 0.001) >= _ERROR_SPIKE_FACTOR)):
+                        if (
+                            rate >= _ERROR_MIN_RATE
+                            and baseline_rate >= 0
+                            and (baseline_rate == 0 or rate / max(baseline_rate, 0.001) >= _ERROR_SPIKE_FACTOR)
+                        ):
                             cooldown_key = (host_id, if_index, metric_name)
                             now_ts = datetime.now(UTC).timestamp()
                             last_event = _spike_cooldown.get(cooldown_key, 0)
@@ -400,25 +413,29 @@ async def store_interface_error_metrics_from_poll(
                                 spike_factor = rate / max(baseline_rate, 0.001)
                                 severity = "critical" if spike_factor >= 20 or rate >= 100 else "warning"
                                 # Trigger root-cause correlation asynchronously
-                                _spawn_bg(_create_correlated_error_event(
-                                    host_id=host_id,
-                                    if_index=if_index,
-                                    if_name=if_name,
-                                    metric_name=metric_name,
-                                    current_rate=rate,
-                                    baseline_rate=baseline_rate,
-                                    spike_factor=spike_factor,
-                                    severity=severity,
-                                ))
+                                _spawn_bg(
+                                    _create_correlated_error_event(
+                                        host_id=host_id,
+                                        if_index=if_index,
+                                        if_name=if_name,
+                                        metric_name=metric_name,
+                                        current_rate=rate,
+                                        baseline_rate=baseline_rate,
+                                        spike_factor=spike_factor,
+                                        severity=severity,
+                                    )
+                                )
 
-        error_stat_rows.append((
-            if_index,
-            if_name,
-            iface.get("in_errors", 0) or 0,
-            iface.get("out_errors", 0) or 0,
-            iface.get("in_discards", 0) or 0,
-            iface.get("out_discards", 0) or 0,
-        ))
+        error_stat_rows.append(
+            (
+                if_index,
+                if_name,
+                iface.get("in_errors", 0) or 0,
+                iface.get("out_errors", 0) or 0,
+                iface.get("in_discards", 0) or 0,
+                iface.get("out_discards", 0) or 0,
+            )
+        )
 
     if error_stat_rows:
         await db.upsert_interface_error_stats_batch(host_id, error_stat_rows)
@@ -444,14 +461,10 @@ async def _create_correlated_error_event(
         window_end = now.isoformat()
 
         # Gather correlated events within ±30 min window
-        config_changes = await db.get_config_drift_events_in_range(
-            [host_id], window_start, window_end)
-        deployments = await db.get_deployments_for_host_in_range(
-            host_id, window_start, window_end)
-        topology_changes = await db.get_topology_changes_in_range(
-            host_id, window_start, window_end)
-        syslog_events = await db.get_trap_syslog_events_in_range(
-            host_id, window_start, window_end)
+        config_changes = await db.get_config_drift_events_in_range([host_id], window_start, window_end)
+        deployments = await db.get_deployments_for_host_in_range(host_id, window_start, window_end)
+        topology_changes = await db.get_topology_changes_in_range(host_id, window_start, window_end)
+        syslog_events = await db.get_trap_syslog_events_in_range(host_id, window_start, window_end)
 
         # Classify root cause
         category, hint = _classify_root_cause(
@@ -486,10 +499,14 @@ async def _create_correlated_error_event(
             correlation_details=json.dumps(correlation),
         )
         LOGGER.info(
-            "interface_errors: spike detected host=%d if=%s metric=%s "
-            "rate=%.2f/s baseline=%.2f/s (%.1f×) cause=%s",
-            host_id, if_name, metric_name, current_rate, baseline_rate,
-            spike_factor, category,
+            "interface_errors: spike detected host=%d if=%s metric=%s rate=%.2f/s baseline=%.2f/s (%.1f×) cause=%s",
+            host_id,
+            if_name,
+            metric_name,
+            current_rate,
+            baseline_rate,
+            spike_factor,
+            category,
         )
     except Exception as exc:
         LOGGER.debug("interface_errors: correlation failed: %s", str(exc))
@@ -512,69 +529,76 @@ def _classify_root_cause(
     # Priority 1: Recent config change or deployment
     if deployments:
         dep_names = [d.get("name", "unnamed") for d in deployments[:3]]
-        return ("deployment",
-                f"Deployment detected within 30 min: {', '.join(dep_names)}. "
-                "Error spike may be caused by the deployed configuration change.")
+        return (
+            "deployment",
+            f"Deployment detected within 30 min: {', '.join(dep_names)}. "
+            "Error spike may be caused by the deployed configuration change.",
+        )
 
     if config_changes:
         drift_count = len(config_changes)
-        return ("config_change",
-                f"{drift_count} config change(s) detected within 30 min. "
-                "Error spike correlates with configuration drift - review recent changes.")
+        return (
+            "config_change",
+            f"{drift_count} config change(s) detected within 30 min. "
+            "Error spike correlates with configuration drift - review recent changes.",
+        )
 
     # Priority 2: Topology change (link flap, STP change)
     if topology_changes:
         change_types = set(c.get("change_type", "") for c in topology_changes)
-        return ("topology",
-                f"Topology change(s) detected: {', '.join(change_types)}. "
-                "Errors may be caused by link state transitions or reconvergence.")
+        return (
+            "topology",
+            f"Topology change(s) detected: {', '.join(change_types)}. "
+            "Errors may be caused by link state transitions or reconvergence.",
+        )
 
     # Priority 3: Syslog/trap events (e.g., link down, module reset)
-    physical_keywords = {"link", "duplex", "speed", "sfp", "transceiver",
-                         "optic", "cable", "crc", "err-disabled"}
+    physical_keywords = {"link", "duplex", "speed", "sfp", "transceiver", "optic", "cable", "crc", "err-disabled"}
     if syslog_events:
-        phys_events = [e for e in syslog_events
-                       if any(kw in (e.get("message", "") or "").lower() for kw in physical_keywords)]
+        phys_events = [
+            e for e in syslog_events if any(kw in (e.get("message", "") or "").lower() for kw in physical_keywords)
+        ]
         if phys_events:
-            return ("physical_layer",
-                    f"Physical layer syslog events detected ({len(phys_events)} events). "
-                    "Suspect cable, SFP/optic, or duplex mismatch issue.")
+            return (
+                "physical_layer",
+                f"Physical layer syslog events detected ({len(phys_events)} events). "
+                "Suspect cable, SFP/optic, or duplex mismatch issue.",
+            )
 
     # Priority 4: Error type heuristics (no correlated events found)
     error_hints = {
         "if_in_errors": (
             "physical_layer",
             "Input errors (CRC, frame, runts) with no config change - "
-            "suspect physical layer: check cable, SFP/optic, or duplex mismatch."
+            "suspect physical layer: check cable, SFP/optic, or duplex mismatch.",
         ),
         "if_out_errors": (
             "congestion",
-            "Output errors with no config change - "
-            "suspect interface congestion or speed/duplex mismatch."
+            "Output errors with no config change - suspect interface congestion or speed/duplex mismatch.",
         ),
         "if_in_discards": (
             "congestion",
-            "Input discards increasing - "
-            "possible input queue overflow due to high traffic or slow CPU."
+            "Input discards increasing - possible input queue overflow due to high traffic or slow CPU.",
         ),
         "if_out_discards": (
             "congestion",
-            "Output discards increasing - "
-            "suspect output queue congestion; check QoS policy and interface speed."
+            "Output discards increasing - suspect output queue congestion; check QoS policy and interface speed.",
         ),
     }
 
     if metric_name in error_hints:
         return error_hints[metric_name]
 
-    return ("unknown",
-            f"Error rate spike ({spike_factor:.1f}× baseline) with no correlated events. "
-            "Manual investigation recommended.")
+    return (
+        "unknown",
+        f"Error rate spike ({spike_factor:.1f}× baseline) with no correlated events. Manual investigation recommended.",
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 3.  METRIC SAMPLE EMITTER  (write poll results as flexible metrics)
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 async def emit_metric_samples_from_poll(poll_result: dict) -> int:
     """Convert a monitoring poll result dict into metric_samples rows."""
@@ -611,12 +635,26 @@ async def emit_metric_samples_from_poll(poll_result: dict) -> int:
 
 # Core metrics to downsample
 _DOWNSAMPLE_METRICS = [
-    "cpu_percent", "memory_percent", "memory_used_mb", "memory_total_mb",
-    "uptime_seconds", "response_time_ms", "packet_loss_pct",
-    "if_up_count", "if_down_count", "vpn_tunnels_up", "vpn_tunnels_down",
+    "cpu_percent",
+    "memory_percent",
+    "memory_used_mb",
+    "memory_total_mb",
+    "uptime_seconds",
+    "response_time_ms",
+    "packet_loss_pct",
+    "if_up_count",
+    "if_down_count",
+    "vpn_tunnels_up",
+    "vpn_tunnels_down",
     "route_count",
-    "if_in_errors", "if_out_errors", "if_in_discards", "if_out_discards",
-    "if_in_errors_rate", "if_out_errors_rate", "if_in_discards_rate", "if_out_discards_rate",
+    "if_in_errors",
+    "if_out_errors",
+    "if_in_discards",
+    "if_out_discards",
+    "if_in_errors_rate",
+    "if_out_errors_rate",
+    "if_in_discards_rate",
+    "if_out_discards_rate",
 ]
 
 
@@ -757,6 +795,7 @@ async def _downsampling_loop() -> None:
 # 5.  SNMP TRAP / SYSLOG UDP RECEIVER
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 class _TrapSyslogProtocol(asyncio.DatagramProtocol):
     """Async UDP listener for SNMP traps (port 162) and syslog (port 514)."""
 
@@ -774,8 +813,7 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
             else:
                 self._handle_syslog(data, source_ip)
         except Exception as exc:
-            LOGGER.debug("metrics: %s parse error from %s: %s",
-                         self.event_type, source_ip, exc)
+            LOGGER.debug("metrics: %s parse error from %s: %s", self.event_type, source_ip, exc)
 
     def _handle_trap(self, data: bytes, source_ip: str):
         # Basic SNMPv2c trap parsing - extract OID and value from the PDU.
@@ -802,9 +840,7 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         except Exception as exc:
             LOGGER.debug("metrics: trap OID extraction failed from %s: %s", source_ip, exc)
 
-        _spawn_bg(
-            _store_event(source_ip, "trap", "", "info", oid, message, raw_hex[:2000])
-        )
+        _spawn_bg(_store_event(source_ip, "trap", "", "info", oid, message, raw_hex[:2000]))
 
     def _handle_syslog(self, data: bytes, source_ip: str):
         try:
@@ -827,17 +863,22 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
                 # (Emergency/Alert/Critical) are critical; 3-4 (Error/Warning)
                 # map to warning so routine device "error" syslogs don't flood
                 # the critical tier; 5-7 (Notice/Info/Debug) are info.
-                _sev_map = {0: "critical", 1: "critical", 2: "critical",
-                            3: "warning", 4: "warning", 5: "info",
-                            6: "info", 7: "info"}
+                _sev_map = {
+                    0: "critical",
+                    1: "critical",
+                    2: "critical",
+                    3: "warning",
+                    4: "warning",
+                    5: "info",
+                    6: "info",
+                    7: "info",
+                }
                 severity = _sev_map.get(sev_num, "info")
-                message = text[pri_end + 1:].strip()
+                message = text[pri_end + 1 :].strip()
             except (ValueError, IndexError) as exc:
                 LOGGER.debug("metrics: syslog priority parse failed from %s: %s", source_ip, exc)
 
-        _spawn_bg(
-            _store_event(source_ip, "syslog", facility, severity, "", message, text[:2000])
-        )
+        _spawn_bg(_store_event(source_ip, "syslog", facility, severity, "", message, text[:2000]))
 
 
 async def _store_event(source_ip, event_type, facility, severity, oid, message, raw_data):
@@ -922,6 +963,7 @@ def stop_receivers():
 
 # ── Metrics Query API ────────────────────────────────────────────────────────
 
+
 @router.get("/api/metrics/query")
 async def metrics_query(
     metric: str = Query(..., description="Metric name, e.g. cpu_percent"),
@@ -951,10 +993,14 @@ async def metrics_query(
     # Parse time range
     now = datetime.now(UTC)
     range_map = {
-        "1h": timedelta(hours=1), "6h": timedelta(hours=6),
-        "12h": timedelta(hours=12), "24h": timedelta(hours=24),
-        "2d": timedelta(days=2), "7d": timedelta(days=7),
-        "30d": timedelta(days=30), "90d": timedelta(days=90),
+        "1h": timedelta(hours=1),
+        "6h": timedelta(hours=6),
+        "12h": timedelta(hours=12),
+        "24h": timedelta(hours=24),
+        "2d": timedelta(days=2),
+        "7d": timedelta(days=7),
+        "30d": timedelta(days=30),
+        "90d": timedelta(days=90),
         "365d": timedelta(days=365),
     }
     delta = range_map.get(range)
@@ -975,22 +1021,34 @@ async def metrics_query(
 
     if step == "raw":
         data = await db.query_metric_samples(
-            metric_name=metric, host_ids=host_ids,
-            start=start_time, end=end_time, limit=10000,
-        )
-        return {
-            "metric": metric, "step": "raw", "range": range,
-            "count": len(data), "data": data,
-        }
-    else:
-        data = await db.query_metric_rollups(
-            metric_name=metric, time_window=step,
-            host_ids=host_ids, start=start_time, end=end_time,
+            metric_name=metric,
+            host_ids=host_ids,
+            start=start_time,
+            end=end_time,
             limit=10000,
         )
         return {
-            "metric": metric, "step": step, "range": range,
-            "count": len(data), "data": data,
+            "metric": metric,
+            "step": "raw",
+            "range": range,
+            "count": len(data),
+            "data": data,
+        }
+    else:
+        data = await db.query_metric_rollups(
+            metric_name=metric,
+            time_window=step,
+            host_ids=host_ids,
+            start=start_time,
+            end=end_time,
+            limit=10000,
+        )
+        return {
+            "metric": metric,
+            "step": step,
+            "range": range,
+            "count": len(data),
+            "data": data,
         }
 
 
@@ -1021,8 +1079,10 @@ async def capacity_planning(
     # Parse time range
     now = datetime.now(UTC)
     range_map = {
-        "30d": timedelta(days=30), "90d": timedelta(days=90),
-        "180d": timedelta(days=180), "365d": timedelta(days=365),
+        "30d": timedelta(days=30),
+        "90d": timedelta(days=90),
+        "180d": timedelta(days=180),
+        "365d": timedelta(days=365),
     }
     delta = range_map.get(range)
     if not delta:
@@ -1033,15 +1093,23 @@ async def capacity_planning(
 
     # Query daily rollups
     data = await db.query_metric_rollups(
-        metric_name=metric, time_window="daily",
-        host_ids=host_ids, start=start_time, end=end_time,
+        metric_name=metric,
+        time_window="daily",
+        host_ids=host_ids,
+        start=start_time,
+        end=end_time,
         limit=50000,
     )
 
     if not data:
         return {
-            "metric": metric, "range": range, "count": 0,
-            "data": [], "trend": None, "projection": [], "per_host": [],
+            "metric": metric,
+            "range": range,
+            "count": 0,
+            "data": [],
+            "trend": None,
+            "projection": [],
+            "per_host": [],
         }
 
     # Group data by host for per-host projections
@@ -1066,16 +1134,18 @@ async def capacity_planning(
                 ts = datetime.fromisoformat(ts_str).replace(tzinfo=None)
                 day_offset = (ts - (now.replace(tzinfo=None) - delta)).total_seconds() / 86400
                 regression_points.append((day_offset, val))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
 
         if len(regression_points) < 2:
-            per_host_results.append({
-                "hostname": hostname,
-                "trend": None,
-                "projection": [],
-                "threshold_eta": None,
-            })
+            per_host_results.append(
+                {
+                    "hostname": hostname,
+                    "trend": None,
+                    "projection": [],
+                    "threshold_eta": None,
+                }
+            )
             continue
 
         slope, intercept = _linear_regression(regression_points)
@@ -1108,17 +1178,22 @@ async def capacity_planning(
                     "current_value": round(current_val, 2),
                 }
 
-        per_host_results.append({
-            "hostname": hostname,
-            "trend": {"slope": round(slope, 6), "intercept": round(intercept, 2)},
-            "projection": projection,
-            "threshold_eta": threshold_eta,
-        })
+        per_host_results.append(
+            {
+                "hostname": hostname,
+                "trend": {"slope": round(slope, 6), "intercept": round(intercept, 2)},
+                "projection": projection,
+                "threshold_eta": threshold_eta,
+            }
+        )
 
     return {
-        "metric": metric, "range": range, "threshold": threshold,
+        "metric": metric,
+        "range": range,
+        "threshold": threshold,
         "projection_days": projection_days,
-        "count": len(data), "data": data,
+        "count": len(data),
+        "data": data,
         "per_host": per_host_results,
     }
 
@@ -1132,7 +1207,7 @@ def _linear_regression(points: list[tuple[float, float]]) -> tuple[float, float]
     sum_y = sum(p[1] for p in points)
     sum_xy = sum(p[0] * p[1] for p in points)
     sum_x2 = sum(p[0] ** 2 for p in points)
-    denom = n * sum_x2 - sum_x ** 2
+    denom = n * sum_x2 - sum_x**2
     if denom == 0:
         return (0.0, sum_y / n)
     slope = (n * sum_xy - sum_x * sum_y) / denom
@@ -1148,6 +1223,7 @@ async def metrics_names():
 
 # ── Interface Time-Series API ────────────────────────────────────────────────
 
+
 @router.get("/api/metrics/interfaces/{host_id}")
 async def interface_timeseries(
     host_id: int,
@@ -1157,21 +1233,25 @@ async def interface_timeseries(
     """Get per-interface utilization time-series for a host."""
     now = datetime.now(UTC)
     range_map = {
-        "1h": timedelta(hours=1), "6h": timedelta(hours=6),
-        "24h": timedelta(hours=24), "7d": timedelta(days=7),
+        "1h": timedelta(hours=1),
+        "6h": timedelta(hours=6),
+        "24h": timedelta(hours=24),
+        "7d": timedelta(days=7),
         "30d": timedelta(days=30),
     }
     delta = range_map.get(range, timedelta(hours=6))
     start = (now - delta).strftime("%Y-%m-%d %H:%M:%S")
 
     data = await db.query_interface_ts(
-        host_id=host_id, if_index=if_index, start=start,
+        host_id=host_id,
+        if_index=if_index,
+        start=start,
     )
-    return {"host_id": host_id, "if_index": if_index, "range": range,
-            "count": len(data), "data": data}
+    return {"host_id": host_id, "if_index": if_index, "range": range, "count": len(data), "data": data}
 
 
 # ── Vendor OID Registry API ─────────────────────────────────────────────────
+
 
 @router.get("/api/metrics/vendor-oids")
 async def vendor_oids_list():
@@ -1195,10 +1275,11 @@ async def vendor_oids_create(body: dict, request: Request):
         raise HTTPException(400, "vendor and device_type are required")
     try:
         cpu_walk = int(body.get("cpu_walk", 1))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         raise HTTPException(400, "cpu_walk must be an integer")
     entry_id = await db.upsert_vendor_oid(
-        vendor=vendor, device_type=device_type,
+        vendor=vendor,
+        device_type=device_type,
         cpu_oid=body.get("cpu_oid", ""),
         cpu_walk=cpu_walk,
         mem_used_oid=body.get("mem_used_oid", ""),
@@ -1222,6 +1303,7 @@ async def vendor_oids_delete(entry_id: int):
 
 # ── Trap / Syslog Events API ────────────────────────────────────────────────
 
+
 @router.get("/api/metrics/events")
 async def trap_syslog_events(
     event_type: str | None = Query(default=None),
@@ -1233,6 +1315,7 @@ async def trap_syslog_events(
 
 
 # ── Admin: Receiver control ─────────────────────────────────────────────────
+
 
 @admin_router.post("/api/admin/metrics/receivers/start")
 async def admin_start_receivers(body: dict = {}):

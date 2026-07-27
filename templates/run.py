@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 run.py - Start the Plexus server.
@@ -14,7 +13,7 @@ Usage:
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import argparse
 import asyncio
@@ -59,10 +58,12 @@ def generate_self_signed_cert():
         from cryptography.x509.oid import NameOID
 
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, "Plexus"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Plexus"),
-        ])
+        subject = issuer = x509.Name(
+            [
+                x509.NameAttribute(NameOID.COMMON_NAME, "Plexus"),
+                x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Plexus"),
+            ]
+        )
         cert = (
             x509.CertificateBuilder()
             .subject_name(subject)
@@ -72,21 +73,25 @@ def generate_self_signed_cert():
             .not_valid_before(datetime.datetime.now(datetime.UTC))
             .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365))
             .add_extension(
-                x509.SubjectAlternativeName([
-                    x509.DNSName("localhost"),
-                    x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-                ]),
+                x509.SubjectAlternativeName(
+                    [
+                        x509.DNSName("localhost"),
+                        x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+                    ]
+                ),
                 critical=False,
             )
             .sign(key, hashes.SHA256())
         )
 
         with open(key_file, "wb") as f:
-            f.write(key.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.TraditionalOpenSSL,
-                serialization.NoEncryption(),
-            ))
+            f.write(
+                key.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.TraditionalOpenSSL,
+                    serialization.NoEncryption(),
+                )
+            )
 
         with open(cert_file, "wb") as f:
             f.write(cert.public_bytes(serialization.Encoding.PEM))
@@ -120,7 +125,9 @@ def ignore_connection_reset_error(func):
             return func(*args, **kwargs)
         except ConnectionResetError:
             pass
+
     return wrapper
+
 
 if os.name == "nt":
     original_shutdown = socket.socket.shutdown
@@ -137,9 +144,18 @@ if __name__ == "__main__":
     parser.add_argument("--version", action="version", version=f"Plexus {APP_VERSION}")
     parser.add_argument("--host", default=os.getenv("APP_HOST"), help="Bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=int(os.getenv("APP_PORT", "8080")), help="Port number")
-    parser.add_argument("--reload", action="store_true", default=_env_flag("APP_RELOAD", False), help="Auto-reload on changes")
-    parser.add_argument("--https", action="store_true", default=_env_flag("APP_HTTPS", False), help="Enable HTTPS with self-signed cert")
-    parser.add_argument("--expose", action="store_true", default=_env_flag("APP_EXPOSE", False), help="Bind to 0.0.0.0 (network accessible)")
+    parser.add_argument(
+        "--reload", action="store_true", default=_env_flag("APP_RELOAD", False), help="Auto-reload on changes"
+    )
+    parser.add_argument(
+        "--https", action="store_true", default=_env_flag("APP_HTTPS", False), help="Enable HTTPS with self-signed cert"
+    )
+    parser.add_argument(
+        "--expose",
+        action="store_true",
+        default=_env_flag("APP_EXPOSE", False),
+        help="Bind to 0.0.0.0 (network accessible)",
+    )
     args = parser.parse_args()
 
     bind_host = args.host or ("0.0.0.0" if args.expose else "127.0.0.1")
@@ -152,10 +168,11 @@ if __name__ == "__main__":
 
     access_note = "network" if bind_host == "0.0.0.0" else "localhost only"
 
-    dev_bootstrap = (
-        _env_flag("PLEXUS_DEV_BOOTSTRAP", False)
-        or os.getenv("APP_ENV", "").strip().lower() in {"dev", "development", "local"}
-    )
+    dev_bootstrap = _env_flag("PLEXUS_DEV_BOOTSTRAP", False) or os.getenv("APP_ENV", "").strip().lower() in {
+        "dev",
+        "development",
+        "local",
+    }
     login_note = (
         "║   Default login:  admin / netcontrol                 ║"
         if dev_bootstrap

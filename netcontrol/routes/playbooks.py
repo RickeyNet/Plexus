@@ -1,6 +1,7 @@
 """
 playbooks.py -- Playbook CRUD routes and file management.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -24,6 +25,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 
 # ── Models ───────────────────────────────────────────────────────────────────
 
+
 class PlaybookCreate(BaseModel):
     name: str
     filename: str
@@ -31,6 +33,7 @@ class PlaybookCreate(BaseModel):
     tags: list[str] = []
     content: str = ""
     type: str = "python"  # "python" or "ansible"
+
 
 class PlaybookUpdate(BaseModel):
     name: str | None = None
@@ -56,8 +59,7 @@ def _sanitize_playbook_filename(filename: str) -> str:
         raise ValueError("Invalid playbook filename: path separators are not allowed")
     if not _PLAYBOOK_FILENAME_RE.match(name):
         raise ValueError(
-            f"Invalid playbook filename '{filename}': "
-            "only letters, digits, underscores and hyphens are allowed"
+            f"Invalid playbook filename '{filename}': only letters, digits, underscores and hyphens are allowed"
         )
     return name + _PLAYBOOK_ALLOWED_EXT
 
@@ -73,8 +75,7 @@ def _sanitize_ansible_filename(filename: str) -> str:
         raise ValueError("Invalid playbook filename: path separators are not allowed")
     if not _PLAYBOOK_FILENAME_RE.match(name):
         raise ValueError(
-            f"Invalid playbook filename '{filename}': "
-            "only letters, digits, underscores and hyphens are allowed"
+            f"Invalid playbook filename '{filename}': only letters, digits, underscores and hyphens are allowed"
         )
     return name + ".yml"
 
@@ -87,16 +88,16 @@ def write_playbook_file(filename: str, content: str) -> str:
     file_path = os.path.normpath(os.path.join(playbooks_dir, safe_filename))
     if not file_path.startswith(os.path.normpath(playbooks_dir)):
         raise ValueError("Invalid playbook filename: resulting path escapes the playbooks directory")
-    with open(file_path, 'w', encoding='utf-8') as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
     module_name = f"templates.playbooks.{safe_filename[:-3]}"
     try:
         if module_name in sys.modules:
             del sys.modules[module_name]
-        if 'templates.playbooks' in sys.modules:
-            importlib.reload(sys.modules['templates.playbooks'])
+        if "templates.playbooks" in sys.modules:
+            importlib.reload(sys.modules["templates.playbooks"])
         else:
-            importlib.import_module('templates.playbooks')
+            importlib.import_module("templates.playbooks")
     except Exception as e:
         LOGGER.warning("Failed to reload playbook module %s: %s", module_name, e)
     return file_path
@@ -117,15 +118,15 @@ async def sync_playbooks_from_registry():
             if existing:
                 try:
                     await sync_playbook_filename(pb["name"], pb["filename"])
-                    LOGGER.info("sync: updated filename for '%s' to '%s'", pb['name'], pb['filename'])
+                    LOGGER.info("sync: updated filename for '%s' to '%s'", pb["name"], pb["filename"])
                 except Exception as e:
-                    LOGGER.warning("sync: error syncing filename for '%s': %s", pb['name'], e)
+                    LOGGER.warning("sync: error syncing filename for '%s': %s", pb["name"], e)
             else:
                 try:
                     await db.create_playbook(pb["name"], pb["filename"], pb["description"], pb["tags"])
-                    LOGGER.info("sync: added missing playbook '%s' (%s)", pb['name'], pb['filename'])
+                    LOGGER.info("sync: added missing playbook '%s' (%s)", pb["name"], pb["filename"])
                 except Exception as e:
-                    LOGGER.warning("sync: error adding playbook '%s': %s", pb['name'], e)
+                    LOGGER.warning("sync: error adding playbook '%s': %s", pb["name"], e)
 
 
 def _attach_parameters_schema(playbook: dict) -> dict:
@@ -147,6 +148,7 @@ def _attach_parameters_schema(playbook: dict) -> dict:
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
+
 @router.get("/api/playbooks/{playbook_id}")
 async def get_playbook(playbook_id: int):
     playbook = await db.get_playbook(playbook_id)
@@ -160,14 +162,14 @@ async def get_playbook(playbook_id: int):
     if (not content or content.strip() == "") and playbook.get("type", "python") == "python":
         playbooks_dir = os.path.join(project_root, "templates", "playbooks")
         filename = playbook["filename"]
-        if not filename.endswith('.py'):
-            filename += '.py'
+        if not filename.endswith(".py"):
+            filename += ".py"
         file_path = os.path.normpath(os.path.join(playbooks_dir, filename))
         if not file_path.startswith(os.path.normpath(playbooks_dir)):
             raise HTTPException(400, "Invalid playbook filename")
         if os.path.exists(file_path):
             try:
-                with open(file_path, encoding='utf-8') as f:
+                with open(file_path, encoding="utf-8") as f:
                     file_content = f.read()
                     playbook["content"] = file_content
                 await db.update_playbook(playbook_id, content=file_content)
@@ -208,7 +210,13 @@ async def create_playbook(body: PlaybookCreate, request: Request = None):
         write_playbook_file(filename, body.content)
     pid = await db.create_playbook(body.name, filename, body.description, body.tags, body.content, type=pb_type)
     session = _get_session(request) if request else None
-    await _audit("config", "playbook.create", user=session["user"] if session else "", detail=f"created {pb_type} playbook '{body.name}'", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "playbook.create",
+        user=session["user"] if session else "",
+        detail=f"created {pb_type} playbook '{body.name}'",
+        correlation_id=_corr_id(request),
+    )
     return {"id": pid}
 
 
@@ -240,7 +248,13 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
         type=body.type,
     )
     session = _get_session(request) if request else None
-    await _audit("config", "playbook.update", user=session["user"] if session else "", detail=f"updated playbook {playbook_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "playbook.update",
+        user=session["user"] if session else "",
+        detail=f"updated playbook {playbook_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -251,5 +265,11 @@ async def delete_playbook(playbook_id: int, request: Request = None):
         raise HTTPException(404, "Playbook not found")
     await db.delete_playbook(playbook_id)
     session = _get_session(request) if request else None
-    await _audit("config", "playbook.delete", user=session["user"] if session else "", detail=f"deleted playbook {playbook_id} ('{playbook['name']}')", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "playbook.delete",
+        user=session["user"] if session else "",
+        detail=f"deleted playbook {playbook_id} ('{playbook['name']}')",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}

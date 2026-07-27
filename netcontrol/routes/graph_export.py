@@ -26,9 +26,9 @@ LOGGER = configure_logging("plexus.graph_export")
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def _build_echart_option(template: dict, items: list[dict],
-                          metric_data: dict, time_range: str = "24h",
-                          theme: str = "dark") -> dict:
+def _build_echart_option(
+    template: dict, items: list[dict], metric_data: dict, time_range: str = "24h", theme: str = "dark"
+) -> dict:
     """Build an ECharts option object from a graph template + metric data.
 
     metric_data format: {"series_name": [{"ts": "...", "value": float}, ...]}
@@ -85,7 +85,10 @@ def _build_echart_option(template: dict, items: list[dict],
             "bottom": 5,
         },
         "grid": {
-            "left": 60, "right": 20, "top": 50, "bottom": 50,
+            "left": 60,
+            "right": 20,
+            "top": 50,
+            "bottom": 50,
         },
         "xAxis": {
             "type": "time",
@@ -172,10 +175,7 @@ async def get_graph_config(
         metric_name = item.get("metric_name", "")
         if not metric_name:
             continue
-        data = await _fetch_metric_data(
-            host_graph["host_id"], metric_name,
-            host_graph.get("instance_key", ""), hours
-        )
+        data = await _fetch_metric_data(host_graph["host_id"], metric_name, host_graph.get("instance_key", ""), hours)
         metric_data[metric_name] = data
 
     option = _build_echart_option(template, items, metric_data, range, theme)
@@ -207,10 +207,7 @@ async def get_graph_embed(
         metric_name = item.get("metric_name", "")
         if not metric_name:
             continue
-        data = await _fetch_metric_data(
-            host_graph["host_id"], metric_name,
-            host_graph.get("instance_key", ""), hours
-        )
+        data = await _fetch_metric_data(host_graph["host_id"], metric_name, host_graph.get("instance_key", ""), hours)
         metric_data[metric_name] = data
 
     option = _build_echart_option(template, items, metric_data, range, theme)
@@ -270,8 +267,8 @@ async def get_graph_svg_stub(
     svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="100%" height="100%" fill="#1a1a2e"/>
-  <text x="{width//2}" y="{height//2 - 10}" text-anchor="middle" fill="#e0e0e0" font-size="16">{title}</text>
-  <text x="{width//2}" y="{height//2 + 15}" text-anchor="middle" fill="#888" font-size="12">Use /embed endpoint for interactive chart</text>
+  <text x="{width // 2}" y="{height // 2 - 10}" text-anchor="middle" fill="#e0e0e0" font-size="16">{title}</text>
+  <text x="{width // 2}" y="{height // 2 + 15}" text-anchor="middle" fill="#888" font-size="12">Use /embed endpoint for interactive chart</text>
 </svg>"""
     return HTMLResponse(content=svg, media_type="image/svg+xml")
 
@@ -300,8 +297,7 @@ def _parse_range_hours(range_str: str) -> int:
         return 24
 
 
-async def _fetch_metric_data(host_id: int, metric_name: str,
-                               instance_key: str, hours: int) -> list[dict]:
+async def _fetch_metric_data(host_id: int, metric_name: str, instance_key: str, hours: int) -> list[dict]:
     """Fetch metric time-series data for chart rendering."""
     ddb = await db.get_db()
     try:
@@ -316,8 +312,13 @@ async def _fetch_metric_data(host_id: int, metric_name: str,
         )
         rows = await cursor.fetchall()
         if rows:
-            return [{"ts": dict(r)["ts"] if hasattr(r, "keys") else r[1],
-                      "value": dict(r)["value"] if hasattr(r, "keys") else r[0]} for r in rows]
+            return [
+                {
+                    "ts": dict(r)["ts"] if hasattr(r, "keys") else r[1],
+                    "value": dict(r)["value"] if hasattr(r, "keys") else r[0],
+                }
+                for r in rows
+            ]
 
         # Try interface_ts for interface-scoped metrics
         if instance_key:

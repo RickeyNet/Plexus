@@ -29,6 +29,7 @@ DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 # ── SQLite ──────────────────────────────────────────────────────────────────
 
+
 async def _up_sqlite(db) -> None:
     await db.execute(
         """
@@ -50,10 +51,7 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_interface_inventory_host "
-        "ON interface_inventory(host_id, name)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_interface_inventory_host ON interface_inventory(host_id, name)")
 
     await db.execute(
         """
@@ -68,10 +66,7 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_vlan_definitions_host "
-        "ON vlan_definitions(host_id, vlan_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_vlan_definitions_host ON vlan_definitions(host_id, vlan_id)")
 
     await db.execute(
         """
@@ -93,10 +88,7 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_runs_started "
-        "ON audit_runs(started_at DESC)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_runs_started ON audit_runs(started_at DESC)")
 
     await db.execute(
         """
@@ -115,14 +107,8 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_findings_run "
-        "ON audit_findings(run_id, severity)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_findings_host "
-        "ON audit_findings(host_id, run_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_findings_run ON audit_findings(run_id, severity)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_findings_host ON audit_findings(host_id, run_id)")
 
     await db.execute(
         """
@@ -159,6 +145,7 @@ async def _up_sqlite(db) -> None:
 
 # ── Postgres ────────────────────────────────────────────────────────────────
 
+
 async def _up_postgres(db) -> None:
     await db.execute(
         """
@@ -180,10 +167,7 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_interface_inventory_host "
-        "ON interface_inventory(host_id, name)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_interface_inventory_host ON interface_inventory(host_id, name)")
 
     await db.execute(
         """
@@ -198,10 +182,7 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_vlan_definitions_host "
-        "ON vlan_definitions(host_id, vlan_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_vlan_definitions_host ON vlan_definitions(host_id, vlan_id)")
 
     await db.execute(
         """
@@ -223,10 +204,7 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_runs_started "
-        "ON audit_runs(started_at DESC)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_runs_started ON audit_runs(started_at DESC)")
 
     await db.execute(
         """
@@ -245,14 +223,8 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_findings_run "
-        "ON audit_findings(run_id, severity)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_findings_host "
-        "ON audit_findings(host_id, run_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_findings_run ON audit_findings(run_id, severity)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_findings_host ON audit_findings(host_id, run_id)")
 
     await db.execute(
         """

@@ -39,12 +39,10 @@ async def _up_sqlite(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_history_address "
-        "ON ipam_ip_history (address, vrf_name, started_at)"
+        "CREATE INDEX IF NOT EXISTS idx_ipam_history_address ON ipam_ip_history (address, vrf_name, started_at)"
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_history_open "
-        "ON ipam_ip_history (address, vrf_name) WHERE ended_at IS NULL"
+        "CREATE INDEX IF NOT EXISTS idx_ipam_history_open ON ipam_ip_history (address, vrf_name) WHERE ended_at IS NULL"
     )
     await db.execute(
         """
@@ -87,12 +85,10 @@ async def _up_postgres(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_history_address "
-        "ON ipam_ip_history (address, vrf_name, started_at)"
+        "CREATE INDEX IF NOT EXISTS idx_ipam_history_address ON ipam_ip_history (address, vrf_name, started_at)"
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_history_open "
-        "ON ipam_ip_history (address, vrf_name) WHERE ended_at IS NULL"
+        "CREATE INDEX IF NOT EXISTS idx_ipam_history_open ON ipam_ip_history (address, vrf_name) WHERE ended_at IS NULL"
     )
     await db.execute(
         """

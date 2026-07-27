@@ -29,10 +29,12 @@ class _FakeClient:
 
 
 def test_aws_list_all_concatenates_pages():
-    client = _FakeClient([
-        {"Vpcs": [{"VpcId": "vpc-1"}, {"VpcId": "vpc-2"}]},
-        {"Vpcs": [{"VpcId": "vpc-3"}]},
-    ])
+    client = _FakeClient(
+        [
+            {"Vpcs": [{"VpcId": "vpc-1"}, {"VpcId": "vpc-2"}]},
+            {"Vpcs": [{"VpcId": "vpc-3"}]},
+        ]
+    )
     items = collectors_mod._aws_list_all(client, "describe_vpcs", "Vpcs")
     assert [i["VpcId"] for i in items] == ["vpc-1", "vpc-2", "vpc-3"]
 

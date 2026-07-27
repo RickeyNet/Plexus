@@ -33,9 +33,7 @@ async def _up_postgres(db) -> None:
         ("interface_ts", ["in_octets", "out_octets"]),
     ):
         for col in columns:
-            await db.execute(
-                f"ALTER TABLE {table} ALTER COLUMN {col} TYPE BIGINT"
-            )
+            await db.execute(f"ALTER TABLE {table} ALTER COLUMN {col} TYPE BIGINT")
     await db.commit()
 
 

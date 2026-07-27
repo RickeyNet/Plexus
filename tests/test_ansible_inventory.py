@@ -83,25 +83,51 @@ def ansible_client(monkeypatch, tmp_path):
         assert resp.status_code == 201
         core_id = resp.json()["id"]
 
-        resp = client.post("/api/inventory", json={"name": "TestAccess", "description": "Access switches"}, headers=headers)
+        resp = client.post(
+            "/api/inventory", json={"name": "TestAccess", "description": "Access switches"}, headers=headers
+        )
         assert resp.status_code == 201
         access_id = resp.json()["id"]
 
         # Add hosts to core group
-        client.post(f"/api/inventory/{core_id}/hosts", json={
-            "hostname": "core-sw01", "ip_address": "10.0.0.1", "device_type": "cisco_ios",
-        }, headers=headers)
-        client.post(f"/api/inventory/{core_id}/hosts", json={
-            "hostname": "core-sw02", "ip_address": "10.0.0.2", "device_type": "arista_eos",
-        }, headers=headers)
+        client.post(
+            f"/api/inventory/{core_id}/hosts",
+            json={
+                "hostname": "core-sw01",
+                "ip_address": "10.0.0.1",
+                "device_type": "cisco_ios",
+            },
+            headers=headers,
+        )
+        client.post(
+            f"/api/inventory/{core_id}/hosts",
+            json={
+                "hostname": "core-sw02",
+                "ip_address": "10.0.0.2",
+                "device_type": "arista_eos",
+            },
+            headers=headers,
+        )
 
         # Add hosts to access group
-        client.post(f"/api/inventory/{access_id}/hosts", json={
-            "hostname": "access-sw01", "ip_address": "10.1.0.1", "device_type": "cisco_ios",
-        }, headers=headers)
-        client.post(f"/api/inventory/{access_id}/hosts", json={
-            "hostname": "linux-server01", "ip_address": "10.2.0.1", "device_type": "linux",
-        }, headers=headers)
+        client.post(
+            f"/api/inventory/{access_id}/hosts",
+            json={
+                "hostname": "access-sw01",
+                "ip_address": "10.1.0.1",
+                "device_type": "cisco_ios",
+            },
+            headers=headers,
+        )
+        client.post(
+            f"/api/inventory/{access_id}/hosts",
+            json={
+                "hostname": "linux-server01",
+                "ip_address": "10.2.0.1",
+                "device_type": "linux",
+            },
+            headers=headers,
+        )
 
         yield client, headers
 

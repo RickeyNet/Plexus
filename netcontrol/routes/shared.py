@@ -3,6 +3,7 @@ shared.py -- Cross-domain helper functions used by multiple route modules.
 
 Provides audit logging, config capture/push/diff, and session helpers.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,7 @@ _WS_SESSION_MAX_AGE = 86400
 
 
 # ── Audit helper ─────────────────────────────────────────────────────────────
+
 
 async def _audit(
     category: str,
@@ -68,6 +70,7 @@ def supervise_task(task: asyncio.Task, label: str) -> None:
         exc = t.exception()
         if exc is not None:
             LOGGER.error("%s crashed: %s", label, exc, exc_info=exc)
+
     task.add_done_callback(_cb)
 
 
@@ -141,6 +144,7 @@ async def verify_ws_session(token: str) -> dict | None:
 
 # ── Object-level authorization (ownership) ───────────────────────────────────
 
+
 async def require_owner_or_admin(request, owner_username: str | None) -> dict | None:
     """Enforce that the caller owns an object (by username) or is an admin.
 
@@ -172,6 +176,7 @@ async def require_owner_or_admin(request, owner_username: str | None) -> dict | 
 
 
 # ── Credential ownership enforcement ─────────────────────────────────────────
+
 
 async def require_credential_access(
     credential_id,
@@ -211,24 +216,27 @@ async def require_credential_access(
     distinguishable from a future authorization regression.
     """
     caller = (
-        "api-token" if session is not None and session.get("auth_mode") == "token"
+        "api-token"
+        if session is not None and session.get("auth_mode") == "token"
         else (session or {}).get("user") or submitter_username or "(unauthenticated)"
     )
 
     async def _deny(status: int, detail: str, cred: dict | None = None) -> HTTPException:
         await _audit(
-            "credential", "use_denied", user=str(caller),
-            detail=f"credential_id={credential_id} "
-                   f"owner_id={cred.get('owner_id') if cred else '?'} reason={detail}",
+            "credential",
+            "use_denied",
+            user=str(caller),
+            detail=f"credential_id={credential_id} owner_id={cred.get('owner_id') if cred else '?'} reason={detail}",
         )
         return HTTPException(status_code=status, detail=detail)
 
     async def _allow(cred: dict, override: str | None = None) -> dict:
         await _audit(
-            "credential", "use", user=str(caller),
+            "credential",
+            "use",
+            user=str(caller),
             detail=f"credential_id={credential_id} owner_id={cred.get('owner_id')} "
-                   f"service={int(bool(cred.get('is_service')))}"
-                   + (f" override={override}" if override else ""),
+            f"service={int(bool(cred.get('is_service')))}" + (f" override={override}" if override else ""),
         )
         return cred
 
@@ -295,10 +303,7 @@ _VOLATILE_LINE_RES = [
 def _normalize_config(text: str) -> str:
     """Strip volatile metadata lines so they don't appear as drift."""
     lines = text.splitlines(keepends=True)
-    return "".join(
-        line for line in lines
-        if not any(pat.search(line.strip()) for pat in _VOLATILE_LINE_RES)
-    )
+    return "".join(line for line in lines if not any(pat.search(line.strip()) for pat in _VOLATILE_LINE_RES))
 
 
 def _compute_config_diff(
@@ -316,10 +321,14 @@ def _compute_config_diff(
     """
     baseline_lines = _normalize_config(baseline_text).splitlines(keepends=True)
     actual_lines = _normalize_config(actual_text).splitlines(keepends=True)
-    diff = list(difflib.unified_diff(
-        baseline_lines, actual_lines,
-        fromfile=baseline_label, tofile=actual_label,
-    ))
+    diff = list(
+        difflib.unified_diff(
+            baseline_lines,
+            actual_lines,
+            fromfile=baseline_label,
+            tofile=actual_label,
+        )
+    )
     diff_text = "".join(diff)
     added = sum(1 for line in diff if line.startswith("+") and not line.startswith("+++"))
     removed = sum(1 for line in diff if line.startswith("-") and not line.startswith("---"))
@@ -360,12 +369,10 @@ def _open_netmiko_session(host: dict, credentials: dict):
             guesser = SSHDetect(**detect_device)
             best = guesser.autodetect()
             if best:
-                LOGGER.info("Autodetected device_type %s for %s (was %s)",
-                            best, device["host"], device["device_type"])
+                LOGGER.info("Autodetected device_type %s for %s (was %s)", best, device["host"], device["device_type"])
                 device["device_type"] = best
         except Exception:
-            LOGGER.debug("SSHDetect failed for %s, using %s",
-                         device["host"], device["device_type"])
+            LOGGER.debug("SSHDetect failed for %s, using %s", device["host"], device["device_type"])
         finally:
             # Disconnect even when autodetect() raised, or the probe session
             # (socket + paramiko transport thread) leaks until GC.
@@ -415,6 +422,7 @@ async def _run_show_command(host: dict, credentials: dict, command: str) -> str:
     handles the SSH session lifecycle and autodetect.  Returns the raw
     command output string.
     """
+
     def _do_run():
         conn, _ = _open_netmiko_session(host, credentials)
         try:
@@ -468,6 +476,7 @@ async def _collect_mac_table_via_cli(host: dict, credentials: dict) -> list[dict
 
 async def _push_config_to_device(host: dict, credentials: dict, config_lines: list[str]) -> str:
     """SSH to a device and push config lines via Netmiko, then save."""
+
     def _do_push():
         conn, _ = _open_netmiko_session(host, credentials)
         try:

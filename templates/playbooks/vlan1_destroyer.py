@@ -93,9 +93,7 @@ class Vlan1Destroyer(BasePlaybook):
         # If the user didn't pick a template, fall back to a sane built-in
         # so the playbook still does something useful instead of erroring.
         if not template_commands:
-            yield self.log_warn(
-                "No template selected. Using default: switchport access vlan 100"
-            )
+            yield self.log_warn("No template selected. Using default: switchport access vlan 100")
             template_commands = [
                 "switchport mode access",
                 "switchport access vlan 100",
@@ -132,14 +130,11 @@ class Vlan1Destroyer(BasePlaybook):
             # so the UI can't tell the difference.
             if NETMIKO_AVAILABLE:
                 async for event in self._process_real_device(
-                    ip, hostname, device_type, credentials,
-                    template_commands, dry_run
+                    ip, hostname, device_type, credentials, template_commands, dry_run
                 ):
                     yield event
             else:
-                async for event in self._process_simulated_device(
-                    ip, hostname, template_commands, dry_run
-                ):
+                async for event in self._process_simulated_device(ip, hostname, template_commands, dry_run):
                     yield event
 
         async for event in self.run_hosts_concurrently(hosts, run_host):
@@ -152,17 +147,13 @@ class Vlan1Destroyer(BasePlaybook):
             f"{len(hosts)} device(s), remediated {self._total_remediated}."
         )
 
-    async def _process_real_device(
-        self, ip, hostname, device_type, credentials, template_commands, dry_run
-    ):
+    async def _process_real_device(self, ip, hostname, device_type, credentials, template_commands, dry_run):
         """Execute the workflow against an actual switch via Netmiko."""
         # connect_device handles the device dict, exception mapping,
         # enable-mode, and the "Connected to ..." event.  It yields
         # ``conn=None`` if anything failed; we just emit any queued
         # events and bail.
-        async with connect_device(
-            self, ip, hostname, device_type, credentials
-        ) as (conn, events):
+        async with connect_device(self, ip, hostname, device_type, credentials) as (conn, events):
             for ev in events:
                 yield ev
             if conn is None:
@@ -172,9 +163,7 @@ class Vlan1Destroyer(BasePlaybook):
             # gives the device extra time on big chassis where the
             # output can take a while to render.
             yield self.log_info("Gathering interface inventory ...", host=hostname)
-            output = await asyncio.to_thread(
-                conn.send_command, "show interfaces switchport", delay_factor=2
-            )
+            output = await asyncio.to_thread(conn.send_command, "show interfaces switchport", delay_factor=2)
             vlan1_ports = _parse_vlan1_access_ports(output)
 
             # Early-exit when there's nothing to do - saves a noisy log.
@@ -183,14 +172,11 @@ class Vlan1Destroyer(BasePlaybook):
                     "No access ports on VLAN 1 found. Device is clean.",
                     host=hostname,
                 )
-                yield self.log_success(
-                    f"Finished processing {hostname} ({ip}).", host=hostname
-                )
+                yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
                 return
 
             yield self.log_warn(
-                f"Found {len(vlan1_ports)} access port(s) on VLAN 1: "
-                f"{', '.join(vlan1_ports)}",
+                f"Found {len(vlan1_ports)} access port(s) on VLAN 1: {', '.join(vlan1_ports)}",
                 host=hostname,
             )
             self._total_ports_found += len(vlan1_ports)
@@ -218,13 +204,9 @@ class Vlan1Destroyer(BasePlaybook):
                 await asyncio.to_thread(conn.save_config)
                 yield self.log_success("Config saved.", host=hostname)
 
-            yield self.log_success(
-                f"Finished processing {hostname} ({ip}).", host=hostname
-            )
+            yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
 
-    async def _process_simulated_device(
-        self, ip, hostname, template_commands, dry_run
-    ):
+    async def _process_simulated_device(self, ip, hostname, template_commands, dry_run):
         """Mirror the real workflow with fake data so dev/UI work flows."""
         # simulate_connect handles the random sleep + occasional fake timeout.
         async for ev in simulate_connect(self, ip, hostname):
@@ -244,14 +226,11 @@ class Vlan1Destroyer(BasePlaybook):
                 "No access ports on VLAN 1 found. Device is clean.",
                 host=hostname,
             )
-            yield self.log_success(
-                f"Finished processing {hostname} ({ip}).", host=hostname
-            )
+            yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
             return
 
         yield self.log_warn(
-            f"Found {len(vlan1_ports)} access port(s) on VLAN 1: "
-            f"{', '.join(vlan1_ports)}",
+            f"Found {len(vlan1_ports)} access port(s) on VLAN 1: {', '.join(vlan1_ports)}",
             host=hostname,
         )
         self._total_ports_found += len(vlan1_ports)
@@ -274,6 +253,4 @@ class Vlan1Destroyer(BasePlaybook):
             await asyncio.sleep(random.uniform(0.2, 0.4))
             yield self.log_success("Config saved.", host=hostname)
 
-        yield self.log_success(
-            f"Finished processing {hostname} ({ip}).", host=hostname
-        )
+        yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)

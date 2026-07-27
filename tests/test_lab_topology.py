@@ -45,10 +45,12 @@ def _auth_client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from netcontrol.routes import state as _state
+
     _state.API_RATE_LIMIT["enabled"] = False
     _state.API_RATE_LIMIT_TRACKER.clear()
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))
@@ -71,9 +73,7 @@ async def test_topology_tables_exist_after_init(tmp_path, monkeypatch):
     conn = await db_module.get_db()
     try:
         for tbl in ("lab_topologies", "lab_topology_links"):
-            cur = await conn.execute(
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tbl}'"
-            )
+            cur = await conn.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tbl}'")
             assert await cur.fetchone() is not None, f"missing table {tbl}"
         # topology_id column on lab_devices
         cur = await conn.execute("PRAGMA table_info(lab_devices)")
@@ -89,18 +89,17 @@ async def test_topology_tables_exist_after_init(tmp_path, monkeypatch):
 
 def test_yaml_generator_emits_nodes_and_links():
     topology = {
-        "id": 7, "environment_id": 1, "lab_name": "demo",
+        "id": 7,
+        "environment_id": 1,
+        "lab_name": "demo",
         "mgmt_subnet": "172.20.30.0/24",
     }
     devices = [
-        {"id": 10, "hostname": "rtr-a", "runtime_node_kind": "ceos",
-         "runtime_image": "ceos:4.30.0F"},
-        {"id": 11, "hostname": "rtr-b", "runtime_node_kind": "frr",
-         "runtime_image": "frrouting/frr:latest"},
+        {"id": 10, "hostname": "rtr-a", "runtime_node_kind": "ceos", "runtime_image": "ceos:4.30.0F"},
+        {"id": 11, "hostname": "rtr-b", "runtime_node_kind": "frr", "runtime_image": "frrouting/frr:latest"},
     ]
     links = [
-        {"a_device_id": 10, "a_endpoint": "eth1",
-         "b_device_id": 11, "b_endpoint": "eth1"},
+        {"a_device_id": 10, "a_endpoint": "eth1", "b_device_id": 11, "b_endpoint": "eth1"},
     ]
     yml = lab_topology.build_topology_yaml(topology, devices, links)
     assert "name: demo" in yml
@@ -114,8 +113,7 @@ def test_yaml_generator_emits_nodes_and_links():
 
 def test_yaml_generator_handles_no_links():
     topology = {"id": 1, "environment_id": 1, "lab_name": "n", "mgmt_subnet": ""}
-    devices = [{"id": 5, "hostname": "solo", "runtime_node_kind": "linux",
-                "runtime_image": "alpine"}]
+    devices = [{"id": 5, "hostname": "solo", "runtime_node_kind": "linux", "runtime_image": "alpine"}]
     yml = lab_topology.build_topology_yaml(topology, devices, [])
     assert "links:" not in yml
     assert "solo:" in yml
@@ -138,6 +136,7 @@ def _create_member_device(client, env_id, hostname, kind="linux", image="alpine"
             runtime_node_kind=kind,
             runtime_image=image,
         )
+
     asyncio.run(_set_runtime())
     return dev_id
 
@@ -185,21 +184,29 @@ def test_membership_and_link_validation(tmp_path, monkeypatch, request):
     b = _create_member_device(client, env_id, "rtr-b")
 
     # Add members.
-    assert client.post(
-        f"/api/lab/topologies/{topo_id}/devices",
-        json={"device_id": a},
-    ).status_code == 200
-    assert client.post(
-        f"/api/lab/topologies/{topo_id}/devices",
-        json={"device_id": b},
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/api/lab/topologies/{topo_id}/devices",
+            json={"device_id": a},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/lab/topologies/{topo_id}/devices",
+            json={"device_id": b},
+        ).status_code
+        == 200
+    )
 
     # Self-link rejected.
     bad = client.post(
         f"/api/lab/topologies/{topo_id}/links",
         json={
-            "a_device_id": a, "a_endpoint": "eth1",
-            "b_device_id": a, "b_endpoint": "eth2",
+            "a_device_id": a,
+            "a_endpoint": "eth1",
+            "b_device_id": a,
+            "b_endpoint": "eth2",
         },
     )
     assert bad.status_code == 400
@@ -208,8 +215,10 @@ def test_membership_and_link_validation(tmp_path, monkeypatch, request):
     bad = client.post(
         f"/api/lab/topologies/{topo_id}/links",
         json={
-            "a_device_id": a, "a_endpoint": "eth1; rm -rf /",
-            "b_device_id": b, "b_endpoint": "eth1",
+            "a_device_id": a,
+            "a_endpoint": "eth1; rm -rf /",
+            "b_device_id": b,
+            "b_endpoint": "eth1",
         },
     )
     assert bad.status_code == 400
@@ -218,8 +227,10 @@ def test_membership_and_link_validation(tmp_path, monkeypatch, request):
     ok = client.post(
         f"/api/lab/topologies/{topo_id}/links",
         json={
-            "a_device_id": a, "a_endpoint": "eth1",
-            "b_device_id": b, "b_endpoint": "eth1",
+            "a_device_id": a,
+            "a_endpoint": "eth1",
+            "b_device_id": b,
+            "b_endpoint": "eth1",
         },
     )
     assert ok.status_code == 200, ok.text
@@ -261,7 +272,7 @@ def test_deploy_topology_happy_path(tmp_path, monkeypatch, request):
         '{"containers": ['
         ' {"name": "clab-foo-rtr-a", "ipv4_address": "172.20.30.5/24"},'
         ' {"name": "clab-foo-rtr-b", "ipv4_address": "172.20.30.6/24"}'
-        ']}'
+        "]}"
     )
     call_log: list[list[str]] = []
 
@@ -292,8 +303,10 @@ def test_deploy_topology_happy_path(tmp_path, monkeypatch, request):
     client.post(
         f"/api/lab/topologies/{topo_id}/links",
         json={
-            "a_device_id": a, "a_endpoint": "eth1",
-            "b_device_id": b, "b_endpoint": "eth1",
+            "a_device_id": a,
+            "a_endpoint": "eth1",
+            "b_device_id": b,
+            "b_endpoint": "eth1",
         },
     )
 
@@ -309,6 +322,7 @@ def test_deploy_topology_happy_path(tmp_path, monkeypatch, request):
     assert deploy_calls, "expected at least one deploy call"
     yaml_path = deploy_calls[0][2]  # ['deploy', '-t', '<path>', '--reconfigure']
     from pathlib import Path
+
     assert Path(yaml_path).is_file()
     yml = Path(yaml_path).read_text()
     assert "rtr-a:" in yml and "rtr-b:" in yml
@@ -325,7 +339,8 @@ def test_deploy_topology_happy_path(tmp_path, monkeypatch, request):
 def test_deploy_rejects_when_topology_empty(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     monkeypatch.setattr(
-        lab_runtime, "_run_containerlab",
+        lab_runtime,
+        "_run_containerlab",
         AsyncMock(return_value=(0, "version 0.50\n", "")),
     )
     client = _auth_client(tmp_path, monkeypatch, request)
@@ -362,6 +377,7 @@ def test_deploy_rejects_member_with_freestanding_runtime(tmp_path, monkeypatch, 
             runtime_status="running",
             runtime_mgmt_address="10.0.0.1",
         )
+
     asyncio.run(_force_running())
 
     # Adding to topology must be rejected.
@@ -374,9 +390,7 @@ def test_deploy_rejects_member_with_freestanding_runtime(tmp_path, monkeypatch, 
 
 def test_destroy_topology_clears_member_state(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
-    inspect_json = (
-        '{"containers": [{"name": "clab-foo-rtr-d", "ipv4_address": "172.20.30.7/24"}]}'
-    )
+    inspect_json = '{"containers": [{"name": "clab-foo-rtr-d", "ipv4_address": "172.20.30.7/24"}]}'
 
     async def _fake_run(args, cwd=None):
         if args[0] == "version":

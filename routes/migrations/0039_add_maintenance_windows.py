@@ -62,22 +62,18 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_maintenance_scopes_group ON maintenance_window_scopes(group_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_maintenance_scopes_group ON maintenance_window_scopes(group_id)")
 
     if not await _column_exists_sqlite(db, "inventory_groups", "environment"):
-        await db.execute(
-            "ALTER TABLE inventory_groups ADD COLUMN environment TEXT DEFAULT NULL"
-        )
+        await db.execute("ALTER TABLE inventory_groups ADD COLUMN environment TEXT DEFAULT NULL")
 
     deployment_columns = [
-        ("requires_approval",     "INTEGER NOT NULL DEFAULT 0"),
-        ("approval_status",       "TEXT    NOT NULL DEFAULT 'not_required'"),
+        ("requires_approval", "INTEGER NOT NULL DEFAULT 0"),
+        ("approval_status", "TEXT    NOT NULL DEFAULT 'not_required'"),
         ("approval_requested_at", "TEXT"),
-        ("approved_by",           "TEXT    DEFAULT ''"),
-        ("approved_at",           "TEXT"),
-        ("approval_comment",      "TEXT    DEFAULT ''"),
+        ("approved_by", "TEXT    DEFAULT ''"),
+        ("approved_at", "TEXT"),
+        ("approval_comment", "TEXT    DEFAULT ''"),
     ]
     for col, decl in deployment_columns:
         if not await _column_exists_sqlite(db, "deployments", col):
@@ -113,30 +109,16 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_maintenance_scopes_group ON maintenance_window_scopes(group_id)"
-    )
-    await db.execute(
-        "ALTER TABLE inventory_groups ADD COLUMN IF NOT EXISTS environment TEXT DEFAULT NULL"
-    )
-    await db.execute(
-        "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS requires_approval INTEGER NOT NULL DEFAULT 0"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_maintenance_scopes_group ON maintenance_window_scopes(group_id)")
+    await db.execute("ALTER TABLE inventory_groups ADD COLUMN IF NOT EXISTS environment TEXT DEFAULT NULL")
+    await db.execute("ALTER TABLE deployments ADD COLUMN IF NOT EXISTS requires_approval INTEGER NOT NULL DEFAULT 0")
     await db.execute(
         "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'not_required'"
     )
-    await db.execute(
-        "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approval_requested_at TIMESTAMPTZ"
-    )
-    await db.execute(
-        "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approved_by TEXT DEFAULT ''"
-    )
-    await db.execute(
-        "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ"
-    )
-    await db.execute(
-        "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approval_comment TEXT DEFAULT ''"
-    )
+    await db.execute("ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approval_requested_at TIMESTAMPTZ")
+    await db.execute("ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approved_by TEXT DEFAULT ''")
+    await db.execute("ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ")
+    await db.execute("ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approval_comment TEXT DEFAULT ''")
     await db.commit()
 
 

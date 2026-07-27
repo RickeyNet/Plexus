@@ -429,6 +429,7 @@ as `••••••••` in API responses; submit the mask to keep the stor
 ```python
 from runner import BasePlaybook, LogEvent, register_playbook
 
+
 @register_playbook
 class MyScript(BasePlaybook):
     filename = "my_script.py"

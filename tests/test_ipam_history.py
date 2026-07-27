@@ -25,15 +25,11 @@ def hist_db(tmp_path, monkeypatch):
 async def _ensure_group(name: str) -> int:
     db = await db_module.get_db()
     try:
-        cur = await db.execute(
-            "INSERT OR IGNORE INTO inventory_groups (name) VALUES (?)", (name,)
-        )
+        cur = await db.execute("INSERT OR IGNORE INTO inventory_groups (name) VALUES (?)", (name,))
         if cur.lastrowid:
             gid = int(cur.lastrowid)
         else:
-            cur2 = await db.execute(
-                "SELECT id FROM inventory_groups WHERE name = ?", (name,)
-            )
+            cur2 = await db.execute("SELECT id FROM inventory_groups WHERE name = ?", (name,))
             row = await cur2.fetchone()
             gid = int(row[0])
         await db.commit()
@@ -88,9 +84,7 @@ def test_update_host_changes_ip_creates_release_then_assignment(hist_db):
 def test_find_ip_owner_at_returns_correct_lifespan(hist_db):
     async def _go():
         gid = await _ensure_group("G1")
-        await db_module.record_ip_assignment(
-            address="10.1.0.1", hostname="alpha", source_type="host", source_ref="1"
-        )
+        await db_module.record_ip_assignment(address="10.1.0.1", hostname="alpha", source_type="host", source_ref="1")
         # Manually backdate started_at
         db = await db_module.get_db()
         try:
@@ -126,12 +120,8 @@ def test_find_ip_owner_at_returns_correct_lifespan(hist_db):
 
 def test_vrf_isolation_in_history(hist_db):
     async def _go():
-        await db_module.record_ip_assignment(
-            address="172.16.0.1", hostname="ha", vrf_name="tenant-a"
-        )
-        await db_module.record_ip_assignment(
-            address="172.16.0.1", hostname="hb", vrf_name="tenant-b"
-        )
+        await db_module.record_ip_assignment(address="172.16.0.1", hostname="ha", vrf_name="tenant-a")
+        await db_module.record_ip_assignment(address="172.16.0.1", hostname="hb", vrf_name="tenant-b")
         a = await db_module.get_ip_history("172.16.0.1", vrf_name="tenant-a")
         b = await db_module.get_ip_history("172.16.0.1", vrf_name="tenant-b")
         assert len(a) == 1
@@ -144,12 +134,8 @@ def test_vrf_isolation_in_history(hist_db):
 
 def test_record_assignment_dedup_same_owner(hist_db):
     async def _go():
-        await db_module.record_ip_assignment(
-            address="10.5.0.1", hostname="x", source_type="host", source_ref="9"
-        )
-        await db_module.record_ip_assignment(
-            address="10.5.0.1", hostname="x", source_type="host", source_ref="9"
-        )
+        await db_module.record_ip_assignment(address="10.5.0.1", hostname="x", source_type="host", source_ref="9")
+        await db_module.record_ip_assignment(address="10.5.0.1", hostname="x", source_type="host", source_ref="9")
         rows = await db_module.get_ip_history("10.5.0.1")
         assert len(rows) == 1
 
@@ -164,8 +150,11 @@ def test_snapshot_subnet_utilization_counts_correctly(hist_db):
         await db_module.add_host(gid, "h2", "10.50.0.2")
         # Add a reservation of .3
         await db_module.create_ipam_reservation(
-            "10.50.0.0/29", start_ip="10.50.0.3", end_ip="10.50.0.3",
-            reason="lab", created_by="t",
+            "10.50.0.0/29",
+            start_ip="10.50.0.3",
+            end_ip="10.50.0.3",
+            reason="lab",
+            created_by="t",
         )
         # Add a pending allocation (.4)
         await db_module.allocate_next_ip(subnet="10.50.0.0/29")
@@ -216,10 +205,7 @@ def test_prune_history_removes_old_closed_rows(hist_db):
         # Backdate ended_at far into the past
         db = await db_module.get_db()
         try:
-            await db.execute(
-                "UPDATE ipam_ip_history SET ended_at='2000-01-01T00:00:00' "
-                "WHERE address='10.70.0.1'"
-            )
+            await db.execute("UPDATE ipam_ip_history SET ended_at='2000-01-01T00:00:00' WHERE address='10.70.0.1'")
             await db.commit()
         finally:
             await db.close()

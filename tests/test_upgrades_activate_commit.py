@@ -16,6 +16,7 @@ may be marked verified.  They stub every device/DB dependency so the
 only thing under test is the commit/verify branch of
 ``_device_activate``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -50,9 +51,7 @@ class _FakeConn:
             return f"Cisco IOS XE Software, Version {v}\n"
         if command == "install commit":
             if self._commit_raises:
-                raise OSError(
-                    "The process for the command is not responding "
-                    "or is otherwise unavailable")
+                raise OSError("The process for the command is not responding or is otherwise unavailable")
             return self._commit_output
         return ""
 
@@ -111,8 +110,7 @@ def _patched(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(upgrades, "_wait_for_reboot", fake_wait_for_reboot)
     monkeypatch.setattr(upgrades, "_check_image_exists", fake_check_image_exists)
 
-    return {"emits": emits, "db": db_writes, "status": status_emits,
-            "holder": holder}
+    return {"emits": emits, "db": db_writes, "status": status_emits, "holder": holder}
 
 
 def _final_verify_state(db_writes: list[dict]) -> tuple[str | None, str | None]:
@@ -136,9 +134,7 @@ def _final_status(db_writes: list[dict], key: str) -> str | None:
 
 
 @pytest.mark.asyncio
-async def test_commit_failure_marks_device_failed_not_verified(
-    monkeypatch: pytest.MonkeyPatch, _patched
-) -> None:
+async def test_commit_failure_marks_device_failed_not_verified(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
     """A raising ``install commit`` must NOT leave the device verified."""
     # show version calls, in order: pre-activate "already running?" check
     # (must be the OLD version or activate is skipped), then post-reboot
@@ -147,36 +143,31 @@ async def test_commit_failure_marks_device_failed_not_verified(
     _patched["holder"]["conn"] = conn
 
     dev = {"id": 42, "ip_address": "10.0.0.1", "target_image": "cat9k_lite_iosxe.17.15.05.SPA.bin"}
-    await upgrades._device_activate(
-        campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
+    await upgrades._device_activate(campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
 
     verify, err = _final_verify_state(_patched["db"])
     assert verify == "failed", f"commit failure must fail verify, got {verify!r}"
     assert _final_status(_patched["db"], "activate_status") == "failed"
     assert err and "commit failed" in err.lower()
     # It must never have been stamped verified/completed.
-    assert all(
-        w.get("verify_status") != "completed" for w in _patched["db"]
-    ), "device was marked completed despite a failed commit"
-    assert not any(
-        w.get("phase") == "verified" for w in _patched["db"]
-    ), "device phase set to verified despite a failed commit"
+    assert all(w.get("verify_status") != "completed" for w in _patched["db"]), (
+        "device was marked completed despite a failed commit"
+    )
+    assert not any(w.get("phase") == "verified" for w in _patched["db"]), (
+        "device phase set to verified despite a failed commit"
+    )
 
 
 @pytest.mark.asyncio
-async def test_post_commit_rollback_is_detected(
-    monkeypatch: pytest.MonkeyPatch, _patched
-) -> None:
+async def test_post_commit_rollback_is_detected(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
     """Commit 'succeeds' but the device is back on the old version."""
     # show version order: pre-activate check = OLD (so activate runs),
     # post-reboot = NEW, post-commit re-verify = OLD -> silent rollback.
-    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.04"],
-                     commit_raises=False)
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.04"], commit_raises=False)
     _patched["holder"]["conn"] = conn
 
     dev = {"id": 42, "ip_address": "10.0.0.1", "target_image": "cat9k_lite_iosxe.17.15.05.SPA.bin"}
-    await upgrades._device_activate(
-        campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
+    await upgrades._device_activate(campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
 
     verify, err = _final_verify_state(_patched["db"])
     assert verify == "failed", f"post-commit rollback must fail verify, got {verify!r}"
@@ -186,22 +177,16 @@ async def test_post_commit_rollback_is_detected(
 
 
 @pytest.mark.asyncio
-async def test_commit_error_text_marks_device_failed(
-    monkeypatch: pytest.MonkeyPatch, _patched
-) -> None:
+async def test_commit_error_text_marks_device_failed(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
     """Netmiko can return commit failure text without raising."""
     conn = _FakeConn(
         versions=["17.15.04", "17.15.05"],
-        commit_output=(
-            "The process for the command is not responding "
-            "or is otherwise unavailable"
-        ),
+        commit_output=("The process for the command is not responding or is otherwise unavailable"),
     )
     _patched["holder"]["conn"] = conn
 
     dev = {"id": 42, "ip_address": "10.0.0.1", "target_image": "cat9k_lite_iosxe.17.15.05.SPA.bin"}
-    await upgrades._device_activate(
-        campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
+    await upgrades._device_activate(campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
 
     verify, err = _final_verify_state(_patched["db"])
     assert verify == "failed"
@@ -212,19 +197,15 @@ async def test_commit_error_text_marks_device_failed(
 
 
 @pytest.mark.asyncio
-async def test_successful_commit_and_reverify_marks_verified(
-    monkeypatch: pytest.MonkeyPatch, _patched
-) -> None:
+async def test_successful_commit_and_reverify_marks_verified(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
     """Happy path: reboot OK, commit OK, post-commit version still new."""
     # pre-activate check = OLD (activate runs), post-reboot = NEW,
     # post-commit re-verify = NEW (commit stuck).
-    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"],
-                     commit_raises=False)
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], commit_raises=False)
     _patched["holder"]["conn"] = conn
 
     dev = {"id": 42, "ip_address": "10.0.0.1", "target_image": "cat9k_lite_iosxe.17.15.05.SPA.bin"}
-    await upgrades._device_activate(
-        campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
+    await upgrades._device_activate(campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
 
     verify, err = _final_verify_state(_patched["db"])
     assert verify == "completed", f"clean upgrade must verify, got {verify!r}"
@@ -233,9 +214,7 @@ async def test_successful_commit_and_reverify_marks_verified(
 
 
 @pytest.mark.asyncio
-async def test_verify_mismatch_marks_activate_failed(
-    monkeypatch: pytest.MonkeyPatch, _patched
-) -> None:
+async def test_verify_mismatch_marks_activate_failed(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
     """Verify Upgrade must clear the activate green check on version mismatch."""
     conn = _FakeConn(versions=["17.15.04"])
     _patched["holder"]["conn"] = conn
@@ -245,14 +224,10 @@ async def test_verify_mismatch_marks_activate_failed(
         "ip_address": "10.0.0.1",
         "target_image": "cat9k_lite_iosxe.17.15.05.SPA.bin",
     }
-    await upgrades._device_verify(
-        campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
+    await upgrades._device_verify(campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
 
     verify, err = _final_verify_state(_patched["db"])
     assert verify == "failed"
     assert _final_status(_patched["db"], "activate_status") == "failed"
     assert err and "version mismatch" in err.lower()
-    assert any(
-        w.get("activate_status") == "failed" and w.get("verify_status") == "failed"
-        for w in _patched["status"]
-    )
+    assert any(w.get("activate_status") == "failed" and w.get("verify_status") == "failed" for w in _patched["status"])

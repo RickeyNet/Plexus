@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -94,7 +95,9 @@ __all__ = [
 
 
 async def create_metric_sample(
-    host_id: int, metric_name: str, value: float,
+    host_id: int,
+    metric_name: str,
+    value: float,
     labels_json: str = "{}",
 ) -> int:
     db = await _dbcore.get_db()
@@ -184,10 +187,17 @@ async def delete_old_metric_samples(hours: int = 48) -> int:
 
 
 async def create_metric_rollup(
-    host_id: int, metric_name: str, time_window: str,
-    period_start: str, period_end: str,
-    val_min: float, val_avg: float, val_max: float, val_p95: float,
-    sample_count: int, labels_json: str = "{}",
+    host_id: int,
+    metric_name: str,
+    time_window: str,
+    period_start: str,
+    period_end: str,
+    val_min: float,
+    val_avg: float,
+    val_max: float,
+    val_p95: float,
+    sample_count: int,
+    labels_json: str = "{}",
 ) -> int:
     db = await _dbcore.get_db()
     try:
@@ -197,9 +207,19 @@ async def create_metric_rollup(
                 period_start, period_end,
                 val_min, val_avg, val_max, val_p95, sample_count)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (host_id, metric_name, labels_json, time_window,
-             period_start, period_end,
-             val_min, val_avg, val_max, val_p95, sample_count),
+            (
+                host_id,
+                metric_name,
+                labels_json,
+                time_window,
+                period_start,
+                period_end,
+                val_min,
+                val_avg,
+                val_max,
+                val_p95,
+                sample_count,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -245,7 +265,9 @@ async def query_metric_rollups(
 
 
 async def get_raw_samples_for_rollup(
-    metric_name: str, period_start: str, period_end: str,
+    metric_name: str,
+    period_start: str,
+    period_end: str,
 ) -> list[dict]:
     """Fetch raw samples in a time range, grouped by host+labels,
     for the downsampling engine to aggregate."""
@@ -282,9 +304,14 @@ async def delete_old_metric_rollups(time_window: str, retention_days: int) -> in
 
 
 async def create_interface_ts_sample(
-    host_id: int, if_index: int, if_name: str, if_speed_mbps: int,
-    in_octets: int, out_octets: int,
-    in_rate_bps: float | None = None, out_rate_bps: float | None = None,
+    host_id: int,
+    if_index: int,
+    if_name: str,
+    if_speed_mbps: int,
+    in_octets: int,
+    out_octets: int,
+    in_rate_bps: float | None = None,
+    out_rate_bps: float | None = None,
     utilization_pct: float | None = None,
 ) -> int:
     db = await _dbcore.get_db()
@@ -294,8 +321,17 @@ async def create_interface_ts_sample(
                (host_id, if_index, if_name, if_speed_mbps,
                 in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (host_id, if_index, if_name, if_speed_mbps,
-             in_octets, out_octets, in_rate_bps, out_rate_bps, utilization_pct),
+            (
+                host_id,
+                if_index,
+                if_name,
+                if_speed_mbps,
+                in_octets,
+                out_octets,
+                in_rate_bps,
+                out_rate_bps,
+                utilization_pct,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -474,9 +510,12 @@ async def upsert_interface_error_stat(
     out_discards: int,
 ) -> int:
     """Update or insert interface error counters, shifting current to prev."""
-    return await upsert_interface_error_stats_batch(host_id, [
-        (if_index, if_name, in_errors, out_errors, in_discards, out_discards),
-    ])
+    return await upsert_interface_error_stats_batch(
+        host_id,
+        [
+            (if_index, if_name, in_errors, out_errors, in_discards, out_discards),
+        ],
+    )
 
 
 async def upsert_interface_error_stats_batch(
@@ -492,21 +531,14 @@ async def upsert_interface_error_stats_batch(
             "SELECT if_index FROM interface_error_stats WHERE host_id = ?",
             (host_id,),
         )
-        existing = {
-            row_to_dict(row)["if_index"]
-            for row in await cursor.fetchall()
-        }
+        existing = {row_to_dict(row)["if_index"] for row in await cursor.fetchall()}
         update_params: list[tuple] = []
         insert_params: list[tuple] = []
         for if_index, if_name, in_errors, out_errors, in_discards, out_discards in rows:
             if if_index in existing:
-                update_params.append(
-                    (if_name, in_errors, out_errors, in_discards, out_discards,
-                     host_id, if_index))
+                update_params.append((if_name, in_errors, out_errors, in_discards, out_discards, host_id, if_index))
             else:
-                insert_params.append(
-                    (host_id, if_index, if_name, in_errors, out_errors,
-                     in_discards, out_discards))
+                insert_params.append((host_id, if_index, if_name, in_errors, out_errors, in_discards, out_discards))
                 existing.add(if_index)
         if update_params:
             await db.executemany(
@@ -557,9 +589,20 @@ async def create_interface_error_event(
                 current_rate, baseline_rate, spike_factor,
                 root_cause_hint, root_cause_category, correlation_details)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (host_id, if_index, if_name, event_type, metric_name, severity,
-             current_rate, baseline_rate, spike_factor,
-             root_cause_hint, root_cause_category, correlation_details),
+            (
+                host_id,
+                if_index,
+                if_name,
+                event_type,
+                metric_name,
+                severity,
+                current_rate,
+                baseline_rate,
+                spike_factor,
+                root_cause_hint,
+                root_cause_category,
+                correlation_details,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -791,9 +834,14 @@ async def get_vendor_oid_for_host(device_type: str) -> dict | None:
 
 
 async def upsert_vendor_oid(
-    vendor: str, device_type: str, cpu_oid: str = "",
-    cpu_walk: int = 1, mem_used_oid: str = "", mem_free_oid: str = "",
-    mem_total_oid: str = "", uptime_oid: str = "1.3.6.1.2.1.1.3",
+    vendor: str,
+    device_type: str,
+    cpu_oid: str = "",
+    cpu_walk: int = 1,
+    mem_used_oid: str = "",
+    mem_free_oid: str = "",
+    mem_total_oid: str = "",
+    uptime_oid: str = "1.3.6.1.2.1.1.3",
     notes: str = "",
 ) -> int:
     db = await _dbcore.get_db()
@@ -831,9 +879,14 @@ async def delete_vendor_oid(entry_id: int) -> bool:
 
 
 async def create_trap_syslog_event(
-    source_ip: str, event_type: str = "trap", facility: str = "",
-    severity: str = "info", oid: str = "", message: str = "",
-    raw_data: str = "", host_id: int | None = None,
+    source_ip: str,
+    event_type: str = "trap",
+    facility: str = "",
+    severity: str = "info",
+    oid: str = "",
+    message: str = "",
+    raw_data: str = "",
+    host_id: int | None = None,
 ) -> int:
     db = await _dbcore.get_db()
     try:
@@ -898,13 +951,12 @@ async def delete_old_trap_syslog_events(retention_days: int = 30) -> int:
 
 # ── Dashboards ─────────────────────────────────────────────────────────────────
 
+
 async def list_dashboards(owner: str | None = None) -> list[dict]:
     db = await _dbcore.get_db()
     try:
         if owner:
-            cursor = await db.execute(
-                "SELECT * FROM dashboards WHERE owner = ? ORDER BY updated_at DESC", (owner,)
-            )
+            cursor = await db.execute("SELECT * FROM dashboards WHERE owner = ? ORDER BY updated_at DESC", (owner,))
         else:
             cursor = await db.execute("SELECT * FROM dashboards ORDER BY updated_at DESC")
         return rows_to_list(await cursor.fetchall())
@@ -931,8 +983,11 @@ async def get_dashboard(dashboard_id: int) -> dict | None:
 
 
 async def create_dashboard(
-    name: str, description: str = "", owner: str = "",
-    layout_json: str = "{}", variables_json: str = "[]",
+    name: str,
+    description: str = "",
+    owner: str = "",
+    layout_json: str = "{}",
+    variables_json: str = "[]",
 ) -> dict:
     db = await _dbcore.get_db()
     try:
@@ -980,9 +1035,15 @@ async def delete_dashboard(dashboard_id: int) -> bool:
 
 
 async def create_dashboard_panel(
-    dashboard_id: int, title: str = "", chart_type: str = "line",
-    metric_query_json: str = "{}", grid_x: int = 0, grid_y: int = 0,
-    grid_w: int = 6, grid_h: int = 4, options_json: str = "{}",
+    dashboard_id: int,
+    title: str = "",
+    chart_type: str = "line",
+    metric_query_json: str = "{}",
+    grid_x: int = 0,
+    grid_y: int = 0,
+    grid_w: int = 6,
+    grid_h: int = 4,
+    options_json: str = "{}",
 ) -> dict:
     db = await _dbcore.get_db()
     try:
@@ -1046,6 +1107,7 @@ async def delete_dashboard_panel(panel_id: int) -> bool:
 
 # ── Annotations ────────────────────────────────────────────────────────────────
 
+
 async def get_annotations_in_range(
     host_id: int | None = None,
     start: str | None = None,
@@ -1100,9 +1162,15 @@ async def get_annotations_in_range(
             )
             for row in await cursor.fetchall():
                 r = dict(row)
-                cat = "deployment" if "deploy" in (r.get("category") or "") else \
-                      "config" if "config" in (r.get("category") or "") else \
-                      "alert" if "alert" in (r.get("category") or "") else "other"
+                cat = (
+                    "deployment"
+                    if "deploy" in (r.get("category") or "")
+                    else "config"
+                    if "config" in (r.get("category") or "")
+                    else "alert"
+                    if "alert" in (r.get("category") or "")
+                    else "other"
+                )
 
                 # Filter by host_id when provided
                 if host_id is not None:
@@ -1121,13 +1189,15 @@ async def get_annotations_in_range(
                         if f"host_id={host_id}" not in detail and f"host={host_id}" not in detail:
                             continue
 
-                results.append({
-                    "timestamp": r.get("timestamp"),
-                    "title": r.get("action", ""),
-                    "description": r.get("detail", ""),
-                    "category": cat,
-                    "user": r.get("user", ""),
-                })
+                results.append(
+                    {
+                        "timestamp": r.get("timestamp"),
+                        "title": r.get("action", ""),
+                        "description": r.get("detail", ""),
+                        "category": cat,
+                        "user": r.get("user", ""),
+                    }
+                )
 
         return results
     finally:
@@ -1271,7 +1341,9 @@ async def record_availability_transition(
 
 
 async def get_last_availability_state(
-    host_id: int, entity_type: str = "host", entity_id: str = "",
+    host_id: int,
+    entity_type: str = "host",
+    entity_id: str = "",
 ) -> dict | None:
     """Get the most recent availability transition for an entity."""
     states = await get_last_availability_states(host_id, entity_type)
@@ -1281,7 +1353,8 @@ async def get_last_availability_state(
 
 
 async def get_last_availability_states(
-    host_id: int, entity_type: str,
+    host_id: int,
+    entity_type: str,
 ) -> dict[str, str]:
     """Return the latest new_state keyed by entity_id for one host + type."""
     db = await _dbcore.get_db()
@@ -1298,10 +1371,7 @@ async def get_last_availability_states(
                WHERE a.host_id = ? AND a.entity_type = ?""",
             (host_id, entity_type, host_id, entity_type),
         )
-        return {
-            row["entity_id"]: row["new_state"]
-            for row in rows_to_list(await cursor.fetchall())
-        }
+        return {row["entity_id"]: row["new_state"] for row in rows_to_list(await cursor.fetchall())}
     finally:
         await db.close()
 
@@ -1431,12 +1501,15 @@ async def get_availability_summary(
                         # Approximate duration between transitions
                         try:
                             from datetime import datetime as dt
+
                             fmt = "%Y-%m-%d %H:%M:%S"
                             t1 = dt.strptime(last_ts[:19], fmt)
                             t2 = dt.strptime(ts[:19], fmt)
                             down_seconds += (t2 - t1).total_seconds()
                         except Exception as exc:
-                            _LOGGER.warning("uptime: failed to parse transition timestamps '%s' / '%s': %s", last_ts, ts, exc)
+                            _LOGGER.warning(
+                                "uptime: failed to parse transition timestamps '%s' / '%s': %s", last_ts, ts, exc
+                            )
                     current_state = t["new_state"]
                     last_ts = ts
 
@@ -1444,6 +1517,7 @@ async def get_availability_summary(
                 if current_state == "down" and last_ts:
                     try:
                         from datetime import datetime as dt
+
                         fmt = "%Y-%m-%d %H:%M:%S"
                         t1 = dt.strptime(last_ts[:19], fmt)
                         now = dt.utcnow()
@@ -1476,17 +1550,19 @@ async def get_availability_summary(
                     "up_at": odict.get("up_at"),
                 }
 
-            hosts.append({
-                "host_id": h["host_id"],
-                "hostname": h["hostname"],
-                "ip_address": h["ip_address"],
-                "group_id": h["group_id"],
-                "current_state": h["status"],
-                "uptime_pct": uptime_pct,
-                "outage_count": h["outage_count"] or 0,
-                "down_seconds": round(down_seconds),
-                "last_outage": last_outage,
-            })
+            hosts.append(
+                {
+                    "host_id": h["host_id"],
+                    "hostname": h["hostname"],
+                    "ip_address": h["ip_address"],
+                    "group_id": h["group_id"],
+                    "current_state": h["status"],
+                    "uptime_pct": uptime_pct,
+                    "outage_count": h["outage_count"] or 0,
+                    "down_seconds": round(down_seconds),
+                    "last_outage": last_outage,
+                }
+            )
 
         total_hosts = len(hosts) or 1
         avg_uptime = round(sum(h["uptime_pct"] for h in hosts) / total_hosts, 3)
@@ -1546,6 +1622,7 @@ async def get_outage_history(
             if r.get("down_at") and r.get("up_at"):
                 try:
                     from datetime import datetime as dt
+
                     fmt = "%Y-%m-%d %H:%M:%S"
                     d = dt.strptime(r["down_at"][:19], fmt)
                     u = dt.strptime(r["up_at"][:19], fmt)
@@ -1715,9 +1792,7 @@ async def get_custom_oid_profiles(
                 (vendor,),
             )
         else:
-            cursor = await db.execute(
-                "SELECT * FROM custom_oid_profiles ORDER BY vendor, name"
-            )
+            cursor = await db.execute("SELECT * FROM custom_oid_profiles ORDER BY vendor, name")
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -1726,9 +1801,7 @@ async def get_custom_oid_profiles(
 async def get_custom_oid_profile(profile_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM custom_oid_profiles WHERE id = ?", (profile_id,)
-        )
+        cursor = await db.execute("SELECT * FROM custom_oid_profiles WHERE id = ?", (profile_id,))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -1736,9 +1809,13 @@ async def get_custom_oid_profile(profile_id: int) -> dict | None:
 
 
 async def create_custom_oid_profile(
-    name: str, vendor: str = "", device_type: str = "",
-    description: str = "", oids_json: str = "[]",
-    is_default: int = 0, created_by: str = "",
+    name: str,
+    vendor: str = "",
+    device_type: str = "",
+    description: str = "",
+    oids_json: str = "[]",
+    is_default: int = 0,
+    created_by: str = "",
 ) -> dict:
     db = await _dbcore.get_db()
     try:
@@ -1780,12 +1857,8 @@ async def update_custom_oid_profile(profile_id: int, **kwargs) -> dict | None:
 async def delete_custom_oid_profile(profile_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM custom_oid_profiles WHERE id = ?", (profile_id,)
-        )
+        cursor = await db.execute("DELETE FROM custom_oid_profiles WHERE id = ?", (profile_id,))
         await db.commit()
         return cursor.rowcount > 0
     finally:
         await db.close()
-
-

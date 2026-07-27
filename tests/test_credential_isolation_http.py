@@ -66,9 +66,7 @@ async def _seed_shared_objects(bob_id: int, alice_id: int) -> dict:
     host_id = await db_module.add_host(group_id, "iso-sw1", "10.77.0.1")
     profile_id = await db_module.create_compliance_profile("iso-profile", rules="[]")
     backup_id = await db_module.create_config_backup(None, host_id, "hostname iso-sw1")
-    playbook_id = await db_module.create_playbook(
-        "iso-pb", "iso_pb.py", content="print('noop')", type="python"
-    )
+    playbook_id = await db_module.create_playbook("iso-pb", "iso_pb.py", content="print('noop')", type="python")
     return {
         "bob_cred": bob_cred,
         "alice_cred": alice_cred,
@@ -93,6 +91,7 @@ def iso_env(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))
@@ -129,20 +128,26 @@ def _endpoints(ctx: dict, credential_id: int) -> list[tuple[str, dict]]:
     return [
         ("/api/risk-analysis/analyze", {"credential_id": credential_id}),
         (f"/api/hosts/{ctx['host_id']}/fetch-serial", {"credential_id": credential_id}),
-        ("/api/config-drift/snapshots/capture",
-         {"host_id": ctx["host_id"], "credential_id": credential_id}),
-        ("/api/config-backups/restore",
-         {"backup_id": ctx["backup_id"], "credential_id": credential_id}),
-        ("/api/compliance/scan",
-         {"host_id": ctx["host_id"], "profile_id": ctx["profile_id"],
-          "credential_id": credential_id}),
-        ("/api/deployments",
-         {"name": "iso-dep", "group_id": ctx["group_id"], "credential_id": credential_id,
-          "proposed_commands": ["hostname iso-sw1"]}),
+        ("/api/config-drift/snapshots/capture", {"host_id": ctx["host_id"], "credential_id": credential_id}),
+        ("/api/config-backups/restore", {"backup_id": ctx["backup_id"], "credential_id": credential_id}),
+        (
+            "/api/compliance/scan",
+            {"host_id": ctx["host_id"], "profile_id": ctx["profile_id"], "credential_id": credential_id},
+        ),
+        (
+            "/api/deployments",
+            {
+                "name": "iso-dep",
+                "group_id": ctx["group_id"],
+                "credential_id": credential_id,
+                "proposed_commands": ["hostname iso-sw1"],
+            },
+        ),
         ("/api/upgrades/campaigns", {"name": "iso-camp", "credential_id": credential_id}),
-        ("/api/jobs/launch",
-         {"playbook_id": ctx["playbook_id"], "host_ids": [ctx["host_id"]],
-          "credential_id": credential_id}),
+        (
+            "/api/jobs/launch",
+            {"playbook_id": ctx["playbook_id"], "host_ids": [ctx["host_id"]], "credential_id": credential_id},
+        ),
     ]
 
 

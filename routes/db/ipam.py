@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -115,7 +116,7 @@ def _ip_in_reservation(addr: ipaddress.IPv4Address | ipaddress.IPv6Address, rsv:
         start = ipaddress.ip_address(rsv["start_ip"])
         end = ipaddress.ip_address(rsv["end_ip"])
         return start <= addr <= end
-    except (ValueError, KeyError):
+    except ValueError, KeyError:
         return False
 
 
@@ -227,15 +228,11 @@ async def get_ipam_overview(
             alloc_rows = rows_to_list(await cursor.fetchall())
             for row in alloc_rows:
                 k = (row["subnet"], (row.get("vrf") or "").strip())
-                subnet_ext_alloc_count[k] = (
-                    subnet_ext_alloc_count.get(k, 0) + int(row.get("cnt") or 0)
-                )
+                subnet_ext_alloc_count[k] = subnet_ext_alloc_count.get(k, 0) + int(row.get("cnt") or 0)
 
         # ── 4. Merge all (subnet, vrf) keys ─────────────────────────────────
         inventory_keys = set(subnet_hosts.keys())
-        all_keys: set[tuple[str, str]] = (
-            inventory_keys | cloud_keys | external_keys | local_keys
-        )
+        all_keys: set[tuple[str, str]] = inventory_keys | cloud_keys | external_keys | local_keys
         # Exact overlap is now inventory∩cloud per (subnet, vrf); cloud always vrf=""
         exact_overlaps = {sn for (sn, v) in inventory_keys if (sn, "") in cloud_keys and v == ""}
 
@@ -263,20 +260,22 @@ async def get_ipam_overview(
                 total = usable = 0
             used = len(unique_ips)
             utilization_pct = round((used / usable * 100), 1) if usable else 0.0
-            subnets_out.append({
-                "subnet": sn,
-                "vrf_name": vrf,
-                "vlan_ids": vlans,
-                "inventory_host_count": len(hosts_in),
-                "cloud_resource_count": subnet_cloud_count.get(k, 0),
-                "external_prefix_count": subnet_ext_prefix_count.get(k, 0),
-                "external_allocation_count": subnet_ext_alloc_count.get(k, 0),
-                "group_names": group_names,
-                "source_types": src_types,
-                "used_count": used,
-                "total_count": usable,
-                "utilization_pct": utilization_pct,
-            })
+            subnets_out.append(
+                {
+                    "subnet": sn,
+                    "vrf_name": vrf,
+                    "vlan_ids": vlans,
+                    "inventory_host_count": len(hosts_in),
+                    "cloud_resource_count": subnet_cloud_count.get(k, 0),
+                    "external_prefix_count": subnet_ext_prefix_count.get(k, 0),
+                    "external_allocation_count": subnet_ext_alloc_count.get(k, 0),
+                    "group_names": group_names,
+                    "source_types": src_types,
+                    "used_count": used,
+                    "total_count": usable,
+                    "utilization_pct": utilization_pct,
+                }
+            )
 
         # ── 5. Duplicate IP detection (VRF-aware) ───────────────────────────
         # Same IP in different inventory groups within the same VRF = conflict.
@@ -285,16 +284,18 @@ async def get_ipam_overview(
         for (vrf, ip), groups in sorted(ip_groups.items()):
             if len(groups) > 1:
                 host_count = sum(
-                    1 for row in host_rows
-                    if row["ip_address"].strip().split("/")[0] == ip
-                    and (row.get("vrf_name") or "").strip() == vrf
+                    1
+                    for row in host_rows
+                    if row["ip_address"].strip().split("/")[0] == ip and (row.get("vrf_name") or "").strip() == vrf
                 )
-                duplicates_out.append({
-                    "ip_address": ip,
-                    "vrf_name": vrf,
-                    "host_count": host_count,
-                    "groups": sorted(groups),
-                })
+                duplicates_out.append(
+                    {
+                        "ip_address": ip,
+                        "vrf_name": vrf,
+                        "host_count": host_count,
+                        "groups": sorted(groups),
+                    }
+                )
 
         # ── 6. Summary ──────────────────────────────────────────────────────
         total_ext_allocs = sum(subnet_ext_alloc_count.values())
@@ -430,30 +431,34 @@ async def get_ipam_subnet_detail(
         # Inventory entries (include even if reserved - flag them)
         for h in inv_in_subnet:
             ip_s = h["ip"]
-            allocations_out.append({
-                "ip_address": ip_s,
-                "source_type": "inventory",
-                "hostname": h["hostname"],
-                "group_name": h["group"],
-                "description": "",
-                "is_reserved": ip_s in reserved_ips,
-                "allocation_id": None,
-            })
+            allocations_out.append(
+                {
+                    "ip_address": ip_s,
+                    "source_type": "inventory",
+                    "hostname": h["hostname"],
+                    "group_name": h["group"],
+                    "description": "",
+                    "is_reserved": ip_s in reserved_ips,
+                    "allocation_id": None,
+                }
+            )
 
         # External allocations
         for ea in ext_allocs:
             ip_s = (ea.get("address") or "").strip()
             provider = ea.get("provider") or ""
             source_type = "local" if provider == "plexus" else "external"
-            allocations_out.append({
-                "ip_address": ip_s,
-                "source_type": source_type,
-                "hostname": ea.get("dns_name") or "",
-                "group_name": ea.get("source_name") or "",
-                "description": ea.get("description") or "",
-                "is_reserved": ip_s in reserved_ips,
-                "allocation_id": ea.get("id"),
-            })
+            allocations_out.append(
+                {
+                    "ip_address": ip_s,
+                    "source_type": source_type,
+                    "hostname": ea.get("dns_name") or "",
+                    "group_name": ea.get("source_name") or "",
+                    "description": ea.get("description") or "",
+                    "is_reserved": ip_s in reserved_ips,
+                    "allocation_id": ea.get("id"),
+                }
+            )
 
         # Sort by IP
         def _ip_sort_key(item: dict):
@@ -473,17 +478,19 @@ async def get_ipam_subnet_detail(
                 addr_count = max(0, int(end) - int(start) + 1)
             except ValueError:
                 addr_count = 0
-            reservations_out.append({
-                "id": rsv.get("id"),
-                "kind": "custom",
-                "subnet": rsv.get("subnet"),
-                "start_ip": rsv.get("start_ip"),
-                "end_ip": rsv.get("end_ip"),
-                "address_count": addr_count,
-                "reason": rsv.get("reason") or "",
-                "created_by": rsv.get("created_by") or "",
-                "created_at": rsv.get("created_at"),
-            })
+            reservations_out.append(
+                {
+                    "id": rsv.get("id"),
+                    "kind": "custom",
+                    "subnet": rsv.get("subnet"),
+                    "start_ip": rsv.get("start_ip"),
+                    "end_ip": rsv.get("end_ip"),
+                    "address_count": addr_count,
+                    "reason": rsv.get("reason") or "",
+                    "created_by": rsv.get("created_by") or "",
+                    "created_at": rsv.get("created_at"),
+                }
+            )
 
         # ── Available preview (first N free IPs) ────────────────────────────
         occupied = reserved_ips | inv_unique_ips | ext_unique_ips
@@ -656,9 +663,18 @@ async def update_ipam_source(source_id: int, **kwargs) -> dict | None:
     from routes.crypto import encrypt as _enc
 
     allowed = {
-        "provider", "name", "base_url", "auth_type", "sync_scope",
-        "notes", "enabled", "push_enabled", "verify_tls", "last_sync_at",
-        "last_sync_status", "last_sync_message",
+        "provider",
+        "name",
+        "base_url",
+        "auth_type",
+        "sync_scope",
+        "notes",
+        "enabled",
+        "push_enabled",
+        "verify_tls",
+        "last_sync_at",
+        "last_sync_status",
+        "last_sync_message",
     }
     sets: list[str] = []
     vals: list = []
@@ -695,9 +711,7 @@ async def update_ipam_source(source_id: int, **kwargs) -> dict | None:
 async def delete_ipam_source(source_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM ipam_sources WHERE id = ?", (source_id,)
-        )
+        cursor = await db.execute("DELETE FROM ipam_sources WHERE id = ?", (source_id,))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -747,10 +761,13 @@ async def replace_ipam_source_snapshot(
             sn = (pref.get("subnet") or "").strip()
             if not sn:
                 continue
-            prefix_ctx.setdefault(sn, {
-                "vrf": str(pref.get("vrf") or ""),
-                "vlan": str(pref.get("vlan") or ""),
-            })
+            prefix_ctx.setdefault(
+                sn,
+                {
+                    "vrf": str(pref.get("vrf") or ""),
+                    "vlan": str(pref.get("vlan") or ""),
+                },
+            )
 
         alloc_count = 0
         for alloc in allocations:
@@ -860,9 +877,7 @@ async def create_ipam_reservation(
         )
         await db.commit()
         rsv_id = cursor.lastrowid
-        cursor2 = await db.execute(
-            "SELECT * FROM ipam_reservations WHERE id = ?", (rsv_id,)
-        )
+        cursor2 = await db.execute("SELECT * FROM ipam_reservations WHERE id = ?", (rsv_id,))
         row = await cursor2.fetchone()
         return dict(row) if row else None
     finally:
@@ -872,9 +887,7 @@ async def create_ipam_reservation(
 async def delete_ipam_reservation(reservation_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM ipam_reservations WHERE id = ?", (reservation_id,)
-        )
+        cursor = await db.execute("DELETE FROM ipam_reservations WHERE id = ?", (reservation_id,))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -885,9 +898,7 @@ async def get_or_create_builtin_ipam_source() -> dict:
     """Return the built-in Plexus IPAM source, creating it idempotently on first call."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM ipam_sources WHERE provider = 'plexus' LIMIT 1"
-        )
+        cursor = await db.execute("SELECT * FROM ipam_sources WHERE provider = 'plexus' LIMIT 1")
         row = await cursor.fetchone()
         if row:
             return _serialize_ipam_source(dict(row))
@@ -940,9 +951,7 @@ async def create_ipam_prefix(
             )
             row = await cursor2.fetchone()
             return dict(row) if row else None
-        cursor3 = await db.execute(
-            "SELECT * FROM ipam_prefixes WHERE id = ?", (prefix_id,)
-        )
+        cursor3 = await db.execute("SELECT * FROM ipam_prefixes WHERE id = ?", (prefix_id,))
         row = await cursor3.fetchone()
         return dict(row) if row else None
     finally:
@@ -952,9 +961,7 @@ async def create_ipam_prefix(
 async def get_ipam_prefix(prefix_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM ipam_prefixes WHERE id = ?", (prefix_id,)
-        )
+        cursor = await db.execute("SELECT * FROM ipam_prefixes WHERE id = ?", (prefix_id,))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -964,9 +971,7 @@ async def get_ipam_prefix(prefix_id: int) -> dict | None:
 async def delete_ipam_prefix(prefix_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM ipam_prefixes WHERE id = ?", (prefix_id,)
-        )
+        cursor = await db.execute("DELETE FROM ipam_prefixes WHERE id = ?", (prefix_id,))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -1014,9 +1019,7 @@ async def create_local_ipam_allocation(
             )
             row = await cursor2.fetchone()
             return dict(row) if row else None
-        cursor3 = await db.execute(
-            "SELECT * FROM ipam_allocations WHERE id = ?", (alloc_id,)
-        )
+        cursor3 = await db.execute("SELECT * FROM ipam_allocations WHERE id = ?", (alloc_id,))
         row = await cursor3.fetchone()
         result = dict(row) if row else None
     finally:
@@ -1024,7 +1027,8 @@ async def create_local_ipam_allocation(
     if result:
         try:
             await record_ip_assignment(
-                address=address, hostname=hostname or "",
+                address=address,
+                hostname=hostname or "",
                 vrf_name=(result.get("vrf_name") or "").strip(),
                 source_type="ipam_allocation",
                 source_ref=str(result.get("id") or ""),
@@ -1034,7 +1038,9 @@ async def create_local_ipam_allocation(
         except Exception as exc:
             _LOGGER.warning(
                 "Failed to record IP assignment for IPAM allocation %s (%s): %s",
-                result.get("id"), address, exc,
+                result.get("id"),
+                address,
+                exc,
             )
     return result
 
@@ -1048,9 +1054,7 @@ async def delete_ipam_allocation(allocation_id: int) -> bool:
         )
         prior = await cur.fetchone()
         prior_d = dict(prior) if prior else {}
-        cursor = await db.execute(
-            "DELETE FROM ipam_allocations WHERE id = ?", (allocation_id,)
-        )
+        cursor = await db.execute("DELETE FROM ipam_allocations WHERE id = ?", (allocation_id,))
         await db.commit()
         deleted = cursor.rowcount > 0
     finally:
@@ -1065,7 +1069,9 @@ async def delete_ipam_allocation(allocation_id: int) -> bool:
         except Exception as exc:
             _LOGGER.warning(
                 "Failed to record IP release for deleted IPAM allocation %s (%s): %s",
-                allocation_id, prior_d.get("address"), exc,
+                allocation_id,
+                prior_d.get("address"),
+                exc,
             )
     return deleted
 
@@ -1110,9 +1116,7 @@ def _serialize_pending_allocation(row: dict) -> dict:
     }
 
 
-async def _occupied_ips_for_subnet(
-    db, subnet: str, vrf_name: str
-) -> set[str]:
+async def _occupied_ips_for_subnet(db, subnet: str, vrf_name: str) -> set[str]:
     """Return the set of IPs already taken in this subnet+vrf.
 
     Combines:
@@ -1248,14 +1252,20 @@ async def allocate_next_ip(
         )
         await db.commit()
         pid = cursor.lastrowid
-        cur2 = await db.execute(
-            "SELECT * FROM ipam_pending_allocations WHERE id = ?", (pid,)
-        )
+        cur2 = await db.execute("SELECT * FROM ipam_pending_allocations WHERE id = ?", (pid,))
         row = await cur2.fetchone()
-        return _serialize_pending_allocation(dict(row)) if row else {
-            "id": pid, "address": chosen, "subnet": str(net), "vrf_name": vrf_name,
-            "state": "pending", "expires_at": expires_at,
-        }
+        return (
+            _serialize_pending_allocation(dict(row))
+            if row
+            else {
+                "id": pid,
+                "address": chosen,
+                "subnet": str(net),
+                "vrf_name": vrf_name,
+                "state": "pending",
+                "expires_at": expires_at,
+            }
+        )
     finally:
         await db.close()
 
@@ -1263,9 +1273,7 @@ async def allocate_next_ip(
 async def get_pending_allocation(allocation_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cur = await db.execute(
-            "SELECT * FROM ipam_pending_allocations WHERE id = ?", (int(allocation_id),)
-        )
+        cur = await db.execute("SELECT * FROM ipam_pending_allocations WHERE id = ?", (int(allocation_id),))
         row = await cur.fetchone()
         return _serialize_pending_allocation(dict(row)) if row else None
     finally:
@@ -1288,8 +1296,7 @@ async def list_pending_allocations(
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(int(limit))
         cur = await db.execute(
-            f"SELECT * FROM ipam_pending_allocations{where} "
-            f"ORDER BY created_at DESC LIMIT ?",
+            f"SELECT * FROM ipam_pending_allocations{where} ORDER BY created_at DESC LIMIT ?",
             tuple(params),
         )
         rows = rows_to_list(await cur.fetchall())
@@ -1325,9 +1332,7 @@ async def update_pending_allocation_state(
             tuple(params),
         )
         await db.commit()
-        cur = await db.execute(
-            "SELECT * FROM ipam_pending_allocations WHERE id = ?", (int(allocation_id),)
-        )
+        cur = await db.execute("SELECT * FROM ipam_pending_allocations WHERE id = ?", (int(allocation_id),))
         row = await cur.fetchone()
         return _serialize_pending_allocation(dict(row)) if row else None
     finally:
@@ -1428,9 +1433,7 @@ async def record_ip_assignment(
                 and (existing_d.get("source_type") or "") == source_type
                 and (existing_d.get("source_ref") or "") == source_ref
             ):
-                cur2 = await db.execute(
-                    "SELECT * FROM ipam_ip_history WHERE id = ?", (existing_d["id"],)
-                )
+                cur2 = await db.execute("SELECT * FROM ipam_ip_history WHERE id = ?", (existing_d["id"],))
                 row = await cur2.fetchone()
                 return _serialize_ip_history(dict(row)) if row else None
             await db.execute(
@@ -1456,9 +1459,7 @@ async def record_ip_assignment(
         )
         await db.commit()
         new_id = cur3.lastrowid
-        cur4 = await db.execute(
-            "SELECT * FROM ipam_ip_history WHERE id = ?", (new_id,)
-        )
+        cur4 = await db.execute("SELECT * FROM ipam_ip_history WHERE id = ?", (new_id,))
         row = await cur4.fetchone()
         return _serialize_ip_history(dict(row)) if row else None
     finally:
@@ -1547,9 +1548,7 @@ async def find_ip_owner_at(
         await db.close()
 
 
-async def list_ip_history_for_hostname(
-    hostname: str, limit: int = 200
-) -> list[dict]:
+async def list_ip_history_for_hostname(hostname: str, limit: int = 200) -> list[dict]:
     """All IPs ever assigned to `hostname`, newest first."""
     hostname = (hostname or "").strip()
     if not hostname:
@@ -1568,9 +1567,7 @@ async def list_ip_history_for_hostname(
         await db.close()
 
 
-async def snapshot_subnet_utilization(
-    subnet: str, vrf_name: str = ""
-) -> dict | None:
+async def snapshot_subnet_utilization(subnet: str, vrf_name: str = "") -> dict | None:
     """Compute utilization for a subnet+vrf and persist a time-series row."""
     try:
         net = ipaddress.ip_network(subnet, strict=False)
@@ -1710,9 +1707,7 @@ async def snapshot_subnet_utilization(
         )
         await db.commit()
         new_id = cur.lastrowid
-        cur2 = await db.execute(
-            "SELECT * FROM ipam_subnet_utilization WHERE id = ?", (new_id,)
-        )
+        cur2 = await db.execute("SELECT * FROM ipam_subnet_utilization WHERE id = ?", (new_id,))
         row = await cur2.fetchone()
         return _serialize_subnet_utilization(dict(row)) if row else None
     finally:
@@ -1784,8 +1779,7 @@ async def list_subnet_utilization(
     db = await _dbcore.get_db()
     try:
         cur = await db.execute(
-            f"SELECT * FROM ipam_subnet_utilization{where} "
-            f"ORDER BY captured_at DESC LIMIT ?",
+            f"SELECT * FROM ipam_subnet_utilization{where} ORDER BY captured_at DESC LIMIT ?",
             tuple(params),
         )
         rows = rows_to_list(await cur.fetchall())
@@ -1798,9 +1792,7 @@ async def prune_ip_history(retention_days: int = 365) -> int:
     """Delete closed history rows older than retention_days. Returns rows removed."""
     if retention_days <= 0:
         return 0
-    cutoff = (
-        datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(retention_days))
-    ).isoformat()
+    cutoff = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(retention_days))).isoformat()
     db = await _dbcore.get_db()
     try:
         cur = await db.execute(
@@ -1817,9 +1809,7 @@ async def prune_subnet_utilization(retention_days: int = 365) -> int:
     """Delete utilization snapshots older than retention_days."""
     if retention_days <= 0:
         return 0
-    cutoff = (
-        datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(retention_days))
-    ).isoformat()
+    cutoff = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(retention_days))).isoformat()
     db = await _dbcore.get_db()
     try:
         cur = await db.execute(
@@ -1852,25 +1842,21 @@ async def generate_ipam_utilization_report_data(
     db = await _dbcore.get_db()
     try:
         cur = await db.execute(
-            "SELECT DISTINCT subnet, vrf FROM ipam_prefixes "
-            "WHERE subnet IS NOT NULL AND subnet != ''"
+            "SELECT DISTINCT subnet, vrf FROM ipam_prefixes WHERE subnet IS NOT NULL AND subnet != ''"
         )
         for row in rows_to_list(await cur.fetchall()):
             sn = (row.get("subnet") or "").strip()
             v = (row.get("vrf") or "").strip()
             if sn and (vrf_name is None or v == vrf_name):
                 pairs.add((sn, v))
-        cur = await db.execute(
-            "SELECT DISTINCT subnet, vrf_name FROM ipam_subnet_utilization"
-        )
+        cur = await db.execute("SELECT DISTINCT subnet, vrf_name FROM ipam_subnet_utilization")
         for row in rows_to_list(await cur.fetchall()):
             sn = (row.get("subnet") or "").strip()
             v = (row.get("vrf_name") or "").strip()
             if sn and (vrf_name is None or v == vrf_name):
                 pairs.add((sn, v))
         cur = await db.execute(
-            "SELECT ip_address, vrf_name FROM hosts "
-            "WHERE ip_address IS NOT NULL AND ip_address != ''"
+            "SELECT ip_address, vrf_name FROM hosts WHERE ip_address IS NOT NULL AND ip_address != ''"
         )
         for row in rows_to_list(await cur.fetchall()):
             ip_s = (row.get("ip_address") or "").strip().split("/")[0]
@@ -1886,9 +1872,7 @@ async def generate_ipam_utilization_report_data(
     rows: list[dict] = []
     for subnet, vrf in pairs:
         snap = None
-        existing = await list_subnet_utilization(
-            subnet=subnet, vrf_name=vrf, limit=1
-        )
+        existing = await list_subnet_utilization(subnet=subnet, vrf_name=vrf, limit=1)
         if existing:
             snap = existing[0]
         else:
@@ -1915,9 +1899,7 @@ async def generate_ipam_utilization_report_data(
     return rows
 
 
-def _linear_forecast(
-    points: list[tuple[float, float]], target_pct: float
-) -> tuple[float | None, float | None]:
+def _linear_forecast(points: list[tuple[float, float]], target_pct: float) -> tuple[float | None, float | None]:
     """Least-squares linear fit over (t, util%) points.
 
     Returns (slope_per_day, days_to_target). Slope is utilization_pct change
@@ -1956,9 +1938,7 @@ async def generate_ipam_forecast_report_data(
     `min_points` samples are reported with status="insufficient_data" so the
     report always covers the full inventory.
     """
-    cutoff = (
-        datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(lookback_days))
-    ).isoformat()
+    cutoff = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(lookback_days))).isoformat()
     db = await _dbcore.get_db()
     try:
         clauses = ["captured_at >= ?"]
@@ -2015,9 +1995,7 @@ async def generate_ipam_forecast_report_data(
         projected_at: str | None = None
         status = "stable"
         if days_to_target is not None and days_to_target > 0:
-            projected_dt = datetime.now(UTC).replace(tzinfo=None) + timedelta(
-                days=days_to_target
-            )
+            projected_dt = datetime.now(UTC).replace(tzinfo=None) + timedelta(days=days_to_target)
             projected_at = projected_dt.isoformat()
             if days_to_target <= 30:
                 status = "critical"
@@ -2033,12 +2011,8 @@ async def generate_ipam_forecast_report_data(
                 "vrf_name": vrf,
                 "samples": len(samples),
                 "current_utilization_pct": round(latest_pct, 2),
-                "slope_pct_per_day": (
-                    round(slope, 4) if slope is not None else None
-                ),
-                "days_to_target": (
-                    round(days_to_target, 1) if days_to_target is not None else None
-                ),
+                "slope_pct_per_day": (round(slope, 4) if slope is not None else None),
+                "days_to_target": (round(days_to_target, 1) if days_to_target is not None else None),
                 "projected_exhaustion_at": projected_at,
                 "target_pct": float(target_pct),
                 "status": status,
@@ -2046,8 +2020,12 @@ async def generate_ipam_forecast_report_data(
         )
     # Sort: critical first, then by days_to_target ascending (None last).
     status_order = {
-        "exhausted": 0, "critical": 1, "warning": 2, "ok": 3,
-        "stable": 4, "insufficient_data": 5,
+        "exhausted": 0,
+        "critical": 1,
+        "warning": 2,
+        "ok": 3,
+        "stable": 4,
+        "insufficient_data": 5,
     }
     rows.sort(
         key=lambda r: (
@@ -2067,9 +2045,7 @@ async def generate_ipam_history_report_data(
     limit: int = 1000,
 ) -> list[dict]:
     """Per-IP assignment history rows for forensic/audit reports."""
-    cutoff = (
-        datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(days))
-    ).isoformat()
+    cutoff = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(days))).isoformat()
     clauses = ["started_at >= ?"]
     params: list = [cutoff]
     if address:
@@ -2104,7 +2080,8 @@ async def generate_ipam_history_report_data(
                 s = datetime.fromisoformat(str(started).replace("Z", ""))
                 e = (
                     datetime.fromisoformat(str(ended).replace("Z", ""))
-                    if ended else datetime.now(UTC).replace(tzinfo=None)
+                    if ended
+                    else datetime.now(UTC).replace(tzinfo=None)
                 )
                 duration_s = (e - s).total_seconds()
             except ValueError:
@@ -2118,9 +2095,7 @@ async def generate_ipam_history_report_data(
                 "source_ref": r.get("source_ref") or "",
                 "started_at": started,
                 "ended_at": ended,
-                "duration_hours": (
-                    round(duration_s / 3600.0, 2) if duration_s is not None else None
-                ),
+                "duration_hours": (round(duration_s / 3600.0, 2) if duration_s is not None else None),
                 "recorded_by": r.get("recorded_by") or "",
                 "note": r.get("note") or "",
             }
@@ -2186,9 +2161,7 @@ async def create_reconciliation_run(source_id: int, triggered_by: str = "") -> d
         run_id = cursor.lastrowid
         if not run_id:
             return None
-        cur2 = await db.execute(
-            "SELECT * FROM ipam_reconciliation_runs WHERE id = ?", (run_id,)
-        )
+        cur2 = await db.execute("SELECT * FROM ipam_reconciliation_runs WHERE id = ?", (run_id,))
         row = await cur2.fetchone()
         return _serialize_reconciliation_run(dict(row)) if row else None
     finally:
@@ -2309,9 +2282,7 @@ async def list_reconciliation_diffs(
 async def get_reconciliation_diff(diff_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM ipam_reconciliation_diffs WHERE id = ?", (diff_id,)
-        )
+        cursor = await db.execute("SELECT * FROM ipam_reconciliation_diffs WHERE id = ?", (diff_id,))
         row = await cursor.fetchone()
         return _serialize_reconciliation_diff(dict(row)) if row else None
     finally:
@@ -2335,9 +2306,7 @@ async def mark_reconciliation_diff_resolved(
             (resolution, resolved_by, message, diff_id),
         )
         await db.commit()
-        cursor = await db.execute(
-            "SELECT * FROM ipam_reconciliation_diffs WHERE id = ?", (diff_id,)
-        )
+        cursor = await db.execute("SELECT * FROM ipam_reconciliation_diffs WHERE id = ?", (diff_id,))
         row = await cursor.fetchone()
         if not row:
             return None
@@ -2462,8 +2431,15 @@ async def update_dhcp_server(server_id: int, **kwargs) -> dict | None:
     from routes.crypto import encrypt as _enc
 
     allowed = {
-        "provider", "name", "base_url", "auth_type", "notes",
-        "enabled", "verify_tls", "last_sync_at", "last_sync_status",
+        "provider",
+        "name",
+        "base_url",
+        "auth_type",
+        "notes",
+        "enabled",
+        "verify_tls",
+        "last_sync_at",
+        "last_sync_status",
         "last_sync_message",
     }
     sets: list[str] = []
@@ -2500,9 +2476,7 @@ async def update_dhcp_server(server_id: int, **kwargs) -> dict | None:
 async def delete_dhcp_server(server_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM dhcp_servers WHERE id = ?", (server_id,)
-        )
+        cursor = await db.execute("DELETE FROM dhcp_servers WHERE id = ?", (server_id,))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -2636,9 +2610,7 @@ async def list_dhcp_scopes(server_id: int | None = None) -> list[dict]:
                 (server_id,),
             )
         else:
-            cursor = await db.execute(
-                "SELECT * FROM dhcp_scopes ORDER BY server_id, subnet"
-            )
+            cursor = await db.execute("SELECT * FROM dhcp_scopes ORDER BY server_id, subnet")
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -2670,5 +2642,3 @@ async def list_dhcp_leases(
         return [dict(r) for r in rows]
     finally:
         await db.close()
-
-

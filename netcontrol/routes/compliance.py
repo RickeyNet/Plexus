@@ -2,6 +2,7 @@
 compliance.py -- Compliance profile CRUD, assignment management, scan execution,
 admin scheduling, and background compliance check loop.
 """
+
 from __future__ import annotations
 
 import functools
@@ -88,7 +89,7 @@ class ComplianceScanRequest(BaseModel):
 class ComplianceBulkScanRequest(BaseModel):
     profile_id: int
     credential_id: int
-    host_ids: list[int] = []   # empty = scan all hosts
+    host_ids: list[int] = []  # empty = scan all hosts
 
 
 class ComplianceRemediateRequest(BaseModel):
@@ -152,8 +153,14 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
     pattern = rule.get("pattern", "")
     name = rule.get("name", pattern[:60])
     remediation = rule.get("remediation")  # list of IOS commands or None
-    result = {"name": name, "type": rule_type, "pattern": pattern, "passed": False, "detail": "",
-              "remediation": remediation}
+    result = {
+        "name": name,
+        "type": rule_type,
+        "pattern": pattern,
+        "passed": False,
+        "detail": "",
+        "remediation": remediation,
+    }
 
     if not pattern:
         result["passed"] = True
@@ -185,8 +192,7 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
                 # Distinguish a genuine miss from a truncation artifact so a
                 # large config isn't silently reported non-compliant.
                 result["detail"] = (
-                    f"Regex not matched in first {_MAX_SEARCH // 1000}KB "
-                    f"(config truncated for search): {pattern}"
+                    f"Regex not matched in first {_MAX_SEARCH // 1000}KB (config truncated for search): {pattern}"
                 )
             else:
                 result["detail"] = f"Regex not matched: {pattern}"
@@ -222,8 +228,15 @@ async def _evaluate_host_compliance(host: dict, profile: dict, credentials: dict
             "total_rules": 0,
             "passed_rules": 0,
             "failed_rules": 0,
-            "findings": json.dumps([{"name": "config_capture", "passed": False,
-                                      "detail": f"Timed out after {_SCAN_TIMEOUT_SECONDS}s connecting to {host.get('ip_address', '?')}"}]),
+            "findings": json.dumps(
+                [
+                    {
+                        "name": "config_capture",
+                        "passed": False,
+                        "detail": f"Timed out after {_SCAN_TIMEOUT_SECONDS}s connecting to {host.get('ip_address', '?')}",
+                    }
+                ]
+            ),
             "config_snippet": "",
         }
     except Exception as exc:
@@ -308,8 +321,10 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
             except HTTPException as exc:
                 LOGGER.warning(
                     "compliance: credential %s rejected for assignment %s (assigned_by=%r): %s",
-                    assignment["credential_id"], assignment["id"],
-                    assignment.get("assigned_by"), exc.detail,
+                    assignment["credential_id"],
+                    assignment["id"],
+                    assignment.get("assigned_by"),
+                    exc.detail,
                 )
                 errors += 1
                 continue
@@ -354,15 +369,22 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
             LOGGER.warning("compliance: assignment %s failed: %s", assignment["id"], exc)
 
     # Retention cleanup
-    retention_days = int(state.COMPLIANCE_CHECK_CONFIG.get("retention_days", state.COMPLIANCE_CHECK_DEFAULTS["retention_days"]))
+    retention_days = int(
+        state.COMPLIANCE_CHECK_CONFIG.get("retention_days", state.COMPLIANCE_CHECK_DEFAULTS["retention_days"])
+    )
     try:
         await db.delete_old_compliance_scan_results(retention_days)
     except Exception as exc:
         LOGGER.warning("compliance: retention cleanup failed: %s", exc)
 
     if assignments_run > 0:
-        LOGGER.info("compliance: ran %d assignments, scanned %d hosts, %d violations, %d errors",
-                     assignments_run, hosts_scanned, violations, errors)
+        LOGGER.info(
+            "compliance: ran %d assignments, scanned %d hosts, %d violations, %d errors",
+            assignments_run,
+            hosts_scanned,
+            violations,
+            errors,
+        )
         increment_metric("compliance.check.scheduled.success")
 
     return {
@@ -380,8 +402,13 @@ async def _compliance_check_loop() -> None:
 
     while True:
         try:
-            await asyncio.sleep(int(state.COMPLIANCE_CHECK_CONFIG.get(
-                "interval_seconds", state.COMPLIANCE_CHECK_DEFAULTS["interval_seconds"])))
+            await asyncio.sleep(
+                int(
+                    state.COMPLIANCE_CHECK_CONFIG.get(
+                        "interval_seconds", state.COMPLIANCE_CHECK_DEFAULTS["interval_seconds"]
+                    )
+                )
+            )
             await _run_compliance_check_once()
         except asyncio.CancelledError:
             raise
@@ -412,7 +439,8 @@ async def create_compliance_profile(body: ComplianceProfileCreate, request: Requ
         created_by=session["user"] if session else "",
     )
     await _audit(
-        "compliance", "profile.created",
+        "compliance",
+        "profile.created",
         user=session["user"] if session else "",
         detail=f"profile_id={profile_id} name={body.name} rules={len(body.rules)}",
         correlation_id=_corr_id(request),
@@ -447,7 +475,8 @@ async def update_compliance_profile(profile_id: int, body: ComplianceProfileUpda
     await db.update_compliance_profile(profile_id, **updates)
     session = _get_session(request)
     await _audit(
-        "compliance", "profile.updated",
+        "compliance",
+        "profile.updated",
         user=session["user"] if session else "",
         detail=f"profile_id={profile_id} fields={list(updates.keys())}",
         correlation_id=_corr_id(request),
@@ -463,7 +492,8 @@ async def delete_compliance_profile(profile_id: int, request: Request):
     await db.delete_compliance_profile(profile_id)
     session = _get_session(request)
     await _audit(
-        "compliance", "profile.deleted",
+        "compliance",
+        "profile.deleted",
         user=session["user"] if session else "",
         detail=f"profile_id={profile_id} name={profile['name']}",
         correlation_id=_corr_id(request),
@@ -491,13 +521,17 @@ async def create_compliance_assignment(body: ComplianceAssignmentCreate, request
     if not group:
         raise HTTPException(status_code=404, detail="Inventory group not found")
     await require_credential_access(
-        body.credential_id, session=_get_session(request), allow_service=True,
+        body.credential_id,
+        session=_get_session(request),
+        allow_service=True,
     )
     # Prevent duplicate (profile_id, group_id) - DB has UNIQUE constraint but give a clean error
     existing = await db.get_compliance_assignments(profile_id=body.profile_id, group_id=body.group_id)
     if existing:
         raise HTTPException(status_code=409, detail="This profile is already assigned to that group")
-    interval = max(state.COMPLIANCE_ASSIGNMENT_MIN_INTERVAL, min(state.COMPLIANCE_ASSIGNMENT_MAX_INTERVAL, body.interval_seconds))
+    interval = max(
+        state.COMPLIANCE_ASSIGNMENT_MIN_INTERVAL, min(state.COMPLIANCE_ASSIGNMENT_MAX_INTERVAL, body.interval_seconds)
+    )
     session = _get_session(request)
     assignment_id = await db.create_compliance_assignment(
         profile_id=body.profile_id,
@@ -507,7 +541,8 @@ async def create_compliance_assignment(body: ComplianceAssignmentCreate, request
         assigned_by=session["user"] if session else "",
     )
     await _audit(
-        "compliance", "assignment.created",
+        "compliance",
+        "assignment.created",
         user=session["user"] if session else "",
         detail=f"assignment_id={assignment_id} profile={body.profile_id} group={body.group_id}",
         correlation_id=_corr_id(request),
@@ -525,16 +560,21 @@ async def update_compliance_assignment(assignment_id: int, body: ComplianceAssig
         updates["enabled"] = 1 if body.enabled else 0
     if body.credential_id is not None:
         await require_credential_access(
-            body.credential_id, session=_get_session(request), allow_service=True,
+            body.credential_id,
+            session=_get_session(request),
+            allow_service=True,
         )
         updates["credential_id"] = body.credential_id
     if body.interval_seconds is not None:
-        updates["interval_seconds"] = max(state.COMPLIANCE_ASSIGNMENT_MIN_INTERVAL,
-                                          min(state.COMPLIANCE_ASSIGNMENT_MAX_INTERVAL, body.interval_seconds))
+        updates["interval_seconds"] = max(
+            state.COMPLIANCE_ASSIGNMENT_MIN_INTERVAL,
+            min(state.COMPLIANCE_ASSIGNMENT_MAX_INTERVAL, body.interval_seconds),
+        )
     await db.update_compliance_assignment(assignment_id, **updates)
     session = _get_session(request)
     await _audit(
-        "compliance", "assignment.updated",
+        "compliance",
+        "assignment.updated",
         user=session["user"] if session else "",
         detail=f"assignment_id={assignment_id} fields={list(updates.keys())}",
         correlation_id=_corr_id(request),
@@ -550,7 +590,8 @@ async def delete_compliance_assignment(assignment_id: int, request: Request):
     await db.delete_compliance_assignment(assignment_id)
     session = _get_session(request)
     await _audit(
-        "compliance", "assignment.deleted",
+        "compliance",
+        "assignment.deleted",
         user=session["user"] if session else "",
         detail=f"assignment_id={assignment_id}",
         correlation_id=_corr_id(request),
@@ -570,8 +611,11 @@ async def list_compliance_scan_results(
     limit: int = Query(default=200, ge=1, le=1000),
 ):
     return await db.get_compliance_scan_results(
-        host_id=host_id, profile_id=profile_id,
-        assignment_id=assignment_id, status=status, limit=limit,
+        host_id=host_id,
+        profile_id=profile_id,
+        assignment_id=assignment_id,
+        status=status,
+        limit=limit,
     )
 
 
@@ -591,7 +635,8 @@ async def delete_compliance_scan_result(result_id: int, request: Request):
     await db.delete_compliance_scan_result(result_id)
     session = _get_session(request)
     await _audit(
-        "compliance", "result.deleted",
+        "compliance",
+        "result.deleted",
         user=session["user"] if session else "",
         detail=f"result_id={result_id}",
         correlation_id=_corr_id(request),
@@ -631,7 +676,9 @@ async def scan_assignment_now(assignment_id: int, request: Request):
         raise HTTPException(status_code=404, detail="Compliance profile not found")
 
     cred = await require_credential_access(
-        assignment["credential_id"], session=_get_session(request), allow_service=True,
+        assignment["credential_id"],
+        session=_get_session(request),
+        allow_service=True,
     )
 
     hosts = await db.get_hosts_for_group(assignment["group_id"])
@@ -675,7 +722,8 @@ async def scan_assignment_now(assignment_id: int, request: Request):
 
     session = _get_session(request)
     await _audit(
-        "compliance", "assignment.scan_now",
+        "compliance",
+        "assignment.scan_now",
         user=session["user"] if session else "",
         detail=f"assignment_id={assignment_id} hosts_scanned={hosts_scanned} violations={violations} errors={errors}",
         correlation_id=_corr_id(request),
@@ -709,7 +757,8 @@ async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
     )
     session = _get_session(request)
     await _audit(
-        "compliance", "scan.manual",
+        "compliance",
+        "scan.manual",
         user=session["user"] if session else "",
         detail=f"host_id={body.host_id} profile_id={body.profile_id} status={result['status']}",
         correlation_id=_corr_id(request),
@@ -784,7 +833,8 @@ async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Req
 
     session = _get_session(request)
     await _audit(
-        "compliance", "scan.bulk",
+        "compliance",
+        "scan.bulk",
         user=session["user"] if session else "",
         detail=(
             f"profile_id={body.profile_id} hosts_scanned={hosts_scanned} "
@@ -850,15 +900,19 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
 
     remediation_cmds = target_rule.get("remediation")
     if not remediation_cmds:
-        raise HTTPException(400, f"Rule '{body.rule_name}' has no remediation commands defined - this issue requires manual intervention")
+        raise HTTPException(
+            400,
+            f"Rule '{body.rule_name}' has no remediation commands defined - this issue requires manual intervention",
+        )
 
     # Verify the rule actually failed in this scan
     findings = []
     try:
         findings = json.loads(scan_result.get("findings", "[]"))
     except json.JSONDecodeError as exc:
-        LOGGER.warning("compliance: failed to parse findings for scan %s (host %s): %s",
-                       body.result_id, host["id"], exc)
+        LOGGER.warning(
+            "compliance: failed to parse findings for scan %s (host %s): %s", body.result_id, host["id"], exc
+        )
 
     rule_finding = None
     for f in findings:
@@ -877,7 +931,8 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
     if body.dry_run:
         # Dry-run: just return what would be pushed
         await _audit(
-            "compliance", "remediate.dryrun",
+            "compliance",
+            "remediate.dryrun",
             user=session["user"] if session else "",
             detail=f"host_id={host['id']} rule={body.rule_name} commands={len(remediation_cmds)}",
             correlation_id=_corr_id(request),
@@ -893,6 +948,7 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
 
     # Live push (with timeout to prevent indefinite hangs)
     import asyncio as _aio
+
     try:
         output = await _aio.wait_for(
             _push_config_to_device(host, cred, remediation_cmds),
@@ -900,27 +956,30 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
         )
     except TimeoutError as exc:
         await _audit(
-            "compliance", "remediate.failed",
+            "compliance",
+            "remediate.failed",
             user=session["user"] if session else "",
             detail=f"host_id={host['id']} rule={body.rule_name} error=timeout after {_SCAN_TIMEOUT_SECONDS}s",
             correlation_id=_corr_id(request),
         )
-        LOGGER.error("Remediation timed out for host %s rule %s",
-                     host["ip_address"], body.rule_name)
-        raise HTTPException(500, f"Remediation timed out after {_SCAN_TIMEOUT_SECONDS}s - the device may not have responded")
+        LOGGER.error("Remediation timed out for host %s rule %s", host["ip_address"], body.rule_name)
+        raise HTTPException(
+            500, f"Remediation timed out after {_SCAN_TIMEOUT_SECONDS}s - the device may not have responded"
+        )
     except Exception as exc:
         await _audit(
-            "compliance", "remediate.failed",
+            "compliance",
+            "remediate.failed",
             user=session["user"] if session else "",
             detail=f"host_id={host['id']} rule={body.rule_name} error={str(exc)[:200]}",
             correlation_id=_corr_id(request),
         )
-        LOGGER.error("Remediation failed for host %s rule %s: %s",
-                     host["ip_address"], body.rule_name, exc)
+        LOGGER.error("Remediation failed for host %s rule %s: %s", host["ip_address"], body.rule_name, exc)
         raise HTTPException(500, "Remediation failed - see server logs for details")
 
     await _audit(
-        "compliance", "remediate.applied",
+        "compliance",
+        "remediate.applied",
         user=session["user"] if session else "",
         detail=f"host_id={host['id']} rule={body.rule_name} commands={len(remediation_cmds)}",
         correlation_id=_corr_id(request),
@@ -940,8 +999,9 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
     try:
         new_findings = json.loads(rescan.get("findings", "[]"))
     except json.JSONDecodeError as exc:
-        LOGGER.warning("compliance: failed to parse rescan findings for scan %s (host %s): %s",
-                       rescan_id, host["id"], exc)
+        LOGGER.warning(
+            "compliance: failed to parse rescan findings for scan %s (host %s): %s", rescan_id, host["id"], exc
+        )
     rule_now_passes = False
     for f in new_findings:
         if f.get("name") == body.rule_name and f.get("passed"):
@@ -961,8 +1021,8 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
         "rescan_passed": rescan["passed_rules"],
         "rescan_total": rescan["total_rules"],
         "message": f"Remediation applied to {host['hostname']}. "
-                   f"{'Rule now PASSES.' if rule_now_passes else 'Rule still failing - review output.'} "
-                   f"New score: {rescan['passed_rules']}/{rescan['total_rules']}",
+        f"{'Rule now PASSES.' if rule_now_passes else 'Rule still failing - review output.'} "
+        f"New score: {rescan['passed_rules']}/{rescan['total_rules']}",
     }
 
 
@@ -1001,7 +1061,8 @@ async def load_builtin_compliance_profiles(request: Request):
             loaded += 1
 
     await _audit(
-        "compliance", "profiles.builtin_loaded",
+        "compliance",
+        "profiles.builtin_loaded",
         user=session["user"] if session else "",
         detail=f"loaded={loaded} updated={updated} total_available={len(BUILTIN_PROFILES)}",
         correlation_id=_corr_id(request),
@@ -1023,7 +1084,8 @@ async def admin_update_compliance_config(body: dict, request: Request):
     await db.set_auth_setting("compliance_check", state.COMPLIANCE_CHECK_CONFIG)
     session = _get_session(request)
     await _audit(
-        "compliance", "config.updated",
+        "compliance",
+        "config.updated",
         user=session["user"] if session else "",
         detail=f"enabled={state.COMPLIANCE_CHECK_CONFIG['enabled']} interval={state.COMPLIANCE_CHECK_CONFIG['interval_seconds']}s",
         correlation_id=_corr_id(request),
@@ -1036,7 +1098,8 @@ async def admin_run_compliance_check_now(request: Request):
     result = await _run_compliance_check_once(force=True)
     session = _get_session(request)
     await _audit(
-        "compliance", "check.manual",
+        "compliance",
+        "check.manual",
         user=session["user"] if session else "",
         detail=f"assignments_run={result.get('assignments_run', 0)} hosts_scanned={result.get('hosts_scanned', 0)}",
         correlation_id=_corr_id(request),

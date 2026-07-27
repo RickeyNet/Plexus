@@ -79,9 +79,7 @@ async def test_rollback_exists_and_is_noop():
 async def test_explicit_returning_insert_is_fetched():
     fake = _FakeConn()
     conn = _PostgresConnectionCompat(fake)
-    cur = await conn.execute(
-        "INSERT INTO metric_baselines (host_id) VALUES (?) RETURNING id", (1,)
-    )
+    cur = await conn.execute("INSERT INTO metric_baselines (host_id) VALUES (?) RETURNING id", (1,))
     assert cur.lastrowid == 42
     row = await cur.fetchone()
     assert row["id"] == 42

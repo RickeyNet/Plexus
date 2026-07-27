@@ -24,20 +24,15 @@ def alloc_db(tmp_path, monkeypatch):
 async def _seed_host(group: str, hostname: str, ip: str, vrf: str = "") -> None:
     db = await db_module.get_db()
     try:
-        cur = await db.execute(
-            "INSERT OR IGNORE INTO inventory_groups (name) VALUES (?)", (group,)
-        )
+        cur = await db.execute("INSERT OR IGNORE INTO inventory_groups (name) VALUES (?)", (group,))
         if cur.lastrowid:
             gid = int(cur.lastrowid)
         else:
-            cur2 = await db.execute(
-                "SELECT id FROM inventory_groups WHERE name = ?", (group,)
-            )
+            cur2 = await db.execute("SELECT id FROM inventory_groups WHERE name = ?", (group,))
             row = await cur2.fetchone()
             gid = int(row[0])
         await db.execute(
-            "INSERT INTO hosts (group_id, hostname, ip_address, vrf_name, status) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO hosts (group_id, hostname, ip_address, vrf_name, status) VALUES (?, ?, ?, ?, ?)",
             (gid, hostname, ip, vrf, "online"),
         )
         await db.commit()
@@ -49,9 +44,7 @@ def test_allocate_next_ip_skips_inventory_hosts(alloc_db):
     async def _go():
         await _seed_host("G1", "h1", "10.0.0.1")
         await _seed_host("G1", "h2", "10.0.0.2")
-        result = await db_module.allocate_next_ip(
-            subnet="10.0.0.0/29", hostname="new-device"
-        )
+        result = await db_module.allocate_next_ip(subnet="10.0.0.0/29", hostname="new-device")
         assert result["address"] == "10.0.0.3"
         assert result["state"] == "pending"
         assert result["subnet"] == "10.0.0.0/29"
@@ -94,9 +87,7 @@ def test_allocate_vrf_isolation(alloc_db):
     async def _go():
         await _seed_host("Tenant-A", "ha", "172.16.0.1", vrf="tenant-a")
         # Same address occupied in tenant-a should not block allocation in tenant-b
-        result = await db_module.allocate_next_ip(
-            subnet="172.16.0.0/29", vrf_name="tenant-b"
-        )
+        result = await db_module.allocate_next_ip(subnet="172.16.0.0/29", vrf_name="tenant-b")
         assert result["address"] == "172.16.0.1"
         assert result["vrf_name"] == "tenant-b"
 
@@ -122,9 +113,7 @@ def test_release_frees_ip_for_re_allocation(alloc_db):
 def test_expire_stale_pending_allocations(alloc_db):
     async def _go():
         # Allocate with TTL of 60s (will not expire on its own)
-        result = await db_module.allocate_next_ip(
-            subnet="10.30.0.0/30", ttl_seconds=60
-        )
+        result = await db_module.allocate_next_ip(subnet="10.30.0.0/30", ttl_seconds=60)
         # Manually backdate expires_at to the past
         db = await db_module.get_db()
         try:

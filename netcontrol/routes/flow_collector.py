@@ -9,6 +9,7 @@ Provides:
   - Traffic analysis API endpoints (top talkers, applications, conversations)
   - Background collection and cleanup loops
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -59,17 +60,40 @@ _exporter_cache_lock = asyncio.Lock()
 
 # Well-known port to service name mapping
 PORT_SERVICES = {
-    22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP",
-    110: "POP3", 143: "IMAP", 443: "HTTPS", 993: "IMAPS", 995: "POP3S",
-    3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL", 8080: "HTTP-Alt",
-    8443: "HTTPS-Alt", 123: "NTP", 161: "SNMP", 162: "SNMP-Trap",
-    514: "Syslog", 520: "RIP", 1433: "MSSQL", 6379: "Redis",
+    22: "SSH",
+    23: "Telnet",
+    25: "SMTP",
+    53: "DNS",
+    80: "HTTP",
+    110: "POP3",
+    143: "IMAP",
+    443: "HTTPS",
+    993: "IMAPS",
+    995: "POP3S",
+    3306: "MySQL",
+    3389: "RDP",
+    5432: "PostgreSQL",
+    8080: "HTTP-Alt",
+    8443: "HTTPS-Alt",
+    123: "NTP",
+    161: "SNMP",
+    162: "SNMP-Trap",
+    514: "Syslog",
+    520: "RIP",
+    1433: "MSSQL",
+    6379: "Redis",
     27017: "MongoDB",
 }
 
 PROTOCOL_NAMES = {
-    1: "ICMP", 6: "TCP", 17: "UDP", 47: "GRE", 50: "ESP",
-    51: "AH", 89: "OSPF", 132: "SCTP",
+    1: "ICMP",
+    6: "TCP",
+    17: "UDP",
+    47: "GRE",
+    50: "ESP",
+    51: "AH",
+    89: "OSPF",
+    132: "SCTP",
 }
 
 
@@ -103,11 +127,29 @@ def parse_netflow_v5(data: bytes, addr: tuple) -> list[dict]:
         if offset + 48 > len(data):
             break
 
-        fields = struct.unpack("!IIIHHIIIIHHBBBBHHBBH", data[offset:offset + 48])
-        (src_ip_raw, dst_ip_raw, nexthop, input_if, output_if,
-         packets, octets, first, last,
-         src_port, dst_port, _pad1, tcp_flags, protocol, tos,
-         src_as, dst_as, src_mask, dst_mask, _pad2) = fields
+        fields = struct.unpack("!IIIHHIIIIHHBBBBHHBBH", data[offset : offset + 48])
+        (
+            src_ip_raw,
+            dst_ip_raw,
+            nexthop,
+            input_if,
+            output_if,
+            packets,
+            octets,
+            first,
+            last,
+            src_port,
+            dst_port,
+            _pad1,
+            tcp_flags,
+            protocol,
+            tos,
+            src_as,
+            dst_as,
+            src_mask,
+            dst_mask,
+            _pad2,
+        ) = fields
 
         src_ip = socket.inet_ntoa(struct.pack("!I", src_ip_raw))
         dst_ip = socket.inet_ntoa(struct.pack("!I", dst_ip_raw))
@@ -119,25 +161,27 @@ def parse_netflow_v5(data: bytes, addr: tuple) -> list[dict]:
         start_time = (ts - timedelta(milliseconds=sys_uptime - first)).isoformat()
         end_time = (ts - timedelta(milliseconds=sys_uptime - last)).isoformat()
 
-        records.append({
-            "exporter_ip": exporter_ip,
-            "flow_type": "netflow_v5",
-            "src_ip": src_ip,
-            "dst_ip": dst_ip,
-            "src_port": src_port,
-            "dst_port": dst_port,
-            "protocol": protocol,
-            "bytes": octets,
-            "packets": packets,
-            "src_as": src_as,
-            "dst_as": dst_as,
-            "input_if": input_if,
-            "output_if": output_if,
-            "tos": tos,
-            "tcp_flags": tcp_flags,
-            "start_time": start_time,
-            "end_time": end_time,
-        })
+        records.append(
+            {
+                "exporter_ip": exporter_ip,
+                "flow_type": "netflow_v5",
+                "src_ip": src_ip,
+                "dst_ip": dst_ip,
+                "src_port": src_port,
+                "dst_port": dst_port,
+                "protocol": protocol,
+                "bytes": octets,
+                "packets": packets,
+                "src_as": src_as,
+                "dst_as": dst_as,
+                "input_if": input_if,
+                "output_if": output_if,
+                "tos": tos,
+                "tcp_flags": tcp_flags,
+                "start_time": start_time,
+                "end_time": end_time,
+            }
+        )
 
     return records
 
@@ -151,10 +195,21 @@ _nf9_templates: dict[tuple[str, int], list[tuple[int, int]]] = {}
 
 # NetFlow v9 field type IDs (subset)
 NF9_FIELDS = {
-    1: "in_bytes", 2: "in_pkts", 4: "protocol", 5: "tos",
-    6: "tcp_flags", 7: "src_port", 8: "src_ip", 10: "input_if",
-    11: "dst_port", 12: "dst_ip", 14: "output_if",
-    16: "src_as", 17: "dst_as", 21: "last_switched", 22: "first_switched",
+    1: "in_bytes",
+    2: "in_pkts",
+    4: "protocol",
+    5: "tos",
+    6: "tcp_flags",
+    7: "src_port",
+    8: "src_ip",
+    10: "input_if",
+    11: "dst_port",
+    12: "dst_ip",
+    14: "output_if",
+    16: "src_as",
+    17: "dst_as",
+    21: "last_switched",
+    22: "first_switched",
 }
 
 
@@ -173,25 +228,25 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
     offset = 20 if version == 9 else 16  # v9 header=20, IPFIX header=16
 
     while offset < len(data) - 4:
-        flowset_id, flowset_length = struct.unpack("!HH", data[offset:offset + 4])
+        flowset_id, flowset_length = struct.unpack("!HH", data[offset : offset + 4])
 
         if flowset_length < 4:
             break
 
-        flowset_data = data[offset + 4:offset + flowset_length]
+        flowset_data = data[offset + 4 : offset + flowset_length]
         offset += flowset_length
 
         if flowset_id == 0:
             # Template FlowSet
             tpl_offset = 0
             while tpl_offset < len(flowset_data) - 4:
-                tpl_id, field_count = struct.unpack("!HH", flowset_data[tpl_offset:tpl_offset + 4])
+                tpl_id, field_count = struct.unpack("!HH", flowset_data[tpl_offset : tpl_offset + 4])
                 tpl_offset += 4
                 fields = []
                 for _ in range(field_count):
                     if tpl_offset + 4 > len(flowset_data):
                         break
-                    f_type, f_len = struct.unpack("!HH", flowset_data[tpl_offset:tpl_offset + 4])
+                    f_type, f_len = struct.unpack("!HH", flowset_data[tpl_offset : tpl_offset + 4])
                     tpl_offset += 4
                     fields.append((f_type, f_len))
                 _nf9_templates[(exporter_ip, tpl_id)] = fields
@@ -211,7 +266,7 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
                 rec = {}
                 field_offset = rec_offset
                 for f_type, f_len in template:
-                    raw = flowset_data[field_offset:field_offset + f_len]
+                    raw = flowset_data[field_offset : field_offset + f_len]
                     field_offset += f_len
 
                     if f_type in (8, 12):  # IP addresses
@@ -223,25 +278,27 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
 
                 rec_offset += record_len
 
-                records.append({
-                    "exporter_ip": exporter_ip,
-                    "flow_type": f"netflow_v{version}",
-                    "src_ip": rec.get("src_ip", ""),
-                    "dst_ip": rec.get("dst_ip", ""),
-                    "src_port": rec.get("src_port", 0),
-                    "dst_port": rec.get("dst_port", 0),
-                    "protocol": rec.get("protocol", 0),
-                    "bytes": rec.get("in_bytes", 0),
-                    "packets": rec.get("in_pkts", 0),
-                    "src_as": rec.get("src_as", 0),
-                    "dst_as": rec.get("dst_as", 0),
-                    "input_if": rec.get("input_if", 0),
-                    "output_if": rec.get("output_if", 0),
-                    "tos": rec.get("tos", 0),
-                    "tcp_flags": rec.get("tcp_flags", 0),
-                    "start_time": datetime.now(UTC).isoformat(),
-                    "end_time": datetime.now(UTC).isoformat(),
-                })
+                records.append(
+                    {
+                        "exporter_ip": exporter_ip,
+                        "flow_type": f"netflow_v{version}",
+                        "src_ip": rec.get("src_ip", ""),
+                        "dst_ip": rec.get("dst_ip", ""),
+                        "src_port": rec.get("src_port", 0),
+                        "dst_port": rec.get("dst_port", 0),
+                        "protocol": rec.get("protocol", 0),
+                        "bytes": rec.get("in_bytes", 0),
+                        "packets": rec.get("in_pkts", 0),
+                        "src_as": rec.get("src_as", 0),
+                        "dst_as": rec.get("dst_as", 0),
+                        "input_if": rec.get("input_if", 0),
+                        "output_if": rec.get("output_if", 0),
+                        "tos": rec.get("tos", 0),
+                        "tcp_flags": rec.get("tcp_flags", 0),
+                        "start_time": datetime.now(UTC).isoformat(),
+                        "end_time": datetime.now(UTC).isoformat(),
+                    }
+                )
 
     return records
 
@@ -282,7 +339,7 @@ def _decode_raw_packet_header(header: bytes) -> dict:
 
     # Strip 802.1Q VLAN tag (or QinQ) if present so we can reach the IP header.
     while ethertype == 0x8100 and len(header) >= ip_offset + 4:
-        ethertype = int.from_bytes(header[ip_offset + 2:ip_offset + 4], "big")
+        ethertype = int.from_bytes(header[ip_offset + 2 : ip_offset + 4], "big")
         ip_offset += 4
 
     if ethertype != 0x0800:  # not IPv4 - bail (IPv6/ARP/MPLS not in flow_records schema)
@@ -290,7 +347,7 @@ def _decode_raw_packet_header(header: bytes) -> dict:
     if len(header) < ip_offset + 20:
         return {}
 
-    ip_hdr = header[ip_offset:ip_offset + 20]
+    ip_hdr = header[ip_offset : ip_offset + 20]
     version_ihl = ip_hdr[0]
     if (version_ihl >> 4) != 4:
         return {}
@@ -308,8 +365,8 @@ def _decode_raw_packet_header(header: bytes) -> dict:
     if protocol in (6, 17):  # TCP / UDP
         l4_offset = ip_offset + ihl
         if len(header) >= l4_offset + 4:
-            src_port = int.from_bytes(header[l4_offset:l4_offset + 2], "big")
-            dst_port = int.from_bytes(header[l4_offset + 2:l4_offset + 4], "big")
+            src_port = int.from_bytes(header[l4_offset : l4_offset + 2], "big")
+            dst_port = int.from_bytes(header[l4_offset + 2 : l4_offset + 4], "big")
 
     return {
         "src_ip": src_ip,
@@ -353,7 +410,7 @@ def parse_sflow(data: bytes, addr: tuple) -> list[dict]:
 
     offset = 4
     try:
-        addr_type = struct.unpack("!I", data[offset:offset + 4])[0]
+        addr_type = struct.unpack("!I", data[offset : offset + 4])[0]
         offset += 4
         if addr_type == 1:  # IPv4
             offset += 4
@@ -365,7 +422,7 @@ def parse_sflow(data: bytes, addr: tuple) -> list[dict]:
         if offset + 16 > len(data):
             return []
         # sub_agent_id, sequence, uptime, num_samples
-        _sub_agent, _seq, _uptime, num_samples = struct.unpack("!IIII", data[offset:offset + 16])
+        _sub_agent, _seq, _uptime, num_samples = struct.unpack("!IIII", data[offset : offset + 16])
         offset += 16
     except struct.error:
         return []
@@ -375,7 +432,7 @@ def parse_sflow(data: bytes, addr: tuple) -> list[dict]:
     for _ in range(num_samples):
         if offset + 8 > len(data):
             break
-        sample_type, sample_length = struct.unpack("!II", data[offset:offset + 8])
+        sample_type, sample_length = struct.unpack("!II", data[offset : offset + 8])
         offset += 8
         sample_end = offset + sample_length
         if sample_length <= 0 or sample_end > len(data):
@@ -432,16 +489,31 @@ def _parse_sflow_flow_sample(sample: bytes, exporter_ip: str, expanded: bool) ->
             if len(sample) < 44:
                 return []
             (
-                _seq, _src_type, _src_index, sampling_rate, _pool, _drops,
-                _in_fmt, _in_val, _out_fmt, _out_val, records_count,
+                _seq,
+                _src_type,
+                _src_index,
+                sampling_rate,
+                _pool,
+                _drops,
+                _in_fmt,
+                _in_val,
+                _out_fmt,
+                _out_val,
+                records_count,
             ) = struct.unpack("!IIIIIIIIIII", sample[:44])
             cursor = 44
         else:
             if len(sample) < 32:
                 return []
             (
-                _seq, _source_id, sampling_rate, _pool, _drops,
-                _input, _output, records_count,
+                _seq,
+                _source_id,
+                sampling_rate,
+                _pool,
+                _drops,
+                _input,
+                _output,
+                records_count,
             ) = struct.unpack("!IIIIIIII", sample[:32])
             cursor = 32
     except struct.error:
@@ -457,7 +529,7 @@ def _parse_sflow_flow_sample(sample: bytes, exporter_ip: str, expanded: bool) ->
         if cursor + 8 > len(sample):
             break
         try:
-            data_format, flow_data_length = struct.unpack("!II", sample[cursor:cursor + 8])
+            data_format, flow_data_length = struct.unpack("!II", sample[cursor : cursor + 8])
         except struct.error:
             break
         cursor += 8
@@ -476,14 +548,12 @@ def _parse_sflow_flow_sample(sample: bytes, exporter_ip: str, expanded: bool) ->
             continue
 
         try:
-            protocol_kind, frame_length, _stripped, header_length = struct.unpack(
-                "!IIII", body[:16]
-            )
+            protocol_kind, frame_length, _stripped, header_length = struct.unpack("!IIII", body[:16])
         except struct.error:
             continue
         if protocol_kind != _SF_HEADER_ETHERNET_ISO88023:
             continue
-        header_bytes = body[16:16 + header_length]
+        header_bytes = body[16 : 16 + header_length]
 
         decoded = _decode_raw_packet_header(header_bytes)
         if not decoded:
@@ -494,24 +564,26 @@ def _parse_sflow_flow_sample(sample: bytes, exporter_ip: str, expanded: bool) ->
         bytes_estimate = frame_length * rate
         packets_estimate = rate
 
-        out.append({
-            "exporter_ip": exporter_ip,
-            "flow_type": "sflow_v5",
-            "src_ip": decoded["src_ip"],
-            "dst_ip": decoded["dst_ip"],
-            "src_port": decoded["src_port"],
-            "dst_port": decoded["dst_port"],
-            "protocol": decoded["protocol"],
-            "bytes": bytes_estimate,
-            "packets": packets_estimate,
-            "src_as": 0,
-            "dst_as": 0,
-            "input_if": 0,
-            "output_if": 0,
-            "tos": 0,
-            "tcp_flags": 0,
-            # start_time / end_time filled in by parse_sflow()
-        })
+        out.append(
+            {
+                "exporter_ip": exporter_ip,
+                "flow_type": "sflow_v5",
+                "src_ip": decoded["src_ip"],
+                "dst_ip": decoded["dst_ip"],
+                "src_port": decoded["src_port"],
+                "dst_port": decoded["dst_port"],
+                "protocol": decoded["protocol"],
+                "bytes": bytes_estimate,
+                "packets": packets_estimate,
+                "src_as": 0,
+                "dst_as": 0,
+                "input_if": 0,
+                "output_if": 0,
+                "tos": 0,
+                "tcp_flags": 0,
+                # start_time / end_time filled in by parse_sflow()
+            }
+        )
 
     return out
 
@@ -528,6 +600,7 @@ def _latest_sflow_sampling_rate(exporter_ip: str) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 # UDP Flow Receiver Protocol
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 class _FlowCollectorProtocol(asyncio.DatagramProtocol):
     """UDP listener that receives NetFlow/IPFIX/sFlow packets.
@@ -580,19 +653,32 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
         last_record_at = records[-1].get("end_time")
 
         for rec in records:
-            self._buffer.append((
-                rec["exporter_ip"], host_id, rec["flow_type"],
-                rec["src_ip"], rec["dst_ip"], rec["src_port"], rec["dst_port"],
-                rec["protocol"], rec["bytes"], rec["packets"],
-                rec["src_as"], rec["dst_as"], rec["input_if"], rec["output_if"],
-                rec["tos"], rec["tcp_flags"], rec["start_time"], rec["end_time"],
-            ))
+            self._buffer.append(
+                (
+                    rec["exporter_ip"],
+                    host_id,
+                    rec["flow_type"],
+                    rec["src_ip"],
+                    rec["dst_ip"],
+                    rec["src_port"],
+                    rec["dst_port"],
+                    rec["protocol"],
+                    rec["bytes"],
+                    rec["packets"],
+                    rec["src_as"],
+                    rec["dst_as"],
+                    rec["input_if"],
+                    rec["output_if"],
+                    rec["tos"],
+                    rec["tcp_flags"],
+                    rec["start_time"],
+                    rec["end_time"],
+                )
+            )
 
         # Per-exporter telemetry: count this packet (not per-record) so the
         # number matches what the device actually sent over the wire.
-        self._spawn(_record_exporter_packet(
-            exporter_ip, flow_type, host_id, last_record_at, sampling_rate
-        ))
+        self._spawn(_record_exporter_packet(exporter_ip, flow_type, host_id, last_record_at, sampling_rate))
 
         if len(self._buffer) >= FLOW_COLLECTOR_CONFIG.get("batch_size", 100):
             self._spawn(self._flush_buffer())
@@ -690,8 +776,7 @@ async def _record_exporter_packet(
             last_record_at=last_record_at,
         )
     except Exception as exc:
-        LOGGER.debug("flow_collector: exporter upsert failed for %s: %s",
-                     exporter_ip, type(exc).__name__)
+        LOGGER.debug("flow_collector: exporter upsert failed for %s: %s", exporter_ip, type(exc).__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -736,7 +821,8 @@ async def start_flow_collector(port: int = 2055, sflow_port: int | None = None) 
         except Exception as exc:
             LOGGER.warning(
                 "flow_collector: sFlow listener on port %d failed (continuing without it): %s",
-                sflow_port, str(exc),
+                sflow_port,
+                str(exc),
             )
             _sflow_transport = None
             _sflow_protocol = None
@@ -810,8 +896,10 @@ async def flow_aggregation_cycle():
     top_convos = await db.get_flow_top_conversations(hours=1, limit=50)
 
     for summary_type, data in [
-        ("top_src", top_src), ("top_dst", top_dst),
-        ("top_applications", top_apps), ("top_conversations", top_convos),
+        ("top_src", top_src),
+        ("top_dst", top_dst),
+        ("top_applications", top_apps),
+        ("top_conversations", top_convos),
     ]:
         if data:
             await db.create_flow_summary(
@@ -968,11 +1056,7 @@ async def apply_flow_collector_config(new_cfg: dict) -> dict:
     new_netflow = int(FLOW_COLLECTOR_CONFIG.get("netflow_port", 2055))
     new_sflow = int(FLOW_COLLECTOR_CONFIG.get("sflow_port", 6343))
 
-    listener_change = (
-        old_netflow != new_netflow
-        or old_sflow != new_sflow
-        or old_enabled != new_enabled
-    )
+    listener_change = old_netflow != new_netflow or old_sflow != new_sflow or old_enabled != new_enabled
 
     if new_enabled:
         if listener_change:
@@ -1011,9 +1095,7 @@ def _config_snapshot() -> dict:
         "sflow_port": int(FLOW_COLLECTOR_CONFIG.get("sflow_port", 6343)),
         "retention_hours": int(FLOW_COLLECTOR_CONFIG.get("retention_hours", 48)),
         "summary_retention_days": int(FLOW_COLLECTOR_CONFIG.get("summary_retention_days", 30)),
-        "aggregation_interval_seconds": int(
-            FLOW_COLLECTOR_CONFIG.get("aggregation_interval_seconds", 3600)
-        ),
+        "aggregation_interval_seconds": int(FLOW_COLLECTOR_CONFIG.get("aggregation_interval_seconds", 3600)),
         "netflow_running": _flow_transport is not None,
         "sflow_running": _sflow_transport is not None,
     }

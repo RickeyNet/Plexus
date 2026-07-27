@@ -220,9 +220,7 @@ async def _check_git_channel(cfg: dict[str, Any]) -> dict[str, Any]:
         rc, count, err = _run_git(["rev-list", "--count", f"HEAD..{ref}"], repo_root)
         if rc != 0:
             return {"ok": False, "error": f"git rev-list failed: {err}"}
-        rc, log, _ = _run_git(
-            ["log", "--oneline", f"HEAD..{ref}", "-n", "20"], repo_root
-        )
+        rc, log, _ = _run_git(["log", "--oneline", f"HEAD..{ref}", "-n", "20"], repo_root)
         try:
             ahead = int(count)
         except ValueError:

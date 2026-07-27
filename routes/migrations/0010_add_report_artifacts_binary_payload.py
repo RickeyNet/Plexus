@@ -90,9 +90,7 @@ async def _up_postgres(db) -> None:
     )
     exists = await cursor.fetchone()
     if not exists:
-        await db.execute(
-            "ALTER TABLE report_artifacts ADD COLUMN content_blob BYTEA"
-        )
+        await db.execute("ALTER TABLE report_artifacts ADD COLUMN content_blob BYTEA")
 
     await db.execute(
         """
@@ -114,4 +112,3 @@ async def up(db) -> None:
         await _up_postgres(db)
     else:
         await _up_sqlite(db)
-

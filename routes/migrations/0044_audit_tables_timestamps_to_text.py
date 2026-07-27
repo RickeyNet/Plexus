@@ -25,24 +25,23 @@ DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 _PG_CONVERSIONS = [
     ("interface_inventory", "collected_at"),
-    ("vlan_definitions",    "collected_at"),
-    ("audit_runs",          "started_at"),
-    ("audit_runs",          "finished_at"),
-    ("audit_findings",      "created_at"),
+    ("vlan_definitions", "collected_at"),
+    ("audit_runs", "started_at"),
+    ("audit_runs", "finished_at"),
+    ("audit_findings", "created_at"),
     ("audit_rule_overrides", "created_at"),
     ("audit_rule_overrides", "expires_at"),
-    ("audit_schedules",     "last_run_at"),
-    ("audit_schedules",     "created_at"),
-    ("audit_schedules",     "updated_at"),
-    ("config_templates",    "created_at"),
-    ("config_templates",    "updated_at"),
+    ("audit_schedules", "last_run_at"),
+    ("audit_schedules", "created_at"),
+    ("audit_schedules", "updated_at"),
+    ("config_templates", "created_at"),
+    ("config_templates", "updated_at"),
 ]
 
 
 async def _column_type(db, table: str, column: str) -> str | None:
     cursor = await db.execute(
-        "SELECT data_type FROM information_schema.columns "
-        "WHERE table_name = ? AND column_name = ?",
+        "SELECT data_type FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
         (table, column),
     )
     row = await cursor.fetchone()
@@ -56,17 +55,9 @@ async def _up_postgres(db) -> None:
         dtype = await _column_type(db, table, column)
         if dtype is None or dtype == "text":
             continue
-        await db.execute(
-            f"ALTER TABLE {table} ALTER COLUMN {column} "
-            f"TYPE TEXT USING {column}::text"
-        )
-        await db.execute(
-            f"ALTER TABLE {table} ALTER COLUMN {column} DROP DEFAULT"
-        )
-        await db.execute(
-            f"ALTER TABLE {table} ALTER COLUMN {column} "
-            f"SET DEFAULT (NOW()::text)"
-        )
+        await db.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE TEXT USING {column}::text")
+        await db.execute(f"ALTER TABLE {table} ALTER COLUMN {column} DROP DEFAULT")
+        await db.execute(f"ALTER TABLE {table} ALTER COLUMN {column} SET DEFAULT (NOW()::text)")
     await db.commit()
 
 

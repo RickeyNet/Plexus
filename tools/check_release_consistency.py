@@ -64,10 +64,7 @@ def main() -> int:
     if tag:
         normalized_tag = _normalize_tag(tag)
         if normalized_tag != app_version:
-            print(
-                "Release consistency check failed: "
-                f"tag={normalized_tag} but APP_VERSION={app_version}"
-            )
+            print(f"Release consistency check failed: tag={normalized_tag} but APP_VERSION={app_version}")
             return 1
 
     print(

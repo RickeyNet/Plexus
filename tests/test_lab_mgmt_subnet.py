@@ -10,13 +10,12 @@ with a defensive re-check at YAML-emit time.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from netcontrol.routes.lab_topology import (
     TopologyCreate,
     _normalize_mgmt_subnet,
     build_topology_yaml,
 )
+from pydantic import ValidationError
 
 _INJECTION = "172.20.20.0/24\n    binds:\n      - /:/host:rw\n    exec:\n      - rm -rf /"
 

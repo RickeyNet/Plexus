@@ -5,6 +5,7 @@ access-groups CRUD, audit-events, login-rules, auth-config, retention cleanup.
 Domain-specific admin routes (discovery-sync, topology-discovery, config-drift,
 config-backups, compliance, monitoring, SNMP) remain in app.py for now.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,6 +58,7 @@ def init_admin(
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
+
 
 class AdminUserCreateRequest(BaseModel):
     username: str
@@ -157,8 +159,8 @@ class SiemSinkRequest(BaseModel):
     id: str = ""  # generated if blank on create
     name: str = ""
     enabled: bool = True
-    protocol: str = "udp"     # udp | tcp | tls | https
-    format: str = "json"      # cef | json
+    protocol: str = "udp"  # udp | tcp | tls | https
+    format: str = "json"  # cef | json
     host: str = ""
     port: int = Field(default=514, ge=1, le=65535)
     url: str = ""
@@ -265,11 +267,15 @@ def _security_check_payload() -> dict:
     api_token_required = _env_flag("APP_REQUIRE_API_TOKEN", False)
     warnings = []
     if not _https:
-        warnings.append("APP_HTTPS is false: browser traffic may be sent over HTTP if your proxy does not enforce HTTPS.")
+        warnings.append(
+            "APP_HTTPS is false: browser traffic may be sent over HTTP if your proxy does not enforce HTTPS."
+        )
     if not _hsts:
         warnings.append("APP_HSTS is false: browsers are not instructed to enforce HTTPS for future requests.")
     if not _https_redirect:
-        warnings.append("APP_HTTPS_REDIRECT is false: plaintext HTTP requests are not redirected to HTTPS at the app level.")
+        warnings.append(
+            "APP_HTTPS_REDIRECT is false: plaintext HTTP requests are not redirected to HTTPS at the app level."
+        )
     if not api_token_required:
         warnings.append("APP_REQUIRE_API_TOKEN is false: non-session API calls are not forced to present an API token.")
     if not _api_token:
@@ -396,7 +402,13 @@ async def admin_create_user(body: AdminUserCreateRequest, request: Request):
             await db.delete_user(user_id)
             raise HTTPException(status_code=400, detail=str(e))
     session = _get_session(request)
-    await _audit("auth", "user.create", user=session["user"] if session else "", detail=f"created user '{username}' role={role}", correlation_id=_corr_id(request))
+    await _audit(
+        "auth",
+        "user.create",
+        user=session["user"] if session else "",
+        detail=f"created user '{username}' role={role}",
+        correlation_id=_corr_id(request),
+    )
     user = await db.get_user_by_id(user_id)
     return await _admin_user_payload(user)
 
@@ -432,7 +444,8 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
     if role is not None and role != (target.get("role") or ""):
         await db.bump_user_session_epoch(user_id)
     await _audit(
-        "auth", "user.update",
+        "auth",
+        "user.update",
         user=session["user"] if session else "",
         detail=f"updated user id={user_id}" + (f" role={role}" if role else ""),
         correlation_id=_corr_id(request),
@@ -456,7 +469,8 @@ async def admin_reset_user_password(user_id: int, body: AdminUserPasswordResetRe
     await db.bump_user_session_epoch(user_id)
     session = _get_session(request)
     await _audit(
-        "auth", "user.password_reset",
+        "auth",
+        "user.password_reset",
         user=session["user"] if session else "",
         detail=f"reset password for user id={user_id} ('{target.get('username', '')}')",
         correlation_id=_corr_id(request),
@@ -478,7 +492,8 @@ async def admin_set_user_groups(user_id: int, body: AdminUserGroupAssignmentRequ
     await db.bump_user_session_epoch(user_id)
     session = _get_session(request)
     await _audit(
-        "auth", "user.groups_changed",
+        "auth",
+        "user.groups_changed",
         user=session["user"] if session else "",
         detail=f"set groups for user id={user_id}: {body.group_ids}",
         correlation_id=_corr_id(request),
@@ -504,7 +519,13 @@ async def admin_delete_user(user_id: int, request: Request):
         raise HTTPException(status_code=404, detail="User not found")
     if outcome == "last_admin":
         raise HTTPException(status_code=400, detail="Cannot delete the last admin user")
-    await _audit("auth", "user.delete", user=session["user"] if session else "", detail=f"deleted user '{target['username']}'", correlation_id=_corr_id(request))
+    await _audit(
+        "auth",
+        "user.delete",
+        user=session["user"] if session else "",
+        detail=f"deleted user '{target['username']}'",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -589,6 +610,7 @@ _SECRET_MASK = "••••••••"
 def _redact_auth_config(cfg: dict) -> dict:
     """Return a copy of auth config with secrets masked for API responses."""
     import copy
+
     redacted = copy.deepcopy(cfg)
     if redacted.get("radius", {}).get("secret"):
         redacted["radius"]["secret"] = _SECRET_MASK
@@ -692,8 +714,7 @@ _sink_mutation_lock = asyncio.Lock()
 async def _persist_and_apply_sinks() -> list[dict]:
     """Persist `state.SIEM_SINKS` to auth_settings and reconcile the
     dispatcher. Returns the list of redacted dicts the API surfaces."""
-    payload = {"sinks": [siem_forwarder.sink_config_to_dict(sc, redact_secrets=False)
-                         for sc in state.SIEM_SINKS]}
+    payload = {"sinks": [siem_forwarder.sink_config_to_dict(sc, redact_secrets=False) for sc in state.SIEM_SINKS]}
     await db.set_auth_setting("siem_sinks", payload)
     await siem_forwarder.apply_sinks(state.SIEM_SINKS)
     return [siem_forwarder.sink_config_to_dict(sc) for sc in state.SIEM_SINKS]
@@ -833,16 +854,13 @@ async def _persist_and_apply_channels() -> list[dict]:
     reconcile the dispatcher. Returns the list of redacted dicts for the API."""
     payload = {
         "channels": [
-            notification_channels.channel_config_to_dict(c, redact_secrets=False)
-            for c in state.NOTIFICATION_CHANNELS
+            notification_channels.channel_config_to_dict(c, redact_secrets=False) for c in state.NOTIFICATION_CHANNELS
         ],
         "default_channel_ids": list(state.NOTIFICATION_DEFAULT_CHANNEL_IDS),
     }
     await db.set_auth_setting("notification_channels", payload)
-    await notification_channels.apply_channels(
-        state.NOTIFICATION_CHANNELS, state.NOTIFICATION_DEFAULT_CHANNEL_IDS)
-    return [notification_channels.channel_config_to_dict(c)
-            for c in state.NOTIFICATION_CHANNELS]
+    await notification_channels.apply_channels(state.NOTIFICATION_CHANNELS, state.NOTIFICATION_DEFAULT_CHANNEL_IDS)
+    return [notification_channels.channel_config_to_dict(c) for c in state.NOTIFICATION_CHANNELS]
 
 
 def _channel_index(channel_id: str) -> int:
@@ -857,8 +875,7 @@ async def admin_list_notification_channels():
     """Return configured channels (secrets redacted), default channel ids, and
     live runtime stats."""
     return {
-        "channels": [notification_channels.channel_config_to_dict(c)
-                     for c in state.NOTIFICATION_CHANNELS],
+        "channels": [notification_channels.channel_config_to_dict(c) for c in state.NOTIFICATION_CHANNELS],
         "default_channel_ids": list(state.NOTIFICATION_DEFAULT_CHANNEL_IDS),
         "stats": notification_channels.get_stats(),
     }
@@ -890,7 +907,9 @@ async def admin_create_notification_channel(body: NotificationChannelRequest, re
 
 @router.put("/api/admin/notification-channels/{channel_id}")
 async def admin_update_notification_channel(
-    channel_id: str, body: NotificationChannelRequest, request: Request,
+    channel_id: str,
+    body: NotificationChannelRequest,
+    request: Request,
 ):
     async with _channel_mutation_lock:
         idx = _channel_index(channel_id)
@@ -923,9 +942,7 @@ async def admin_delete_notification_channel(channel_id: str, request: Request):
             raise HTTPException(status_code=404, detail="Channel not found")
         state.NOTIFICATION_CHANNELS.pop(idx)
         # Drop the deleted channel from the default set too.
-        state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
-            c for c in state.NOTIFICATION_DEFAULT_CHANNEL_IDS if c != channel_id
-        ]
+        state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [c for c in state.NOTIFICATION_DEFAULT_CHANNEL_IDS if c != channel_id]
         await _persist_and_apply_channels()
     session = _get_session(request)
     await _audit(
@@ -943,9 +960,7 @@ async def admin_set_notification_defaults(body: NotificationDefaultsRequest, req
     """Set the default channel set used for alerts not tied to a user rule."""
     async with _channel_mutation_lock:
         valid_ids = {c.id for c in state.NOTIFICATION_CHANNELS}
-        state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
-            cid for cid in body.default_channel_ids if cid in valid_ids
-        ]
+        state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [cid for cid in body.default_channel_ids if cid in valid_ids]
         await _persist_and_apply_channels()
     session = _get_session(request)
     await _audit(

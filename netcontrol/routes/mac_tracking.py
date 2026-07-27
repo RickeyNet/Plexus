@@ -7,6 +7,7 @@ Provides:
   - MAC/ARP search and history API endpoints
   - Background collection loop integration
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,9 +34,9 @@ LOGGER = configure_logging("plexus.mac_tracking")
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Bridge forwarding table (standard)
-DOT1D_TP_FDB_ADDRESS = "1.3.6.1.2.1.17.4.3.1.1"   # dot1dTpFdbAddress
-DOT1D_TP_FDB_PORT = "1.3.6.1.2.1.17.4.3.1.2"      # dot1dTpFdbPort
-DOT1D_TP_FDB_STATUS = "1.3.6.1.2.1.17.4.3.1.3"    # dot1dTpFdbStatus
+DOT1D_TP_FDB_ADDRESS = "1.3.6.1.2.1.17.4.3.1.1"  # dot1dTpFdbAddress
+DOT1D_TP_FDB_PORT = "1.3.6.1.2.1.17.4.3.1.2"  # dot1dTpFdbPort
+DOT1D_TP_FDB_STATUS = "1.3.6.1.2.1.17.4.3.1.3"  # dot1dTpFdbStatus
 
 # VLAN-aware forwarding table (Q-BRIDGE-MIB)
 DOT1Q_TP_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2"  # dot1qTpFdbPort
@@ -44,32 +45,38 @@ DOT1Q_TP_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2"  # dot1qTpFdbPort
 DOT1D_BASE_PORT_IF_INDEX = "1.3.6.1.2.1.17.1.4.1.2"  # dot1dBasePortIfIndex
 
 # Per-port VLAN membership (used to tag MACs without per-VLAN context walks)
-VM_VLAN_OID = "1.3.6.1.4.1.9.9.68.1.2.2.1.2"          # Cisco vmVlan (access port VLAN), indexed by ifIndex
-DOT1Q_PVID_OID = "1.3.6.1.2.1.17.7.1.4.5.1.1"         # dot1qPvid, indexed by dot1dBasePort
+VM_VLAN_OID = "1.3.6.1.4.1.9.9.68.1.2.2.1.2"  # Cisco vmVlan (access port VLAN), indexed by ifIndex
+DOT1Q_PVID_OID = "1.3.6.1.2.1.17.7.1.4.5.1.1"  # dot1qPvid, indexed by dot1dBasePort
 
 # Switch-wide VLAN inventory (used to seed per-VLAN context walks even when no
 # access ports report the VLAN — e.g. trunk-only VLANs or VLANs whose access
 # ports are admin-down). VTP is Cisco-specific; dot1qVlanStaticName is the
 # standard Q-BRIDGE counterpart.
-VTP_VLAN_NAME_OID = "1.3.6.1.4.1.9.9.46.1.3.1.1.4"        # vtpVlanName (per management domain + vlan id)
+VTP_VLAN_NAME_OID = "1.3.6.1.4.1.9.9.46.1.3.1.1.4"  # vtpVlanName (per management domain + vlan id)
 DOT1Q_VLAN_STATIC_NAME_OID = "1.3.6.1.2.1.17.7.1.4.3.1.1"  # dot1qVlanStaticName
 
 # ARP table
-IP_NET_TO_MEDIA_PHYS = "1.3.6.1.2.1.4.22.1.2"     # ipNetToMediaPhysAddress
-IP_NET_TO_MEDIA_NET = "1.3.6.1.2.1.4.22.1.3"       # ipNetToMediaNetAddress
-IP_NET_TO_MEDIA_TYPE = "1.3.6.1.2.1.4.22.1.4"      # ipNetToMediaType
+IP_NET_TO_MEDIA_PHYS = "1.3.6.1.2.1.4.22.1.2"  # ipNetToMediaPhysAddress
+IP_NET_TO_MEDIA_NET = "1.3.6.1.2.1.4.22.1.3"  # ipNetToMediaNetAddress
+IP_NET_TO_MEDIA_TYPE = "1.3.6.1.2.1.4.22.1.4"  # ipNetToMediaType
 
 # ifName for port resolution
 IF_NAME_OID = "1.3.6.1.2.1.31.1.1.1.1"
 
 # Status type mapping
 FDB_STATUS_MAP = {
-    "1": "other", "2": "invalid", "3": "learned",
-    "4": "self", "5": "mgmt",
+    "1": "other",
+    "2": "invalid",
+    "3": "learned",
+    "4": "self",
+    "5": "mgmt",
 }
 
 ARP_TYPE_MAP = {
-    "1": "other", "2": "invalid", "3": "dynamic", "4": "static",
+    "1": "other",
+    "2": "invalid",
+    "3": "dynamic",
+    "4": "static",
 }
 
 # A port reporting more distinct MACs than this in one collection is treated as
@@ -90,7 +97,7 @@ def _format_mac(raw_value) -> str:
         # Some implementations return hex string directly
         s = str(raw_value).strip()
         if len(s) == 12 and all(c in "0123456789abcdefABCDEF" for c in s):
-            return ":".join(s[i:i+2].lower() for i in range(0, 12, 2))
+            return ":".join(s[i : i + 2].lower() for i in range(0, 12, 2))
         return s
     except Exception:
         return str(raw_value)
@@ -113,11 +120,14 @@ def _extract_mac_from_oid_suffix(suffix: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def collect_mac_arp_tables(host_id: int, ip_address: str,
-                                  snmp_config: dict,
-                                  timeout_seconds: float = 5.0,
-                                  device_type: str = "",
-                                  host: dict | None = None) -> dict:
+async def collect_mac_arp_tables(
+    host_id: int,
+    ip_address: str,
+    snmp_config: dict,
+    timeout_seconds: float = 5.0,
+    device_type: str = "",
+    host: dict | None = None,
+) -> dict:
     """Collect MAC and ARP tables from a device.
 
     MACs are pulled via SSH + ``show mac address-table`` parsed by
@@ -143,7 +153,9 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     # block ran but every walk failed" without needing shell access to the
     # app server's logs.
     result = {
-        "macs_found": 0, "arps_found": 0, "errors": [],
+        "macs_found": 0,
+        "arps_found": 0,
+        "errors": [],
         "diag": {
             "device_type": device_type,
             "snmp_version": str(snmp_config.get("version", "")),
@@ -188,9 +200,8 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 # logged into devices as an arbitrary operator and pulled an
                 # owned user credential into a background path — exactly what
                 # the credential-ownership model is meant to prevent.
-                cred_id = (
-                    state.AUTH_CONFIG.get("service_credential_id")
-                    or state.AUTH_CONFIG.get("default_credential_id")
+                cred_id = state.AUTH_CONFIG.get("service_credential_id") or state.AUTH_CONFIG.get(
+                    "default_credential_id"
                 )
                 service_cred = await db.get_credential_raw(cred_id) if cred_id else None
                 if service_cred is None:
@@ -201,9 +212,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 else:
                     result["diag"]["cli_attempted"] = True
                     try:
-                        cli_macs = await _collect_mac_table_via_cli(
-                            host, service_cred
-                        )
+                        cli_macs = await _collect_mac_table_via_cli(host, service_cred)
                         result["diag"]["cli_succeeded"] = True
                         result["diag"]["cli_mac_count"] = len(cli_macs)
                     except Exception as exc:
@@ -212,8 +221,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                         # data. The operator sees the failure in the
                         # returned errors array.
                         result["errors"].append(
-                            f"CLI MAC collection failed ({type(exc).__name__}): "
-                            f"{exc}; falling back to SNMP"
+                            f"CLI MAC collection failed ({type(exc).__name__}): {exc}; falling back to SNMP"
                         )
         except Exception as exc:
             # Defensive: anything that goes wrong in the CLI setup path
@@ -225,8 +233,12 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
 
     def _walk_with_errors(oid: str, max_rows: int = 2000):
         return _snmp_walk(
-            ip_address, timeout_seconds, snmp_config, oid,
-            max_rows=max_rows, return_errors=True,
+            ip_address,
+            timeout_seconds,
+            snmp_config,
+            oid,
+            max_rows=max_rows,
+            return_errors=True,
         )
 
     # ── Single global pass: everything lives in the default context ──
@@ -235,11 +247,20 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     # The supporting OIDs (vlan map, ifName, etc.) stay in the plain mode —
     # they're allowed to be empty without it counting as a failure.
     try:
-        (arp_phys_pair,
-         arp_net, arp_type_rows,
-         if_names, vm_vlan, dot1q_pvid,
-         fdb_addr_pair, fdb_port, fdb_status, q_fdb_port_pair, bridge_port_map,
-         vtp_vlan_names, dot1q_static_vlan_names,
+        (
+            arp_phys_pair,
+            arp_net,
+            arp_type_rows,
+            if_names,
+            vm_vlan,
+            dot1q_pvid,
+            fdb_addr_pair,
+            fdb_port,
+            fdb_status,
+            q_fdb_port_pair,
+            bridge_port_map,
+            vtp_vlan_names,
+            dot1q_static_vlan_names,
         ) = await asyncio.gather(
             _walk_with_errors(IP_NET_TO_MEDIA_PHYS),
             _walk(IP_NET_TO_MEDIA_NET),
@@ -271,8 +292,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         if len(fdb_errors) == 1:
             result["errors"].append(f"FDB walk failed: {next(iter(fdb_errors))}")
         else:
-            for tag, err in (("dot1dTpFdb", fdb_addr_err),
-                              ("dot1qTpFdb", q_fdb_port_err)):
+            for tag, err in (("dot1dTpFdb", fdb_addr_err), ("dot1qTpFdb", q_fdb_port_err)):
                 if err:
                     result["errors"].append(f"{tag} walk failed: {err}")
     if arp_phys_err:
@@ -309,7 +329,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             continue
         try:
             vid = int(str(val).strip())
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
         if 1 <= vid <= 4094:
             if_index_to_vlan[if_idx] = vid
@@ -319,7 +339,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             continue
         try:
             vid = int(str(val).strip())
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
         if 1 <= vid <= 4094:
             if_index_to_vlan[if_idx] = vid
@@ -329,7 +349,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         port_name = if_index_to_name.get(if_idx, f"port-{bridge_port}")
         try:
             port_index = int(if_idx)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             port_index = 0
         port_vlan = if_index_to_vlan.get(if_idx, 0)
         return port_name, port_index, port_vlan
@@ -356,7 +376,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             suffix = oid.rsplit(".", 1)[-1] if "." in oid else ""
             try:
                 vid = int(suffix)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
             if 1 <= vid <= 4094:
                 out.add(vid)
@@ -425,8 +445,12 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 ctx_cfg["snmp_context"] = f"vlan-{vid}"
                 try:
                     q_rows, q_err = await _snmp_walk(
-                        ip_address, timeout_seconds, ctx_cfg, DOT1Q_TP_FDB_PORT,
-                        max_rows=2000, return_errors=True,
+                        ip_address,
+                        timeout_seconds,
+                        ctx_cfg,
+                        DOT1Q_TP_FDB_PORT,
+                        max_rows=2000,
+                        return_errors=True,
                     )
                 except Exception as exc:
                     return {"vid": vid, "error": f"vlan-{vid}: {type(exc).__name__}: {exc}"}
@@ -439,21 +463,26 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
                 # context, no reason to serialise them against each other.
                 try:
                     d_addr_pair, d_port_rows, d_status_rows = await asyncio.gather(
-                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg,
-                                   DOT1D_TP_FDB_ADDRESS, max_rows=2000,
-                                   return_errors=True),
-                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg,
-                                   DOT1D_TP_FDB_PORT, max_rows=2000),
-                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg,
-                                   DOT1D_TP_FDB_STATUS, max_rows=2000),
+                        _snmp_walk(
+                            ip_address,
+                            timeout_seconds,
+                            ctx_cfg,
+                            DOT1D_TP_FDB_ADDRESS,
+                            max_rows=2000,
+                            return_errors=True,
+                        ),
+                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_PORT, max_rows=2000),
+                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_STATUS, max_rows=2000),
                     )
                 except Exception as exc:
                     return {"vid": vid, "error": f"vlan-{vid}: {type(exc).__name__}: {exc}"}
                 d_addr_rows, d_addr_err = d_addr_pair
                 return {
                     "vid": vid,
-                    "q_rows": q_rows, "q_err": q_err,
-                    "d_addr_rows": d_addr_rows, "d_addr_err": d_addr_err,
+                    "q_rows": q_rows,
+                    "q_err": q_err,
+                    "d_addr_rows": d_addr_rows,
+                    "d_addr_err": d_addr_err,
                     "d_port_rows": d_port_rows,
                     "d_status_rows": d_status_rows,
                 }
@@ -518,9 +547,7 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
             # Cap the list so we don't dump 50 lines for a chatty device.
             preview = "; ".join(per_vlan_errors[:5])
             suffix = f" (+{len(per_vlan_errors) - 5} more)" if len(per_vlan_errors) > 5 else ""
-            result["errors"].append(
-                f"Per-VLAN FDB walks partially failed: {preview}{suffix}"
-            )
+            result["errors"].append(f"Per-VLAN FDB walks partially failed: {preview}{suffix}")
 
     # ── Assemble the authoritative (mac, vlan) → location map ────────────
     # One sighting per (mac, vlan), chosen by source priority so the most
@@ -531,14 +558,19 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     #   4. default-ctx dot1d   - VLAN guessed from the learning port's PVID
     sightings: dict[tuple[str, int], dict] = {}
 
-    def _add_sighting(mac: str, vlan: int, port_name: str,
-                      port_index: int, entry_type: str) -> None:
+    def _add_sighting(mac: str, vlan: int, port_name: str, port_index: int, entry_type: str) -> None:
         if not mac:
             return
-        sightings.setdefault((mac, vlan), {
-            "mac": mac, "vlan": vlan, "port_name": port_name,
-            "port_index": port_index, "entry_type": entry_type,
-        })
+        sightings.setdefault(
+            (mac, vlan),
+            {
+                "mac": mac,
+                "vlan": vlan,
+                "port_name": port_name,
+                "port_index": port_index,
+                "entry_type": entry_type,
+            },
+        )
 
     # 1. CLI rows (authoritative when present).
     if cli_macs:
@@ -552,13 +584,13 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     if not cli_macs:
         # 2. Q-BRIDGE FDB (default context + any per-VLAN contexts merged in).
         for oid, port_val in q_fdb_port.items():
-            suffix = oid[len(DOT1Q_TP_FDB_PORT):].lstrip(".")
+            suffix = oid[len(DOT1Q_TP_FDB_PORT) :].lstrip(".")
             parts = suffix.split(".")
             port_name, port_index, port_vlan = _resolve_port(str(port_val))
             if len(parts) >= 7:
                 try:
                     vlan = int(parts[0])
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     vlan = port_vlan
                 mac = _extract_mac_from_oid_suffix(".".join(parts[1:7]))
             else:
@@ -569,29 +601,27 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         # 3. per-VLAN-context dot1d FDB — VLAN is the context id, not the OID.
         for vid, d_addr_rows, d_port_rows, d_status_rows in per_vlan_dot1d:
             for oid, mac_val in d_addr_rows.items():
-                suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
+                suffix = oid[len(DOT1D_TP_FDB_ADDRESS) :].lstrip(".")
                 mac = _format_mac(mac_val)
                 if not mac or len(mac) < 12:
                     mac = _extract_mac_from_oid_suffix(suffix)
                 if not mac:
                     continue
                 bridge_port = str(d_port_rows.get(DOT1D_TP_FDB_PORT + "." + suffix, "0"))
-                status = FDB_STATUS_MAP.get(
-                    str(d_status_rows.get(DOT1D_TP_FDB_STATUS + "." + suffix, "")), "dynamic")
+                status = FDB_STATUS_MAP.get(str(d_status_rows.get(DOT1D_TP_FDB_STATUS + "." + suffix, "")), "dynamic")
                 port_name, port_index, _ = _resolve_port(bridge_port)
                 _add_sighting(mac, vid, port_name, port_index, status)
 
         # 4. default-context dot1d FDB — VLAN falls back to the port's PVID.
         for oid, mac_val in fdb_addr.items():
-            suffix = oid[len(DOT1D_TP_FDB_ADDRESS):].lstrip(".")
+            suffix = oid[len(DOT1D_TP_FDB_ADDRESS) :].lstrip(".")
             mac = _format_mac(mac_val)
             if not mac or len(mac) < 12:
                 mac = _extract_mac_from_oid_suffix(suffix)
             if not mac:
                 continue
             bridge_port = str(fdb_port.get(DOT1D_TP_FDB_PORT + "." + suffix, "0"))
-            status = FDB_STATUS_MAP.get(
-                str(fdb_status.get(DOT1D_TP_FDB_STATUS + "." + suffix, "")), "dynamic")
+            status = FDB_STATUS_MAP.get(str(fdb_status.get(DOT1D_TP_FDB_STATUS + "." + suffix, "")), "dynamic")
             port_name, port_index, port_vlan = _resolve_port(bridge_port)
             _add_sighting(mac, port_vlan, port_name, port_index, status)
 
@@ -618,8 +648,10 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
     # thousands of connection cycles per fleet collection).
     sighting_batch = [
         {
-            "mac": s["mac"], "vlan": s["vlan"],
-            "port_name": s["port_name"], "port_index": s["port_index"],
+            "mac": s["mac"],
+            "vlan": s["vlan"],
+            "port_name": s["port_name"],
+            "port_index": s["port_index"],
             "entry_type": s["entry_type"],
             "is_uplink": port_mac_counts.get(s["port_name"], 0) > _UPLINK_MAC_THRESHOLD,
         }
@@ -629,14 +661,15 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         counts = await db.record_mac_sightings_batch(host_id, sighting_batch)
         result["macs_found"] += counts["macs"]
     except Exception as exc:
-        LOGGER.warning("mac_tracking: host %s MAC batch write failed (%d sightings): %s",
-                       host_id, len(sighting_batch), exc)
+        LOGGER.warning(
+            "mac_tracking: host %s MAC batch write failed (%d sightings): %s", host_id, len(sighting_batch), exc
+        )
         result["errors"].append(f"MAC table write failed: {exc}")
 
     # ── ARP table (global, ipNetToMediaTable) ──
     arp_batch: list[dict] = []
     for oid, mac_val in arp_phys.items():
-        suffix = oid[len(IP_NET_TO_MEDIA_PHYS):].lstrip(".")
+        suffix = oid[len(IP_NET_TO_MEDIA_PHYS) :].lstrip(".")
         mac = _format_mac(mac_val)
         if not mac:
             continue
@@ -654,10 +687,13 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         type_oid = IP_NET_TO_MEDIA_TYPE + "." + suffix
         arp_type = ARP_TYPE_MAP.get(str(arp_type_rows.get(type_oid, "")), "dynamic")
 
-        arp_batch.append({
-            "ip_address": ip_addr, "mac_address": mac,
-            "interface_name": iface_name,
-        })
+        arp_batch.append(
+            {
+                "ip_address": ip_addr,
+                "mac_address": mac,
+                "interface_name": iface_name,
+            }
+        )
 
     # One batched transaction: ARP upserts plus the cross-host IP enrichment
     # of mac_address_table (the access switch holds the FDB row; this L3
@@ -666,8 +702,9 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         try:
             result["arps_found"] += await db.upsert_arp_entries_batch(host_id, arp_batch)
         except Exception as exc:
-            LOGGER.warning("mac_tracking: host %s ARP batch write failed (%d entries): %s",
-                           host_id, len(arp_batch), exc)
+            LOGGER.warning(
+                "mac_tracking: host %s ARP batch write failed (%d entries): %s", host_id, len(arp_batch), exc
+            )
             result["errors"].append(f"ARP table write failed: {exc}")
 
     result["diag"]["ports"] = len(if_index_to_name)
@@ -679,13 +716,18 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
         "mac_tracking: host %s (%s) ports=%d port_vlans=%d "
         "vlans_discovered=%d vlan_ctx=%d/%d (skipped=%d) "
         "cli=%s(%d) - %d MACs, %d ARPs collected",
-        host_id, ip_address, len(if_index_to_name), len(if_index_to_vlan),
+        host_id,
+        ip_address,
+        len(if_index_to_name),
+        len(if_index_to_vlan),
         len(vlans_in_use),
-        per_vlan_successes, per_vlan_attempts, per_vlan_skipped,
-        "ok" if result["diag"]["cli_succeeded"]
-        else ("fail" if result["diag"]["cli_attempted"] else "skip"),
+        per_vlan_successes,
+        per_vlan_attempts,
+        per_vlan_skipped,
+        "ok" if result["diag"]["cli_succeeded"] else ("fail" if result["diag"]["cli_attempted"] else "skip"),
         result["diag"]["cli_mac_count"],
-        result["macs_found"], result["arps_found"],
+        result["macs_found"],
+        result["arps_found"],
     )
     return result
 
@@ -702,29 +744,34 @@ async def collect_mac_arp_tables(host_id: int, ip_address: str,
 # so calling it every discovery cycle is cheap and idempotent.
 
 # IF-MIB OIDs reused for the inventory snapshot
-IF_DESCR_OID = "1.3.6.1.2.1.2.2.1.2"               # ifDescr (fallback name)
-IF_ALIAS_OID = "1.3.6.1.2.1.31.1.1.1.18"           # ifAlias (description)
-IF_ADMIN_STATUS_OID = "1.3.6.1.2.1.2.2.1.7"         # 1=up 2=down 3=testing
-IF_OPER_STATUS_OID = "1.3.6.1.2.1.2.2.1.8"          # 1=up 2=down ...
-IF_HIGH_SPEED_OID = "1.3.6.1.2.1.31.1.1.1.15"       # Mbps
-IF_SPEED_OID = "1.3.6.1.2.1.2.2.1.5"                # bps fallback
-IF_LAST_CHANGE_OID = "1.3.6.1.2.1.2.2.1.9"          # sysUptime ticks at last admin/oper transition
-DOT3_STATS_DUPLEX_OID = "1.3.6.1.2.1.10.7.2.1.19"   # 1=unknown 2=half 3=full
+IF_DESCR_OID = "1.3.6.1.2.1.2.2.1.2"  # ifDescr (fallback name)
+IF_ALIAS_OID = "1.3.6.1.2.1.31.1.1.1.18"  # ifAlias (description)
+IF_ADMIN_STATUS_OID = "1.3.6.1.2.1.2.2.1.7"  # 1=up 2=down 3=testing
+IF_OPER_STATUS_OID = "1.3.6.1.2.1.2.2.1.8"  # 1=up 2=down ...
+IF_HIGH_SPEED_OID = "1.3.6.1.2.1.31.1.1.1.15"  # Mbps
+IF_SPEED_OID = "1.3.6.1.2.1.2.2.1.5"  # bps fallback
+IF_LAST_CHANGE_OID = "1.3.6.1.2.1.2.2.1.9"  # sysUptime ticks at last admin/oper transition
+DOT3_STATS_DUPLEX_OID = "1.3.6.1.2.1.10.7.2.1.19"  # 1=unknown 2=half 3=full
 
 # Cisco VTP VLAN states (vtpVlanName itself is declared above; the FDB
 # collector seeds per-VLAN context walks from it, so it lives at module top).
 VTP_VLAN_STATE_OID = "1.3.6.1.4.1.9.9.46.1.3.1.1.2"  # vtpVlanState (1=operational ...)
 
 # Cisco VTP trunk allowed-VLAN bitmaps (1k/2k/3k/4k slices, 128 bytes each)
-VTP_TRUNK_VLANS_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.4"      # vlans 0..1023
-VTP_TRUNK_VLANS_2K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.17"   # 1024..2047
-VTP_TRUNK_VLANS_3K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.18"   # 2048..3071
-VTP_TRUNK_VLANS_4K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.19"   # 3072..4094
+VTP_TRUNK_VLANS_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.4"  # vlans 0..1023
+VTP_TRUNK_VLANS_2K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.17"  # 1024..2047
+VTP_TRUNK_VLANS_3K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.18"  # 2048..3071
+VTP_TRUNK_VLANS_4K_OID = "1.3.6.1.4.1.9.9.46.1.6.1.1.19"  # 3072..4094
 
 ADMIN_STATE_MAP = {"1": "up", "2": "down", "3": "testing"}
 OPER_STATE_MAP = {
-    "1": "up", "2": "down", "3": "testing", "4": "unknown",
-    "5": "dormant", "6": "notPresent", "7": "lowerLayerDown",
+    "1": "up",
+    "2": "down",
+    "3": "testing",
+    "4": "unknown",
+    "5": "dormant",
+    "6": "notPresent",
+    "7": "lowerLayerDown",
 }
 DUPLEX_MAP = {"1": "unknown", "2": "half", "3": "full"}
 VTP_STATE_MAP = {"1": "operational", "2": "suspended"}
@@ -758,13 +805,13 @@ def _format_ticks_to_iso_offset(ticks_raw) -> str:
     sysUpTime. So we just normalise to a clean string."""
     try:
         return str(int(str(ticks_raw).strip()))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return ""
 
 
-async def collect_interface_inventory(host_id: int, ip_address: str,
-                                       snmp_config: dict,
-                                       timeout_seconds: float = 5.0) -> dict:
+async def collect_interface_inventory(
+    host_id: int, ip_address: str, snmp_config: dict, timeout_seconds: float = 5.0
+) -> dict:
     """Walk per-port + VLAN-definition data for a single host.
 
     Writes to ``interface_inventory`` (one row per ifIndex) and
@@ -776,21 +823,44 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
         return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
 
     try:
-        (if_names, if_descr, if_alias,
-         admin_status, oper_status,
-         high_speed, low_speed, last_change, duplex,
-         vm_vlan, dot1q_pvid, bridge_port_map,
-         vtp_names, vtp_states,
-         trunk_vlans_1k, trunk_vlans_2k, trunk_vlans_3k, trunk_vlans_4k,
+        (
+            if_names,
+            if_descr,
+            if_alias,
+            admin_status,
+            oper_status,
+            high_speed,
+            low_speed,
+            last_change,
+            duplex,
+            vm_vlan,
+            dot1q_pvid,
+            bridge_port_map,
+            vtp_names,
+            vtp_states,
+            trunk_vlans_1k,
+            trunk_vlans_2k,
+            trunk_vlans_3k,
+            trunk_vlans_4k,
         ) = await asyncio.gather(
-            _walk(IF_NAME_OID), _walk(IF_DESCR_OID), _walk(IF_ALIAS_OID),
-            _walk(IF_ADMIN_STATUS_OID), _walk(IF_OPER_STATUS_OID),
-            _walk(IF_HIGH_SPEED_OID), _walk(IF_SPEED_OID),
-            _walk(IF_LAST_CHANGE_OID), _walk(DOT3_STATS_DUPLEX_OID),
-            _walk(VM_VLAN_OID), _walk(DOT1Q_PVID_OID), _walk(DOT1D_BASE_PORT_IF_INDEX),
-            _walk(VTP_VLAN_NAME_OID), _walk(VTP_VLAN_STATE_OID),
-            _walk(VTP_TRUNK_VLANS_OID), _walk(VTP_TRUNK_VLANS_2K_OID),
-            _walk(VTP_TRUNK_VLANS_3K_OID), _walk(VTP_TRUNK_VLANS_4K_OID),
+            _walk(IF_NAME_OID),
+            _walk(IF_DESCR_OID),
+            _walk(IF_ALIAS_OID),
+            _walk(IF_ADMIN_STATUS_OID),
+            _walk(IF_OPER_STATUS_OID),
+            _walk(IF_HIGH_SPEED_OID),
+            _walk(IF_SPEED_OID),
+            _walk(IF_LAST_CHANGE_OID),
+            _walk(DOT3_STATS_DUPLEX_OID),
+            _walk(VM_VLAN_OID),
+            _walk(DOT1Q_PVID_OID),
+            _walk(DOT1D_BASE_PORT_IF_INDEX),
+            _walk(VTP_VLAN_NAME_OID),
+            _walk(VTP_VLAN_STATE_OID),
+            _walk(VTP_TRUNK_VLANS_OID),
+            _walk(VTP_TRUNK_VLANS_2K_OID),
+            _walk(VTP_TRUNK_VLANS_3K_OID),
+            _walk(VTP_TRUNK_VLANS_4K_OID),
         )
     except Exception as exc:
         result["errors"].append(f"SNMP walk failed: {str(exc)}")
@@ -859,15 +929,13 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
             try:
                 return int(s)
             except (ValueError, TypeError) as exc:
-                LOGGER.debug("interface_inventory: bad ifHighSpeed value %r for ifIndex %s: %s",
-                             s, if_idx, exc)
+                LOGGER.debug("interface_inventory: bad ifHighSpeed value %r for ifIndex %s: %s", s, if_idx, exc)
         s2 = lo_speed_by_idx.get(if_idx, "")
         if s2:
             try:
                 return max(0, int(s2) // 1_000_000)
             except (ValueError, TypeError) as exc:
-                LOGGER.debug("interface_inventory: bad ifSpeed value %r for ifIndex %s: %s",
-                             s2, if_idx, exc)
+                LOGGER.debug("interface_inventory: bad ifSpeed value %r for ifIndex %s: %s", s2, if_idx, exc)
         return 0
 
     # ── Decide which VLAN to report for an access port ──
@@ -876,11 +944,10 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
         # vacuous PVID that we want to ignore, so an empty access_vlan
         # here is correct for them and the trunk_vlans column carries
         # the real info.
-        for src in (vm_vlan_by_idx.get(if_idx, ""),
-                    pvid_by_if_index.get(if_idx, "")):
+        for src in (vm_vlan_by_idx.get(if_idx, ""), pvid_by_if_index.get(if_idx, "")):
             try:
                 vid = int(src)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
             if 1 <= vid <= 4094:
                 return vid
@@ -891,7 +958,7 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
     for if_idx in all_if_indexes:
         try:
             ifindex_int = int(if_idx)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
         name = name_by_idx.get(if_idx) or descr_by_idx.get(if_idx) or f"ifIndex-{if_idx}"
         try:
@@ -910,8 +977,9 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
             )
             result["ports_written"] += 1
         except Exception as exc:
-            LOGGER.warning("interface_inventory: host %s port upsert failed for ifIndex %s (%s): %s",
-                           host_id, if_idx, name, exc)
+            LOGGER.warning(
+                "interface_inventory: host %s port upsert failed for ifIndex %s (%s): %s", host_id, if_idx, name, exc
+            )
 
     # ── Write VLAN definitions ──
     # vtpVlanName is indexed by <management-domain>.<vlan-id>; the trailing
@@ -921,7 +989,7 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
         suffix = oid.rsplit(".", 1)[-1]
         try:
             vid = int(suffix)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
         vlan_state_by_id[vid] = VTP_STATE_MAP.get(str(val).strip(), str(val).strip())
 
@@ -929,7 +997,7 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
         suffix = oid.rsplit(".", 1)[-1]
         try:
             vid = int(suffix)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
         if not (1 <= vid <= 4094):
             continue
@@ -942,12 +1010,14 @@ async def collect_interface_inventory(host_id: int, ip_address: str,
             )
             result["vlans_written"] += 1
         except Exception as exc:
-            LOGGER.warning("interface_inventory: host %s VLAN upsert failed for vlan %s: %s",
-                           host_id, vid, exc)
+            LOGGER.warning("interface_inventory: host %s VLAN upsert failed for vlan %s: %s", host_id, vid, exc)
 
     LOGGER.info(
         "interface_inventory: host %s (%s) - %d ports, %d VLANs collected",
-        host_id, ip_address, result["ports_written"], result["vlans_written"],
+        host_id,
+        ip_address,
+        result["ports_written"],
+        result["vlans_written"],
     )
     return result
 
@@ -1046,7 +1116,9 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         if not snmp_cfg.get("enabled"):
             raise HTTPException(400, "SNMP not enabled for this host's group")
         result = await collect_mac_arp_tables(
-            host_id, host["ip_address"], snmp_cfg,
+            host_id,
+            host["ip_address"],
+            snmp_cfg,
             device_type=host.get("device_type", ""),
             host=host,
         )
@@ -1087,17 +1159,18 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         asyncio.create_task(_run_fleet_collection_job(job["job_id"], targets)),
         "mac-fleet-collection",
     )
-    return {"job_id": job["job_id"], "status": "running",
-            "hosts_total": len(targets)}
+    return {"job_id": job["job_id"], "status": "running", "hosts_total": len(targets)}
 
 
-async def _run_fleet_collection_job(job_id: str,
-                                    targets: list[tuple[dict, dict]]) -> None:
+async def _run_fleet_collection_job(job_id: str, targets: list[tuple[dict, dict]]) -> None:
     """Background task: collect MAC/ARP tables from every target host."""
     global _full_collection_running
     total: dict = {
-        "macs_found": 0, "arps_found": 0, "hosts_collected": 0,
-        "errors": [], "host_errors": [],
+        "macs_found": 0,
+        "arps_found": 0,
+        "hosts_collected": 0,
+        "errors": [],
+        "host_errors": [],
     }
     tasks: list[asyncio.Task] = []
     try:
@@ -1107,7 +1180,9 @@ async def _run_fleet_collection_job(job_id: str,
             async with sem:
                 try:
                     res = await collect_mac_arp_tables(
-                        h["id"], h["ip_address"], cfg,
+                        h["id"],
+                        h["ip_address"],
+                        cfg,
                         device_type=h.get("device_type", ""),
                         host=h,
                     )
@@ -1134,15 +1209,20 @@ async def _run_fleet_collection_job(job_id: str,
                 # depends on.
                 host_errs = res.get("errors") or []
                 if host_errs:
-                    total["host_errors"].append({
-                        "host_id": h["id"], "hostname": hostname,
-                        "errors": host_errs,
-                    })
+                    total["host_errors"].append(
+                        {
+                            "host_id": h["id"],
+                            "hostname": hostname,
+                            "errors": host_errs,
+                        }
+                    )
                     for e in host_errs:
                         total["errors"].append(f"{hostname}: {e}")
             background_jobs.update_progress(
-                job_id, hosts_done=done,
-                macs_found=total["macs_found"], arps_found=total["arps_found"],
+                job_id,
+                hosts_done=done,
+                macs_found=total["macs_found"],
+                arps_found=total["arps_found"],
             )
         background_jobs.finish_job(job_id, "completed", result=total)
     except Exception as exc:
@@ -1219,7 +1299,9 @@ async def acknowledge_mac_move_event(event_id: int, request: Request):
     if not ok:
         raise HTTPException(404, "Move event not found")
     await _audit(
-        "mac-tracking", "move.acknowledged", user=user,
+        "mac-tracking",
+        "move.acknowledged",
+        user=user,
         detail=f"event_id={event_id}",
         correlation_id=_corr_id(request),
     )
@@ -1227,9 +1309,7 @@ async def acknowledge_mac_move_event(event_id: int, request: Request):
 
 
 @router.post("/api/mac-tracking/moves/acknowledge-all")
-async def acknowledge_all_mac_move_events(
-    body: MacMoveBulkAckRequest, request: Request
-):
+async def acknowledge_all_mac_move_events(body: MacMoveBulkAckRequest, request: Request):
     """Acknowledge every open move event (or a specific list of ids)."""
     session = _get_session(request)
     user = session["user"] if session else ""
@@ -1239,14 +1319,18 @@ async def acknowledge_all_mac_move_events(
             if await db.acknowledge_mac_move_event(eid, actor=user):
                 acked += 1
         await _audit(
-            "mac-tracking", "move.acknowledged_bulk", user=user,
+            "mac-tracking",
+            "move.acknowledged_bulk",
+            user=user,
             detail=f"acknowledged={acked} of {len(body.event_ids)} requested ids",
             correlation_id=_corr_id(request),
         )
         return {"ok": True, "acknowledged": acked}
     acked = await db.acknowledge_open_mac_move_events(actor=user)
     await _audit(
-        "mac-tracking", "move.acknowledged_all", user=user,
+        "mac-tracking",
+        "move.acknowledged_all",
+        user=user,
         detail=f"acknowledged={acked} open events",
         correlation_id=_corr_id(request),
     )
@@ -1260,9 +1344,11 @@ async def acknowledge_all_mac_move_events(
 
 async def _run_mac_move_retention_once() -> dict:
     """Prune MAC move events and movement-history rows past the retention window."""
-    days = int(state.MAC_MOVE_RETENTION_CONFIG.get(
-        "event_retention_days",
-        state.MAC_MOVE_RETENTION_DEFAULTS["event_retention_days"]))
+    days = int(
+        state.MAC_MOVE_RETENTION_CONFIG.get(
+            "event_retention_days", state.MAC_MOVE_RETENTION_DEFAULTS["event_retention_days"]
+        )
+    )
     removed = 0
     history_removed = 0
     try:
@@ -1277,8 +1363,9 @@ async def _run_mac_move_retention_once() -> dict:
     except Exception as exc:
         LOGGER.warning("mac history retention failed: %s", exc)
     if removed or history_removed:
-        LOGGER.info("mac move retention: pruned %d events, %d history rows older than %d days",
-                    removed, history_removed, days)
+        LOGGER.info(
+            "mac move retention: pruned %d events, %d history rows older than %d days", removed, history_removed, days
+        )
     return {"removed": removed, "history_removed": history_removed, "retention_days": days}
 
 
@@ -1286,13 +1373,16 @@ async def _mac_move_retention_loop() -> None:
     """Infinite loop that prunes old MAC move events at a fixed interval."""
     while True:
         try:
-            await asyncio.sleep(int(state.MAC_MOVE_RETENTION_CONFIG.get(
-                "interval_seconds",
-                state.MAC_MOVE_RETENTION_DEFAULTS["interval_seconds"])))
+            await asyncio.sleep(
+                int(
+                    state.MAC_MOVE_RETENTION_CONFIG.get(
+                        "interval_seconds", state.MAC_MOVE_RETENTION_DEFAULTS["interval_seconds"]
+                    )
+                )
+            )
             await _run_mac_move_retention_once()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             LOGGER.warning("mac move retention loop failure: %s", exc)
-            await asyncio.sleep(
-                state.MAC_MOVE_RETENTION_DEFAULTS["interval_seconds"])
+            await asyncio.sleep(state.MAC_MOVE_RETENTION_DEFAULTS["interval_seconds"])

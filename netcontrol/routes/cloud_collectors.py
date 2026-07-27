@@ -216,11 +216,14 @@ def _azure_nsg_rules(nsg) -> list[dict]:
                 "action": action,
                 "protocol": protocol,
                 "source_selector": _azure_selector(rule_obj, "source_address_prefix", "source_address_prefixes"),
-                "destination_selector": _azure_selector(rule_obj, "destination_address_prefix", "destination_address_prefixes"),
+                "destination_selector": _azure_selector(
+                    rule_obj, "destination_address_prefix", "destination_address_prefixes"
+                ),
                 "port_expression": _join_policy_selectors(
                     [str(getattr(rule_obj, "destination_port_range", "") or "").strip()]
                     + [str(item or "").strip() for item in (getattr(rule_obj, "destination_port_ranges", None) or [])]
-                ) or "all",
+                )
+                or "all",
                 "priority": getattr(rule_obj, "priority", None),
                 "metadata": {
                     "is_default": rule_obj in default,
@@ -242,7 +245,9 @@ def _gcp_firewall_rules(fw: dict, *, resource_uid: str) -> list[dict]:
         normalized_direction = direction
 
     source_selector = _join_policy_selectors([str(item or "").strip() for item in (fw.get("sourceRanges") or [])])
-    destination_selector = _join_policy_selectors([str(item or "").strip() for item in (fw.get("destinationRanges") or [])])
+    destination_selector = _join_policy_selectors(
+        [str(item or "").strip() for item in (fw.get("destinationRanges") or [])]
+    )
     if not source_selector:
         source_selector = "any" if normalized_direction == "inbound" else "self"
     if not destination_selector:
@@ -468,7 +473,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         metadata={"is_default": bool(vpc.get("IsDefault", False))},
                     )
                 )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed vpc list region=%s", region, exc_info=True)
             section_errors.append(f"vpcs:{region}")
 
@@ -488,7 +493,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         region=region,
                         status="available",
                         metadata={
-                            "vpc_ids": [str(item.get("VpcId") or "").strip() for item in attachments if str(item.get("VpcId") or "").strip()],
+                            "vpc_ids": [
+                                str(item.get("VpcId") or "").strip()
+                                for item in attachments
+                                if str(item.get("VpcId") or "").strip()
+                            ],
                         },
                     )
                 )
@@ -505,7 +514,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             state=str(attachment.get("State") or "attached"),
                         )
                     )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed internet gateway list region=%s", region, exc_info=True)
             section_errors.append(f"internet_gateways:{region}")
 
@@ -541,7 +550,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             state=str(gateway.get("State") or ""),
                         )
                     )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed nat gateway list region=%s", region, exc_info=True)
             section_errors.append(f"nat_gateways:{region}")
 
@@ -565,7 +574,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         },
                     )
                 )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed security group list region=%s", region, exc_info=True)
             section_errors.append(f"security_groups:{region}")
 
@@ -585,7 +594,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         status=str(tgw.get("State") or ""),
                     )
                 )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed tgw list region=%s", region, exc_info=True)
             section_errors.append(f"transit_gateways:{region}")
 
@@ -608,7 +617,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         state=str(attachment.get("State") or ""),
                     )
                 )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed tgw attachment list region=%s", region, exc_info=True)
             section_errors.append(f"transit_gateway_attachments:{region}")
 
@@ -631,7 +640,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         metadata={"peering_id": str(peering.get("VpcPeeringConnectionId") or "")},
                     )
                 )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed vpc peering list region=%s", region, exc_info=True)
             section_errors.append(f"vpc_peering_connections:{region}")
 
@@ -652,7 +661,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         status=str(gateway.get("State") or ""),
                         metadata={
                             "availability_zone": str(gateway.get("AvailabilityZone") or "").strip(),
-                            "vpc_ids": [str(item.get("VpcId") or "").strip() for item in attachments if str(item.get("VpcId") or "").strip()],
+                            "vpc_ids": [
+                                str(item.get("VpcId") or "").strip()
+                                for item in attachments
+                                if str(item.get("VpcId") or "").strip()
+                            ],
                         },
                     )
                 )
@@ -669,7 +682,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             state=str(attachment.get("State") or gateway.get("State") or ""),
                         )
                     )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed vpn gateway list region=%s", region, exc_info=True)
             section_errors.append(f"vpn_gateways:{region}")
 
@@ -731,7 +744,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             },
                         )
                     )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed route table list region=%s", region, exc_info=True)
             section_errors.append(f"route_tables:{region}")
 
@@ -774,7 +787,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             state=str(vpn.get("State") or ""),
                         )
                     )
-        except (BotoCoreError, ClientError):
+        except BotoCoreError, ClientError:
             LOGGER.warning("aws collector: failed vpn list region=%s", region, exc_info=True)
             section_errors.append(f"vpn_connections:{region}")
 
@@ -867,11 +880,7 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
         raise CloudCollectorUnavailable("Azure collector requires azure-identity and azure-mgmt-network") from exc
 
     auth = _parse_auth_config(account)
-    subscription_id = str(
-        auth.get("subscription_id")
-        or account.get("account_identifier")
-        or ""
-    ).strip()
+    subscription_id = str(auth.get("subscription_id") or account.get("account_identifier") or "").strip()
     if not subscription_id:
         raise CloudCollectorAuthError("Azure subscription_id is required")
 
@@ -992,7 +1001,9 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                 subnet_id = str(getattr(getattr(ip_config, "subnet", None), "id", "") or "").strip()
                 if not subnet_id:
                     continue
-                vnet_uid = subnet_to_vnet.get(subnet_id.lower()) or _azure_vnet_uid_from_resource_id(subnet_id, subscription_id)
+                vnet_uid = subnet_to_vnet.get(subnet_id.lower()) or _azure_vnet_uid_from_resource_id(
+                    subnet_id, subscription_id
+                )
                 if not vnet_uid:
                     continue
                 connections.append(
@@ -1072,7 +1083,9 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                 subnet_id = str(getattr(subnet, "id", "") or "").strip()
                 if not subnet_id:
                     continue
-                vnet_uid = subnet_to_vnet.get(subnet_id.lower()) or _azure_vnet_uid_from_resource_id(subnet_id, subscription_id)
+                vnet_uid = subnet_to_vnet.get(subnet_id.lower()) or _azure_vnet_uid_from_resource_id(
+                    subnet_id, subscription_id
+                )
                 if not vnet_uid:
                     continue
                 connections.append(
@@ -1133,7 +1146,9 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
                         "azure",
                         source_uid,
                         target_uid,
-                        str(getattr(conn, "connection_type", "gateway_connection") or "gateway_connection").strip().lower(),
+                        str(getattr(conn, "connection_type", "gateway_connection") or "gateway_connection")
+                        .strip()
+                        .lower(),
                         state=str(getattr(conn, "provisioning_state", "") or ""),
                         metadata={"connection_status": str(getattr(conn, "connection_status", "") or "").strip()},
                     )
@@ -1594,9 +1609,7 @@ def get_provider_capabilities() -> dict[str, dict]:
         features: dict[str, dict] = {}
         all_missing: list[str] = []
         for feature, modules in deps.items():
-            missing = sorted(
-                {dist for module, dist in modules.items() if not _importable(module)}
-            )
+            missing = sorted({dist for module, dist in modules.items() if not _importable(module)})
             features[feature] = {"supported": not missing, "missing_dependencies": missing}
             all_missing.extend(missing)
 

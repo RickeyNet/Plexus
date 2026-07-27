@@ -46,10 +46,7 @@ class CiscoXEDriver(Driver):
             cmds.append(f"interface {intf}")
             cmds.append(f" ip flow monitor {cfg.monitor_name} input")
             if cfg.sampling_rate > 1:
-                cmds.append(
-                    f" ip flow monitor {cfg.monitor_name} sampler "
-                    f"{cfg.sampler_name} input"
-                )
+                cmds.append(f" ip flow monitor {cfg.monitor_name} sampler {cfg.sampler_name} input")
             cmds.append("exit")
         return cmds
 

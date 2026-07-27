@@ -30,8 +30,7 @@ class NtpAudit(BasePlaybook):
     filename = "ntp_audit.py"
     display_name = "NTP Compliance Check"
     description = (
-        "Audits NTP configuration on all devices. Reports missing or "
-        "unauthorized NTP servers and clock settings."
+        "Audits NTP configuration on all devices. Reports missing or unauthorized NTP servers and clock settings."
     )
     tags = ["ntp", "compliance", "audit"]
     requires_template = False
@@ -56,9 +55,7 @@ class NtpAudit(BasePlaybook):
                 servers.append(parts[0])
         return servers
 
-    async def _run_simulated(
-        self, hosts, credentials, template_commands, dry_run
-    ) -> AsyncGenerator[LogEvent]:
+    async def _run_simulated(self, hosts, credentials, template_commands, dry_run) -> AsyncGenerator[LogEvent]:
         yield self.log_info(f"NTP Compliance Audit - checking {len(hosts)} host(s)")
         yield self.log_info(f"Expected NTP servers: {', '.join(EXPECTED_NTP_SERVERS)}")
 
@@ -108,9 +105,7 @@ class NtpAudit(BasePlaybook):
             yield event
 
         yield self.log_sep()
-        yield self.log_info(
-            f"Audit complete: {compliant} compliant, {non_compliant} non-compliant"
-        )
+        yield self.log_info(f"Audit complete: {compliant} compliant, {non_compliant} non-compliant")
         # Promote the closing line to ``success`` or ``warn`` so the UI
         # colours it appropriately at a glance.
         if non_compliant == 0:
