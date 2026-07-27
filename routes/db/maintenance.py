@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -70,8 +71,17 @@ async def create_maintenance_window(
                (name, description, start_at, end_at, recurrence, weekday_mask,
                 policy, enabled, created_by, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (name, description, start_at, end_at, recurrence, int(weekday_mask),
-             policy, 1 if enabled else 0, created_by),
+            (
+                name,
+                description,
+                start_at,
+                end_at,
+                recurrence,
+                int(weekday_mask),
+                policy,
+                1 if enabled else 0,
+                created_by,
+            ),
         )
         window_id = cursor.lastrowid
         for gid in group_ids or []:
@@ -151,9 +161,7 @@ async def delete_maintenance_window(window_id: int) -> None:
 async def get_maintenance_window(window_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM maintenance_windows WHERE id = ?", (window_id,)
-        )
+        cursor = await db.execute("SELECT * FROM maintenance_windows WHERE id = ?", (window_id,))
         row = row_to_dict(await cursor.fetchone())
         if not row:
             return None
@@ -170,9 +178,7 @@ async def get_maintenance_window(window_id: int) -> dict | None:
 async def list_maintenance_windows() -> list[dict]:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM maintenance_windows ORDER BY start_at DESC"
-        )
+        cursor = await db.execute("SELECT * FROM maintenance_windows ORDER BY start_at DESC")
         windows = rows_to_list(await cursor.fetchall())
         cursor = await db.execute(
             """SELECT s.window_id, s.group_id, g.name AS group_name
@@ -182,9 +188,7 @@ async def list_maintenance_windows() -> list[dict]:
         scopes = rows_to_list(await cursor.fetchall())
         by_window: dict[int, list[dict]] = {}
         for s in scopes:
-            by_window.setdefault(s["window_id"], []).append(
-                {"group_id": s["group_id"], "group_name": s["group_name"]}
-            )
+            by_window.setdefault(s["window_id"], []).append({"group_id": s["group_id"], "group_name": s["group_name"]})
         for w in windows:
             w["scopes"] = by_window.get(w["id"], [])
             w["group_ids"] = [sc["group_id"] for sc in w["scopes"]]

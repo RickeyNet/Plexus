@@ -63,8 +63,7 @@ def test_counter_delta_64bit_reset_is_none():
     assert _counter_delta(5_000_000_000, 1_000_000) is None
 
 
-async def _seed_prev_stat(host_id: int, if_index: int, polled_at: str,
-                          in_octets: int, out_octets: int) -> None:
+async def _seed_prev_stat(host_id: int, if_index: int, polled_at: str, in_octets: int, out_octets: int) -> None:
     db = await db_module.get_db()
     try:
         await db.execute(
@@ -97,14 +96,14 @@ async def _add_host(hostname: str) -> int:
 def test_rates_are_computed_from_naive_prev_timestamp(rate_db):
     """End-to-end guard: a prev interface_stats row with a naive polled_at must
     yield a non-NULL rate (the old code produced NULL for every interface)."""
+
     async def _go():
         host_id = await _add_host("rate-host")
         # Prev counters an hour ago; a naive timestamp exactly like datetime('now').
         await _seed_prev_stat(host_id, 1, "2020-01-01 00:00:00", 1_000, 2_000)
         stored = await store_interface_ts_from_poll(
             host_id,
-            [{"if_index": 1, "name": "Gi0/1", "speed_mbps": 1000,
-              "in_octets": 1_000_000, "out_octets": 2_000_000}],
+            [{"if_index": 1, "name": "Gi0/1", "speed_mbps": 1000, "in_octets": 1_000_000, "out_octets": 2_000_000}],
         )
         assert stored == 1
         rows = await db_module.query_interface_ts(host_id, if_index=1)
@@ -119,14 +118,13 @@ def test_rates_are_computed_from_naive_prev_timestamp(rate_db):
 def test_counter_reset_yields_null_rate_not_spike(rate_db):
     """A reboot (counters drop into the 64-bit range from a huge value) must
     skip the interval rather than fabricate a multi-terabit spike."""
+
     async def _go():
         host_id = await _add_host("reset-host")
-        await _seed_prev_stat(host_id, 2, "2020-01-01 00:00:00",
-                              5_000_000_000, 5_000_000_000)
+        await _seed_prev_stat(host_id, 2, "2020-01-01 00:00:00", 5_000_000_000, 5_000_000_000)
         await store_interface_ts_from_poll(
             host_id,
-            [{"if_index": 2, "name": "Gi0/2", "speed_mbps": 1000,
-              "in_octets": 1_000_000, "out_octets": 1_000_000}],
+            [{"if_index": 2, "name": "Gi0/2", "speed_mbps": 1000, "in_octets": 1_000_000, "out_octets": 1_000_000}],
         )
         rows = await db_module.query_interface_ts(host_id, if_index=2)
         assert rows

@@ -24,6 +24,7 @@ async def _sqlite_columns(db, table: str) -> list[str]:
 
 # ── SQLite ──────────────────────────────────────────────────────────────────
 
+
 async def _up_sqlite(db) -> None:
     await db.execute(
         """
@@ -39,25 +40,19 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_schedules_enabled "
-        "ON audit_schedules(enabled, last_run_at)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_schedules_enabled ON audit_schedules(enabled, last_run_at)")
 
     cols = await _sqlite_columns(db, "audit_runs")
     if "schedule_id" not in cols:
         await db.execute(
-            "ALTER TABLE audit_runs ADD COLUMN schedule_id INTEGER "
-            "REFERENCES audit_schedules(id) ON DELETE SET NULL"
+            "ALTER TABLE audit_runs ADD COLUMN schedule_id INTEGER REFERENCES audit_schedules(id) ON DELETE SET NULL"
         )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_runs_schedule "
-        "ON audit_runs(schedule_id, started_at DESC)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_runs_schedule ON audit_runs(schedule_id, started_at DESC)")
     await db.commit()
 
 
 # ── Postgres ────────────────────────────────────────────────────────────────
+
 
 async def _up_postgres(db) -> None:
     await db.execute(
@@ -74,19 +69,13 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_schedules_enabled "
-        "ON audit_schedules(enabled, last_run_at)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_schedules_enabled ON audit_schedules(enabled, last_run_at)")
 
     await db.execute(
         "ALTER TABLE audit_runs ADD COLUMN IF NOT EXISTS schedule_id INTEGER "
         "REFERENCES audit_schedules(id) ON DELETE SET NULL"
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_audit_runs_schedule "
-        "ON audit_runs(schedule_id, started_at DESC)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_runs_schedule ON audit_runs(schedule_id, started_at DESC)")
     await db.commit()
 
 

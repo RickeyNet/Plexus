@@ -116,9 +116,7 @@ async def test_generate_network_documentation_report_data_group_filter(docs_db):
 @pytest.mark.asyncio
 async def test_generate_report_dispatches_network_documentation(monkeypatch):
     create_run_mock = AsyncMock(return_value={"id": 77})
-    generate_rows_mock = AsyncMock(
-        return_value=[{"section": "summary", "details": "devices=1"}]
-    )
+    generate_rows_mock = AsyncMock(return_value=[{"section": "summary", "details": "devices=1"}])
     complete_run_mock = AsyncMock(return_value=True)
 
     monkeypatch.setattr(reporting_module.db, "create_report_run", create_run_mock)
@@ -274,7 +272,7 @@ async def test_run_scheduled_reports_once_runs_due_definitions(monkeypatch):
         "id": 11,
         "name": "Daily Docs",
         "report_type": "network_documentation",
-        "parameters_json": "{\"group_id\": 1}",
+        "parameters_json": '{"group_id": 1}',
         "schedule": "1h",
         "last_run_at": (now - timedelta(hours=2)).isoformat(),
     }
@@ -288,7 +286,9 @@ async def test_run_scheduled_reports_once_runs_due_definitions(monkeypatch):
     }
 
     monkeypatch.setattr(reporting_module, "REPORT_SCHEDULER_ENABLED", True)
-    monkeypatch.setattr(reporting_module.db, "list_report_definitions", AsyncMock(return_value=[due_report, not_due_report]))
+    monkeypatch.setattr(
+        reporting_module.db, "list_report_definitions", AsyncMock(return_value=[due_report, not_due_report])
+    )
     execute_mock = AsyncMock(return_value={"run_id": 501, "artifact_count": 2})
     update_mock = AsyncMock(return_value=None)
     cleanup_mock = AsyncMock(return_value=0)

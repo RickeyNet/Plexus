@@ -2,6 +2,7 @@
 reporting.py -- Report generation and CSV export for availability,
 compliance, and interface utilization data.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,17 +28,14 @@ router = APIRouter()
 LOGGER = configure_logging("plexus.reporting")
 
 REPORT_SCHEDULER_ENABLED = os.getenv("APP_REPORT_SCHEDULER_ENABLED", "true").strip().lower() not in {
-    "0", "false", "no", "off",
+    "0",
+    "false",
+    "no",
+    "off",
 }
-REPORT_SCHEDULER_POLL_SECONDS = max(
-    30, int(os.getenv("APP_REPORT_SCHEDULER_POLL_SECONDS", "60"))
-)
-REPORT_SCHEDULER_MAX_RUNS_PER_CYCLE = max(
-    1, min(50, int(os.getenv("APP_REPORT_SCHEDULER_MAX_RUNS_PER_CYCLE", "10")))
-)
-REPORT_RUN_RETENTION_DAYS = max(
-    7, int(os.getenv("APP_REPORT_RUN_RETENTION_DAYS", "120"))
-)
+REPORT_SCHEDULER_POLL_SECONDS = max(30, int(os.getenv("APP_REPORT_SCHEDULER_POLL_SECONDS", "60")))
+REPORT_SCHEDULER_MAX_RUNS_PER_CYCLE = max(1, min(50, int(os.getenv("APP_REPORT_SCHEDULER_MAX_RUNS_PER_CYCLE", "10"))))
+REPORT_RUN_RETENTION_DAYS = max(7, int(os.getenv("APP_REPORT_RUN_RETENTION_DAYS", "120")))
 
 
 class ReportDefinitionCreate(BaseModel):
@@ -228,9 +226,7 @@ async def _persist_report_artifacts(
 
     if report_type in {"ipam_utilization", "ipam_forecast"}:
         title = (
-            "Plexus IPAM Subnet Utilization"
-            if report_type == "ipam_utilization"
-            else "Plexus IPAM Exhaustion Forecast"
+            "Plexus IPAM Subnet Utilization" if report_type == "ipam_utilization" else "Plexus IPAM Exhaustion Forecast"
         )
         pdf_bytes = _render_tabular_pdf(title, rows)
         artifacts.append(
@@ -303,9 +299,7 @@ async def _execute_report_run(
     try:
         rows = await _generate_report_rows(report_type, params)
 
-        await db.complete_report_run(
-            run["id"], json.dumps(rows, default=str), len(rows), "completed"
-        )
+        await db.complete_report_run(run["id"], json.dumps(rows, default=str), len(rows), "completed")
 
         if persist_artifacts:
             artifacts = await _persist_report_artifacts(
@@ -429,9 +423,7 @@ async def _build_network_doc_topology(group_id: int | None = None) -> dict:
     edges: list[dict] = []
 
     source_host_ids = {int(link["source_host_id"]) for link in links if link.get("source_host_id")}
-    target_host_ids = {
-        int(link["target_host_id"]) for link in links if link.get("target_host_id")
-    }
+    target_host_ids = {int(link["target_host_id"]) for link in links if link.get("target_host_id")}
     all_host_ids = source_host_ids | target_host_ids
 
     hosts = await db.get_hosts_by_ids(list(all_host_ids)) if all_host_ids else []
@@ -570,7 +562,7 @@ def _render_network_doc_svg(graph: dict, group_id: int | None = None) -> str:
                 f'<text x="{mx:.1f}" y="{my:.1f}" text-anchor="middle" '
                 'font-family="Arial, sans-serif" font-size="10" fill="#334155" '
                 'stroke="#ffffff" stroke-width="2" paint-order="stroke fill">'
-                f'{_xml_escape(iface_label)}</text>'
+                f"{_xml_escape(iface_label)}</text>"
             )
 
     node_parts: list[str] = []
@@ -590,19 +582,19 @@ def _render_network_doc_svg(graph: dict, group_id: int | None = None) -> str:
         node_parts.append(
             f'<text x="{x:.1f}" y="{(y + 42):.1f}" text-anchor="middle" '
             'font-family="Arial, sans-serif" font-size="12" fill="#0f172a">'
-            f'{_xml_escape(label)}</text>'
+            f"{_xml_escape(label)}</text>"
         )
         if ip:
             node_parts.append(
                 f'<text x="{x:.1f}" y="{(y + 56):.1f}" text-anchor="middle" '
                 'font-family="Arial, sans-serif" font-size="10" fill="#475569">'
-                f'{_xml_escape(ip)}</text>'
+                f"{_xml_escape(ip)}</text>"
             )
         if group_name:
             node_parts.append(
                 f'<text x="{x:.1f}" y="{(y - 33):.1f}" text-anchor="middle" '
                 'font-family="Arial, sans-serif" font-size="10" fill="#64748b">'
-                f'{_xml_escape(group_name)}</text>'
+                f"{_xml_escape(group_name)}</text>"
             )
 
     legend = """
@@ -621,13 +613,13 @@ def _render_network_doc_svg(graph: dict, group_id: int | None = None) -> str:
   <text x="{width // 2}" y="56" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#64748b">{_xml_escape(subtitle)}</text>
   {legend}
   <g id="edges">
-    {''.join(edge_parts)}
+    {"".join(edge_parts)}
   </g>
   <g id="edge-labels">
-    {''.join(edge_label_parts)}
+    {"".join(edge_label_parts)}
   </g>
   <g id="nodes">
-    {''.join(node_parts)}
+    {"".join(node_parts)}
   </g>
 </svg>"""
 
@@ -669,39 +661,33 @@ def _render_network_doc_drawio(graph: dict, group_id: int | None = None) -> str:
 
     graph_lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        "<mxfile host=\"Plexus\" modified=\"{}\" agent=\"Plexus\" version=\"20.8.16\">".format(
+        '<mxfile host="Plexus" modified="{}" agent="Plexus" version="20.8.16">'.format(
             datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         ),
-        "  <diagram id=\"plexus-network-doc\" name=\"Network Topology\">",
-        "    <mxGraphModel dx=\"1264\" dy=\"776\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" pageWidth=\"1600\" pageHeight=\"1200\" math=\"0\" shadow=\"0\">",
+        '  <diagram id="plexus-network-doc" name="Network Topology">',
+        '    <mxGraphModel dx="1264" dy="776" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">',
         "      <root>",
-        "        <mxCell id=\"0\" />",
-        "        <mxCell id=\"1\" parent=\"0\" />",
+        '        <mxCell id="0" />',
+        '        <mxCell id="1" parent="0" />',
     ]
 
     graph_lines.append(
-        f"        <mxCell id=\"title_cell\" value=\"{_xml_attr_escape(title)}\" style=\"text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontStyle=1;fontSize=22;fontColor=#0f172a;\" vertex=\"1\" parent=\"1\">"
+        f'        <mxCell id="title_cell" value="{_xml_attr_escape(title)}" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontStyle=1;fontSize=22;fontColor=#0f172a;" vertex="1" parent="1">'
     )
-    graph_lines.append(
-        "          <mxGeometry x=\"480\" y=\"16\" width=\"640\" height=\"30\" as=\"geometry\" />"
-    )
+    graph_lines.append('          <mxGeometry x="480" y="16" width="640" height="30" as="geometry" />')
     graph_lines.append("        </mxCell>")
 
     graph_lines.append(
-        f"        <mxCell id=\"subtitle_cell\" value=\"{_xml_attr_escape(subtitle)}\" style=\"text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=12;fontColor=#475569;\" vertex=\"1\" parent=\"1\">"
+        f'        <mxCell id="subtitle_cell" value="{_xml_attr_escape(subtitle)}" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=12;fontColor=#475569;" vertex="1" parent="1">'
     )
-    graph_lines.append(
-        "          <mxGeometry x=\"420\" y=\"46\" width=\"760\" height=\"22\" as=\"geometry\" />"
-    )
+    graph_lines.append('          <mxGeometry x="420" y="46" width="760" height="22" as="geometry" />')
     graph_lines.append("        </mxCell>")
 
     if not nodes:
         graph_lines.append(
-            "        <mxCell id=\"empty_state\" value=\"No topology nodes available for export.\" style=\"rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;strokeColor=#cbd5e1;fillColor=#f8fafc;fontColor=#334155;fontSize=14;\" vertex=\"1\" parent=\"1\">"
+            '        <mxCell id="empty_state" value="No topology nodes available for export." style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;strokeColor=#cbd5e1;fillColor=#f8fafc;fontColor=#334155;fontSize=14;" vertex="1" parent="1">'
         )
-        graph_lines.append(
-            "          <mxGeometry x=\"460\" y=\"330\" width=\"680\" height=\"80\" as=\"geometry\" />"
-        )
+        graph_lines.append('          <mxGeometry x="460" y="330" width="680" height="80" as="geometry" />')
         graph_lines.append("        </mxCell>")
     else:
         cx = width / 2
@@ -734,9 +720,7 @@ def _render_network_doc_drawio(graph: dict, group_id: int | None = None) -> str:
             ip = str(node.get("ip") or "")
             group_name = str(node.get("group_name") or "")
             in_inventory = bool(node.get("in_inventory"))
-            value = _drawio_value(
-                [label, ip, f"Group: {group_name}" if group_name else ""]
-            )
+            value = _drawio_value([label, ip, f"Group: {group_name}" if group_name else ""])
 
             fill = "#dbeafe" if in_inventory else "#e2e8f0"
             stroke = "#1d4ed8" if in_inventory else "#475569"
@@ -747,10 +731,10 @@ def _render_network_doc_drawio(graph: dict, group_id: int | None = None) -> str:
             )
             node_id = node_cell_ids[node["id"]]
             graph_lines.append(
-                f"        <mxCell id=\"{node_id}\" value=\"{_xml_attr_escape(value)}\" style=\"{style}\" vertex=\"1\" parent=\"1\">"
+                f'        <mxCell id="{node_id}" value="{_xml_attr_escape(value)}" style="{style}" vertex="1" parent="1">'
             )
             graph_lines.append(
-                f"          <mxGeometry x=\"{x - 80:.1f}\" y=\"{y - 26:.1f}\" width=\"160\" height=\"52\" as=\"geometry\" />"
+                f'          <mxGeometry x="{x - 80:.1f}" y="{y - 26:.1f}" width="160" height="52" as="geometry" />'
             )
             graph_lines.append("        </mxCell>")
 
@@ -773,9 +757,9 @@ def _render_network_doc_drawio(graph: dict, group_id: int | None = None) -> str:
                 f"html=1;strokeColor={color};fontSize=10;labelBackgroundColor=#ffffff;"
             )
             graph_lines.append(
-                f"        <mxCell id=\"e_{edge_counter}\" value=\"{_xml_attr_escape(value)}\" style=\"{edge_style}\" edge=\"1\" parent=\"1\" source=\"{src_cell}\" target=\"{dst_cell}\">"
+                f'        <mxCell id="e_{edge_counter}" value="{_xml_attr_escape(value)}" style="{edge_style}" edge="1" parent="1" source="{src_cell}" target="{dst_cell}">'
             )
-            graph_lines.append("          <mxGeometry relative=\"1\" as=\"geometry\" />")
+            graph_lines.append('          <mxGeometry relative="1" as="geometry" />')
             graph_lines.append("        </mxCell>")
             edge_counter += 1
 
@@ -791,12 +775,7 @@ def _render_network_doc_drawio(graph: dict, group_id: int | None = None) -> str:
 
 
 def _pdf_escape(text: str) -> str:
-    return (
-        str(text or "")
-        .replace("\\", "\\\\")
-        .replace("(", "\\(")
-        .replace(")", "\\)")
-    )
+    return str(text or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 def _rows_to_network_doc_lines(rows: list[dict], group_id: int | None = None) -> list[str]:
@@ -839,10 +818,7 @@ def _rows_to_network_doc_lines(rows: list[dict], group_id: int | None = None) ->
     subnets = [r for r in rows if str(r.get("section")) == "ip_plan"]
     lines.append(f"IP Plan ({len(subnets)} subnets)")
     for r in subnets:
-        lines.append(
-            f"  {r.get('subnet', '')} hosts={r.get('subnet_host_count', 0)} "
-            f"groups={r.get('group_name', '')}"
-        )
+        lines.append(f"  {r.get('subnet', '')} hosts={r.get('subnet_host_count', 0)} groups={r.get('group_name', '')}")
         if r.get("details"):
             lines.append(f"    {r.get('details')}")
     lines.append("")
@@ -887,10 +863,7 @@ def _render_text_pdf(title: str, lines: list[str]) -> bytes:
     if not all_lines:
         all_lines = [title]
 
-    chunks = [
-        all_lines[i: i + max_lines_per_page]
-        for i in range(0, len(all_lines), max_lines_per_page)
-    ]
+    chunks = [all_lines[i : i + max_lines_per_page] for i in range(0, len(all_lines), max_lines_per_page)]
 
     page_count = len(chunks)
     font_obj = 3 + page_count * 2
@@ -916,11 +889,7 @@ def _render_text_pdf(title: str, lines: list[str]) -> bytes:
         stream_cmds.append("ET")
 
         stream = ("\n".join(stream_cmds) + "\n").encode("utf-8")
-        objects[content_obj] = (
-            f"<< /Length {len(stream)} >>\nstream\n".encode("ascii")
-            + stream
-            + b"endstream"
-        )
+        objects[content_obj] = f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"endstream"
         objects[page_obj] = (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} {page_height}] "
             f"/Resources << /Font << /F1 {font_obj} 0 R >> >> "
@@ -944,11 +913,7 @@ def _render_text_pdf(title: str, lines: list[str]) -> bytes:
     out.extend(b"0000000000 65535 f \n")
     for obj_num in range(1, max_obj + 1):
         out.extend(f"{offsets[obj_num]:010d} 00000 n \n".encode("ascii"))
-    out.extend(
-        f"trailer\n<< /Size {max_obj + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode(
-            "ascii"
-        )
-    )
+    out.extend(f"trailer\n<< /Size {max_obj + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii"))
     return bytes(out)
 
 
@@ -964,9 +929,7 @@ async def generate_report(body: dict, request: Request):
     params = body.get("parameters", {})
     if not isinstance(params, dict):
         params = {}
-    persist_artifacts = bool(
-        body.get("persist_artifacts", report_type == "network_documentation")
-    )
+    persist_artifacts = bool(body.get("persist_artifacts", report_type == "network_documentation"))
 
     return await _execute_report_run(
         report_id=body.get("report_id"),
@@ -1137,9 +1100,7 @@ async def export_ipam_utilization_csv(
     vrf_name: str | None = Query(default=None),
     threshold_pct: float = Query(default=0.0),
 ):
-    rows = await db.generate_ipam_utilization_report_data(
-        vrf_name=vrf_name, threshold_pct=threshold_pct
-    )
+    rows = await db.generate_ipam_utilization_report_data(vrf_name=vrf_name, threshold_pct=threshold_pct)
     return _csv_download_response(_rows_to_csv(rows), "ipam_utilization_report.csv")
 
 
@@ -1148,9 +1109,7 @@ async def export_ipam_utilization_pdf(
     vrf_name: str | None = Query(default=None),
     threshold_pct: float = Query(default=0.0),
 ):
-    rows = await db.generate_ipam_utilization_report_data(
-        vrf_name=vrf_name, threshold_pct=threshold_pct
-    )
+    rows = await db.generate_ipam_utilization_report_data(vrf_name=vrf_name, threshold_pct=threshold_pct)
     pdf_bytes = _render_tabular_pdf("Plexus IPAM Subnet Utilization", rows)
     return Response(
         content=pdf_bytes,
@@ -1211,8 +1170,11 @@ async def export_ipam_history_csv(
     limit: int = Query(default=1000, ge=1, le=10000),
 ):
     rows = await db.generate_ipam_history_report_data(
-        address=address, hostname=hostname, vrf_name=vrf_name,
-        days=days, limit=limit,
+        address=address,
+        hostname=hostname,
+        vrf_name=vrf_name,
+        days=days,
+        limit=limit,
     )
     return _csv_download_response(_rows_to_csv(rows), "ipam_history_report.csv")
 
@@ -1288,7 +1250,9 @@ async def export_report_run_csv(run_id: int):
                 media_type=str(full.get("media_type") or "text/csv"),
                 headers={
                     "Content-Disposition": f"attachment; filename={os.path.basename(str(full.get('file_name') or f'report_{run_id}.csv'))}",
-                    "Content-Length": str(len(payload if isinstance(payload, (bytes, bytearray)) else str(payload).encode('utf-8'))),
+                    "Content-Length": str(
+                        len(payload if isinstance(payload, (bytes, bytearray)) else str(payload).encode("utf-8"))
+                    ),
                 },
             )
 

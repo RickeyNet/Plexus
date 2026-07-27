@@ -43,27 +43,32 @@ class _FileLock:
         self._fd = os.open(self._path, os.O_CREAT | os.O_RDWR)
         if sys.platform == "win32":
             import msvcrt
+
             msvcrt.locking(self._fd, msvcrt.LK_LOCK, 1)
         else:
             import fcntl
+
             fcntl.flock(self._fd, fcntl.LOCK_EX)
 
     def release(self) -> None:
         if self._fd is not None:
             if sys.platform == "win32":
                 import msvcrt
+
                 try:
                     msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
                 except OSError as exc:
                     _LOGGER.debug("Failed to unlock migration lock file %s: %s", self._path, exc)
             else:
                 import fcntl
+
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
             os.close(self._fd)
             self._fd = None
 
 
 # ── Discovery ───────────────────────────────────────────────────────────────
+
 
 def _discover_migrations() -> list[dict]:
     """Return a sorted list of ``{version, description, module}`` dicts."""
@@ -83,12 +88,14 @@ def _discover_migrations() -> list[dict]:
         if not hasattr(mod, "up") or not hasattr(mod, "VERSION"):
             _LOGGER.warning("migration file %s missing VERSION or up(); skipping", name)
             continue
-        found.append({
-            "version": mod.VERSION,
-            "description": getattr(mod, "DESCRIPTION", name),
-            "up": mod.up,
-            "filename": name,
-        })
+        found.append(
+            {
+                "version": mod.VERSION,
+                "description": getattr(mod, "DESCRIPTION", name),
+                "up": mod.up,
+                "filename": name,
+            }
+        )
 
     found.sort(key=lambda m: m["version"])
 
@@ -96,10 +103,7 @@ def _discover_migrations() -> list[dict]:
     seen: set[int] = set()
     for m in found:
         if m["version"] in seen:
-            raise RuntimeError(
-                f"Duplicate migration version {m['version']} "
-                f"(file: {m['filename']})"
-            )
+            raise RuntimeError(f"Duplicate migration version {m['version']} (file: {m['filename']})")
         seen.add(m["version"])
 
     return found
@@ -156,13 +160,9 @@ async def _bootstrap_baseline(db, *, engine: str) -> None:
         return  # framework already in use
 
     if engine == "postgres":
-        cursor = await db.execute(
-            "SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1"
-        )
+        cursor = await db.execute("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1")
     else:
-        cursor = await db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users' LIMIT 1"
-        )
+        cursor = await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users' LIMIT 1")
     row = await cursor.fetchone()
     if row is None:
         return  # truly empty DB; SCHEMA hasn't been applied yet
@@ -170,9 +170,7 @@ async def _bootstrap_baseline(db, *, engine: str) -> None:
     _LOGGER.info("schema: marking v1.0.0 baseline migrations 1–32 as applied")
     for mig in _discover_migrations():
         if mig["version"] <= 32:
-            await _record_migration(
-                db, mig["version"], mig["description"], engine=engine
-            )
+            await _record_migration(db, mig["version"], mig["description"], engine=engine)
 
 
 async def _record_migration(db, version: int, description: str, *, engine: str) -> None:
@@ -191,6 +189,7 @@ async def _record_migration(db, version: int, description: str, *, engine: str) 
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
+
 async def run_migrations(db, *, engine: str = "sqlite") -> int:
     """Apply any pending migrations.  Returns the count of newly applied ones.
 
@@ -208,6 +207,7 @@ async def run_migrations(db, *, engine: str = "sqlite") -> int:
             await db.execute(f"SELECT pg_advisory_lock({_ADVISORY_LOCK_ID})")
         else:
             from routes.database import DB_PATH
+
             lock = _FileLock(DB_PATH + ".migrate.lock")
             lock.acquire()
 
@@ -250,7 +250,8 @@ async def run_migrations(db, *, engine: str = "sqlite") -> int:
             except Exception as exc:
                 _LOGGER.warning(
                     "Migration cleanup failed: could not release Postgres advisory lock %s: %s",
-                    _ADVISORY_LOCK_ID, exc,
+                    _ADVISORY_LOCK_ID,
+                    exc,
                 )
         if lock is not None:
             lock.release()

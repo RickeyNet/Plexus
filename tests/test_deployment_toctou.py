@@ -27,15 +27,16 @@ async def _make_deployment(status: str = "planning") -> int:
     try:
         cur = await db.execute("INSERT INTO inventory_groups (name) VALUES ('g')")
         gid = int(cur.lastrowid)
-        cur = await db.execute(
-            "INSERT INTO credentials (name, username, password) VALUES ('c', 'u', 'p')"
-        )
+        cur = await db.execute("INSERT INTO credentials (name, username, password) VALUES ('c', 'u', 'p')")
         cid = int(cur.lastrowid)
         await db.commit()
     finally:
         await db.close()
     dep_id = await db_module.create_deployment(
-        name="d", group_id=gid, credential_id=cid, proposed_commands="show ver",
+        name="d",
+        group_id=gid,
+        credential_id=cid,
+        proposed_commands="show ver",
     )
     if status != "planning":
         await db_module.update_deployment_status(dep_id, status)

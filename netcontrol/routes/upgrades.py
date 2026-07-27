@@ -6,6 +6,7 @@ image management, and real-time WebSocket streaming.
 
 Ported from standalone iosxe_upgrade.py into the Plexus platform.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -40,6 +41,7 @@ from netcontrol.telemetry import configure_logging
 try:
     from netmiko import ConnectHandler, file_transfer
     from netmiko.exceptions import NetmikoTimeoutException
+
     NETMIKO_AVAILABLE = True
 except ImportError:
     NETMIKO_AVAILABLE = False
@@ -50,7 +52,9 @@ LOGGER = configure_logging("plexus.upgrades")
 
 
 async def _resolve_campaign_credential(
-    cred_id, created_by, session: dict | None = None,
+    cred_id,
+    created_by,
+    session: dict | None = None,
 ) -> dict:
     """Resolve the credential a campaign should run with.
 
@@ -68,16 +72,17 @@ async def _resolve_campaign_credential(
         created_by = (created_by or "").strip()
         if created_by and created_by.lower() != "unknown":
             return await require_credential_access(
-                cred_id, submitter_username=created_by, allow_service=True,
+                cred_id,
+                submitter_username=created_by,
+                allow_service=True,
             )
         return await require_credential_access(
-            cred_id, session=session, allow_service=True,
+            cred_id,
+            session=session,
+            allow_service=True,
         )
 
-    fallback_id = (
-        state.AUTH_CONFIG.get("service_credential_id")
-        or state.AUTH_CONFIG.get("default_credential_id")
-    )
+    fallback_id = state.AUTH_CONFIG.get("service_credential_id") or state.AUTH_CONFIG.get("default_credential_id")
     if not fallback_id:
         raise HTTPException(
             400,
@@ -87,10 +92,9 @@ async def _resolve_campaign_credential(
         )
     cred = await db.get_credential_raw(fallback_id)
     if not cred:
-        raise HTTPException(
-            400, f"Configured default credential {fallback_id} no longer exists"
-        )
+        raise HTTPException(400, f"Configured default credential {fallback_id} no longer exists")
     return cred
+
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -119,11 +123,12 @@ SOFTWARE_IMAGES_DIR = _resolve_software_images_dir()
 
 BACKUPS_DIR = os.path.join(
     _REPO_ROOT,
-    "backups", "upgrades",
+    "backups",
+    "upgrades",
 )
 
 # Stored filenames must stay safe for IOS-XE CLI interpolation (_SAFE_IMAGE_NAME_RE).
-_UPLOAD_FILENAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$')
+_UPLOAD_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 
 
 def _software_images_root() -> str:
@@ -202,9 +207,10 @@ def _verify_software_images_writable() -> None:
         f.write(b"")
     os.remove(probe)
 
+
 # Validation patterns for values interpolated into device CLI commands
-_SAFE_IMAGE_NAME_RE = re.compile(r'^[A-Za-z0-9._\-]+$')
-_SAFE_DEST_PATH_RE = re.compile(r'^[a-z]+[0-9]*:/?$')   # flash: bootflash:/ slot0: etc.
+_SAFE_IMAGE_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
+_SAFE_DEST_PATH_RE = re.compile(r"^[a-z]+[0-9]*:/?$")  # flash: bootflash:/ slot0: etc.
 
 
 def _validate_cli_inputs(image_name: str, dest_path: str) -> str | None:
@@ -307,16 +313,13 @@ async def rehydrate_scheduled_upgrades():
 
         # Resolve credentials
         try:
-            options = (
-                json.loads(campaign["options"])
-                if isinstance(campaign["options"], str)
-                else campaign["options"]
-            )
+            options = json.loads(campaign["options"]) if isinstance(campaign["options"], str) else campaign["options"]
             # Rehydrating a scheduled activate after restart: resolve against
             # the campaign creator (no live session here), falling back to the
             # configured service credential when the campaign has none set.
             cred = await _resolve_campaign_credential(
-                options.get("credential_id"), campaign.get("created_by"),
+                options.get("credential_id"),
+                campaign.get("created_by"),
             )
             credentials = {
                 "username": cred["username"],
@@ -325,9 +328,7 @@ async def rehydrate_scheduled_upgrades():
             }
             devices = await db.get_upgrade_devices(campaign_id)
             image_map_raw = (
-                json.loads(campaign["image_map"])
-                if isinstance(campaign["image_map"], str)
-                else campaign["image_map"]
+                json.loads(campaign["image_map"]) if isinstance(campaign["image_map"], str) else campaign["image_map"]
             )
             image_map = sorted(image_map_raw.items(), key=lambda x: len(x[0]), reverse=True)
         except Exception:
@@ -343,8 +344,7 @@ async def rehydrate_scheduled_upgrades():
                         status="activate_failed",
                         completed_at=_utc_now_iso(),
                         error_message=(
-                            "Scheduled activate could not be rehydrated; "
-                            "check credentials/devices and reschedule."
+                            "Scheduled activate could not be rehydrated; check credentials/devices and reschedule."
                         ),
                     )
             except Exception as exc:
@@ -375,8 +375,7 @@ async def rehydrate_scheduled_upgrades():
                         scheduled_at=scheduled_at_utc.isoformat(),
                         completed_at=_utc_now_iso(),
                         error_message=(
-                            "Scheduled activate window was missed due to a server restart; "
-                            "reschedule required."
+                            "Scheduled activate window was missed due to a server restart; reschedule required."
                         ),
                     )
                 await _emit(
@@ -395,9 +394,7 @@ async def rehydrate_scheduled_upgrades():
             campaign_id,
             scheduled_at_utc.isoformat(),
         )
-        op = await db.get_latest_upgrade_operation(
-            campaign_id, phase="activate", statuses=("scheduled", "running")
-        )
+        op = await db.get_latest_upgrade_operation(campaign_id, phase="activate", statuses=("scheduled", "running"))
         if op:
             operation_id = op["id"]
         else:
@@ -421,7 +418,12 @@ async def rehydrate_scheduled_upgrades():
             try:
                 delay_seconds = (_sat - datetime.now(UTC)).total_seconds()
                 if delay_seconds > 0:
-                    await _emit(_cid, None, "info", f"Resuming scheduled activate (rehydrated after restart); fires at {_sat.isoformat()}")
+                    await _emit(
+                        _cid,
+                        None,
+                        "info",
+                        f"Resuming scheduled activate (rehydrated after restart); fires at {_sat.isoformat()}",
+                    )
                     await asyncio.sleep(delay_seconds)
                 await db.update_upgrade_campaign(_cid, status="running_activate", scheduled_at=None)
                 await db.update_upgrade_operation(
@@ -457,8 +459,6 @@ async def rehydrate_scheduled_upgrades():
         task.add_done_callback(_on_done)
 
 
-
-
 class ImageUpdate(BaseModel):
     model_pattern: str = ""
     version: str = ""
@@ -474,8 +474,7 @@ class CampaignCreate(BaseModel):
     image_map: dict = Field(default_factory=dict, max_length=1000)
     options: dict = Field(default_factory=dict, max_length=200)
     host_ids: list[int] = Field(default_factory=list, max_length=100000)
-    ad_hoc_ips: list[Annotated[str, Field(max_length=64)]] = Field(
-        default_factory=list, max_length=100000)
+    ad_hoc_ips: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=100000)
     # Optional: when omitted the campaign runs with the configured service
     # credential (the system account used for unattended work).
     credential_id: int | None = None
@@ -487,8 +486,7 @@ class CampaignUpdate(BaseModel):
     image_map: dict = Field(default_factory=dict, max_length=1000)
     options: dict = Field(default_factory=dict, max_length=200)
     host_ids: list[int] = Field(default_factory=list, max_length=100000)
-    ad_hoc_ips: list[Annotated[str, Field(max_length=64)]] = Field(
-        default_factory=list, max_length=100000)
+    ad_hoc_ips: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=100000)
     credential_id: int | None = None
 
 
@@ -743,7 +741,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     md5_hash = md5.hexdigest()
 
     # Auto-detect version from filename
-    ver_match = re.search(r'(\d+\.\d+\.\d+)', filename)
+    ver_match = re.search(r"(\d+\.\d+\.\d+)", filename)
     version = ver_match.group(1) if ver_match else ""
 
     # Auto-detect model pattern from filename
@@ -782,7 +780,14 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     await _audit("upgrades", "image_upload", user=user, detail=f"Uploaded {filename} ({size} bytes, md5={md5_hash})")
     LOGGER.info("Image uploaded: %s (%s bytes) by %s", filename, size, user)
 
-    return {"id": image_id, "filename": filename, "file_size": size, "md5_hash": md5_hash, "version": version, "model_pattern": model_pattern}
+    return {
+        "id": image_id,
+        "filename": filename,
+        "file_size": size,
+        "md5_hash": md5_hash,
+        "version": version,
+        "model_pattern": model_pattern,
+    }
 
 
 @router.get("/api/upgrades/images")
@@ -880,7 +885,10 @@ async def create_campaign(body: CampaignCreate, request: Request):
             continue
         try:
             await db.add_upgrade_device(
-                campaign_id, hid, host["ip_address"], host.get("hostname", ""),
+                campaign_id,
+                hid,
+                host["ip_address"],
+                host.get("hostname", ""),
             )
             added += 1
         except Exception as exc:
@@ -901,13 +909,17 @@ async def create_campaign(body: CampaignCreate, request: Request):
 
     if not_found_host_ids or skipped_host_ids or skipped_ips:
         LOGGER.warning(
-            "Campaign '%s': %d devices added; not-found host ids=%s, "
-            "duplicate/skipped host ids=%s, skipped ips=%s",
-            body.name, added, not_found_host_ids, skipped_host_ids, skipped_ips,
+            "Campaign '%s': %d devices added; not-found host ids=%s, duplicate/skipped host ids=%s, skipped ips=%s",
+            body.name,
+            added,
+            not_found_host_ids,
+            skipped_host_ids,
+            skipped_ips,
         )
 
-    await _audit("upgrades", "campaign_create", user=user,
-                 detail=f"Created campaign '{body.name}' with {added} devices")
+    await _audit(
+        "upgrades", "campaign_create", user=user, detail=f"Created campaign '{body.name}' with {added} devices"
+    )
     LOGGER.info("Campaign created: %s (%d devices) by %s", body.name, added, user)
 
     return {
@@ -992,7 +1004,10 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
         if host and host["ip_address"] not in existing_ips:
             try:
                 await db.add_upgrade_device(
-                    campaign_id, hid, host["ip_address"], host.get("hostname", ""),
+                    campaign_id,
+                    hid,
+                    host["ip_address"],
+                    host.get("hostname", ""),
                 )
                 added += 1
             except Exception as exc:
@@ -1008,8 +1023,12 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
                 LOGGER.debug("update_campaign: skipping ad-hoc device %s: %s", ip, exc)
 
     total_devices = len(await db.get_upgrade_devices(campaign_id))
-    await _audit("upgrades", "campaign_update", user=user,
-                 detail=f"Updated campaign '{body.name}' - {total_devices} devices ({added} new)")
+    await _audit(
+        "upgrades",
+        "campaign_update",
+        user=user,
+        detail=f"Updated campaign '{body.name}' - {total_devices} devices ({added} new)",
+    )
     LOGGER.info("Campaign updated: %s (%d total devices, %d new) by %s", body.name, total_devices, added, user)
 
     return {"ok": True, "total_devices": total_devices, "devices_added": added}
@@ -1034,7 +1053,9 @@ async def delete_campaign(campaign_id: int, request: Request):
 
 
 @router.get("/api/upgrades/campaigns/{campaign_id}/events")
-async def get_campaign_events(campaign_id: int, request: Request, device_id: int = None, limit: int = Query(default=1000, ge=1, le=10000)):
+async def get_campaign_events(
+    campaign_id: int, request: Request, device_id: int = None, limit: int = Query(default=1000, ge=1, le=10000)
+):
     campaign = await db.get_upgrade_campaign(campaign_id)
     if not campaign:
         raise HTTPException(404, "Campaign not found")
@@ -1060,11 +1081,13 @@ async def list_backups():
         if not os.path.isfile(fpath):
             continue
         stat = os.stat(fpath)
-        backups.append({
-            "filename": fname,
-            "size": stat.st_size,
-            "modified": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
-        })
+        backups.append(
+            {
+                "filename": fname,
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+            }
+        )
     return backups
 
 
@@ -1142,7 +1165,9 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     # credential is used as the default for this unattended work.
     options = json.loads(campaign["options"]) if isinstance(campaign["options"], str) else campaign["options"]
     cred = await _resolve_campaign_credential(
-        options.get("credential_id"), campaign.get("created_by"), session=session,
+        options.get("credential_id"),
+        campaign.get("created_by"),
+        session=session,
     )
 
     credentials = {
@@ -1170,14 +1195,14 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     phase_status_key = _phase_status_key(body.phase)
     for dev in devices:
         if dev.get(phase_status_key) == "cancelled":
-            await db.update_upgrade_device(
-                dev["id"], **{phase_status_key: "pending", "error_message": ""}
-            )
+            await db.update_upgrade_device(dev["id"], **{phase_status_key: "pending", "error_message": ""})
             dev[phase_status_key] = "pending"
             dev["error_message"] = ""
 
     # Parse image map
-    image_map_raw = json.loads(campaign["image_map"]) if isinstance(campaign["image_map"], str) else campaign["image_map"]
+    image_map_raw = (
+        json.loads(campaign["image_map"]) if isinstance(campaign["image_map"], str) else campaign["image_map"]
+    )
     # image_map: {"pattern": "image_filename", ...}
     # Sort by pattern length descending for specificity matching
     image_map = sorted(image_map_raw.items(), key=lambda x: len(x[0]), reverse=True)
@@ -1187,9 +1212,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
         "scheduled" if scheduled_at_utc is not None else "running",
         requested_by=user,
         device_count=len(devices),
-        scheduled_at=(
-            scheduled_at_utc.isoformat() if scheduled_at_utc is not None else None
-        ),
+        scheduled_at=(scheduled_at_utc.isoformat() if scheduled_at_utc is not None else None),
         started_at=None if scheduled_at_utc is not None else _utc_now_iso(),
     )
 
@@ -1254,8 +1277,12 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
         task = asyncio.create_task(_run_scheduled_phase())
     else:
         await db.update_upgrade_campaign(campaign_id, status=f"running_{body.phase}")
-        await _audit("upgrades", "phase_execute", user=user,
-                     detail=f"Executing {body.phase} on campaign {campaign_id} ({len(devices)} devices)")
+        await _audit(
+            "upgrades",
+            "phase_execute",
+            user=user,
+            detail=f"Executing {body.phase} on campaign {campaign_id} ({len(devices)} devices)",
+        )
         task = asyncio.create_task(
             _run_phase(
                 campaign_id,
@@ -1310,11 +1337,14 @@ async def cancel_campaign(campaign_id: int, request: Request):
     await _emit(campaign_id, None, "warn", "Campaign phase cancelled by user")
 
     # Notify WebSocket
-    await _broadcast_upgrade_event(campaign_id, {
-        "type": "campaign_complete",
-        "campaign_id": campaign_id,
-        "status": "cancelled",
-    })
+    await _broadcast_upgrade_event(
+        campaign_id,
+        {
+            "type": "campaign_complete",
+            "campaign_id": campaign_id,
+            "status": "cancelled",
+        },
+    )
 
     return {"ok": True}
 
@@ -1407,9 +1437,7 @@ async def cancel_campaign_devices(
         "upgrades",
         "devices_cancel",
         user=user,
-        detail=(
-            f"Cancelled {cancelled} device(s) in {phase} phase for campaign {campaign_id}"
-        ),
+        detail=(f"Cancelled {cancelled} device(s) in {phase} phase for campaign {campaign_id}"),
         correlation_id=_corr_id(request),
     )
 
@@ -1466,24 +1494,26 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
     events = await db.get_upgrade_events(campaign_id, limit=1000)
     last_id = events[-1]["id"] if events else 0
     try:
-        await ws.send_json({
-            "type": "replay_batch",
-            "campaign_id": campaign_id,
-            "last_event_id": last_id,
-            "events": [
-                {
-                    "type": "upgrade_event",
-                    "campaign_id": campaign_id,
-                    "device_id": ev.get("device_id"),
-                    "level": ev["level"],
-                    "message": ev["message"],
-                    "host": ev.get("host", ""),
-                    "timestamp": ev["timestamp"],
-                    "event_id": ev["id"],
-                }
-                for ev in events
-            ],
-        })
+        await ws.send_json(
+            {
+                "type": "replay_batch",
+                "campaign_id": campaign_id,
+                "last_event_id": last_id,
+                "events": [
+                    {
+                        "type": "upgrade_event",
+                        "campaign_id": campaign_id,
+                        "device_id": ev.get("device_id"),
+                        "level": ev["level"],
+                        "message": ev["message"],
+                        "host": ev.get("host", ""),
+                        "timestamp": ev["timestamp"],
+                        "event_id": ev["id"],
+                    }
+                    for ev in events
+                ],
+            }
+        )
     except Exception:
         return
 
@@ -1531,8 +1561,12 @@ async def _run_phase(
     status_key = _phase_status_key(phase)
     phase_name = _phase_label(phase)
 
-    await _emit(campaign_id, None, "info",
-                f"Starting {phase_name} phase for {len(devices)} device(s) (max {max_workers} concurrent)")
+    await _emit(
+        campaign_id,
+        None,
+        "info",
+        f"Starting {phase_name} phase for {len(devices)} device(s) (max {max_workers} concurrent)",
+    )
 
     semaphore = asyncio.Semaphore(max_workers)
 
@@ -1573,11 +1607,14 @@ async def _run_phase(
                 raise
             except Exception as e:
                 LOGGER.error("Unhandled error on device %s: %s", dev["ip_address"], e, exc_info=True)
-                await db.update_upgrade_device(dev["id"], **{
-                    status_key: "failed",
-                    "phase": "failed",
-                    "error_message": str(e)[:1000],
-                })
+                await db.update_upgrade_device(
+                    dev["id"],
+                    **{
+                        status_key: "failed",
+                        "phase": "failed",
+                        "error_message": str(e)[:1000],
+                    },
+                )
                 await _emit(campaign_id, dev["id"], "error", f"Unhandled error: {str(e)[:500]}", host=dev["ip_address"])
 
     tasks = [asyncio.create_task(_process_device(d)) for d in devices]
@@ -1608,10 +1645,7 @@ async def _run_phase(
     if operation_id is not None:
         error_message = ""
         if failed or cancelled:
-            error_message = (
-                f"{phase_name} phase completed with {failed} failed and "
-                f"{cancelled} cancelled device(s)."
-            )
+            error_message = f"{phase_name} phase completed with {failed} failed and {cancelled} cancelled device(s)."
         await db.update_upgrade_operation(
             operation_id,
             status=final_status,
@@ -1623,20 +1657,27 @@ async def _run_phase(
             error_message=error_message,
         )
     level = "success" if failed == 0 and cancelled == 0 else "warn"
-    await _emit(campaign_id, None, level,
-                f"{phase_name} phase complete: {completed}/{total} succeeded, {failed} failed, {cancelled} cancelled")
+    await _emit(
+        campaign_id,
+        None,
+        level,
+        f"{phase_name} phase complete: {completed}/{total} succeeded, {failed} failed, {cancelled} cancelled",
+    )
 
     # Small delay to ensure all _emit() DB writes are flushed before the
     # frontend reloads and replays history
     await asyncio.sleep(0.5)
 
     # Notify WebSocket clients
-    await _broadcast_upgrade_event(campaign_id, {
-        "type": "campaign_complete",
-        "campaign_id": campaign_id,
-        "status": final_status,
-        "phase": phase,
-    })
+    await _broadcast_upgrade_event(
+        campaign_id,
+        {
+            "type": "campaign_complete",
+            "campaign_id": campaign_id,
+            "status": final_status,
+            "phase": phase,
+        },
+    )
 
 
 async def _resolve_device_type(dev) -> str:
@@ -1711,9 +1752,7 @@ def _resolve_image(model, image_map):
     return None
 
 
-async def _run_install_add_prestage(
-    conn, campaign_id, dev_id, ip, image_name, dest_path, device_type="cisco_xe"
-):
+async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, dest_path, device_type="cisco_xe"):
     """Pre-stage packages so activate can run without a new add.
 
     Delegates the actual install-add verb to the driver so non-Cisco-XE
@@ -1742,8 +1781,7 @@ async def _run_install_add_prestage(
     try:
         install_add_cmd = driver.upgrade_install_add_command(full_path)
     except DriverCapabilityError as e:
-        await _emit(campaign_id, dev_id, "error",
-                    f"Pre-stage not supported on this platform: {e}", host=ip)
+        await _emit(campaign_id, dev_id, "error", f"Pre-stage not supported on this platform: {e}", host=ip)
         return False, str(e)
     await _emit(campaign_id, dev_id, "info", f"Pre-staging image: {install_add_cmd}", host=ip)
     await _emit(campaign_id, dev_id, "info", "This may take several minutes...", host=ip)
@@ -1913,15 +1951,15 @@ async def _detect_model(conn, ip):
 
     for line in output.splitlines():
         if not model:
-            match = re.search(r'cisco\s+(C\S+)\s+\(', line, re.IGNORECASE)
+            match = re.search(r"cisco\s+(C\S+)\s+\(", line, re.IGNORECASE)
             if match:
                 model = match.group(1).upper()
             else:
-                match = re.search(r'Model\s+Number\s*:\s*(\S+)', line, re.IGNORECASE)
+                match = re.search(r"Model\s+Number\s*:\s*(\S+)", line, re.IGNORECASE)
                 if match:
                     model = match.group(1).upper()
         if not version:
-            match = re.search(r'Version\s+(\d+\.\d+\.\d+\S*)', line)
+            match = re.search(r"Version\s+(\d+\.\d+\.\d+\S*)", line)
             if match:
                 version = match.group(1)
 
@@ -1937,19 +1975,23 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
     dev_id = dev["id"]
     device_type = await _resolve_device_type(dev)
 
-    await db.update_upgrade_device(dev_id, prestage_status="running", phase="prestage",
-                                   started_at=datetime.now(UTC).isoformat())
+    await db.update_upgrade_device(
+        dev_id, prestage_status="running", phase="prestage", started_at=datetime.now(UTC).isoformat()
+    )
     await _emit_device_status(campaign_id, dev_id, prestage_status="running")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options,
-                                     retries=options.get("retries", 2),
-                                     device_type=device_type)
+        conn = await _connect_device(
+            ip, credentials, options, retries=options.get("retries", 2), device_type=device_type
+        )
     except Exception as e:
-        await db.update_upgrade_device(dev_id, prestage_status="failed", phase="failed",
-                                       error_message=f"Connection failed: {e}")
-        await _emit_device_status(campaign_id, dev_id, prestage_status="failed", error_message=f"Connection failed: {e}")
+        await db.update_upgrade_device(
+            dev_id, prestage_status="failed", phase="failed", error_message=f"Connection failed: {e}"
+        )
+        await _emit_device_status(
+            campaign_id, dev_id, prestage_status="failed", error_message=f"Connection failed: {e}"
+        )
         await _emit(campaign_id, dev_id, "error", f"Connection failed: {e}", host=ip)
         return
 
@@ -1978,11 +2020,13 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
             await db.update_upgrade_device(dev_id, health_status=health)
 
             if not passed:
-                await _emit(campaign_id, dev_id, "error",
-                            f"Health check FAILED: {'; '.join(warnings)}", host=ip)
-                await db.update_upgrade_device(dev_id, prestage_status="failed", phase="failed",
-                                               error_message="Health check failed")
-                await _emit_device_status(campaign_id, dev_id, prestage_status="failed", error_message="Health check failed")
+                await _emit(campaign_id, dev_id, "error", f"Health check FAILED: {'; '.join(warnings)}", host=ip)
+                await db.update_upgrade_device(
+                    dev_id, prestage_status="failed", phase="failed", error_message="Health check failed"
+                )
+                await _emit_device_status(
+                    campaign_id, dev_id, prestage_status="failed", error_message="Health check failed"
+                )
                 await asyncio.to_thread(conn.disconnect)
                 return
             else:
@@ -1998,7 +2042,7 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
                 config = await asyncio.to_thread(conn.send_command, "show running-config", read_timeout=120)
                 os.makedirs(BACKUPS_DIR, exist_ok=True)
                 hostname = dev.get("hostname") or ip
-                clean = re.sub(r'[^\w\-.]', '_', hostname)
+                clean = re.sub(r"[^\w\-.]", "_", hostname)
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = os.path.join(BACKUPS_DIR, f"backup_{clean}_{ts}.txt")
                 with open(backup_file, "w") as f:
@@ -2019,26 +2063,30 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
         await _emit(campaign_id, dev_id, "info", "Removing inactive packages...", host=ip)
         try:
             output = await asyncio.to_thread(
-                conn.send_command, "install remove inactive",
+                conn.send_command,
+                "install remove inactive",
                 expect_string=r"#|proceed|y/n|\[yes/no\]|\[y/n\]",
                 read_timeout=300,
             )
             if any(x in output.lower() for x in ["proceed", "y/n", "yes/no"]):
                 output += await asyncio.to_thread(
-                    conn.send_command, "y", expect_string=r"#", read_timeout=600,
+                    conn.send_command,
+                    "y",
+                    expect_string=r"#",
+                    read_timeout=600,
                 )
             await _emit(campaign_id, dev_id, "success", "Inactive packages removed", host=ip)
         except Exception as e:
             await _emit(campaign_id, dev_id, "warn", f"Install remove inactive: {e}", host=ip)
 
-        await db.update_upgrade_device(dev_id, prestage_status="completed", phase="prestage_done",
-                                       phase_detail="Prestage completed successfully")
+        await db.update_upgrade_device(
+            dev_id, prestage_status="completed", phase="prestage_done", phase_detail="Prestage completed successfully"
+        )
         await _emit_device_status(campaign_id, dev_id, prestage_status="completed")
         await _emit(campaign_id, dev_id, "success", "Prestage complete", host=ip)
 
     except Exception as e:
-        await db.update_upgrade_device(dev_id, prestage_status="failed", phase="failed",
-                                       error_message=str(e))
+        await db.update_upgrade_device(dev_id, prestage_status="failed", phase="failed", error_message=str(e))
         await _emit_device_status(campaign_id, dev_id, prestage_status="failed", error_message=str(e))
         await _emit(campaign_id, dev_id, "error", f"Prestage failed: {e}", host=ip)
     finally:
@@ -2058,19 +2106,23 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
     dest_path = options.get("dest_path", "flash:")
     device_type = await _resolve_device_type(dev)
 
-    await db.update_upgrade_device(dev_id, transfer_status="running", phase="transfer",
-                                   started_at=datetime.now(UTC).isoformat())
+    await db.update_upgrade_device(
+        dev_id, transfer_status="running", phase="transfer", started_at=datetime.now(UTC).isoformat()
+    )
     await _emit_device_status(campaign_id, dev_id, transfer_status="running")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options,
-                                     retries=options.get("retries", 2),
-                                     device_type=device_type)
+        conn = await _connect_device(
+            ip, credentials, options, retries=options.get("retries", 2), device_type=device_type
+        )
     except Exception as e:
-        await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                       error_message=f"Connection failed: {e}")
-        await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=f"Connection failed: {e}")
+        await db.update_upgrade_device(
+            dev_id, transfer_status="failed", phase="failed", error_message=f"Connection failed: {e}"
+        )
+        await _emit_device_status(
+            campaign_id, dev_id, transfer_status="failed", error_message=f"Connection failed: {e}"
+        )
         await _emit(campaign_id, dev_id, "error", f"Connection failed: {e}", host=ip)
         return
 
@@ -2086,9 +2138,12 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 if target_image:
                     await db.update_upgrade_device(dev_id, model=model, target_image=target_image)
             if not target_image:
-                await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                               error_message="No target image resolved")
-                await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message="No target image resolved")
+                await db.update_upgrade_device(
+                    dev_id, transfer_status="failed", phase="failed", error_message="No target image resolved"
+                )
+                await _emit_device_status(
+                    campaign_id, dev_id, transfer_status="failed", error_message="No target image resolved"
+                )
                 await _emit(campaign_id, dev_id, "error", "Cannot determine target image", host=ip)
                 return
 
@@ -2101,30 +2156,41 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
             if det_model:
                 await db.update_upgrade_device(dev_id, model=det_model, current_version=running_version or "")
             if running_version and expected_version in running_version:
-                await _emit(campaign_id, dev_id, "success",
-                            f"Already running target version {running_version} - skipping transfer", host=ip)
-                await db.update_upgrade_device(dev_id,
-                                               prestage_status="completed",
-                                               transfer_status="completed",
-                                               activate_status="completed",
-                                               verify_status="completed",
-                                               phase="verified",
-                                               current_version=running_version,
-                                               error_message="",
-                                               completed_at=datetime.now(UTC).isoformat())
-                await _emit_device_status(campaign_id, dev_id,
-                                          prestage_status="completed",
-                                          transfer_status="completed",
-                                          activate_status="completed",
-                                          verify_status="completed",
-                                          error_message="")
+                await _emit(
+                    campaign_id,
+                    dev_id,
+                    "success",
+                    f"Already running target version {running_version} - skipping transfer",
+                    host=ip,
+                )
+                await db.update_upgrade_device(
+                    dev_id,
+                    prestage_status="completed",
+                    transfer_status="completed",
+                    activate_status="completed",
+                    verify_status="completed",
+                    phase="verified",
+                    current_version=running_version,
+                    error_message="",
+                    completed_at=datetime.now(UTC).isoformat(),
+                )
+                await _emit_device_status(
+                    campaign_id,
+                    dev_id,
+                    prestage_status="completed",
+                    transfer_status="completed",
+                    activate_status="completed",
+                    verify_status="completed",
+                    error_message="",
+                )
                 return
 
         try:
             image_path = _image_file_path(image_name)
         except HTTPException:
-            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                           error_message="Invalid image path")
+            await db.update_upgrade_device(
+                dev_id, transfer_status="failed", phase="failed", error_message="Invalid image path"
+            )
             await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message="Invalid image path")
             await _emit(campaign_id, dev_id, "error", "Invalid image path - possible path traversal", host=ip)
             return
@@ -2132,8 +2198,7 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
         # Validate image_name and dest_path before using in device CLI commands
         cli_err = _validate_cli_inputs(image_name, dest_path)
         if cli_err:
-            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                           error_message=cli_err)
+            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed", error_message=cli_err)
             await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=cli_err)
             await _emit(campaign_id, dev_id, "error", cli_err, host=ip)
             return
@@ -2147,11 +2212,22 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 image_path = fallback
             else:
                 searched = ", ".join(_candidate_image_dirs())
-                await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                               error_message=f"Image file not found in: {searched}")
-                await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=f"Image file not found in: {searched}")
-                await _emit(campaign_id, dev_id, "error",
-                            f"Image file not found on server: {target_image} (searched: {searched})", host=ip)
+                await db.update_upgrade_device(
+                    dev_id,
+                    transfer_status="failed",
+                    phase="failed",
+                    error_message=f"Image file not found in: {searched}",
+                )
+                await _emit_device_status(
+                    campaign_id, dev_id, transfer_status="failed", error_message=f"Image file not found in: {searched}"
+                )
+                await _emit(
+                    campaign_id,
+                    dev_id,
+                    "error",
+                    f"Image file not found on server: {target_image} (searched: {searched})",
+                    host=ip,
+                )
                 return
 
         # Compute local MD5
@@ -2165,12 +2241,17 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
         await _emit(campaign_id, dev_id, "info", "Checking flash space...", host=ip)
         has_space, free_bytes = await _check_flash_space(conn, image_path, dest_path)
         if not has_space:
-            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                           error_message="Insufficient flash space")
-            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message="Insufficient flash space")
+            await db.update_upgrade_device(
+                dev_id, transfer_status="failed", phase="failed", error_message="Insufficient flash space"
+            )
+            await _emit_device_status(
+                campaign_id, dev_id, transfer_status="failed", error_message="Insufficient flash space"
+            )
             await _emit(campaign_id, dev_id, "error", "Insufficient flash space", host=ip)
             return
-        await _emit(campaign_id, dev_id, "info", f"Flash space OK ({(free_bytes or 0) / 1024 / 1024:.0f} MB free)", host=ip)
+        await _emit(
+            campaign_id, dev_id, "info", f"Flash space OK ({(free_bytes or 0) / 1024 / 1024:.0f} MB free)", host=ip
+        )
 
         # Check if image already exists
         exists = await asyncio.to_thread(_check_image_exists, conn, image_name, dest_path)
@@ -2184,21 +2265,31 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                     await _emit(campaign_id, dev_id, "success", "Existing image matches - no transfer needed", host=ip)
                     should_prestage = True
                 else:
-                    await _emit(campaign_id, dev_id, "warn", "Existing image does NOT match - will re-transfer", host=ip)
+                    await _emit(
+                        campaign_id, dev_id, "warn", "Existing image does NOT match - will re-transfer", host=ip
+                    )
             else:
                 await _emit(campaign_id, dev_id, "success", "Image already on flash - skipping transfer", host=ip)
                 should_prestage = True
 
             if should_prestage:
                 prestage_ok, prestage_err = await _run_install_add_prestage(
-                    conn, campaign_id, dev_id, ip, image_name, dest_path,
+                    conn,
+                    campaign_id,
+                    dev_id,
+                    ip,
+                    image_name,
+                    dest_path,
                     device_type=device_type,
                 )
                 if not prestage_ok:
-                    await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                                   error_message=prestage_err)
+                    await db.update_upgrade_device(
+                        dev_id, transfer_status="failed", phase="failed", error_message=prestage_err
+                    )
                     await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=prestage_err)
-                    await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip)
+                    await _emit(
+                        campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip
+                    )
                     return
 
                 await db.update_upgrade_device(dev_id, transfer_status="completed", phase="transfer_done")
@@ -2215,7 +2306,7 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
         elapsed = time.time() - start_time
 
         if transfer_ok:
-            await _emit(campaign_id, dev_id, "success", f"Transfer completed in {elapsed/60:.1f} minutes", host=ip)
+            await _emit(campaign_id, dev_id, "success", f"Transfer completed in {elapsed / 60:.1f} minutes", host=ip)
 
             # Post-transfer MD5 verification
             if local_md5 and not options.get("skip_md5"):
@@ -2224,9 +2315,12 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 if md5_ok:
                     await _emit(campaign_id, dev_id, "success", "MD5 verified - image integrity confirmed", host=ip)
                 else:
-                    await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                                   error_message="MD5 mismatch after transfer")
-                    await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message="MD5 mismatch after transfer")
+                    await db.update_upgrade_device(
+                        dev_id, transfer_status="failed", phase="failed", error_message="MD5 mismatch after transfer"
+                    )
+                    await _emit_device_status(
+                        campaign_id, dev_id, transfer_status="failed", error_message="MD5 mismatch after transfer"
+                    )
                     await _emit(campaign_id, dev_id, "error", "MD5 mismatch after transfer!", host=ip)
                     return
 
@@ -2237,12 +2331,18 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 LOGGER.debug("write memory failed after transfer for %s: %s", ip, exc)
 
             prestage_ok, prestage_err = await _run_install_add_prestage(
-                conn, campaign_id, dev_id, ip, image_name, dest_path,
+                conn,
+                campaign_id,
+                dev_id,
+                ip,
+                image_name,
+                dest_path,
                 device_type=device_type,
             )
             if not prestage_ok:
-                await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                               error_message=prestage_err)
+                await db.update_upgrade_device(
+                    dev_id, transfer_status="failed", phase="failed", error_message=prestage_err
+                )
                 await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=prestage_err)
                 await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip)
                 return
@@ -2253,27 +2353,47 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
         else:
             # SCP reported failure, but file may have transferred before connection dropped.
             # Reconnect and check flash before marking as failed.
-            await _emit(campaign_id, dev_id, "warn",
-                        f"SCP error after {elapsed/60:.1f} minutes: {transfer_err or 'unknown'} - verifying flash...", host=ip)
+            await _emit(
+                campaign_id,
+                dev_id,
+                "warn",
+                f"SCP error after {elapsed / 60:.1f} minutes: {transfer_err or 'unknown'} - verifying flash...",
+                host=ip,
+            )
             try:
-                verify_conn = await _connect_device(ip, credentials, options, retries=1,
-                                                    device_type=device_type)
+                verify_conn = await _connect_device(ip, credentials, options, retries=1, device_type=device_type)
                 exists = await asyncio.to_thread(_check_image_exists, verify_conn, image_name, dest_path)
                 if exists:
-                    await _emit(campaign_id, dev_id, "success",
-                                "Image found on flash despite SCP error - transfer actually succeeded", host=ip)
+                    await _emit(
+                        campaign_id,
+                        dev_id,
+                        "success",
+                        "Image found on flash despite SCP error - transfer actually succeeded",
+                        host=ip,
+                    )
                     # Run MD5 verification if enabled
                     md5_passed = True
                     if local_md5 and not options.get("skip_md5"):
                         await _emit(campaign_id, dev_id, "info", "Verifying MD5 on switch...", host=ip)
                         md5_ok = await _verify_md5_on_switch(verify_conn, image_name, dest_path, local_md5)
                         if md5_ok:
-                            await _emit(campaign_id, dev_id, "success", "MD5 verified - image integrity confirmed", host=ip)
+                            await _emit(
+                                campaign_id, dev_id, "success", "MD5 verified - image integrity confirmed", host=ip
+                            )
                         else:
                             md5_passed = False
-                            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                                           error_message="MD5 mismatch after transfer")
-                            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message="MD5 mismatch after transfer")
+                            await db.update_upgrade_device(
+                                dev_id,
+                                transfer_status="failed",
+                                phase="failed",
+                                error_message="MD5 mismatch after transfer",
+                            )
+                            await _emit_device_status(
+                                campaign_id,
+                                dev_id,
+                                transfer_status="failed",
+                                error_message="MD5 mismatch after transfer",
+                            )
                             await _emit(campaign_id, dev_id, "error", "MD5 mismatch after transfer!", host=ip)
                     if md5_passed:
                         try:
@@ -2281,14 +2401,24 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                         except Exception as exc:
                             LOGGER.debug("write memory failed after transfer for %s: %s", ip, exc)
                         prestage_ok, prestage_err = await _run_install_add_prestage(
-                            verify_conn, campaign_id, dev_id, ip, image_name, dest_path,
+                            verify_conn,
+                            campaign_id,
+                            dev_id,
+                            ip,
+                            image_name,
+                            dest_path,
                             device_type=device_type,
                         )
                         if not prestage_ok:
-                            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                                           error_message=prestage_err)
-                            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=prestage_err)
-                            await _emit(campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip)
+                            await db.update_upgrade_device(
+                                dev_id, transfer_status="failed", phase="failed", error_message=prestage_err
+                            )
+                            await _emit_device_status(
+                                campaign_id, dev_id, transfer_status="failed", error_message=prestage_err
+                            )
+                            await _emit(
+                                campaign_id, dev_id, "error", f"Pre-stage (install add) failed: {prestage_err}", host=ip
+                            )
                             try:
                                 await asyncio.to_thread(verify_conn.disconnect)
                             except Exception as exc:
@@ -2310,14 +2440,18 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 await _emit(campaign_id, dev_id, "warn", "Could not reconnect to verify flash", host=ip)
 
             err_detail = f"SCP transfer failed: {transfer_err}" if transfer_err else "SCP transfer failed"
-            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                           error_message=err_detail)
+            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed", error_message=err_detail)
             await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=err_detail)
-            await _emit(campaign_id, dev_id, "error", f"Transfer failed after {elapsed/60:.1f} minutes - {transfer_err or 'unknown error'}", host=ip)
+            await _emit(
+                campaign_id,
+                dev_id,
+                "error",
+                f"Transfer failed after {elapsed / 60:.1f} minutes - {transfer_err or 'unknown error'}",
+                host=ip,
+            )
 
     except Exception as e:
-        await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed",
-                                       error_message=str(e))
+        await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed", error_message=str(e))
         await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=str(e))
         await _emit(campaign_id, dev_id, "error", f"Transfer failed: {e}", host=ip)
     finally:
@@ -2337,19 +2471,23 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
     dest_path = options.get("dest_path", "flash:")
     device_type = await _resolve_device_type(dev)
 
-    await db.update_upgrade_device(dev_id, activate_status="running", phase="activate",
-                                   started_at=datetime.now(UTC).isoformat())
+    await db.update_upgrade_device(
+        dev_id, activate_status="running", phase="activate", started_at=datetime.now(UTC).isoformat()
+    )
     await _emit_device_status(campaign_id, dev_id, activate_status="running")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options,
-                                     retries=options.get("retries", 2),
-                                     device_type=device_type)
+        conn = await _connect_device(
+            ip, credentials, options, retries=options.get("retries", 2), device_type=device_type
+        )
     except Exception as e:
-        await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
-                                       error_message=f"Connection failed: {e}")
-        await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=f"Connection failed: {e}")
+        await db.update_upgrade_device(
+            dev_id, activate_status="failed", phase="failed", error_message=f"Connection failed: {e}"
+        )
+        await _emit_device_status(
+            campaign_id, dev_id, activate_status="failed", error_message=f"Connection failed: {e}"
+        )
         await _emit(campaign_id, dev_id, "error", f"Connection failed: {e}", host=ip)
         return
 
@@ -2365,9 +2503,12 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                 if target_image:
                     await db.update_upgrade_device(dev_id, target_image=target_image)
             if not target_image:
-                await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
-                                               error_message="No target image resolved")
-                await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message="No target image resolved")
+                await db.update_upgrade_device(
+                    dev_id, activate_status="failed", phase="failed", error_message="No target image resolved"
+                )
+                await _emit_device_status(
+                    campaign_id, dev_id, activate_status="failed", error_message="No target image resolved"
+                )
                 await _emit(campaign_id, dev_id, "error", "Cannot determine target image", host=ip)
                 return
 
@@ -2380,30 +2521,39 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             if det_model:
                 await db.update_upgrade_device(dev_id, model=det_model, current_version=running_version or "")
             if running_version and expected_version in running_version:
-                await _emit(campaign_id, dev_id, "success",
-                            f"Already running target version {running_version} - skipping activate", host=ip)
-                await db.update_upgrade_device(dev_id,
-                                               prestage_status="completed",
-                                               transfer_status="completed",
-                                               activate_status="completed",
-                                               verify_status="completed",
-                                               phase="verified",
-                                               current_version=running_version,
-                                               error_message="",
-                                               completed_at=datetime.now(UTC).isoformat())
-                await _emit_device_status(campaign_id, dev_id,
-                                          prestage_status="completed",
-                                          transfer_status="completed",
-                                          activate_status="completed",
-                                          verify_status="completed",
-                                          error_message="")
+                await _emit(
+                    campaign_id,
+                    dev_id,
+                    "success",
+                    f"Already running target version {running_version} - skipping activate",
+                    host=ip,
+                )
+                await db.update_upgrade_device(
+                    dev_id,
+                    prestage_status="completed",
+                    transfer_status="completed",
+                    activate_status="completed",
+                    verify_status="completed",
+                    phase="verified",
+                    current_version=running_version,
+                    error_message="",
+                    completed_at=datetime.now(UTC).isoformat(),
+                )
+                await _emit_device_status(
+                    campaign_id,
+                    dev_id,
+                    prestage_status="completed",
+                    transfer_status="completed",
+                    activate_status="completed",
+                    verify_status="completed",
+                    error_message="",
+                )
                 return
 
         # Validate inputs before using in device CLI commands
         cli_err = _validate_cli_inputs(image_name, dest_path)
         if cli_err:
-            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
-                                           error_message=cli_err)
+            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=cli_err)
             await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=cli_err)
             await _emit(campaign_id, dev_id, "error", cli_err, host=ip)
             return
@@ -2411,9 +2561,12 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
         # Verify image exists on flash
         exists = await asyncio.to_thread(_check_image_exists, conn, image_name, dest_path)
         if not exists:
-            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
-                                           error_message=f"Image {image_name} not found on flash")
-            await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=f"Image {image_name} not found on flash")
+            await db.update_upgrade_device(
+                dev_id, activate_status="failed", phase="failed", error_message=f"Image {image_name} not found on flash"
+            )
+            await _emit_device_status(
+                campaign_id, dev_id, activate_status="failed", error_message=f"Image {image_name} not found on flash"
+            )
             await _emit(campaign_id, dev_id, "error", f"Image {image_name} not on flash. Run transfer first.", host=ip)
             return
 
@@ -2429,11 +2582,9 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
         try:
             activate_commands = get_driver(device_type).upgrade_activate_commands(full_path)
         except DriverCapabilityError as e:
-            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
-                                           error_message=str(e))
+            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=str(e))
             await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=str(e))
-            await _emit(campaign_id, dev_id, "error",
-                        f"Activate not supported on this platform: {e}", host=ip)
+            await _emit(campaign_id, dev_id, "error", f"Activate not supported on this platform: {e}", host=ip)
             return
         for command in activate_commands:
             await _emit(campaign_id, dev_id, "cmd", f"Executing: {command}", host=ip)
@@ -2441,7 +2592,9 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
             try:
                 await asyncio.to_thread(
-                    conn.send_command, command, read_timeout=120,
+                    conn.send_command,
+                    command,
+                    read_timeout=120,
                 )
             except Exception as e:
                 # Expected on the final command - the switch reboots and drops
@@ -2458,8 +2611,13 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             verify_wait = options.get("verify_wait", 1200)
             check_interval = options.get("check_interval", 30)
 
-            await _emit(campaign_id, dev_id, "info",
-                        f"Waiting for switch to reboot (up to {verify_wait // 60} minutes)...", host=ip)
+            await _emit(
+                campaign_id,
+                dev_id,
+                "info",
+                f"Waiting for switch to reboot (up to {verify_wait // 60} minutes)...",
+                host=ip,
+            )
 
             # First: wait for switch to go DOWN (confirm reboot started)
             await _emit(campaign_id, dev_id, "info", "Waiting for switch to go offline...", host=ip)
@@ -2467,11 +2625,18 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             if went_down:
                 await _emit(campaign_id, dev_id, "info", "Switch is offline - reboot in progress", host=ip)
             else:
-                await _emit(campaign_id, dev_id, "warn",
-                            "Switch never went offline - it may not have reloaded. Checking version anyway...", host=ip)
+                await _emit(
+                    campaign_id,
+                    dev_id,
+                    "warn",
+                    "Switch never went offline - it may not have reloaded. Checking version anyway...",
+                    host=ip,
+                )
 
             # Then: wait for switch to come BACK online
-            new_conn = await _wait_for_reboot(ip, credentials, options, verify_wait, check_interval, campaign_id, dev_id, device_type=device_type)
+            new_conn = await _wait_for_reboot(
+                ip, credentials, options, verify_wait, check_interval, campaign_id, dev_id, device_type=device_type
+            )
 
             if new_conn:
                 await _emit(campaign_id, dev_id, "success", "Switch is back online!", host=ip)
@@ -2481,8 +2646,13 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                 if expected_version:
                     _, running_version = await _detect_model(new_conn, ip)
                     if running_version and expected_version in running_version:
-                        await _emit(campaign_id, dev_id, "success",
-                                    f"Version verified: {running_version} (expected {expected_version})", host=ip)
+                        await _emit(
+                            campaign_id,
+                            dev_id,
+                            "success",
+                            f"Version verified: {running_version} (expected {expected_version})",
+                            host=ip,
+                        )
 
                         # Commit the install to make the new version permanent.
                         # Driver returns an empty string for platforms that
@@ -2491,15 +2661,17 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                         try:
                             commit_cmd = get_driver(device_type).upgrade_commit_command()
                         except DriverCapabilityError as e:
-                            await _emit(campaign_id, dev_id, "warn",
-                                        f"Skipping commit: {e}", host=ip)
+                            await _emit(campaign_id, dev_id, "warn", f"Skipping commit: {e}", host=ip)
                             commit_cmd = ""
                         if commit_cmd:
-                            await _emit(campaign_id, dev_id, "info",
-                                        f"Running {commit_cmd} to lock in new version...", host=ip)
+                            await _emit(
+                                campaign_id, dev_id, "info", f"Running {commit_cmd} to lock in new version...", host=ip
+                            )
                             try:
                                 commit_output = await asyncio.to_thread(
-                                    new_conn.send_command, commit_cmd, read_timeout=300,
+                                    new_conn.send_command,
+                                    commit_cmd,
+                                    read_timeout=300,
                                 )
                                 if _install_commit_output_failed(commit_output):
                                     raise RuntimeError(commit_output.strip()[:500])
@@ -2513,19 +2685,28 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                 # is a hard failure, not a warning - do NOT mark
                                 # the device verified.
                                 msg = f"Commit failed: {e} - device will roll back to the old version"
-                                await _emit(campaign_id, dev_id, "error",
-                                            f"{commit_cmd} failed: {e} - switch will roll back!", host=ip)
+                                await _emit(
+                                    campaign_id,
+                                    dev_id,
+                                    "error",
+                                    f"{commit_cmd} failed: {e} - switch will roll back!",
+                                    host=ip,
+                                )
                                 await db.update_upgrade_device(
-                                    dev_id, activate_status="failed",
+                                    dev_id,
+                                    activate_status="failed",
                                     verify_status="failed",
                                     phase="failed",
                                     current_version=running_version,
-                                    error_message=msg)
+                                    error_message=msg,
+                                )
                                 await _emit_device_status(
-                                    campaign_id, dev_id,
+                                    campaign_id,
+                                    dev_id,
                                     activate_status="failed",
                                     verify_status="failed",
-                                    error_message=msg)
+                                    error_message=msg,
+                                )
                                 try:
                                     await asyncio.to_thread(new_conn.disconnect)
                                 except Exception as exc:
@@ -2536,25 +2717,29 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                             # command can still leave the device on the old
                             # version (rollback already fired, partial commit).
                             # Trust nothing - re-read the running version.
-                            await _emit(campaign_id, dev_id, "info",
-                                        "Confirming version after commit...", host=ip)
+                            await _emit(campaign_id, dev_id, "info", "Confirming version after commit...", host=ip)
                             _, post_commit_version = await _detect_model(new_conn, ip)
-                            if not (post_commit_version
-                                    and expected_version in post_commit_version):
-                                msg = (f"Post-commit version mismatch: running "
-                                       f"{post_commit_version}, expected {expected_version}")
+                            if not (post_commit_version and expected_version in post_commit_version):
+                                msg = (
+                                    f"Post-commit version mismatch: running "
+                                    f"{post_commit_version}, expected {expected_version}"
+                                )
                                 await _emit(campaign_id, dev_id, "error", msg, host=ip)
                                 await db.update_upgrade_device(
-                                    dev_id, activate_status="failed",
+                                    dev_id,
+                                    activate_status="failed",
                                     verify_status="failed",
                                     phase="failed",
                                     current_version=post_commit_version or running_version,
-                                    error_message=msg)
+                                    error_message=msg,
+                                )
                                 await _emit_device_status(
-                                    campaign_id, dev_id,
+                                    campaign_id,
+                                    dev_id,
                                     activate_status="failed",
                                     verify_status="failed",
-                                    error_message=msg)
+                                    error_message=msg,
+                                )
                                 try:
                                     await asyncio.to_thread(new_conn.disconnect)
                                 except Exception as exc:
@@ -2562,27 +2747,44 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                 return
                             running_version = post_commit_version
 
-                        await _emit(campaign_id, dev_id, "success",
-                                    f"Upgrade verified and committed - running {running_version}", host=ip)
-                        await db.update_upgrade_device(dev_id, verify_status="completed",
-                                                       phase="verified",
-                                                       current_version=running_version,
-                                                       error_message="")
-                        await _emit_device_status(campaign_id, dev_id,
-                                                  verify_status="completed",
-                                                  error_message="")
+                        await _emit(
+                            campaign_id,
+                            dev_id,
+                            "success",
+                            f"Upgrade verified and committed - running {running_version}",
+                            host=ip,
+                        )
+                        await db.update_upgrade_device(
+                            dev_id,
+                            verify_status="completed",
+                            phase="verified",
+                            current_version=running_version,
+                            error_message="",
+                        )
+                        await _emit_device_status(campaign_id, dev_id, verify_status="completed", error_message="")
                     else:
-                        await _emit(campaign_id, dev_id, "error",
-                                    f"Version mismatch! Running: {running_version}, Expected: {expected_version}", host=ip)
-                        await db.update_upgrade_device(dev_id, activate_status="failed",
-                                                       verify_status="failed",
-                                                       phase="failed",
-                                                       current_version=running_version or "",
-                                                       error_message=f"Version mismatch: {running_version}")
-                        await _emit_device_status(campaign_id, dev_id,
-                                                  activate_status="failed",
-                                                  verify_status="failed",
-                                                  error_message=f"Version mismatch: {running_version}")
+                        await _emit(
+                            campaign_id,
+                            dev_id,
+                            "error",
+                            f"Version mismatch! Running: {running_version}, Expected: {expected_version}",
+                            host=ip,
+                        )
+                        await db.update_upgrade_device(
+                            dev_id,
+                            activate_status="failed",
+                            verify_status="failed",
+                            phase="failed",
+                            current_version=running_version or "",
+                            error_message=f"Version mismatch: {running_version}",
+                        )
+                        await _emit_device_status(
+                            campaign_id,
+                            dev_id,
+                            activate_status="failed",
+                            verify_status="failed",
+                            error_message=f"Version mismatch: {running_version}",
+                        )
                         try:
                             await asyncio.to_thread(new_conn.disconnect)
                         except Exception as exc:
@@ -2594,26 +2796,37 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                 except Exception as exc:
                     LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
             else:
-                await _emit(campaign_id, dev_id, "error",
-                            f"Switch did not come back within {verify_wait // 60} minutes", host=ip)
-                await db.update_upgrade_device(dev_id, activate_status="failed",
-                                               verify_status="failed",
-                                               phase="failed",
-                                               error_message="Switch unreachable after reboot")
-                await _emit_device_status(campaign_id, dev_id,
-                                          activate_status="failed",
-                                          verify_status="failed",
-                                          error_message="Switch unreachable after reboot")
+                await _emit(
+                    campaign_id,
+                    dev_id,
+                    "error",
+                    f"Switch did not come back within {verify_wait // 60} minutes",
+                    host=ip,
+                )
+                await db.update_upgrade_device(
+                    dev_id,
+                    activate_status="failed",
+                    verify_status="failed",
+                    phase="failed",
+                    error_message="Switch unreachable after reboot",
+                )
+                await _emit_device_status(
+                    campaign_id,
+                    dev_id,
+                    activate_status="failed",
+                    verify_status="failed",
+                    error_message="Switch unreachable after reboot",
+                )
                 return
 
-        await db.update_upgrade_device(dev_id, activate_status="completed", phase="completed",
-                                       completed_at=datetime.now(UTC).isoformat())
+        await db.update_upgrade_device(
+            dev_id, activate_status="completed", phase="completed", completed_at=datetime.now(UTC).isoformat()
+        )
         await _emit_device_status(campaign_id, dev_id, activate_status="completed")
         await _emit(campaign_id, dev_id, "success", "Activate phase complete", host=ip)
 
     except Exception as e:
-        await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed",
-                                       error_message=str(e))
+        await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=str(e))
         await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=str(e))
         await _emit(campaign_id, dev_id, "error", f"Activate failed: {e}", host=ip)
     finally:
@@ -2637,12 +2850,13 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options,
-                                     retries=options.get("retries", 2),
-                                     device_type=device_type)
+        conn = await _connect_device(
+            ip, credentials, options, retries=options.get("retries", 2), device_type=device_type
+        )
     except Exception as e:
-        await db.update_upgrade_device(dev_id, verify_status="failed", phase="failed",
-                                       error_message=f"Connection failed: {e}")
+        await db.update_upgrade_device(
+            dev_id, verify_status="failed", phase="failed", error_message=f"Connection failed: {e}"
+        )
         await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message=f"Connection failed: {e}")
         await _emit(campaign_id, dev_id, "error", f"Connection failed: {e}", host=ip)
         return
@@ -2656,9 +2870,12 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
             await db.update_upgrade_device(dev_id, model=model, current_version=running_version or "")
 
         if not running_version:
-            await db.update_upgrade_device(dev_id, verify_status="failed", phase="failed",
-                                           error_message="Could not detect running version")
-            await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message="Could not detect running version")
+            await db.update_upgrade_device(
+                dev_id, verify_status="failed", phase="failed", error_message="Could not detect running version"
+            )
+            await _emit_device_status(
+                campaign_id, dev_id, verify_status="failed", error_message="Could not detect running version"
+            )
             await _emit(campaign_id, dev_id, "error", "Could not detect running version", host=ip)
             return
 
@@ -2667,15 +2884,22 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
         # Resolve expected version from target image
         target_image = dev.get("target_image", "")
         if not target_image and model:
-            image_map_items = image_map if isinstance(image_map, list) else sorted(image_map.items(), key=lambda x: len(x[0]), reverse=True)
+            image_map_items = (
+                image_map
+                if isinstance(image_map, list)
+                else sorted(image_map.items(), key=lambda x: len(x[0]), reverse=True)
+            )
             target_image = _resolve_image(model, image_map_items)
             if target_image:
                 await db.update_upgrade_device(dev_id, target_image=target_image)
 
         if not target_image:
-            await db.update_upgrade_device(dev_id, verify_status="failed", phase="failed",
-                                           error_message="No target image to verify against")
-            await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message="No target image to verify against")
+            await db.update_upgrade_device(
+                dev_id, verify_status="failed", phase="failed", error_message="No target image to verify against"
+            )
+            await _emit_device_status(
+                campaign_id, dev_id, verify_status="failed", error_message="No target image to verify against"
+            )
             await _emit(campaign_id, dev_id, "error", "No target image to verify against", host=ip)
             return
 
@@ -2683,9 +2907,15 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
         expected_version = _extract_version(image_name)
 
         if not expected_version:
-            await db.update_upgrade_device(dev_id, verify_status="failed", phase="failed",
-                                           error_message=f"Cannot extract version from {image_name}")
-            await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message=f"Cannot extract version from {image_name}")
+            await db.update_upgrade_device(
+                dev_id,
+                verify_status="failed",
+                phase="failed",
+                error_message=f"Cannot extract version from {image_name}",
+            )
+            await _emit_device_status(
+                campaign_id, dev_id, verify_status="failed", error_message=f"Cannot extract version from {image_name}"
+            )
             await _emit(campaign_id, dev_id, "error", f"Cannot extract version from image name: {image_name}", host=ip)
             return
 
@@ -2694,37 +2924,59 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
         # Compare versions
         if expected_version in running_version:
             # Device is fully upgraded - mark all steps completed
-            await db.update_upgrade_device(dev_id, verify_status="completed", phase="verified",
-                                           prestage_status="completed",
-                                           transfer_status="completed",
-                                           activate_status="completed",
-                                           current_version=running_version,
-                                           error_message="",
-                                           completed_at=datetime.now(UTC).isoformat())
-            await _emit_device_status(campaign_id, dev_id,
-                                      prestage_status="completed",
-                                      transfer_status="completed",
-                                      activate_status="completed",
-                                      verify_status="completed",
-                                      error_message="")
-            await _emit(campaign_id, dev_id, "success",
-                        f"Upgrade verified - running {running_version} (matches {expected_version})", host=ip)
+            await db.update_upgrade_device(
+                dev_id,
+                verify_status="completed",
+                phase="verified",
+                prestage_status="completed",
+                transfer_status="completed",
+                activate_status="completed",
+                current_version=running_version,
+                error_message="",
+                completed_at=datetime.now(UTC).isoformat(),
+            )
+            await _emit_device_status(
+                campaign_id,
+                dev_id,
+                prestage_status="completed",
+                transfer_status="completed",
+                activate_status="completed",
+                verify_status="completed",
+                error_message="",
+            )
+            await _emit(
+                campaign_id,
+                dev_id,
+                "success",
+                f"Upgrade verified - running {running_version} (matches {expected_version})",
+                host=ip,
+            )
         else:
-            await db.update_upgrade_device(dev_id, activate_status="failed",
-                                           verify_status="failed",
-                                           phase="failed",
-                                           error_message=f"Version mismatch: running {running_version}, expected {expected_version}",
-                                           current_version=running_version)
-            await _emit_device_status(campaign_id, dev_id,
-                                      activate_status="failed",
-                                      verify_status="failed",
-                                      error_message=f"Version mismatch: running {running_version}, expected {expected_version}")
-            await _emit(campaign_id, dev_id, "error",
-                        f"Version mismatch - running {running_version}, expected {expected_version}", host=ip)
+            await db.update_upgrade_device(
+                dev_id,
+                activate_status="failed",
+                verify_status="failed",
+                phase="failed",
+                error_message=f"Version mismatch: running {running_version}, expected {expected_version}",
+                current_version=running_version,
+            )
+            await _emit_device_status(
+                campaign_id,
+                dev_id,
+                activate_status="failed",
+                verify_status="failed",
+                error_message=f"Version mismatch: running {running_version}, expected {expected_version}",
+            )
+            await _emit(
+                campaign_id,
+                dev_id,
+                "error",
+                f"Version mismatch - running {running_version}, expected {expected_version}",
+                host=ip,
+            )
 
     except Exception as e:
-        await db.update_upgrade_device(dev_id, verify_status="failed", phase="failed",
-                                       error_message=str(e))
+        await db.update_upgrade_device(dev_id, verify_status="failed", phase="failed", error_message=str(e))
         await _emit_device_status(campaign_id, dev_id, verify_status="failed", error_message=str(e))
         await _emit(campaign_id, dev_id, "error", f"Verify failed: {e}", host=ip)
     finally:
@@ -2751,9 +3003,9 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip} for prestage verification...", host=ip)
 
     try:
-        conn = await _connect_device(ip, credentials, options,
-                                     retries=options.get("retries", 2),
-                                     device_type=device_type)
+        conn = await _connect_device(
+            ip, credentials, options, retries=options.get("retries", 2), device_type=device_type
+        )
     except Exception as e:
         err_msg = f"Connection failed: {e}"
         await db.update_upgrade_device(
@@ -2778,7 +3030,11 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
                 await db.update_upgrade_device(dev_id, model=det_model)
 
         if not target_image and model:
-            image_map_items = image_map if isinstance(image_map, list) else sorted(image_map.items(), key=lambda x: len(x[0]), reverse=True)
+            image_map_items = (
+                image_map
+                if isinstance(image_map, list)
+                else sorted(image_map.items(), key=lambda x: len(x[0]), reverse=True)
+            )
             target_image = _resolve_image(model, image_map_items)
             if target_image:
                 await db.update_upgrade_device(dev_id, target_image=target_image)
@@ -2813,9 +3069,7 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
 
         expected_version = _extract_version(image_name)
         detail = (
-            f"Prestage artifacts verified for {expected_version}"
-            if expected_version
-            else "Prestage artifacts verified"
+            f"Prestage artifacts verified for {expected_version}" if expected_version else "Prestage artifacts verified"
         )
         await db.update_upgrade_device(
             dev_id,
@@ -2856,9 +3110,8 @@ async def _health_check(conn, hostname):
 
     # CPU
     try:
-        cpu_output = await asyncio.to_thread(conn.send_command,
-                                             "show processes cpu | include CPU", read_timeout=30)
-        cpu_match = re.search(r'five minutes:\s*(\d+)%', cpu_output)
+        cpu_output = await asyncio.to_thread(conn.send_command, "show processes cpu | include CPU", read_timeout=30)
+        cpu_match = re.search(r"five minutes:\s*(\d+)%", cpu_output)
         if cpu_match:
             cpu_5min = int(cpu_match.group(1))
             if cpu_5min > 80:
@@ -2871,9 +3124,8 @@ async def _health_check(conn, hostname):
 
     # Memory
     try:
-        mem_output = await asyncio.to_thread(conn.send_command,
-                                             "show platform resources", read_timeout=30)
-        mem_match = re.search(r'Used:\s*\d+\s*kB\s*\((\d+)%\)', mem_output)
+        mem_output = await asyncio.to_thread(conn.send_command, "show platform resources", read_timeout=30)
+        mem_match = re.search(r"Used:\s*\d+\s*kB\s*\((\d+)%\)", mem_output)
         if mem_match:
             mem_pct = int(mem_match.group(1))
             if mem_pct > 90:
@@ -2887,10 +3139,10 @@ async def _health_check(conn, hostname):
     # Stack health
     try:
         stack_output = await asyncio.to_thread(conn.send_command, "show switch", read_timeout=30)
-        if re.search(r'^\s*\d+\s+', stack_output, re.MULTILINE):
+        if re.search(r"^\s*\d+\s+", stack_output, re.MULTILINE):
             for line in stack_output.splitlines():
                 match = re.match(
-                    r'\s*(\d+)\s+\S+\s+.*?(Ready|Removed|Progressing|Provisioned|Invalid|Added|Syncing|Version Mismatch)',
+                    r"\s*(\d+)\s+\S+\s+.*?(Ready|Removed|Progressing|Provisioned|Invalid|Added|Syncing|Version Mismatch)",
                     line,
                 )
                 if match and match.group(2) != "Ready":
@@ -2918,9 +3170,10 @@ async def _check_flash_space(conn, image_path, dest_path):
     """Check if flash has enough space for the image."""
     image_size = os.path.getsize(image_path)
     output = await asyncio.to_thread(
-        conn.send_command, f"dir {dest_path} | include bytes",
+        conn.send_command,
+        f"dir {dest_path} | include bytes",
     )
-    match = re.search(r'(\d+)\s+bytes\s+free', output)
+    match = re.search(r"(\d+)\s+bytes\s+free", output)
     if match:
         free = int(match.group(1))
         return free > image_size * 1.1, free
@@ -2940,11 +3193,13 @@ async def _verify_md5_on_switch(conn, image_name, dest_path, expected_md5):
     """Verify MD5 hash on the switch matches local."""
     try:
         output = await asyncio.to_thread(
-            conn.send_command, f"verify /md5 {dest_path}{image_name}", read_timeout=900,
+            conn.send_command,
+            f"verify /md5 {dest_path}{image_name}",
+            read_timeout=900,
         )
-        md5_match = re.search(r'=\s*([a-fA-F0-9]{32})', output)
+        md5_match = re.search(r"=\s*([a-fA-F0-9]{32})", output)
         if not md5_match:
-            md5_match = re.search(r'\b([a-fA-F0-9]{32})\b', output)
+            md5_match = re.search(r"\b([a-fA-F0-9]{32})\b", output)
         if md5_match:
             return md5_match.group(1).lower() == expected_md5.lower()
         return False
@@ -3010,26 +3265,25 @@ async def _wait_for_down(ip, timeout=300, check_interval=10, campaign_id=None, d
 
         elapsed = int(time.time() - start)
         if campaign_id is not None and elapsed % 30 < check_interval:
-            await _emit(campaign_id, dev_id, "dim",
-                        f"Switch still up... ({elapsed}s elapsed)", host=ip)
+            await _emit(campaign_id, dev_id, "dim", f"Switch still up... ({elapsed}s elapsed)", host=ip)
         await asyncio.sleep(check_interval)
 
     return False  # Never went down within timeout
 
 
-async def _wait_for_reboot(ip, credentials, options, max_wait, check_interval, campaign_id, dev_id, device_type="cisco_xe"):
+async def _wait_for_reboot(
+    ip, credentials, options, max_wait, check_interval, campaign_id, dev_id, device_type="cisco_xe"
+):
     """Wait for switch to come back online after reboot."""
     start = time.time()
 
     while (time.time() - start) < max_wait:
         elapsed = int(time.time() - start)
         if elapsed % 60 < check_interval:
-            await _emit(campaign_id, dev_id, "dim",
-                        f"Waiting for reboot... ({elapsed}s elapsed)", host=ip)
+            await _emit(campaign_id, dev_id, "dim", f"Waiting for reboot... ({elapsed}s elapsed)", host=ip)
 
         try:
-            conn = await _connect_device(ip, credentials, options, retries=1,
-                                         device_type=device_type)
+            conn = await _connect_device(ip, credentials, options, retries=1, device_type=device_type)
             return conn
         except Exception:
             await asyncio.sleep(check_interval)
@@ -3039,5 +3293,5 @@ async def _wait_for_reboot(ip, credentials, options, max_wait, check_interval, c
 
 def _extract_version(image_name):
     """Extract version from image filename. e.g. cat9k_iosxe.17.15.05.SPA.bin -> 17.15.05"""
-    match = re.search(r'(\d+\.\d+\.\d+)', image_name)
+    match = re.search(r"(\d+\.\d+\.\d+)", image_name)
     return match.group(1) if match else None

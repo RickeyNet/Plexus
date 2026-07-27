@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -63,13 +64,20 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def upsert_metric_baseline(host_id: int, metric_name: str,
-                                   day_of_week: int, hour_of_day: int,
-                                   baseline_avg: float, baseline_stddev: float,
-                                   baseline_min: float, baseline_max: float,
-                                   baseline_p95: float, sample_count: int,
-                                   labels_json: str = "{}",
-                                   learning_window_days: int = 14) -> int:
+async def upsert_metric_baseline(
+    host_id: int,
+    metric_name: str,
+    day_of_week: int,
+    hour_of_day: int,
+    baseline_avg: float,
+    baseline_stddev: float,
+    baseline_min: float,
+    baseline_max: float,
+    baseline_p95: float,
+    sample_count: int,
+    labels_json: str = "{}",
+    learning_window_days: int = 14,
+) -> int:
     """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE (SQLite 3.24+)."""
     db = await _dbcore.get_db()
     try:
@@ -89,9 +97,20 @@ async def upsert_metric_baseline(host_id: int, metric_name: str,
                 learning_window_days = excluded.learning_window_days,
                 last_computed = datetime('now')
                RETURNING id""",
-            (host_id, metric_name, labels_json, day_of_week, hour_of_day,
-             baseline_avg, baseline_stddev, baseline_min, baseline_max,
-             baseline_p95, sample_count, learning_window_days),
+            (
+                host_id,
+                metric_name,
+                labels_json,
+                day_of_week,
+                hour_of_day,
+                baseline_avg,
+                baseline_stddev,
+                baseline_min,
+                baseline_max,
+                baseline_p95,
+                sample_count,
+                learning_window_days,
+            ),
         )
         row = await cursor.fetchone()
         await db.commit()
@@ -103,9 +122,9 @@ async def upsert_metric_baseline(host_id: int, metric_name: str,
         await db.close()
 
 
-async def get_metric_baseline(host_id: int, metric_name: str,
-                                day_of_week: int, hour_of_day: int,
-                                labels_json: str = "{}") -> dict | None:
+async def get_metric_baseline(
+    host_id: int, metric_name: str, day_of_week: int, hour_of_day: int, labels_json: str = "{}"
+) -> dict | None:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
@@ -140,6 +159,7 @@ async def get_baselines_for_host(host_id: int, metric_name: str | None = None) -
 
 # ── Baseline Alert Rules ──
 
+
 async def list_baseline_alert_rules(enabled_only: bool = False) -> list[dict]:
     db = await _dbcore.get_db()
     try:
@@ -172,12 +192,20 @@ async def create_baseline_alert_rule(**kwargs) -> int:
                 sensitivity, min_samples, learning_days, enabled,
                 severity, cooldown_minutes, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (kwargs.get("name", ""), kwargs.get("description", ""),
-             kwargs.get("metric_name", ""), kwargs.get("host_id"),
-             kwargs.get("group_id"), kwargs.get("sensitivity", 2.0),
-             kwargs.get("min_samples", 100), kwargs.get("learning_days", 14),
-             kwargs.get("enabled", 1), kwargs.get("severity", "warning"),
-             kwargs.get("cooldown_minutes", 30), kwargs.get("created_by", "")),
+            (
+                kwargs.get("name", ""),
+                kwargs.get("description", ""),
+                kwargs.get("metric_name", ""),
+                kwargs.get("host_id"),
+                kwargs.get("group_id"),
+                kwargs.get("sensitivity", 2.0),
+                kwargs.get("min_samples", 100),
+                kwargs.get("learning_days", 14),
+                kwargs.get("enabled", 1),
+                kwargs.get("severity", "warning"),
+                kwargs.get("cooldown_minutes", 30),
+                kwargs.get("created_by", ""),
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -190,9 +218,19 @@ async def update_baseline_alert_rule(rule_id: int, **kwargs) -> bool:
     try:
         sets = []
         vals = []
-        allowed = ("name", "description", "metric_name", "host_id", "group_id",
-                    "sensitivity", "min_samples", "learning_days", "enabled",
-                    "severity", "cooldown_minutes")
+        allowed = (
+            "name",
+            "description",
+            "metric_name",
+            "host_id",
+            "group_id",
+            "sensitivity",
+            "min_samples",
+            "learning_days",
+            "enabled",
+            "severity",
+            "cooldown_minutes",
+        )
         for k, v in kwargs.items():
             if k in allowed:
                 sets.append(f"{k} = ?")
@@ -221,16 +259,16 @@ async def delete_baseline_alert_rule(rule_id: int) -> bool:
 # ── IOS-XE Upgrade System ──────────────────────────────────────────────────
 
 
-async def create_upgrade_image(filename, original_name, file_size, md5_hash,
-                               model_pattern, version, platform, notes, uploaded_by):
+async def create_upgrade_image(
+    filename, original_name, file_size, md5_hash, model_pattern, version, platform, notes, uploaded_by
+):
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             "INSERT INTO upgrade_images (filename, original_name, file_size, md5_hash, "
             "model_pattern, version, platform, notes, uploaded_by) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (filename, original_name, file_size, md5_hash,
-             model_pattern, version, platform, notes, uploaded_by),
+            (filename, original_name, file_size, md5_hash, model_pattern, version, platform, notes, uploaded_by),
         )
         await db.commit()
         return cursor.lastrowid
@@ -302,8 +340,7 @@ async def create_upgrade_campaign(name, description, image_map, options, created
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO upgrade_campaigns (name, description, image_map, options, created_by) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO upgrade_campaigns (name, description, image_map, options, created_by) VALUES (?, ?, ?, ?, ?)",
             (name, description, json.dumps(image_map), json.dumps(options), created_by),
         )
         await db.commit()
@@ -437,9 +474,7 @@ async def update_upgrade_operation(operation_id, **kwargs):
             return False
         sets.append("updated_at = ?")
         vals.append(datetime.now(UTC).isoformat())
-        sql, sql_params = _safe_dynamic_update(
-            "upgrade_operations", sets, vals, "id = ?", operation_id
-        )
+        sql, sql_params = _safe_dynamic_update("upgrade_operations", sets, vals, "id = ?", operation_id)
         await db.execute(sql, sql_params)
         await db.commit()
         return True
@@ -488,8 +523,7 @@ async def add_upgrade_device(campaign_id, host_id, ip_address, hostname):
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO upgrade_devices (campaign_id, host_id, ip_address, hostname) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO upgrade_devices (campaign_id, host_id, ip_address, hostname) VALUES (?, ?, ?, ?)",
             (campaign_id, host_id, ip_address, hostname),
         )
         await db.commit()
@@ -554,9 +588,19 @@ async def update_upgrade_device(device_id, **kwargs):
     db = await _dbcore.get_db()
     try:
         allowed = {
-            "model", "current_version", "target_image", "phase", "phase_detail",
-            "health_status", "prestage_status", "transfer_status", "activate_status",
-            "verify_status", "error_message", "started_at", "completed_at",
+            "model",
+            "current_version",
+            "target_image",
+            "phase",
+            "phase_detail",
+            "health_status",
+            "prestage_status",
+            "transfer_status",
+            "activate_status",
+            "verify_status",
+            "error_message",
+            "started_at",
+            "completed_at",
         }
         sets, vals = [], []
         for k, v in kwargs.items():
@@ -577,8 +621,7 @@ async def add_upgrade_event(campaign_id, device_id, level, message, host=""):
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO upgrade_events (campaign_id, device_id, level, message, host) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO upgrade_events (campaign_id, device_id, level, message, host) VALUES (?, ?, ?, ?, ?)",
             (campaign_id, device_id, level, message, host),
         )
         await db.commit()
@@ -616,5 +659,3 @@ async def get_upgrade_events(campaign_id, device_id=None, limit=1000):
         return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
-
-

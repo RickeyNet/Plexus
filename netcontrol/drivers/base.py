@@ -39,7 +39,7 @@ def _normalise_mac(raw: str) -> str:
     hex_only = "".join(c for c in raw.lower() if c in "0123456789abcdef")
     if len(hex_only) != 12:
         return raw.strip().lower()
-    return ":".join(hex_only[i:i + 2] for i in range(0, 12, 2))
+    return ":".join(hex_only[i : i + 2] for i in range(0, 12, 2))
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,15 +77,11 @@ class Driver:
 
     def build_netflow_config(self, cfg: NetflowConfig) -> list[str]:
         """Return the config-mode command lines that enable NetFlow export."""
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement build_netflow_config()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement build_netflow_config()")
 
     def netflow_verify_command(self) -> str:
         """Return a ``show`` command that confirms the exporter is up."""
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement netflow_verify_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement netflow_verify_command()")
 
     def capture_running_config_command(self) -> str:
         """Return the show command that dumps the device's running config.
@@ -96,9 +92,7 @@ class Driver:
         ``show configuration | display set`` while Cisco uses
         ``show running-config``.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement capture_running_config_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement capture_running_config_command()")
 
     def save_config_commands(self) -> list[str]:
         """Return the command(s) that persist running-config to startup.
@@ -112,9 +106,7 @@ class Driver:
         handles vendor quirks automatically; this exists for routes that
         push config without Netmiko's high-level helper.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement save_config_commands()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement save_config_commands()")
 
     # ── MAC address-table capability surface ───────────────────────────────
     #
@@ -141,9 +133,7 @@ class Driver:
         switch-only command shipped to its SSH session.  Switch / bridge
         drivers override.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement mac_table_show_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement mac_table_show_command()")
 
     def parse_mac_table(self, parsed_rows: list[dict]) -> list[dict]:
         """Normalise textfsm-parsed rows into the collector's schema.
@@ -158,9 +148,7 @@ class Driver:
         contract above; switch drivers override with vendor-appropriate
         column names.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement parse_mac_table()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_mac_table()")
 
     @staticmethod
     def _parse_cisco_style_mac_rows(parsed_rows: list[dict]) -> list[dict]:
@@ -172,28 +160,28 @@ class Driver:
         """
         out: list[dict] = []
         for row in parsed_rows or []:
-            mac_raw = (row.get("destination_address")
-                       or row.get("mac") or row.get("mac_address") or "").strip()
+            mac_raw = (row.get("destination_address") or row.get("mac") or row.get("mac_address") or "").strip()
             if not mac_raw:
                 continue
             vlan_raw = str(row.get("vlan", "")).strip()
             try:
                 vlan = int(vlan_raw)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 # Cisco prints "All" for system / multicast entries — skip
                 # them, they're not learnt MACs.
                 continue
-            port = (row.get("destination_port") or row.get("ports")
-                    or row.get("port") or "").strip()
+            port = (row.get("destination_port") or row.get("ports") or row.get("port") or "").strip()
             if not port or port.lower() in ("cpu", "router", "switch"):
                 continue
             type_raw = str(row.get("type", "dynamic")).strip().lower()
-            out.append({
-                "mac": _normalise_mac(mac_raw),
-                "vlan": vlan,
-                "port": port,
-                "type": type_raw if type_raw in ("dynamic", "static") else "dynamic",
-            })
+            out.append(
+                {
+                    "mac": _normalise_mac(mac_raw),
+                    "vlan": vlan,
+                    "port": port,
+                    "type": type_raw if type_raw in ("dynamic", "static") else "dynamic",
+                }
+            )
         return out
 
     # ── SNMPv3 capability surface ──────────────────────────────────────────
@@ -212,9 +200,7 @@ class Driver:
         ``show running-config | include snmp-server``; Junos would be
         ``show configuration snmp | display set``.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement snmpv3_show_existing_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement snmpv3_show_existing_command()")
 
     def snmpv3_engine_id_show_command(self) -> str:
         """Return the show command that prints the local SNMP engine ID.
@@ -224,9 +210,7 @@ class Driver:
         default, so pinning is unnecessary and ``snmp-server engineID
         local`` is not a valid command).
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement snmpv3_engine_id_show_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement snmpv3_engine_id_show_command()")
 
     def snmpv3_engine_id_pin_command(self, engine_id: str) -> str:
         """Return the config line that pins the SNMP engine ID.
@@ -241,9 +225,7 @@ class Driver:
         Returns an empty string when the platform doesn't support
         pinning (see ``snmpv3_engine_id_show_command``).
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement snmpv3_engine_id_pin_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement snmpv3_engine_id_pin_command()")
 
     def snmpv3_verify_users_command(self) -> str:
         """Return the show command that lists configured SNMPv3 users.
@@ -252,9 +234,7 @@ class Driver:
         ``show snmp user`` is the de-facto common command across IOS,
         IOS-XE, and NX-OS; Junos uses ``show snmp v3 user``.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement snmpv3_verify_users_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement snmpv3_verify_users_command()")
 
     # ── Health-check / fingerprint capability surface ──────────────────────
     #
@@ -276,9 +256,7 @@ class Driver:
         model.  Most platforms accept ``show version`` verbatim; Junos
         would override with ``show version detail``.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement show_version_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement show_version_command()")
 
     def serial_number_show_command(self) -> str:
         """Return an include-filtered show command for the serial line only.
@@ -291,9 +269,7 @@ class Driver:
         the NX-OS chassis serial is printed as "Processor Board ID" not
         "System Serial Number".
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement serial_number_show_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement serial_number_show_command()")
 
     def parse_serial_number(self, output: str) -> str | None:
         """Extract the chassis serial from ``show version`` output.
@@ -304,9 +280,7 @@ class Driver:
         Returns ``None`` when no serial line is found (the caller
         decides whether that is a 422 or a "try again later").
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement parse_serial_number()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_serial_number()")
 
     # ── Software upgrade capability surface ────────────────────────────────
     #
@@ -360,9 +334,7 @@ class Driver:
         stage not supported" error in the operator log, which is
         misleading for platforms that simply don't need pre-staging.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement upgrade_install_add_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_install_add_command()")
 
     def upgrade_activate_commands(self, image_path: str) -> list[str]:
         """Return the command(s) that activate the staged image and reboot.
@@ -373,9 +345,7 @@ class Driver:
         list is expected to trigger the reload - the caller treats a
         dropped SSH session after the last command as success.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement upgrade_activate_commands()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_activate_commands()")
 
     def upgrade_commit_command(self) -> str:
         """Return the command that makes the new image permanent.
@@ -386,9 +356,7 @@ class Driver:
         Platforms with no separate commit step should return an empty
         string so the caller can short-circuit.
         """
-        raise DriverCapabilityError(
-            f"{type(self).__name__} does not implement upgrade_commit_command()"
-        )
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_commit_command()")
 
 
 class GenericDriver(Driver):
@@ -414,16 +382,12 @@ def register_driver(cls: type[Driver]) -> type[Driver]:
     "which driver am I getting?" depend on import order.
     """
     if not cls.device_types:
-        raise ValueError(
-            f"{cls.__name__} must declare a non-empty device_types tuple "
-            "before it can be registered."
-        )
+        raise ValueError(f"{cls.__name__} must declare a non-empty device_types tuple before it can be registered.")
     for dt in cls.device_types:
         existing = _REGISTRY.get(dt)
         if existing is not None and existing is not cls:
             raise ValueError(
-                f"device_type {dt!r} already registered to {existing.__name__}; "
-                f"cannot re-register to {cls.__name__}"
+                f"device_type {dt!r} already registered to {existing.__name__}; cannot re-register to {cls.__name__}"
             )
         _REGISTRY[dt] = cls
     return cls

@@ -7,6 +7,7 @@ Provides:
   - Built-in functions: SUM, AVG, MIN, MAX, ABS, PERCENTILE_95, NEGATE
   - Expression evaluation endpoint for testing
 """
+
 from __future__ import annotations
 
 import math
@@ -25,15 +26,18 @@ LOGGER = configure_logging("plexus.cdef_engine")
 # Pydantic Models
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 class CdefCreate(BaseModel):
     name: str
     description: str = ""
     expression: str
 
+
 class CdefUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     expression: str | None = None
+
 
 class CdefEvaluateRequest(BaseModel):
     expression: str
@@ -43,6 +47,7 @@ class CdefEvaluateRequest(BaseModel):
 # ═════════════════════════════════════════════════════════════════════════════
 # RPN Expression Evaluator (Cacti CDEF compatible)
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def _percentile(values: list[float], pct: float) -> float:
     """Calculate the Nth percentile of a list of values."""
@@ -181,7 +186,7 @@ def evaluate_cdef_expression(expression: str, data_map: dict[str, list[float]]) 
                 # LIMIT pops upper, lower, value → pushes value if in range, else NaN
                 if len(stack) >= 3:
                     upper, lower, val = stack.pop(), stack.pop(), stack.pop()
-                    stack.append(val if lower <= val <= upper else float('nan'))
+                    stack.append(val if lower <= val <= upper else float("nan"))
             elif token.upper() == "IF":
                 # IF pops b, a, cond → pushes a if cond != 0 else b
                 if len(stack) >= 3:

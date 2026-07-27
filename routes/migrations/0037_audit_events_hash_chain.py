@@ -65,13 +65,12 @@ def _compute_row_hash(
     prev_hash: str,
 ) -> str:
     return hashlib.sha256(
-        _canonical_row_bytes(
-            timestamp, category, action, user, detail, correlation_id, prev_hash
-        )
+        _canonical_row_bytes(timestamp, category, action, user, detail, correlation_id, prev_hash)
     ).hexdigest()
 
 
 # ── SQLite ──────────────────────────────────────────────────────────────────
+
 
 async def _column_exists_sqlite(db, table: str, column: str) -> bool:
     cursor = await db.execute(f"PRAGMA table_info({table})")
@@ -81,26 +80,19 @@ async def _column_exists_sqlite(db, table: str, column: str) -> bool:
 
 async def _up_sqlite(db) -> None:
     if not await _column_exists_sqlite(db, "audit_events", "prev_hash"):
-        await db.execute(
-            "ALTER TABLE audit_events ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''"
-        )
+        await db.execute("ALTER TABLE audit_events ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''")
     if not await _column_exists_sqlite(db, "audit_events", "row_hash"):
-        await db.execute(
-            "ALTER TABLE audit_events ADD COLUMN row_hash TEXT NOT NULL DEFAULT ''"
-        )
+        await db.execute("ALTER TABLE audit_events ADD COLUMN row_hash TEXT NOT NULL DEFAULT ''")
 
     # Backfill in id ASC so each prev_hash matches the previous row_hash.
     cursor = await db.execute(
-        'SELECT id, timestamp, category, action, "user", detail, correlation_id '
-        "FROM audit_events ORDER BY id ASC"
+        'SELECT id, timestamp, category, action, "user", detail, correlation_id FROM audit_events ORDER BY id ASC'
     )
     rows = await cursor.fetchall()
 
     prev_hash = ""
     for row in rows:
-        row_id, ts, cat, act, usr, det, corr = (
-            row[0], row[1], row[2], row[3], row[4], row[5], row[6]
-        )
+        row_id, ts, cat, act, usr, det, corr = (row[0], row[1], row[2], row[3], row[4], row[5], row[6])
         rh = _compute_row_hash(ts, cat, act, usr, det, corr, prev_hash)
         await db.execute(
             "UPDATE audit_events SET prev_hash = ?, row_hash = ? WHERE id = ?",
@@ -136,14 +128,11 @@ async def _up_sqlite(db) -> None:
 
 # ── Postgres ────────────────────────────────────────────────────────────────
 
+
 async def _up_postgres(db) -> None:
     # IF NOT EXISTS for idempotency on re-runs of partially-applied migrations.
-    await db.execute(
-        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS prev_hash TEXT NOT NULL DEFAULT ''"
-    )
-    await db.execute(
-        "ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS row_hash TEXT NOT NULL DEFAULT ''"
-    )
+    await db.execute("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS prev_hash TEXT NOT NULL DEFAULT ''")
+    await db.execute("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS row_hash TEXT NOT NULL DEFAULT ''")
 
     cursor = await db.execute(
         'SELECT id, timestamp::text, category, action, "user", '
@@ -154,9 +143,7 @@ async def _up_postgres(db) -> None:
 
     prev_hash = ""
     for row in rows:
-        row_id, ts, cat, act, usr, det, corr = (
-            row[0], row[1], row[2], row[3], row[4], row[5], row[6]
-        )
+        row_id, ts, cat, act, usr, det, corr = (row[0], row[1], row[2], row[3], row[4], row[5], row[6])
         rh = _compute_row_hash(ts, cat, act, usr, det, corr, prev_hash)
         await db.execute(
             "UPDATE audit_events SET prev_hash = ?, row_hash = ? WHERE id = ?",

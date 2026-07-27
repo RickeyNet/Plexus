@@ -98,9 +98,7 @@ def configure_logging(logger_name: str = "plexus") -> logging.Logger:
     if not logger.handlers:
         logger.setLevel(logging.INFO)
         handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
-        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
         handler.addFilter(RedactingFilter())
         logger.addHandler(handler)
     logger.propagate = False
@@ -152,9 +150,7 @@ def _build_syslog_handler(config: dict[str, Any]) -> logging.Handler:
     )
     setattr(handler, _SYSLOG_MARKER, True)
     handler.setLevel(level)
-    handler.setFormatter(
-        logging.Formatter(f"{app_name}[%(process)d]: %(levelname)s %(name)s %(message)s")
-    )
+    handler.setFormatter(logging.Formatter(f"{app_name}[%(process)d]: %(levelname)s %(name)s %(message)s"))
     handler.addFilter(RedactingFilter())
     return handler
 

@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,6 +46,7 @@ __all__ = [
 # Playbooks
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def get_all_playbooks() -> list[dict]:
     db = await _dbcore.get_db()
     try:
@@ -76,9 +78,14 @@ async def get_playbook(playbook_id: int) -> dict | None:
         await db.close()
 
 
-async def create_playbook(name: str, filename: str, description: str = "",
-                          tags: list[str] | None = None, content: str = "",
-                          type: str = "python") -> int:
+async def create_playbook(
+    name: str,
+    filename: str,
+    description: str = "",
+    tags: list[str] | None = None,
+    content: str = "",
+    type: str = "python",
+) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
@@ -116,9 +123,15 @@ async def sync_playbook_filename(name: str, filename: str):
         await db.close()
 
 
-async def update_playbook(playbook_id: int, name: str = None, filename: str = None,
-                          description: str = None, tags: list[str] | None = None,
-                          content: str = None, type: str = None):
+async def update_playbook(
+    playbook_id: int,
+    name: str = None,
+    filename: str = None,
+    description: str = None,
+    tags: list[str] | None = None,
+    content: str = None,
+    type: str = None,
+):
     """Update playbook fields. None values are not updated."""
     db = await _dbcore.get_db()
     try:
@@ -143,9 +156,11 @@ async def update_playbook(playbook_id: int, name: str = None, filename: str = No
         if type is not None:
             updates.append("type = ?")
             params.append(type)
-        
+
         if updates:
-            updates.append("updated_at = NOW()::text" if _dbcore.DB_ENGINE == "postgres" else "updated_at = datetime('now')")
+            updates.append(
+                "updated_at = NOW()::text" if _dbcore.DB_ENGINE == "postgres" else "updated_at = datetime('now')"
+            )
             sql, sql_params = _safe_dynamic_update("playbooks", updates, params, "id = ?", playbook_id)
             await db.execute(sql, sql_params)
             await db.commit()
@@ -169,6 +184,7 @@ async def delete_playbook(playbook_id: int):
 # Templates
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def get_all_templates() -> list[dict]:
     db = await _dbcore.get_db()
     try:
@@ -187,13 +203,11 @@ async def get_template(template_id: int) -> dict | None:
         await db.close()
 
 
-async def create_template(name: str, content: str, description: str = "",
-                          device_type: str = "") -> int:
+async def create_template(name: str, content: str, description: str = "", device_type: str = "") -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO templates (name, device_type, content, description) "
-            "VALUES (?,?,?,?)",
+            "INSERT INTO templates (name, device_type, content, description) VALUES (?,?,?,?)",
             (name, device_type, content, description),
         )
         await db.commit()
@@ -202,8 +216,7 @@ async def create_template(name: str, content: str, description: str = "",
         await db.close()
 
 
-async def update_template(template_id: int, name: str, content: str,
-                          description: str = "", device_type: str = ""):
+async def update_template(template_id: int, name: str, content: str, description: str = "", device_type: str = ""):
     db = await _dbcore.get_db()
     try:
         await db.execute(
@@ -225,17 +238,13 @@ async def get_template_variants(name: str) -> list[dict]:
     """
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM templates WHERE name = ? ORDER BY device_type", (name,)
-        )
+        cursor = await db.execute("SELECT * FROM templates WHERE name = ? ORDER BY device_type", (name,))
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
 
-async def resolve_template_for_device_type(
-    template_id: int, device_type: str
-) -> dict | None:
+async def resolve_template_for_device_type(template_id: int, device_type: str) -> dict | None:
     """Resolve the right template body for a host's device_type.
 
     Phase 12 lets one logical template (keyed by ``name``) carry
@@ -284,9 +293,7 @@ async def resolve_template_for_device_type(
     return base
 
 
-def resolve_variant_in_memory(
-    base: dict, variants: list[dict], device_type: str
-) -> dict:
+def resolve_variant_in_memory(base: dict, variants: list[dict], device_type: str) -> dict:
     """Pure, no-I/O twin of ``resolve_template_for_device_type``'s rule.
 
     Given the already-fetched selected row (``base``) and every row
@@ -320,5 +327,3 @@ async def delete_template(template_id: int):
         await db.commit()
     finally:
         await db.close()
-
-

@@ -114,6 +114,7 @@ def fake_netmiko(monkeypatch):
 
     # Flip the cached flags inside _common.py so it takes the live path.
     import templates.playbooks._common as common
+
     monkeypatch.setattr(common, "NETMIKO_AVAILABLE", True)
     monkeypatch.setattr(common, "ConnectHandler", _connect_handler)
     monkeypatch.setattr(common, "NetmikoTimeoutException", _Timeout)
@@ -122,6 +123,7 @@ def fake_netmiko(monkeypatch):
     # The playbook module captures NETMIKO_AVAILABLE at import time, so
     # patch the bound name too.
     import templates.playbooks.snmpv3_configurator as pb
+
     monkeypatch.setattr(pb, "NETMIKO_AVAILABLE", True)
 
     yield holder
@@ -147,13 +149,14 @@ async def test_unknown_vendor_is_skipped_before_ssh(fake_netmiko):
     from templates.playbooks.snmpv3_configurator import Snmpv3Configurator
 
     pb = Snmpv3Configurator()
-    events = await _drain(pb.run(
-        hosts=[{"ip_address": "10.0.0.1", "hostname": "weird-box",
-                "device_type": "frobozz_os"}],
-        credentials={"username": "u", "password": "p", "secret": ""},
-        template_commands=["snmp-server group SECURE v3 priv"],
-        dry_run=False,
-    ))
+    events = await _drain(
+        pb.run(
+            hosts=[{"ip_address": "10.0.0.1", "hostname": "weird-box", "device_type": "frobozz_os"}],
+            credentials={"username": "u", "password": "p", "secret": ""},
+            template_commands=["snmp-server group SECURE v3 priv"],
+            dry_run=False,
+        )
+    )
 
     # No SSH session was ever opened.
     assert fake_netmiko["conn"] is None
@@ -181,13 +184,14 @@ async def test_show_existing_uses_driver_command_dry_run(fake_netmiko):
     from templates.playbooks.snmpv3_configurator import Snmpv3Configurator
 
     pb = Snmpv3Configurator()
-    events = await _drain(pb.run(
-        hosts=[{"ip_address": "10.0.0.1", "hostname": "sw1",
-                "device_type": "cisco_xe"}],
-        credentials={"username": "u", "password": "p", "secret": ""},
-        template_commands=["snmp-server user netops SECURE v3 auth sha s priv aes 256 p"],
-        dry_run=True,
-    ))
+    events = await _drain(
+        pb.run(
+            hosts=[{"ip_address": "10.0.0.1", "hostname": "sw1", "device_type": "cisco_xe"}],
+            credentials={"username": "u", "password": "p", "secret": ""},
+            template_commands=["snmp-server user netops SECURE v3 auth sha s priv aes 256 p"],
+            dry_run=True,
+        )
+    )
 
     conn = fake_netmiko["conn"]
     assert conn is not None
@@ -198,8 +202,7 @@ async def test_show_existing_uses_driver_command_dry_run(fake_netmiko):
     assert conn.save_calls == 0
     assert conn.disconnect_calls == 1
     # And the operator saw the would-apply preview.
-    assert any(e.level == "info" and "[DRY-RUN] Would apply" in e.message
-               for e in events)
+    assert any(e.level == "info" and "[DRY-RUN] Would apply" in e.message for e in events)
 
 
 # ── NX-OS skips the engine-ID pin ──────────────────────────────────────────
@@ -217,13 +220,14 @@ async def test_nxos_skips_engine_id_pin(fake_netmiko):
     from templates.playbooks.snmpv3_configurator import Snmpv3Configurator
 
     pb = Snmpv3Configurator()
-    events = await _drain(pb.run(
-        hosts=[{"ip_address": "10.0.0.2", "hostname": "nx1",
-                "device_type": "cisco_nxos"}],
-        credentials={"username": "u", "password": "p", "secret": ""},
-        template_commands=["snmp-server user netops SECURE v3 auth sha s priv aes 256 p"],
-        dry_run=False,
-    ))
+    events = await _drain(
+        pb.run(
+            hosts=[{"ip_address": "10.0.0.2", "hostname": "nx1", "device_type": "cisco_nxos"}],
+            credentials={"username": "u", "password": "p", "secret": ""},
+            template_commands=["snmp-server user netops SECURE v3 auth sha s priv aes 256 p"],
+            dry_run=False,
+        )
+    )
 
     conn = fake_netmiko["conn"]
     assert conn is not None
@@ -231,8 +235,7 @@ async def test_nxos_skips_engine_id_pin(fake_netmiko):
     assert len(conn.config_sets) == 1
     # And no engine-ID pin command sneaked in - the only config_set is
     # the template itself.
-    pinned = [c for batch in conn.config_sets for c in batch
-              if "snmp-server engineID local" in c]
+    pinned = [c for batch in conn.config_sets for c in batch if "snmp-server engineID local" in c]
     assert pinned == []
     # 'show snmp engineID' was never run because the driver returned "".
     assert "show snmp engineID" not in conn.send_commands
@@ -264,13 +267,14 @@ async def test_live_push_uses_driver_verify_and_saves(fake_netmiko):
     }
 
     pb = Snmpv3Configurator()
-    events = await _drain(pb.run(
-        hosts=[{"ip_address": "10.0.0.3", "hostname": "xe1",
-                "device_type": "cisco_xe"}],
-        credentials={"username": "u", "password": "p", "secret": ""},
-        template_commands=["snmp-server user netops SECURE v3 auth sha s priv aes 256 p"],
-        dry_run=False,
-    ))
+    events = await _drain(
+        pb.run(
+            hosts=[{"ip_address": "10.0.0.3", "hostname": "xe1", "device_type": "cisco_xe"}],
+            credentials={"username": "u", "password": "p", "secret": ""},
+            template_commands=["snmp-server user netops SECURE v3 auth sha s priv aes 256 p"],
+            dry_run=False,
+        )
+    )
 
     conn = fake_netmiko["conn"]
     assert conn is not None
@@ -279,21 +283,19 @@ async def test_live_push_uses_driver_verify_and_saves(fake_netmiko):
     assert "show snmp engineID" in conn.send_commands
     assert "show snmp user" in conn.send_commands
     # Step 2 - pin command came from the driver with the captured ID.
-    pin_batches = [b for b in conn.config_sets
-                   if any("snmp-server engineID local 80000009030050568D9CDFC0" in c
-                          for c in b)]
+    pin_batches = [
+        b for b in conn.config_sets if any("snmp-server engineID local 80000009030050568D9CDFC0" in c for c in b)
+    ]
     assert len(pin_batches) == 1
     # Step 3 - the user template itself was pushed.
-    template_batches = [b for b in conn.config_sets
-                        if any(c.startswith("snmp-server user netops") for c in b)]
+    template_batches = [b for b in conn.config_sets if any(c.startswith("snmp-server user netops") for c in b)]
     assert len(template_batches) == 1
     # Persisted to startup exactly once.
     assert conn.save_calls == 1
     # Disconnect ran cleanly.
     assert conn.disconnect_calls == 1
     # And the run finished successfully.
-    assert any(e.level == "success" and "Finished processing" in e.message
-               for e in events)
+    assert any(e.level == "success" and "Finished processing" in e.message for e in events)
 
 
 # ── Phase 12: per-device_type template resolution ──────────────────────────
@@ -326,35 +328,32 @@ async def test_per_vendor_body_sent_to_matching_host(fake_netmiko):
     # "[DRY-RUN] Would apply" preview (live mode only logs the fake's
     # "<applied N lines>" string, and the conn holder keeps only the
     # last host's conn - the event stream is the per-host source).
-    events = await _drain(pb.run(
-        hosts=[
-            {"ip_address": "10.0.0.10", "hostname": "fw-pa",
-             "device_type": "paloalto_panos"},
-            {"ip_address": "10.0.0.11", "hostname": "fw-forti",
-             "device_type": "fortinet"},
-        ],
-        credentials={"username": "u", "password": "p", "secret": ""},
-        # Flat body is intentionally a sentinel that must NEVER be sent
-        # because both hosts have a vendor-specific variant.
-        template_commands=["GENERIC-SENTINEL-MUST-NOT-APPEAR"],
-        dry_run=True,
-    ))
+    events = await _drain(
+        pb.run(
+            hosts=[
+                {"ip_address": "10.0.0.10", "hostname": "fw-pa", "device_type": "paloalto_panos"},
+                {"ip_address": "10.0.0.11", "hostname": "fw-forti", "device_type": "fortinet"},
+            ],
+            credentials={"username": "u", "password": "p", "secret": ""},
+            # Flat body is intentionally a sentinel that must NEVER be sent
+            # because both hosts have a vendor-specific variant.
+            template_commands=["GENERIC-SENTINEL-MUST-NOT-APPEAR"],
+            dry_run=True,
+        )
+    )
 
     # Each host's would-apply preview must contain its own vendor body.
     pa_msgs = [e.message for e in events if e.host == "fw-pa"]
     forti_msgs = [e.message for e in events if e.host == "fw-forti"]
-    assert any("set deviceconfig system snmp-setting access-setting" in m
-               for m in pa_msgs)
+    assert any("set deviceconfig system snmp-setting access-setting" in m for m in pa_msgs)
     assert any("config system snmp user" in m for m in forti_msgs)
     # Neither host got the other's body or the generic sentinel.
     assert all("config system snmp user" not in m for m in pa_msgs)
-    assert all("set deviceconfig system snmp-setting" not in m
-               for m in forti_msgs)
+    assert all("set deviceconfig system snmp-setting" not in m for m in forti_msgs)
     joined = "\n".join(e.message for e in events)
     assert "GENERIC-SENTINEL-MUST-NOT-APPEAR" not in joined
     # Both hosts finished.
-    assert sum(1 for e in events
-               if e.level == "success" and "Finished processing" in e.message) == 2
+    assert sum(1 for e in events if e.level == "success" and "Finished processing" in e.message) == 2
 
 
 @pytest.mark.asyncio
@@ -372,13 +371,14 @@ async def test_generic_fallback_when_no_vendor_variant(fake_netmiko):
         "": ["snmp-server user netops SECURE v3 auth sha s priv aes 256 p"],
         "paloalto_panos": ["set deviceconfig system snmp-setting PA-ONLY"],
     }
-    events = await _drain(pb.run(
-        hosts=[{"ip_address": "10.0.0.20", "hostname": "eos1",
-                "device_type": "arista_eos"}],
-        credentials={"username": "u", "password": "p", "secret": ""},
-        template_commands=None,
-        dry_run=False,
-    ))
+    events = await _drain(
+        pb.run(
+            hosts=[{"ip_address": "10.0.0.20", "hostname": "eos1", "device_type": "arista_eos"}],
+            credentials={"username": "u", "password": "p", "secret": ""},
+            template_commands=None,
+            dry_run=False,
+        )
+    )
 
     conn = fake_netmiko["conn"]
     assert conn is not None
@@ -386,8 +386,7 @@ async def test_generic_fallback_when_no_vendor_variant(fake_netmiko):
     pushed = [c for batch in conn.config_sets for c in batch]
     assert any(c.startswith("snmp-server user netops") for c in pushed)
     assert all("PA-ONLY" not in c for c in pushed)
-    assert any(e.level == "success" and "Finished processing" in e.message
-               for e in events)
+    assert any(e.level == "success" and "Finished processing" in e.message for e in events)
 
 
 @pytest.mark.asyncio
@@ -404,13 +403,14 @@ async def test_host_with_no_resolvable_body_is_skipped(fake_netmiko):
     pb.template_by_device_type = {
         "paloalto_panos": ["set deviceconfig system snmp-setting PA-ONLY"],
     }
-    events = await _drain(pb.run(
-        hosts=[{"ip_address": "10.0.0.30", "hostname": "fw-forti",
-                "device_type": "fortinet"}],
-        credentials={"username": "u", "password": "p", "secret": ""},
-        template_commands=None,
-        dry_run=False,
-    ))
+    events = await _drain(
+        pb.run(
+            hosts=[{"ip_address": "10.0.0.30", "hostname": "fw-forti", "device_type": "fortinet"}],
+            credentials={"username": "u", "password": "p", "secret": ""},
+            template_commands=None,
+            dry_run=False,
+        )
+    )
 
     assert fake_netmiko["conn"] is None
     errors = [e for e in events if e.level == "error"]
@@ -433,13 +433,14 @@ async def test_firewall_snmpv3_skips_engine_id_pin(fake_netmiko):
     pb.template_by_device_type = {
         "paloalto_panos": ["set deviceconfig system snmp-setting access-setting"],
     }
-    events = await _drain(pb.run(
-        hosts=[{"ip_address": "10.0.0.40", "hostname": "fw-pa",
-                "device_type": "paloalto_panos"}],
-        credentials={"username": "u", "password": "p", "secret": ""},
-        template_commands=None,
-        dry_run=False,
-    ))
+    events = await _drain(
+        pb.run(
+            hosts=[{"ip_address": "10.0.0.40", "hostname": "fw-pa", "device_type": "paloalto_panos"}],
+            credentials={"username": "u", "password": "p", "secret": ""},
+            template_commands=None,
+            dry_run=False,
+        )
+    )
 
     conn = fake_netmiko["conn"]
     assert conn is not None
@@ -448,6 +449,4 @@ async def test_firewall_snmpv3_skips_engine_id_pin(fake_netmiko):
     assert "show snmp engineID" not in conn.send_commands
     assert any("engine ID is platform-managed" in e.message for e in events)
     # The PAN-OS show-existing command (driver-supplied) actually ran.
-    assert any(
-        c.startswith("show config running xpath") for c in conn.send_commands
-    )
+    assert any(c.startswith("show config running xpath") for c in conn.send_commands)

@@ -17,6 +17,7 @@ LOGGER = configure_logging("plexus.state")
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -262,9 +263,24 @@ SYSLOG_DEFAULTS = {
     "app_name": "plexus",
 }
 SYSLOG_FACILITIES = {
-    "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news",
-    "uucp", "cron", "local0", "local1", "local2", "local3", "local4",
-    "local5", "local6", "local7",
+    "kern",
+    "user",
+    "mail",
+    "daemon",
+    "auth",
+    "syslog",
+    "lpr",
+    "news",
+    "uucp",
+    "cron",
+    "local0",
+    "local1",
+    "local2",
+    "local3",
+    "local4",
+    "local5",
+    "local6",
+    "local7",
 }
 SYSLOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
@@ -288,9 +304,9 @@ DEFAULT_LOGIN_RULES = {
 # than read-only (GET).
 DEFAULT_API_RATE_LIMIT = {
     "enabled": True,
-    "window": 60,               # sliding window in seconds
-    "max_read": 120,            # GET requests per window per IP
-    "max_write": 40,            # POST/PUT/DELETE requests per window per IP
+    "window": 60,  # sliding window in seconds
+    "max_read": 120,  # GET requests per window per IP
+    "max_write": 40,  # POST/PUT/DELETE requests per window per IP
 }
 API_RATE_LIMIT = {
     "enabled": _env_flag("APP_API_RATE_LIMIT_ENABLED", DEFAULT_API_RATE_LIMIT["enabled"]),
@@ -353,7 +369,13 @@ _FEATURE_CATALOG = [
     {"key": "templates", "label": "Templates", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "credentials", "label": "Credentials", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "topology", "label": "Topology", "gateable": True, "writable": True, "visible_in_nav": True},
-    {"key": "cloud-visibility", "label": "Cloud Visibility", "gateable": True, "writable": True, "visible_in_nav": True},
+    {
+        "key": "cloud-visibility",
+        "label": "Cloud Visibility",
+        "gateable": True,
+        "writable": True,
+        "visible_in_nav": True,
+    },
     {"key": "monitoring", "label": "Monitoring", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "configuration", "label": "Configuration", "gateable": False, "writable": False, "visible_in_nav": True},
     {"key": "config-drift", "label": "Config Drift", "gateable": True, "writable": True, "visible_in_nav": True},
@@ -364,7 +386,13 @@ _FEATURE_CATALOG = [
     {"key": "reports", "label": "Reports", "gateable": True, "writable": False, "visible_in_nav": True},
     {"key": "graph-templates", "label": "Graphs", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "mac-tracking", "label": "MAC Tracking", "gateable": True, "writable": False, "visible_in_nav": True},
-    {"key": "traffic-analysis", "label": "Traffic Analysis", "gateable": True, "writable": False, "visible_in_nav": True},
+    {
+        "key": "traffic-analysis",
+        "label": "Traffic Analysis",
+        "gateable": True,
+        "writable": False,
+        "visible_in_nav": True,
+    },
     {"key": "upgrades", "label": "Upgrades", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "deployments", "label": "Deployments", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "federation", "label": "Federation", "gateable": True, "writable": True, "visible_in_nav": True},
@@ -376,11 +404,7 @@ FEATURE_FLAGS = [e["key"] for e in _FEATURE_CATALOG if e["gateable"]] + [
     f"{e['key']}.write" for e in _FEATURE_CATALOG if e["gateable"] and e["writable"]
 ]
 
-FEATURE_VISIBILITY_CATALOG = [
-    {"key": e["key"], "label": e["label"]}
-    for e in _FEATURE_CATALOG
-    if e["visible_in_nav"]
-]
+FEATURE_VISIBILITY_CATALOG = [{"key": e["key"], "label": e["label"]} for e in _FEATURE_CATALOG if e["visible_in_nav"]]
 
 FEATURE_VISIBILITY_KEYS = {entry["key"] for entry in FEATURE_VISIBILITY_CATALOG}
 
@@ -398,6 +422,7 @@ def _sanitize_feature_visibility(hidden: list) -> list[str]:
     requested = {str(k) for k in hidden if isinstance(k, str)}
     valid = requested & FEATURE_VISIBILITY_KEYS
     return [entry["key"] for entry in FEATURE_VISIBILITY_CATALOG if entry["key"] in valid]
+
 
 RADIUS_DICTIONARY_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "routes", "radius.dictionary")
 # Normalize so the path resolves correctly from netcontrol/routes/state.py -> project_root/routes/
@@ -500,7 +525,7 @@ IPAM_SYNC_DEFAULTS = {
     "interval_seconds": 1800,  # 30 minutes
 }
 
-IPAM_SYNC_MIN_INTERVAL = 300   # 5 minutes
+IPAM_SYNC_MIN_INTERVAL = 300  # 5 minutes
 IPAM_SYNC_MAX_INTERVAL = 86400  # 24 hours
 
 IPAM_SYNC_CONFIG: dict = dict(IPAM_SYNC_DEFAULTS)
@@ -525,7 +550,7 @@ DHCP_SYNC_CONFIG: dict = dict(DHCP_SYNC_DEFAULTS)
 FLOW_COLLECTOR_DEFAULTS = {
     "enabled": False,
     "netflow_port": 2055,
-    "sflow_port": 6343,           # set to 0 to disable the sFlow listener
+    "sflow_port": 6343,  # set to 0 to disable the sFlow listener
     "retention_hours": 48,
     "summary_retention_days": 30,
     "aggregation_interval_seconds": 3600,
@@ -534,7 +559,7 @@ FLOW_COLLECTOR_DEFAULTS = {
 FLOW_COLLECTOR_MIN_AGG_INTERVAL = 60
 FLOW_COLLECTOR_MAX_AGG_INTERVAL = 86400
 FLOW_COLLECTOR_MIN_RETENTION_HOURS = 1
-FLOW_COLLECTOR_MAX_RETENTION_HOURS = 24 * 365   # 1 year ceiling
+FLOW_COLLECTOR_MAX_RETENTION_HOURS = 24 * 365  # 1 year ceiling
 
 
 def _sanitize_flow_collector_config(data: dict | None) -> dict:
@@ -607,6 +632,7 @@ def _sanitize_ipam_sync_config(data: dict | None) -> dict:
 
 # ── Sanitizer functions ─────────────────────────────────────────────────────
 
+
 def _sanitize_login_rules(data: dict | None) -> dict:
     merged = dict(DEFAULT_LOGIN_RULES)
     if isinstance(data, dict):
@@ -617,7 +643,9 @@ def _sanitize_login_rules(data: dict | None) -> dict:
         "rate_limit_window": max(1, int(merged.get("rate_limit_window", DEFAULT_LOGIN_RULES["rate_limit_window"]))),
         "rate_limit_max": max(1, int(merged.get("rate_limit_max", DEFAULT_LOGIN_RULES["rate_limit_max"]))),
         # 0 = disabled. Cap at 24h so the absolute session lifetime always wins.
-        "session_idle_timeout": max(0, min(86400, int(merged.get("session_idle_timeout", DEFAULT_LOGIN_RULES["session_idle_timeout"])))),
+        "session_idle_timeout": max(
+            0, min(86400, int(merged.get("session_idle_timeout", DEFAULT_LOGIN_RULES["session_idle_timeout"])))
+        ),
     }
 
 
@@ -628,7 +656,7 @@ def _sanitize_positive_int_list(value) -> list[int]:
     for item in value:
         try:
             parsed = int(item)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         if parsed > 0:
             result.add(parsed)
@@ -652,45 +680,47 @@ def _sanitize_auth_config(data: dict | None) -> dict:
             cfg["service_credential_id"] = int(val) if val is not None else None
         radius = data.get("radius")
         if isinstance(radius, dict):
-            cfg["radius"].update({
-                "enabled": bool(radius.get("enabled", cfg["radius"]["enabled"])),
-                "server": str(radius.get("server", cfg["radius"]["server"])).strip(),
-                "port": int(radius.get("port", cfg["radius"]["port"])),
-                "secret": str(radius.get("secret", cfg["radius"]["secret"])),
-                "timeout": int(radius.get("timeout", cfg["radius"]["timeout"])),
-                "fallback_to_local": bool(radius.get("fallback_to_local", cfg["radius"]["fallback_to_local"])),
-                "fallback_on_reject": bool(radius.get("fallback_on_reject", cfg["radius"]["fallback_on_reject"])),
-                "default_group_ids": _sanitize_positive_int_list(
-                    radius.get("default_group_ids", cfg["radius"]["default_group_ids"])
-                ),
-            })
+            cfg["radius"].update(
+                {
+                    "enabled": bool(radius.get("enabled", cfg["radius"]["enabled"])),
+                    "server": str(radius.get("server", cfg["radius"]["server"])).strip(),
+                    "port": int(radius.get("port", cfg["radius"]["port"])),
+                    "secret": str(radius.get("secret", cfg["radius"]["secret"])),
+                    "timeout": int(radius.get("timeout", cfg["radius"]["timeout"])),
+                    "fallback_to_local": bool(radius.get("fallback_to_local", cfg["radius"]["fallback_to_local"])),
+                    "fallback_on_reject": bool(radius.get("fallback_on_reject", cfg["radius"]["fallback_on_reject"])),
+                    "default_group_ids": _sanitize_positive_int_list(
+                        radius.get("default_group_ids", cfg["radius"]["default_group_ids"])
+                    ),
+                }
+            )
     cfg["job_retention_days"] = max(JOB_RETENTION_MIN_DAYS, int(cfg.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
     cfg["radius"]["port"] = max(1, min(65535, cfg["radius"]["port"]))
     cfg["radius"]["timeout"] = max(1, min(30, cfg["radius"]["timeout"]))
-    cfg["radius"]["default_group_ids"] = _sanitize_positive_int_list(
-        cfg["radius"].get("default_group_ids", [])
-    )
+    cfg["radius"]["default_group_ids"] = _sanitize_positive_int_list(cfg["radius"].get("default_group_ids", []))
     # LDAP config sanitization
     ldap = data.get("ldap") if isinstance(data, dict) else None
     if isinstance(ldap, dict):
-        cfg["ldap"].update({
-            "enabled": bool(ldap.get("enabled", cfg["ldap"]["enabled"])),
-            "server": str(ldap.get("server", cfg["ldap"]["server"])).strip(),
-            "port": int(ldap.get("port", cfg["ldap"]["port"])),
-            "use_ssl": bool(ldap.get("use_ssl", cfg["ldap"]["use_ssl"])),
-            "bind_dn": str(ldap.get("bind_dn", cfg["ldap"]["bind_dn"])).strip(),
-            "bind_password": str(ldap.get("bind_password", cfg["ldap"]["bind_password"])),
-            "base_dn": str(ldap.get("base_dn", cfg["ldap"]["base_dn"])).strip(),
-            "user_search_filter": str(ldap.get("user_search_filter", cfg["ldap"]["user_search_filter"])).strip(),
-            "user_dn_template": str(ldap.get("user_dn_template", cfg["ldap"]["user_dn_template"])).strip(),
-            "group_search_base": str(ldap.get("group_search_base", cfg["ldap"]["group_search_base"])).strip(),
-            "group_search_filter": str(ldap.get("group_search_filter", cfg["ldap"]["group_search_filter"])).strip(),
-            "admin_group_dn": str(ldap.get("admin_group_dn", cfg["ldap"]["admin_group_dn"])).strip(),
-            "default_role": str(ldap.get("default_role", cfg["ldap"]["default_role"])).strip(),
-            "timeout": int(ldap.get("timeout", cfg["ldap"]["timeout"])),
-            "fallback_to_local": bool(ldap.get("fallback_to_local", cfg["ldap"]["fallback_to_local"])),
-            "fallback_on_reject": bool(ldap.get("fallback_on_reject", cfg["ldap"]["fallback_on_reject"])),
-        })
+        cfg["ldap"].update(
+            {
+                "enabled": bool(ldap.get("enabled", cfg["ldap"]["enabled"])),
+                "server": str(ldap.get("server", cfg["ldap"]["server"])).strip(),
+                "port": int(ldap.get("port", cfg["ldap"]["port"])),
+                "use_ssl": bool(ldap.get("use_ssl", cfg["ldap"]["use_ssl"])),
+                "bind_dn": str(ldap.get("bind_dn", cfg["ldap"]["bind_dn"])).strip(),
+                "bind_password": str(ldap.get("bind_password", cfg["ldap"]["bind_password"])),
+                "base_dn": str(ldap.get("base_dn", cfg["ldap"]["base_dn"])).strip(),
+                "user_search_filter": str(ldap.get("user_search_filter", cfg["ldap"]["user_search_filter"])).strip(),
+                "user_dn_template": str(ldap.get("user_dn_template", cfg["ldap"]["user_dn_template"])).strip(),
+                "group_search_base": str(ldap.get("group_search_base", cfg["ldap"]["group_search_base"])).strip(),
+                "group_search_filter": str(ldap.get("group_search_filter", cfg["ldap"]["group_search_filter"])).strip(),
+                "admin_group_dn": str(ldap.get("admin_group_dn", cfg["ldap"]["admin_group_dn"])).strip(),
+                "default_role": str(ldap.get("default_role", cfg["ldap"]["default_role"])).strip(),
+                "timeout": int(ldap.get("timeout", cfg["ldap"]["timeout"])),
+                "fallback_to_local": bool(ldap.get("fallback_to_local", cfg["ldap"]["fallback_to_local"])),
+                "fallback_on_reject": bool(ldap.get("fallback_on_reject", cfg["ldap"]["fallback_on_reject"])),
+            }
+        )
     cfg["ldap"]["port"] = max(1, cfg["ldap"]["port"])
     cfg["ldap"]["timeout"] = max(1, cfg["ldap"]["timeout"])
     return cfg
@@ -698,8 +728,6 @@ def _sanitize_auth_config(data: dict | None) -> dict:
 
 def _effective_job_retention_days() -> int:
     return max(JOB_RETENTION_MIN_DAYS, int(AUTH_CONFIG.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
-
-
 
 
 def _sanitize_discovery_sync_config(data: dict | None) -> dict:
@@ -824,9 +852,7 @@ def _sanitize_compliance_check_config(data: dict | None) -> dict:
             COMPLIANCE_CHECK_MIN_INTERVAL,
             min(COMPLIANCE_CHECK_MAX_INTERVAL, cfg["interval_seconds"]),
         )
-        cfg["retention_days"] = max(
-            1, min(365, int(data.get("retention_days", cfg["retention_days"])))
-        )
+        cfg["retention_days"] = max(1, min(365, int(data.get("retention_days", cfg["retention_days"]))))
     return cfg
 
 
@@ -843,13 +869,20 @@ def _sanitize_monitoring_config(data: dict | None) -> dict:
         cfg["cpu_threshold"] = max(1, min(100, int(data.get("cpu_threshold", cfg["cpu_threshold"]))))
         cfg["memory_threshold"] = max(1, min(100, int(data.get("memory_threshold", cfg["memory_threshold"]))))
         cfg["collect_routes"] = bool(data.get("collect_routes", cfg["collect_routes"]))
-        cfg["route_full_interval_seconds"] = max(0, min(86400, int(
-            data.get("route_full_interval_seconds", cfg["route_full_interval_seconds"]))))
+        cfg["route_full_interval_seconds"] = max(
+            0, min(86400, int(data.get("route_full_interval_seconds", cfg["route_full_interval_seconds"])))
+        )
         cfg["collect_vpn"] = bool(data.get("collect_vpn", cfg["collect_vpn"]))
         cfg["escalation_enabled"] = bool(data.get("escalation_enabled", cfg["escalation_enabled"]))
-        cfg["escalation_after_minutes"] = max(5, min(1440, int(data.get("escalation_after_minutes", cfg["escalation_after_minutes"]))))
-        cfg["escalation_check_interval"] = max(30, min(3600, int(data.get("escalation_check_interval", cfg["escalation_check_interval"]))))
-        cfg["default_cooldown_minutes"] = max(1, min(1440, int(data.get("default_cooldown_minutes", cfg["default_cooldown_minutes"]))))
+        cfg["escalation_after_minutes"] = max(
+            5, min(1440, int(data.get("escalation_after_minutes", cfg["escalation_after_minutes"])))
+        )
+        cfg["escalation_check_interval"] = max(
+            30, min(3600, int(data.get("escalation_check_interval", cfg["escalation_check_interval"])))
+        )
+        cfg["default_cooldown_minutes"] = max(
+            1, min(1440, int(data.get("default_cooldown_minutes", cfg["default_cooldown_minutes"])))
+        )
     return cfg
 
 
@@ -874,9 +907,9 @@ def _sanitize_syslog_config(data: dict | None) -> dict:
 
         app_name = str(data.get("app_name", cfg["app_name"]) or "").strip()
         if app_name:
-            cfg["app_name"] = "".join(
-                ch for ch in app_name if ch.isalnum() or ch in "._-"
-            )[:64] or SYSLOG_DEFAULTS["app_name"]
+            cfg["app_name"] = (
+                "".join(ch for ch in app_name if ch.isalnum() or ch in "._-")[:64] or SYSLOG_DEFAULTS["app_name"]
+            )
 
     cfg["port"] = max(1, min(65535, int(cfg["port"])))
     if cfg["enabled"] and not cfg["host"]:
@@ -1126,14 +1159,16 @@ def _resolve_snmp_discovery_config(group_id: int | None = None) -> dict:
         return effective
     merged = dict(effective)
     merged["v3"] = dict(effective.get("v3", {}))
-    merged.update({
-        "enabled": bool(profile.get("enabled", merged.get("enabled", False))),
-        "version": str(profile.get("version", merged.get("version", "2c"))),
-        "community": str(profile.get("community", merged.get("community", ""))),
-        "port": int(profile.get("port", merged.get("port", 161))),
-        "timeout_seconds": float(profile.get("timeout_seconds", merged.get("timeout_seconds", 1.2))),
-        "retries": int(profile.get("retries", merged.get("retries", 0))),
-    })
+    merged.update(
+        {
+            "enabled": bool(profile.get("enabled", merged.get("enabled", False))),
+            "version": str(profile.get("version", merged.get("version", "2c"))),
+            "community": str(profile.get("community", merged.get("community", ""))),
+            "port": int(profile.get("port", merged.get("port", 161))),
+            "timeout_seconds": float(profile.get("timeout_seconds", merged.get("timeout_seconds", 1.2))),
+            "retries": int(profile.get("retries", merged.get("retries", 0))),
+        }
+    )
     if isinstance(profile.get("v3"), dict):
         merged["v3"].update(profile["v3"])
     return _sanitize_snmp_discovery_config(merged)

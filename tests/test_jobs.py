@@ -93,16 +93,19 @@ def test_coerce_int_rejects_unparseable():
     assert exc.value.status_code == 400
 
 
-@pytest.mark.parametrize("raw,expected", [
-    (True, True),
-    ("true", True),
-    ("YES", True),
-    ("1", True),
-    ("on", True),
-    ("false", False),
-    ("0", False),
-    ("anything-else", False),
-])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (True, True),
+        ("true", True),
+        ("YES", True),
+        ("1", True),
+        ("on", True),
+        ("false", False),
+        ("0", False),
+        ("anything-else", False),
+    ],
+)
 def test_coerce_bool_variants(raw, expected):
     schema = [{"name": "enabled", "type": "bool"}]
     assert _coerce_parameters(schema, {"enabled": raw}) == {"enabled": expected}

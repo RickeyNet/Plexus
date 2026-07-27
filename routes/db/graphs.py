@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -81,8 +82,11 @@ __all__ = [
 # Graph Templates (Cacti-parity)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def list_graph_templates(
-    category: str | None = None, scope: str | None = None, built_in: bool | None = None,
+    category: str | None = None,
+    scope: str | None = None,
+    built_in: bool | None = None,
 ) -> list[dict]:
     db = await _dbcore.get_db()
     try:
@@ -99,7 +103,8 @@ async def list_graph_templates(
             params.append(1 if built_in else 0)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         cursor = await db.execute(
-            f"SELECT * FROM graph_templates{where} ORDER BY category, name", tuple(params),
+            f"SELECT * FROM graph_templates{where} ORDER BY category, name",
+            tuple(params),
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -125,13 +130,22 @@ async def get_graph_template(template_id: int) -> dict | None:
 
 
 async def create_graph_template(
-    name: str, description: str = "", graph_type: str = "line",
-    category: str = "system", scope: str = "device",
-    title_format: str = "", y_axis_label: str = "",
-    y_min: float | None = None, y_max: float | None = None,
-    stacked: bool = False, area_fill: bool = True,
-    grid_w: int = 6, grid_h: int = 4, options_json: str = "{}",
-    built_in: bool = False, created_by: str = "",
+    name: str,
+    description: str = "",
+    graph_type: str = "line",
+    category: str = "system",
+    scope: str = "device",
+    title_format: str = "",
+    y_axis_label: str = "",
+    y_min: float | None = None,
+    y_max: float | None = None,
+    stacked: bool = False,
+    area_fill: bool = True,
+    grid_w: int = 6,
+    grid_h: int = 4,
+    options_json: str = "{}",
+    built_in: bool = False,
+    created_by: str = "",
 ) -> dict:
     db = await _dbcore.get_db()
     try:
@@ -141,9 +155,24 @@ async def create_graph_template(
                 y_axis_label, y_min, y_max, stacked, area_fill, grid_w, grid_h,
                 options_json, built_in, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, description, graph_type, category, scope, title_format,
-             y_axis_label, y_min, y_max, int(stacked), int(area_fill),
-             grid_w, grid_h, options_json, int(built_in), created_by),
+            (
+                name,
+                description,
+                graph_type,
+                category,
+                scope,
+                title_format,
+                y_axis_label,
+                y_min,
+                y_max,
+                int(stacked),
+                int(area_fill),
+                grid_w,
+                grid_h,
+                options_json,
+                int(built_in),
+                created_by,
+            ),
         )
         await db.commit()
         new_id = cursor.lastrowid
@@ -155,8 +184,19 @@ async def create_graph_template(
 
 async def update_graph_template(template_id: int, **kwargs) -> dict | None:
     allowed = {
-        "name", "description", "graph_type", "category", "scope", "title_format",
-        "y_axis_label", "y_min", "y_max", "stacked", "area_fill", "grid_w", "grid_h",
+        "name",
+        "description",
+        "graph_type",
+        "category",
+        "scope",
+        "title_format",
+        "y_axis_label",
+        "y_min",
+        "y_max",
+        "stacked",
+        "area_fill",
+        "grid_w",
+        "grid_h",
         "options_json",
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
@@ -189,11 +229,18 @@ async def delete_graph_template(template_id: int) -> bool:
 
 # ── Graph Template Items ───────────────────────────────────────────────────
 
+
 async def create_graph_template_item(
-    template_id: int, sort_order: int = 0, metric_name: str = "",
-    label: str = "", color: str = "", line_type: str = "area",
-    cdef_expression: str = "", consolidation: str = "avg",
-    transform: str = "", legend_format: str = "",
+    template_id: int,
+    sort_order: int = 0,
+    metric_name: str = "",
+    label: str = "",
+    color: str = "",
+    line_type: str = "area",
+    cdef_expression: str = "",
+    consolidation: str = "avg",
+    transform: str = "",
+    legend_format: str = "",
 ) -> dict:
     db = await _dbcore.get_db()
     try:
@@ -202,8 +249,18 @@ async def create_graph_template_item(
                (template_id, sort_order, metric_name, label, color, line_type,
                 cdef_expression, consolidation, transform, legend_format)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (template_id, sort_order, metric_name, label, color, line_type,
-             cdef_expression, consolidation, transform, legend_format),
+            (
+                template_id,
+                sort_order,
+                metric_name,
+                label,
+                color,
+                line_type,
+                cdef_expression,
+                consolidation,
+                transform,
+                legend_format,
+            ),
         )
         await db.commit()
         new_id = cursor.lastrowid
@@ -215,8 +272,15 @@ async def create_graph_template_item(
 
 async def update_graph_template_item(item_id: int, **kwargs) -> dict | None:
     allowed = {
-        "sort_order", "metric_name", "label", "color", "line_type",
-        "cdef_expression", "consolidation", "transform", "legend_format",
+        "sort_order",
+        "metric_name",
+        "label",
+        "color",
+        "line_type",
+        "cdef_expression",
+        "consolidation",
+        "transform",
+        "legend_format",
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
@@ -247,6 +311,7 @@ async def delete_graph_template_item(item_id: int) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 # Host Templates (Cacti-parity)
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 async def list_host_templates() -> list[dict]:
     db = await _dbcore.get_db()
@@ -289,8 +354,11 @@ async def get_host_template(template_id: int) -> dict | None:
 
 
 async def create_host_template(
-    name: str, description: str = "", device_types: str = "[]",
-    auto_apply: bool = True, poll_interval: int | None = None,
+    name: str,
+    description: str = "",
+    device_types: str = "[]",
+    auto_apply: bool = True,
+    poll_interval: int | None = None,
     created_by: str = "",
 ) -> dict:
     db = await _dbcore.get_db()
@@ -338,7 +406,8 @@ async def delete_host_template(template_id: int) -> bool:
 
 
 async def link_graph_template_to_host_template(
-    host_template_id: int, graph_template_id: int,
+    host_template_id: int,
+    graph_template_id: int,
 ) -> dict:
     db = await _dbcore.get_db()
     try:
@@ -354,7 +423,8 @@ async def link_graph_template_to_host_template(
 
 
 async def unlink_graph_template_from_host_template(
-    host_template_id: int, graph_template_id: int,
+    host_template_id: int,
+    graph_template_id: int,
 ) -> bool:
     db = await _dbcore.get_db()
     try:
@@ -373,8 +443,10 @@ async def unlink_graph_template_from_host_template(
 # Host Graphs (graph template instances applied to devices)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def list_host_graphs(
-    host_id: int | None = None, graph_template_id: int | None = None,
+    host_id: int | None = None,
+    graph_template_id: int | None = None,
     enabled_only: bool = False,
 ) -> list[dict]:
     db = await _dbcore.get_db()
@@ -430,9 +502,13 @@ async def get_host_graph(host_graph_id: int) -> dict | None:
 
 
 async def create_host_graph(
-    host_id: int, graph_template_id: int, title: str = "",
-    instance_key: str = "", instance_label: str = "",
-    enabled: bool = True, pinned: bool = False,
+    host_id: int,
+    graph_template_id: int,
+    title: str = "",
+    instance_key: str = "",
+    instance_label: str = "",
+    enabled: bool = True,
+    pinned: bool = False,
     options_json: str = "{}",
 ) -> dict:
     db = await _dbcore.get_db()
@@ -441,8 +517,7 @@ async def create_host_graph(
             """INSERT OR IGNORE INTO host_graphs
                (host_id, graph_template_id, title, instance_key, instance_label, enabled, pinned, options_json)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (host_id, graph_template_id, title, instance_key, instance_label,
-             int(enabled), int(pinned), options_json),
+            (host_id, graph_template_id, title, instance_key, instance_label, int(enabled), int(pinned), options_json),
         )
         await db.commit()
         new_id = cursor.lastrowid
@@ -506,16 +581,14 @@ async def apply_graph_templates_to_host(host_id: int) -> list[dict]:
         host = dict(host)
         device_type = (host.get("device_type") or "").strip().lower()
 
-        cursor2 = await db.execute(
-            "SELECT * FROM host_templates WHERE auto_apply = 1"
-        )
+        cursor2 = await db.execute("SELECT * FROM host_templates WHERE auto_apply = 1")
         htemplates = rows_to_list(await cursor2.fetchall())
 
         created: list[dict] = []
         for ht in htemplates:
             try:
                 dt_list = json.loads(ht.get("device_types", "[]"))
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 dt_list = []
             # Empty list means "match all devices"
             if dt_list and device_type not in [d.lower() for d in dt_list]:
@@ -537,9 +610,7 @@ async def apply_graph_templates_to_host(host_id: int) -> list[dict]:
                 )
                 await db.commit()
                 if cursor4.lastrowid:
-                    cursor5 = await db.execute(
-                        "SELECT * FROM host_graphs WHERE id = ?", (cursor4.lastrowid,)
-                    )
+                    cursor5 = await db.execute("SELECT * FROM host_graphs WHERE id = ?", (cursor4.lastrowid,))
                     row = await cursor5.fetchone()
                     if row:
                         created.append(dict(row))
@@ -556,9 +627,7 @@ async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list
     """
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM graph_templates WHERE scope = 'interface'"
-        )
+        cursor = await db.execute("SELECT * FROM graph_templates WHERE scope = 'interface'")
         iface_templates = rows_to_list(await cursor.fetchall())
         if not iface_templates:
             return []
@@ -570,9 +639,9 @@ async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list
             if not if_index:
                 continue
             for gt in iface_templates:
-                title = (gt.get("title_format") or gt["name"]).replace(
-                    "$interface", if_name
-                ).replace("$ifIndex", if_index)
+                title = (
+                    (gt.get("title_format") or gt["name"]).replace("$interface", if_name).replace("$ifIndex", if_index)
+                )
                 cursor2 = await db.execute(
                     """INSERT OR IGNORE INTO host_graphs
                        (host_id, graph_template_id, title, instance_key, instance_label, enabled)
@@ -581,9 +650,7 @@ async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list
                 )
                 await db.commit()
                 if cursor2.lastrowid:
-                    cursor3 = await db.execute(
-                        "SELECT * FROM host_graphs WHERE id = ?", (cursor2.lastrowid,)
-                    )
+                    cursor3 = await db.execute("SELECT * FROM host_graphs WHERE id = ?", (cursor2.lastrowid,))
                     row = await cursor3.fetchone()
                     if row:
                         created.append(dict(row))
@@ -595,6 +662,7 @@ async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list
 # ═════════════════════════════════════════════════════════════════════════════
 # Graph Trees (hierarchical navigation)
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 async def list_graph_trees() -> list[dict]:
     db = await _dbcore.get_db()
@@ -624,7 +692,10 @@ async def get_graph_tree(tree_id: int) -> dict | None:
 
 
 async def create_graph_tree(
-    name: str, description: str = "", sort_order: int = 0, created_by: str = "",
+    name: str,
+    description: str = "",
+    sort_order: int = 0,
+    created_by: str = "",
 ) -> dict:
     db = await _dbcore.get_db()
     try:
@@ -669,11 +740,16 @@ async def delete_graph_tree(tree_id: int) -> bool:
 
 # ── Graph Tree Nodes ──────────────────────────────────────────────────────
 
+
 async def create_graph_tree_node(
-    tree_id: int, parent_node_id: int | None = None,
-    node_type: str = "header", title: str = "",
-    sort_order: int = 0, host_id: int | None = None,
-    group_id: int | None = None, graph_id: int | None = None,
+    tree_id: int,
+    parent_node_id: int | None = None,
+    node_type: str = "header",
+    title: str = "",
+    sort_order: int = 0,
+    host_id: int | None = None,
+    group_id: int | None = None,
+    graph_id: int | None = None,
 ) -> dict:
     db = await _dbcore.get_db()
     try:
@@ -723,6 +799,7 @@ async def delete_graph_tree_node(node_id: int) -> bool:
 # Data Source Profiles (per-device poll configuration)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def list_data_source_profiles(host_id: int | None = None) -> list[dict]:
     db = await _dbcore.get_db()
     try:
@@ -732,9 +809,7 @@ async def list_data_source_profiles(host_id: int | None = None) -> list[dict]:
                 (host_id,),
             )
         else:
-            cursor = await db.execute(
-                "SELECT * FROM data_source_profiles ORDER BY host_id, profile_name"
-            )
+            cursor = await db.execute("SELECT * FROM data_source_profiles ORDER BY host_id, profile_name")
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -751,8 +826,10 @@ async def get_data_source_profile(profile_id: int) -> dict | None:
 
 
 async def create_data_source_profile(
-    host_id: int, profile_name: str = "default",
-    poll_interval: int = 300, oids_json: str = "[]",
+    host_id: int,
+    profile_name: str = "default",
+    poll_interval: int = 300,
+    oids_json: str = "[]",
     enabled: bool = True,
 ) -> dict:
     db = await _dbcore.get_db()
@@ -786,7 +863,9 @@ async def update_data_source_profile(profile_id: int, **kwargs) -> dict | None:
         updates["enabled"] = int(updates["enabled"])
     set_exprs = [f"{k} = ?" for k in updates]
     set_exprs.append("updated_at = datetime('now')")
-    sql, sql_params = _safe_dynamic_update("data_source_profiles", set_exprs, list(updates.values()), "id = ?", profile_id)
+    sql, sql_params = _safe_dynamic_update(
+        "data_source_profiles", set_exprs, list(updates.values()), "id = ?", profile_id
+    )
     db = await _dbcore.get_db()
     try:
         await db.execute(sql, sql_params)
@@ -822,8 +901,14 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"metric_name": "cpu_usage", "label": "CPU %", "color": "#3B82F6",
-             "line_type": "area", "consolidation": "avg", "legend_format": "Avg: {avg} Max: {max}"},
+            {
+                "metric_name": "cpu_usage",
+                "label": "CPU %",
+                "color": "#3B82F6",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Avg: {avg} Max: {max}",
+            },
         ],
     },
     {
@@ -839,8 +924,14 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"metric_name": "memory_usage", "label": "Memory %", "color": "#8B5CF6",
-             "line_type": "area", "consolidation": "avg", "legend_format": "Avg: {avg} Max: {max}"},
+            {
+                "metric_name": "memory_usage",
+                "label": "Memory %",
+                "color": "#8B5CF6",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Avg: {avg} Max: {max}",
+            },
         ],
     },
     {
@@ -856,12 +947,26 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"sort_order": 0, "metric_name": "if_in_octets", "label": "Inbound",
-             "color": "#10B981", "line_type": "area", "consolidation": "avg",
-             "transform": "rate,8,*", "legend_format": "In: {avg} bps (peak {max})"},
-            {"sort_order": 1, "metric_name": "if_out_octets", "label": "Outbound",
-             "color": "#F59E0B", "line_type": "area", "consolidation": "avg",
-             "transform": "rate,8,*,negate", "legend_format": "Out: {avg} bps (peak {max})"},
+            {
+                "sort_order": 0,
+                "metric_name": "if_in_octets",
+                "label": "Inbound",
+                "color": "#10B981",
+                "line_type": "area",
+                "consolidation": "avg",
+                "transform": "rate,8,*",
+                "legend_format": "In: {avg} bps (peak {max})",
+            },
+            {
+                "sort_order": 1,
+                "metric_name": "if_out_octets",
+                "label": "Outbound",
+                "color": "#F59E0B",
+                "line_type": "area",
+                "consolidation": "avg",
+                "transform": "rate,8,*,negate",
+                "legend_format": "Out: {avg} bps (peak {max})",
+            },
         ],
     },
     {
@@ -877,18 +982,42 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": True,
         "area_fill": False,
         "items": [
-            {"sort_order": 0, "metric_name": "if_in_errors", "label": "In Errors",
-             "color": "#EF4444", "line_type": "line", "consolidation": "avg",
-             "transform": "rate"},
-            {"sort_order": 1, "metric_name": "if_out_errors", "label": "Out Errors",
-             "color": "#F97316", "line_type": "line", "consolidation": "avg",
-             "transform": "rate"},
-            {"sort_order": 2, "metric_name": "if_in_discards", "label": "In Discards",
-             "color": "#A855F7", "line_type": "line", "consolidation": "avg",
-             "transform": "rate"},
-            {"sort_order": 3, "metric_name": "if_out_discards", "label": "Out Discards",
-             "color": "#EC4899", "line_type": "line", "consolidation": "avg",
-             "transform": "rate"},
+            {
+                "sort_order": 0,
+                "metric_name": "if_in_errors",
+                "label": "In Errors",
+                "color": "#EF4444",
+                "line_type": "line",
+                "consolidation": "avg",
+                "transform": "rate",
+            },
+            {
+                "sort_order": 1,
+                "metric_name": "if_out_errors",
+                "label": "Out Errors",
+                "color": "#F97316",
+                "line_type": "line",
+                "consolidation": "avg",
+                "transform": "rate",
+            },
+            {
+                "sort_order": 2,
+                "metric_name": "if_in_discards",
+                "label": "In Discards",
+                "color": "#A855F7",
+                "line_type": "line",
+                "consolidation": "avg",
+                "transform": "rate",
+            },
+            {
+                "sort_order": 3,
+                "metric_name": "if_out_discards",
+                "label": "Out Discards",
+                "color": "#EC4899",
+                "line_type": "line",
+                "consolidation": "avg",
+                "transform": "rate",
+            },
         ],
     },
     {
@@ -906,9 +1035,15 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "grid_w": 3,
         "grid_h": 3,
         "items": [
-            {"metric_name": "uptime", "label": "Uptime", "color": "#10B981",
-             "line_type": "line", "consolidation": "last",
-             "transform": "div,8640000", "legend_format": "{last} days"},
+            {
+                "metric_name": "uptime",
+                "label": "Uptime",
+                "color": "#10B981",
+                "line_type": "line",
+                "consolidation": "last",
+                "transform": "div,8640000",
+                "legend_format": "{last} days",
+            },
         ],
     },
     {
@@ -924,12 +1059,24 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"sort_order": 0, "metric_name": "if_utilization_in", "label": "In Utilization",
-             "color": "#3B82F6", "line_type": "area", "consolidation": "avg",
-             "legend_format": "Avg: {avg}% Peak: {max}%"},
-            {"sort_order": 1, "metric_name": "if_utilization_out", "label": "Out Utilization",
-             "color": "#F59E0B", "line_type": "area", "consolidation": "avg",
-             "legend_format": "Avg: {avg}% Peak: {max}%"},
+            {
+                "sort_order": 0,
+                "metric_name": "if_utilization_in",
+                "label": "In Utilization",
+                "color": "#3B82F6",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Avg: {avg}% Peak: {max}%",
+            },
+            {
+                "sort_order": 1,
+                "metric_name": "if_utilization_out",
+                "label": "Out Utilization",
+                "color": "#F59E0B",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Avg: {avg}% Peak: {max}%",
+            },
         ],
     },
     {
@@ -945,9 +1092,14 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"metric_name": "ping_rtt", "label": "RTT", "color": "#06B6D4",
-             "line_type": "area", "consolidation": "avg",
-             "legend_format": "Avg: {avg}ms Max: {max}ms"},
+            {
+                "metric_name": "ping_rtt",
+                "label": "RTT",
+                "color": "#06B6D4",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Avg: {avg}ms Max: {max}ms",
+            },
         ],
     },
     # ── Get-started pack ───────────────────────────────────────────────────
@@ -968,9 +1120,14 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"metric_name": "response_time_ms", "label": "Response Time",
-             "color": "#06B6D4", "line_type": "area", "consolidation": "avg",
-             "legend_format": "Avg: {avg}ms Max: {max}ms"},
+            {
+                "metric_name": "response_time_ms",
+                "label": "Response Time",
+                "color": "#06B6D4",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Avg: {avg}ms Max: {max}ms",
+            },
         ],
     },
     {
@@ -986,9 +1143,14 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"metric_name": "packet_loss_pct", "label": "Loss %",
-             "color": "#EF4444", "line_type": "area", "consolidation": "avg",
-             "legend_format": "Avg: {avg}% Max: {max}%"},
+            {
+                "metric_name": "packet_loss_pct",
+                "label": "Loss %",
+                "color": "#EF4444",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Avg: {avg}% Max: {max}%",
+            },
         ],
     },
     {
@@ -1004,12 +1166,24 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": False,
         "items": [
-            {"sort_order": 0, "metric_name": "cpu_percent", "label": "CPU %",
-             "color": "#3B82F6", "line_type": "line", "consolidation": "avg",
-             "legend_format": "CPU avg: {avg}% peak: {max}%"},
-            {"sort_order": 1, "metric_name": "memory_percent", "label": "Memory %",
-             "color": "#8B5CF6", "line_type": "line", "consolidation": "avg",
-             "legend_format": "Mem avg: {avg}% peak: {max}%"},
+            {
+                "sort_order": 0,
+                "metric_name": "cpu_percent",
+                "label": "CPU %",
+                "color": "#3B82F6",
+                "line_type": "line",
+                "consolidation": "avg",
+                "legend_format": "CPU avg: {avg}% peak: {max}%",
+            },
+            {
+                "sort_order": 1,
+                "metric_name": "memory_percent",
+                "label": "Memory %",
+                "color": "#8B5CF6",
+                "line_type": "line",
+                "consolidation": "avg",
+                "legend_format": "Mem avg: {avg}% peak: {max}%",
+            },
         ],
     },
     {
@@ -1025,12 +1199,24 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"sort_order": 0, "metric_name": "memory_used_mb", "label": "Used",
-             "color": "#8B5CF6", "line_type": "area", "consolidation": "avg",
-             "legend_format": "Used avg: {avg} MB"},
-            {"sort_order": 1, "metric_name": "memory_total_mb", "label": "Total",
-             "color": "#64748B", "line_type": "line", "consolidation": "last",
-             "legend_format": "Total: {last} MB"},
+            {
+                "sort_order": 0,
+                "metric_name": "memory_used_mb",
+                "label": "Used",
+                "color": "#8B5CF6",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Used avg: {avg} MB",
+            },
+            {
+                "sort_order": 1,
+                "metric_name": "memory_total_mb",
+                "label": "Total",
+                "color": "#64748B",
+                "line_type": "line",
+                "consolidation": "last",
+                "legend_format": "Total: {last} MB",
+            },
         ],
     },
     {
@@ -1046,12 +1232,24 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": False,
         "items": [
-            {"sort_order": 0, "metric_name": "if_up_count", "label": "Up",
-             "color": "#10B981", "line_type": "line", "consolidation": "avg",
-             "legend_format": "Up: {last}"},
-            {"sort_order": 1, "metric_name": "if_down_count", "label": "Down",
-             "color": "#EF4444", "line_type": "line", "consolidation": "avg",
-             "legend_format": "Down: {last}"},
+            {
+                "sort_order": 0,
+                "metric_name": "if_up_count",
+                "label": "Up",
+                "color": "#10B981",
+                "line_type": "line",
+                "consolidation": "avg",
+                "legend_format": "Up: {last}",
+            },
+            {
+                "sort_order": 1,
+                "metric_name": "if_down_count",
+                "label": "Down",
+                "color": "#EF4444",
+                "line_type": "line",
+                "consolidation": "avg",
+                "legend_format": "Down: {last}",
+            },
         ],
     },
     {
@@ -1067,9 +1265,14 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"metric_name": "route_count", "label": "Routes",
-             "color": "#0EA5E9", "line_type": "area", "consolidation": "avg",
-             "legend_format": "Avg: {avg} Max: {max}"},
+            {
+                "metric_name": "route_count",
+                "label": "Routes",
+                "color": "#0EA5E9",
+                "line_type": "area",
+                "consolidation": "avg",
+                "legend_format": "Avg: {avg} Max: {max}",
+            },
         ],
     },
     {
@@ -1085,12 +1288,24 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": False,
         "items": [
-            {"sort_order": 0, "metric_name": "vpn_tunnels_up", "label": "Up",
-             "color": "#10B981", "line_type": "line", "consolidation": "avg",
-             "legend_format": "Up: {last}"},
-            {"sort_order": 1, "metric_name": "vpn_tunnels_down", "label": "Down",
-             "color": "#EF4444", "line_type": "line", "consolidation": "avg",
-             "legend_format": "Down: {last}"},
+            {
+                "sort_order": 0,
+                "metric_name": "vpn_tunnels_up",
+                "label": "Up",
+                "color": "#10B981",
+                "line_type": "line",
+                "consolidation": "avg",
+                "legend_format": "Up: {last}",
+            },
+            {
+                "sort_order": 1,
+                "metric_name": "vpn_tunnels_down",
+                "label": "Down",
+                "color": "#EF4444",
+                "line_type": "line",
+                "consolidation": "avg",
+                "legend_format": "Down: {last}",
+            },
         ],
     },
     {
@@ -1106,9 +1321,15 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "stacked": False,
         "area_fill": True,
         "items": [
-            {"metric_name": "uptime_seconds", "label": "Uptime",
-             "color": "#10B981", "line_type": "area", "consolidation": "last",
-             "transform": "div,86400", "legend_format": "{last} days"},
+            {
+                "metric_name": "uptime_seconds",
+                "label": "Uptime",
+                "color": "#10B981",
+                "line_type": "area",
+                "consolidation": "last",
+                "transform": "div,86400",
+                "legend_format": "{last} days",
+            },
         ],
     },
 ]
@@ -1133,13 +1354,21 @@ async def seed_built_in_graph_templates() -> int:
                     y_axis_label, y_min, y_max, stacked, area_fill, grid_w, grid_h,
                     options_json, built_in, created_by)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', 1, 'system')""",
-                (tpl_def["name"], tpl_def.get("description", ""),
-                 tpl_def.get("graph_type", "line"), tpl_def.get("category", "system"),
-                 tpl_def.get("scope", "device"), tpl_def.get("title_format", ""),
-                 tpl_def.get("y_axis_label", ""),
-                 tpl_def.get("y_min"), tpl_def.get("y_max"),
-                 int(tpl_def.get("stacked", False)), int(tpl_def.get("area_fill", True)),
-                 tpl_def.get("grid_w", 6), tpl_def.get("grid_h", 4)),
+                (
+                    tpl_def["name"],
+                    tpl_def.get("description", ""),
+                    tpl_def.get("graph_type", "line"),
+                    tpl_def.get("category", "system"),
+                    tpl_def.get("scope", "device"),
+                    tpl_def.get("title_format", ""),
+                    tpl_def.get("y_axis_label", ""),
+                    tpl_def.get("y_min"),
+                    tpl_def.get("y_max"),
+                    int(tpl_def.get("stacked", False)),
+                    int(tpl_def.get("area_fill", True)),
+                    tpl_def.get("grid_w", 6),
+                    tpl_def.get("grid_h", 4),
+                ),
             )
             await db.commit()
             tpl_id = cursor2.lastrowid
@@ -1149,11 +1378,18 @@ async def seed_built_in_graph_templates() -> int:
                        (template_id, sort_order, metric_name, label, color, line_type,
                         cdef_expression, consolidation, transform, legend_format)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (tpl_id, item.get("sort_order", idx),
-                     item.get("metric_name", ""), item.get("label", ""),
-                     item.get("color", ""), item.get("line_type", "area"),
-                     item.get("cdef_expression", ""), item.get("consolidation", "avg"),
-                     item.get("transform", ""), item.get("legend_format", "")),
+                    (
+                        tpl_id,
+                        item.get("sort_order", idx),
+                        item.get("metric_name", ""),
+                        item.get("label", ""),
+                        item.get("color", ""),
+                        item.get("line_type", "area"),
+                        item.get("cdef_expression", ""),
+                        item.get("consolidation", "avg"),
+                        item.get("transform", ""),
+                        item.get("legend_format", ""),
+                    ),
                 )
             await db.commit()
             tpl_def["items"] = items
@@ -1165,9 +1401,7 @@ async def seed_built_in_graph_templates() -> int:
         # runs every startup -- not just on first creation -- so newly
         # added built-ins auto-apply on upgrade, not only on fresh installs.
         # INSERT OR IGNORE keeps it idempotent.
-        cursor_ht = await db.execute(
-            "SELECT id FROM host_templates WHERE name = 'Default (All Devices)'"
-        )
+        cursor_ht = await db.execute("SELECT id FROM host_templates WHERE name = 'Default (All Devices)'")
         ht_row = await cursor_ht.fetchone()
         if ht_row:
             ht_id = ht_row[0] if isinstance(ht_row, tuple) else dict(ht_row)["id"]
@@ -1181,9 +1415,7 @@ async def seed_built_in_graph_templates() -> int:
             ht_id = cursor_ht2.lastrowid
             _LOGGER.info("Seeded default host template (id=%s)", ht_id)
 
-        cursor_device_tpls = await db.execute(
-            "SELECT id FROM graph_templates WHERE built_in = 1 AND scope = 'device'"
-        )
+        cursor_device_tpls = await db.execute("SELECT id FROM graph_templates WHERE built_in = 1 AND scope = 'device'")
         linked = 0
         for row in await cursor_device_tpls.fetchall():
             gt_id = row[0] if isinstance(row, tuple) else dict(row)["id"]
@@ -1237,12 +1469,18 @@ async def get_snmp_data_source(ds_id: int) -> dict | None:
         await db.close()
 
 
-async def upsert_snmp_data_source(
-    host_id: int, ds_type: str, instance_key: str, **kwargs
-) -> int:
+async def upsert_snmp_data_source(host_id: int, ds_type: str, instance_key: str, **kwargs) -> int:
     """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE (SQLite 3.24+)."""
-    allowed = {"name", "table_oid", "index_oid", "instance_label",
-               "oids_json", "poll_interval", "enabled", "last_polled_at"}
+    allowed = {
+        "name",
+        "table_oid",
+        "index_oid",
+        "instance_label",
+        "oids_json",
+        "poll_interval",
+        "enabled",
+        "last_polled_at",
+    }
     name = kwargs.get("name", "")
     table_oid = kwargs.get("table_oid", "")
     index_oid = kwargs.get("index_oid", "")
@@ -1266,10 +1504,20 @@ async def upsert_snmp_data_source(
                  instance_label, oids_json, poll_interval, enabled)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(host_id, ds_type, instance_key) DO UPDATE SET
-                {', '.join(update_sets)}
+                {", ".join(update_sets)}
                 RETURNING id""",
-            (host_id, ds_type, instance_key, name, table_oid, index_oid,
-             instance_label, oids_json, poll_interval, enabled),
+            (
+                host_id,
+                ds_type,
+                instance_key,
+                name,
+                table_oid,
+                index_oid,
+                instance_label,
+                oids_json,
+                poll_interval,
+                enabled,
+            ),
         )
         row = await cursor.fetchone()
         await db.commit()
@@ -1313,9 +1561,7 @@ async def delete_snmp_data_source(ds_id: int) -> bool:
 async def delete_snmp_data_sources_for_host(host_id: int) -> int:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM snmp_data_sources WHERE host_id = ?", (host_id,)
-        )
+        cursor = await db.execute("DELETE FROM snmp_data_sources WHERE host_id = ?", (host_id,))
         await db.commit()
         return cursor.rowcount
     finally:
@@ -1384,8 +1630,9 @@ async def get_cdef_definition(cdef_id: int) -> dict | None:
         await db.close()
 
 
-async def create_cdef_definition(name: str, expression: str, description: str = "",
-                                  built_in: int = 0, created_by: str = "") -> int:
+async def create_cdef_definition(
+    name: str, expression: str, description: str = "", built_in: int = 0, created_by: str = ""
+) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
@@ -1449,5 +1696,3 @@ async def seed_built_in_cdefs() -> int:
         return created
     finally:
         await db.close()
-
-

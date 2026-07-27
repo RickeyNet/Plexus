@@ -120,9 +120,7 @@ async def test_run_phase_updates_operation_with_terminal_counts(monkeypatch: pyt
             "failed": 1,
             "cancelled": 1,
             "completed_at": operation_updates[0]["completed_at"],
-            "error_message": (
-                "Activate phase completed with 1 failed and 1 cancelled device(s)."
-            ),
+            "error_message": ("Activate phase completed with 1 failed and 1 cancelled device(s)."),
         }
     ]
 
@@ -244,10 +242,7 @@ async def test_scheduled_execute_failure_is_recorded(monkeypatch: pytest.MonkeyP
     assert campaign_updates[-1] == {"status": "activate_failed", "scheduled_at": None}
     assert operation_updates[-1]["status"] == "activate_failed"
     assert "Scheduled activate failed" in operation_updates[-1]["error_message"]
-    assert any(
-        args[2] == "error" and "Scheduled activate failed" in args[3]
-        for args in emitted
-    )
+    assert any(args[2] == "error" and "Scheduled activate failed" in args[3] for args in emitted)
 
 
 @pytest.mark.asyncio
@@ -261,9 +256,7 @@ async def test_execute_validates_credential_against_campaign_creator(
 
     monkeypatch.setattr(upgrades, "NETMIKO_AVAILABLE", True)
     # The operator triggering the run is NOT the campaign creator.
-    monkeypatch.setattr(
-        upgrades, "_get_session", lambda _request: {"user": "bob", "user_id": 2}
-    )
+    monkeypatch.setattr(upgrades, "_get_session", lambda _request: {"user": "bob", "user_id": 2})
 
     async def fake_get_upgrade_campaign(_campaign_id):
         return {
@@ -286,14 +279,10 @@ async def test_execute_validates_credential_against_campaign_creator(
         captured.update(kwargs)
         raise _Stop()  # short-circuit before the heavy execution machinery
 
-    monkeypatch.setattr(
-        upgrades, "require_credential_access", fake_require_credential_access
-    )
+    monkeypatch.setattr(upgrades, "require_credential_access", fake_require_credential_access)
 
     with pytest.raises(_Stop):
-        await upgrades.execute_phase(
-            7, upgrades.CampaignPhaseRequest(phase="activate"), request=None
-        )
+        await upgrades.execute_phase(7, upgrades.CampaignPhaseRequest(phase="activate"), request=None)
 
     assert captured["credential_id"] == 9
     # Validated against the creator (alice), via the submitter path — not the
@@ -326,9 +315,7 @@ async def test_resolve_campaign_credential_explicit(monkeypatch):
 async def test_resolve_campaign_credential_falls_back_to_service(monkeypatch):
     """No credential set → use the configured service credential, with no
     per-user ownership check (it's the system default)."""
-    monkeypatch.setattr(
-        upgrades.state, "AUTH_CONFIG", {"service_credential_id": 42}
-    )
+    monkeypatch.setattr(upgrades.state, "AUTH_CONFIG", {"service_credential_id": 42})
 
     async def fake_get_raw(cred_id):
         return {"id": cred_id, "username": "svc", "password": "p", "secret": "", "is_service": 1}

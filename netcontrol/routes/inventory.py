@@ -1,6 +1,7 @@
 """
 inventory.py -- Inventory group/host CRUD, discovery, and SNMP profile routes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -59,18 +60,20 @@ async def _notify_flow_collector_host_changed(
     """
     try:
         from netcontrol.routes.flow_collector import on_host_changed
+
         await on_host_changed(old_ip=old_ip, new_ip=new_ip, host_id=host_id)
     except Exception as exc:
         LOGGER.debug("flow_collector cache refresh skipped: %s", type(exc).__name__)
 
+
 # Reserved IP ranges that should not be added to inventory (mirrors jobs.py)
 _BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),        # loopback
-    ipaddress.ip_network("::1/128"),             # IPv6 loopback
-    ipaddress.ip_network("169.254.0.0/16"),      # link-local
-    ipaddress.ip_network("fe80::/10"),           # IPv6 link-local
-    ipaddress.ip_network("0.0.0.0/8"),           # "this" network
-    ipaddress.ip_network("224.0.0.0/4"),         # multicast
+    ipaddress.ip_network("127.0.0.0/8"),  # loopback
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+    ipaddress.ip_network("0.0.0.0/8"),  # "this" network
+    ipaddress.ip_network("224.0.0.0/4"),  # multicast
     ipaddress.ip_network("255.255.255.255/32"),  # broadcast
 ]
 
@@ -99,12 +102,14 @@ class GroupUpdate(BaseModel):
     name: str
     description: str = ""
 
+
 class HostCreate(BaseModel):
     hostname: str
     ip_address: str
     device_type: str = "cisco_ios"
     vrf_name: str = ""
     vlan_id: str = ""
+
 
 class HostUpdate(BaseModel):
     hostname: str
@@ -206,8 +211,7 @@ async def _probe_discovery_target(
                     writer.close()
                     await writer.wait_closed()
                 except Exception as exc:
-                    LOGGER.debug("discovery: error closing probe connection to %s:%s: %s",
-                                 ip_address, port, exc)
+                    LOGGER.debug("discovery: error closing probe connection to %s:%s: %s", ip_address, port, exc)
     if not detected_port:
         # Last-resort ICMP probe so hosts that block SNMP/22/443 but still
         # answer ping (firewalls with locked-down mgmt planes, appliances
@@ -215,7 +219,9 @@ async def _probe_discovery_target(
         # caller can disable this for pure-SNMP networks.
         if use_icmp:
             icmp_hit = await _probe_discovery_target_icmp(
-                ip_address, timeout_seconds, hostname_prefix,
+                ip_address,
+                timeout_seconds,
+                hostname_prefix,
             )
             if icmp_hit is not None:
                 return icmp_hit
@@ -443,9 +449,8 @@ def _build_discovery_plan(
             (e["hostname"] for e in entries if e["sys_name_norm"]),
             (snmp_entries or entries)[0]["hostname"],
         )
-        device_type = (
-            next((e["device_type"] for e in snmp_entries if e["device_type"] != "unknown"), "")
-            or next((e["device_type"] for e in entries if e["device_type"] != "unknown"), "unknown")
+        device_type = next((e["device_type"] for e in snmp_entries if e["device_type"] != "unknown"), "") or next(
+            (e["device_type"] for e in entries if e["device_type"] != "unknown"), "unknown"
         )
         model = next((e["model"] for e in entries if e["model"]), "")
         sw = next((e["software_version"] for e in entries if e["software_version"]), "")
@@ -480,15 +485,21 @@ def _build_discovery_plan(
 
         if canonical is None:
             primary_ip = (
-                snmp_entries[0]["ip"] if snmp_entries
-                else sorted(group_ips, key=lambda x: ipaddress.ip_address(x))[0]
+                snmp_entries[0]["ip"] if snmp_entries else sorted(group_ips, key=lambda x: ipaddress.ip_address(x))[0]
             )
-            plan["add"].append({
-                "hostname": real_hostname, "ip": primary_ip, "device_type": device_type,
-                "status": status, "model": model, "software_version": sw,
-                "device_category": category, "serial_number": serial,
-                "alias_ips": sorted(full_ips - {primary_ip}),
-            })
+            plan["add"].append(
+                {
+                    "hostname": real_hostname,
+                    "ip": primary_ip,
+                    "device_type": device_type,
+                    "status": status,
+                    "model": model,
+                    "software_version": sw,
+                    "device_category": category,
+                    "serial_number": serial,
+                    "alias_ips": sorted(full_ips - {primary_ip}),
+                }
+            )
         else:
             primary_ip = (canonical.get("ip_address") or "").strip()
             eff_hostname = real_hostname if sys_norm else canonical.get("hostname")
@@ -498,19 +509,25 @@ def _build_discovery_plan(
             # reveals vendor but not OS variant); a blank protocol or any SNMP
             # probe is authoritative. A low-confidence probe may only fill an
             # unknown type, never overwrite an established one.
-            low_confidence = (not any_snmp) and any(
-                e["probe_protocol"] in ("ssh", "https") for e in entries
-            )
+            low_confidence = (not any_snmp) and any(e["probe_protocol"] in ("ssh", "https") for e in entries)
             if low_confidence and existing_dt != "unknown" and device_type != existing_dt:
                 eff_dt = existing_dt
             elif device_type == "unknown" and existing_dt != "unknown":
                 eff_dt = existing_dt
-            plan["update"].append({
-                "host_id": canonical_id, "hostname": eff_hostname, "ip": primary_ip,
-                "device_type": eff_dt, "status": status, "model": model,
-                "software_version": sw, "device_category": category,
-                "serial_number": serial, "alias_ips": sorted(full_ips - {primary_ip}),
-            })
+            plan["update"].append(
+                {
+                    "host_id": canonical_id,
+                    "hostname": eff_hostname,
+                    "ip": primary_ip,
+                    "device_type": eff_dt,
+                    "status": status,
+                    "model": model,
+                    "software_version": sw,
+                    "device_category": category,
+                    "serial_number": serial,
+                    "alias_ips": sorted(full_ips - {primary_ip}),
+                }
+            )
 
     # "matched" = devices reconciled this cycle (adds + updates), preserving the
     # pre-dedup meaning of "how many discovered devices were processed".
@@ -557,7 +574,9 @@ async def _sync_group_hosts(
         async def _walk(ip: str) -> list[str]:
             async with sem:
                 return await _collect_interface_ips(
-                    ip, float(snmp_cfg.get("timeout_seconds", 2.0)), snmp_cfg,
+                    ip,
+                    float(snmp_cfg.get("timeout_seconds", 2.0)),
+                    snmp_cfg,
                 )
 
         walked = await asyncio.gather(*[_walk(ip) for ip in targets], return_exceptions=True)
@@ -590,13 +609,12 @@ async def _sync_group_hosts(
     # ── Updates (existing hosts first, so IDs/ordering stay stable) ───────
     for item in plan["update"]:
         existing = existing_by_id.get(item["host_id"], {})
-        if (
-            existing.get("hostname") != item["hostname"]
-            or existing.get("device_type") != item["device_type"]
-        ):
+        if existing.get("hostname") != item["hostname"] or existing.get("device_type") != item["device_type"]:
             await db.update_host(item["host_id"], item["hostname"], item["ip"], item["device_type"])
             await push_inventory_host_allocation(
-                hostname=item["hostname"], ip_address=item["ip"], source_hint="discovery-update",
+                hostname=item["hostname"],
+                ip_address=item["ip"],
+                source_hint="discovery-update",
             )
             updated += 1
         await _write_device_info(item["host_id"], item, existing)
@@ -612,7 +630,9 @@ async def _sync_group_hosts(
             continue
         await db.update_host_status(new_id, item["status"])
         await push_inventory_host_allocation(
-            hostname=item["hostname"], ip_address=item["ip"], source_hint="discovery-add",
+            hostname=item["hostname"],
+            ip_address=item["ip"],
+            source_hint="discovery-add",
         )
         await _write_device_info(new_id, item, None)
         try:
@@ -673,15 +693,17 @@ async def _run_discovery_sync_once() -> dict:
             LOGGER.warning("discovery sync: skipped missing group_id=%s", group_id)
             continue
         try:
-            body = DiscoverySyncRequest.model_validate({
-                "cidrs": profile.get("cidrs", []),
-                "timeout_seconds": profile.get("timeout_seconds", state.DISCOVERY_DEFAULT_TIMEOUT_SECONDS),
-                "max_hosts": profile.get("max_hosts", state.DISCOVERY_DEFAULT_MAX_HOSTS),
-                "device_type": profile.get("device_type", "unknown"),
-                "hostname_prefix": profile.get("hostname_prefix", "discovered"),
-                "use_snmp": profile.get("use_snmp", True),
-                "remove_absent": profile.get("remove_absent", False),
-            })
+            body = DiscoverySyncRequest.model_validate(
+                {
+                    "cidrs": profile.get("cidrs", []),
+                    "timeout_seconds": profile.get("timeout_seconds", state.DISCOVERY_DEFAULT_TIMEOUT_SECONDS),
+                    "max_hosts": profile.get("max_hosts", state.DISCOVERY_DEFAULT_MAX_HOSTS),
+                    "device_type": profile.get("device_type", "unknown"),
+                    "hostname_prefix": profile.get("hostname_prefix", "discovered"),
+                    "use_snmp": profile.get("use_snmp", True),
+                    "remove_absent": profile.get("remove_absent", False),
+                }
+            )
             _, discovered = await _discover_hosts(body, group_id=group_id)
             result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
             synced_groups += 1
@@ -711,7 +733,13 @@ async def _discovery_sync_loop() -> None:
     while True:
         try:
             await _run_discovery_sync_once()
-            await asyncio.sleep(int(state.DISCOVERY_SYNC_CONFIG.get("interval_seconds", state.DISCOVERY_SYNC_DEFAULTS["interval_seconds"])))
+            await asyncio.sleep(
+                int(
+                    state.DISCOVERY_SYNC_CONFIG.get(
+                        "interval_seconds", state.DISCOVERY_SYNC_DEFAULTS["interval_seconds"]
+                    )
+                )
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -773,6 +801,7 @@ async def admin_list_snmp_profiles():
 async def _validate_snmp_profile_secrets(profile: dict):
     """Check that any {{secret.NAME}} references in v3 passwords exist."""
     from routes.secret_resolver import extract_secret_names, has_secret_references
+
     v3 = profile.get("v3", {})
     for field_name in ("auth_password", "priv_password"):
         value = v3.get(field_name, "")
@@ -781,7 +810,10 @@ async def _validate_snmp_profile_secrets(profile: dict):
             for name in names:
                 row = await db.get_secret_variable_by_name(name)
                 if row is None:
-                    raise HTTPException(400, f"Secret variable '{name}' not found. Create it in Credentials \u2192 Secret Variables first.")
+                    raise HTTPException(
+                        400,
+                        f"Secret variable '{name}' not found. Create it in Credentials \u2192 Secret Variables first.",
+                    )
 
 
 @admin_router.post("/api/admin/snmp-profiles")
@@ -840,11 +872,13 @@ async def list_snmp_profile_assignments():
     assignments = []
     for group_id, profile_id in state.GROUP_SNMP_ASSIGNMENTS.items():
         profile = state.SNMP_PROFILES.get(profile_id) if profile_id else None
-        assignments.append({
-            "group_id": group_id,
-            "snmp_profile_id": profile_id,
-            "profile_name": profile["name"] if profile else "",
-        })
+        assignments.append(
+            {
+                "group_id": group_id,
+                "snmp_profile_id": profile_id,
+                "profile_name": profile["name"] if profile else "",
+            }
+        )
     return {"assignments": assignments}
 
 
@@ -913,15 +947,17 @@ async def export_inventory_csv():
     writer = csv.writer(output)
     writer.writerow(["Hostname", "IP Address", "Model", "Software Version", "Device Type", "Status", "Group"])
     for r in rows:
-        writer.writerow([
-            r.get("hostname", ""),
-            r.get("ip_address", ""),
-            r.get("model", ""),
-            r.get("software_version", ""),
-            r.get("device_type", ""),
-            r.get("status", ""),
-            r.get("group_name", ""),
-        ])
+        writer.writerow(
+            [
+                r.get("hostname", ""),
+                r.get("ip_address", ""),
+                r.get("model", ""),
+                r.get("software_version", ""),
+                r.get("device_type", ""),
+                r.get("status", ""),
+                r.get("group_name", ""),
+            ]
+        )
     return StreamingResponse(
         io.StringIO(output.getvalue()),
         media_type="text/csv",
@@ -972,7 +1008,10 @@ async def add_host(group_id: int, body: HostCreate):
     _validate_host_ip(body.ip_address)
     try:
         hid = await db.add_host(
-            group_id, body.hostname, body.ip_address, body.device_type,
+            group_id,
+            body.hostname,
+            body.ip_address,
+            body.device_type,
             vrf_name=body.vrf_name or "",
             vlan_id=str(body.vlan_id or ""),
         )
@@ -999,7 +1038,10 @@ async def update_host(host_id: int, body: HostUpdate):
     prior = await db.get_host(host_id)
     prior_ip = (prior.get("ip_address") if prior else "") or ""
     await db.update_host(
-        host_id, body.hostname, body.ip_address, body.device_type,
+        host_id,
+        body.hostname,
+        body.ip_address,
+        body.device_type,
         vrf_name=body.vrf_name,
         vlan_id=body.vlan_id,
     )
@@ -1082,9 +1124,7 @@ async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Req
         )
 
     try:
-        output = await _run_show_command(
-            host, cred, driver.serial_number_show_command()
-        )
+        output = await _run_show_command(host, cred, driver.serial_number_show_command())
     except Exception:
         LOGGER.warning("fetch-serial SSH failed for host_id=%s ip=%s", host_id, host.get("ip_address"))
         raise HTTPException(502, "Could not connect to device")
@@ -1097,7 +1137,8 @@ async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Req
     await db.update_host_serial(host_id, serial)
     session = _get_session(request)
     await _audit(
-        "inventory", "host.serial_fetched",
+        "inventory",
+        "host.serial_fetched",
         user=session["user"] if session else "",
         detail=f"host_id={host_id} serial={serial}",
         correlation_id=_corr_id(request),
@@ -1134,18 +1175,22 @@ async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, requ
                     "ok": False,
                 }
             try:
-                output = await _run_show_command(
-                    host, cred, driver.serial_number_show_command()
-                )
+                output = await _run_show_command(host, cred, driver.serial_number_show_command())
                 serial = driver.parse_serial_number(output) or ""
                 if serial:
                     await db.update_host_serial(host["id"], serial)
                     return {"host_id": host["id"], "hostname": host["hostname"], "serial_number": serial, "ok": True}
-                return {"host_id": host["id"], "hostname": host["hostname"], "error": "Not found in output", "ok": False}
+                return {
+                    "host_id": host["id"],
+                    "hostname": host["hostname"],
+                    "error": "Not found in output",
+                    "ok": False,
+                }
             except Exception:
                 LOGGER.warning(
                     "bulk-fetch-serial SSH failed for host_id=%s ip=%s",
-                    host["id"], host.get("ip_address"),
+                    host["id"],
+                    host.get("ip_address"),
                 )
                 return {"host_id": host["id"], "hostname": host["hostname"], "error": "Connection failed", "ok": False}
 
@@ -1153,7 +1198,8 @@ async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, requ
     session = _get_session(request)
     ok_count = sum(1 for r in results if r.get("ok"))
     await _audit(
-        "inventory", "host.serial_bulk_fetched",
+        "inventory",
+        "host.serial_bulk_fetched",
         user=session["user"] if session else "",
         detail=f"group_id={group_id} total={len(hosts)} ok={ok_count}",
         correlation_id=_corr_id(request),
@@ -1221,13 +1267,10 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest):
         asyncio.create_task(_run_discovery_scan_job(job["job_id"], group_id, body, targets)),
         "discovery-scan",
     )
-    return {"job_id": job["job_id"], "status": "running",
-            "group_id": group_id, "total_targets": len(targets)}
+    return {"job_id": job["job_id"], "status": "running", "group_id": group_id, "total_targets": len(targets)}
 
 
-async def _run_discovery_scan_job(job_id: str, group_id: int,
-                                  body: DiscoveryScanRequest,
-                                  targets: list[str]) -> None:
+async def _run_discovery_scan_job(job_id: str, group_id: int, body: DiscoveryScanRequest, targets: list[str]) -> None:
     """Background task: probe every target, tracking progress on the job."""
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
@@ -1255,12 +1298,16 @@ async def _run_discovery_scan_job(job_id: str, group_id: int,
                 discovered.append(result)
             background_jobs.update_progress(job_id, scanned=scanned, found=len(discovered))
         discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
-        background_jobs.finish_job(job_id, "completed", result={
-            "group_id": group_id,
-            "scanned_hosts": len(targets),
-            "discovered_count": len(discovered),
-            "discovered_hosts": discovered,
-        })
+        background_jobs.finish_job(
+            job_id,
+            "completed",
+            result={
+                "group_id": group_id,
+                "scanned_hosts": len(targets),
+                "discovered_count": len(discovered),
+                "discovered_hosts": discovered,
+            },
+        )
     except Exception as exc:
         LOGGER.exception("inventory: discovery scan job %s failed", job_id)
         # Reap the still-pending probes so their results/exceptions are
@@ -1366,9 +1413,17 @@ async def test_group_snmp_profile(group_id: int, body: dict):
         result = await _snmp_get(target_ip, timeout, snmp_config)
     except Exception as exc:
         LOGGER.warning("SNMP test failed for %s: %s", target_ip, exc)
-        return {"success": False, "target_ip": target_ip, "error": "SNMP query failed - check credentials and connectivity."}
+        return {
+            "success": False,
+            "target_ip": target_ip,
+            "error": "SNMP query failed - check credentials and connectivity.",
+        }
     if result is None:
-        return {"success": False, "target_ip": target_ip, "error": "SNMP query failed -- no response or bad credentials"}
+        return {
+            "success": False,
+            "target_ip": target_ip,
+            "error": "SNMP query failed -- no response or bad credentials",
+        }
     return {"success": True, "target_ip": target_ip, "result": result}
 
 

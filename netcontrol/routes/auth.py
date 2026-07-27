@@ -3,6 +3,7 @@ auth.py -- Authentication routes: login, register, logout, status, profile, chan
 
 Includes RADIUS authentication helpers and login rate-limiting logic.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,6 +31,7 @@ try:
     from pyrad import packet as radius_packet
     from pyrad.client import Client as RadiusClient
     from pyrad.dictionary import Dictionary as RadiusDictionary
+
     PYRAD_AVAILABLE = True
 except Exception:
     RadiusClient = None
@@ -43,6 +45,7 @@ try:
     import ldap as python_ldap
     from ldap.dn import escape_dn_chars as _escape_dn_chars
     from ldap.filter import escape_filter_chars as _escape_filter_chars
+
     LDAP_AVAILABLE = True
 except Exception:
     python_ldap = None
@@ -170,8 +173,7 @@ async def verify_radius_user(username: str, password: str) -> tuple[bool, str]:
     return await asyncio.to_thread(_radius_authenticate_sync, username, password, radius_cfg)
 
 
-async def upsert_external_user(username: str, display_name: str = "",
-                                role: str = "user") -> dict | None:
+async def upsert_external_user(username: str, display_name: str = "", role: str = "user") -> dict | None:
     """Ensure a local shadow user exists for externally-authenticated identities (RADIUS/LDAP).
 
     Guards against directory name-collision privilege escalation: if a local
@@ -303,7 +305,9 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             search_filter = user_search_filter.replace("{username}", _escape_filter_chars(username))
             try:
                 result = conn.search_s(
-                    base_dn, python_ldap.SCOPE_SUBTREE, search_filter,
+                    base_dn,
+                    python_ldap.SCOPE_SUBTREE,
+                    search_filter,
                     ["dn", "displayName", "mail", "sAMAccountName", "cn", "memberOf"],
                 )
             except python_ldap.NO_SUCH_OBJECT:
@@ -365,7 +369,9 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             try:
                 search_filter = user_search_filter.replace("{username}", _escape_filter_chars(username))
                 result = conn.search_s(
-                    base_dn, python_ldap.SCOPE_SUBTREE, search_filter,
+                    base_dn,
+                    python_ldap.SCOPE_SUBTREE,
+                    search_filter,
                     ["displayName", "mail", "cn", "memberOf"],
                 )
                 entries = [(dn, attrs) for dn, attrs in result if dn is not None]
@@ -390,11 +396,11 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
         # Fetch group memberships if a group search is configured
         if group_search_base and group_search_filter and not user_attrs.get("groups"):
             try:
-                gfilter = group_search_filter.replace("{user_dn}", _escape_filter_chars(user_dn)).replace("{username}", _escape_filter_chars(username))
+                gfilter = group_search_filter.replace("{user_dn}", _escape_filter_chars(user_dn)).replace(
+                    "{username}", _escape_filter_chars(username)
+                )
                 g_result = conn.search_s(group_search_base, python_ldap.SCOPE_SUBTREE, gfilter, ["dn", "cn"])
-                user_attrs["groups"] = [
-                    dn for dn, _ in g_result if dn is not None
-                ]
+                user_attrs["groups"] = [dn for dn, _ in g_result if dn is not None]
             except Exception as exc:
                 LOGGER.warning("ldap: group search failed for '%s': %s", username, exc)
 
@@ -612,18 +618,22 @@ async def _get_user_features(user: dict) -> list[str]:
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
+
 
 class RegisterRequest(BaseModel):
     username: str
     password: str
     display_name: str = ""
 
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
 
 class UpdateProfileRequest(BaseModel):
     display_name: str | None = None
@@ -655,7 +665,9 @@ async def login(body: LoginRequest, request: Request):
         # Account lockout check
         if ip in LOCKED_OUT:
             if now < LOCKED_OUT[ip]:
-                raise HTTPException(status_code=429, detail=f"Account locked. Try again in {int((LOCKED_OUT[ip]-now)//60)+1} min.")
+                raise HTTPException(
+                    status_code=429, detail=f"Account locked. Try again in {int((LOCKED_OUT[ip] - now) // 60) + 1} min."
+                )
             else:
                 del LOCKED_OUT[ip]
                 LOGIN_ATTEMPTS.pop(ip, None)
@@ -679,31 +691,43 @@ async def login(body: LoginRequest, request: Request):
             attempts = [t for t in attempts if now - t < LOGIN_RULES["rate_limit_window"]]
             attempts.append(now)
             LOGIN_ATTEMPTS[ip] = attempts
-            await _audit_fn("auth", "login.failure", user=body.username, detail=auth_error or "bad credentials", correlation_id=_corr_id(request))
+            await _audit_fn(
+                "auth",
+                "login.failure",
+                user=body.username,
+                detail=auth_error or "bad credentials",
+                correlation_id=_corr_id(request),
+            )
             # Lockout if too many failed attempts
             if len(attempts) >= LOGIN_RULES["max_attempts"]:
                 LOCKED_OUT[ip] = now + LOGIN_RULES["lockout_time"]
-                raise HTTPException(status_code=429, detail="Account locked due to too many failed attempts. Try again later.")
+                raise HTTPException(
+                    status_code=429, detail="Account locked due to too many failed attempts. Try again later."
+                )
             raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
         # On success, reset attempts
         LOGIN_ATTEMPTS.pop(ip, None)
     # Use the canonical username from the DB (may differ in case from input)
     canonical_user = user["username"]
-    await _audit_fn("auth", "login.success", user=canonical_user, detail=f"source={auth_source}", correlation_id=_corr_id(request))
+    await _audit_fn(
+        "auth", "login.success", user=canonical_user, detail=f"source={auth_source}", correlation_id=_corr_id(request)
+    )
     token = _create_session_token_fn(canonical_user, user["id"], user.get("session_epoch") or 0)
     csrf_token = _generate_csrf_token(canonical_user)
-    response = JSONResponse({
-        "ok": True,
-        "username": canonical_user,
-        "user_id": user["id"],
-        "display_name": user["display_name"] or canonical_user,
-        "role": user["role"],
-        "auth_source": auth_source,
-        "feature_access": await _features_fn(user),
-        "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
-        "must_change_password": bool(user.get("must_change_password")),
-        "csrf_token": csrf_token,
-    })
+    response = JSONResponse(
+        {
+            "ok": True,
+            "username": canonical_user,
+            "user_id": user["id"],
+            "display_name": user["display_name"] or canonical_user,
+            "role": user["role"],
+            "auth_source": auth_source,
+            "feature_access": await _features_fn(user),
+            "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
+            "must_change_password": bool(user.get("must_change_password")),
+            "csrf_token": csrf_token,
+        }
+    )
     _https = getattr(_app, "APP_HTTPS_ENABLED", _APP_HTTPS_ENABLED)
     response.set_cookie(
         key="session",
@@ -738,16 +762,18 @@ async def register(body: RegisterRequest, request: Request = None):
     await _audit("auth", "register", user=body.username, correlation_id=_corr_id(request) if request else "")
     token = _create_session_token_fn(body.username, user_id)
     csrf_token = _generate_csrf_token(body.username)
-    response = JSONResponse({
-        "ok": True,
-        "username": body.username,
-        "user_id": user_id,
-        "display_name": display,
-        "role": "user",
-        "feature_access": await _features_fn(user),
-        "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
-        "csrf_token": csrf_token,
-    })
+    response = JSONResponse(
+        {
+            "ok": True,
+            "username": body.username,
+            "user_id": user_id,
+            "display_name": display,
+            "role": "user",
+            "feature_access": await _features_fn(user),
+            "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
+            "csrf_token": csrf_token,
+        }
+    )
     _https = getattr(_app, "APP_HTTPS_ENABLED", _APP_HTTPS_ENABLED)
     response.set_cookie(
         key="session",
@@ -850,7 +876,7 @@ async def _require_auth_dep(request: Request):
 
 # Per-user rate limiter for change-password (keyed on user_id)
 _PASSWORD_CHANGE_ATTEMPTS: dict[int, list[float]] = {}
-_PASSWORD_CHANGE_MAX = 5       # max attempts per window
+_PASSWORD_CHANGE_MAX = 5  # max attempts per window
 _PASSWORD_CHANGE_WINDOW = 300  # 5-minute window
 
 

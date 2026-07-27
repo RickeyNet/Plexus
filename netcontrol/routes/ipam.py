@@ -186,9 +186,7 @@ async def ipam_address_context_api(ip: str, vrf: str | None = Query(default=None
     duplicates = overview.get("duplicate_ips", [])
     if target_vrf:
         conflict_entry = next(
-            (d for d in duplicates
-             if d.get("ip_address") == ip
-             and (d.get("vrf_name") or "").strip() == target_vrf),
+            (d for d in duplicates if d.get("ip_address") == ip and (d.get("vrf_name") or "").strip() == target_vrf),
             None,
         )
     else:
@@ -466,6 +464,7 @@ async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
     """Define a subnet in the built-in Plexus IPAM source."""
     try:
         import ipaddress as _ip
+
         _ip.ip_network(body.subnet, strict=False)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet CIDR") from None
@@ -517,6 +516,7 @@ async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, re
     """Manually assign an IP address within a subnet."""
     try:
         import ipaddress as _ip
+
         net = _ip.ip_network(subnet, strict=False)
         addr = _ip.ip_address(body.address)
         if addr not in net:
@@ -586,10 +586,7 @@ async def reconcile_ipam_source_api(source_id: int, request: Request):
         "ipam",
         "reconcile_source",
         user=user,
-        detail=(
-            f"source_id={source_id},run_id={summary.get('run_id')},"
-            f"drifts={summary.get('diff_count')}"
-        ),
+        detail=(f"source_id={source_id},run_id={summary.get('run_id')},drifts={summary.get('diff_count')}"),
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "summary": summary}
@@ -648,10 +645,7 @@ async def resolve_reconciliation_diff_api(
         "ipam",
         "reconcile_resolve",
         user=user,
-        detail=(
-            f"diff_id={diff_id},resolution={body.resolution},"
-            f"address={resolved.get('address')}"
-        ),
+        detail=(f"diff_id={diff_id},resolution={body.resolution},address={resolved.get('address')}"),
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "diff": resolved}
@@ -707,8 +701,7 @@ async def allocate_ip_api(body: IpamAllocateRequest, request: Request):
         "allocate_ip",
         user=session.get("user", ""),
         detail=(
-            f"subnet={body.subnet},address={pending.get('address')},"
-            f"vrf={body.vrf_name},pending_id={pending.get('id')}"
+            f"subnet={body.subnet},address={pending.get('address')},vrf={body.vrf_name},pending_id={pending.get('id')}"
         ),
         correlation_id=_corr_id(request),
     )
@@ -757,10 +750,7 @@ async def commit_allocation_api(allocation_id: int, request: Request):
         "ipam",
         "allocate_commit",
         user=session.get("user", ""),
-        detail=(
-            f"pending_id={allocation_id},address={pending['address']},"
-            f"source_id={target_source_id}"
-        ),
+        detail=(f"pending_id={allocation_id},address={pending['address']},source_id={target_source_id}"),
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "allocation": updated, "ipam_allocation": alloc}
@@ -799,9 +789,7 @@ async def list_pending_allocations_api(
     include_expired: bool = Query(default=False),
     limit: int = Query(default=200, ge=1, le=1000),
 ):
-    rows = await db.list_pending_allocations(
-        state=state, include_expired=include_expired, limit=limit
-    )
+    rows = await db.list_pending_allocations(state=state, include_expired=include_expired, limit=limit)
     return {"allocations": rows, "count": len(rows)}
 
 
@@ -841,9 +829,7 @@ async def get_ip_owner_at_api(
 
 
 @router.get("/api/ipam/history/host/{hostname}")
-async def get_history_for_hostname_api(
-    hostname: str, limit: int = Query(default=200, ge=1, le=2000)
-):
+async def get_history_for_hostname_api(hostname: str, limit: int = Query(default=200, ge=1, le=2000)):
     """All IPs ever associated with a hostname."""
     rows = await db.list_ip_history_for_hostname(hostname, limit=limit)
     return {"hostname": hostname, "history": rows, "count": len(rows)}
@@ -858,9 +844,7 @@ async def list_subnet_utilization_api(
     limit: int = Query(default=500, ge=1, le=5000),
 ):
     """Time-series subnet utilization snapshots, newest first."""
-    rows = await db.list_subnet_utilization(
-        subnet=subnet, vrf_name=vrf, since=since, until=until, limit=limit
-    )
+    rows = await db.list_subnet_utilization(subnet=subnet, vrf_name=vrf, since=since, until=until, limit=limit)
     return {"snapshots": rows, "count": len(rows)}
 
 
@@ -885,14 +869,18 @@ async def snapshot_utilization_api(
         if snap is None:
             raise HTTPException(status_code=400, detail="Could not snapshot subnet")
         await _audit(
-            "ipam", "utilization_snapshot", user=session.get("user", ""),
+            "ipam",
+            "utilization_snapshot",
+            user=session.get("user", ""),
             detail=f"subnet={subnet},vrf={vrf}",
             correlation_id=_corr_id(request),
         )
         return {"ok": True, "snapshot": snap}
     written = await db.snapshot_all_subnet_utilization()
     await _audit(
-        "ipam", "utilization_snapshot_all", user=session.get("user", ""),
+        "ipam",
+        "utilization_snapshot_all",
+        user=session.get("user", ""),
         detail=f"snapshots_written={written}",
         correlation_id=_corr_id(request),
     )

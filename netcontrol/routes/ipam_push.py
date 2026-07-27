@@ -47,11 +47,7 @@ async def push_inventory_host_allocation(
             type(exc).__name__,
         )
         return {"attempted": 0, "pushed": 0, "failed": 1}
-    push_sources = [
-        src
-        for src in sources
-        if src.get("provider") != "plexus" and bool(src.get("push_enabled"))
-    ]
+    push_sources = [src for src in sources if src.get("provider") != "plexus" and bool(src.get("push_enabled"))]
 
     attempted = 0
     pushed = 0

@@ -37,19 +37,11 @@ from templates.playbooks._common import (
 def _resolve_collector(parameters: dict | None) -> tuple[str | None, int]:
     """Pick the collector IP + port from job params or env, in that order."""
     params = parameters or {}
-    ip = (
-        params.get("collector_ip")
-        or os.getenv("PLEXUS_COLLECTOR_IP", "").strip()
-        or None
-    )
-    port_raw = (
-        params.get("collector_port")
-        or os.getenv("APP_NETFLOW_PORT", "").strip()
-        or "2055"
-    )
+    ip = params.get("collector_ip") or os.getenv("PLEXUS_COLLECTOR_IP", "").strip() or None
+    port_raw = params.get("collector_port") or os.getenv("APP_NETFLOW_PORT", "").strip() or "2055"
     try:
         port = int(port_raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         port = 2055
     return ip, port
 
@@ -177,12 +169,21 @@ class NetflowEnabler(BasePlaybook):
 
             if NETMIKO_AVAILABLE:
                 async for event in self._process_real_device(
-                    ip, hostname, device_type, credentials, commands, verify_cmd, dry_run,
+                    ip,
+                    hostname,
+                    device_type,
+                    credentials,
+                    commands,
+                    verify_cmd,
+                    dry_run,
                 ):
                     yield event
             else:
                 async for event in self._process_simulated_device(
-                    ip, hostname, commands, dry_run,
+                    ip,
+                    hostname,
+                    commands,
+                    dry_run,
                 ):
                     yield event
 
@@ -203,7 +204,11 @@ class NetflowEnabler(BasePlaybook):
         dry_run: bool,
     ) -> AsyncGenerator[LogEvent]:
         async with connect_device(
-            self, ip, hostname, device_type, credentials,
+            self,
+            ip,
+            hostname,
+            device_type,
+            credentials,
         ) as (conn, events):
             for ev in events:
                 yield ev
@@ -301,8 +306,7 @@ class NetflowEnabler(BasePlaybook):
             )
             yield self.log_success("Flow exporter configured.", host=hostname)
             yield self.log_info(
-                "Exporter verification:\n  PLEXUS-EXPORT active, "
-                "packets sent: 0 (just configured)",
+                "Exporter verification:\n  PLEXUS-EXPORT active, packets sent: 0 (just configured)",
                 host=hostname,
             )
             yield self.log_success("Config saved.", host=hostname)

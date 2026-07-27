@@ -6,6 +6,7 @@ Covers:
   * SQLite triggers block raw UPDATE and DELETE against audit_events
   * Migration backfill produces a chain that verifies clean
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -31,9 +32,7 @@ async def test_add_audit_event_populates_chain(tmp_path, monkeypatch):
 
     conn = await db_module.get_db()
     try:
-        cursor = await conn.execute(
-            "SELECT id, prev_hash, row_hash FROM audit_events ORDER BY id ASC"
-        )
+        cursor = await conn.execute("SELECT id, prev_hash, row_hash FROM audit_events ORDER BY id ASC")
         rows = await cursor.fetchall()
     finally:
         await conn.close()
@@ -84,9 +83,7 @@ async def test_verify_audit_chain_detects_tamper(tmp_path, monkeypatch):
     raw = sqlite3.connect(db_path)
     try:
         raw.execute("DROP TRIGGER IF EXISTS audit_events_no_update")
-        raw.execute(
-            "UPDATE audit_events SET detail = 'tampered' WHERE id = ?", (id2,)
-        )
+        raw.execute("UPDATE audit_events SET detail = 'tampered' WHERE id = ?", (id2,))
         raw.commit()
     finally:
         raw.close()
@@ -164,11 +161,11 @@ async def test_backfill_produces_clean_chain(tmp_path, monkeypatch):
         # Insert a few rows with NO chain values.
         for i in range(3):
             raw.execute(
-                'INSERT INTO audit_events '
+                "INSERT INTO audit_events "
                 '(timestamp, category, action, "user", detail, correlation_id) '
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (
-                    f"2026-01-0{i+1} 00:00:00",
+                    f"2026-01-0{i + 1} 00:00:00",
                     "auth",
                     "login.success",
                     f"user{i}",
@@ -179,9 +176,7 @@ async def test_backfill_produces_clean_chain(tmp_path, monkeypatch):
         raw.commit()
 
         # Sanity: rows exist with empty chain columns.
-        rows = raw.execute(
-            "SELECT id, prev_hash, row_hash FROM audit_events ORDER BY id ASC"
-        ).fetchall()
+        rows = raw.execute("SELECT id, prev_hash, row_hash FROM audit_events ORDER BY id ASC").fetchall()
         assert len(rows) == 3
         assert all(r[1] == "" and r[2] == "" for r in rows)
     finally:
@@ -198,9 +193,7 @@ async def test_backfill_produces_clean_chain(tmp_path, monkeypatch):
     # Sanity: each prev_hash links to the previous row_hash.
     conn = await db_module.get_db()
     try:
-        cursor = await conn.execute(
-            "SELECT id, prev_hash, row_hash FROM audit_events ORDER BY id ASC"
-        )
+        cursor = await conn.execute("SELECT id, prev_hash, row_hash FROM audit_events ORDER BY id ASC")
         rows = await cursor.fetchall()
     finally:
         await conn.close()

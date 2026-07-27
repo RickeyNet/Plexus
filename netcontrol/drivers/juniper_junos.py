@@ -45,24 +45,16 @@ class JuniperJunosDriver(Driver):
             f"output flow-server {cfg.collector_ip} version9 template {template}",
             # Sampling input: rate=1 means "every packet"; Junos's
             # native knob is the same "1 out of N" ratio.
-            f"set forwarding-options sampling instance {instance} input "
-            f"rate {sampling_rate}",
+            f"set forwarding-options sampling instance {instance} input rate {sampling_rate}",
             # Services-style flow template (v9) with the same 5-tuple +
             # counters as the Cisco drivers emit.
-            f"set services flow-monitoring version9 template {template} "
-            "flow-active-timeout 60",
-            f"set services flow-monitoring version9 template {template} "
-            "template-refresh-rate packets 1000 seconds 60",
-            f"set services flow-monitoring version9 template {template} "
-            "ipv4-template",
+            f"set services flow-monitoring version9 template {template} flow-active-timeout 60",
+            f"set services flow-monitoring version9 template {template} template-refresh-rate packets 1000 seconds 60",
+            f"set services flow-monitoring version9 template {template} ipv4-template",
         ]
         for intf in cfg.interfaces:
-            cmds.append(
-                f"set interfaces {intf} unit 0 family inet sampling input"
-            )
-            cmds.append(
-                f"set interfaces {intf} unit 0 family inet sampling output"
-            )
+            cmds.append(f"set interfaces {intf} unit 0 family inet sampling input")
+            cmds.append(f"set interfaces {intf} unit 0 family inet sampling output")
         return cmds
 
     def netflow_verify_command(self) -> str:
@@ -170,7 +162,7 @@ class JuniperJunosDriver(Driver):
                 continue
             # Drop the "Chassis" label itself and look at the remaining
             # whitespace-separated columns.
-            rest = stripped[len("Chassis"):].split()
+            rest = stripped[len("Chassis") :].split()
             # A Junos serial is alphanumeric and mixes letters and digits
             # (e.g. "JN12345AB"). On models where the Chassis row also carries
             # a Part number (e.g. "750-012345"), the old first-alnum-token

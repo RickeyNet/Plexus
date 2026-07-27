@@ -9,6 +9,7 @@ Provides API endpoints for:
 - Graph Trees (hierarchical navigation)
 - Data Source Profiles (per-device poll configuration)
 """
+
 from __future__ import annotations
 
 import routes.database as db
@@ -24,6 +25,7 @@ LOGGER = configure_logging("plexus.graph_templates")
 # ═════════════════════════════════════════════════════════════════════════════
 # Pydantic Models
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 class GraphTemplateCreate(BaseModel):
     name: str
@@ -169,6 +171,7 @@ class DataSourceProfileUpdate(BaseModel):
 # Graph Template CRUD
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 @router.get("/api/graph-templates")
 async def list_graph_templates_api(
     category: str | None = Query(default=None),
@@ -192,13 +195,20 @@ async def create_graph_template_api(payload: GraphTemplateCreate, request: Reque
     user = getattr(request.state, "user", None) or {}
     created_by = user.get("username", "") if isinstance(user, dict) else ""
     tpl = await db.create_graph_template(
-        name=payload.name, description=payload.description,
-        graph_type=payload.graph_type, category=payload.category,
-        scope=payload.scope, title_format=payload.title_format,
-        y_axis_label=payload.y_axis_label, y_min=payload.y_min,
-        y_max=payload.y_max, stacked=payload.stacked,
-        area_fill=payload.area_fill, grid_w=payload.grid_w,
-        grid_h=payload.grid_h, options_json=payload.options_json,
+        name=payload.name,
+        description=payload.description,
+        graph_type=payload.graph_type,
+        category=payload.category,
+        scope=payload.scope,
+        title_format=payload.title_format,
+        y_axis_label=payload.y_axis_label,
+        y_min=payload.y_min,
+        y_max=payload.y_max,
+        stacked=payload.stacked,
+        area_fill=payload.area_fill,
+        grid_w=payload.grid_w,
+        grid_h=payload.grid_h,
+        options_json=payload.options_json,
         created_by=created_by,
     )
     LOGGER.info("Graph template created: %s (id=%s)", payload.name, tpl.get("id"))
@@ -233,18 +243,23 @@ async def delete_graph_template_api(template_id: int):
 # Graph Template Items
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 @router.post("/api/graph-templates/{template_id}/items", status_code=201)
 async def create_graph_template_item_api(template_id: int, payload: GraphTemplateItemCreate):
     existing = await db.get_graph_template(template_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Graph template not found")
     item = await db.create_graph_template_item(
-        template_id=template_id, sort_order=payload.sort_order,
-        metric_name=payload.metric_name, label=payload.label,
-        color=payload.color, line_type=payload.line_type,
+        template_id=template_id,
+        sort_order=payload.sort_order,
+        metric_name=payload.metric_name,
+        label=payload.label,
+        color=payload.color,
+        line_type=payload.line_type,
         cdef_expression=payload.cdef_expression,
         consolidation=payload.consolidation,
-        transform=payload.transform, legend_format=payload.legend_format,
+        transform=payload.transform,
+        legend_format=payload.legend_format,
     )
     return item
 
@@ -269,6 +284,7 @@ async def delete_graph_template_item_api(template_id: int, item_id: int):
 # Host Template CRUD
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 @router.get("/api/host-templates")
 async def list_host_templates_api():
     templates = await db.list_host_templates()
@@ -288,9 +304,12 @@ async def create_host_template_api(payload: HostTemplateCreate, request: Request
     user = getattr(request.state, "user", None) or {}
     created_by = user.get("username", "") if isinstance(user, dict) else ""
     tpl = await db.create_host_template(
-        name=payload.name, description=payload.description,
-        device_types=payload.device_types, auto_apply=payload.auto_apply,
-        poll_interval=payload.poll_interval, created_by=created_by,
+        name=payload.name,
+        description=payload.description,
+        device_types=payload.device_types,
+        auto_apply=payload.auto_apply,
+        poll_interval=payload.poll_interval,
+        created_by=created_by,
     )
     LOGGER.info("Host template created: %s (id=%s)", payload.name, tpl.get("id"))
     return tpl
@@ -314,6 +333,7 @@ async def delete_host_template_api(template_id: int):
 
 
 # ── Host Template ↔ Graph Template Links ─────────────────────────────────
+
 
 @router.post("/api/host-templates/{template_id}/graph-templates/{graph_template_id}", status_code=201)
 async def link_graph_to_host_template_api(template_id: int, graph_template_id: int):
@@ -339,6 +359,7 @@ async def unlink_graph_from_host_template_api(template_id: int, graph_template_i
 # Host Graphs (template instances on devices)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 @router.get("/api/host-graphs")
 async def list_host_graphs_api(
     host_id: int | None = Query(default=None),
@@ -346,7 +367,9 @@ async def list_host_graphs_api(
     enabled_only: bool = Query(default=False),
 ):
     graphs = await db.list_host_graphs(
-        host_id=host_id, graph_template_id=graph_template_id, enabled_only=enabled_only,
+        host_id=host_id,
+        graph_template_id=graph_template_id,
+        enabled_only=enabled_only,
     )
     return {"host_graphs": graphs}
 
@@ -362,10 +385,14 @@ async def get_host_graph_api(host_graph_id: int):
 @router.post("/api/host-graphs", status_code=201)
 async def create_host_graph_api(payload: HostGraphCreate):
     hg = await db.create_host_graph(
-        host_id=payload.host_id, graph_template_id=payload.graph_template_id,
-        title=payload.title, instance_key=payload.instance_key,
-        instance_label=payload.instance_label, enabled=payload.enabled,
-        pinned=payload.pinned, options_json=payload.options_json,
+        host_id=payload.host_id,
+        graph_template_id=payload.graph_template_id,
+        title=payload.title,
+        instance_key=payload.instance_key,
+        instance_label=payload.instance_label,
+        enabled=payload.enabled,
+        pinned=payload.pinned,
+        options_json=payload.options_json,
     )
     return hg
 
@@ -397,6 +424,7 @@ async def apply_templates_to_host_api(host_id: int):
 # Graph Trees
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 @router.get("/api/graph-trees")
 async def list_graph_trees_api():
     trees = await db.list_graph_trees()
@@ -416,8 +444,10 @@ async def create_graph_tree_api(payload: GraphTreeCreate, request: Request):
     user = getattr(request.state, "user", None) or {}
     created_by = user.get("username", "") if isinstance(user, dict) else ""
     tree = await db.create_graph_tree(
-        name=payload.name, description=payload.description,
-        sort_order=payload.sort_order, created_by=created_by,
+        name=payload.name,
+        description=payload.description,
+        sort_order=payload.sort_order,
+        created_by=created_by,
     )
     LOGGER.info("Graph tree created: %s (id=%s)", payload.name, tree.get("id"))
     return tree
@@ -442,16 +472,21 @@ async def delete_graph_tree_api(tree_id: int):
 
 # ── Graph Tree Nodes ──────────────────────────────────────────────────────
 
+
 @router.post("/api/graph-trees/{tree_id}/nodes", status_code=201)
 async def create_graph_tree_node_api(tree_id: int, payload: GraphTreeNodeCreate):
     tree = await db.get_graph_tree(tree_id)
     if not tree:
         raise HTTPException(status_code=404, detail="Graph tree not found")
     node = await db.create_graph_tree_node(
-        tree_id=tree_id, parent_node_id=payload.parent_node_id,
-        node_type=payload.node_type, title=payload.title,
-        sort_order=payload.sort_order, host_id=payload.host_id,
-        group_id=payload.group_id, graph_id=payload.graph_id,
+        tree_id=tree_id,
+        parent_node_id=payload.parent_node_id,
+        node_type=payload.node_type,
+        title=payload.title,
+        sort_order=payload.sort_order,
+        host_id=payload.host_id,
+        group_id=payload.group_id,
+        graph_id=payload.graph_id,
     )
     return node
 
@@ -476,6 +511,7 @@ async def delete_graph_tree_node_api(tree_id: int, node_id: int):
 # Data Source Profiles
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 @router.get("/api/data-source-profiles")
 async def list_data_source_profiles_api(
     host_id: int | None = Query(default=None),
@@ -495,8 +531,10 @@ async def get_data_source_profile_api(profile_id: int):
 @router.post("/api/data-source-profiles", status_code=201)
 async def create_data_source_profile_api(payload: DataSourceProfileCreate):
     profile = await db.create_data_source_profile(
-        host_id=payload.host_id, profile_name=payload.profile_name,
-        poll_interval=payload.poll_interval, oids_json=payload.oids_json,
+        host_id=payload.host_id,
+        profile_name=payload.profile_name,
+        poll_interval=payload.poll_interval,
+        oids_json=payload.oids_json,
         enabled=payload.enabled,
     )
     return profile

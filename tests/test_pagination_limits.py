@@ -22,6 +22,7 @@ def _auth_client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))

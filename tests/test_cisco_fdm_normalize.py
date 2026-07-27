@@ -35,8 +35,8 @@ def test_full_snapshot_maps_cpu_memory_uptime_and_interfaces():
     assert res["memory_percent"] == 25.0
     assert res["uptime_seconds"] == 123456
     assert res["if_up_count"] == 1
-    assert res["if_down_count"] == 1   # oper down but admin up
-    assert res["if_admin_down"] == 1   # admin down counted separately
+    assert res["if_down_count"] == 1  # oper down but admin up
+    assert res["if_admin_down"] == 1  # admin down counted separately
     assert res["poll_status"] == "ok"
 
 
@@ -97,11 +97,26 @@ def test_error_result_marks_host_down():
 def test_base_result_has_all_monitoring_pipeline_keys():
     # The result dict must carry every key _process_poll_result reads.
     required = {
-        "host_id", "cpu_percent", "memory_percent", "memory_used_mb",
-        "memory_total_mb", "uptime_seconds", "if_up_count", "if_down_count",
-        "if_admin_down", "if_details", "vpn_tunnels_up", "vpn_tunnels_down",
-        "vpn_details", "route_count", "route_snapshot", "poll_status",
-        "poll_error", "response_time_ms", "packet_loss_pct", "icmp_alive",
+        "host_id",
+        "cpu_percent",
+        "memory_percent",
+        "memory_used_mb",
+        "memory_total_mb",
+        "uptime_seconds",
+        "if_up_count",
+        "if_down_count",
+        "if_admin_down",
+        "if_details",
+        "vpn_tunnels_up",
+        "vpn_tunnels_down",
+        "vpn_details",
+        "route_count",
+        "route_snapshot",
+        "poll_status",
+        "poll_error",
+        "response_time_ms",
+        "packet_loss_pct",
+        "icmp_alive",
         "icmp_rtt_ms",
     }
     assert required.issubset(base_result(1).keys())

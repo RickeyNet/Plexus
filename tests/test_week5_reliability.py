@@ -162,7 +162,9 @@ def test_max_concurrent_jobs_env_default():
 
 def test_db_unique_violation_helper_matches_sqlite_and_postgres_messages():
     assert db_module._is_unique_violation(Exception("UNIQUE constraint failed: users.username"))
-    assert db_module._is_unique_violation(Exception("duplicate key value violates unique constraint \"users_username_key\""))
+    assert db_module._is_unique_violation(
+        Exception('duplicate key value violates unique constraint "users_username_key"')
+    )
     assert not db_module._is_unique_violation(Exception("timeout"))
 
 
@@ -244,8 +246,9 @@ async def test_login_records_audit_event_on_success(monkeypatch):
     result = await app_module.login(body, cast(Request, req))
 
     assert result is not None
-    assert any("login.success" in str(call) for call in audit_calls), \
+    assert any("login.success" in str(call) for call in audit_calls), (
         f"Expected audit call with login.success, got: {audit_calls}"
+    )
 
 
 @pytest.mark.asyncio
@@ -275,15 +278,17 @@ async def test_login_records_audit_event_on_failure(monkeypatch):
         await app_module.login(body, cast(Request, req))
     assert exc_info.value.status_code == 401
 
-    assert any("login.failure" in str(call) for call in audit_calls), \
+    assert any("login.failure" in str(call) for call in audit_calls), (
         f"Expected audit call with login.failure, got: {audit_calls}"
+    )
 
 
 @pytest.mark.asyncio
 async def test_audit_helper_swallows_exceptions(monkeypatch):
     """_audit should not raise even when the DB write fails."""
     monkeypatch.setattr(
-        app_module.db, "add_audit_event",
+        app_module.db,
+        "add_audit_event",
         AsyncMock(side_effect=RuntimeError("DB down")),
     )
     # Should not raise

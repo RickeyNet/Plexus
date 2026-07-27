@@ -50,9 +50,7 @@ def _make_client(tmp_path, monkeypatch, request):
         await db_module.init_db()
         db = await db_module.get_db()
         try:
-            await db.execute(
-                "INSERT INTO inventory_groups (name) VALUES ('bootstrap-sentinel')"
-            )
+            await db.execute("INSERT INTO inventory_groups (name) VALUES ('bootstrap-sentinel')")
             await db.commit()
         finally:
             await db.close()
@@ -95,6 +93,7 @@ def geo_client(tmp_path, monkeypatch, request):
 
 
 # ── Site CRUD ─────────────────────────────────────────────────────────────────
+
 
 def test_create_site(geo_client):
     resp = geo_client.post("/api/geo/sites", json={"name": "Melbourne HQ", "address": "123 Main St"})
@@ -167,6 +166,7 @@ def test_missing_site_name_returns_422(geo_client):
 
 # ── Floor CRUD ────────────────────────────────────────────────────────────────
 
+
 def test_create_floor(geo_client):
     site = geo_client.post("/api/geo/sites", json={"name": "Floor Test Site"}).json()
     resp = geo_client.post(f"/api/geo/sites/{site['id']}/floors", json={"name": "Ground Floor", "floor_number": 0})
@@ -201,6 +201,7 @@ def test_delete_floor(geo_client):
 
 # ── Placements ────────────────────────────────────────────────────────────────
 
+
 def _setup_site_floor_host(geo_client):
     """Helper: create a site, floor, and a host; return (site_id, floor_id, host_id)."""
     site = geo_client.post("/api/geo/sites", json={"name": "Placement Site"}).json()
@@ -209,9 +210,7 @@ def _setup_site_floor_host(geo_client):
     async def _create_host():
         db = await db_module.get_db()
         try:
-            cur = await db.execute(
-                "INSERT INTO inventory_groups (name) VALUES ('placement-group')"
-            )
+            cur = await db.execute("INSERT INTO inventory_groups (name) VALUES ('placement-group')")
             gid = cur.lastrowid
             cur2 = await db.execute(
                 "INSERT INTO hosts (group_id, hostname, ip_address, status) VALUES (?, 'sw-01', '10.1.1.1', 'up')",
@@ -270,6 +269,7 @@ def test_placement_out_of_range_returns_422(geo_client):
 
 
 # ── Overview ──────────────────────────────────────────────────────────────────
+
 
 def test_geo_overview(geo_client):
     geo_client.post("/api/geo/sites", json={"name": "Overview Site"})

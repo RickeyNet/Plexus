@@ -5,6 +5,7 @@ REST API for inventory, playbooks, templates, credentials, and jobs.
 WebSocket endpoint for real-time job output streaming.
 Session-based authentication with signed cookies.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -292,6 +293,7 @@ from routes.runner import LogEvent, execute_playbook, get_playbook_class
 
 try:
     from routes.ansible_runner_backend import execute_ansible_playbook
+
     ANSIBLE_RUNNER_AVAILABLE = True
 except ImportError:
     ANSIBLE_RUNNER_AVAILABLE = False
@@ -354,7 +356,7 @@ def _validate_csrf_token(token: str, session_user: str) -> bool:
     try:
         data = _csrf_serializer.loads(token, max_age=CSRF_TOKEN_MAX_AGE)
         return data.get("csrf_user") == session_user
-    except (BadSignature, SignatureExpired):
+    except BadSignature, SignatureExpired:
         return False
 
 
@@ -454,9 +456,7 @@ def _hash_password(password: str, salt: str = "") -> str:
     # Use PBKDF2 with 600 000 iterations (OWASP recommendation) instead of
     # a single SHA-256 round.  Existing hashes are 64-char hex (SHA-256);
     # new hashes are 128-char hex (PBKDF2-SHA-256, 64-byte dk).
-    return hashlib.pbkdf2_hmac(
-        "sha256", password.encode(), f"{salt}:".encode(), 600_000, dklen=64
-    ).hex()
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), f"{salt}:".encode(), 600_000, dklen=64).hex()
 
 
 def _bootstrap_admin_username() -> str:
@@ -480,12 +480,7 @@ def _emit_bootstrap_admin_credentials(
         if must_change_password
         else "Development bootstrap password is active."
     )
-    _msg = (
-        f"\n*** {action} ***\n"
-        f"    Username: {username}\n"
-        f"    Password: {password}\n"
-        f"    {guidance}\n\n"
-    )
+    _msg = f"\n*** {action} ***\n    Username: {username}\n    Password: {password}\n    {guidance}\n\n"
     os.write(2, _msg.encode())  # fd 2 = stderr
 
 
@@ -636,25 +631,29 @@ def create_session_token(username: str, user_id: int, session_epoch: int = 0) ->
     # `session_epoch` binds the token to the user's current revocation
     # generation; bumping the user's epoch invalidates every prior token.
     now = int(time.time())
-    return _serializer.dumps({
-        "user": username,
-        "user_id": user_id,
-        "session_epoch": int(session_epoch or 0),
-        "originally_issued_at": now,
-        "last_activity": now,
-    })
+    return _serializer.dumps(
+        {
+            "user": username,
+            "user_id": user_id,
+            "session_epoch": int(session_epoch or 0),
+            "originally_issued_at": now,
+            "last_activity": now,
+        }
+    )
 
 
 def _refresh_session_token(data: dict) -> str:
     """Re-issue a session token with `last_activity` bumped to now, preserving
     `originally_issued_at` so the absolute lifetime cap continues to apply."""
-    return _serializer.dumps({
-        "user": data["user"],
-        "user_id": data["user_id"],
-        "session_epoch": int(data.get("session_epoch") or 0),
-        "originally_issued_at": data.get("originally_issued_at", int(time.time())),
-        "last_activity": int(time.time()),
-    })
+    return _serializer.dumps(
+        {
+            "user": data["user"],
+            "user_id": data["user_id"],
+            "session_epoch": int(data.get("session_epoch") or 0),
+            "originally_issued_at": data.get("originally_issued_at", int(time.time())),
+            "last_activity": int(time.time()),
+        }
+    )
 
 
 def verify_session_token(token: str) -> dict | None:
@@ -687,7 +686,15 @@ def verify_session_token(token: str) -> dict | None:
 # Initialize shared module with session verifier
 shared.init_shared(verify_session_token)
 
-PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/status", "/api/health", "/api/version", "/favicon.ico"}
+PUBLIC_PATHS = {
+    "/",
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/status",
+    "/api/health",
+    "/api/version",
+    "/favicon.ico",
+}
 
 # Paths that remain accessible even when must_change_password is true
 PASSWORD_CHANGE_ALLOWED_PATHS = {
@@ -925,7 +932,9 @@ def _flow_collector_seed_from_env() -> dict | None:
         try:
             seeded["aggregation_interval_seconds"] = int(agg_raw)
         except ValueError:
-            LOGGER.warning("flow settings seed: ignoring invalid APP_FLOW_AGGREGATION_INTERVAL_SECONDS value %r", agg_raw)
+            LOGGER.warning(
+                "flow settings seed: ignoring invalid APP_FLOW_AGGREGATION_INTERVAL_SECONDS value %r", agg_raw
+            )
     return seeded or None
 
 
@@ -968,13 +977,10 @@ async def _load_persisted_security_settings():
     # auth_settings stores dicts; the channel list is wrapped as
     # {"channels": [...], "default_channel_ids": [...]}.
     if isinstance(notify_raw, dict):
-        state.NOTIFICATION_CHANNELS = notification_channels.sanitize_channels(
-            notify_raw.get("channels"))
+        state.NOTIFICATION_CHANNELS = notification_channels.sanitize_channels(notify_raw.get("channels"))
         valid_ids = {c.id for c in state.NOTIFICATION_CHANNELS}
         state.NOTIFICATION_DEFAULT_CHANNEL_IDS = [
-            str(c).strip()
-            for c in (notify_raw.get("default_channel_ids") or [])
-            if str(c).strip() in valid_ids
+            str(c).strip() for c in (notify_raw.get("default_channel_ids") or []) if str(c).strip() in valid_ids
         ]
     else:
         state.NOTIFICATION_CHANNELS = []
@@ -1027,6 +1033,7 @@ def require_feature(feature_key: str):
         if user.get("role") != "admin" and feature_key not in features:
             raise HTTPException(status_code=403, detail=f"Access denied for feature '{feature_key}'")
         return session
+
     return _dependency
 
 
@@ -1042,6 +1049,7 @@ def require_feature_method(feature_key: str):
     always required even on writes, so granting only `<feature>.write`
     without the base read key denies access.
     """
+
     async def _dependency(request: Request, response: Response = None):
         session = await require_auth(request, response)
         if session and session.get("auth_mode") == "token":
@@ -1059,9 +1067,13 @@ def require_feature_method(feature_key: str):
         if request.method.upper() not in _READ_METHODS:
             write_key = f"{feature_key}.write"
             if write_key not in features:
-                raise HTTPException(status_code=403, detail=f"Read-only access for '{feature_key}'; '{write_key}' required to modify")
+                raise HTTPException(
+                    status_code=403, detail=f"Read-only access for '{feature_key}'; '{write_key}' required to modify"
+                )
         return session
+
     return _dependency
+
 
 async def require_admin(request: Request, response: Response = None):
     """Dependency that checks for admin access. Returns session dict.
@@ -1128,13 +1140,14 @@ async def _ipam_sync_loop() -> None:
             except IpamAdapterError as exc:
                 LOGGER.warning("IPAM scheduled sync: source_id=%s adapter error: %s", source_id, exc)
                 await _record_sync_status(
-                    db.set_ipam_source_sync_status(source_id, status="error", message=str(exc)),
-                    "IPAM scheduled sync")
+                    db.set_ipam_source_sync_status(source_id, status="error", message=str(exc)), "IPAM scheduled sync"
+                )
             except Exception as exc:
                 LOGGER.warning("IPAM scheduled sync: source_id=%s error: %s", source_id, type(exc).__name__)
                 await _record_sync_status(
                     db.set_ipam_source_sync_status(source_id, status="error", message="Scheduled sync failed"),
-                    "IPAM scheduled sync")
+                    "IPAM scheduled sync",
+                )
 
 
 async def _dhcp_sync_loop() -> None:
@@ -1180,13 +1193,14 @@ async def _dhcp_sync_loop() -> None:
             except DhcpAdapterError as exc:
                 LOGGER.warning("DHCP scheduled sync: server_id=%s adapter error: %s", server_id, exc)
                 await _record_sync_status(
-                    db.set_dhcp_server_sync_status(server_id, status="error", message=str(exc)),
-                    "DHCP scheduled sync")
+                    db.set_dhcp_server_sync_status(server_id, status="error", message=str(exc)), "DHCP scheduled sync"
+                )
             except Exception as exc:
                 LOGGER.warning("DHCP scheduled sync: server_id=%s error: %s", server_id, type(exc).__name__)
                 await _record_sync_status(
                     db.set_dhcp_server_sync_status(server_id, status="error", message="Scheduled sync failed"),
-                    "DHCP scheduled sync")
+                    "DHCP scheduled sync",
+                )
 
 
 async def _record_sync_status(coro, what: str) -> None:
@@ -1212,9 +1226,7 @@ async def _cloud_flow_sync_loop() -> None:
         try:
             lookback = max(5, int(cfg.get("lookback_minutes", 15)))
             result = await pull_flow_logs_all_accounts(lookback_minutes=lookback)
-            await persist_cloud_flow_sync_status(
-                build_cloud_sync_status(result, source="scheduled", scope="all")
-            )
+            await persist_cloud_flow_sync_status(build_cloud_sync_status(result, source="scheduled", scope="all"))
             total = result.get("total_ingested", 0)
             processed = result.get("accounts_processed", 0)
             if total > 0:
@@ -1237,9 +1249,12 @@ async def _cloud_flow_sync_loop() -> None:
             LOGGER.warning("Cloud flow sync loop failed: %s", type(exc).__name__)
             await _record_sync_status(
                 persist_cloud_flow_sync_status(
-                    build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
+                    build_cloud_sync_status(
+                        {"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all"
+                    )
                 ),
-                "Cloud flow sync")
+                "Cloud flow sync",
+            )
 
 
 async def _cloud_discovery_sync_loop() -> None:
@@ -1281,9 +1296,7 @@ async def _cloud_traffic_metric_sync_loop() -> None:
         try:
             lookback = max(5, int(cfg.get("lookback_minutes", 15)))
             result = await pull_traffic_metrics_all_accounts(lookback_minutes=lookback)
-            await persist_cloud_traffic_sync_status(
-                build_cloud_sync_status(result, source="scheduled", scope="all")
-            )
+            await persist_cloud_traffic_sync_status(build_cloud_sync_status(result, source="scheduled", scope="all"))
             total = result.get("total_ingested", 0)
             processed = result.get("accounts_processed", 0)
             if total > 0:
@@ -1302,14 +1315,18 @@ async def _cloud_traffic_metric_sync_loop() -> None:
             LOGGER.warning("Cloud traffic sync loop failed: %s", type(exc).__name__)
             await _record_sync_status(
                 persist_cloud_traffic_sync_status(
-                    build_cloud_sync_status({"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all")
+                    build_cloud_sync_status(
+                        {"ok": False, "errors": [type(exc).__name__]}, source="scheduled", scope="all"
+                    )
                 ),
-                "Cloud traffic sync")
+                "Cloud traffic sync",
+            )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # App Lifecycle
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1333,6 +1350,7 @@ async def lifespan(app: FastAPI):
     check = await db.get_all_groups()
     if not check:
         from routes.seed import seed
+
         await seed()
     await db.seed_built_in_graph_templates()
     await db.seed_built_in_cdefs()
@@ -1364,8 +1382,10 @@ async def lifespan(app: FastAPI):
     # be smaller than poll_concurrency on low-core hosts, which would throttle
     # the raised concurrency back down. Enlarge it (never shrink below default).
     import concurrent.futures
-    _poll_concurrency = int(state.MONITORING_CONFIG.get(
-        "poll_concurrency", state.MONITORING_DEFAULTS["poll_concurrency"]))
+
+    _poll_concurrency = int(
+        state.MONITORING_CONFIG.get("poll_concurrency", state.MONITORING_DEFAULTS["poll_concurrency"])
+    )
     asyncio.get_running_loop().set_default_executor(
         concurrent.futures.ThreadPoolExecutor(
             max_workers=max(32, _poll_concurrency + 8),
@@ -1382,9 +1402,10 @@ async def lifespan(app: FastAPI):
         exc = task.exception()
         if exc is not None:
             LOGGER.error(
-                "background loop %s died with %s: %s — it will not run again "
-                "until the app restarts",
-                task.get_name(), type(exc).__name__, exc,
+                "background loop %s died with %s: %s — it will not run again until the app restarts",
+                task.get_name(),
+                type(exc).__name__,
+                exc,
             )
 
     background_tasks = [
@@ -1432,7 +1453,8 @@ async def lifespan(app: FastAPI):
     # register the hook that fans newly created monitoring alerts out to them.
     try:
         await notification_channels.start_dispatcher(
-            state.NOTIFICATION_CHANNELS, state.NOTIFICATION_DEFAULT_CHANNEL_IDS)
+            state.NOTIFICATION_CHANNELS, state.NOTIFICATION_DEFAULT_CHANNEL_IDS
+        )
         db.set_alert_created_hook(notification_channels.on_alert_created)
     except Exception as exc:
         LOGGER.warning("notification_channels: startup failed: %s", type(exc).__name__)
@@ -1472,7 +1494,8 @@ async def lifespan(app: FastAPI):
             if isinstance(res, Exception):
                 LOGGER.warning(
                     "background loop %s exited with %s during shutdown",
-                    task.get_name(), type(res).__name__,
+                    task.get_name(),
+                    type(res).__name__,
                 )
         await _cancel_flow_aggregation_task()
         if flow_collector_started:
@@ -1681,11 +1704,7 @@ async def api_rate_limit_middleware(request: Request, call_next):
     refresh storm shouldn't be able to self-DoS into a 429 loop.
     """
     cfg = state.API_RATE_LIMIT
-    if (
-        cfg.get("enabled")
-        and request.url.path.startswith("/api/")
-        and request.url.path not in PUBLIC_PATHS
-    ):
+    if cfg.get("enabled") and request.url.path.startswith("/api/") and request.url.path not in PUBLIC_PATHS:
         # Skip counting for authenticated requests - see docstring.
         api_token = _extract_api_token(request)
         is_authenticated = bool(
@@ -1746,7 +1765,9 @@ async def metrics_and_logging_middleware(request: Request, call_next):
         increment_metric("api.requests.total")
         increment_metric("api.requests.failed")
         observe_timing("api.request.duration_ms", duration_ms)
-        LOGGER.warning("request error path=%s correlation_id=%s duration_ms=%.1f", request.url.path, corr_id, duration_ms)
+        LOGGER.warning(
+            "request error path=%s correlation_id=%s duration_ms=%.1f", request.url.path, corr_id, duration_ms
+        )
         raise
 
     duration_ms = (time.perf_counter() - start) * 1000
@@ -1821,11 +1842,7 @@ async def https_redirect_middleware(request: Request, call_next):
 
     # Detect scheme: trust X-Forwarded-Proto from reverse proxy, fall back to
     # the actual request scheme (covers direct TLS termination by uvicorn).
-    scheme = (
-        request.headers.get("x-forwarded-proto", request.url.scheme)
-        .strip()
-        .lower()
-    )
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme).strip().lower()
 
     if scheme != "https":
         target = request.url.replace(scheme="https")
@@ -1920,6 +1937,7 @@ async def version():
     # Public on purpose so deploy/upgrade.sh and external monitoring can
     # read it without holding a session.  Mirrors how /api/health is exposed.
     from netcontrol.version import APP_GIT_SHA, APP_VERSION
+
     return {"version": APP_VERSION, "git_sha": APP_GIT_SHA}
 
 
@@ -2174,6 +2192,7 @@ FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+
 # React frontend - the only UI (migration history: docs/FRONTEND_MIGRATION.md).
 # Built from netcontrol/static/frontend via `npm run build`. Mounted at
 # /frontend with SPA-style fallback so client-side routes resolve to index.html.
@@ -2215,6 +2234,7 @@ if os.path.isdir(FRONTEND_DIST):
             return FileResponse(FRONTEND_INDEX)
         raise HTTPException(status_code=404, detail="React frontend not built")
 
+
 @app.get("/")
 async def serve_frontend():
     """Serve the React UI. The legacy vanilla-JS SPA was retired after the
@@ -2223,6 +2243,7 @@ async def serve_frontend():
     if os.path.isfile(FRONTEND_INDEX):
         return RedirectResponse(url="/frontend/")
     return RedirectResponse(url="/docs")
+
 
 @app.get("/favicon.ico")
 async def favicon():

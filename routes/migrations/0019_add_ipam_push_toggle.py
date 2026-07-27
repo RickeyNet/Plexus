@@ -20,9 +20,7 @@ async def _up_sqlite(db) -> None:
     rows = await cursor.fetchall()
     cols = {str(r[1]) for r in rows}
     if "push_enabled" not in cols:
-        await db.execute(
-            "ALTER TABLE ipam_sources ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 0"
-        )
+        await db.execute("ALTER TABLE ipam_sources ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 0")
     await db.commit()
 
 

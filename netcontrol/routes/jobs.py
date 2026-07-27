@@ -1,6 +1,7 @@
 """
 jobs.py -- Job orchestration routes: launch, cancel, retry, priority, queue, WebSocket streaming.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +42,7 @@ _POST_JOB_REPROBE_DELAY = 15
 
 try:
     from routes.ansible_runner_backend import execute_ansible_playbook
+
     ANSIBLE_RUNNER_AVAILABLE = True
 except ImportError:
     ANSIBLE_RUNNER_AVAILABLE = False
@@ -59,7 +61,9 @@ _verify_session_token = None
 _get_user_features = None
 
 
-def init_jobs(require_auth_fn, require_feature_fn, verify_session_token_fn, get_user_features_fn, require_admin_fn=None):
+def init_jobs(
+    require_auth_fn, require_feature_fn, verify_session_token_fn, get_user_features_fn, require_admin_fn=None
+):
     global _require_auth, _require_feature, _require_admin, _verify_session_token, _get_user_features
     _require_auth = require_auth_fn
     _require_feature = require_feature_fn
@@ -85,18 +89,16 @@ _shutting_down = False
 
 _PRIORITY_LABELS = {0: "low", 1: "below-normal", 2: "normal", 3: "high", 4: "critical"}
 _JOB_EVENT_BATCH_SIZE = max(1, int(os.getenv("APP_JOB_EVENT_BATCH_SIZE", "50")))
-_JOB_EVENT_FLUSH_SECONDS = max(
-    0.01, float(os.getenv("APP_JOB_EVENT_FLUSH_SECONDS", "0.1"))
-)
+_JOB_EVENT_FLUSH_SECONDS = max(0.01, float(os.getenv("APP_JOB_EVENT_FLUSH_SECONDS", "0.1")))
 
 # Reserved IP ranges that should not be targeted by ad-hoc jobs
 _BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),      # loopback
-    ipaddress.ip_network("::1/128"),           # IPv6 loopback
-    ipaddress.ip_network("169.254.0.0/16"),    # link-local
-    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
-    ipaddress.ip_network("0.0.0.0/8"),         # "this" network
-    ipaddress.ip_network("224.0.0.0/4"),       # multicast
+    ipaddress.ip_network("127.0.0.0/8"),  # loopback
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+    ipaddress.ip_network("0.0.0.0/8"),  # "this" network
+    ipaddress.ip_network("224.0.0.0/4"),  # multicast
     ipaddress.ip_network("255.255.255.255/32"),  # broadcast
 ]
 
@@ -120,11 +122,7 @@ def _template_lines(content: str) -> list[str]:
     body and every per-device_type variant are parsed identically (the
     three former copies of this comprehension could drift).
     """
-    return [
-        line.rstrip()
-        for line in (content or "").splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    return [line.rstrip() for line in (content or "").splitlines() if line.strip() and not line.strip().startswith("#")]
 
 
 class _JobEventWriter:
@@ -171,9 +169,7 @@ class _JobEventWriter:
 
             while not stopping and len(batch) < self.batch_size:
                 try:
-                    item = await asyncio.wait_for(
-                        self.queue.get(), timeout=self.flush_seconds
-                    )
+                    item = await asyncio.wait_for(self.queue.get(), timeout=self.flush_seconds)
                 except TimeoutError:
                     break
                 if item is self._STOP:
@@ -189,20 +185,24 @@ class _JobEventWriter:
                     # enqueue() re-raises a dead writer's exception inside the
                     # playbook's event callback, aborting the live device job.
                     # Retry once, then drop the batch and keep the job alive.
-                    LOGGER.warning("job %s: event batch write failed (%s); retrying once",
-                                   self.job_id, type(exc).__name__)
+                    LOGGER.warning(
+                        "job %s: event batch write failed (%s); retrying once", self.job_id, type(exc).__name__
+                    )
                     try:
                         await asyncio.sleep(0.5)
                         await db.add_job_events(self.job_id, batch)
                     except Exception as exc2:
                         LOGGER.error(
                             "job %s: dropping %d job event(s) after retry failed: %s",
-                            self.job_id, len(batch), type(exc2).__name__,
+                            self.job_id,
+                            len(batch),
+                            type(exc2).__name__,
                         )
                 batch = []
 
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
+
 
 class JobLaunch(BaseModel):
     playbook_id: int
@@ -314,8 +314,12 @@ async def _reprobe_hosts_after_job(hosts: list[dict], credentials: dict, dry_run
                     discovered.append(result)
             if discovered:
                 await _sync_group_hosts(group_id, discovered, remove_absent=False)
-                LOGGER.info("post-job reprobe: group %s - %d/%d hosts re-synced via SNMP",
-                            group_id, len(discovered), len(group_hosts))
+                LOGGER.info(
+                    "post-job reprobe: group %s - %d/%d hosts re-synced via SNMP",
+                    group_id,
+                    len(discovered),
+                    len(group_hosts),
+                )
     except Exception as exc:
         LOGGER.warning("post-job SNMP reprobe failed: %s", exc)
 
@@ -354,16 +358,17 @@ async def reap_and_resume_jobs() -> None:
     for job_id in orphaned:
         try:
             await db.add_job_event(
-                job_id, "error",
-                "Job was interrupted by a server restart and marked failed. "
-                "Re-run it if the change did not complete.",
+                job_id,
+                "error",
+                "Job was interrupted by a server restart and marked failed. Re-run it if the change did not complete.",
             )
         except Exception as exc:
             LOGGER.debug("job reaper: could not add event to job %s: %s", job_id, exc)
     if orphaned:
         LOGGER.warning(
             "job reaper: marked %d orphaned running job(s) as failed: %s",
-            len(orphaned), orphaned,
+            len(orphaned),
+            orphaned,
         )
     await _process_job_queue()
 
@@ -387,7 +392,8 @@ async def drain_running_jobs(grace_seconds: float | None = None) -> None:
         return
     LOGGER.info(
         "shutdown: waiting up to %.0fs for %d in-flight job(s) to finish",
-        grace_seconds, len(tasks),
+        grace_seconds,
+        len(tasks),
     )
     _, pending = await asyncio.wait(tasks, timeout=grace_seconds)
     if pending:
@@ -418,9 +424,14 @@ async def _process_job_queue_inner():
         return
 
     job_id = next_job["id"]
-    LOGGER.info("Queue: processing job %d (playbook_id=%s, group_id=%s, host_ids=%s, ad_hoc_ips=%s)",
-                job_id, next_job.get("playbook_id"), next_job.get("inventory_group_id"),
-                next_job.get("host_ids"), next_job.get("ad_hoc_ips"))
+    LOGGER.info(
+        "Queue: processing job %d (playbook_id=%s, group_id=%s, host_ids=%s, ad_hoc_ips=%s)",
+        job_id,
+        next_job.get("playbook_id"),
+        next_job.get("inventory_group_id"),
+        next_job.get("host_ids"),
+        next_job.get("ad_hoc_ips"),
+    )
 
     # Fetch all the info needed to run this job
     playbook = await db.get_playbook(next_job["playbook_id"])
@@ -448,13 +459,15 @@ async def _process_job_queue_inner():
         try:
             ad_hoc_list = json.loads(next_job["ad_hoc_ips"])
             for ip in ad_hoc_list:
-                hosts.append({
-                    "id": None,
-                    "hostname": ip,
-                    "ip_address": ip,
-                    "device_type": "cisco_ios",
-                    "group_id": None,
-                })
+                hosts.append(
+                    {
+                        "id": None,
+                        "hostname": ip,
+                        "ip_address": ip,
+                        "device_type": "cisco_ios",
+                        "group_id": None,
+                    }
+                )
         except (json.JSONDecodeError, TypeError) as exc:
             LOGGER.warning("job %s: failed to parse stored ad_hoc_ips: %s", job_id, exc)
 
@@ -485,7 +498,11 @@ async def _process_job_queue_inner():
             return
     if not credentials:
         await db.update_job_status(job_id, "failed")
-        await db.add_job_event(job_id, "error", "No credential configured - set a default credential in Settings or select one when launching the job")
+        await db.add_job_event(
+            job_id,
+            "error",
+            "No credential configured - set a default credential in Settings or select one when launching the job",
+        )
         return
 
     # Get template commands.  ``template_commands`` is the flat generic
@@ -512,9 +529,7 @@ async def _process_job_queue_inner():
             seen_dts = {h.get("device_type") or "" for h in hosts}
             for dt in seen_dts:
                 resolved = db.resolve_variant_in_memory(tpl, variants, dt)
-                template_by_device_type[dt] = _template_lines(
-                    resolved["content"]
-                )
+                template_by_device_type[dt] = _template_lines(resolved["content"])
 
     # Resolve {{secret.NAME}} placeholders in every command body (the
     # flat one and each per-device_type variant).  Secrets are resolved
@@ -523,9 +538,7 @@ async def _process_job_queue_inner():
     # to a subset of hosts.
     _secret_redact_values: set[str] = set()
     _all_bodies = [template_commands, *template_by_device_type.values()]
-    _needs_secrets = any(
-        b and has_secret_references("\n".join(b)) for b in _all_bodies
-    )
+    _needs_secrets = any(b and has_secret_references("\n".join(b)) for b in _all_bodies)
     if _needs_secrets:
         try:
             for body in _all_bodies:
@@ -540,7 +553,8 @@ async def _process_job_queue_inner():
         except SecretResolutionError as exc:
             await db.finish_job(job_id, status="failed")
             await db.add_job_event(
-                job_id, "error",
+                job_id,
+                "error",
                 f"Template references undefined secret variable(s): {', '.join(exc.missing)}. "
                 "Create them in Credentials → Secret Variables before running this job.",
             )
@@ -549,11 +563,19 @@ async def _process_job_queue_inner():
     # Resolve dry_run: the DB stores 1/0; treat NULL or missing as dry-run (safe default)
     raw_dry_run = next_job.get("dry_run")
     dry_run = raw_dry_run != 0  # Only False when explicitly stored as 0
-    LOGGER.info("job %s: dry_run raw=%r resolved=%s playbook=%s hosts=%d",
-                job_id, raw_dry_run, dry_run, playbook.get("name", "?"), len(hosts))
+    LOGGER.info(
+        "job %s: dry_run raw=%r resolved=%s playbook=%s hosts=%d",
+        job_id,
+        raw_dry_run,
+        dry_run,
+        playbook.get("name", "?"),
+        len(hosts),
+    )
 
     # Record the mode as the first job event so it's always visible in output
-    mode_label = "DRY-RUN (simulation only - no changes will be made)" if dry_run else "LIVE MODE - changes WILL be applied"
+    mode_label = (
+        "DRY-RUN (simulation only - no changes will be made)" if dry_run else "LIVE MODE - changes WILL be applied"
+    )
     await db.add_job_event(job_id, "info", f"Job mode: {mode_label}")
 
     pb_type = playbook.get("type", "python")
@@ -593,13 +615,25 @@ async def _process_job_queue_inner():
         if isinstance(params_raw, str) and params_raw:
             try:
                 job_parameters = json.loads(params_raw)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 job_parameters = {}
         elif isinstance(params_raw, dict):
             job_parameters = params_raw
         else:
             job_parameters = {}
-        task = asyncio.create_task(_run_job(job_id, pb_class, hosts, credentials, template_commands, dry_run, _secret_redact_values, job_parameters, template_by_device_type))
+        task = asyncio.create_task(
+            _run_job(
+                job_id,
+                pb_class,
+                hosts,
+                credentials,
+                template_commands,
+                dry_run,
+                _secret_redact_values,
+                job_parameters,
+                template_by_device_type,
+            )
+        )
     async with _running_tasks_lock:
         _running_job_tasks[job_id] = task
 
@@ -608,12 +642,14 @@ async def _process_job_queue_inner():
             async with _running_tasks_lock:
                 _running_job_tasks.pop(job_id, None)
             await _process_job_queue()
+
         asyncio.ensure_future(_cleanup())
 
     task.add_done_callback(_on_done)
 
 
 # ── Job runners ──────────────────────────────────────────────────────────────
+
 
 async def _run_ansible_job(
     job_id: int,
@@ -760,7 +796,12 @@ async def _run_job(
     job_succeeded = False
     try:
         result = await execute_playbook(
-            pb_class, hosts, credentials, template_commands, dry_run, on_event,
+            pb_class,
+            hosts,
+            credentials,
+            template_commands,
+            dry_run,
+            on_event,
             parameters=parameters,
             template_by_device_type=template_by_device_type,
         )
@@ -816,6 +857,7 @@ async def _run_job(
 
 # ── Job REST routes ──────────────────────────────────────────────────────────
 
+
 def _jobs_deps():
     return [Depends(_require_auth), Depends(_require_feature("jobs"))]
 
@@ -849,8 +891,7 @@ async def get_job(job_id: int, request: Request):
 
 
 @router.get("/api/jobs/{job_id}/events")
-async def get_job_events(job_id: int, request: Request,
-                         limit: int = Query(default=10000, ge=1, le=100000)):
+async def get_job_events(job_id: int, request: Request, limit: int = Query(default=10000, ge=1, le=100000)):
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
@@ -866,7 +907,12 @@ async def launch_job(body: JobLaunch, request: Request):
     at /ws/jobs/{job_id} to stream real-time output.
     """
     session = _get_session(request)
-    LOGGER.debug("JobLaunch request: playbook_id=%s host_ids=%s inventory_group_id=%s", body.playbook_id, body.host_ids, body.inventory_group_id)
+    LOGGER.debug(
+        "JobLaunch request: playbook_id=%s host_ids=%s inventory_group_id=%s",
+        body.playbook_id,
+        body.host_ids,
+        body.inventory_group_id,
+    )
 
     # Validate playbook exists
     playbook = await db.get_playbook(body.playbook_id)
@@ -903,13 +949,15 @@ async def launch_job(body: JobLaunch, request: Request):
             ip = ip.strip()
             if ip:
                 _validate_ad_hoc_ip(ip)
-                ad_hoc_hosts.append({
-                    "id": None,
-                    "hostname": ip,
-                    "ip_address": ip,
-                    "device_type": "cisco_ios",
-                    "group_id": None,
-                })
+                ad_hoc_hosts.append(
+                    {
+                        "id": None,
+                        "hostname": ip,
+                        "ip_address": ip,
+                        "device_type": "cisco_ios",
+                        "group_id": None,
+                    }
+                )
         hosts = hosts + ad_hoc_hosts
 
     if not hosts:
@@ -920,7 +968,9 @@ async def launch_job(body: JobLaunch, request: Request):
     # it does not grant regular users implicit access to another user's creds.
     cred_id = body.credential_id or state.AUTH_CONFIG.get("default_credential_id")
     if not cred_id:
-        raise HTTPException(400, "No credential configured - set a default credential in Settings or select one when launching the job")
+        raise HTTPException(
+            400, "No credential configured - set a default credential in Settings or select one when launching the job"
+        )
     cred = await require_credential_access(cred_id, session=session)
     credentials = {
         "username": cred["username"],
@@ -983,10 +1033,14 @@ async def launch_job(body: JobLaunch, request: Request):
     # Store ad-hoc IPs separately so the queue processor can reconstruct them
     stored_ad_hoc = [ip.strip() for ip in body.ad_hoc_ips if ip.strip()] if body.ad_hoc_ips else None
     job_id = await db.create_job(
-        body.playbook_id, inventory_group_id,
-        body.credential_id, body.template_id,
-        body.dry_run, launched_by=launched_by,
-        priority=priority, depends_on=body.depends_on,
+        body.playbook_id,
+        inventory_group_id,
+        body.credential_id,
+        body.template_id,
+        body.dry_run,
+        launched_by=launched_by,
+        priority=priority,
+        depends_on=body.depends_on,
         host_ids=selected_host_ids,
         ad_hoc_ips=stored_ad_hoc,
         parameters=coerced_params,
@@ -995,9 +1049,13 @@ async def launch_job(body: JobLaunch, request: Request):
     # Trigger queue processor to potentially start this job immediately
     asyncio.ensure_future(_process_job_queue())
 
-    await _audit("jobs", "job.launch", user=launched_by,
-                 detail=f"queued job {job_id} playbook='{playbook['name']}' hosts={len(hosts)} dry_run={body.dry_run} priority={priority}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "jobs",
+        "job.launch",
+        user=launched_by,
+        detail=f"queued job {job_id} playbook='{playbook['name']}' hosts={len(hosts)} dry_run={body.dry_run} priority={priority}",
+        correlation_id=_corr_id(request),
+    )
     return {"job_id": job_id, "status": "queued"}
 
 
@@ -1035,8 +1093,7 @@ async def cancel_job_endpoint(job_id: int, request: Request):
         except Exception as exc:
             LOGGER.debug("job %s: failed to send job_complete to WS client: %s", job_id, exc)
 
-    await _audit("jobs", "job.cancelled", user=user,
-                 detail=f"cancelled job {job_id}", correlation_id=_corr_id(request))
+    await _audit("jobs", "job.cancelled", user=user, detail=f"cancelled job {job_id}", correlation_id=_corr_id(request))
 
     # Try to start the next queued job
     asyncio.ensure_future(_process_job_queue())
@@ -1077,9 +1134,12 @@ async def retry_job_endpoint(job_id: int, request: Request):
             LOGGER.warning("job %s: failed to parse parameters for retry: %s", job_id, exc)
 
     new_job_id = await db.create_job(
-        job["playbook_id"], job.get("inventory_group_id"),
-        job.get("credential_id"), job.get("template_id"),
-        bool(job.get("dry_run", 1)), launched_by=user,
+        job["playbook_id"],
+        job.get("inventory_group_id"),
+        job.get("credential_id"),
+        job.get("template_id"),
+        bool(job.get("dry_run", 1)),
+        launched_by=user,
         priority=job.get("priority", 2),
         host_ids=retry_host_ids,
         ad_hoc_ips=retry_ad_hoc,
@@ -1088,9 +1148,13 @@ async def retry_job_endpoint(job_id: int, request: Request):
 
     asyncio.ensure_future(_process_job_queue())
 
-    await _audit("jobs", "job.retry", user=user,
-                 detail=f"retried job {job_id} as new job {new_job_id}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "jobs",
+        "job.retry",
+        user=user,
+        detail=f"retried job {job_id} as new job {new_job_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"job_id": new_job_id, "status": "queued", "retried_from": job_id}
 
 
@@ -1131,8 +1195,10 @@ async def rerun_job_endpoint(job_id: int, request: Request):
             LOGGER.warning("job %s: failed to parse parameters for rerun: %s", job_id, exc)
 
     new_job_id = await db.create_job(
-        job["playbook_id"], job.get("inventory_group_id"),
-        job.get("credential_id"), job.get("template_id"),
+        job["playbook_id"],
+        job.get("inventory_group_id"),
+        job.get("credential_id"),
+        job.get("template_id"),
         False,  # dry_run = False (live mode)
         launched_by=user,
         priority=job.get("priority", 2),
@@ -1143,9 +1209,13 @@ async def rerun_job_endpoint(job_id: int, request: Request):
 
     asyncio.ensure_future(_process_job_queue())
 
-    await _audit("jobs", "job.rerun_live", user=user,
-                 detail=f"re-ran job {job_id} as live job {new_job_id}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "jobs",
+        "job.rerun_live",
+        user=user,
+        detail=f"re-ran job {job_id} as live job {new_job_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"job_id": new_job_id, "status": "queued", "rerun_from": job_id}
 
 
@@ -1167,13 +1237,18 @@ async def update_job_priority_endpoint(job_id: int, body: dict, request: Request
         raise HTTPException(400, "Failed to update priority")
 
     session = _get_session(request)
-    await _audit("jobs", "job.priority_changed", user=session["user"] if session else "",
-                 detail=f"job {job_id} priority={new_priority}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "jobs",
+        "job.priority_changed",
+        user=session["user"] if session else "",
+        detail=f"job {job_id} priority={new_priority}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True, "priority": max(0, min(4, new_priority))}
 
 
 # ── WebSocket for live job streaming ─────────────────────────────────────────
+
 
 @ws_router.websocket("/ws/jobs/{job_id}")
 async def websocket_job(websocket: WebSocket, job_id: int):
@@ -1216,18 +1291,18 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     # Send historical events first
     events = await db.get_job_events(job_id)
     for event in events:
-        await websocket.send_json({
-            "level": event["level"],
-            "message": event["message"],
-            "host": event["host"],
-            "timestamp": event["timestamp"],
-        })
+        await websocket.send_json(
+            {
+                "level": event["level"],
+                "message": event["message"],
+                "host": event["host"],
+                "timestamp": event["timestamp"],
+            }
+        )
 
     # Check if job is already done
     if job and job["status"] not in ("running", "pending"):
-        await websocket.send_json({
-            "type": "job_complete", "job_id": job_id, "status": job["status"]
-        })
+        await websocket.send_json({"type": "job_complete", "job_id": job_id, "status": job["status"]})
         await websocket.close()
         return
 

@@ -24,6 +24,7 @@ DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+
 async def _sqlite_columns(db, table: str) -> list[str]:
     cursor = await db.execute(f"PRAGMA table_info({table})")
     return [row[1] for row in await cursor.fetchall()]
@@ -38,6 +39,7 @@ async def _sqlite_add_column_if_missing(db, table: str, column: str, definition:
 
 # ── Postgres path ───────────────────────────────────────────────────────────
 
+
 async def _up_postgres(db) -> None:
     await db.execute("ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS content TEXT DEFAULT ''")
     await db.execute("ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS updated_at TEXT")
@@ -46,9 +48,7 @@ async def _up_postgres(db) -> None:
 
     await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")
     await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'")
-    await db.execute(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password INTEGER NOT NULL DEFAULT 0"
-    )
+    await db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password INTEGER NOT NULL DEFAULT 0")
 
     await db.execute("ALTER TABLE credentials ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id)")
 
@@ -74,6 +74,7 @@ async def _up_postgres(db) -> None:
 
 
 # ── SQLite path ─────────────────────────────────────────────────────────────
+
 
 async def _up_sqlite(db) -> None:
     # playbooks columns
@@ -183,9 +184,7 @@ async def _up_sqlite(db) -> None:
         await db.commit()
 
     # Repair job_events FK if it still references jobs_old
-    cursor = await db.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='job_events'"
-    )
+    cursor = await db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='job_events'")
     row = await cursor.fetchone()
     if row and "jobs_old" in (row[0] or ""):
         await db.execute("PRAGMA foreign_keys=OFF")
@@ -214,6 +213,7 @@ async def _up_sqlite(db) -> None:
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
+
 
 async def up(db) -> None:
     if DB_ENGINE == "postgres":

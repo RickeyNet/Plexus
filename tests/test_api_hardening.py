@@ -40,6 +40,7 @@ def _auth_client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))
@@ -54,7 +55,9 @@ def _auth_client(tmp_path, monkeypatch, request):
 def test_deployment_rejects_too_many_commands(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
     body = {
-        "name": "d", "group_id": 1, "credential_id": 1,
+        "name": "d",
+        "group_id": 1,
+        "credential_id": 1,
         "proposed_commands": ["show ver"] * 10001,  # cap is 10000
     }
     assert client.post("/api/deployments", json=body).status_code == 422
@@ -63,7 +66,9 @@ def test_deployment_rejects_too_many_commands(tmp_path, monkeypatch, request):
 def test_deployment_rejects_overlong_command(tmp_path, monkeypatch, request):
     client, _ = _auth_client(tmp_path, monkeypatch, request)
     body = {
-        "name": "d", "group_id": 1, "credential_id": 1,
+        "name": "d",
+        "group_id": 1,
+        "credential_id": 1,
         "proposed_commands": ["x" * 4001],  # per-item cap is 4000
     }
     assert client.post("/api/deployments", json=body).status_code == 422
@@ -109,9 +114,7 @@ def test_svg_stub_escapes_template_name(tmp_path, monkeypatch, request):
             "INSERT INTO hosts (group_id, hostname, ip_address) VALUES (?, 'h', '10.0.0.1')",
             (gid,),
         ).lastrowid
-        tid = conn.execute(
-            "INSERT INTO graph_templates (name) VALUES ('<script>alert(1)</script>')"
-        ).lastrowid
+        tid = conn.execute("INSERT INTO graph_templates (name) VALUES ('<script>alert(1)</script>')").lastrowid
         hgid = conn.execute(
             "INSERT INTO host_graphs (host_id, graph_template_id) VALUES (?, ?)",
             (hid, tid),

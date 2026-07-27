@@ -27,9 +27,7 @@ def snap_db(tmp_path, monkeypatch):
 async def _add_host(hostname: str, ip: str) -> None:
     db = await db_module.get_db()
     try:
-        cur = await db.execute(
-            "INSERT OR IGNORE INTO inventory_groups (name) VALUES ('snap')"
-        )
+        cur = await db.execute("INSERT OR IGNORE INTO inventory_groups (name) VALUES ('snap')")
         cur2 = await db.execute("SELECT id FROM inventory_groups WHERE name='snap'")
         gid = int((await cur2.fetchone())[0])
         await db.execute(
@@ -43,13 +41,12 @@ async def _add_host(hostname: str, ip: str) -> None:
 
 def test_ipv6_64_snapshot_does_not_enumerate(snap_db):
     """A /64 has 2**64 addresses; this must return quickly, not hang."""
+
     async def _go():
         await _add_host("v6host", "2001:db8::5")
         # Wall-clock guard: enumeration would never finish; membership math is
         # instant. asyncio.wait_for fails loudly if we regress to enumeration.
-        row = await asyncio.wait_for(
-            db_module.snapshot_subnet_utilization("2001:db8::/64"), timeout=10
-        )
+        row = await asyncio.wait_for(db_module.snapshot_subnet_utilization("2001:db8::/64"), timeout=10)
         assert row is not None
         assert row["used"] == 1
         # total is clamped to fit SQLite's signed 64-bit INTEGER column.

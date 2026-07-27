@@ -42,14 +42,17 @@ async def test_discovery_scan_launches_job_and_collects_results(monkeypatch):
     async def fake_probe(ip_address, **kwargs):
         # Only one of the two targets is reachable.
         if ip_address == "10.0.0.2":
-            return {"hostname": "discovered-10-0-0-2", "ip_address": ip_address,
-                    "device_type": "unknown", "status": "discovered"}
+            return {
+                "hostname": "discovered-10-0-0-2",
+                "ip_address": ip_address,
+                "device_type": "unknown",
+                "status": "discovered",
+            }
         return None
 
     monkeypatch.setattr(inventory.db, "get_group", fake_get_group)
     monkeypatch.setattr(inventory, "_probe_discovery_target", fake_probe)
-    monkeypatch.setattr(inventory.state, "_resolve_snmp_discovery_config",
-                        lambda _gid: {"enabled": False})
+    monkeypatch.setattr(inventory.state, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False})
 
     launched = await inventory.discovery_scan(1, _request())
     assert launched["status"] == "running"
@@ -78,8 +81,7 @@ async def test_discovery_scan_job_failure_is_reported(monkeypatch):
 
     monkeypatch.setattr(inventory.db, "get_group", fake_get_group)
     monkeypatch.setattr(inventory, "_probe_discovery_target", exploding_probe)
-    monkeypatch.setattr(inventory.state, "_resolve_snmp_discovery_config",
-                        lambda _gid: {"enabled": False})
+    monkeypatch.setattr(inventory.state, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False})
 
     launched = await inventory.discovery_scan(1, _request())
     job = await _wait_for_job(launched["job_id"])

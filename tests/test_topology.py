@@ -92,8 +92,7 @@ def test_build_snmp_auth_disabled():
 
 
 def test_build_snmp_auth_v2c():
-    cfg = {"enabled": True, "version": "2c", "community": "public", "port": 161,
-           "timeout_seconds": 2.0, "retries": 1}
+    cfg = {"enabled": True, "version": "2c", "community": "public", "port": 161, "timeout_seconds": 2.0, "retries": 1}
     result = app_module._build_snmp_auth(cfg)
     if not app_module.PYSMNP_AVAILABLE:
         assert result is None
@@ -106,8 +105,7 @@ def test_build_snmp_auth_v2c():
 
 
 def test_build_snmp_auth_v2c_empty_community():
-    cfg = {"enabled": True, "version": "2c", "community": "", "port": 161,
-           "timeout_seconds": 2.0, "retries": 0}
+    cfg = {"enabled": True, "version": "2c", "community": "", "port": 161, "timeout_seconds": 2.0, "retries": 0}
     result = app_module._build_snmp_auth(cfg)
     if not app_module.PYSMNP_AVAILABLE:
         assert result is None
@@ -117,8 +115,11 @@ def test_build_snmp_auth_v2c_empty_community():
 
 def test_build_snmp_auth_v3():
     cfg = {
-        "enabled": True, "version": "3", "port": 161,
-        "timeout_seconds": 2.0, "retries": 0,
+        "enabled": True,
+        "version": "3",
+        "port": 161,
+        "timeout_seconds": 2.0,
+        "retries": 0,
         "v3": {
             "username": "admin",
             "auth_protocol": "sha",
@@ -138,8 +139,11 @@ def test_build_snmp_auth_v3():
 
 def test_build_snmp_auth_v3_missing_username():
     cfg = {
-        "enabled": True, "version": "3", "port": 161,
-        "timeout_seconds": 2.0, "retries": 0,
+        "enabled": True,
+        "version": "3",
+        "port": 161,
+        "timeout_seconds": 2.0,
+        "retries": 0,
         "v3": {"username": "", "auth_password": "pass"},
     }
     result = app_module._build_snmp_auth(cfg)
@@ -194,7 +198,8 @@ async def test_discover_neighbors_cdp(monkeypatch):
     monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
-        host_id=10, ip_address="10.0.0.1",
+        host_id=10,
+        ip_address="10.0.0.1",
         snmp_config={"enabled": True, "version": "2c", "community": "public"},
         timeout_seconds=2.0,
     )
@@ -251,7 +256,8 @@ async def test_discover_neighbors_lldp(monkeypatch):
     monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
-        host_id=20, ip_address="10.0.0.2",
+        host_id=20,
+        ip_address="10.0.0.2",
         snmp_config={"enabled": True},
         timeout_seconds=2.0,
     )
@@ -268,6 +274,7 @@ async def test_discover_neighbors_lldp(monkeypatch):
 @pytest.mark.asyncio
 async def test_discover_neighbors_empty_walks(monkeypatch):
     """No neighbors found should return empty list."""
+
     async def fake_snmp_walk(ip, timeout_s, cfg, base_oid, max_rows=500):
         return {}
 
@@ -275,7 +282,8 @@ async def test_discover_neighbors_empty_walks(monkeypatch):
     monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
-        host_id=1, ip_address="10.0.0.1",
+        host_id=1,
+        ip_address="10.0.0.1",
         snmp_config={"enabled": True},
         timeout_seconds=2.0,
     )
@@ -321,7 +329,8 @@ async def test_discover_neighbors_ospf(monkeypatch):
     monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
-        host_id=1, ip_address="10.0.0.1",
+        host_id=1,
+        ip_address="10.0.0.1",
         snmp_config={"enabled": True},
         timeout_seconds=2.0,
     )
@@ -371,7 +380,8 @@ async def test_discover_neighbors_bgp(monkeypatch):
     monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
-        host_id=1, ip_address="10.0.0.1",
+        host_id=1,
+        ip_address="10.0.0.1",
         snmp_config={"enabled": True},
         timeout_seconds=2.0,
     )
@@ -422,7 +432,8 @@ async def test_discover_neighbors_deduplicates_cdp_lldp(monkeypatch):
     monkeypatch.setattr(snmp_module, "_snmp_walk", fake_snmp_walk)
 
     neighbors, _if_stats = await app_module._discover_neighbors(
-        host_id=1, ip_address="10.0.0.1",
+        host_id=1,
+        ip_address="10.0.0.1",
         snmp_config={"enabled": True},
         timeout_seconds=2.0,
     )
@@ -433,9 +444,11 @@ async def test_discover_neighbors_deduplicates_cdp_lldp(monkeypatch):
     assert len(cdp_entries) >= 1
     # LLDP for same peer on same local interface should be deduplicated
     for lldp in lldp_entries:
-        matching_cdp = [c for c in cdp_entries
-                        if c["remote_device_name"] == lldp["remote_device_name"]
-                        and c["local_interface"] == lldp["local_interface"]]
+        matching_cdp = [
+            c
+            for c in cdp_entries
+            if c["remote_device_name"] == lldp["remote_device_name"] and c["local_interface"] == lldp["local_interface"]
+        ]
         assert len(matching_cdp) == 0, "LLDP duplicate of CDP entry should be filtered"
 
 
@@ -474,10 +487,14 @@ async def topo_db(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_upsert_and_get_topology_link(topo_db):
     link_id = await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/1", target_host_id=None,
-        target_ip="10.0.1.2", target_device_name="sw-dist-01",
-        target_interface="Gi0/1", protocol="cdp",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/1",
+        target_host_id=None,
+        target_ip="10.0.1.2",
+        target_device_name="sw-dist-01",
+        target_interface="Gi0/1",
+        protocol="cdp",
         target_platform="WS-C3750",
     )
     assert link_id > 0
@@ -493,16 +510,24 @@ async def test_upsert_and_get_topology_link(topo_db):
 async def test_upsert_topology_link_deduplicates(topo_db):
     """Upserting same source+interface+target should update, not duplicate."""
     await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/1", target_host_id=None,
-        target_ip="10.0.1.2", target_device_name="sw-dist-01",
-        target_interface="Gi0/1", protocol="cdp",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/1",
+        target_host_id=None,
+        target_ip="10.0.1.2",
+        target_device_name="sw-dist-01",
+        target_interface="Gi0/1",
+        protocol="cdp",
     )
     await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/1", target_host_id=None,
-        target_ip="10.0.1.99", target_device_name="sw-dist-01",
-        target_interface="Gi0/1", protocol="lldp",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/1",
+        target_host_id=None,
+        target_ip="10.0.1.99",
+        target_device_name="sw-dist-01",
+        target_interface="Gi0/1",
+        protocol="lldp",
     )
     links = await db_module.get_topology_links()
     assert len(links) == 1
@@ -514,9 +539,12 @@ async def test_upsert_topology_link_deduplicates(topo_db):
 @pytest.mark.asyncio
 async def test_get_topology_links_filter_by_group(topo_db):
     await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/1", target_host_id=None,
-        target_ip="10.0.1.2", target_device_name="sw-dist-01",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/1",
+        target_host_id=None,
+        target_ip="10.0.1.2",
+        target_device_name="sw-dist-01",
         target_interface="Gi0/1",
     )
     # Group 1 should return the link
@@ -531,9 +559,12 @@ async def test_get_topology_links_filter_by_group(topo_db):
 @pytest.mark.asyncio
 async def test_get_topology_links_for_host(topo_db):
     await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/1", target_host_id=200,
-        target_ip="10.0.1.2", target_device_name="sw-dist-01",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/1",
+        target_host_id=200,
+        target_ip="10.0.1.2",
+        target_device_name="sw-dist-01",
         target_interface="Gi0/1",
     )
     # Source host
@@ -550,15 +581,21 @@ async def test_get_topology_links_for_host(topo_db):
 @pytest.mark.asyncio
 async def test_delete_topology_links_for_host(topo_db):
     await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/1", target_host_id=None,
-        target_ip="", target_device_name="peer-a",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/1",
+        target_host_id=None,
+        target_ip="",
+        target_device_name="peer-a",
         target_interface="eth0",
     )
     await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/2", target_host_id=None,
-        target_ip="", target_device_name="peer-b",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/2",
+        target_host_id=None,
+        target_ip="",
+        target_device_name="peer-b",
         target_interface="eth0",
     )
     deleted = await db_module.delete_topology_links_for_host(100)
@@ -570,15 +607,21 @@ async def test_delete_topology_links_for_host(topo_db):
 @pytest.mark.asyncio
 async def test_delete_all_topology_links(topo_db):
     await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/1", target_host_id=None,
-        target_ip="", target_device_name="a",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/1",
+        target_host_id=None,
+        target_ip="",
+        target_device_name="a",
         target_interface="eth0",
     )
     await db_module.upsert_topology_link(
-        source_host_id=200, source_ip="10.0.1.2",
-        source_interface="Gi0/1", target_host_id=None,
-        target_ip="", target_device_name="b",
+        source_host_id=200,
+        source_ip="10.0.1.2",
+        source_interface="Gi0/1",
+        target_host_id=None,
+        target_ip="",
+        target_device_name="b",
         target_interface="eth0",
     )
     deleted = await db_module.delete_all_topology_links()
@@ -589,9 +632,12 @@ async def test_delete_all_topology_links(topo_db):
 async def test_resolve_topology_target_host_ids(topo_db):
     """resolve should match target_ip to hosts.ip_address."""
     await db_module.upsert_topology_link(
-        source_host_id=100, source_ip="10.0.1.1",
-        source_interface="Gi0/1", target_host_id=None,
-        target_ip="10.0.1.2", target_device_name="sw-dist-01",
+        source_host_id=100,
+        source_ip="10.0.1.1",
+        source_interface="Gi0/1",
+        target_host_id=None,
+        target_ip="10.0.1.2",
+        target_device_name="sw-dist-01",
         target_interface="Gi0/1",
     )
     resolved = await db_module.resolve_topology_target_host_ids()
@@ -624,8 +670,12 @@ async def test_get_topology_builds_graph(monkeypatch):
     ]
     fake_hosts = [
         {
-            "id": 10, "hostname": "core-sw", "ip_address": "10.0.0.1",
-            "device_type": "cisco_ios", "group_id": 1, "status": "online",
+            "id": 10,
+            "hostname": "core-sw",
+            "ip_address": "10.0.0.1",
+            "device_type": "cisco_ios",
+            "group_id": 1,
+            "status": "online",
         },
     ]
     fake_groups = [{"id": 1, "name": "Core"}]
@@ -755,8 +805,10 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
 
     monkeypatch.setattr(app_module.db, "get_group", AsyncMock(return_value=fake_group))
     monkeypatch.setattr(app_module.db, "get_hosts_for_group", AsyncMock(return_value=fake_hosts))
+
     def resolve_snmp_fn(gid):
         return {"enabled": True, "version": "2c", "community": "public"}
+
     monkeypatch.setattr(app_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
     monkeypatch.setattr(state_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
 
@@ -765,10 +817,18 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
 
     async def fake_discover(host_id, ip, cfg, timeout_seconds=5.0):
         call_log.append(("discover", host_id))
-        neighbors = [{"source_host_id": host_id, "source_ip": ip,
-                       "local_interface": "Gi0/1", "remote_device_name": f"peer-{host_id}",
-                       "remote_ip": "", "remote_interface": "eth0",
-                       "protocol": "cdp", "remote_platform": ""}]
+        neighbors = [
+            {
+                "source_host_id": host_id,
+                "source_ip": ip,
+                "local_interface": "Gi0/1",
+                "remote_device_name": f"peer-{host_id}",
+                "remote_ip": "",
+                "remote_interface": "eth0",
+                "protocol": "cdp",
+                "remote_platform": "",
+            }
+        ]
         return neighbors, []  # (neighbors, if_stats)
 
     async def fake_replace(host_id, links):
@@ -796,19 +856,32 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
     discover_indices = [i for i, entry in enumerate(call_log) if entry[0] == "discover"]
     db_write_indices = [i for i, entry in enumerate(call_log) if entry[0] == "replace"]
     assert len(db_write_indices) == 2  # one batched write per host
-    assert max(discover_indices) < min(db_write_indices), \
-        "All SNMP walks should complete before any DB writes"
+    assert max(discover_indices) < min(db_write_indices), "All SNMP walks should complete before any DB writes"
 
 
 @pytest.mark.asyncio
 async def test_discover_topology_for_group_handles_snmp_errors(monkeypatch):
     """Hosts that fail SNMP should be counted as errors, not crash."""
     monkeypatch.setattr(app_module.db, "get_group", AsyncMock(return_value={"id": 1, "name": "core"}))
-    monkeypatch.setattr(app_module.db, "get_hosts_for_group", AsyncMock(return_value=[
-        {"id": 100, "hostname": "sw1", "ip_address": "10.0.0.1", "device_type": "cisco_ios", "status": "online"},
-    ]))
+    monkeypatch.setattr(
+        app_module.db,
+        "get_hosts_for_group",
+        AsyncMock(
+            return_value=[
+                {
+                    "id": 100,
+                    "hostname": "sw1",
+                    "ip_address": "10.0.0.1",
+                    "device_type": "cisco_ios",
+                    "status": "online",
+                },
+            ]
+        ),
+    )
+
     def resolve_snmp_fn(gid):
         return {"enabled": True, "version": "2c", "community": "public"}
+
     monkeypatch.setattr(app_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
     monkeypatch.setattr(state_module, "_resolve_snmp_discovery_config", resolve_snmp_fn)
 
@@ -834,8 +907,14 @@ async def test_discover_topology_for_group_handles_snmp_errors(monkeypatch):
 async def test_get_host_topology(monkeypatch):
     fake_host = {"id": 100, "hostname": "sw1", "ip_address": "10.0.0.1"}
     fake_links = [
-        {"id": 1, "source_host_id": 100, "target_device_name": "peer",
-         "source_interface": "Gi0/1", "target_interface": "eth0", "protocol": "cdp"},
+        {
+            "id": 1,
+            "source_host_id": 100,
+            "target_device_name": "peer",
+            "source_interface": "Gi0/1",
+            "target_interface": "eth0",
+            "protocol": "cdp",
+        },
     ]
 
     monkeypatch.setattr(app_module.db, "get_host", AsyncMock(return_value=fake_host))
@@ -853,6 +932,7 @@ async def test_get_host_topology_not_found(monkeypatch):
     monkeypatch.setattr(topology_module, "db", app_module.db)
 
     from fastapi import HTTPException
+
     with pytest.raises(HTTPException) as exc:
         await topology_module.get_host_topology(999)
     assert exc.value.status_code == 404
@@ -953,7 +1033,8 @@ async def test_correlate_fdb_multi_owner_port_skipped(monkeypatch):
                 {"mac_address": "bb:bb:bb:bb:bb:02", "port_name": "Gi1/0/24"},
                 {"mac_address": "cc:cc:cc:cc:cc:03", "port_name": "Gi1/0/24"},
             ],
-            2: [], 3: [],
+            2: [],
+            3: [],
         },
         arp_by_host={1: [], 2: [], 3: []},
     )
@@ -976,7 +1057,8 @@ async def test_correlate_fdb_self_mac_ignored(monkeypatch):
         mac_by_host={
             # sw-a's FDB shows its own MAC on Gi1/0/1 (typical "self" entry)
             1: [{"mac_address": "aa:aa:aa:aa:aa:01", "port_name": "Gi1/0/1"}],
-            2: [], 3: [],
+            2: [],
+            3: [],
         },
         arp_by_host={1: [], 2: [], 3: []},
     )
@@ -998,16 +1080,21 @@ async def test_correlate_fdb_skips_cdp_lldp_covered_interfaces(monkeypatch):
         },
         mac_by_host={
             1: [{"mac_address": "bb:bb:bb:bb:bb:02", "port_name": "Gi1/0/24"}],
-            2: [], 3: [],
+            2: [],
+            3: [],
         },
         arp_by_host={1: [], 2: [], 3: []},
     )
 
     existing = {
-        1: [{
-            "local_interface": "Gi1/0/24", "remote_device_name": "sw-b",
-            "remote_interface": "Gi1/0/2", "protocol": "cdp",
-        }],
+        1: [
+            {
+                "local_interface": "Gi1/0/24",
+                "remote_device_name": "sw-b",
+                "remote_interface": "Gi1/0/2",
+                "protocol": "cdp",
+            }
+        ],
     }
     out = await topology_module._correlate_fdb_topology(hosts, existing_neighbors_by_host=existing)
     assert out == {}
@@ -1028,11 +1115,13 @@ async def test_correlate_fdb_arp_fallback_when_iface_mac_missing(monkeypatch):
             # sw-a sees an unknown MAC on Gi1/0/30; ARP on sw-a will tell us that
             # MAC belongs to 10.0.0.3 (== sw-c).
             1: [{"mac_address": "cc:cc:cc:cc:cc:99", "port_name": "Gi1/0/30"}],
-            2: [], 3: [],
+            2: [],
+            3: [],
         },
         arp_by_host={
             1: [{"ip_address": "10.0.0.3", "mac_address": "cc:cc:cc:cc:cc:99"}],
-            2: [], 3: [],
+            2: [],
+            3: [],
         },
     )
 

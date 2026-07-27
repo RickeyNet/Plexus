@@ -33,17 +33,13 @@ async def _up_sqlite(db) -> None:
     for name, decl in _COLUMNS:
         if await _column_exists_sqlite(db, name):
             continue
-        await db.execute(
-            f"ALTER TABLE monitoring_polls ADD COLUMN {name} {decl}"
-        )
+        await db.execute(f"ALTER TABLE monitoring_polls ADD COLUMN {name} {decl}")
     await db.commit()
 
 
 async def _up_postgres(db) -> None:
     for name, decl in _COLUMNS:
-        await db.execute(
-            f"ALTER TABLE monitoring_polls ADD COLUMN IF NOT EXISTS {name} {decl}"
-        )
+        await db.execute(f"ALTER TABLE monitoring_polls ADD COLUMN IF NOT EXISTS {name} {decl}")
     await db.commit()
 
 
