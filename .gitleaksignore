@@ -1,0 +1,4 @@
+# False positive: high-entropy `key:"..."` string inside the vendored,
+# minified vis-network library (legacy SPA asset, since removed from HEAD).
+# Finding exists only in git history at commit 0881bda.
+0881bda3820b2470430459f4acc7c925037fbc8e:netcontrol/static/js/vis-network.min.js:generic-api-key:33
