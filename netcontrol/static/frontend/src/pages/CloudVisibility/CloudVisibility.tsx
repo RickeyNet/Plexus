@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
 import { PageHelp } from '@/components/PageHelp';

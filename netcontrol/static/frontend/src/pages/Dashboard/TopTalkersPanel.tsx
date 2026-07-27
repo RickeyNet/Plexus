@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { echarts } from '@/lib/echart-core';
 
 import { useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';

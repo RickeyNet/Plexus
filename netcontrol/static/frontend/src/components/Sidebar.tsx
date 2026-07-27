@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
 import { prefetchRoute } from '@/lib/pageLoaders';
