@@ -88,6 +88,7 @@ _TEAMS_COLOR = {"critical": "D13438", "warning": "F7A700", "info": "0078D4"}
 
 # ── Channel config + runtime stats ───────────────────────────────────────────
 
+
 @dataclass
 class ChannelConfig:
     """Validated, in-memory representation of one notification channel."""
@@ -95,8 +96,8 @@ class ChannelConfig:
     id: str
     name: str
     enabled: bool
-    type: str               # email | pagerduty | webhook | teams
-    severity_floor: str     # info | warning | critical
+    type: str  # email | pagerduty | webhook | teams
+    severity_floor: str  # info | warning | critical
     queue_size: int
     max_retries: int
     backoff_base: float
@@ -105,20 +106,20 @@ class ChannelConfig:
     # email
     smtp_host: str = ""
     smtp_port: int = 587
-    smtp_use_tls: bool = True   # STARTTLS
+    smtp_use_tls: bool = True  # STARTTLS
     smtp_use_ssl: bool = False  # implicit TLS (SMTPS)
     smtp_username: str = ""
     smtp_password: str = ""
     mail_from: str = ""
-    mail_to: str = ""           # comma/space separated recipient list
+    mail_to: str = ""  # comma/space separated recipient list
 
     # pagerduty
-    routing_key: str = ""       # Events API v2 integration key (secret)
+    routing_key: str = ""  # Events API v2 integration key (secret)
 
     # webhook
     webhook_url: str = ""
-    webhook_auth_header: str = ""   # header name, e.g. "Authorization"
-    webhook_auth_value: str = ""    # header value (secret)
+    webhook_auth_header: str = ""  # header name, e.g. "Authorization"
+    webhook_auth_value: str = ""  # header value (secret)
     verify_tls: bool = True
 
     # teams
@@ -144,6 +145,7 @@ class ChannelRuntime:
 
 # ── Validation / sanitization ────────────────────────────────────────────────
 
+
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -155,7 +157,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 def _coerce_int(value: Any, default: int, low: int, high: int) -> int:
     try:
         ival = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     return max(low, min(high, ival))
 
@@ -163,7 +165,7 @@ def _coerce_int(value: Any, default: int, low: int, high: int) -> int:
 def _coerce_float(value: Any, default: float, low: float, high: float) -> float:
     try:
         fval = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     return max(low, min(high, fval))
 
@@ -249,6 +251,7 @@ def channel_config_to_dict(cfg: ChannelConfig, *, redact_secrets: bool = True) -
     """Serialize a ChannelConfig to a JSON-able dict. Optionally redacts the
     secret fields (SMTP password, PagerDuty routing key, webhook auth value)
     for API responses."""
+
     def secret(value: str) -> str:
         return REDACTION_MASK if (redact_secrets and value) else value
 
@@ -333,6 +336,7 @@ def parse_channel_ids(raw: Any) -> list[str]:
 
 
 # ── Formatters ───────────────────────────────────────────────────────────────
+
 
 def _severity_label(severity: str) -> str:
     s = (severity or "warning").lower()
@@ -475,6 +479,7 @@ def build_email(alert: dict, cfg: ChannelConfig) -> EmailMessage:
 
 # ── Channel drivers ──────────────────────────────────────────────────────────
 
+
 def _httpx_verify(cfg: ChannelConfig) -> Any:
     return True if cfg.verify_tls else False
 
@@ -525,8 +530,7 @@ def _send_email_blocking(cfg: ChannelConfig, msg: EmailMessage) -> None:
     recipients = _parse_recipients(cfg.mail_to)
     if cfg.smtp_use_ssl:
         context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(cfg.smtp_host, cfg.smtp_port,
-                              timeout=DEFAULT_SMTP_TIMEOUT, context=context) as server:
+        with smtplib.SMTP_SSL(cfg.smtp_host, cfg.smtp_port, timeout=DEFAULT_SMTP_TIMEOUT, context=context) as server:
             if cfg.smtp_username:
                 server.login(cfg.smtp_username, cfg.smtp_password)
             server.send_message(msg, from_addr=cfg.mail_from, to_addrs=recipients)
@@ -577,8 +581,7 @@ async def _channel_loop(rt: ChannelRuntime) -> None:
     """One asyncio task per channel. Pulls alerts from the queue, formats,
     sends, and retries with exponential backoff bounded by max_retries."""
     cfg = rt.config
-    LOGGER.info("notify channel %s: started (type=%s, floor=%s)",
-                cfg.id, cfg.type, cfg.severity_floor)
+    LOGGER.info("notify channel %s: started (type=%s, floor=%s)", cfg.id, cfg.type, cfg.severity_floor)
     try:
         while True:
             alert = await rt.queue.get()
@@ -598,7 +601,10 @@ async def _channel_loop(rt: ChannelRuntime) -> None:
                         if attempt > cfg.max_retries:
                             LOGGER.warning(
                                 "notify channel %s: giving up on alert id=%s after %d attempts: %s",
-                                cfg.id, alert.get("alert_id"), attempt, rt.last_error,
+                                cfg.id,
+                                alert.get("alert_id"),
+                                attempt,
+                                rt.last_error,
                             )
                             break
                         delay = min(cfg.backoff_cap, cfg.backoff_base * (2 ** (attempt - 1)))
@@ -625,8 +631,7 @@ def _enqueue_one(rt: ChannelRuntime, alert: dict) -> None:
             rt.queue.task_done()
             rt.dropped_queue_full += 1
         except asyncio.QueueEmpty as exc:
-            LOGGER.warning("notify channel %s: queue full, drop-oldest raced empty: %s",
-                           rt.config.id, exc)
+            LOGGER.warning("notify channel %s: queue full, drop-oldest raced empty: %s", rt.config.id, exc)
         try:
             rt.queue.put_nowait(alert)
         except asyncio.QueueFull:
@@ -674,19 +679,34 @@ async def on_alert_created(alert: dict) -> None:
 def _config_changed(old: ChannelConfig, new: ChannelConfig) -> bool:
     """Field-by-field compare to decide whether to recreate the channel task."""
     for fname in (
-        "enabled", "type", "severity_floor", "queue_size", "max_retries",
-        "backoff_base", "backoff_cap", "smtp_host", "smtp_port", "smtp_use_tls",
-        "smtp_use_ssl", "smtp_username", "smtp_password", "mail_from", "mail_to",
-        "routing_key", "webhook_url", "webhook_auth_header", "webhook_auth_value",
-        "verify_tls", "teams_webhook_url",
+        "enabled",
+        "type",
+        "severity_floor",
+        "queue_size",
+        "max_retries",
+        "backoff_base",
+        "backoff_cap",
+        "smtp_host",
+        "smtp_port",
+        "smtp_use_tls",
+        "smtp_use_ssl",
+        "smtp_username",
+        "smtp_password",
+        "mail_from",
+        "mail_to",
+        "routing_key",
+        "webhook_url",
+        "webhook_auth_header",
+        "webhook_auth_value",
+        "verify_tls",
+        "teams_webhook_url",
     ):
         if getattr(old, fname) != getattr(new, fname):
             return True
     return False
 
 
-async def apply_channels(configs: list[ChannelConfig],
-                         default_channel_ids: list[str] | None = None) -> None:
+async def apply_channels(configs: list[ChannelConfig], default_channel_ids: list[str] | None = None) -> None:
     """Reconcile the running channel set against a new desired config list.
 
     New channels get a queue + task; removed/changed channels are cancelled
@@ -698,8 +718,7 @@ async def apply_channels(configs: list[ChannelConfig],
             _default_channel_ids = [str(c).strip() for c in default_channel_ids if str(c).strip()]
         desired = {c.id: c for c in configs}
         to_remove = [
-            cid for cid, rt in _channels.items()
-            if cid not in desired or _config_changed(rt.config, desired[cid])
+            cid for cid, rt in _channels.items() if cid not in desired or _config_changed(rt.config, desired[cid])
         ]
         for cid in to_remove:
             rt = _channels.pop(cid)
@@ -717,8 +736,7 @@ async def apply_channels(configs: list[ChannelConfig],
             _channels[cid] = rt
 
 
-async def start_dispatcher(configs: list[ChannelConfig],
-                           default_channel_ids: list[str] | None = None) -> None:
+async def start_dispatcher(configs: list[ChannelConfig], default_channel_ids: list[str] | None = None) -> None:
     """Lifespan entry point. Idempotent."""
     global _started
     await apply_channels(configs, default_channel_ids or [])
@@ -745,21 +763,23 @@ def get_stats() -> list[dict]:
     """Snapshot of per-channel runtime stats for the admin API."""
     out = []
     for rt in _channels.values():
-        out.append({
-            "id": rt.config.id,
-            "name": rt.config.name,
-            "enabled": rt.config.enabled,
-            "type": rt.config.type,
-            "queue_depth": rt.queue.qsize(),
-            "queue_size": rt.config.queue_size,
-            "delivered": rt.delivered,
-            "delivery_failures": rt.delivery_failures,
-            "dropped_queue_full": rt.dropped_queue_full,
-            "dropped_below_severity": rt.dropped_below_severity,
-            "last_error": rt.last_error,
-            "last_delivery_at": rt.last_delivery_at,
-            "last_failure_at": rt.last_failure_at,
-        })
+        out.append(
+            {
+                "id": rt.config.id,
+                "name": rt.config.name,
+                "enabled": rt.config.enabled,
+                "type": rt.config.type,
+                "queue_depth": rt.queue.qsize(),
+                "queue_size": rt.config.queue_size,
+                "delivered": rt.delivered,
+                "delivery_failures": rt.delivery_failures,
+                "dropped_queue_full": rt.dropped_queue_full,
+                "dropped_below_severity": rt.dropped_below_severity,
+                "last_error": rt.last_error,
+                "last_delivery_at": rt.last_delivery_at,
+                "last_failure_at": rt.last_failure_at,
+            }
+        )
     return out
 
 
@@ -771,8 +791,7 @@ def _probe_alert() -> dict:
         "severity": "warning",
         "metric": "notification.test",
         "alert_type": "test",
-        "message": "Plexus notification channel test - if you received this, "
-                   "the channel is configured correctly.",
+        "message": "Plexus notification channel test - if you received this, the channel is configured correctly.",
         "value": None,
         "threshold": None,
         "rule_id": None,

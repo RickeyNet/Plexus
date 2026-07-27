@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -59,6 +60,7 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 # Inventory Groups
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 async def get_all_groups() -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
@@ -121,19 +123,21 @@ async def get_all_groups_with_hosts() -> list[dict]:
         host_id = row["host_id"]
         if host_id is None:
             continue
-        group["hosts"].append({
-            "id": host_id,
-            "group_id": row["host_group_id"],
-            "hostname": row["host_hostname"],
-            "ip_address": row["host_ip_address"],
-            "device_type": row["host_device_type"],
-            "status": row["host_status"],
-            "last_seen": row["host_last_seen"],
-            "model": row["host_model"] or "",
-            "software_version": row["host_software_version"] or "",
-            "device_category": row["host_device_category"] or "",
-            "serial_number": row["host_serial_number"] or "",
-        })
+        group["hosts"].append(
+            {
+                "id": host_id,
+                "group_id": row["host_group_id"],
+                "hostname": row["host_hostname"],
+                "ip_address": row["host_ip_address"],
+                "device_type": row["host_device_type"],
+                "status": row["host_status"],
+                "last_seen": row["host_last_seen"],
+                "model": row["host_model"] or "",
+                "software_version": row["host_software_version"] or "",
+                "device_category": row["host_device_category"] or "",
+                "serial_number": row["host_serial_number"] or "",
+            }
+        )
         group["host_count"] += 1
 
     return groups
@@ -220,19 +224,21 @@ async def get_all_groups_with_hosts_for_user(user_id: int) -> list[dict]:
         host_id = row["host_id"]
         if host_id is None:
             continue
-        group["hosts"].append({
-            "id": host_id,
-            "group_id": row["host_group_id"],
-            "hostname": row["host_hostname"],
-            "ip_address": row["host_ip_address"],
-            "device_type": row["host_device_type"],
-            "status": row["host_status"],
-            "last_seen": row["host_last_seen"],
-            "model": row["host_model"] or "",
-            "software_version": row["host_software_version"] or "",
-            "device_category": row["host_device_category"] or "",
-            "serial_number": row["host_serial_number"] or "",
-        })
+        group["hosts"].append(
+            {
+                "id": host_id,
+                "group_id": row["host_group_id"],
+                "hostname": row["host_hostname"],
+                "ip_address": row["host_ip_address"],
+                "device_type": row["host_device_type"],
+                "status": row["host_status"],
+                "last_seen": row["host_last_seen"],
+                "model": row["host_model"] or "",
+                "software_version": row["host_software_version"] or "",
+                "device_category": row["host_device_category"] or "",
+                "serial_number": row["host_serial_number"] or "",
+            }
+        )
         group["host_count"] += 1
 
     return groups
@@ -248,8 +254,7 @@ async def set_user_group_order(user_id: int, ordered_group_ids: list[int]) -> No
         )
         for position, group_id in enumerate(ordered_group_ids):
             await db.execute(
-                "INSERT INTO user_inventory_group_order (user_id, group_id, position) "
-                "VALUES (?, ?, ?)",
+                "INSERT INTO user_inventory_group_order (user_id, group_id, position) VALUES (?, ?, ?)",
                 (user_id, int(group_id), position),
             )
         await db.commit()
@@ -309,6 +314,7 @@ async def delete_group(group_id: int):
 # Hosts
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def get_host(host_id: int) -> dict | None:
     """Get a single host by ID."""
     db = await _dbcore.get_db(read_only=True)
@@ -322,9 +328,7 @@ async def get_host(host_id: int) -> dict | None:
 async def get_hosts_for_group(group_id: int) -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute(
-            "SELECT * FROM hosts WHERE group_id = ? ORDER BY ip_address", (group_id,)
-        )
+        cursor = await db.execute("SELECT * FROM hosts WHERE group_id = ? ORDER BY ip_address", (group_id,))
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -336,10 +340,9 @@ async def get_hosts_by_ids(host_ids: list[int]) -> list[dict]:
         return []
     db = await _dbcore.get_db()
     try:
-        placeholders = ','.join('?' * len(host_ids))
+        placeholders = ",".join("?" * len(host_ids))
         cursor = await db.execute(
-            f"SELECT * FROM hosts WHERE id IN ({placeholders}) ORDER BY ip_address",
-            tuple(host_ids)
+            f"SELECT * FROM hosts WHERE id IN ({placeholders}) ORDER BY ip_address", tuple(host_ids)
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -350,9 +353,7 @@ async def get_all_hosts() -> list[dict]:
     """Get every host across all groups, ordered by hostname."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM hosts ORDER BY hostname, ip_address"
-        )
+        cursor = await db.execute("SELECT * FROM hosts ORDER BY hostname, ip_address")
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -361,9 +362,7 @@ async def get_all_hosts() -> list[dict]:
 async def find_host_by_ip(ip_address: str) -> dict | None:
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM hosts WHERE ip_address = ? LIMIT 1", (ip_address,)
-        )
+        cursor = await db.execute("SELECT * FROM hosts WHERE ip_address = ? LIMIT 1", (ip_address,))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -385,9 +384,7 @@ async def get_host_ip_index(group_id: int) -> dict[str, int]:
     db = await _dbcore.get_db()
     try:
         index: dict[str, int] = {}
-        cursor = await db.execute(
-            "SELECT id, ip_address FROM hosts WHERE group_id = ?", (group_id,)
-        )
+        cursor = await db.execute("SELECT id, ip_address FROM hosts WHERE group_id = ?", (group_id,))
         for row in await cursor.fetchall():
             d = dict(row)
             ip = (d.get("ip_address") or "").strip()
@@ -418,10 +415,7 @@ async def set_host_ip_aliases(host_id: int, primary_ip: str, alias_ips: list[str
     of alias rows written.
     """
     primary = (primary_ip or "").strip()
-    clean = sorted({
-        ip.strip() for ip in alias_ips
-        if ip and ip.strip() and ip.strip() != primary
-    })
+    clean = sorted({ip.strip() for ip in alias_ips if ip and ip.strip() and ip.strip() != primary})
     db = await _dbcore.get_db()
     try:
         await db.execute("DELETE FROM host_ip_aliases WHERE host_id = ?", (host_id,))
@@ -481,22 +475,19 @@ async def get_fdm_hosts() -> list[dict]:
     """
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM hosts WHERE fdm_api_enabled = 1 ORDER BY hostname, ip_address"
-        )
+        cursor = await db.execute("SELECT * FROM hosts WHERE fdm_api_enabled = 1 ORDER BY hostname, ip_address")
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
 
-async def add_host(group_id: int, hostname: str, ip_address: str,
-                   device_type: str = "cisco_ios",
-                   vrf_name: str = "", vlan_id: str = "") -> int:
+async def add_host(
+    group_id: int, hostname: str, ip_address: str, device_type: str = "cisco_ios", vrf_name: str = "", vlan_id: str = ""
+) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id) VALUES (?,?,?,?,?,?)",
             (group_id, hostname, ip_address, device_type, vrf_name or "", str(vlan_id or "")),
         )
         await db.commit()
@@ -510,14 +501,18 @@ async def add_host(group_id: int, hostname: str, ip_address: str,
     if ip_address:
         try:
             await record_ip_assignment(
-                address=ip_address, hostname=hostname or "",
-                vrf_name=vrf_name or "", source_type="host",
-                source_ref=str(new_id), note="host added",
+                address=ip_address,
+                hostname=hostname or "",
+                vrf_name=vrf_name or "",
+                source_type="host",
+                source_ref=str(new_id),
+                note="host added",
             )
         except Exception as exc:
             _LOGGER.warning(
                 "Failed to record IP assignment for host %s: %s",
-                new_id, exc,
+                new_id,
+                exc,
             )
     return new_id
 
@@ -525,9 +520,7 @@ async def add_host(group_id: int, hostname: str, ip_address: str,
 async def remove_host(host_id: int):
     db = await _dbcore.get_db()
     try:
-        cur = await db.execute(
-            "SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,)
-        )
+        cur = await db.execute("SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,))
         row = await cur.fetchone()
         prior_ip = ""
         prior_vrf = ""
@@ -541,24 +534,26 @@ async def remove_host(host_id: int):
         await db.close()
     if prior_ip:
         try:
-            await record_ip_release(
-                address=prior_ip, vrf_name=prior_vrf, note="host removed"
-            )
+            await record_ip_release(address=prior_ip, vrf_name=prior_vrf, note="host removed")
         except Exception as exc:
             _LOGGER.warning(
                 "Failed to record IP release for removed host %s: %s",
-                host_id, exc,
+                host_id,
+                exc,
             )
 
 
-async def update_host(host_id: int, hostname: str, ip_address: str,
-                      device_type: str = "cisco_ios",
-                      vrf_name: str | None = None, vlan_id: str | None = None):
+async def update_host(
+    host_id: int,
+    hostname: str,
+    ip_address: str,
+    device_type: str = "cisco_ios",
+    vrf_name: str | None = None,
+    vlan_id: str | None = None,
+):
     db = await _dbcore.get_db()
     try:
-        cur = await db.execute(
-            "SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,)
-        )
+        cur = await db.execute("SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,))
         prior_row = await cur.fetchone()
         prior = dict(prior_row) if prior_row else {}
         prior_ip = (prior.get("ip_address") or "").strip()
@@ -571,10 +566,8 @@ async def update_host(host_id: int, hostname: str, ip_address: str,
             )
         else:
             await db.execute(
-                "UPDATE hosts SET hostname=?, ip_address=?, device_type=?, vrf_name=?, vlan_id=? "
-                "WHERE id=?",
-                (hostname, ip_address, device_type,
-                 vrf_name or "", str(vlan_id or ""), host_id),
+                "UPDATE hosts SET hostname=?, ip_address=?, device_type=?, vrf_name=?, vlan_id=? WHERE id=?",
+                (hostname, ip_address, device_type, vrf_name or "", str(vlan_id or ""), host_id),
             )
         await db.commit()
     finally:
@@ -584,19 +577,21 @@ async def update_host(host_id: int, hostname: str, ip_address: str,
     new_ip = (ip_address or "").strip()
     try:
         if prior_ip and (prior_ip != new_ip or prior_vrf != new_vrf):
-            await record_ip_release(
-                address=prior_ip, vrf_name=prior_vrf, note="host updated"
-            )
+            await record_ip_release(address=prior_ip, vrf_name=prior_vrf, note="host updated")
         if new_ip:
             await record_ip_assignment(
-                address=new_ip, hostname=hostname or "",
-                vrf_name=new_vrf or "", source_type="host",
-                source_ref=str(host_id), note="host updated",
+                address=new_ip,
+                hostname=hostname or "",
+                vrf_name=new_vrf or "",
+                source_type="host",
+                source_ref=str(host_id),
+                note="host updated",
             )
     except Exception as exc:
         _LOGGER.warning(
             "Failed to record IP assignment history for updated host %s: %s",
-            host_id, exc,
+            host_id,
+            exc,
         )
 
 
@@ -640,13 +635,12 @@ async def bulk_delete_hosts(host_ids: list[int]) -> int:
         vrf = (r.get("vrf_name") or "").strip()
         if ip:
             try:
-                await record_ip_release(
-                    address=ip, vrf_name=vrf, note="bulk host delete"
-                )
+                await record_ip_release(address=ip, vrf_name=vrf, note="bulk host delete")
             except Exception as exc:
                 _LOGGER.warning(
                     "Failed to record IP release for bulk-deleted host (%s): %s",
-                    ip, exc,
+                    ip,
+                    exc,
                 )
     return rowcount
 
@@ -663,8 +657,7 @@ async def update_host_status(host_id: int, status: str):
         await db.close()
 
 
-async def update_host_device_info(host_id: int, model: str, software_version: str,
-                                  device_category: str = ""):
+async def update_host_device_info(host_id: int, model: str, software_version: str, device_category: str = ""):
     """Update the model, software_version, and device_category fields for a host."""
     db = await _dbcore.get_db()
     try:
@@ -710,5 +703,3 @@ async def get_all_hosts_for_export() -> list[dict]:
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
-
-

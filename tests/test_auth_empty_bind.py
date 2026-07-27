@@ -23,9 +23,7 @@ def test_ldap_rejects_empty_password(monkeypatch):
     # Force the LDAP_AVAILABLE gate open so we reach the empty-password guard;
     # the guard returns before any python_ldap call, so no server is needed.
     monkeypatch.setattr(auth, "LDAP_AVAILABLE", True)
-    ok, status, attrs = auth._ldap_authenticate_sync(
-        "alice", "", {"server": "ldap.example.com", "base_dn": "dc=x"}
-    )
+    ok, status, attrs = auth._ldap_authenticate_sync("alice", "", {"server": "ldap.example.com", "base_dn": "dc=x"})
     assert ok is False
     assert status == "reject"
     assert attrs == {}
@@ -35,7 +33,5 @@ def test_ldap_empty_password_does_not_touch_server(monkeypatch):
     # Even with a bogus server that would error on connect, an empty password
     # short-circuits to reject (not error).
     monkeypatch.setattr(auth, "LDAP_AVAILABLE", True)
-    ok, status, _ = auth._ldap_authenticate_sync(
-        "bob", "", {"server": "203.0.113.9", "port": 389, "base_dn": "dc=x"}
-    )
+    ok, status, _ = auth._ldap_authenticate_sync("bob", "", {"server": "203.0.113.9", "port": 389, "base_dn": "dc=x"})
     assert (ok, status) == (False, "reject")

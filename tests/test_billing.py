@@ -11,6 +11,7 @@ from netcontrol.routes.billing import (
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 async def _init(tmp_path, monkeypatch):
     """Set up a fresh in-memory DB with all tables + migrations."""
     db_path = str(tmp_path / "test.db")
@@ -30,9 +31,7 @@ async def _add_host(group_name="default", hostname="sw1", ip="10.0.0.1"):
         if cur.lastrowid:
             gid = cur.lastrowid
         else:
-            cur2 = await db.execute(
-                "SELECT id FROM inventory_groups WHERE name = ?", (group_name,)
-            )
+            cur2 = await db.execute("SELECT id FROM inventory_groups WHERE name = ?", (group_name,))
             gid = (await cur2.fetchone())[0]
 
         cur = await db.execute(
@@ -204,7 +203,9 @@ async def test_update_billing_circuit(tmp_path, monkeypatch):
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
-        name="Test", host_id=host_id, if_index=1,
+        name="Test",
+        host_id=host_id,
+        if_index=1,
         commit_rate_bps=50_000_000,
     )
 
@@ -223,7 +224,9 @@ async def test_delete_billing_circuit(tmp_path, monkeypatch):
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
-        name="Delete Me", host_id=host_id, if_index=1,
+        name="Delete Me",
+        host_id=host_id,
+        if_index=1,
     )
     assert await db_module.delete_billing_circuit(circuit["id"])
     assert await db_module.get_billing_circuit(circuit["id"]) is None
@@ -235,7 +238,9 @@ async def test_billing_period_crud(tmp_path, monkeypatch):
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
-        name="Test", host_id=host_id, if_index=1,
+        name="Test",
+        host_id=host_id,
+        if_index=1,
     )
 
     period = await db_module.create_billing_period(
@@ -330,7 +335,9 @@ async def test_generate_billing_no_samples(tmp_path, monkeypatch):
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
-        name="Empty", host_id=host_id, if_index=1,
+        name="Empty",
+        host_id=host_id,
+        if_index=1,
         commit_rate_bps=100_000_000,
     )
 
@@ -361,10 +368,7 @@ async def test_generate_billing_overage_detection(tmp_path, monkeypatch):
     )
 
     # All samples at 50 Mbps = P95 should be ~50 Mbps
-    samples = [
-        (50_000_000.0, 40_000_000.0, f"2026-03-{1 + i // 10:02d}T{i % 10:02d}:00:00")
-        for i in range(100)
-    ]
+    samples = [(50_000_000.0, 40_000_000.0, f"2026-03-{1 + i // 10:02d}T{i % 10:02d}:00:00") for i in range(100)]
     await _add_interface_samples(host_id, 1, samples)
 
     period = await generate_billing_for_circuit(
@@ -404,9 +408,13 @@ def app_client(tmp_path, monkeypatch):
 
 def _admin_headers(client):
     """Login as the bootstrap admin and return auth headers with CSRF token."""
-    login = client.post("/api/auth/login", json={
-        "username": "admin", "password": "netcontrol",
-    })
+    login = client.post(
+        "/api/auth/login",
+        json={
+            "username": "admin",
+            "password": "netcontrol",
+        },
+    )
     data = login.json()
     token = data.get("token", "")
     csrf = data.get("csrf_token", "")
@@ -430,25 +438,28 @@ def test_api_circuit_crud(app_client):
 
     # Insert a host directly via sync sqlite3 (inventory API routes differ)
     import sqlite3
+
     conn = sqlite3.connect(db_module.DB_PATH)
     conn.execute("INSERT OR IGNORE INTO inventory_groups (name) VALUES ('billing-test')")
-    conn.execute(
-        "INSERT INTO hosts (group_id, hostname, ip_address) VALUES (1, 'router1', '10.0.0.1')"
-    )
+    conn.execute("INSERT INTO hosts (group_id, hostname, ip_address) VALUES (1, 'router1', '10.0.0.1')")
     conn.commit()
     host_id = conn.execute("SELECT id FROM hosts WHERE hostname='router1'").fetchone()[0]
     conn.close()
 
     # Create circuit
-    create_resp = client.post("/api/billing/circuits", json={
-        "name": "ISP-A",
-        "host_id": host_id,
-        "if_index": 1,
-        "if_name": "Gi0/0",
-        "customer": "Acme",
-        "commit_rate_bps": 100000000,
-        "cost_per_mbps": 5.0,
-    }, headers=headers)
+    create_resp = client.post(
+        "/api/billing/circuits",
+        json={
+            "name": "ISP-A",
+            "host_id": host_id,
+            "if_index": 1,
+            "if_name": "Gi0/0",
+            "customer": "Acme",
+            "commit_rate_bps": 100000000,
+            "cost_per_mbps": 5.0,
+        },
+        headers=headers,
+    )
     assert create_resp.status_code == 201
     circuit = create_resp.json()
     assert circuit["name"] == "ISP-A"
@@ -458,9 +469,13 @@ def test_api_circuit_crud(app_client):
     assert get_resp.status_code == 200
 
     # Update circuit
-    put_resp = client.put(f"/api/billing/circuits/{circuit['id']}", json={
-        "name": "ISP-A Updated",
-    }, headers=headers)
+    put_resp = client.put(
+        f"/api/billing/circuits/{circuit['id']}",
+        json={
+            "name": "ISP-A Updated",
+        },
+        headers=headers,
+    )
     assert put_resp.status_code == 200
     assert put_resp.json()["name"] == "ISP-A Updated"
 

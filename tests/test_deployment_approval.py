@@ -5,6 +5,7 @@ that run at deployment creation. The thin FastAPI wrappers around these
 are covered by inspection -- exercising them needs the full auth fixture
 and would not catch anything the DB tests don't already.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,6 +25,7 @@ async def _seed_credential() -> int:
     """Insert a dummy credential -- approval logic doesn't read its
     payload, but the FK requires the row to exist."""
     from routes.crypto import encrypt
+
     enc = encrypt("dummy")
     db = await db_module.get_db()
     try:
@@ -59,8 +61,11 @@ async def test_set_deployment_approval_request_transition(tmp_path, monkeypatch)
     group_id = await db_module.create_group("lab")
     cred_id = await _seed_credential()
     dep_id = await db_module.create_deployment(
-        name="dep-1", group_id=group_id, credential_id=cred_id,
-        proposed_commands="x", created_by="alice",
+        name="dep-1",
+        group_id=group_id,
+        credential_id=cred_id,
+        proposed_commands="x",
+        created_by="alice",
     )
 
     await db_module.set_deployment_approval(
@@ -81,15 +86,23 @@ async def test_set_deployment_approval_approve_stamps_approver(tmp_path, monkeyp
     group_id = await db_module.create_group("lab")
     cred_id = await _seed_credential()
     dep_id = await db_module.create_deployment(
-        name="dep-1", group_id=group_id, credential_id=cred_id,
-        proposed_commands="x", created_by="alice",
+        name="dep-1",
+        group_id=group_id,
+        credential_id=cred_id,
+        proposed_commands="x",
+        created_by="alice",
     )
     await db_module.set_deployment_approval(
-        dep_id, requires_approval=True, approval_status="pending", request=True,
+        dep_id,
+        requires_approval=True,
+        approval_status="pending",
+        request=True,
     )
 
     await db_module.set_deployment_approval(
-        dep_id, approval_status="approved", approved_by="bob",
+        dep_id,
+        approval_status="approved",
+        approved_by="bob",
         approval_comment="lgtm",
     )
     dep = await db_module.get_deployment(dep_id)
@@ -104,7 +117,10 @@ async def test_set_deployment_approval_rejects_invalid_status(tmp_path, monkeypa
     group_id = await db_module.create_group("lab")
     cred_id = await _seed_credential()
     dep_id = await db_module.create_deployment(
-        name="dep-1", group_id=group_id, credential_id=cred_id, proposed_commands="x",
+        name="dep-1",
+        group_id=group_id,
+        credential_id=cred_id,
+        proposed_commands="x",
     )
     with pytest.raises(ValueError):
         await db_module.set_deployment_approval(dep_id, approval_status="bogus")
@@ -145,7 +161,10 @@ async def test_create_deployment_auto_flags_for_production_group(tmp_path, monke
     group = await db_module.get_group(group_id)
     if (group.get("environment") or "").lower() == "production":
         await db_module.set_deployment_approval(
-            dep_id, requires_approval=True, approval_status="pending", request=True,
+            dep_id,
+            requires_approval=True,
+            approval_status="pending",
+            request=True,
         )
 
     dep = await db_module.get_deployment(dep_id)

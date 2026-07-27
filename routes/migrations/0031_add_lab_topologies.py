@@ -34,17 +34,13 @@ DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 async def _column_exists(db, table: str, column: str, *, engine: str) -> bool:
     if engine == "postgres":
         cur = await db.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = ? AND column_name = ?",
+            "SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
             (table, column),
         )
         return await cur.fetchone() is not None
     cur = await db.execute(f"PRAGMA table_info({table})")
     rows = await cur.fetchall()
-    return any(
-        (row[1] if not isinstance(row, dict) else row.get("name")) == column
-        for row in rows
-    )
+    return any((row[1] if not isinstance(row, dict) else row.get("name")) == column for row in rows)
 
 
 async def _up_sqlite(db) -> None:
@@ -83,19 +79,12 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_topology_links_topo "
-        "ON lab_topology_links (topology_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_topology_links_topo ON lab_topology_links (topology_id)")
     if not await _column_exists(db, "lab_devices", "topology_id", engine="sqlite"):
         await db.execute(
-            "ALTER TABLE lab_devices ADD COLUMN topology_id INTEGER "
-            "REFERENCES lab_topologies(id) ON DELETE SET NULL"
+            "ALTER TABLE lab_devices ADD COLUMN topology_id INTEGER REFERENCES lab_topologies(id) ON DELETE SET NULL"
         )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_devices_topology "
-        "ON lab_devices (topology_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_devices_topology ON lab_devices (topology_id)")
     await db.commit()
 
 
@@ -131,19 +120,12 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_topology_links_topo "
-        "ON lab_topology_links (topology_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_topology_links_topo ON lab_topology_links (topology_id)")
     if not await _column_exists(db, "lab_devices", "topology_id", engine="postgres"):
         await db.execute(
-            "ALTER TABLE lab_devices ADD COLUMN topology_id INTEGER "
-            "REFERENCES lab_topologies(id) ON DELETE SET NULL"
+            "ALTER TABLE lab_devices ADD COLUMN topology_id INTEGER REFERENCES lab_topologies(id) ON DELETE SET NULL"
         )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_devices_topology "
-        "ON lab_devices (topology_id)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_devices_topology ON lab_devices (topology_id)")
     await db.commit()
 
 

@@ -8,6 +8,7 @@ from netcontrol.routes.metrics_engine import _classify_root_cause
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 async def _init(tmp_path, monkeypatch):
     """Set up a fresh in-memory DB with all tables + migrations."""
     db_path = str(tmp_path / "test.db")
@@ -27,9 +28,7 @@ async def _add_host(group_name="default", hostname="sw1", ip="10.0.0.1"):
         if cur.lastrowid:
             gid = cur.lastrowid
         else:
-            cur2 = await db.execute(
-                "SELECT id FROM inventory_groups WHERE name = ?", (group_name,)
-            )
+            cur2 = await db.execute("SELECT id FROM inventory_groups WHERE name = ?", (group_name,))
             gid = (await cur2.fetchone())[0]
 
         cur = await db.execute(
@@ -55,8 +54,13 @@ async def test_upsert_and_fetch_interface_error_stats(tmp_path, monkeypatch):
 
     # First upsert - creates the row
     await db_module.upsert_interface_error_stat(
-        host_id, if_index=1, if_name="Gi1/0/1",
-        in_errors=100, out_errors=50, in_discards=10, out_discards=5,
+        host_id,
+        if_index=1,
+        if_name="Gi1/0/1",
+        in_errors=100,
+        out_errors=50,
+        in_discards=10,
+        out_discards=5,
     )
     rows = await db_module.get_interface_error_stats_for_host(host_id)
     assert len(rows) == 1
@@ -65,8 +69,13 @@ async def test_upsert_and_fetch_interface_error_stats(tmp_path, monkeypatch):
 
     # Second upsert - current shifts to prev
     await db_module.upsert_interface_error_stat(
-        host_id, if_index=1, if_name="Gi1/0/1",
-        in_errors=200, out_errors=70, in_discards=15, out_discards=8,
+        host_id,
+        if_index=1,
+        if_name="Gi1/0/1",
+        in_errors=200,
+        out_errors=70,
+        in_discards=15,
+        out_discards=8,
     )
     rows = await db_module.get_interface_error_stats_for_host(host_id)
     assert len(rows) == 1
@@ -83,10 +92,16 @@ async def test_create_and_get_error_event(tmp_path, monkeypatch):
     host_id = await _add_host()
 
     event_id = await db_module.create_interface_error_event(
-        host_id=host_id, if_index=1, if_name="Gi1/0/1",
-        event_type="spike", metric_name="if_in_errors",
-        severity="warning", current_rate=25.5, baseline_rate=3.0,
-        spike_factor=8.5, root_cause_hint="Suspect physical layer",
+        host_id=host_id,
+        if_index=1,
+        if_name="Gi1/0/1",
+        event_type="spike",
+        metric_name="if_in_errors",
+        severity="warning",
+        current_rate=25.5,
+        baseline_rate=3.0,
+        spike_factor=8.5,
+        root_cause_hint="Suspect physical layer",
         root_cause_category="physical_layer",
         correlation_details=json.dumps({"config_changes": 0}),
     )
@@ -112,16 +127,30 @@ async def test_get_interface_error_events_filters(tmp_path, monkeypatch):
     h2 = await _add_host(hostname="sw2", ip="10.0.0.2")
 
     await db_module.create_interface_error_event(
-        host_id=h1, if_index=1, if_name="Gi1/0/1",
-        event_type="spike", metric_name="if_in_errors",
-        severity="warning", current_rate=10, baseline_rate=1,
-        spike_factor=10, root_cause_hint="test", root_cause_category="unknown",
+        host_id=h1,
+        if_index=1,
+        if_name="Gi1/0/1",
+        event_type="spike",
+        metric_name="if_in_errors",
+        severity="warning",
+        current_rate=10,
+        baseline_rate=1,
+        spike_factor=10,
+        root_cause_hint="test",
+        root_cause_category="unknown",
     )
     eid2 = await db_module.create_interface_error_event(
-        host_id=h2, if_index=2, if_name="Gi1/0/2",
-        event_type="spike", metric_name="if_out_errors",
-        severity="critical", current_rate=200, baseline_rate=5,
-        spike_factor=40, root_cause_hint="test", root_cause_category="congestion",
+        host_id=h2,
+        if_index=2,
+        if_name="Gi1/0/2",
+        event_type="spike",
+        metric_name="if_out_errors",
+        severity="critical",
+        current_rate=200,
+        baseline_rate=5,
+        spike_factor=40,
+        root_cause_hint="test",
+        root_cause_category="congestion",
     )
 
     # Filter by host
@@ -151,10 +180,17 @@ async def test_acknowledge_error_event(tmp_path, monkeypatch):
     host_id = await _add_host()
 
     eid = await db_module.create_interface_error_event(
-        host_id=host_id, if_index=1, if_name="Gi1/0/1",
-        event_type="spike", metric_name="if_in_errors",
-        severity="warning", current_rate=10, baseline_rate=1,
-        spike_factor=10, root_cause_hint="test", root_cause_category="unknown",
+        host_id=host_id,
+        if_index=1,
+        if_name="Gi1/0/1",
+        event_type="spike",
+        metric_name="if_in_errors",
+        severity="warning",
+        current_rate=10,
+        baseline_rate=1,
+        spike_factor=10,
+        root_cause_hint="test",
+        root_cause_category="unknown",
     )
 
     ok = await db_module.acknowledge_interface_error_event(eid, "admin")
@@ -179,10 +215,17 @@ async def test_resolve_error_event(tmp_path, monkeypatch):
     host_id = await _add_host()
 
     eid = await db_module.create_interface_error_event(
-        host_id=host_id, if_index=1, if_name="Gi1/0/1",
-        event_type="spike", metric_name="if_in_errors",
-        severity="warning", current_rate=10, baseline_rate=1,
-        spike_factor=10, root_cause_hint="test", root_cause_category="unknown",
+        host_id=host_id,
+        if_index=1,
+        if_name="Gi1/0/1",
+        event_type="spike",
+        metric_name="if_in_errors",
+        severity="warning",
+        current_rate=10,
+        baseline_rate=1,
+        spike_factor=10,
+        root_cause_hint="test",
+        root_cause_category="unknown",
     )
     ok = await db_module.resolve_interface_error_event(eid)
     assert ok is True
@@ -253,10 +296,17 @@ async def test_delete_old_interface_error_events(tmp_path, monkeypatch):
     host_id = await _add_host()
 
     eid = await db_module.create_interface_error_event(
-        host_id=host_id, if_index=1, if_name="Gi1/0/1",
-        event_type="spike", metric_name="if_in_errors",
-        severity="warning", current_rate=10, baseline_rate=1,
-        spike_factor=10, root_cause_hint="test", root_cause_category="unknown",
+        host_id=host_id,
+        if_index=1,
+        if_name="Gi1/0/1",
+        event_type="spike",
+        metric_name="if_in_errors",
+        severity="warning",
+        current_rate=10,
+        baseline_rate=1,
+        spike_factor=10,
+        root_cause_hint="test",
+        root_cause_category="unknown",
     )
 
     # With a high retention of 365 days, nothing should be deleted

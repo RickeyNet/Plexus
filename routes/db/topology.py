@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -144,6 +145,7 @@ __all__ = [
 # Topology Links
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def upsert_topology_link(
     source_host_id: int,
     source_ip: str,
@@ -171,9 +173,17 @@ async def upsert_topology_link(
                    protocol = excluded.protocol,
                    target_platform = excluded.target_platform,
                    discovered_at = excluded.discovered_at""",
-            (source_host_id, source_ip, source_interface,
-             target_host_id, target_ip, target_device_name,
-             target_interface, protocol, target_platform),
+            (
+                source_host_id,
+                source_ip,
+                source_interface,
+                target_host_id,
+                target_ip,
+                target_device_name,
+                target_interface,
+                protocol,
+                target_platform,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -230,9 +240,7 @@ async def delete_topology_links_for_host(host_id: int) -> int:
     """Delete all topology links where the given host is the source."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "DELETE FROM topology_links WHERE source_host_id = ?", (host_id,)
-        )
+        cursor = await db.execute("DELETE FROM topology_links WHERE source_host_id = ?", (host_id,))
         await db.commit()
         return cursor.rowcount
     finally:
@@ -248,9 +256,7 @@ async def replace_topology_links_for_host(host_id: int, links: list[dict]) -> in
     """
     db = await _dbcore.get_db()
     try:
-        await db.execute(
-            "DELETE FROM topology_links WHERE source_host_id = ?", (host_id,)
-        )
+        await db.execute("DELETE FROM topology_links WHERE source_host_id = ?", (host_id,))
         if links:
             await db.executemany(
                 """INSERT INTO topology_links
@@ -265,10 +271,20 @@ async def replace_topology_links_for_host(host_id: int, links: list[dict]) -> in
                        protocol = excluded.protocol,
                        target_platform = excluded.target_platform,
                        discovered_at = excluded.discovered_at""",
-                [(link["source_host_id"], link["source_ip"], link["source_interface"],
-                  link["target_host_id"], link["target_ip"], link["target_device_name"],
-                  link["target_interface"], link["protocol"], link["target_platform"])
-                 for link in links],
+                [
+                    (
+                        link["source_host_id"],
+                        link["source_ip"],
+                        link["source_interface"],
+                        link["target_host_id"],
+                        link["target_ip"],
+                        link["target_device_name"],
+                        link["target_interface"],
+                        link["protocol"],
+                        link["target_platform"],
+                    )
+                    for link in links
+                ],
             )
         await db.commit()
         return len(links)
@@ -312,6 +328,7 @@ async def resolve_topology_target_host_ids() -> int:
 # Interface Stats (utilization tracking)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def upsert_interface_stat(
     host_id: int,
     if_index: int,
@@ -321,9 +338,11 @@ async def upsert_interface_stat(
     out_octets: int,
 ) -> int:
     """Insert or update interface counters, shifting current values to prev_*."""
-    return await upsert_interface_stats_batch([
-        (host_id, if_index, if_name, if_speed_mbps, in_octets, out_octets),
-    ])
+    return await upsert_interface_stats_batch(
+        [
+            (host_id, if_index, if_name, if_speed_mbps, in_octets, out_octets),
+        ]
+    )
 
 
 _UPSERT_INTERFACE_STAT_SQL = """
@@ -391,6 +410,7 @@ async def get_interface_stats_by_hosts(host_ids: list[int]) -> list[dict]:
 # Interface inventory (audit: port-hygiene rule)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def upsert_interface_inventory(
     host_id: int,
     if_index: int,
@@ -425,8 +445,19 @@ async def upsert_interface_inventory(
                    access_vlan = excluded.access_vlan,
                    trunk_vlans = excluded.trunk_vlans,
                    collected_at = excluded.collected_at""",
-            (host_id, if_index, name, description, admin_state, oper_state,
-             speed_mbps, duplex, last_change, access_vlan, trunk_vlans),
+            (
+                host_id,
+                if_index,
+                name,
+                description,
+                admin_state,
+                oper_state,
+                speed_mbps,
+                duplex,
+                last_change,
+                access_vlan,
+                trunk_vlans,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -466,6 +497,7 @@ async def get_interface_inventory_by_name(host_id: int, name: str) -> dict | Non
 # ═════════════════════════════════════════════════════════════════════════════
 # VLAN definitions (audit: vlan-consistency rule)
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 async def upsert_vlan_definition(
     host_id: int,
@@ -507,6 +539,7 @@ async def get_vlan_definitions_for_host(host_id: int) -> list[dict]:
 # Topology Changes (diff detection)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def insert_topology_change(
     change_type: str,
     source_host_id: int | None,
@@ -525,8 +558,16 @@ async def insert_topology_change(
                (change_type, source_host_id, source_hostname, source_interface,
                 target_device_name, target_interface, target_ip, protocol, detected_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (change_type, source_host_id, source_hostname, source_interface,
-             target_device_name, target_interface, target_ip, protocol),
+            (
+                change_type,
+                source_host_id,
+                source_hostname,
+                source_interface,
+                target_device_name,
+                target_interface,
+                target_ip,
+                protocol,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -534,8 +575,7 @@ async def insert_topology_change(
         await db.close()
 
 
-async def get_topology_changes(unacknowledged_only: bool = False,
-                               limit: int = 100) -> list[dict]:
+async def get_topology_changes(unacknowledged_only: bool = False, limit: int = 100) -> list[dict]:
     """Return recent topology changes."""
     db = await _dbcore.get_db()
     try:
@@ -554,9 +594,7 @@ async def get_topology_changes_count(unacknowledged_only: bool = True) -> int:
     db = await _dbcore.get_db()
     try:
         where = "WHERE acknowledged = 0" if unacknowledged_only else ""
-        cursor = await db.execute(
-            f"SELECT COUNT(*) FROM topology_changes {where}"
-        )
+        cursor = await db.execute(f"SELECT COUNT(*) FROM topology_changes {where}")
         row = await cursor.fetchone()
         return row[0] if row else 0
     finally:
@@ -567,9 +605,7 @@ async def acknowledge_topology_changes() -> int:
     """Mark all unacknowledged changes as acknowledged."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "UPDATE topology_changes SET acknowledged = 1 WHERE acknowledged = 0"
-        )
+        cursor = await db.execute("UPDATE topology_changes SET acknowledged = 1 WHERE acknowledged = 0")
         await db.commit()
         return cursor.rowcount
     finally:
@@ -593,6 +629,7 @@ async def delete_old_topology_changes(days: int = 30) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 # STP Topology State + Events
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 async def upsert_stp_port_state(
     host_id: int,
@@ -633,9 +670,18 @@ async def upsert_stp_port_state(
                    is_root_bridge = excluded.is_root_bridge,
                    collected_at = excluded.collected_at""",
             (
-                host_id, vlan_id, bridge_port, if_index, interface_name,
-                port_state, port_role, designated_bridge_id, root_bridge_id,
-                root_port, topology_change_count, time_since_topology_change,
+                host_id,
+                vlan_id,
+                bridge_port,
+                if_index,
+                interface_name,
+                port_state,
+                port_role,
+                designated_bridge_id,
+                root_bridge_id,
+                root_port,
+                topology_change_count,
+                time_since_topology_change,
                 1 if is_root_bridge else 0,
             ),
         )
@@ -722,8 +768,14 @@ async def insert_stp_topology_event(
                 details, old_value, new_value, acknowledged, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))""",
             (
-                host_id, vlan_id, event_type, severity, interface_name,
-                details, old_value, new_value,
+                host_id,
+                vlan_id,
+                event_type,
+                severity,
+                interface_name,
+                details,
+                old_value,
+                new_value,
             ),
         )
         await db.commit()
@@ -759,9 +811,7 @@ async def get_stp_topology_events_count(unacknowledged_only: bool = True) -> int
     db = await _dbcore.get_db()
     try:
         where_sql = "WHERE acknowledged = 0" if unacknowledged_only else ""
-        cursor = await db.execute(
-            f"SELECT COUNT(*) FROM stp_topology_events {where_sql}"
-        )
+        cursor = await db.execute(f"SELECT COUNT(*) FROM stp_topology_events {where_sql}")
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
     finally:
@@ -772,9 +822,7 @@ async def acknowledge_stp_topology_events() -> int:
     """Mark all unacknowledged STP events as acknowledged."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "UPDATE stp_topology_events SET acknowledged = 1 WHERE acknowledged = 0"
-        )
+        cursor = await db.execute("UPDATE stp_topology_events SET acknowledged = 1 WHERE acknowledged = 0")
         await db.commit()
         return cursor.rowcount
     finally:
@@ -837,6 +885,7 @@ async def count_recent_stp_topology_events(
 
 
 # ── STP Root-Bridge Policies ─────────────────────────────────────────────────
+
 
 async def upsert_stp_root_policy(
     group_id: int,
@@ -956,6 +1005,7 @@ async def delete_stp_root_policy(policy_id: int) -> int:
 
 # ── Topology Node Positions ──────────────────────────────────────────────────
 
+
 async def get_topology_positions() -> dict:
     """Return all saved node positions as {node_id: {x, y}}."""
     db = await _dbcore.get_db()
@@ -1044,9 +1094,7 @@ async def get_config_baseline(baseline_id: int) -> dict | None:
     """Return a single config baseline by ID."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM config_baselines WHERE id = ?", (baseline_id,)
-        )
+        cursor = await db.execute("SELECT * FROM config_baselines WHERE id = ?", (baseline_id,))
         row = await cursor.fetchone()
         return row_to_dict(row)
     finally:
@@ -1057,9 +1105,7 @@ async def get_config_baseline_for_host(host_id: int) -> dict | None:
     """Return the config baseline for a specific host."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM config_baselines WHERE host_id = ?", (host_id,)
-        )
+        cursor = await db.execute("SELECT * FROM config_baselines WHERE host_id = ?", (host_id,))
         row = await cursor.fetchone()
         return row_to_dict(row)
     finally:
@@ -1182,9 +1228,7 @@ async def get_config_snapshot(snapshot_id: int) -> dict | None:
     """Return a single config snapshot by ID."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM config_snapshots WHERE id = ?", (snapshot_id,)
-        )
+        cursor = await db.execute("SELECT * FROM config_snapshots WHERE id = ?", (snapshot_id,))
         row = await cursor.fetchone()
         return row_to_dict(row)
     finally:
@@ -1207,9 +1251,7 @@ async def get_config_snapshots_by_ids(snapshot_ids: list[int]) -> list[dict]:
         await db.close()
 
 
-async def get_config_snapshots_for_host(
-    host_id: int, limit: int = 50
-) -> list[dict]:
+async def get_config_snapshots_for_host(host_id: int, limit: int = 50) -> list[dict]:
     """Return config snapshots for a host, newest first."""
     db = await _dbcore.get_db()
     try:
@@ -1246,9 +1288,7 @@ async def delete_config_snapshot(snapshot_id: int) -> None:
     """Delete a config snapshot."""
     db = await _dbcore.get_db()
     try:
-        await db.execute(
-            "DELETE FROM config_snapshots WHERE id = ?", (snapshot_id,)
-        )
+        await db.execute("DELETE FROM config_snapshots WHERE id = ?", (snapshot_id,))
         await db.commit()
     finally:
         await db.close()
@@ -1287,8 +1327,7 @@ async def create_config_drift_event(
                (host_id, snapshot_id, baseline_id, diff_text,
                 diff_lines_added, diff_lines_removed, detected_at)
                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (host_id, snapshot_id, baseline_id, diff_text,
-             diff_lines_added, diff_lines_removed),
+            (host_id, snapshot_id, baseline_id, diff_text, diff_lines_added, diff_lines_removed),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1417,30 +1456,22 @@ async def get_config_drift_summary() -> dict:
     db = await _dbcore.get_db()
     try:
         # Count hosts with baselines
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM config_baselines"
-        )
+        cursor = await db.execute("SELECT COUNT(*) FROM config_baselines")
         row = await cursor.fetchone()
         total_baselined = row[0] if row else 0
 
         # Count hosts with open drift events
-        cursor = await db.execute(
-            "SELECT COUNT(DISTINCT host_id) FROM config_drift_events WHERE status = 'open'"
-        )
+        cursor = await db.execute("SELECT COUNT(DISTINCT host_id) FROM config_drift_events WHERE status = 'open'")
         row = await cursor.fetchone()
         drifted = row[0] if row else 0
 
         # Count open events
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM config_drift_events WHERE status = 'open'"
-        )
+        cursor = await db.execute("SELECT COUNT(*) FROM config_drift_events WHERE status = 'open'")
         row = await cursor.fetchone()
         open_events = row[0] if row else 0
 
         # Count accepted events
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM config_drift_events WHERE status = 'accepted'"
-        )
+        cursor = await db.execute("SELECT COUNT(*) FROM config_drift_events WHERE status = 'accepted'")
         row = await cursor.fetchone()
         accepted_events = row[0] if row else 0
 
@@ -1455,9 +1486,7 @@ async def get_config_drift_summary() -> dict:
         await db.close()
 
 
-async def update_config_drift_event_status(
-    event_id: int, status: str, resolved_by: str = ""
-) -> None:
+async def update_config_drift_event_status(event_id: int, status: str, resolved_by: str = "") -> None:
     """Update drift event status (open/resolved/accepted)."""
     db = await _dbcore.get_db()
     try:
@@ -1706,9 +1735,7 @@ def _compile_config_backup_regex(pattern: str) -> re.Pattern:
 _CONFIG_BACKUP_REGEX_MIN_LITERAL = 3
 
 # Escaped alphanumerics are class shorthands / anchors / backrefs, never literals.
-_REGEX_NON_LITERAL_ESCAPES = frozenset(
-    "dDwWsSbBAZ0123456789nrtvfaux"
-)
+_REGEX_NON_LITERAL_ESCAPES = frozenset("dDwWsSbBAZ0123456789nrtvfaux")
 
 
 def _regex_required_literal(pattern: str) -> str:
@@ -1849,7 +1876,7 @@ def _extract_config_backup_match_context(
     end = min(len(lines), match_idx + radius + 1)
     before_lines = lines[start:match_idx]
     match_line = lines[match_idx]
-    after_lines = lines[match_idx + 1:end]
+    after_lines = lines[match_idx + 1 : end]
     context_text = "\n".join(before_lines + [match_line] + after_lines)
     return {
         "line_number": match_idx + 1,
@@ -2469,8 +2496,17 @@ async def create_compliance_scan_result(
                (assignment_id, profile_id, host_id, status, total_rules, passed_rules,
                 failed_rules, findings, config_snippet, scanned_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (assignment_id, profile_id, host_id, status, total_rules, passed_rules,
-             failed_rules, findings, config_snippet),
+            (
+                assignment_id,
+                profile_id,
+                host_id,
+                status,
+                total_rules,
+                passed_rules,
+                failed_rules,
+                findings,
+                config_snippet,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -2653,9 +2689,21 @@ async def create_risk_analysis(
                 proposed_commands, proposed_diff, current_config, simulated_config,
                 analysis, compliance_impact, affected_areas, created_by, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (change_type, host_id, group_id, risk_level, risk_score,
-             proposed_commands, proposed_diff, current_config, simulated_config,
-             analysis, compliance_impact, affected_areas, created_by),
+            (
+                change_type,
+                host_id,
+                group_id,
+                risk_level,
+                risk_score,
+                proposed_commands,
+                proposed_diff,
+                current_config,
+                simulated_config,
+                analysis,
+                compliance_impact,
+                affected_areas,
+                created_by,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -2798,9 +2846,18 @@ async def create_deployment(
                 proposed_commands, template_id, risk_analysis_id, host_ids,
                 created_by, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (name, description, group_id, credential_id, change_type,
-             proposed_commands, template_id, risk_analysis_id, host_ids,
-             created_by),
+            (
+                name,
+                description,
+                group_id,
+                credential_id,
+                change_type,
+                proposed_commands,
+                template_id,
+                risk_analysis_id,
+                host_ids,
+                created_by,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -2877,7 +2934,8 @@ async def claim_deployment_for_execute(deployment_id: int) -> bool:
 
 
 async def update_deployment_status(
-    deployment_id: int, status: str,
+    deployment_id: int,
+    status: str,
     rollback_status: str | None = None,
 ) -> None:
     db = await _dbcore.get_db()
@@ -2892,7 +2950,7 @@ async def update_deployment_status(
                 "UPDATE deployments SET status = ? WHERE id = ?",
                 (status, deployment_id),
             )
-        if status in ("executing",) :
+        if status in ("executing",):
             await db.execute(
                 "UPDATE deployments SET started_at = datetime('now') WHERE id = ? AND started_at IS NULL",
                 (deployment_id,),
@@ -2928,7 +2986,9 @@ async def get_deployment_summary() -> dict:
         cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'completed'")
         completed = (await cursor.fetchone())[0]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status IN ('executing', 'pre-check', 'post-check')")
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM deployments WHERE status IN ('executing', 'pre-check', 'post-check')"
+        )
         active = (await cursor.fetchone())[0]
 
         cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'rolled-back'")
@@ -2977,7 +3037,9 @@ async def create_deployment_checkpoint(
 
 
 async def update_deployment_checkpoint(
-    checkpoint_id: int, status: str, result: str = "{}",
+    checkpoint_id: int,
+    status: str,
+    result: str = "{}",
 ) -> None:
     db = await _dbcore.get_db()
     try:
@@ -3032,7 +3094,8 @@ async def create_deployment_snapshot(
 
 
 async def get_deployment_snapshots(
-    deployment_id: int, phase: str | None = None,
+    deployment_id: int,
+    phase: str | None = None,
 ) -> list[dict]:
     db = await _dbcore.get_db()
     try:
@@ -3057,5 +3120,3 @@ async def get_deployment_snapshots(
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
-
-

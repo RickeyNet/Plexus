@@ -226,7 +226,7 @@ _INSERT_ID_TABLES = {
 # ── SQL safety helpers ────────────────────────────────────────────────────────
 
 # Only allow simple column identifiers in dynamic SQL (letters, digits, underscore).
-_SAFE_COLUMN_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+_SAFE_COLUMN_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 def _minute_bucket_expr(column: str, bucket_minutes: int) -> str:
@@ -267,7 +267,9 @@ def _minutes_between_expr(later: str, earlier: str) -> str:
     return f"((julianday({later}) - julianday({earlier})) * 1440)"
 
 
-def _safe_dynamic_update(table: str, field_exprs: list[str], values: list, where_clause: str, where_val) -> tuple[str, tuple]:
+def _safe_dynamic_update(
+    table: str, field_exprs: list[str], values: list, where_clause: str, where_val
+) -> tuple[str, tuple]:
     """Build a parameterized UPDATE statement from validated field expressions.
 
     Each field_expr must be of the form 'column_name = ?' and column_name
@@ -276,7 +278,7 @@ def _safe_dynamic_update(table: str, field_exprs: list[str], values: list, where
     a future caller passes user-controlled field names).
     """
     for expr in field_exprs:
-        col = expr.split('=', 1)[0].strip()
+        col = expr.split("=", 1)[0].strip()
         if not _SAFE_COLUMN_RE.match(col):
             raise ValueError(f"Unsafe column name in dynamic UPDATE: {col!r}")
     all_values = list(values) + [where_val]
@@ -2354,12 +2356,12 @@ def _convert_qmark_to_dollar_params(query: str) -> str:
 # Anything outside these shapes will fall through unchanged and surface as a
 # postgres syntax error - flagging unhandled patterns is preferable to silently
 # producing wrong SQL.
-_SQLITE_DT_BASE = r"(?:'now'|[\w.]+)"   # 'now' or an unquoted column reference
-_SQLITE_DT_LITERAL_MOD = r"'([+-]?\d+\s+\w+)'"          # '-7 days'
-_SQLITE_DT_PARAM_ONLY = r"\$(\d+)"                       # $1 (whole modifier)
+_SQLITE_DT_BASE = r"(?:'now'|[\w.]+)"  # 'now' or an unquoted column reference
+_SQLITE_DT_LITERAL_MOD = r"'([+-]?\d+\s+\w+)'"  # '-7 days'
+_SQLITE_DT_PARAM_ONLY = r"\$(\d+)"  # $1 (whole modifier)
 _SQLITE_DT_SIGN_PARAM_UNIT = r"'([+-])'\s*\|\|\s*\$(\d+)\s*\|\|\s*'\s+(\w+)'"  # '-' || $1 || ' days'
-_SQLITE_DT_PARAM_UNIT = r"\$(\d+)\s*\|\|\s*'\s+(\w+)'"   # $1 || ' hours'  (sign embedded in value)
-_SQLITE_DT_COL_UNIT = r"'([+-])'\s*\|\|\s*([\w.]+)\s*\|\|\s*'\s+(\w+)'"        # '+' || col || ' seconds'
+_SQLITE_DT_PARAM_UNIT = r"\$(\d+)\s*\|\|\s*'\s+(\w+)'"  # $1 || ' hours'  (sign embedded in value)
+_SQLITE_DT_COL_UNIT = r"'([+-])'\s*\|\|\s*([\w.]+)\s*\|\|\s*'\s+(\w+)'"  # '+' || col || ' seconds'
 
 _DT_RE_LITERAL = re.compile(
     rf"datetime\(\s*({_SQLITE_DT_BASE})\s*,\s*{_SQLITE_DT_LITERAL_MOD}\s*\)",
@@ -2403,6 +2405,7 @@ def _convert_sqlite_datetime_modifiers_to_postgres(query: str) -> str:
         sign, col, unit = m.group(2), m.group(3), m.group(4)
         op = "+" if sign == "+" else "-"
         return f"({base} {op} ({col} || ' {unit}')::interval)::text"
+
     query = _DT_RE_COL_UNIT.sub(_col_unit, query)
 
     def _sign_param_unit(m: re.Match) -> str:
@@ -2411,24 +2414,28 @@ def _convert_sqlite_datetime_modifiers_to_postgres(query: str) -> str:
         op = "+" if sign == "+" else "-"
         # Cast $N to text - caller may pass an int, but `||` requires text.
         return f"({base} {op} (${n}::text || ' {unit}')::interval)::text"
+
     query = _DT_RE_SIGN_PARAM_UNIT.sub(_sign_param_unit, query)
 
     def _param_unit(m: re.Match) -> str:
         base = _pg_base(m.group(1))
         n, unit = m.group(2), m.group(3)
         return f"({base} + (${n}::text || ' {unit}')::interval)::text"
+
     query = _DT_RE_PARAM_UNIT.sub(_param_unit, query)
 
     def _literal(m: re.Match) -> str:
         base = _pg_base(m.group(1))
         modifier = m.group(2).strip()
         return f"({base} + INTERVAL '{modifier}')::text"
+
     query = _DT_RE_LITERAL.sub(_literal, query)
 
     def _param_only(m: re.Match) -> str:
         base = _pg_base(m.group(1))
         n = m.group(2)
         return f"({base} + (${n}::text)::interval)::text"
+
     query = _DT_RE_PARAM_ONLY.sub(_param_only, query)
 
     return query
@@ -2501,8 +2508,7 @@ class _PostgresCursorCompat:
         # empty list when no rows were returned so callers don't AttributeError.
         if not self._rows:
             return []
-        return [(name, None, None, None, None, None, None)
-                for name in self._rows[0].keys()]
+        return [(name, None, None, None, None, None, None) for name in self._rows[0].keys()]
 
     async def fetchone(self):
         if self._idx >= len(self._rows):
@@ -2579,8 +2585,7 @@ class _PostgresConnectionCompat:
         converted = _convert_qmark_to_dollar_params(query)
 
         if query_upper.startswith("SELECT") or query_upper.startswith("WITH"):
-            rows = await self._run_statement(
-                lambda: self._conn.fetch(converted, *params))
+            rows = await self._run_statement(lambda: self._conn.fetch(converted, *params))
             return _PostgresCursorCompat(rows=rows, rowcount=len(rows))
 
         await self._ensure_tx()
@@ -2599,15 +2604,13 @@ class _PostgresConnectionCompat:
             # lastrowid emulation — must run through fetch(), otherwise asyncpg's
             # execute() discards the rows and callers doing fetchone()/lastrowid
             # get None and crash.
-            rows = await self._run_statement(
-                lambda: self._conn.fetch(converted, *params))
+            rows = await self._run_statement(lambda: self._conn.fetch(converted, *params))
             lastrowid = None
             if rows and "id" in rows[0].keys():
                 lastrowid = rows[0]["id"]
             return _PostgresCursorCompat(rows=rows, lastrowid=lastrowid, rowcount=len(rows))
 
-        status = await self._run_statement(
-            lambda: self._conn.execute(converted, *params))
+        status = await self._run_statement(lambda: self._conn.execute(converted, *params))
         return _PostgresCursorCompat(rowcount=_parse_rowcount(status))
 
     async def executescript(self, script: str):
@@ -2619,8 +2622,7 @@ class _PostgresConnectionCompat:
         converted = _convert_qmark_to_dollar_params(query)
         cleaned = [_strip_nuls_from_params(tuple(row)) for row in params]
         await self._ensure_tx()
-        await self._run_statement(
-            lambda: self._conn.executemany(converted, cleaned))
+        await self._run_statement(lambda: self._conn.executemany(converted, cleaned))
         return _PostgresCursorCompat(rowcount=len(cleaned))
 
     async def commit(self):
@@ -2671,10 +2673,10 @@ class _PostgresConnectionCompat:
 # connection is never closed during normal operation.
 
 _sqlite_conn = None
-_sqlite_conn_path = None                # DB_PATH the singleton is bound to
-_sqlite_conn_loop = None                # event loop the singleton was built on
-_sqlite_conn_lock = asyncio.Lock()      # guards lazy creation of _sqlite_conn
-_sqlite_access_lock = asyncio.Lock()    # serializes each critical section
+_sqlite_conn_path = None  # DB_PATH the singleton is bound to
+_sqlite_conn_loop = None  # event loop the singleton was built on
+_sqlite_conn_lock = asyncio.Lock()  # guards lazy creation of _sqlite_conn
+_sqlite_access_lock = asyncio.Lock()  # serializes each critical section
 _pg_pool = None
 _pg_pool_lock = asyncio.Lock()
 
@@ -2686,8 +2688,8 @@ _pg_pool_lock = asyncio.Lock()
 # the writer. Same (DB_PATH, loop) binding rules as the singleton; the pool
 # is torn down and rebuilt when either changes (tests), and released
 # connections from a stale generation are stopped instead of re-pooled.
-_sqlite_read_pool: list = []            # idle read connections
-_sqlite_read_pool_key: tuple | None = None   # (DB_PATH, loop) the pool is bound to
+_sqlite_read_pool: list = []  # idle read connections
+_sqlite_read_pool_key: tuple | None = None  # (DB_PATH, loop) the pool is bound to
 _sqlite_read_sem: asyncio.Semaphore | None = None
 _sqlite_read_rebuild_lock = asyncio.Lock()
 
@@ -2802,12 +2804,10 @@ async def _get_sqlite_singleton():
     # connection so each test/loop gets an isolated, live database.
     global _sqlite_conn, _sqlite_conn_path, _sqlite_conn_loop
     running = asyncio.get_running_loop()
-    if (_sqlite_conn is not None and _sqlite_conn_path == DB_PATH
-            and _sqlite_conn_loop is running):
+    if _sqlite_conn is not None and _sqlite_conn_path == DB_PATH and _sqlite_conn_loop is running:
         return _sqlite_conn
     async with _sqlite_conn_lock:
-        if (_sqlite_conn is not None and _sqlite_conn_path == DB_PATH
-                and _sqlite_conn_loop is running):
+        if _sqlite_conn is not None and _sqlite_conn_path == DB_PATH and _sqlite_conn_loop is running:
             return _sqlite_conn
         if _sqlite_conn is not None:
             # Only the owning loop can await close() (it schedules onto that
@@ -2879,9 +2879,7 @@ async def _get_pg_pool():
     async with _pg_pool_lock:
         if _pg_pool is not None:
             return _pg_pool
-        _pg_pool = await asyncpg.create_pool(
-            APP_DATABASE_URL, min_size=1, max_size=10
-        )
+        _pg_pool = await asyncpg.create_pool(APP_DATABASE_URL, min_size=1, max_size=10)
         return _pg_pool
 
 
@@ -2954,14 +2952,12 @@ async def get_db(*, read_only: bool = False):
         pool = await _get_pg_pool()
         raw = await pool.acquire()
         conn = _PostgresConnectionCompat(raw)
-        _held.set({"conn": conn, "depth": 1, "engine": "postgres",
-                   "pool": pool, "raw": raw})
+        _held.set({"conn": conn, "depth": 1, "engine": "postgres", "pool": pool, "raw": raw})
         return _ConnProxy(conn)
 
     if read_only and SQLITE_READ_POOL_SIZE > 0:
         conn, sem, pool_key = await _acquire_sqlite_read_conn()
-        _held.set({"conn": conn, "depth": 1, "engine": "sqlite",
-                   "readonly": True, "sem": sem, "pool_key": pool_key})
+        _held.set({"conn": conn, "depth": 1, "engine": "sqlite", "readonly": True, "sem": sem, "pool_key": pool_key})
         return _ConnProxy(conn)
 
     # SQLite write (or read with the pool disabled): acquire the exclusive
@@ -2987,9 +2983,7 @@ async def _release_db():
         # roll it back before the connection returns to the pool.
         try:
             if state["conn"]._tx is not None:
-                _LOGGER.warning(
-                    "get_db(): pg section released with an uncommitted transaction; rolling back"
-                )
+                _LOGGER.warning("get_db(): pg section released with an uncommitted transaction; rolling back")
                 await state["conn"].rollback()
         except Exception as exc:
             _LOGGER.warning("get_db(): pg rollback of abandoned transaction failed: %s", exc)
@@ -3006,9 +3000,7 @@ async def _release_db():
         # before handing the lock over.
         try:
             if getattr(state["conn"], "in_transaction", False):
-                _LOGGER.warning(
-                    "get_db(): section released with an uncommitted transaction; rolling back"
-                )
+                _LOGGER.warning("get_db(): section released with an uncommitted transaction; rolling back")
                 await state["conn"].rollback()
         except Exception as exc:
             _LOGGER.warning("get_db(): rollback of abandoned transaction failed: %s", exc)
@@ -3053,6 +3045,7 @@ async def init_db():
 
 # ── Helper: row → dict ──────────────────────────────────────────────────────
 
+
 def row_to_dict(row) -> dict:
     if row is None:
         return None
@@ -3061,8 +3054,6 @@ def row_to_dict(row) -> dict:
 
 def rows_to_list(rows) -> list[dict]:
     return [dict(r) for r in rows]
-
-
 
 
 # ═════════════════════════════════════════════════════════════════════════════

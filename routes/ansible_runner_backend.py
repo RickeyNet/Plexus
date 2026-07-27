@@ -23,27 +23,27 @@ _LOGGER = logging.getLogger("plexus.ansible")
 
 # Maps Netmiko device_type values to Ansible ansible_network_os values
 _DEVICE_TYPE_MAP = {
-    "cisco_ios":        "cisco.ios.ios",
-    "cisco_xe":         "cisco.ios.ios",
-    "cisco_nxos":       "cisco.nxos.nxos",
-    "cisco_nxos_ssh":   "cisco.nxos.nxos",
-    "cisco_asa":        "cisco.asa.asa",
+    "cisco_ios": "cisco.ios.ios",
+    "cisco_xe": "cisco.ios.ios",
+    "cisco_nxos": "cisco.nxos.nxos",
+    "cisco_nxos_ssh": "cisco.nxos.nxos",
+    "cisco_asa": "cisco.asa.asa",
     # FTD's LINA CLI is ASA-shaped - the cisco.asa.asa collection
     # speaks the right show/configure dialect for FMC-managed and
     # FDM-managed FTDs alike.  Native FTD collections exist but
     # target FMC, not the device itself.
-    "cisco_ftd":        "cisco.asa.asa",
-    "cisco_xr":         "cisco.iosxr.iosxr",
-    "arista_eos":       "arista.eos.eos",
-    "juniper_junos":    "junipernetworks.junos.junos",
-    "paloalto_panos":   "paloaltonetworks.panos.panos",
-    "linux":            "linux",
-    "linux_ssh":        "linux",
-    "vyos":             "vyos.vyos.vyos",
-    "fortinet":         "fortinet.fortios.fortios",
-    "hp_comware":       "community.network.comware",
-    "hp_procurve":      "community.network.procurve",
-    "dell_os10":        "dellemc.os10.os10",
+    "cisco_ftd": "cisco.asa.asa",
+    "cisco_xr": "cisco.iosxr.iosxr",
+    "arista_eos": "arista.eos.eos",
+    "juniper_junos": "junipernetworks.junos.junos",
+    "paloalto_panos": "paloaltonetworks.panos.panos",
+    "linux": "linux",
+    "linux_ssh": "linux",
+    "vyos": "vyos.vyos.vyos",
+    "fortinet": "fortinet.fortios.fortios",
+    "hp_comware": "community.network.comware",
+    "hp_procurve": "community.network.procurve",
+    "dell_os10": "dellemc.os10.os10",
 }
 
 
@@ -60,6 +60,7 @@ def _ansible_connection(device_type: str) -> str:
 
 
 # ── Inventory generation ─────────────────────────────────────────────────────
+
 
 def build_inventory(
     hosts: list[dict],
@@ -108,6 +109,7 @@ def build_inventory(
 
 
 # ── Event translation ────────────────────────────────────────────────────────
+
 
 def _translate_event(event: dict) -> LogEvent | None:
     """Translate an ansible-runner event dict into a Plexus LogEvent."""
@@ -214,6 +216,7 @@ def _extract_stats(events: list[dict]) -> tuple[int, int, int, int]:
 
 # ── Main executor ────────────────────────────────────────────────────────────
 
+
 async def execute_ansible_playbook(
     playbook_content: str,
     hosts: list[dict],
@@ -275,11 +278,13 @@ async def execute_ansible_playbook(
 
         # Emit start event
         if event_callback:
-            await event_callback(LogEvent(
-                level="info",
-                message=f"Launching Ansible playbook ({len(hosts)} host(s), "
-                        f"group={group_name}, check_mode={dry_run})",
-            ))
+            await event_callback(
+                LogEvent(
+                    level="info",
+                    message=f"Launching Ansible playbook ({len(hosts)} host(s), "
+                    f"group={group_name}, check_mode={dry_run})",
+                )
+            )
 
         # Run ansible-runner in a thread to not block the event loop
         runner = await asyncio.to_thread(
@@ -306,16 +311,19 @@ async def execute_ansible_playbook(
         # Emit summary
         status = "failed" if runner.status == "failed" or failed > 0 else "success"
         if event_callback:
-            await event_callback(LogEvent(
-                level="sep",
-                message="=" * 60,
-            ))
+            await event_callback(
+                LogEvent(
+                    level="sep",
+                    message="=" * 60,
+                )
+            )
             summary_level = "success" if status == "success" else "error"
-            await event_callback(LogEvent(
-                level=summary_level,
-                message=f"Playbook finished: {runner.status} "
-                        f"(ok={ok} failed={failed} skipped={skipped})",
-            ))
+            await event_callback(
+                LogEvent(
+                    level=summary_level,
+                    message=f"Playbook finished: {runner.status} (ok={ok} failed={failed} skipped={skipped})",
+                )
+            )
 
         return PlaybookResult(
             status=status,
@@ -327,10 +335,12 @@ async def execute_ansible_playbook(
     except Exception as e:
         _LOGGER.error("Ansible playbook execution error: %s", e, exc_info=True)
         if event_callback:
-            await event_callback(LogEvent(
-                level="error",
-                message=f"Ansible execution failed: {e}",
-            ))
+            await event_callback(
+                LogEvent(
+                    level="error",
+                    message=f"Ansible execution failed: {e}",
+                )
+            )
         return PlaybookResult(status="failed", hosts_ok=0, hosts_failed=len(hosts), hosts_skipped=0)
 
     finally:

@@ -30,16 +30,12 @@ async def _column_exists_sqlite(db) -> bool:
 async def _up_sqlite(db) -> None:
     if await _column_exists_sqlite(db):
         return
-    await db.execute(
-        "ALTER TABLE federation_peers ADD COLUMN tls_verify INTEGER NOT NULL DEFAULT 1"
-    )
+    await db.execute("ALTER TABLE federation_peers ADD COLUMN tls_verify INTEGER NOT NULL DEFAULT 1")
     await db.commit()
 
 
 async def _up_postgres(db) -> None:
-    await db.execute(
-        "ALTER TABLE federation_peers ADD COLUMN IF NOT EXISTS tls_verify INTEGER NOT NULL DEFAULT 1"
-    )
+    await db.execute("ALTER TABLE federation_peers ADD COLUMN IF NOT EXISTS tls_verify INTEGER NOT NULL DEFAULT 1")
     await db.commit()
 
 

@@ -17,7 +17,6 @@ DESCRIPTION = "Add flow_records(flow_type, received_at) index"
 async def up(db) -> None:
     # Identical SQL on SQLite and Postgres.
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_flow_records_flow_type_received "
-        "ON flow_records(flow_type, received_at)"
+        "CREATE INDEX IF NOT EXISTS idx_flow_records_flow_type_received ON flow_records(flow_type, received_at)"
     )
     await db.commit()

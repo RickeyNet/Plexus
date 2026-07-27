@@ -171,9 +171,7 @@ class FdmClient:
             # we have no usable refresh token or the refresh itself fails.
             if self._refresh_token and now < self._refresh_expiry - _TOKEN_EXPIRY_SKEW_SECONDS:
                 try:
-                    await self._token_request(
-                        {"grant_type": "refresh_token", "refresh_token": self._refresh_token}
-                    )
+                    await self._token_request({"grant_type": "refresh_token", "refresh_token": self._refresh_token})
                     return self._access_token  # type: ignore[return-value]
                 except FdmApiError:
                     pass  # refresh token dead too - re-auth below
@@ -213,18 +211,14 @@ class FdmClient:
         client = self._ensure_client()
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         try:
-            resp = await client.request(
-                method, path.lstrip("/"), params=params, json=json_body, headers=headers
-            )
+            resp = await client.request(method, path.lstrip("/"), params=params, json=json_body, headers=headers)
         except httpx.HTTPError as exc:
             raise FdmApiError(f"FDM {method} {path} failed: {exc}") from exc
 
         if resp.status_code == 401 and _retry_on_auth:
             async with self._token_lock:
                 self._invalidate_token()
-            return await self.request(
-                method, path, params=params, json_body=json_body, _retry_on_auth=False
-            )
+            return await self.request(method, path, params=params, json_body=json_body, _retry_on_auth=False)
 
         if resp.status_code >= 400:
             raise FdmApiError(
@@ -261,17 +255,11 @@ class FdmClient:
     async def get_disk_usage(self) -> dict[str, Any]:
         return await self.get("operational/diskusage/default")
 
-    async def get_trending_report(
-        self, report: str, *, duration_minutes: int = 60
-    ) -> dict[str, Any]:
+    async def get_trending_report(self, report: str, *, duration_minutes: int = 60) -> dict[str, Any]:
         """Time-series trend for ``cpu``/``memory``/``eps``/``throughput``."""
         if report not in _TRENDING_REPORTS:
-            raise ValueError(
-                f"unknown trending report {report!r}; expected one of {_TRENDING_REPORTS}"
-            )
-        return await self.get(
-            f"monitor/trendingreports/{report}", params={"time_duration": duration_minutes}
-        )
+            raise ValueError(f"unknown trending report {report!r}; expected one of {_TRENDING_REPORTS}")
+        return await self.get(f"monitor/trendingreports/{report}", params={"time_duration": duration_minutes})
 
     # ── Teardown ───────────────────────────────────────────────────────────
 

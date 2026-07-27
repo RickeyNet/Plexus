@@ -7,6 +7,7 @@ Provides API endpoints for:
   - Error spike events with root-cause correlation details
   - Event acknowledgement and resolution
 """
+
 from __future__ import annotations
 
 import json
@@ -44,7 +45,7 @@ async def interface_error_summary(
         labels_str = row.get("labels_json", "{}")
         try:
             labels = json.loads(labels_str)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             labels = {}
         if_key = f"{labels.get('if_index', '?')}:{labels.get('if_name', '?')}"
         if if_key not in interfaces:
@@ -82,7 +83,11 @@ async def interface_error_detail(
 ):
     """Detailed error/discard time-series for a single interface."""
     samples = await db.get_interface_error_trending(
-        host_id, if_index=if_index, start=start, end=end, limit=limit,
+        host_id,
+        if_index=if_index,
+        start=start,
+        end=end,
+        limit=limit,
     )
 
     # Separate by metric type for easy charting
@@ -99,10 +104,12 @@ async def interface_error_detail(
     for s in samples:
         metric = s.get("metric_name", "")
         if metric in series:
-            series[metric].append({
-                "value": s.get("value"),
-                "sampled_at": s.get("sampled_at"),
-            })
+            series[metric].append(
+                {
+                    "value": s.get("value"),
+                    "sampled_at": s.get("sampled_at"),
+                }
+            )
 
     # Fetch error events for this interface
     events = await db.get_interface_error_events(host_id=host_id, limit=50)
@@ -126,8 +133,10 @@ async def list_error_events(
 ):
     """List interface error spike events across all devices."""
     return await db.get_interface_error_events(
-        host_id=host_id, severity=severity,
-        unresolved_only=unresolved_only, limit=limit,
+        host_id=host_id,
+        severity=severity,
+        unresolved_only=unresolved_only,
+        limit=limit,
     )
 
 
@@ -141,7 +150,7 @@ async def get_error_event(event_id: int):
     # Parse correlation_details JSON for the response
     try:
         event["correlation_details"] = json.loads(event.get("correlation_details", "{}"))
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         event["correlation_details"] = {}
 
     return event
@@ -155,8 +164,13 @@ async def acknowledge_error_event(event_id: int, request: Request):
     success = await db.acknowledge_interface_error_event(event_id, user)
     if not success:
         raise HTTPException(status_code=404, detail="Event not found")
-    await _audit("interface_errors", "event.acknowledged", user=user,
-                 detail=f"event_id={event_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "interface_errors",
+        "event.acknowledged",
+        user=user,
+        detail=f"event_id={event_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -168,6 +182,7 @@ async def resolve_error_event(event_id: int, request: Request):
     success = await db.resolve_interface_error_event(event_id)
     if not success:
         raise HTTPException(status_code=404, detail="Event not found")
-    await _audit("interface_errors", "event.resolved", user=user,
-                 detail=f"event_id={event_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "interface_errors", "event.resolved", user=user, detail=f"event_id={event_id}", correlation_id=_corr_id(request)
+    )
     return {"ok": True}

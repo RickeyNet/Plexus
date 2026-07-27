@@ -25,6 +25,7 @@ async def _geo_audit(request: Request, action: str, detail: str) -> None:
     user = session.get("user", "") if session else ""
     await _audit("geolocation", action, user=user, detail=detail, correlation_id=_corr_id(request))
 
+
 # ── Floor plan image storage ─────────────────────────────────────────────────
 # Images are stored in a directory outside the web-served static tree and
 # served via the /api/geo/floors/{id}/image endpoint to prevent path traversal.
@@ -40,6 +41,7 @@ _MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
+
 
 class GeoSiteCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
@@ -74,12 +76,14 @@ class GeoPlacementUpsert(BaseModel):
 
 # ── Overview ──────────────────────────────────────────────────────────────────
 
+
 @router.get("/api/geo/overview")
 async def geo_overview_api():
     return await db.get_geo_overview()
 
 
 # ── Sites ─────────────────────────────────────────────────────────────────────
+
 
 @router.get("/api/geo/sites")
 async def list_geo_sites_api():
@@ -144,6 +148,7 @@ async def delete_geo_site_api(site_id: int, request: Request):
 
 # ── Floors ────────────────────────────────────────────────────────────────────
 
+
 @router.post("/api/geo/sites/{site_id}/floors", status_code=201)
 async def create_geo_floor_api(site_id: int, body: GeoFloorCreate, request: Request):
     site = await db.get_geo_site(site_id)
@@ -195,6 +200,7 @@ async def delete_geo_floor_api(floor_id: int, request: Request):
 
 
 # ── Floor plan image upload / download ───────────────────────────────────────
+
 
 def _floor_image_path(filename: str) -> str:
     """Return the safe absolute path for a floor plan image filename."""
@@ -315,6 +321,7 @@ async def get_floor_image_api(floor_id: int):
 
 # ── Device placements ─────────────────────────────────────────────────────────
 
+
 @router.get("/api/geo/floors/{floor_id}/placements")
 async def get_floor_placements_api(floor_id: int):
     floor = await db.get_geo_floor(floor_id)
@@ -337,8 +344,11 @@ async def upsert_floor_placement_api(
     if not host:
         raise HTTPException(404, "Host not found")
     placement = await db.upsert_geo_placement(floor_id, host_id, body.x_pct, body.y_pct)
-    await _geo_audit(request, "geo_placement_upsert",
-                 f"Placed host id={host_id} on floor id={floor_id} at ({body.x_pct:.3f}, {body.y_pct:.3f})")
+    await _geo_audit(
+        request,
+        "geo_placement_upsert",
+        f"Placed host id={host_id} on floor id={floor_id} at ({body.x_pct:.3f}, {body.y_pct:.3f})",
+    )
     return placement
 
 
@@ -347,6 +357,5 @@ async def delete_floor_placement_api(floor_id: int, host_id: int, request: Reque
     removed = await db.delete_geo_placement(floor_id, host_id)
     if not removed:
         raise HTTPException(404, "Placement not found")
-    await _geo_audit(request, "geo_placement_delete",
-                 f"Removed host id={host_id} from floor id={floor_id}")
+    await _geo_audit(request, "geo_placement_delete", f"Removed host id={host_id} from floor id={floor_id}")
     return {"ok": True}

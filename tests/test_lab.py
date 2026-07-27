@@ -45,6 +45,7 @@ def _auth_client(tmp_path, monkeypatch, request):
 
     # Disable rate limiting and clear any leftover counts from a previous test.
     from netcontrol.routes import state as _state
+
     _state.API_RATE_LIMIT["enabled"] = False
     _state.API_RATE_LIMIT_TRACKER.clear()
 
@@ -74,9 +75,7 @@ async def test_lab_tables_exist_after_init(tmp_path, monkeypatch):
     conn = await db_module.get_db()
     try:
         for tbl in ("lab_environments", "lab_devices", "lab_runs"):
-            cur = await conn.execute(
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tbl}'"
-            )
+            cur = await conn.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tbl}'")
             row = await cur.fetchone()
             assert row is not None, f"{tbl} table should exist"
     finally:
@@ -117,7 +116,8 @@ def test_device_create_and_simulate(tmp_path, monkeypatch, request):
     client = _auth_client(tmp_path, monkeypatch, request)
 
     env_id = client.post(
-        "/api/lab/environments", json={"name": "sim-env"},
+        "/api/lab/environments",
+        json={"name": "sim-env"},
     ).json()["id"]
 
     initial_config = "interface Gi0/1\n shutdown\n"
@@ -204,14 +204,15 @@ def test_clone_host_uses_latest_snapshot(tmp_path, monkeypatch, request):
     async def _seed():
         gid = await db_module.create_group(name="lab-src")
         hid = await db_module.add_host(
-            group_id=gid, hostname="prod-rtr", ip_address="10.1.1.1",
+            group_id=gid,
+            hostname="prod-rtr",
+            ip_address="10.1.1.1",
         )
         # Insert a config snapshot for that host.
         conn = await db_module.get_db()
         try:
             await conn.execute(
-                "INSERT INTO config_snapshots (host_id, capture_method, config_text) "
-                "VALUES (?, 'manual', ?)",
+                "INSERT INTO config_snapshots (host_id, capture_method, config_text) VALUES (?, 'manual', ?)",
                 (hid, "hostname prod-rtr\ninterface Gi0/0\n ip address 10.1.1.1 255.255.255.0\n"),
             )
             await conn.commit()
@@ -248,19 +249,21 @@ def test_promote_run_creates_deployment(tmp_path, monkeypatch, request):
     async def _seed():
         gid = await db_module.create_group(name="prod")
         hid = await db_module.add_host(
-            group_id=gid, hostname="prod-rtr-2", ip_address="10.2.2.1",
+            group_id=gid,
+            hostname="prod-rtr-2",
+            ip_address="10.2.2.1",
         )
         conn = await db_module.get_db()
         try:
             await conn.execute(
-                "INSERT INTO config_snapshots (host_id, capture_method, config_text) "
-                "VALUES (?, 'manual', ?)",
+                "INSERT INTO config_snapshots (host_id, capture_method, config_text) VALUES (?, 'manual', ?)",
                 (hid, "hostname prod-rtr-2\n"),
             )
             await conn.commit()
         finally:
             await conn.close()
         from routes.crypto import encrypt
+
         admin = await db_module.get_user_by_username("admin")
         cred_id = await db_module.create_credential(
             name="lab-cred",

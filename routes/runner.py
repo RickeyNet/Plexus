@@ -44,9 +44,10 @@ def list_registered_playbooks() -> list[dict]:
 
 # ── Data classes ─────────────────────────────────────────────────────────────
 
+
 @dataclass
 class LogEvent:
-    level: str          # info, success, error, warn, cmd, dim, sep
+    level: str  # info, success, error, warn, cmd, dim, sep
     message: str
     host: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -58,19 +59,20 @@ class LogEvent:
 @dataclass
 class HostResult:
     host: str
-    status: str         # ok, failed, skipped
+    status: str  # ok, failed, skipped
     message: str = ""
 
 
 @dataclass
 class PlaybookResult:
-    status: str         # success, failed
+    status: str  # success, failed
     hosts_ok: int = 0
     hosts_failed: int = 0
     hosts_skipped: int = 0
 
 
 # ── Base class ───────────────────────────────────────────────────────────────
+
 
 class BasePlaybook:
     """
@@ -124,9 +126,7 @@ class BasePlaybook:
     # wide APP_PLAYBOOK_HOST_CONCURRENCY setting is used.
     host_concurrency: int | None = None
 
-    def commands_for_host(
-        self, host: dict, template_commands: list[str] | None
-    ) -> list[str] | None:
+    def commands_for_host(self, host: dict, template_commands: list[str] | None) -> list[str] | None:
         """Return the template body to push to a single host.
 
         Prefers the vendor-specific body resolved into
@@ -178,9 +178,7 @@ class BasePlaybook:
         limit = max(1, configured)
 
         semaphore = asyncio.Semaphore(limit)
-        queue: asyncio.Queue[tuple[LogEvent | None, BaseException | None]] = (
-            asyncio.Queue()
-        )
+        queue: asyncio.Queue[tuple[LogEvent | None, BaseException | None]] = asyncio.Queue()
 
         async def run_one(host: dict) -> None:
             try:
@@ -229,6 +227,7 @@ class BasePlaybook:
 
 # ── Executor ─────────────────────────────────────────────────────────────────
 
+
 async def execute_playbook(
     playbook_cls: type,
     hosts: list[dict],
@@ -264,10 +263,7 @@ async def execute_playbook(
                 hosts_failed += 1
 
     except Exception as e:
-        error_event = LogEvent(
-            level="error",
-            message=f"Playbook execution failed: {e}\n{traceback.format_exc()}"
-        )
+        error_event = LogEvent(level="error", message=f"Playbook execution failed: {e}\n{traceback.format_exc()}")
         if event_callback:
             await event_callback(error_event)
         status = "failed"

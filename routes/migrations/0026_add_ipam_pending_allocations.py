@@ -41,12 +41,10 @@ async def _up_sqlite(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_pending_subnet_state "
-        "ON ipam_pending_allocations (subnet, state)"
+        "CREATE INDEX IF NOT EXISTS idx_ipam_pending_subnet_state ON ipam_pending_allocations (subnet, state)"
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_pending_vrf_address "
-        "ON ipam_pending_allocations (vrf_name, address, state)"
+        "CREATE INDEX IF NOT EXISTS idx_ipam_pending_vrf_address ON ipam_pending_allocations (vrf_name, address, state)"
     )
     await db.commit()
 
@@ -73,12 +71,10 @@ async def _up_postgres(db) -> None:
         """
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_pending_subnet_state "
-        "ON ipam_pending_allocations (subnet, state)"
+        "CREATE INDEX IF NOT EXISTS idx_ipam_pending_subnet_state ON ipam_pending_allocations (subnet, state)"
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ipam_pending_vrf_address "
-        "ON ipam_pending_allocations (vrf_name, address, state)"
+        "CREATE INDEX IF NOT EXISTS idx_ipam_pending_vrf_address ON ipam_pending_allocations (vrf_name, address, state)"
     )
     await db.commit()
 

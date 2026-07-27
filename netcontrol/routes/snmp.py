@@ -5,6 +5,7 @@ Provides pysnmp helpers, SNMP get/walk, CDP address parsing,
 neighbor discovery, and vendor-OS inference used by inventory
 and topology route modules.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +42,7 @@ try:
         usmHMACSHAAuthProtocol,
         walk_cmd,
     )
+
     PYSMNP_AVAILABLE = True
 except Exception:
     CommunityData = None
@@ -223,6 +225,7 @@ async def _resolve_snmp_secrets(snmp_config: dict) -> dict:
     priv_pw = str(v3.get("priv_password", ""))
     try:
         from routes.secret_resolver import has_secret_references, resolve_secrets
+
         if not (has_secret_references(auth_pw) or has_secret_references(priv_pw)):
             return snmp_config
         resolved = await resolve_secrets([auth_pw, priv_pw])
@@ -249,11 +252,22 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     if not PYSMNP_AVAILABLE:
         raise RuntimeError("pysnmp library is not available")
     _required_imports = [
-        CommunityData, ContextData, ObjectIdentity, ObjectType,
-        SnmpEngine, UdpTransportTarget, UsmUserData, get_cmd,
-        usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol,
-        usmDESPrivProtocol, usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol,
-        usmHMAC192SHA256AuthProtocol, usmHMAC384SHA512AuthProtocol,
+        CommunityData,
+        ContextData,
+        ObjectIdentity,
+        ObjectType,
+        SnmpEngine,
+        UdpTransportTarget,
+        UsmUserData,
+        get_cmd,
+        usmAesCfb128Protocol,
+        usmAesCfb192Protocol,
+        usmAesCfb256Protocol,
+        usmDESPrivProtocol,
+        usmHMACMD5AuthProtocol,
+        usmHMACSHAAuthProtocol,
+        usmHMAC192SHA256AuthProtocol,
+        usmHMAC384SHA512AuthProtocol,
     ]
     if any(obj is None for obj in _required_imports):
         raise RuntimeError("pysnmp imported but one or more required symbols are None")
@@ -340,16 +354,22 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         if community:
             LOGGER.warning(
                 "SNMPv3 failed for %s (%s), falling back to v2c",
-                ip_address, v3_err,
+                ip_address,
+                v3_err,
             )
             v2_auth = CommunityData(community, mpModel=1)
             engine2 = SnmpEngine()
             try:
                 transport2 = await UdpTransportTarget.create(
-                    (ip_address, port), timeout=timeout, retries=retries,
+                    (ip_address, port),
+                    timeout=timeout,
+                    retries=retries,
                 )
                 error_indication, error_status, _error_index, var_binds = await get_cmd(
-                    engine2, v2_auth, transport2, ContextData(),
+                    engine2,
+                    v2_auth,
+                    transport2,
+                    ContextData(),
                     ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
                     ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
                     ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1
@@ -358,9 +378,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
                 if not error_indication and not error_status:
                     version = "2c-fallback"
                 else:
-                    raise RuntimeError(
-                        f"SNMPv3 failed for {ip_address}: {v3_err}"
-                    )
+                    raise RuntimeError(f"SNMPv3 failed for {ip_address}: {v3_err}")
             finally:
                 engine2.close_dispatcher()
         else:
@@ -431,8 +449,7 @@ async def _probe_discovery_target_snmp(ip_address: str, timeout_seconds: float, 
 IP_AD_ENT_ADDR_OID = "1.3.6.1.2.1.4.20.1.1"
 
 
-async def _collect_interface_ips(ip_address: str, timeout_seconds: float,
-                                 snmp_config: dict) -> list[str]:
+async def _collect_interface_ips(ip_address: str, timeout_seconds: float, snmp_config: dict) -> list[str]:
     """Walk the device's ipAddrTable and return its configured IPv4 interface
     IPs (loopback/link-local/multicast excluded).
 
@@ -444,7 +461,11 @@ async def _collect_interface_ips(ip_address: str, timeout_seconds: float,
         return []
     try:
         rows = await _snmp_walk(
-            ip_address, timeout_seconds, snmp_config, IP_AD_ENT_ADDR_OID, max_rows=512,
+            ip_address,
+            timeout_seconds,
+            snmp_config,
+            IP_AD_ENT_ADDR_OID,
+            max_rows=512,
         )
     except Exception as exc:
         LOGGER.debug("interface-IP walk failed for %s: %s", ip_address, exc)
@@ -497,18 +518,23 @@ def _build_snmp_auth(snmp_config: dict):
         if not username or not auth_password:
             return None
         auth_map = {
-            "md5": usmHMACMD5AuthProtocol, "sha": usmHMACSHAAuthProtocol,
-            "sha256": usmHMAC192SHA256AuthProtocol, "sha512": usmHMAC384SHA512AuthProtocol,
+            "md5": usmHMACMD5AuthProtocol,
+            "sha": usmHMACSHAAuthProtocol,
+            "sha256": usmHMAC192SHA256AuthProtocol,
+            "sha512": usmHMAC384SHA512AuthProtocol,
         }
         priv_map = {
-            "des": usmDESPrivProtocol, "aes128": usmAesCfb128Protocol,
-            "aes192": usmAesCfb192Protocol, "aes256": usmAesCfb256Protocol,
+            "des": usmDESPrivProtocol,
+            "aes128": usmAesCfb128Protocol,
+            "aes192": usmAesCfb192Protocol,
+            "aes256": usmAesCfb256Protocol,
         }
         auth_proto = auth_map.get(str(v3.get("auth_protocol", "sha")).lower(), usmHMACSHAAuthProtocol)
         priv_proto = priv_map.get(str(v3.get("priv_protocol", "aes128")).lower(), usmAesCfb128Protocol)
         if priv_password:
-            auth_data = UsmUserData(username, authKey=auth_password, privKey=priv_password,
-                                    authProtocol=auth_proto, privProtocol=priv_proto)
+            auth_data = UsmUserData(
+                username, authKey=auth_password, privKey=priv_password, authProtocol=auth_proto, privProtocol=priv_proto
+            )
         else:
             auth_data = UsmUserData(username, authKey=auth_password, authProtocol=auth_proto)
         # SNMPv3 engine discovery needs extra retries (see _snmp_get).
@@ -527,9 +553,14 @@ def _build_snmp_auth(snmp_config: dict):
 _SNMP_BULK_MAX_REPETITIONS = 25
 
 
-async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
-                     base_oid: str, max_rows: int = 500,
-                     return_errors: bool = False):
+async def _snmp_walk(
+    ip_address: str,
+    timeout_seconds: float,
+    snmp_config: dict,
+    base_oid: str,
+    max_rows: int = 500,
+    return_errors: bool = False,
+):
     """Walk an SNMP OID subtree and return {oid: value} dict.
 
     Default return is the bare dict (back-compat for many callers). When
@@ -565,14 +596,21 @@ async def _snmp_walk(ip_address: str, timeout_seconds: float, snmp_config: dict,
     # same (errInd, errStat, errIdx, varBinds) rows, so the loop is unchanged.
     if version == "1" or bulk_walk_cmd is None:
         walker = walk_cmd(
-            engine, auth_data, transport, context_data,
+            engine,
+            auth_data,
+            transport,
+            context_data,
             ObjectType(ObjectIdentity(base_oid)),
             lexicographicMode=False,
         )
     else:
         walker = bulk_walk_cmd(
-            engine, auth_data, transport, context_data,
-            0, _SNMP_BULK_MAX_REPETITIONS,
+            engine,
+            auth_data,
+            transport,
+            context_data,
+            0,
+            _SNMP_BULK_MAX_REPETITIONS,
             ObjectType(ObjectIdentity(base_oid)),
             lexicographicMode=False,
         )
@@ -634,14 +672,16 @@ def _parse_cdp_address(raw_value) -> str:
 # ── Neighbor Discovery ───────────────────────────────────────────────────────
 
 
-async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
-                              timeout_seconds: float = 5.0) -> tuple[list[dict], list[dict]]:
+async def _discover_neighbors(
+    host_id: int, ip_address: str, snmp_config: dict, timeout_seconds: float = 5.0
+) -> tuple[list[dict], list[dict]]:
     """Discover CDP/LLDP/OSPF/BGP neighbors and poll interface counters.
 
     Returns (neighbors_list, interface_stats_list).
     All independent SNMP walks run in parallel for speed.
     """
     neighbors: list[dict] = []
+
     def _walk(oid):
         return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid)
 
@@ -651,12 +691,12 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
     if_descr_oid = "1.3.6.1.2.1.2.2.1.2"
 
     # Interface counters
-    if_hc_in_oid = "1.3.6.1.2.1.31.1.1.1.6"          # ifHCInOctets (64-bit)
-    if_hc_out_oid = "1.3.6.1.2.1.31.1.1.1.10"        # ifHCOutOctets (64-bit)
-    if_in_octets_oid = "1.3.6.1.2.1.2.2.1.10"         # ifInOctets (32-bit fallback)
-    if_out_octets_oid = "1.3.6.1.2.1.2.2.1.16"        # ifOutOctets (32-bit fallback)
-    if_high_speed_oid = "1.3.6.1.2.1.31.1.1.1.15"     # ifHighSpeed (Mbps)
-    if_speed_oid = "1.3.6.1.2.1.2.2.1.5"              # ifSpeed (bps)
+    if_hc_in_oid = "1.3.6.1.2.1.31.1.1.1.6"  # ifHCInOctets (64-bit)
+    if_hc_out_oid = "1.3.6.1.2.1.31.1.1.1.10"  # ifHCOutOctets (64-bit)
+    if_in_octets_oid = "1.3.6.1.2.1.2.2.1.10"  # ifInOctets (32-bit fallback)
+    if_out_octets_oid = "1.3.6.1.2.1.2.2.1.16"  # ifOutOctets (32-bit fallback)
+    if_high_speed_oid = "1.3.6.1.2.1.31.1.1.1.15"  # ifHighSpeed (Mbps)
+    if_speed_oid = "1.3.6.1.2.1.2.2.1.5"  # ifSpeed (bps)
 
     # CDP OIDs
     cdp_device_id_base = "1.3.6.1.4.1.9.9.23.1.2.1.1.6"
@@ -682,28 +722,61 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
     LOGGER.info("topology: starting parallel SNMP walks for %s (%s)", ip_address, host_id)
 
     # Fire ALL walks in parallel - one round-trip instead of 17 sequential ones
-    (if_names, if_descr,
-     hc_in, hc_out, lo_in, lo_out, high_speed_raw, speed_raw,
-     cdp_device_ids, cdp_addresses, cdp_ports, cdp_platforms,
-     lldp_names, lldp_port_ids, lldp_port_descs, lldp_sys_descs, lldp_man_addrs,
-     ospf_rtr_ids, ospf_states,
-     bgp_states, bgp_remote_as,
+    (
+        if_names,
+        if_descr,
+        hc_in,
+        hc_out,
+        lo_in,
+        lo_out,
+        high_speed_raw,
+        speed_raw,
+        cdp_device_ids,
+        cdp_addresses,
+        cdp_ports,
+        cdp_platforms,
+        lldp_names,
+        lldp_port_ids,
+        lldp_port_descs,
+        lldp_sys_descs,
+        lldp_man_addrs,
+        ospf_rtr_ids,
+        ospf_states,
+        bgp_states,
+        bgp_remote_as,
     ) = await asyncio.gather(
-        _walk(if_name_oid), _walk(if_descr_oid),
-        _walk(if_hc_in_oid), _walk(if_hc_out_oid),
-        _walk(if_in_octets_oid), _walk(if_out_octets_oid),
-        _walk(if_high_speed_oid), _walk(if_speed_oid),
-        _walk(cdp_device_id_base), _walk(cdp_address_base),
-        _walk(cdp_port_base), _walk(cdp_platform_base),
-        _walk(lldp_sys_name_base), _walk(lldp_port_id_base),
-        _walk(lldp_port_desc_base), _walk(lldp_sys_desc_base), _walk(lldp_man_addr_base),
-        _walk(ospf_nbr_rtr_id_base), _walk(ospf_nbr_state_base),
-        _walk(bgp_peer_state_base), _walk(bgp_peer_remote_as_base),
+        _walk(if_name_oid),
+        _walk(if_descr_oid),
+        _walk(if_hc_in_oid),
+        _walk(if_hc_out_oid),
+        _walk(if_in_octets_oid),
+        _walk(if_out_octets_oid),
+        _walk(if_high_speed_oid),
+        _walk(if_speed_oid),
+        _walk(cdp_device_id_base),
+        _walk(cdp_address_base),
+        _walk(cdp_port_base),
+        _walk(cdp_platform_base),
+        _walk(lldp_sys_name_base),
+        _walk(lldp_port_id_base),
+        _walk(lldp_port_desc_base),
+        _walk(lldp_sys_desc_base),
+        _walk(lldp_man_addr_base),
+        _walk(ospf_nbr_rtr_id_base),
+        _walk(ospf_nbr_state_base),
+        _walk(bgp_peer_state_base),
+        _walk(bgp_peer_remote_as_base),
     )
 
-    LOGGER.info("topology: SNMP walks complete for %s - CDP:%d LLDP:%d OSPF:%d BGP:%d ifStats:%d",
-                ip_address, len(cdp_device_ids), len(lldp_names),
-                len(ospf_rtr_ids), len(bgp_states), len(hc_in) or len(lo_in))
+    LOGGER.info(
+        "topology: SNMP walks complete for %s - CDP:%d LLDP:%d OSPF:%d BGP:%d ifStats:%d",
+        ip_address,
+        len(cdp_device_ids),
+        len(lldp_names),
+        len(ospf_rtr_ids),
+        len(bgp_states),
+        len(hc_in) or len(lo_in),
+    )
 
     # ── Build ifIndex -> interface name map ──
     effective_if_names = if_names or if_descr
@@ -739,16 +812,14 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
                 try:
                     in_val = int(val)
                 except (ValueError, TypeError) as exc:
-                    LOGGER.debug("topology: bad in-octets value from %s for ifIndex %s: %s",
-                                 ip_address, idx, exc)
+                    LOGGER.debug("topology: bad in-octets value from %s for ifIndex %s: %s", ip_address, idx, exc)
                 break
         for oid, val in out_octets_raw.items():
             if oid.endswith("." + idx):
                 try:
                     out_val = int(val)
                 except (ValueError, TypeError) as exc:
-                    LOGGER.debug("topology: bad out-octets value from %s for ifIndex %s: %s",
-                                 ip_address, idx, exc)
+                    LOGGER.debug("topology: bad out-octets value from %s for ifIndex %s: %s", ip_address, idx, exc)
                 break
         for oid, val in effective_speed.items():
             if oid.endswith("." + idx):
@@ -756,22 +827,23 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
                     raw_speed = int(val)
                     speed_mbps = raw_speed if high_speed_raw else raw_speed // 1_000_000
                 except (ValueError, TypeError) as exc:
-                    LOGGER.debug("topology: bad interface speed value from %s for ifIndex %s: %s",
-                                 ip_address, idx, exc)
+                    LOGGER.debug("topology: bad interface speed value from %s for ifIndex %s: %s", ip_address, idx, exc)
                 break
 
-        if_stats.append({
-            "host_id": host_id,
-            "if_index": int(idx),
-            "if_name": if_index_map.get(idx, f"ifIndex-{idx}"),
-            "if_speed_mbps": speed_mbps,
-            "in_octets": in_val,
-            "out_octets": out_val,
-        })
+        if_stats.append(
+            {
+                "host_id": host_id,
+                "if_index": int(idx),
+                "if_name": if_index_map.get(idx, f"ifIndex-{idx}"),
+                "if_speed_mbps": speed_mbps,
+                "in_octets": in_val,
+                "out_octets": out_val,
+            }
+        )
 
     # ── CDP Neighbor Parsing ──
     for oid, device_name_val in cdp_device_ids.items():
-        suffix = oid[len(cdp_device_id_base):]
+        suffix = oid[len(cdp_device_id_base) :]
         if not suffix:
             continue
         parts = suffix.lstrip(".").split(".")
@@ -793,21 +865,23 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         remote_port = _snmp_str(cdp_ports.get(port_oid, ""))
         platform = _snmp_str(cdp_platforms.get(plat_oid, ""))
 
-        neighbors.append({
-            "source_host_id": host_id,
-            "source_ip": ip_address,
-            "local_interface": local_iface,
-            "remote_device_name": remote_name,
-            "remote_ip": remote_ip,
-            "remote_interface": remote_port,
-            "protocol": "cdp",
-            "remote_platform": platform,
-        })
+        neighbors.append(
+            {
+                "source_host_id": host_id,
+                "source_ip": ip_address,
+                "local_interface": local_iface,
+                "remote_device_name": remote_name,
+                "remote_ip": remote_ip,
+                "remote_interface": remote_port,
+                "protocol": "cdp",
+                "remote_platform": platform,
+            }
+        )
 
     # ── LLDP Neighbor Parsing ──
     lldp_addr_map: dict[str, str] = {}
     for oid, val in lldp_man_addrs.items():
-        suffix = oid[len(lldp_man_addr_base):]
+        suffix = oid[len(lldp_man_addr_base) :]
         parts = suffix.lstrip(".").split(".")
         if len(parts) >= 3:
             key = f"{parts[0]}.{parts[1]}.{parts[2]}"
@@ -816,11 +890,12 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
                 if len(raw) == 4:
                     lldp_addr_map[key] = socket.inet_ntoa(raw)
             except Exception as exc:
-                LOGGER.debug("topology: failed to parse LLDP management address from %s (oid %s): %s",
-                             ip_address, oid, exc)
+                LOGGER.debug(
+                    "topology: failed to parse LLDP management address from %s (oid %s): %s", ip_address, oid, exc
+                )
 
     for oid, sys_name_val in lldp_names.items():
-        suffix = oid[len(lldp_sys_name_base):]
+        suffix = oid[len(lldp_sys_name_base) :]
         if not suffix:
             continue
         parts = suffix.lstrip(".").split(".")
@@ -842,27 +917,28 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         remote_ip = lldp_addr_map.get(lldp_key, "")
 
         already_found = any(
-            n["remote_device_name"].lower() == remote_name.lower()
-            and n["local_interface"] == local_iface
+            n["remote_device_name"].lower() == remote_name.lower() and n["local_interface"] == local_iface
             for n in neighbors
         )
         if already_found:
             continue
 
-        neighbors.append({
-            "source_host_id": host_id,
-            "source_ip": ip_address,
-            "local_interface": local_iface,
-            "remote_device_name": remote_name or f"lldp-{remote_port_raw}",
-            "remote_ip": remote_ip,
-            "remote_interface": remote_port,
-            "protocol": "lldp",
-            "remote_platform": sys_desc[:200] if sys_desc else "",
-        })
+        neighbors.append(
+            {
+                "source_host_id": host_id,
+                "source_ip": ip_address,
+                "local_interface": local_iface,
+                "remote_device_name": remote_name or f"lldp-{remote_port_raw}",
+                "remote_ip": remote_ip,
+                "remote_interface": remote_port,
+                "protocol": "lldp",
+                "remote_platform": sys_desc[:200] if sys_desc else "",
+            }
+        )
 
     # ── OSPF Neighbor Parsing ──
     for oid, rtr_id_val in ospf_rtr_ids.items():
-        suffix = oid[len(ospf_nbr_rtr_id_base):].lstrip(".")
+        suffix = oid[len(ospf_nbr_rtr_id_base) :].lstrip(".")
         parts = suffix.split(".")
         if len(parts) >= 4:
             nbr_ip = ".".join(parts[:4])
@@ -877,20 +953,22 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         if already_found:
             continue
 
-        neighbors.append({
-            "source_host_id": host_id,
-            "source_ip": ip_address,
-            "local_interface": "",
-            "remote_device_name": rtr_id or nbr_ip,
-            "remote_ip": nbr_ip,
-            "remote_interface": "",
-            "protocol": "ospf",
-            "remote_platform": f"OSPF state={state_val}" if state_val else "",
-        })
+        neighbors.append(
+            {
+                "source_host_id": host_id,
+                "source_ip": ip_address,
+                "local_interface": "",
+                "remote_device_name": rtr_id or nbr_ip,
+                "remote_ip": nbr_ip,
+                "remote_interface": "",
+                "protocol": "ospf",
+                "remote_platform": f"OSPF state={state_val}" if state_val else "",
+            }
+        )
 
     # ── BGP Peer Parsing ──
     for oid, state_val in bgp_states.items():
-        suffix = oid[len(bgp_peer_state_base):].lstrip(".")
+        suffix = oid[len(bgp_peer_state_base) :].lstrip(".")
         parts = suffix.split(".")
         if len(parts) >= 4:
             peer_ip = ".".join(parts[:4])
@@ -904,16 +982,18 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
         if already_found:
             continue
 
-        neighbors.append({
-            "source_host_id": host_id,
-            "source_ip": ip_address,
-            "local_interface": "",
-            "remote_device_name": f"AS{remote_as}" if remote_as else peer_ip,
-            "remote_ip": peer_ip,
-            "remote_interface": "",
-            "protocol": "bgp",
-            "remote_platform": f"AS {remote_as}, state={state_val}" if remote_as else "",
-        })
+        neighbors.append(
+            {
+                "source_host_id": host_id,
+                "source_ip": ip_address,
+                "local_interface": "",
+                "remote_device_name": f"AS{remote_as}" if remote_as else peer_ip,
+                "remote_ip": peer_ip,
+                "remote_interface": "",
+                "protocol": "bgp",
+                "remote_platform": f"AS {remote_as}, state={state_val}" if remote_as else "",
+            }
+        )
 
     return neighbors, if_stats
 
@@ -921,9 +1001,9 @@ async def _discover_neighbors(host_id: int, ip_address: str, snmp_config: dict,
 # ── SNMP Table Walking (auto-discovery of interfaces as data sources) ─────
 
 
-async def snmp_table_walk(ip_address: str, snmp_config: dict,
-                          table_oids: list[str], timeout_seconds: float = 5.0,
-                          max_rows: int = 1000) -> dict[str, dict[str, str]]:
+async def snmp_table_walk(
+    ip_address: str, snmp_config: dict, table_oids: list[str], timeout_seconds: float = 5.0, max_rows: int = 1000
+) -> dict[str, dict[str, str]]:
     """Walk multiple SNMP OID subtrees in parallel and correlate rows by index suffix.
 
     Returns {table_oid: {index_suffix: value}} for each OID walked.
@@ -934,8 +1014,7 @@ async def snmp_table_walk(ip_address: str, snmp_config: dict,
     async def _walk_one(oid):
         return oid, await _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows)
 
-    results_raw = await asyncio.gather(*[_walk_one(oid) for oid in table_oids],
-                                        return_exceptions=True)
+    results_raw = await asyncio.gather(*[_walk_one(oid) for oid in table_oids], return_exceptions=True)
     tables: dict[str, dict[str, str]] = {}
     for res in results_raw:
         if isinstance(res, Exception):
@@ -945,7 +1024,7 @@ async def snmp_table_walk(ip_address: str, snmp_config: dict,
         for full_oid, val in raw_data.items():
             # Extract index suffix (everything after the base OID prefix)
             if full_oid.startswith(oid_prefix):
-                suffix = full_oid[len(oid_prefix):].lstrip(".")
+                suffix = full_oid[len(oid_prefix) :].lstrip(".")
             else:
                 # Fallback: use last dotted component
                 suffix = full_oid.rsplit(".", 1)[-1] if "." in full_oid else full_oid
@@ -955,9 +1034,9 @@ async def snmp_table_walk(ip_address: str, snmp_config: dict,
     return tables
 
 
-async def auto_discover_data_sources(host_id: int, ip_address: str,
-                                      snmp_config: dict,
-                                      timeout_seconds: float = 5.0) -> dict:
+async def auto_discover_data_sources(
+    host_id: int, ip_address: str, snmp_config: dict, timeout_seconds: float = 5.0
+) -> dict:
     """Walk ifTable/ifXTable to enumerate interfaces as independent data sources.
 
     Also discovers storage entries (hrStorageTable) if available.
@@ -967,29 +1046,29 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
 
     # OIDs for interface discovery
     IF_TABLE_OIDS = [
-        "1.3.6.1.2.1.31.1.1.1.1",    # ifName
-        "1.3.6.1.2.1.2.2.1.2",        # ifDescr
-        "1.3.6.1.2.1.2.2.1.3",        # ifType
-        "1.3.6.1.2.1.2.2.1.5",        # ifSpeed (bps)
-        "1.3.6.1.2.1.31.1.1.1.15",    # ifHighSpeed (Mbps)
-        "1.3.6.1.2.1.2.2.1.7",        # ifAdminStatus
-        "1.3.6.1.2.1.2.2.1.8",        # ifOperStatus
-        "1.3.6.1.2.1.2.2.1.6",        # ifPhysAddress (MAC)
+        "1.3.6.1.2.1.31.1.1.1.1",  # ifName
+        "1.3.6.1.2.1.2.2.1.2",  # ifDescr
+        "1.3.6.1.2.1.2.2.1.3",  # ifType
+        "1.3.6.1.2.1.2.2.1.5",  # ifSpeed (bps)
+        "1.3.6.1.2.1.31.1.1.1.15",  # ifHighSpeed (Mbps)
+        "1.3.6.1.2.1.2.2.1.7",  # ifAdminStatus
+        "1.3.6.1.2.1.2.2.1.8",  # ifOperStatus
+        "1.3.6.1.2.1.2.2.1.6",  # ifPhysAddress (MAC)
         # Per-port VLAN membership. Walked here so MAC tracking can tag every
         # learned MAC with the port's access VLAN (or PVID for trunks) instead
         # of relying on per-VLAN Q-BRIDGE walks, which require SNMPv3 contexts
         # the user often isn't authorised for.
         "1.3.6.1.4.1.9.9.68.1.2.2.1.2",  # vmVlan (Cisco access-port VLAN; harmless on non-Cisco)
-        "1.3.6.1.2.1.17.7.1.4.5.1.1",    # dot1qPvid (standard PVID, indexed by dot1dBasePort)
+        "1.3.6.1.2.1.17.7.1.4.5.1.1",  # dot1qPvid (standard PVID, indexed by dot1dBasePort)
     ]
 
     # OIDs for storage discovery (HOST-RESOURCES-MIB)
     STORAGE_TABLE_OIDS = [
-        "1.3.6.1.2.1.25.2.3.1.2",     # hrStorageType
-        "1.3.6.1.2.1.25.2.3.1.3",     # hrStorageDescr
-        "1.3.6.1.2.1.25.2.3.1.4",     # hrStorageAllocationUnits
-        "1.3.6.1.2.1.25.2.3.1.5",     # hrStorageSize
-        "1.3.6.1.2.1.25.2.3.1.6",     # hrStorageUsed
+        "1.3.6.1.2.1.25.2.3.1.2",  # hrStorageType
+        "1.3.6.1.2.1.25.2.3.1.3",  # hrStorageDescr
+        "1.3.6.1.2.1.25.2.3.1.4",  # hrStorageAllocationUnits
+        "1.3.6.1.2.1.25.2.3.1.5",  # hrStorageSize
+        "1.3.6.1.2.1.25.2.3.1.6",  # hrStorageUsed
     ]
 
     counts = {"interfaces": 0, "storage": 0, "total": 0}
@@ -1002,8 +1081,7 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
             return_exceptions=False,
         )
     except Exception as exc:
-        LOGGER.warning("data_source_discovery: SNMP table walk failed for %s: %s",
-                        ip_address, str(exc))
+        LOGGER.warning("data_source_discovery: SNMP table walk failed for %s: %s", ip_address, str(exc))
         return counts
 
     # ── Process interfaces ──
@@ -1024,8 +1102,7 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
     if_pvid_data: dict[str, str] = {}
     if pvid_by_bridge_port:
         try:
-            bp_map = await _snmp_walk(ip_address, timeout_seconds, snmp_config,
-                                       "1.3.6.1.2.1.17.1.4.1.2", max_rows=2000)
+            bp_map = await _snmp_walk(ip_address, timeout_seconds, snmp_config, "1.3.6.1.2.1.17.1.4.1.2", max_rows=2000)
             bp_to_ifindex: dict[str, str] = {}
             for oid, val in bp_map.items():
                 bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
@@ -1036,8 +1113,7 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
                 if if_idx:
                     if_pvid_data[if_idx] = pvid
         except Exception as exc:
-            LOGGER.warning("data_source_discovery: dot1qPvid bridge-port walk failed for %s: %s",
-                           ip_address, exc)
+            LOGGER.warning("data_source_discovery: dot1qPvid bridge-port walk failed for %s: %s", ip_address, exc)
 
     # Collect all known if_indexes
     all_indexes = set()
@@ -1052,12 +1128,12 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
             speed_bps = if_speed_data.get(idx, "0")
             try:
                 speed_mbps = int(speed_bps) // 1_000_000
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 speed_mbps = 0
         else:
             try:
                 speed_mbps = int(speed_raw)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 speed_mbps = 0
 
         admin_status = if_admin_data.get(idx, "")
@@ -1070,7 +1146,7 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
         port_vlan_raw = if_vmvlan_data.get(idx, "") or if_pvid_data.get(idx, "")
         try:
             port_vlan = int(str(port_vlan_raw).strip()) if port_vlan_raw else 0
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             port_vlan = 0
 
         oids_info = {
@@ -1095,8 +1171,7 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
             )
             counts["interfaces"] += 1
         except Exception as exc:
-            LOGGER.debug("data_source_discovery: failed to store interface %s for host %s: %s",
-                         idx, host_id, exc)
+            LOGGER.debug("data_source_discovery: failed to store interface %s for host %s: %s", idx, host_id, exc)
 
     # ── Process storage entries ──
     storage_type_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.2", {})
@@ -1126,10 +1201,14 @@ async def auto_discover_data_sources(host_id: int, ip_address: str,
             )
             counts["storage"] += 1
         except Exception as exc:
-            LOGGER.debug("data_source_discovery: failed to store storage entry %s for host %s: %s",
-                         idx, host_id, exc)
+            LOGGER.debug("data_source_discovery: failed to store storage entry %s for host %s: %s", idx, host_id, exc)
 
     counts["total"] = counts["interfaces"] + counts["storage"]
-    LOGGER.info("data_source_discovery: host %s (%s) - %d interfaces, %d storage entries",
-                host_id, ip_address, counts["interfaces"], counts["storage"])
+    LOGGER.info(
+        "data_source_discovery: host %s (%s) - %d interfaces, %d storage entries",
+        host_id,
+        ip_address,
+        counts["interfaces"],
+        counts["storage"],
+    )
     return counts

@@ -197,14 +197,9 @@ async def test_host_runner_bounds_concurrency_and_preserves_host_order():
             active -= 1
 
     hosts = [{"hostname": f"sw{i}"} for i in range(5)]
-    events = [
-        event
-        async for event in playbook.run_hosts_concurrently(hosts, worker)
-    ]
+    events = [event async for event in playbook.run_hosts_concurrently(hosts, worker)]
 
     assert max_active == 2
     for host in hosts:
-        messages = [
-            event.message for event in events if event.host == host["hostname"]
-        ]
+        messages = [event.message for event in events if event.host == host["hostname"]]
         assert messages == ["start", "finish"]

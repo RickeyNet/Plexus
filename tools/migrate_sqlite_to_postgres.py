@@ -148,8 +148,12 @@ async def _set_sequences(conn: Any) -> None:
             """
             SELECT setval(
                 pg_get_serial_sequence($1, 'id'),
-                COALESCE((SELECT MAX(id) FROM ONLY """ + safe + """), 0),
-                COALESCE((SELECT MAX(id) FROM ONLY """ + safe + """), 0) > 0
+                COALESCE((SELECT MAX(id) FROM ONLY """
+            + safe
+            + """), 0),
+                COALESCE((SELECT MAX(id) FROM ONLY """
+            + safe
+            + """), 0) > 0
             )
             """,
             table,

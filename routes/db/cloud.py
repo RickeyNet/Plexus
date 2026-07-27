@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -96,6 +97,7 @@ def _cloud_auth_encrypt(value) -> str:
     if not text or text == "{}":
         return ""
     from routes.crypto import encrypt as _enc
+
     return _enc(text)
 
 
@@ -135,6 +137,7 @@ def _cloud_auth_decrypt(stored) -> str:
         return "{}"
     if _looks_encrypted(stored):
         from routes.crypto import decrypt as _dec
+
         try:
             return _dec(stored) or "{}"
         except Exception:
@@ -348,7 +351,10 @@ async def replace_cloud_discovery_snapshot(
             except Exception:
                 priority = None
         raw_uid = str(rule.get("rule_uid") or rule.get("id") or "").strip()
-        rule_uid = raw_uid or f"{resource_uid}:rule:{index + 1}:{direction or 'any'}:{action or 'any'}:{rule_name or 'unnamed'}"
+        rule_uid = (
+            raw_uid
+            or f"{resource_uid}:rule:{index + 1}:{direction or 'any'}:{action or 'any'}:{rule_name or 'unnamed'}"
+        )
         metadata = rule.get("metadata") if isinstance(rule.get("metadata"), dict) else {}
         return {
             "provider": str(resource_item.get("provider") or provider_name or "").strip(),
@@ -1113,5 +1119,3 @@ async def get_cloud_traffic_metric_top_resources(
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
-
-

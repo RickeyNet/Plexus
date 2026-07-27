@@ -52,18 +52,12 @@ def test_configure_syslog_logging_attaches_and_removes_handler():
 
     try:
         assert syslog_logging_enabled() is True
-        assert any(
-            isinstance(handler, logging.handlers.SysLogHandler)
-            for handler in logger.handlers
-        )
+        assert any(isinstance(handler, logging.handlers.SysLogHandler) for handler in logger.handlers)
     finally:
         configure_syslog_logging({"enabled": False})
 
     assert syslog_logging_enabled() is False
-    assert not any(
-        isinstance(handler, logging.handlers.SysLogHandler)
-        for handler in logger.handlers
-    )
+    assert not any(isinstance(handler, logging.handlers.SysLogHandler) for handler in logger.handlers)
 
 
 @pytest.mark.asyncio

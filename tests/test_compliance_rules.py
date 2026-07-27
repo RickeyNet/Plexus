@@ -66,10 +66,8 @@ def test_negation_pattern_matches_negation_line():
 
 def test_directive_helper_ignores_leading_whitespace():
     # Nested/indented config lines still match after stripping.
-    assert _config_has_directive("  service password-encryption\n",
-                                 "service password-encryption") is True
-    assert _config_has_directive("  no service password-encryption\n",
-                                 "service password-encryption") is False
+    assert _config_has_directive("  service password-encryption\n", "service password-encryption") is True
+    assert _config_has_directive("  no service password-encryption\n", "service password-encryption") is False
 
 
 def test_empty_pattern_auto_passes():
@@ -77,8 +75,7 @@ def test_empty_pattern_auto_passes():
 
 
 def test_regex_match_and_invalid_regex():
-    ok = _evaluate_rule({"type": "regex_match", "pattern": r"ssh version \d"},
-                        CONFIG_ENABLED)
+    ok = _evaluate_rule({"type": "regex_match", "pattern": r"ssh version \d"}, CONFIG_ENABLED)
     assert ok["passed"] is True
     bad = _evaluate_rule({"type": "regex_match", "pattern": "("}, CONFIG_ENABLED)
     assert bad["passed"] is False

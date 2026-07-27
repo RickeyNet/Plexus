@@ -90,9 +90,7 @@ async def test_owner_can_use_own_credential(cred_env):
 
 @pytest.mark.asyncio
 async def test_user_cannot_use_another_users_credential(cred_env):
-    await _expect_denied(
-        403, shared.require_credential_access(2, session=ALICE_SESSION)
-    )
+    await _expect_denied(403, shared.require_credential_access(2, session=ALICE_SESSION))
     assert cred_env[-1]["action"] == "use_denied"
 
 
@@ -100,16 +98,12 @@ async def test_user_cannot_use_another_users_credential(cred_env):
 async def test_admin_role_does_not_bypass_ownership(cred_env):
     # Admins manage credentials via the CRUD endpoints, but may not *use*
     # another user's credential for device operations.
-    await _expect_denied(
-        403, shared.require_credential_access(1, session=ADMIN_SESSION)
-    )
+    await _expect_denied(403, shared.require_credential_access(1, session=ADMIN_SESSION))
 
 
 @pytest.mark.asyncio
 async def test_unowned_credential_denied_for_regular_user(cred_env):
-    await _expect_denied(
-        403, shared.require_credential_access(3, session=ALICE_SESSION)
-    )
+    await _expect_denied(403, shared.require_credential_access(3, session=ALICE_SESSION))
 
 
 @pytest.mark.asyncio
@@ -136,9 +130,7 @@ async def test_no_session_no_submitter_is_unauthenticated(cred_env):
 
 @pytest.mark.asyncio
 async def test_service_credential_requires_opt_in_even_for_admin(cred_env):
-    await _expect_denied(
-        403, shared.require_credential_access(4, session=ADMIN_SESSION)
-    )
+    await _expect_denied(403, shared.require_credential_access(4, session=ADMIN_SESSION))
 
 
 @pytest.mark.asyncio
@@ -147,9 +139,7 @@ async def test_service_credential_with_opt_in_is_admin_only(cred_env):
         403,
         shared.require_credential_access(4, session=ALICE_SESSION, allow_service=True),
     )
-    cred = await shared.require_credential_access(
-        4, session=ADMIN_SESSION, allow_service=True
-    )
+    cred = await shared.require_credential_access(4, session=ADMIN_SESSION, allow_service=True)
     assert cred["id"] == 4
     assert "override=admin-service-cred" in cred_env[-1]["detail"]
 
@@ -167,17 +157,13 @@ async def test_submitter_owner_allowed(cred_env):
 @pytest.mark.asyncio
 async def test_submitter_mismatch_fails_closed(cred_env):
     # A queued task submitted by bob may not execute with alice's credential.
-    await _expect_denied(
-        403, shared.require_credential_access(1, submitter_username="bob")
-    )
+    await _expect_denied(403, shared.require_credential_access(1, submitter_username="bob"))
     assert cred_env[-1]["action"] == "use_denied"
 
 
 @pytest.mark.asyncio
 async def test_deleted_submitter_fails_closed(cred_env):
-    await _expect_denied(
-        403, shared.require_credential_access(1, submitter_username="ghost")
-    )
+    await _expect_denied(403, shared.require_credential_access(1, submitter_username="ghost"))
 
 
 @pytest.mark.asyncio
@@ -186,9 +172,7 @@ async def test_service_credential_requires_admin_submitter(cred_env):
         403,
         shared.require_credential_access(4, submitter_username="alice", allow_service=True),
     )
-    cred = await shared.require_credential_access(
-        4, submitter_username="root", allow_service=True
-    )
+    cred = await shared.require_credential_access(4, submitter_username="root", allow_service=True)
     assert cred["id"] == 4
 
 
@@ -230,9 +214,7 @@ async def test_compliance_remediate_validates_credential(monkeypatch):
 
     with pytest.raises(_Stop):
         await compliance.remediate_compliance_finding(
-            compliance.ComplianceRemediateRequest(
-                result_id=1, rule_name="r1", credential_id=9, dry_run=True
-            ),
+            compliance.ComplianceRemediateRequest(result_id=1, rule_name="r1", credential_id=9, dry_run=True),
             request=None,
         )
 

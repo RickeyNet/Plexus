@@ -75,8 +75,7 @@ def update_progress(job_id: str, **fields) -> None:
         job["progress"].update(fields)
 
 
-def finish_job(job_id: str, status: str = "completed",
-               result: dict | None = None, error: str | None = None) -> None:
+def finish_job(job_id: str, status: str = "completed", result: dict | None = None, error: str | None = None) -> None:
     """Mark a job terminal and schedule its record for cleanup."""
     job = _jobs.get(job_id)
     if job is None:

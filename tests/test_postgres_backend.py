@@ -69,10 +69,9 @@ async def test_postgres_audit_chain_concurrent_writers(monkeypatch):
     monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
 
     await db_module.init_db()
-    ids = await asyncio.gather(*(
-        db_module.add_audit_event("ci", "pg.chain_smoke", user=f"writer{i}")
-        for i in range(10)
-    ))
+    ids = await asyncio.gather(
+        *(db_module.add_audit_event("ci", "pg.chain_smoke", user=f"writer{i}") for i in range(10))
+    )
     assert len(set(ids)) == 10
 
     result = await db_module.verify_audit_chain()

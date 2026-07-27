@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -52,6 +53,7 @@ __all__ = [
 # Users
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def get_user_by_username(username: str) -> dict | None:
     db = await _dbcore.get_db()
     try:
@@ -73,9 +75,14 @@ async def get_user_by_id(user_id: int) -> dict | None:
         await db.close()
 
 
-async def create_user(username: str, password_hash: str, salt: str,
-                      display_name: str = "", role: str = "user",
-                      must_change_password: bool = False) -> int:
+async def create_user(
+    username: str,
+    password_hash: str,
+    salt: str,
+    display_name: str = "",
+    role: str = "user",
+    must_change_password: bool = False,
+) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
@@ -137,7 +144,13 @@ async def update_user_profile(user_id: int, display_name: str = None):
         await db.close()
 
 
-async def update_user_admin(user_id: int, username: str = None, display_name: str = None, role: str = None, session_never_expires: bool | None = None):
+async def update_user_admin(
+    user_id: int,
+    username: str = None,
+    display_name: str = None,
+    role: str = None,
+    session_never_expires: bool | None = None,
+):
     db = await _dbcore.get_db()
     try:
         fields = []
@@ -430,5 +443,3 @@ async def get_auth_setting(key: str) -> dict | None:
         return json.loads(row[0])
     finally:
         await db.close()
-
-

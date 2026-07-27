@@ -22,6 +22,7 @@ from netcontrol.routes import flow_collector
 
 # ── shared fixture helpers ──────────────────────────────────────────────────
 
+
 async def _init_db(tmp_path, monkeypatch) -> str:
     """Point routes.database at a fresh sqlite file and run init_db()."""
     db_path = str(tmp_path / "flow.db")
@@ -41,9 +42,7 @@ async def _add_host(hostname: str = "exporter1", ip: str = "10.1.2.3") -> int:
         if cur.lastrowid:
             gid = cur.lastrowid
         else:
-            cur2 = await db.execute(
-                "SELECT id FROM inventory_groups WHERE name = ?", ("default",)
-            )
+            cur2 = await db.execute("SELECT id FROM inventory_groups WHERE name = ?", ("default",))
             gid = (await cur2.fetchone())[0]
         cur = await db.execute(
             "INSERT INTO hosts (group_id, hostname, ip_address) VALUES (?, ?, ?)",
@@ -71,14 +70,15 @@ def _build_nf5_packet(records: list[dict]) -> bytes:
     """
     header = struct.pack(
         "!HHIIIIBBh",
-        5,                # version
-        len(records),     # count
-        1_000_000,        # sys_uptime ms
-        1_700_000_000,    # unix_secs
-        0,                # unix_nsecs
-        0,                # flow_sequence
-        0, 0,             # engine_type, engine_id
-        0,                # sampling
+        5,  # version
+        len(records),  # count
+        1_000_000,  # sys_uptime ms
+        1_700_000_000,  # unix_secs
+        0,  # unix_nsecs
+        0,  # flow_sequence
+        0,
+        0,  # engine_type, engine_id
+        0,  # sampling
     )
     body = b""
     for r in records:
@@ -86,37 +86,51 @@ def _build_nf5_packet(records: list[dict]) -> bytes:
             "!IIIHHIIIIHHBBBBHHBBH",
             struct.unpack("!I", socket.inet_aton(r["src_ip"]))[0],
             struct.unpack("!I", socket.inet_aton(r["dst_ip"]))[0],
-            0,                          # nexthop
+            0,  # nexthop
             r.get("input_if", 1),
             r.get("output_if", 2),
             r.get("packets", 1),
             r.get("bytes", 100),
-            900_000,                    # first switched (ms)
-            999_000,                    # last switched (ms)
+            900_000,  # first switched (ms)
+            999_000,  # last switched (ms)
             r.get("src_port", 12345),
             r.get("dst_port", 80),
-            0,                          # pad1
+            0,  # pad1
             r.get("tcp_flags", 0),
             r.get("protocol", 6),
-            0,                          # tos
-            0,                          # src_as
-            0,                          # dst_as
-            0,                          # src_mask
-            0,                          # dst_mask
-            0,                          # pad2
+            0,  # tos
+            0,  # src_as
+            0,  # dst_as
+            0,  # src_mask
+            0,  # dst_mask
+            0,  # pad2
         )
     return header + body
 
 
 def test_parse_netflow_v5_roundtrip():
-    pkt = _build_nf5_packet([
-        {"src_ip": "10.0.0.1", "dst_ip": "10.0.0.2",
-         "src_port": 5555, "dst_port": 443, "protocol": 6,
-         "bytes": 2048, "packets": 4},
-        {"src_ip": "192.168.1.10", "dst_ip": "8.8.8.8",
-         "src_port": 33333, "dst_port": 53, "protocol": 17,
-         "bytes": 128, "packets": 1},
-    ])
+    pkt = _build_nf5_packet(
+        [
+            {
+                "src_ip": "10.0.0.1",
+                "dst_ip": "10.0.0.2",
+                "src_port": 5555,
+                "dst_port": 443,
+                "protocol": 6,
+                "bytes": 2048,
+                "packets": 4,
+            },
+            {
+                "src_ip": "192.168.1.10",
+                "dst_ip": "8.8.8.8",
+                "src_port": 33333,
+                "dst_port": 53,
+                "protocol": 17,
+                "bytes": 128,
+                "packets": 1,
+            },
+        ]
+    )
 
     recs = flow_collector.parse_netflow_v5(pkt, ("203.0.113.1", 2055))
 
@@ -167,12 +181,12 @@ def _build_nf9_template_and_data() -> bytes:
     # ─ v9 header (20 bytes)
     header = struct.pack(
         "!HHIIII",
-        9,             # version
-        2,             # count of flowsets (template + data)
-        12_345,        # sys_uptime
-        1_700_000_000, # unix_secs
-        0,             # sequence_number
-        1,             # source_id
+        9,  # version
+        2,  # count of flowsets (template + data)
+        12_345,  # sys_uptime
+        1_700_000_000,  # unix_secs
+        0,  # sequence_number
+        1,  # source_id
     )
 
     # ─ Template flowset (id=0)
@@ -181,7 +195,7 @@ def _build_nf9_template_and_data() -> bytes:
     for f_type, f_len in fields:
         tpl_body += struct.pack("!HH", f_type, f_len)
     tpl_flowset_len = 4 + len(tpl_body)
-    if tpl_flowset_len % 4:                     # pad to 4-byte boundary
+    if tpl_flowset_len % 4:  # pad to 4-byte boundary
         tpl_body += b"\x00" * (4 - tpl_flowset_len % 4)
         tpl_flowset_len = 4 + len(tpl_body)
     tpl_flowset = struct.pack("!HH", 0, tpl_flowset_len) + tpl_body
@@ -190,18 +204,18 @@ def _build_nf9_template_and_data() -> bytes:
     rec1 = (
         socket.inet_aton("10.0.0.1")
         + socket.inet_aton("10.0.0.2")
-        + struct.pack("!H", 1111)        # src_port
-        + struct.pack("!H", 443)         # dst_port
-        + struct.pack("!B", 6)           # protocol = TCP
-        + struct.pack("!I", 5000)        # in_bytes
-        + struct.pack("!I", 7)           # in_pkts
+        + struct.pack("!H", 1111)  # src_port
+        + struct.pack("!H", 443)  # dst_port
+        + struct.pack("!B", 6)  # protocol = TCP
+        + struct.pack("!I", 5000)  # in_bytes
+        + struct.pack("!I", 7)  # in_pkts
     )
     rec2 = (
         socket.inet_aton("10.0.0.3")
         + socket.inet_aton("8.8.8.8")
         + struct.pack("!H", 2222)
         + struct.pack("!H", 53)
-        + struct.pack("!B", 17)          # UDP
+        + struct.pack("!B", 17)  # UDP
         + struct.pack("!I", 256)
         + struct.pack("!I", 2)
     )
@@ -256,8 +270,7 @@ def test_parse_netflow_v9_data_without_template_is_ignored():
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def _build_sflow_packet(src_ip: str, dst_ip: str, src_port: int, dst_port: int,
-                       sampling_rate: int = 1024) -> bytes:
+def _build_sflow_packet(src_ip: str, dst_ip: str, src_port: int, dst_port: int, sampling_rate: int = 1024) -> bytes:
     """Build an sFlow v5 datagram carrying one flow_sample with one
     raw_packet_header (Ethernet/IPv4/UDP).
 
@@ -277,79 +290,84 @@ def _build_sflow_packet(src_ip: str, dst_ip: str, src_port: int, dst_port: int,
     """
     # Build the Ethernet + IPv4 + UDP header that sFlow will sample.
     eth = (
-        b"\xaa\xbb\xcc\xdd\xee\xff"          # dst mac
-        + b"\x11\x22\x33\x44\x55\x66"        # src mac
-        + b"\x08\x00"                        # ethertype = IPv4
+        b"\xaa\xbb\xcc\xdd\xee\xff"  # dst mac
+        + b"\x11\x22\x33\x44\x55\x66"  # src mac
+        + b"\x08\x00"  # ethertype = IPv4
     )
     # IPv4: ihl=5, total_length=28 (20 IP + 8 UDP), proto=17 (UDP)
     ipv4 = (
-        b"\x45\x00"                          # version=4, ihl=5, dscp=0
-        + struct.pack("!H", 20 + 8)          # total_length
-        + b"\x00\x00\x00\x00"                # id+flags+frag
-        + b"\x40\x11"                        # ttl=64, proto=UDP
-        + b"\x00\x00"                        # checksum (ignored by parser)
+        b"\x45\x00"  # version=4, ihl=5, dscp=0
+        + struct.pack("!H", 20 + 8)  # total_length
+        + b"\x00\x00\x00\x00"  # id+flags+frag
+        + b"\x40\x11"  # ttl=64, proto=UDP
+        + b"\x00\x00"  # checksum (ignored by parser)
         + socket.inet_aton(src_ip)
         + socket.inet_aton(dst_ip)
     )
     udp = (
         struct.pack("!H", src_port)
         + struct.pack("!H", dst_port)
-        + b"\x00\x08"                        # udp length
-        + b"\x00\x00"                        # udp checksum
+        + b"\x00\x08"  # udp length
+        + b"\x00\x00"  # udp checksum
     )
-    header_bytes = eth + ipv4 + udp          # 14 + 20 + 8 = 42 bytes
+    header_bytes = eth + ipv4 + udp  # 14 + 20 + 8 = 42 bytes
     header_len = len(header_bytes)
     # XDR opaque pads to a 4-byte boundary.
     pad = (-header_len) % 4
     header_padded = header_bytes + b"\x00" * pad
 
     raw_pkt_record_body = (
-        struct.pack("!I", 1)                 # protocol_kind = Ethernet
-        + struct.pack("!I", 60)              # original frame length on the wire
-        + struct.pack("!I", 0)               # stripped
-        + struct.pack("!I", header_len)      # header_length
+        struct.pack("!I", 1)  # protocol_kind = Ethernet
+        + struct.pack("!I", 60)  # original frame length on the wire
+        + struct.pack("!I", 0)  # stripped
+        + struct.pack("!I", header_len)  # header_length
         + header_padded
     )
     flow_record = (
-        struct.pack("!I", 1)                 # data_format = raw_packet_header
+        struct.pack("!I", 1)  # data_format = raw_packet_header
         + struct.pack("!I", len(raw_pkt_record_body))
         + raw_pkt_record_body
     )
 
-    flow_sample_body = struct.pack(
-        "!IIIIIIII",
-        99,                                  # seq
-        0,                                   # source_id (type<<24 | index)
-        sampling_rate,
-        0,                                   # sample_pool
-        0,                                   # drops
-        1,                                   # input if
-        2,                                   # output if
-        1,                                   # flow_records_count
-    ) + flow_record
+    flow_sample_body = (
+        struct.pack(
+            "!IIIIIIII",
+            99,  # seq
+            0,  # source_id (type<<24 | index)
+            sampling_rate,
+            0,  # sample_pool
+            0,  # drops
+            1,  # input if
+            2,  # output if
+            1,  # flow_records_count
+        )
+        + flow_record
+    )
 
     sample = (
-        struct.pack("!I", 1)                 # sample_type = flow_sample
+        struct.pack("!I", 1)  # sample_type = flow_sample
         + struct.pack("!I", len(flow_sample_body))
         + flow_sample_body
     )
 
     datagram_header = (
-        struct.pack("!I", 5)                 # version
-        + struct.pack("!I", 1)               # agent_addr_type IPv4
-        + socket.inet_aton("10.0.0.99")      # agent address
-        + struct.pack("!I", 0)               # sub_agent_id
-        + struct.pack("!I", 1)               # sequence_number
-        + struct.pack("!I", 0)               # uptime_ms
-        + struct.pack("!I", 1)               # num_samples
+        struct.pack("!I", 5)  # version
+        + struct.pack("!I", 1)  # agent_addr_type IPv4
+        + socket.inet_aton("10.0.0.99")  # agent address
+        + struct.pack("!I", 0)  # sub_agent_id
+        + struct.pack("!I", 1)  # sequence_number
+        + struct.pack("!I", 0)  # uptime_ms
+        + struct.pack("!I", 1)  # num_samples
     )
     return datagram_header + sample
 
 
 def test_parse_sflow_flow_sample_extracts_udp_5tuple():
     pkt = _build_sflow_packet(
-        src_ip="10.5.5.1", dst_ip="10.5.5.2",
-        src_port=44444, dst_port=53,
+        src_ip="10.5.5.1",
+        dst_ip="10.5.5.2",
+        src_port=44444,
+        dst_port=53,
         sampling_rate=512,
     )
 
@@ -363,7 +381,7 @@ def test_parse_sflow_flow_sample_extracts_udp_5tuple():
     assert rec["dst_ip"] == "10.5.5.2"
     assert rec["src_port"] == 44444
     assert rec["dst_port"] == 53
-    assert rec["protocol"] == 17                 # UDP
+    assert rec["protocol"] == 17  # UDP
     # bytes_estimate = frame_length * sampling_rate
     assert rec["bytes"] == 60 * 512
     assert rec["packets"] == 512
@@ -388,23 +406,72 @@ async def test_create_flow_records_batch_and_top_talkers(tmp_path, monkeypatch):
 
     rows = [
         # 10.0.0.1 wins on src_ip total bytes (1000 + 2000 = 3000).
-        ("10.10.10.1", host_id, "netflow_v5",
-         "10.0.0.1", "8.8.8.8", 1111, 53, 17, 1000, 2, 0, 0, 1, 2, 0, 0,
-         "2026-05-12T00:00:00+00:00", "2026-05-12T00:00:01+00:00"),
-        ("10.10.10.1", host_id, "netflow_v5",
-         "10.0.0.1", "1.1.1.1", 2222, 443, 6, 2000, 4, 0, 0, 1, 2, 0, 0,
-         "2026-05-12T00:00:02+00:00", "2026-05-12T00:00:03+00:00"),
+        (
+            "10.10.10.1",
+            host_id,
+            "netflow_v5",
+            "10.0.0.1",
+            "8.8.8.8",
+            1111,
+            53,
+            17,
+            1000,
+            2,
+            0,
+            0,
+            1,
+            2,
+            0,
+            0,
+            "2026-05-12T00:00:00+00:00",
+            "2026-05-12T00:00:01+00:00",
+        ),
+        (
+            "10.10.10.1",
+            host_id,
+            "netflow_v5",
+            "10.0.0.1",
+            "1.1.1.1",
+            2222,
+            443,
+            6,
+            2000,
+            4,
+            0,
+            0,
+            1,
+            2,
+            0,
+            0,
+            "2026-05-12T00:00:02+00:00",
+            "2026-05-12T00:00:03+00:00",
+        ),
         # 10.0.0.2 has fewer bytes - should sort second.
-        ("10.10.10.1", host_id, "netflow_v5",
-         "10.0.0.2", "8.8.8.8", 3333, 53, 17, 500, 1, 0, 0, 1, 2, 0, 0,
-         "2026-05-12T00:00:04+00:00", "2026-05-12T00:00:05+00:00"),
+        (
+            "10.10.10.1",
+            host_id,
+            "netflow_v5",
+            "10.0.0.2",
+            "8.8.8.8",
+            3333,
+            53,
+            17,
+            500,
+            1,
+            0,
+            0,
+            1,
+            2,
+            0,
+            0,
+            "2026-05-12T00:00:04+00:00",
+            "2026-05-12T00:00:05+00:00",
+        ),
     ]
     inserted = await db_module.create_flow_records_batch(rows)
     assert inserted == 3
 
-    top_src = await db_module.get_flow_top_talkers(
-        host_id=host_id, hours=1, direction="src", limit=10
-    )
+    top_src = await db_module.get_flow_top_talkers(host_id=host_id, hours=1, direction="src", limit=10)
     # 10.0.0.1 with 3000 bytes / 2 flows; 10.0.0.2 with 500 bytes / 1 flow.
     assert len(top_src) == 2
     assert top_src[0]["ip"] == "10.0.0.1"
@@ -414,9 +481,7 @@ async def test_create_flow_records_batch_and_top_talkers(tmp_path, monkeypatch):
     assert top_src[1]["total_bytes"] == 500
 
     # And the destination view: 8.8.8.8 should win since it's hit twice.
-    top_dst = await db_module.get_flow_top_talkers(
-        host_id=host_id, hours=1, direction="dst", limit=10
-    )
+    top_dst = await db_module.get_flow_top_talkers(host_id=host_id, hours=1, direction="dst", limit=10)
     dst_ips = [r["ip"] for r in top_dst]
     assert "8.8.8.8" in dst_ips
     # 8.8.8.8 = 1000 + 500 = 1500 vs 1.1.1.1 = 2000, so 1.1.1.1 wins.
@@ -518,9 +583,7 @@ async def test_on_host_changed_updates_cache_and_exporter_rows(tmp_path, monkeyp
     # Add the host and notify the collector - both the cache and the
     # exporter row should pick up the new host_id without a restart.
     host_id = await _add_host(hostname="sw-c", ip="10.99.0.1")
-    await flow_collector.on_host_changed(
-        old_ip=None, new_ip="10.99.0.1", host_id=host_id
-    )
+    await flow_collector.on_host_changed(old_ip=None, new_ip="10.99.0.1", host_id=host_id)
 
     assert flow_collector._exporter_cache.get("10.99.0.1") == host_id
 
@@ -529,8 +592,6 @@ async def test_on_host_changed_updates_cache_and_exporter_rows(tmp_path, monkeyp
     assert rows[0]["hostname"] == "sw-c"
 
     # Now simulate the host being deleted: old_ip set, new_ip None.
-    await flow_collector.on_host_changed(
-        old_ip="10.99.0.1", new_ip=None, host_id=None
-    )
+    await flow_collector.on_host_changed(old_ip="10.99.0.1", new_ip=None, host_id=None)
     rows = await db_module.list_flow_exporters()
     assert rows[0]["host_id"] is None

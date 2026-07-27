@@ -1,6 +1,7 @@
 """
 config_drift.py -- Config drift detection routes: baselines, snapshots, drift events, revert, analysis.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,6 +47,7 @@ def init_config_drift(verify_session_token_fn, get_user_features_fn):
 
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
+
 
 class ConfigBaselineCreate(BaseModel):
     host_id: int
@@ -142,8 +144,7 @@ async def _broadcast_capture_line(job_id: str, text: str) -> None:
                 try:
                     _capture_job_sockets[job_id].remove(ws)
                 except (ValueError, KeyError) as exc:
-                    LOGGER.debug("capture broadcast: WS already removed for job %s: %s",
-                                 job_id, exc)
+                    LOGGER.debug("capture broadcast: WS already removed for job %s: %s", job_id, exc)
 
 
 async def _finish_capture_job(job_id: str, status: str) -> None:
@@ -160,11 +161,13 @@ async def _finish_capture_job(job_id: str, status: str) -> None:
             await asyncio.wait_for(ws.send_json(done_msg), timeout=5)
         except Exception:
             LOGGER.debug("capture finish: dropping dead WS for job %s", job_id)
+
     # Schedule cleanup of in-memory job state after 5 minutes
     async def _deferred_capture_cleanup() -> None:
         await asyncio.sleep(300)
         async with _capture_jobs_lock:
             _capture_jobs.pop(job_id, None)
+
     asyncio.ensure_future(_deferred_capture_cleanup())
 
 
@@ -205,8 +208,9 @@ async def _capture_job_body(
     ok_count = 0
     fail_count = 0
 
-    await _broadcast_capture_line(job_id,
-        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Starting config capture for {total} host(s)...\n")
+    await _broadcast_capture_line(
+        job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Starting config capture for {total} host(s)...\n"
+    )
 
     sem = state.device_op_semaphore()
 
@@ -217,12 +221,16 @@ async def _capture_job_body(
         hostname = h.get("hostname", h.get("ip_address", "unknown"))
         ip = h.get("ip_address", "")
         async with sem:
-            await _broadcast_capture_line(job_id,
-                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) Connecting to {hostname} ({ip})...\n")
+            await _broadcast_capture_line(
+                job_id,
+                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) Connecting to {hostname} ({ip})...\n",
+            )
             try:
                 config_text = await _capture_running_config(h, credentials)
                 sid = await db.create_config_snapshot(
-                    host_id=h["id"], config_text=config_text, capture_method="manual",
+                    host_id=h["id"],
+                    config_text=config_text,
+                    capture_method="manual",
                 )
                 ok_count += 1
                 captured_host_ids.append(h["id"])
@@ -236,26 +244,33 @@ async def _capture_job_body(
                         source="auto-capture",
                         created_by=user,
                     )
-                    await _broadcast_capture_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) \u2713 {hostname} \u2014 captured ({len(config_text)} chars, snapshot #{sid}) [baseline set]\n")
+                    await _broadcast_capture_line(
+                        job_id,
+                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) \u2713 {hostname} \u2014 captured ({len(config_text)} chars, snapshot #{sid}) [baseline set]\n",
+                    )
                 else:
-                    await _broadcast_capture_line(job_id,
-                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) \u2713 {hostname} \u2014 captured ({len(config_text)} chars, snapshot #{sid})\n")
+                    await _broadcast_capture_line(
+                        job_id,
+                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) \u2713 {hostname} \u2014 captured ({len(config_text)} chars, snapshot #{sid})\n",
+                    )
             except Exception as exc:
                 fail_count += 1
-                await _broadcast_capture_line(job_id,
-                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) \u2717 {hostname} \u2014 FAILED: {exc}\n")
+                await _broadcast_capture_line(
+                    job_id,
+                    f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) \u2717 {hostname} \u2014 FAILED: {exc}\n",
+                )
 
     tasks = [asyncio.create_task(_capture_one(i + 1, h)) for i, h in enumerate(hosts)]
     await asyncio.gather(*tasks)
 
-    await _broadcast_capture_line(job_id,
-        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capture complete: {ok_count} succeeded, {fail_count} failed out of {total} host(s).\n")
+    await _broadcast_capture_line(
+        job_id,
+        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capture complete: {ok_count} succeeded, {fail_count} failed out of {total} host(s).\n",
+    )
 
     # Run drift analysis for each successfully captured host
     if captured_host_ids:
-        await _broadcast_capture_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Running drift analysis...\n")
+        await _broadcast_capture_line(job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Running drift analysis...\n")
         drift_count = 0
         compliant_count = 0
         skip_count = 0
@@ -270,8 +285,10 @@ async def _capture_job_body(
                     compliant_count += 1
             except Exception as exc:
                 LOGGER.error("config-drift: analysis failed for host %s: %s", hid, exc)
-        await _broadcast_capture_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Analysis complete: {compliant_count} compliant, {drift_count} drifted, {skip_count} skipped (no baseline).\n")
+        await _broadcast_capture_line(
+            job_id,
+            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Analysis complete: {compliant_count} compliant, {drift_count} drifted, {skip_count} skipped (no baseline).\n",
+        )
 
     return "completed" if fail_count == 0 else ("partial" if ok_count > 0 else "failed")
 
@@ -289,8 +306,10 @@ async def _analyze_drift_for_host(host_id: int) -> dict:
         return {"drifted": False, "event_id": None, "diff_summary": "No snapshot available"}
 
     diff_text, added, removed = _compute_config_diff(
-        baseline["config_text"], snapshot["config_text"],
-        baseline_label="baseline", actual_label="running-config",
+        baseline["config_text"],
+        snapshot["config_text"],
+        baseline_label="baseline",
+        actual_label="running-config",
     )
     if not diff_text:
         return {"drifted": False, "event_id": None, "diff_summary": "In compliance"}
@@ -301,8 +320,7 @@ async def _analyze_drift_for_host(host_id: int) -> dict:
     # when the drift is unchanged; a different diff is genuinely new drift.
     open_events = await db.get_config_drift_events(status="open", host_id=host_id, limit=20)
     for existing in open_events:
-        if (existing.get("baseline_id") == baseline["id"]
-                and existing.get("diff_text") == diff_text):
+        if existing.get("baseline_id") == baseline["id"] and existing.get("diff_text") == diff_text:
             return {
                 "drifted": True,
                 "event_id": existing["id"],
@@ -354,8 +372,7 @@ async def _broadcast_revert_line(job_id: str, line: str):
                 try:
                     _revert_job_sockets[job_id].remove(ws)
                 except (ValueError, KeyError) as exc:
-                    LOGGER.debug("revert broadcast: WS already removed for job %s: %s",
-                                 job_id, exc)
+                    LOGGER.debug("revert broadcast: WS already removed for job %s: %s", job_id, exc)
 
 
 async def _finish_revert_job(job_id: str, status: str = "completed"):
@@ -367,11 +384,13 @@ async def _finish_revert_job(job_id: str, status: str = "completed"):
             await asyncio.wait_for(ws.send_json({"type": "job_complete", "status": status}), timeout=5)
         except Exception:
             LOGGER.debug("revert finish: dropping dead WS for job %s", job_id)
+
     # Schedule cleanup of in-memory job state after 5 minutes
     async def _deferred_revert_cleanup() -> None:
         await asyncio.sleep(300)
         async with _revert_jobs_lock:
             _revert_jobs.pop(job_id, None)
+
     asyncio.ensure_future(_deferred_revert_cleanup())
 
 
@@ -468,51 +487,61 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
     """Background task: push only the changed lines back to the device, then re-capture and re-analyze."""
     hostname = host.get("hostname", host["ip_address"])
     try:
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Analyzing diff for {hostname}...\n")
+        await _broadcast_revert_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Analyzing diff for {hostname}...\n"
+        )
 
         diff_text = event.get("diff_text", "")
         config_lines = _build_revert_commands(diff_text, baseline.get("config_text", ""))
 
         if not config_lines:
-            await _broadcast_revert_line(job_id,
-                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] No config changes to revert.\n")
+            await _broadcast_revert_line(
+                job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] No config changes to revert.\n"
+            )
             await _finish_revert_job(job_id, "completed")
             return
 
         # Log what will be pushed
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {len(config_lines)} lines to revert (only changed lines, not full config):\n")
+        await _broadcast_revert_line(
+            job_id,
+            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {len(config_lines)} lines to revert (only changed lines, not full config):\n",
+        )
         for cmd in config_lines:
             await _broadcast_revert_line(job_id, f"  {cmd}\n")
 
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Connecting to {hostname} ({host['ip_address']})...\n")
+        await _broadcast_revert_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Connecting to {hostname} ({host['ip_address']})...\n"
+        )
 
         output = await _push_config_to_device(host, credentials, config_lines)
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Config pushed successfully.\n")
+        await _broadcast_revert_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Config pushed successfully.\n"
+        )
 
         # Re-capture the running config to verify
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Re-capturing running config to verify...\n")
+        await _broadcast_revert_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Re-capturing running config to verify...\n"
+        )
         new_config = await _capture_running_config(host, credentials)
         sid = await db.create_config_snapshot(
             host_id=host["id"],
             config_text=new_config,
             capture_method="post-revert",
         )
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Snapshot #{sid} captured ({len(new_config)} chars).\n")
+        await _broadcast_revert_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Snapshot #{sid} captured ({len(new_config)} chars).\n"
+        )
 
         # Re-analyze drift
         result = await _analyze_drift_for_host(host["id"])
         if result.get("drifted"):
-            await _broadcast_revert_line(job_id,
-                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Warning: device still shows drift after revert.\n")
+            await _broadcast_revert_line(
+                job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Warning: device still shows drift after revert.\n"
+            )
         else:
-            await _broadcast_revert_line(job_id,
-                f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Device is now compliant with baseline.\n")
+            await _broadcast_revert_line(
+                job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Device is now compliant with baseline.\n"
+            )
 
         # Mark original event as resolved
         prev_status = event.get("status", "open")
@@ -526,11 +555,11 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
             actor=user,
             details="resolved after revert job completion",
         )
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift event marked as resolved.\n")
+        await _broadcast_revert_line(
+            job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Drift event marked as resolved.\n"
+        )
 
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Revert complete.\n")
+        await _broadcast_revert_line(job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Revert complete.\n")
         await _finish_revert_job(job_id, "completed")
     except Exception as exc:
         LOGGER.error("config-drift revert failed for %s: %s", hostname, exc)
@@ -545,14 +574,15 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
                 details="revert job failed; see server logs",
             )
         except Exception as hist_exc:
-            LOGGER.warning("config-drift: failed to record revert_failed history for event %s: %s",
-                           event["id"], hist_exc)
-        await _broadcast_revert_line(job_id,
-            f"[{datetime.now(UTC).strftime('%H:%M:%S')}] FAILED: {exc}\n")
+            LOGGER.warning(
+                "config-drift: failed to record revert_failed history for event %s: %s", event["id"], hist_exc
+            )
+        await _broadcast_revert_line(job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] FAILED: {exc}\n")
         await _finish_revert_job(job_id, "failed")
 
 
 # ── Background loops ─────────────────────────────────────────────────────────
+
 
 async def _run_config_drift_check_once() -> dict:
     """Run drift analysis on all hosts that have baselines."""
@@ -574,7 +604,8 @@ async def _run_config_drift_check_once() -> dict:
             return await _analyze_drift_for_host(host_id)
 
     results = await asyncio.gather(
-        *[_check_one(hid) for hid in host_ids], return_exceptions=True,
+        *[_check_one(hid) for hid in host_ids],
+        return_exceptions=True,
     )
     for hid, result in zip(host_ids, results):
         if isinstance(result, BaseException):
@@ -586,8 +617,11 @@ async def _run_config_drift_check_once() -> dict:
             drifted += 1
 
     # Retention cleanup
-    retention_days = int(state.CONFIG_DRIFT_CHECK_CONFIG.get(
-        "snapshot_retention_days", state.CONFIG_DRIFT_CHECK_DEFAULTS["snapshot_retention_days"]))
+    retention_days = int(
+        state.CONFIG_DRIFT_CHECK_CONFIG.get(
+            "snapshot_retention_days", state.CONFIG_DRIFT_CHECK_DEFAULTS["snapshot_retention_days"]
+        )
+    )
     try:
         await db.delete_old_config_snapshots(retention_days)
         await db.delete_old_config_drift_events(retention_days)
@@ -595,8 +629,7 @@ async def _run_config_drift_check_once() -> dict:
         LOGGER.warning("config drift retention cleanup failed: %s", exc)
 
     if hosts_checked > 0:
-        LOGGER.info("config drift check: checked %d hosts, %d drifted, %d errors",
-                     hosts_checked, drifted, errors)
+        LOGGER.info("config drift check: checked %d hosts, %d drifted, %d errors", hosts_checked, drifted, errors)
         increment_metric("config_drift.check.scheduled.success")
 
     return {
@@ -611,8 +644,13 @@ async def _config_drift_check_loop() -> None:
     """Infinite loop that runs drift checks at configurable intervals."""
     while True:
         try:
-            await asyncio.sleep(int(state.CONFIG_DRIFT_CHECK_CONFIG.get(
-                "interval_seconds", state.CONFIG_DRIFT_CHECK_DEFAULTS["interval_seconds"])))
+            await asyncio.sleep(
+                int(
+                    state.CONFIG_DRIFT_CHECK_CONFIG.get(
+                        "interval_seconds", state.CONFIG_DRIFT_CHECK_DEFAULTS["interval_seconds"]
+                    )
+                )
+            )
             await _run_config_drift_check_once()
         except asyncio.CancelledError:
             raise
@@ -660,7 +698,8 @@ async def create_config_baseline(body: ConfigBaselineCreate, request: Request):
         created_by=user,
     )
     await _audit(
-        "config-drift", "baseline.created",
+        "config-drift",
+        "baseline.created",
         user=user,
         detail=f"host_id={body.host_id} name={body.name!r}",
         correlation_id=_corr_id(request),
@@ -682,7 +721,8 @@ async def update_config_baseline_endpoint(baseline_id: int, body: ConfigBaseline
     )
     session = _get_session(request)
     await _audit(
-        "config-drift", "baseline.updated",
+        "config-drift",
+        "baseline.updated",
         user=session["user"] if session else "",
         detail=f"baseline_id={baseline_id}",
         correlation_id=_corr_id(request),
@@ -699,7 +739,8 @@ async def delete_config_baseline_endpoint(baseline_id: int, request: Request):
     await db.delete_config_baseline(baseline_id)
     session = _get_session(request)
     await _audit(
-        "config-drift", "baseline.deleted",
+        "config-drift",
+        "baseline.deleted",
         user=session["user"] if session else "",
         detail=f"baseline_id={baseline_id} host_id={existing.get('host_id')}",
         correlation_id=_corr_id(request),
@@ -708,6 +749,7 @@ async def delete_config_baseline_endpoint(baseline_id: int, request: Request):
 
 
 # ── Routes: Snapshots ────────────────────────────────────────────────────────
+
 
 @router.get("/api/config-drift/snapshots")
 async def list_config_snapshots(host_id: int = Query(), limit: int = Query(default=50, ge=1, le=10000)):
@@ -743,7 +785,8 @@ async def capture_config_snapshot(body: ConfigSnapshotCaptureRequest, request: R
     )
     session = _get_session(request)
     await _audit(
-        "config-drift", "snapshot.captured",
+        "config-drift",
+        "snapshot.captured",
         user=session["user"] if session else "",
         detail=f"host_id={body.host_id} snapshot_id={snapshot_id}",
         correlation_id=_corr_id(request),
@@ -767,7 +810,9 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
             try:
                 config_text = await _capture_running_config(h, cred)
                 sid = await db.create_config_snapshot(
-                    host_id=h["id"], config_text=config_text, capture_method="manual",
+                    host_id=h["id"],
+                    config_text=config_text,
+                    capture_method="manual",
                 )
                 return {"host_id": h["id"], "hostname": h["hostname"], "ok": True, "snapshot_id": sid}
             except Exception as exc:
@@ -777,7 +822,8 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
     results = await asyncio.gather(*tasks)
     session = _get_session(request)
     await _audit(
-        "config-drift", "snapshot.captured_group",
+        "config-drift",
+        "snapshot.captured_group",
         user=session["user"] if session else "",
         detail=f"group_id={body.group_id} hosts={len(hosts)}",
         correlation_id=_corr_id(request),
@@ -786,6 +832,7 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
 
 
 # ── Routes: Capture Jobs (background with WebSocket streaming) ───────────────
+
 
 @router.post("/api/config-drift/snapshots/capture-job")
 async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
@@ -813,7 +860,8 @@ async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
     )
 
     await _audit(
-        "config-drift", "snapshot.capture_job",
+        "config-drift",
+        "snapshot.capture_job",
         user=launched_by,
         detail=f"group_id={body.group_id} hosts={len(hosts)} job_id={job_id}",
         correlation_id=_corr_id(request),
@@ -847,7 +895,8 @@ async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request:
     )
 
     await _audit(
-        "config-drift", "snapshot.capture_job",
+        "config-drift",
+        "snapshot.capture_job",
         user=launched_by,
         detail=f"host_id={body.host_id} job_id={job_id}",
         correlation_id=_corr_id(request),
@@ -946,13 +995,18 @@ async def delete_config_snapshot_endpoint(snapshot_id: int, request: Request):
     await db.delete_config_snapshot(snapshot_id)
     session = _get_session(request)
     user = session["user"] if session else ""
-    await _audit("config_drift", "snapshot.deleted", user=user,
-                 detail=f"snapshot_id={snapshot_id} host_id={existing.get('host_id', '')}",
-                 correlation_id=_corr_id(request))
+    await _audit(
+        "config_drift",
+        "snapshot.deleted",
+        user=user,
+        detail=f"snapshot_id={snapshot_id} host_id={existing.get('host_id', '')}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
 # ── Routes: Drift Events ─────────────────────────────────────────────────────
+
 
 @router.get("/api/config-drift/events")
 async def list_config_drift_events(
@@ -974,9 +1028,7 @@ async def bulk_accept_drift_events(body: ConfigDriftBulkAcceptRequest, request: 
     events = await db.get_config_drift_events_by_ids(list(dict.fromkeys(body.event_ids)))
     open_events = [e for e in events if e.get("status") == "open"]
     snapshot_ids = [e["snapshot_id"] for e in open_events if e.get("snapshot_id")]
-    snapshots_by_id = {
-        s["id"]: s for s in await db.get_config_snapshots_by_ids(snapshot_ids)
-    }
+    snapshots_by_id = {s["id"]: s for s in await db.get_config_snapshots_by_ids(snapshot_ids)}
     accepted = 0
     for event in open_events:
         from_status = event.get("status", "")
@@ -1002,7 +1054,8 @@ async def bulk_accept_drift_events(body: ConfigDriftBulkAcceptRequest, request: 
         )
         accepted += 1
     await _audit(
-        "config-drift", "drift.bulk_accepted",
+        "config-drift",
+        "drift.bulk_accepted",
         user=user,
         detail=f"count={accepted} ids={body.event_ids[:20]}",
         correlation_id=_corr_id(request),
@@ -1054,7 +1107,9 @@ async def update_config_drift_event_status(event_id: int, body: ConfigDriftStatu
                 source="accepted-drift",
                 created_by=user,
             )
-            LOGGER.info("config-drift: baseline updated for host %s after accepting event %s", event["host_id"], event_id)
+            LOGGER.info(
+                "config-drift: baseline updated for host %s after accepting event %s", event["host_id"], event_id
+            )
 
     await db.create_config_drift_event_history(
         event_id=event_id,
@@ -1067,7 +1122,8 @@ async def update_config_drift_event_status(event_id: int, body: ConfigDriftStatu
     )
 
     await _audit(
-        "config-drift", f"drift.{body.status}",
+        "config-drift",
+        f"drift.{body.status}",
         user=user,
         detail=f"event_id={event_id} host_id={event.get('host_id')}",
         correlation_id=_corr_id(request),
@@ -1076,6 +1132,7 @@ async def update_config_drift_event_status(event_id: int, body: ConfigDriftStatu
 
 
 # ── Routes: Revert ───────────────────────────────────────────────────────────
+
 
 @router.post("/api/config-drift/events/revert")
 async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
@@ -1097,7 +1154,13 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
     user = session["user"] if session else ""
 
     job_id = str(uuid.uuid4())
-    _revert_jobs[job_id] = {"status": "running", "output": "", "event_id": body.event_id, "host_id": event["host_id"], "launched_by": user}
+    _revert_jobs[job_id] = {
+        "status": "running",
+        "output": "",
+        "event_id": body.event_id,
+        "host_id": event["host_id"],
+        "launched_by": user,
+    }
     _revert_job_sockets[job_id] = []
 
     supervise_task(
@@ -1115,7 +1178,8 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
     )
 
     await _audit(
-        "config-drift", "drift.revert",
+        "config-drift",
+        "drift.revert",
         user=user,
         detail=f"event_id={body.event_id} host_id={event['host_id']} job_id={job_id}",
         correlation_id=_corr_id(request),
@@ -1186,6 +1250,7 @@ async def ws_config_revert(websocket: WebSocket, job_id: str):
 
 # ── Routes: Analysis ─────────────────────────────────────────────────────────
 
+
 @router.post("/api/config-drift/analyze")
 async def analyze_config_drift(body: ConfigDriftAnalyzeRequest, request: Request):
     """Run drift analysis for a single host."""
@@ -1195,7 +1260,8 @@ async def analyze_config_drift(body: ConfigDriftAnalyzeRequest, request: Request
     result = await _analyze_drift_for_host(body.host_id)
     session = _get_session(request)
     await _audit(
-        "config-drift", "drift.analyzed",
+        "config-drift",
+        "drift.analyzed",
         user=session["user"] if session else "",
         detail=f"host_id={body.host_id} drifted={result['drifted']}",
         correlation_id=_corr_id(request),
@@ -1220,7 +1286,8 @@ async def analyze_group_config_drift(body: ConfigDriftAnalyzeGroupRequest, reque
     session = _get_session(request)
     drifted_count = sum(1 for r in results if r["drifted"])
     await _audit(
-        "config-drift", "drift.analyzed_group",
+        "config-drift",
+        "drift.analyzed_group",
         user=session["user"] if session else "",
         detail=f"group_id={body.group_id} hosts={len(results)} drifted={drifted_count}",
         correlation_id=_corr_id(request),
@@ -1241,7 +1308,9 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
         LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
         raise HTTPException(status_code=502, detail="SSH capture failed; see server logs")
     snapshot_id = await db.create_config_snapshot(
-        host_id=body.host_id, config_text=config_text, capture_method="manual",
+        host_id=body.host_id,
+        config_text=config_text,
+        capture_method="manual",
     )
     result = await _analyze_drift_for_host(body.host_id)
     result["snapshot_id"] = snapshot_id
@@ -1249,7 +1318,8 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
     result["hostname"] = host["hostname"]
     session = _get_session(request)
     await _audit(
-        "config-drift", "drift.check",
+        "config-drift",
+        "drift.check",
         user=session["user"] if session else "",
         detail=f"host_id={body.host_id} drifted={result['drifted']}",
         correlation_id=_corr_id(request),
@@ -1259,6 +1329,7 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
 
 # ── Routes: Summary ──────────────────────────────────────────────────────────
 
+
 @router.get("/api/config-drift/summary")
 async def get_config_drift_summary():
     """Return drift detection summary stats."""
@@ -1266,6 +1337,7 @@ async def get_config_drift_summary():
 
 
 # ── Routes: Admin Config Drift Schedule ──────────────────────────────────────
+
 
 @admin_router.get("/api/admin/config-drift")
 async def admin_get_config_drift_config():
@@ -1280,7 +1352,8 @@ async def admin_update_config_drift_config(body: dict, request: Request):
     await db.set_auth_setting("config_drift_check", state.CONFIG_DRIFT_CHECK_CONFIG)
     session = _get_session(request)
     await _audit(
-        "config-drift", "config.updated",
+        "config-drift",
+        "config.updated",
         user=session["user"] if session else "",
         detail=f"enabled={state.CONFIG_DRIFT_CHECK_CONFIG['enabled']} interval={state.CONFIG_DRIFT_CHECK_CONFIG['interval_seconds']}s",
         correlation_id=_corr_id(request),
@@ -1294,7 +1367,8 @@ async def admin_run_config_drift_check_now(request: Request):
     result = await _run_config_drift_check_once()
     session = _get_session(request)
     await _audit(
-        "config-drift", "check.manual",
+        "config-drift",
+        "check.manual",
         user=session["user"] if session else "",
         detail=f"hosts_checked={result.get('hosts_checked', 0)} drifted={result.get('drifted', 0)}",
         correlation_id=_corr_id(request),

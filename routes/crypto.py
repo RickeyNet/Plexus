@@ -97,9 +97,10 @@ def _load_or_create_key() -> bytes:
             mode = os.stat(KEY_FILE).st_mode
             if mode & (stat.S_IRGRP | stat.S_IROTH):
                 LOGGER.warning(
-                    "Encryption key file %s is readable by group/other (mode %o). "
-                    "Run: chmod 600 %s",
-                    KEY_FILE, stat.S_IMODE(mode), KEY_FILE,
+                    "Encryption key file %s is readable by group/other (mode %o). Run: chmod 600 %s",
+                    KEY_FILE,
+                    stat.S_IMODE(mode),
+                    KEY_FILE,
                 )
         except (OSError, AttributeError) as exc:
             LOGGER.debug("Key file permission check skipped (Windows or stat unavailable): %s", exc)
@@ -147,7 +148,7 @@ _key_raw = base64.urlsafe_b64decode(_key_b64)
 _legacy_fernet = None
 try:
     _legacy_fernet = Fernet(_key_b64)
-except (ValueError, TypeError, binascii.Error):
+except ValueError, TypeError, binascii.Error:
     LOGGER.debug("Key is not a legacy Fernet key; legacy Fernet decryption disabled")
 
 # For AES-256-GCM: if this is a legacy Fernet key (32 bytes = 16 sign + 16 enc),
@@ -183,16 +184,14 @@ def decrypt(ciphertext: str) -> str:
     try:
         raw = base64.urlsafe_b64decode(ciphertext.encode())
     except Exception:
-        raise RuntimeError(
-            "Failed to decrypt credential - ciphertext is not valid base64."
-        )
+        raise RuntimeError("Failed to decrypt credential - ciphertext is not valid base64.")
 
     # New AES-256-GCM format: prefix 0x02 + 12-byte nonce + ciphertext+tag
     if raw[:1] == _V2_PREFIX:
         if len(raw) < 1 + _NONCE_SIZE + 16:  # prefix + nonce + min GCM tag
             raise RuntimeError("Failed to decrypt credential - ciphertext is too short.")
-        nonce = raw[1:1 + _NONCE_SIZE]
-        ct = raw[1 + _NONCE_SIZE:]
+        nonce = raw[1 : 1 + _NONCE_SIZE]
+        ct = raw[1 + _NONCE_SIZE :]
         try:
             return _aesgcm.decrypt(nonce, ct, None).decode()
         except Exception:

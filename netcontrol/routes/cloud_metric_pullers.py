@@ -148,9 +148,7 @@ async def pull_aws_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
     extra = _parse_cursor_extra(cursor)
     regions_set = set(regions)
     region_marks: dict[str, str] = {
-        k: v
-        for k, v in (extra.get("regions") or {}).items()
-        if isinstance(v, str) and k in regions_set
+        k: v for k, v in (extra.get("regions") or {}).items() if isinstance(v, str) and k in regions_set
     }
     global_start, end_dt = _window(cursor, lookback_minutes=lookback_minutes)
 
@@ -266,9 +264,7 @@ async def _aws_cloudwatch_fetch(
                             "Metric": {
                                 "Namespace": namespace,
                                 "MetricName": metric_name,
-                                "Dimensions": [
-                                    {"Name": resource_dimension_name, "Value": resource_id}
-                                ],
+                                "Dimensions": [{"Name": resource_dimension_name, "Value": resource_id}],
                             },
                             "Period": period_seconds,
                             "Stat": statistic,
@@ -279,7 +275,7 @@ async def _aws_cloudwatch_fetch(
 
         records: list[dict] = []
         for batch_start in range(0, len(queries), _AWS_METRIC_DATA_BATCH):
-            batch = queries[batch_start:batch_start + _AWS_METRIC_DATA_BATCH]
+            batch = queries[batch_start : batch_start + _AWS_METRIC_DATA_BATCH]
             token: str | None = None
             while True:
                 kwargs: dict[str, Any] = {
@@ -302,9 +298,7 @@ async def _aws_cloudwatch_fetch(
                             {
                                 "MetricName": metric_name,
                                 "Namespace": namespace,
-                                "Dimensions": [
-                                    {"Name": resource_dimension_name, "Value": resource_id}
-                                ],
+                                "Dimensions": [{"Name": resource_dimension_name, "Value": resource_id}],
                                 "Timestamp": ts,
                                 "Value": value,
                                 "Statistic": statistic,
@@ -388,12 +382,14 @@ def _build_azure_metrics_client(auth: dict):
     if client_id and client_secret and tenant_id:
         try:
             from azure.identity import ClientSecretCredential
+
             credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
         except ImportError:
             raise ImportError("azure-identity is required for explicit service principal auth")
     if credential is None:
         try:
             from azure.identity import DefaultAzureCredential
+
             credential = DefaultAzureCredential()
         except ImportError:
             raise ImportError("azure-identity is required for Azure Monitor puller")
@@ -664,7 +660,8 @@ async def pull_traffic_metrics_all_accounts(*, lookback_minutes: int = _DEFAULT_
         async with semaphore:
             try:
                 return account_id, await pull_traffic_metrics_for_account(
-                    account, lookback_minutes=lookback_minutes,
+                    account,
+                    lookback_minutes=lookback_minutes,
                 )
             except Exception as exc:
                 LOGGER.warning(
@@ -704,9 +701,14 @@ def _build_boto3_session(auth: dict):
     if role_arn:
         from botocore.config import Config
 
-        sts = session.client("sts", config=Config(
-            connect_timeout=10, read_timeout=30, retries={"max_attempts": 2},
-        ))
+        sts = session.client(
+            "sts",
+            config=Config(
+                connect_timeout=10,
+                read_timeout=30,
+                retries={"max_attempts": 2},
+            ),
+        )
         assume_args: dict[str, str] = {
             "RoleArn": role_arn,
             "RoleSessionName": str(auth.get("role_session_name") or "plexus-metric-puller"),

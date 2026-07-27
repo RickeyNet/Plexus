@@ -20,6 +20,7 @@ class TemplateCreate(BaseModel):
     # the same name; see migration 0040 / resolve_template_for_device_type.
     device_type: str = ""
 
+
 class TemplateUpdate(BaseModel):
     name: str
     content: str
@@ -34,12 +35,16 @@ async def list_templates():
 
 @router.post("/api/templates", status_code=201)
 async def create_template(body: TemplateCreate, request: Request = None):
-    tid = await db.create_template(
-        body.name, body.content, body.description, body.device_type
-    )
+    tid = await db.create_template(body.name, body.content, body.description, body.device_type)
     session = _get_session(request) if request else None
     _dt = f" [{body.device_type}]" if body.device_type else ""
-    await _audit("config", "template.create", user=session["user"] if session else "", detail=f"created template '{body.name}'{_dt}", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "template.create",
+        user=session["user"] if session else "",
+        detail=f"created template '{body.name}'{_dt}",
+        correlation_id=_corr_id(request),
+    )
     return {"id": tid}
 
 
@@ -53,11 +58,15 @@ async def get_template(template_id: int):
 
 @router.put("/api/templates/{template_id}")
 async def update_template(template_id: int, body: TemplateUpdate, request: Request = None):
-    await db.update_template(
-        template_id, body.name, body.content, body.description, body.device_type
-    )
+    await db.update_template(template_id, body.name, body.content, body.description, body.device_type)
     session = _get_session(request) if request else None
-    await _audit("config", "template.update", user=session["user"] if session else "", detail=f"updated template {template_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "template.update",
+        user=session["user"] if session else "",
+        detail=f"updated template {template_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -65,5 +74,11 @@ async def update_template(template_id: int, body: TemplateUpdate, request: Reque
 async def delete_template(template_id: int, request: Request = None):
     await db.delete_template(template_id)
     session = _get_session(request) if request else None
-    await _audit("config", "template.delete", user=session["user"] if session else "", detail=f"deleted template {template_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "template.delete",
+        user=session["user"] if session else "",
+        detail=f"deleted template {template_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}

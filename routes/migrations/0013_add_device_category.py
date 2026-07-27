@@ -58,17 +58,13 @@ async def _backfill(db) -> None:
 
 
 async def _up_sqlite(db) -> None:
-    await db.execute(
-        "ALTER TABLE hosts ADD COLUMN device_category TEXT NOT NULL DEFAULT ''"
-    )
+    await db.execute("ALTER TABLE hosts ADD COLUMN device_category TEXT NOT NULL DEFAULT ''")
     await db.commit()
     await _backfill(db)
 
 
 async def _up_postgres(db) -> None:
-    await db.execute(
-        "ALTER TABLE hosts ADD COLUMN device_category TEXT NOT NULL DEFAULT ''"
-    )
+    await db.execute("ALTER TABLE hosts ADD COLUMN device_category TEXT NOT NULL DEFAULT ''")
     await db.commit()
     await _backfill(db)
 

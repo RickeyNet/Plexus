@@ -49,7 +49,7 @@ async def _seed_host_with_polls(hostname: str, rts: list[float]) -> int:
 def _population_stddev(values: list[float]) -> float:
     mean = sum(values) / len(values)
     variance = sum((v - mean) ** 2 for v in values) / len(values)
-    return variance ** 0.5
+    return variance**0.5
 
 
 def test_jitter_matches_population_stddev(sla_db):

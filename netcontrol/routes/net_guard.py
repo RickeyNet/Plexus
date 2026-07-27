@@ -29,6 +29,7 @@ is a strong mitigation but not a full guarantee against DNS-rebinding (a name
 that resolves differently at connect time); pinning the connection to the
 validated IP would be required for that and is out of scope here.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -58,12 +59,7 @@ def _ip_is_blocked(ip: ipaddress._BaseAddress, *, block_private: bool) -> bool:
     # block link-local plus multicast/reserved/unspecified. Loopback and
     # private ranges are permitted by default (legit on-prem / sidecar targets)
     # and only blocked when the operator opts into APP_SSRF_BLOCK_PRIVATE.
-    if (
-        ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    ):
+    if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         return True
     if block_private and (ip.is_private or ip.is_loopback):
         return True
@@ -105,18 +101,14 @@ def validate_outbound_host(host: str, *, block_private: bool | None = None) -> N
         block_private = _env_flag("APP_SSRF_BLOCK_PRIVATE", False)
     for ip in _resolve_ips(host):
         if _ip_is_blocked(ip, block_private=block_private):
-            raise OutboundRequestError(
-                f"host '{host}' resolves to a disallowed address ({ip})"
-            )
+            raise OutboundRequestError(f"host '{host}' resolves to a disallowed address ({ip})")
 
 
 def validate_outbound_url(url: str, *, block_private: bool | None = None) -> None:
     """Validate an http(s) URL. Raises OutboundRequestError on failure."""
     parts = urlsplit((url or "").strip())
     if parts.scheme.lower() not in _ALLOWED_SCHEMES:
-        raise OutboundRequestError(
-            f"URL scheme '{parts.scheme}' not allowed (use http/https)"
-        )
+        raise OutboundRequestError(f"URL scheme '{parts.scheme}' not allowed (use http/https)")
     host = parts.hostname
     if not host:
         raise OutboundRequestError("URL has no host")

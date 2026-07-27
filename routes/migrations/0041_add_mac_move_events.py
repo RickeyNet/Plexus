@@ -39,14 +39,8 @@ async def _up_sqlite(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mac_move_events_mac "
-        "ON mac_move_events(mac_address, detected_at)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mac_move_events_status "
-        "ON mac_move_events(status, detected_at)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_mac_move_events_mac ON mac_move_events(mac_address, detected_at)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_mac_move_events_status ON mac_move_events(status, detected_at)")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS mac_move_event_history (
@@ -91,14 +85,8 @@ async def _up_postgres(db) -> None:
         )
         """
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mac_move_events_mac "
-        "ON mac_move_events(mac_address, detected_at)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mac_move_events_status "
-        "ON mac_move_events(status, detected_at)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_mac_move_events_mac ON mac_move_events(mac_address, detected_at)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_mac_move_events_status ON mac_move_events(status, detected_at)")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS mac_move_event_history (

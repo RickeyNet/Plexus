@@ -3,6 +3,7 @@
 Split out of routes/database.py; star re-exported there so the
 ``routes.database`` facade keeps its full public surface.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -82,9 +83,7 @@ async def get_secret_variable_by_name(name: str) -> dict | None:
         await conn.close()
 
 
-async def create_secret_variable(
-    name: str, enc_value: str, description: str = "", created_by: str = ""
-) -> int:
+async def create_secret_variable(name: str, enc_value: str, description: str = "", created_by: str = "") -> int:
     conn = await _dbcore.get_db()
     try:
         cursor = await conn.execute(
@@ -144,6 +143,7 @@ async def delete_secret_variable(var_id: int) -> bool:
 # Credentials (encrypted externally before storage)
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 async def get_all_credentials(owner_id: int | None = None) -> list[dict]:
     """Return user credentials with passwords masked, excluding service creds.
 
@@ -158,7 +158,8 @@ async def get_all_credentials(owner_id: int | None = None) -> list[dict]:
                 "SELECT id, name, username, owner_id, is_service, created_at "
                 "FROM credentials WHERE owner_id = ? AND is_service = 0 "
                 "ORDER BY name",
-                (owner_id,))
+                (owner_id,),
+            )
         else:
             cursor = await db.execute(
                 "SELECT id, name, username, owner_id, is_service, created_at "
@@ -197,17 +198,21 @@ async def get_credential_raw(cred_id: int) -> dict | None:
         await db.close()
 
 
-async def create_credential(name: str, username: str, enc_password: str,
-                            enc_secret: str = "", owner_id: int | None = None,
-                            is_service: bool = False) -> int:
+async def create_credential(
+    name: str,
+    username: str,
+    enc_password: str,
+    enc_secret: str = "",
+    owner_id: int | None = None,
+    is_service: bool = False,
+) -> int:
     """Insert a credential. Service credentials always have owner_id NULL."""
     if is_service:
         owner_id = None
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO credentials (name, username, password, secret, owner_id, is_service) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO credentials (name, username, password, secret, owner_id, is_service) VALUES (?,?,?,?,?,?)",
             (name, username, enc_password, enc_secret, owner_id, 1 if is_service else 0),
         )
         await db.commit()
@@ -260,5 +265,3 @@ async def update_credential(
         raise
     finally:
         await db.close()
-
-

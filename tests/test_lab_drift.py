@@ -39,10 +39,12 @@ def _auth_client(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
 
     from netcontrol.routes import state as _state
+
     _state.API_RATE_LIMIT["enabled"] = False
     _state.API_RATE_LIMIT_TRACKER.clear()
 
     from starlette.testclient import TestClient
+
     client = TestClient(app_module.app, raise_server_exceptions=False)
     client.__enter__()
     request.addfinalizer(lambda: client.__exit__(None, None, None))
@@ -64,9 +66,7 @@ async def test_drift_table_exists_after_init(tmp_path, monkeypatch):
     await db_module.init_db()
     conn = await db_module.get_db()
     try:
-        cur = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='lab_drift_runs'"
-        )
+        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='lab_drift_runs'")
         assert await cur.fetchone() is not None
     finally:
         await conn.close()
@@ -77,14 +77,14 @@ async def test_drift_table_exists_after_init(tmp_path, monkeypatch):
 
 def _seed_host_with_snapshot(hostname: str, ip: str, config_text: str) -> int:
     """Create a group + host + config_snapshot. Returns the host id."""
+
     async def _do():
         gid = await db_module.create_group(name=f"grp-{hostname}")
         hid = await db_module.add_host(group_id=gid, hostname=hostname, ip_address=ip)
         conn = await db_module.get_db()
         try:
             await conn.execute(
-                "INSERT INTO config_snapshots (host_id, capture_method, config_text) "
-                "VALUES (?, 'manual', ?)",
+                "INSERT INTO config_snapshots (host_id, capture_method, config_text) VALUES (?, 'manual', ?)",
                 (hid, config_text),
             )
             await conn.commit()
@@ -139,8 +139,7 @@ def test_drift_check_detects_divergence(tmp_path, monkeypatch, request):
         conn = await db_module.get_db()
         try:
             await conn.execute(
-                "INSERT INTO config_snapshots (host_id, capture_method, config_text) "
-                "VALUES (?, 'manual', ?)",
+                "INSERT INTO config_snapshots (host_id, capture_method, config_text) VALUES (?, 'manual', ?)",
                 (host_id, initial + "snmp-server community public RO\n"),
             )
             await conn.commit()
@@ -189,11 +188,14 @@ def test_drift_check_missing_when_no_prod_snapshot(tmp_path, monkeypatch, reques
     async def _seed():
         gid = await db_module.create_group(name="bare-grp")
         return await db_module.add_host(
-            group_id=gid, hostname="bare-host", ip_address="10.0.0.3",
+            group_id=gid,
+            hostname="bare-host",
+            ip_address="10.0.0.3",
         )
 
     host_id = asyncio.run(_seed())
     env_id = client.post("/api/lab/environments", json={"name": "no-snap-env"}).json()["id"]
+
     # Manually create the device so the clone-host endpoint doesn't reject the empty config.
     async def _seed_dev():
         return await db_module.create_lab_device(

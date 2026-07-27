@@ -48,9 +48,7 @@ class CiscoNXOSDriver(Driver):
             cmds.append(f"interface {intf}")
             cmds.append(f" ip flow monitor {cfg.monitor_name} input")
             if cfg.sampling_rate > 1:
-                cmds.append(
-                    f" ip flow monitor {cfg.monitor_name} sampler {cfg.sampler_name}"
-                )
+                cmds.append(f" ip flow monitor {cfg.monitor_name} sampler {cfg.sampler_name}")
             cmds.append("exit")
         return cmds
 
@@ -110,7 +108,7 @@ class CiscoNXOSDriver(Driver):
             stripped = line.strip()
             if stripped.startswith("Processor Board ID"):
                 # Strip the label prefix and any optional colon/whitespace.
-                tail = stripped[len("Processor Board ID"):].lstrip(": ").strip()
+                tail = stripped[len("Processor Board ID") :].lstrip(": ").strip()
                 if tail:
                     return tail
         return None

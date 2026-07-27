@@ -53,9 +53,7 @@ def _make_auth_client(tmp_path, monkeypatch, request):
         await db_module.init_db()
         db = await db_module.get_db()
         try:
-            await db.execute(
-                "INSERT INTO inventory_groups (name) VALUES ('bootstrap-sentinel')"
-            )
+            await db.execute("INSERT INTO inventory_groups (name) VALUES ('bootstrap-sentinel')")
             await db.commit()
         finally:
             await db.close()
@@ -115,6 +113,7 @@ def _seed_credential() -> int:
     async def _do():
         # Encrypt a dummy password so the column format is valid
         from routes.crypto import encrypt
+
         enc_pw = encrypt("secret123")
         db = await db_module.get_db()
         try:
@@ -135,9 +134,7 @@ def _get_host_serial(host_id: int) -> str:
     async def _do():
         db = await db_module.get_db()
         try:
-            cursor = await db.execute(
-                "SELECT serial_number FROM hosts WHERE id = ?", (host_id,)
-            )
+            cursor = await db.execute("SELECT serial_number FROM hosts WHERE id = ?", (host_id,))
             row = await cursor.fetchone()
             return row[0] if row else ""
         finally:
@@ -162,6 +159,7 @@ def test_fetch_serial_success(tmp_path, monkeypatch, request):
 
     # Mock SSH helper to return show version output
     sample_output = "System Serial Number: FCW2346L0AJ"
+
     async def _mock_run_show(host, credentials, command):
         assert "System Serial Number" in command
         return sample_output

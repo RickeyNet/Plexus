@@ -1,6 +1,7 @@
 """
 credentials.py -- Credential CRUD routes.
 """
+
 from __future__ import annotations
 
 import routes.database as db
@@ -88,14 +89,16 @@ async def create_service_credential(body: CredentialCreate, request: Request):
     session = _get_session(request)
     await _require_admin_session(session)
     cid = await db.create_credential(
-        body.name, body.username,
+        body.name,
+        body.username,
         encrypt(body.password),
         encrypt(body.secret) if body.secret else encrypt(body.password),
         owner_id=None,
         is_service=True,
     )
     await _audit(
-        "config", "service_credential.create",
+        "config",
+        "service_credential.create",
         user=session["user"],
         detail=f"created service credential '{body.name}'",
         correlation_id=_corr_id(request),
@@ -129,7 +132,8 @@ async def update_service_credential(cred_id: int, body: CredentialUpdate, reques
         enc_secret=updates.get("enc_secret"),
     )
     await _audit(
-        "config", "service_credential.update",
+        "config",
+        "service_credential.update",
         user=session["user"],
         detail=f"updated service credential {cred_id}",
         correlation_id=_corr_id(request),
@@ -146,7 +150,8 @@ async def delete_service_credential(cred_id: int, request: Request):
         raise HTTPException(404, "Service credential not found")
     await db.delete_credential(cred_id)
     await _audit(
-        "config", "service_credential.delete",
+        "config",
+        "service_credential.delete",
         user=session["user"],
         detail=f"deleted service credential {cred_id}",
         correlation_id=_corr_id(request),
@@ -176,12 +181,19 @@ async def create_credential(body: CredentialCreate, request: Request):
         raise HTTPException(401, "Not authenticated")
     owner_id = session["user_id"]
     cid = await db.create_credential(
-        body.name, body.username,
+        body.name,
+        body.username,
         encrypt(body.password),
         encrypt(body.secret) if body.secret else encrypt(body.password),
         owner_id=owner_id,
     )
-    await _audit("config", "credential.create", user=session["user"], detail=f"created credential '{body.name}'", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "credential.create",
+        user=session["user"],
+        detail=f"created credential '{body.name}'",
+        correlation_id=_corr_id(request),
+    )
     return {"id": cid}
 
 
@@ -196,7 +208,13 @@ async def delete_credential(cred_id: int, request: Request):
     if not _can_modify(cred, session):
         raise HTTPException(403, "You can only delete your own credentials")
     await db.delete_credential(cred_id)
-    await _audit("config", "credential.delete", user=session["user"], detail=f"deleted credential {cred_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "credential.delete",
+        user=session["user"],
+        detail=f"deleted credential {cred_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}
 
 
@@ -228,5 +246,11 @@ async def update_credential(cred_id: int, body: CredentialUpdate, request: Reque
         enc_password=updates.get("enc_password"),
         enc_secret=updates.get("enc_secret"),
     )
-    await _audit("config", "credential.update", user=session["user"], detail=f"updated credential {cred_id}", correlation_id=_corr_id(request))
+    await _audit(
+        "config",
+        "credential.update",
+        user=session["user"],
+        detail=f"updated credential {cred_id}",
+        correlation_id=_corr_id(request),
+    )
     return {"ok": True}

@@ -49,14 +49,10 @@ class TemplateConfigurator(BasePlaybook):
         # Hard fail when no template was selected - there is nothing
         # generic to push without one.
         if not template_commands:
-            yield self.log_error(
-                "No template selected - this playbook requires a configuration template."
-            )
+            yield self.log_error("No template selected - this playbook requires a configuration template.")
             return
 
-        yield self.log_info(
-            f"Template Configurator - targeting {len(hosts)} device(s)"
-        )
+        yield self.log_info(f"Template Configurator - targeting {len(hosts)} device(s)")
         yield self.log_info(f"Template has {len(template_commands)} command(s).")
 
         if dry_run:
@@ -85,15 +81,22 @@ class TemplateConfigurator(BasePlaybook):
             ok = True
             if NETMIKO_AVAILABLE:
                 async for event in self._process_real_device(
-                    ip, hostname, device_type, credentials,
-                    template_commands, dry_run,
+                    ip,
+                    hostname,
+                    device_type,
+                    credentials,
+                    template_commands,
+                    dry_run,
                 ):
                     if event.level == "error":
                         ok = False
                     yield event
             else:
                 async for event in self._process_simulated_device(
-                    ip, hostname, template_commands, dry_run,
+                    ip,
+                    hostname,
+                    template_commands,
+                    dry_run,
                 ):
                     if event.level == "error":
                         ok = False
@@ -128,9 +131,7 @@ class TemplateConfigurator(BasePlaybook):
     ) -> AsyncGenerator[LogEvent]:
         # connect_device manages the device dict, exception handling,
         # enable-mode promotion, and clean disconnect on exit.
-        async with connect_device(
-            self, ip, hostname, device_type, credentials
-        ) as (conn, events):
+        async with connect_device(self, ip, hostname, device_type, credentials) as (conn, events):
             for ev in events:
                 yield ev
             if conn is None:
@@ -143,10 +144,7 @@ class TemplateConfigurator(BasePlaybook):
                 # The driver controls the actual commands; unknown
                 # vendors skip the pin step (the helper's no-driver
                 # path is conservative - it logs and returns).
-                has_snmp_cmds = any(
-                    cmd.strip().lower().startswith("snmp-server")
-                    for cmd in template_commands
-                )
+                has_snmp_cmds = any(cmd.strip().lower().startswith("snmp-server") for cmd in template_commands)
                 if has_snmp_cmds and not dry_run:
                     driver = get_driver(device_type)
                     if isinstance(driver, GenericDriver):
@@ -155,9 +153,7 @@ class TemplateConfigurator(BasePlaybook):
                             host=hostname,
                         )
                     else:
-                        async for ev in pin_snmp_engine_id(
-                            self, conn, hostname, driver
-                        ):
+                        async for ev in pin_snmp_engine_id(self, conn, hostname, driver):
                             yield ev
 
                 if dry_run:
@@ -171,9 +167,7 @@ class TemplateConfigurator(BasePlaybook):
                 else:
                     yield self.log_info("Applying template configuration ...", host=hostname)
                     # send_config_set drops into config mode, runs each line, exits.
-                    output = await asyncio.to_thread(
-                        conn.send_config_set, template_commands
-                    )
+                    output = await asyncio.to_thread(conn.send_config_set, template_commands)
                     if output.strip():
                         yield self.log_info(f"Device output:\n{output}", host=hostname)
 
@@ -182,16 +176,12 @@ class TemplateConfigurator(BasePlaybook):
                     await asyncio.to_thread(conn.save_config)
                     yield self.log_success("Config saved.", host=hostname)
 
-                yield self.log_success(
-                    f"Finished processing {hostname} ({ip}).", host=hostname
-                )
+                yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)
 
             except Exception as e:
                 # Any unexpected failure during the push surfaces here
                 # as an ``error`` event, which flips this host's bucket.
-                yield self.log_error(
-                    f"Error configuring {hostname} ({ip}): {e}", host=hostname
-                )
+                yield self.log_error(f"Error configuring {hostname} ({ip}): {e}", host=hostname)
 
     # ── Simulation mode for dev/testing ───────────────────────────────────
 
@@ -211,9 +201,7 @@ class TemplateConfigurator(BasePlaybook):
         await asyncio.sleep(random.uniform(0.2, 0.4))
 
         if dry_run:
-            yield self.log_info(
-                "[DRY-RUN] Would apply the following commands:", host=hostname
-            )
+            yield self.log_info("[DRY-RUN] Would apply the following commands:", host=hostname)
             for cmd in template_commands:
                 yield self.log_info(f"  {cmd}", host=hostname)
         else:
@@ -221,14 +209,11 @@ class TemplateConfigurator(BasePlaybook):
             await asyncio.sleep(random.uniform(0.3, 0.6))
             # Render a believable IOS config-mode echo so the UI looks real.
             yield self.log_info(
-                "Device output:\n"
-                + "\n".join(f"{hostname}(config)#{cmd}" for cmd in template_commands),
+                "Device output:\n" + "\n".join(f"{hostname}(config)#{cmd}" for cmd in template_commands),
                 host=hostname,
             )
             yield self.log_info("Saving running config to startup ...", host=hostname)
             await asyncio.sleep(random.uniform(0.1, 0.3))
             yield self.log_success("Config saved.", host=hostname)
 
-        yield self.log_success(
-            f"Finished processing {hostname} ({ip}).", host=hostname
-        )
+        yield self.log_success(f"Finished processing {hostname} ({ip}).", host=hostname)

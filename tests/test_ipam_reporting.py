@@ -25,15 +25,11 @@ def report_db(tmp_path, monkeypatch):
 async def _ensure_group(name: str) -> int:
     db = await db_module.get_db()
     try:
-        cur = await db.execute(
-            "INSERT OR IGNORE INTO inventory_groups (name) VALUES (?)", (name,)
-        )
+        cur = await db.execute("INSERT OR IGNORE INTO inventory_groups (name) VALUES (?)", (name,))
         if cur.lastrowid:
             gid = int(cur.lastrowid)
         else:
-            cur2 = await db.execute(
-                "SELECT id FROM inventory_groups WHERE name = ?", (name,)
-            )
+            cur2 = await db.execute("SELECT id FROM inventory_groups WHERE name = ?", (name,))
             row = await cur2.fetchone()
             gid = int(row[0])
         await db.commit()
@@ -66,9 +62,7 @@ def test_utilization_report_threshold_filters(report_db):
         await db_module.snapshot_subnet_utilization("10.21.0.0/30")
 
         all_rows = await db_module.generate_ipam_utilization_report_data()
-        full_rows = await db_module.generate_ipam_utilization_report_data(
-            threshold_pct=99.0
-        )
+        full_rows = await db_module.generate_ipam_utilization_report_data(threshold_pct=99.0)
         assert any(r["subnet"] == "10.21.0.0/30" for r in all_rows)
         assert all(r["utilization_pct"] >= 99.0 for r in full_rows)
         assert any(r["subnet"] == "10.20.0.0/30" for r in full_rows)
@@ -120,9 +114,7 @@ def test_forecast_report_projects_exhaustion(report_db):
         finally:
             await db.close()
 
-        rows = await db_module.generate_ipam_forecast_report_data(
-            lookback_days=30, target_pct=90.0
-        )
+        rows = await db_module.generate_ipam_forecast_report_data(lookback_days=30, target_pct=90.0)
         target = next(r for r in rows if r["subnet"] == "10.50.0.0/24")
         assert target["samples"] == 5
         assert target["slope_pct_per_day"] is not None
@@ -201,14 +193,10 @@ def test_reporting_module_dispatches_ipam_report_types(report_db):
         assert isinstance(util, list)
         assert any(r.get("subnet", "").startswith("10.80.0.") for r in util)
 
-        forecast = await reporting._generate_report_rows(
-            "ipam_forecast", {"lookback_days": 30}
-        )
+        forecast = await reporting._generate_report_rows("ipam_forecast", {"lookback_days": 30})
         assert isinstance(forecast, list)
 
-        hist = await reporting._generate_report_rows(
-            "ipam_history", {"hostname": "u1"}
-        )
+        hist = await reporting._generate_report_rows("ipam_history", {"hostname": "u1"})
         assert isinstance(hist, list)
         assert any(r["hostname"] == "u1" for r in hist)
 

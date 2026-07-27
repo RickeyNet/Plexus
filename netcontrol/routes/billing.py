@@ -8,6 +8,7 @@ Provides:
   - CSV export for invoices
   - Overage alerting integration
 """
+
 from __future__ import annotations
 
 import csv
@@ -178,13 +179,19 @@ async def generate_billing_for_circuit(
 
     # Fetch raw samples from interface_ts
     samples = await db.get_billing_samples_for_period(
-        circuit["host_id"], circuit["if_index"], start, end,
+        circuit["host_id"],
+        circuit["if_index"],
+        start,
+        end,
     )
 
     if not samples:
         LOGGER.warning(
             "No samples for circuit %s (%s) period %s–%s",
-            circuit["id"], circuit["name"], start, end,
+            circuit["id"],
+            circuit["name"],
+            start,
+            end,
         )
 
     in_values = [s["in_rate_bps"] for s in samples if s.get("in_rate_bps") is not None]
@@ -235,8 +242,10 @@ async def generate_billing_for_circuit(
 
     LOGGER.info(
         "Generated billing period %s for circuit %s: p95=%s bps, status=%s",
-        period.get("id"), circuit["id"],
-        _format_bps(p95_billing), status,
+        period.get("id"),
+        circuit["id"],
+        _format_bps(p95_billing),
+        status,
     )
     return period
 
@@ -295,9 +304,14 @@ async def create_circuit(payload: BillingCircuitCreate, request: Request):
         overage_enabled=payload.overage_enabled,
         created_by=owner,
     )
-    await _billing_audit(request, "billing_circuit_created", {
-        "circuit_id": circuit["id"], "name": payload.name,
-    })
+    await _billing_audit(
+        request,
+        "billing_circuit_created",
+        {
+            "circuit_id": circuit["id"],
+            "name": payload.name,
+        },
+    )
     return circuit
 
 
@@ -310,9 +324,14 @@ async def update_circuit(circuit_id: int, payload: BillingCircuitUpdate, request
     if not updates:
         return existing
     updated = await db.update_billing_circuit(circuit_id, **updates)
-    await _billing_audit(request, "billing_circuit_updated", {
-        "circuit_id": circuit_id, "changes": list(updates.keys()),
-    })
+    await _billing_audit(
+        request,
+        "billing_circuit_updated",
+        {
+            "circuit_id": circuit_id,
+            "changes": list(updates.keys()),
+        },
+    )
     return updated
 
 
@@ -347,33 +366,44 @@ async def generate_billing(payload: BillingGenerateRequest, request: Request):
         if not circuit["enabled"]:
             raise HTTPException(status_code=400, detail="Circuit is disabled")
         period = await generate_billing_for_circuit(
-            circuit, payload.period_start, payload.period_end,
+            circuit,
+            payload.period_start,
+            payload.period_end,
         )
         results.append(period)
     else:
         # Generate for all enabled circuits (optionally filtered by customer)
         circuits = await db.list_billing_circuits(
-            customer=payload.customer, enabled_only=True,
+            customer=payload.customer,
+            enabled_only=True,
         )
         for circuit in circuits:
             try:
                 period = await generate_billing_for_circuit(
-                    circuit, payload.period_start, payload.period_end,
+                    circuit,
+                    payload.period_start,
+                    payload.period_end,
                 )
                 results.append(period)
             except Exception as exc:
                 LOGGER.error("Billing generation failed for circuit %s: %s", circuit["id"], exc)
-                results.append({
-                    "circuit_id": circuit["id"],
-                    "circuit_name": circuit["name"],
-                    "error": "generation_failed",
-                })
+                results.append(
+                    {
+                        "circuit_id": circuit["id"],
+                        "circuit_name": circuit["name"],
+                        "error": "generation_failed",
+                    }
+                )
 
-    await _billing_audit(request, "billing_generated", {
-        "count": len(results),
-        "circuit_id": payload.circuit_id,
-        "customer": payload.customer,
-    })
+    await _billing_audit(
+        request,
+        "billing_generated",
+        {
+            "count": len(results),
+            "circuit_id": payload.circuit_id,
+            "customer": payload.customer,
+        },
+    )
     return {"periods": results, "count": len(results)}
 
 
@@ -420,8 +450,10 @@ async def get_period_usage(period_id: int):
         raise HTTPException(status_code=404, detail="Circuit not found")
 
     samples = await db.get_billing_samples_for_period(
-        circuit["host_id"], circuit["if_index"],
-        period["period_start"], period["period_end"],
+        circuit["host_id"],
+        circuit["if_index"],
+        period["period_start"],
+        period["period_end"],
     )
 
     return {
@@ -452,39 +484,54 @@ async def export_periods_csv(
         )
 
     fieldnames = [
-        "period_start", "period_end", "customer", "circuit_name",
-        "hostname", "if_name",
-        "p95_in_mbps", "p95_out_mbps", "p95_billing_mbps",
-        "avg_in_mbps", "avg_out_mbps", "max_in_mbps", "max_out_mbps",
-        "commit_rate_mbps", "overage_mbps", "overage_cost",
-        "total_cost", "total_samples", "status",
+        "period_start",
+        "period_end",
+        "customer",
+        "circuit_name",
+        "hostname",
+        "if_name",
+        "p95_in_mbps",
+        "p95_out_mbps",
+        "p95_billing_mbps",
+        "avg_in_mbps",
+        "avg_out_mbps",
+        "max_in_mbps",
+        "max_out_mbps",
+        "commit_rate_mbps",
+        "overage_mbps",
+        "overage_cost",
+        "total_cost",
+        "total_samples",
+        "status",
     ]
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     for p in periods:
-        writer.writerow({
-            "period_start": p.get("period_start", ""),
-            "period_end": p.get("period_end", ""),
-            "customer": p.get("customer", ""),
-            "circuit_name": p.get("circuit_name", ""),
-            "hostname": p.get("hostname", ""),
-            "if_name": p.get("if_name", ""),
-            "p95_in_mbps": round(p.get("p95_in_bps", 0) / 1_000_000, 4),
-            "p95_out_mbps": round(p.get("p95_out_bps", 0) / 1_000_000, 4),
-            "p95_billing_mbps": round(p.get("p95_billing_bps", 0) / 1_000_000, 4),
-            "avg_in_mbps": round(p.get("avg_in_bps", 0) / 1_000_000, 4),
-            "avg_out_mbps": round(p.get("avg_out_bps", 0) / 1_000_000, 4),
-            "max_in_mbps": round(p.get("max_in_bps", 0) / 1_000_000, 4),
-            "max_out_mbps": round(p.get("max_out_bps", 0) / 1_000_000, 4),
-            "commit_rate_mbps": round(p.get("commit_rate_bps", 0) / 1_000_000, 4),
-            "overage_mbps": round(p.get("overage_bps", 0) / 1_000_000, 4),
-            "overage_cost": p.get("overage_cost", 0),
-            "total_cost": p.get("total_cost", 0),
-            "total_samples": p.get("total_samples", 0),
-            "status": p.get("status", ""),
-        })
+        writer.writerow(
+            {
+                "period_start": p.get("period_start", ""),
+                "period_end": p.get("period_end", ""),
+                "customer": p.get("customer", ""),
+                "circuit_name": p.get("circuit_name", ""),
+                "hostname": p.get("hostname", ""),
+                "if_name": p.get("if_name", ""),
+                "p95_in_mbps": round(p.get("p95_in_bps", 0) / 1_000_000, 4),
+                "p95_out_mbps": round(p.get("p95_out_bps", 0) / 1_000_000, 4),
+                "p95_billing_mbps": round(p.get("p95_billing_bps", 0) / 1_000_000, 4),
+                "avg_in_mbps": round(p.get("avg_in_bps", 0) / 1_000_000, 4),
+                "avg_out_mbps": round(p.get("avg_out_bps", 0) / 1_000_000, 4),
+                "max_in_mbps": round(p.get("max_in_bps", 0) / 1_000_000, 4),
+                "max_out_mbps": round(p.get("max_out_bps", 0) / 1_000_000, 4),
+                "commit_rate_mbps": round(p.get("commit_rate_bps", 0) / 1_000_000, 4),
+                "overage_mbps": round(p.get("overage_bps", 0) / 1_000_000, 4),
+                "overage_cost": p.get("overage_cost", 0),
+                "total_cost": p.get("total_cost", 0),
+                "total_samples": p.get("total_samples", 0),
+                "status": p.get("status", ""),
+            }
+        )
 
     csv_data = output.getvalue()
     return StreamingResponse(

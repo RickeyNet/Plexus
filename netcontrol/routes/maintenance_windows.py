@@ -15,6 +15,7 @@ Windows define when production changes are allowed. Each window has a
 A window applies to a target group if its ``maintenance_window_scopes``
 includes that group, or if the window has no scope rows (global).
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -38,8 +39,8 @@ class MaintenanceWindowCreate(BaseModel):
     description: str = ""
     start_at: str  # ISO 8601, UTC recommended
     end_at: str
-    recurrence: str = "none"        # 'none' | 'daily' | 'weekly'
-    weekday_mask: int = 0           # bit 0 = Mon ... bit 6 = Sun (only for weekly)
+    recurrence: str = "none"  # 'none' | 'daily' | 'weekly'
+    weekday_mask: int = 0  # bit 0 = Mon ... bit 6 = Sun (only for weekly)
     policy: str = "block_outside_window"
     enabled: bool = True
     group_ids: list[int] = Field(default_factory=list)
@@ -112,7 +113,9 @@ def window_is_active(window: dict, now: datetime | None = None) -> bool:
         duration = duration + timedelta(days=1)
 
     today_band_start = now.replace(
-        hour=start.hour, minute=start.minute, second=start.second,
+        hour=start.hour,
+        minute=start.minute,
+        second=start.second,
         microsecond=start.microsecond,
     )
     yday_band_start = today_band_start - timedelta(days=1)
@@ -194,7 +197,13 @@ async def evaluate_change_gate(group_ids: list[int]) -> dict:
     if active_allow:
         return {"allowed": True, "reason": "", "policy": "allow_changes", "window": active_allow[0], "warning": ""}
     if active_block:
-        return {"allowed": True, "reason": "", "policy": "block_outside_window", "window": active_block[0], "warning": ""}
+        return {
+            "allowed": True,
+            "reason": "",
+            "policy": "block_outside_window",
+            "window": active_block[0],
+            "warning": "",
+        }
     if inactive_block:
         w = inactive_block[0]
         return {
@@ -275,7 +284,8 @@ async def create_window(body: MaintenanceWindowCreate, request: Request):
         group_ids=body.group_ids,
     )
     await _audit(
-        "maintenance-windows", "window.created",
+        "maintenance-windows",
+        "window.created",
         user=user,
         detail=f"id={window_id} name={body.name} policy={body.policy}",
         correlation_id=_corr_id(request),
@@ -305,7 +315,8 @@ async def update_window(window_id: int, body: MaintenanceWindowUpdate, request: 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session = _get_session(request)
     await _audit(
-        "maintenance-windows", "window.updated",
+        "maintenance-windows",
+        "window.updated",
         user=session["user"] if session else "",
         detail=f"id={window_id}",
         correlation_id=_corr_id(request),
@@ -321,7 +332,8 @@ async def delete_window(window_id: int, request: Request):
     await db.delete_maintenance_window(window_id)
     session = _get_session(request)
     await _audit(
-        "maintenance-windows", "window.deleted",
+        "maintenance-windows",
+        "window.deleted",
         user=session["user"] if session else "",
         detail=f"id={window_id} name={existing.get('name', '')}",
         correlation_id=_corr_id(request),

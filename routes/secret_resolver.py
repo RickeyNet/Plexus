@@ -90,8 +90,10 @@ async def resolve_secrets(
     # Perform substitution
     resolved: list[str] = []
     for line in template_commands:
+
         def _replace(m: re.Match) -> str:
             return secrets_map[m.group(1)]
+
         resolved.append(_SECRET_RE.sub(_replace, line))
     return resolved
 

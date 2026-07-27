@@ -22,7 +22,5 @@ async def up(db):
             updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_secret_variables_name ON secret_variables(name)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_secret_variables_name ON secret_variables(name)")
     await db.commit()

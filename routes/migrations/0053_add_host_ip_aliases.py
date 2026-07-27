@@ -33,9 +33,7 @@ async def _up_sqlite(db) -> None:
             UNIQUE(host_id, ip_address)
         )"""
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_host_ip_aliases_ip ON host_ip_aliases(ip_address)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_host_ip_aliases_ip ON host_ip_aliases(ip_address)")
     await db.commit()
 
 
@@ -48,9 +46,7 @@ async def _up_postgres(db) -> None:
             UNIQUE(host_id, ip_address)
         )"""
     )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_host_ip_aliases_ip ON host_ip_aliases(ip_address)"
-    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_host_ip_aliases_ip ON host_ip_aliases(ip_address)")
     await db.commit()
 
 
