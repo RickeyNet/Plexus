@@ -86,3 +86,28 @@ def test_unknown_rule_type_fails_closed():
     result = _evaluate_rule({"type": "sorcery", "pattern": "x"}, "x")
     assert result["passed"] is False
     assert "Unknown rule type" in result["detail"]
+
+
+def _console_login_rule() -> dict:
+    from routes.builtin_compliance_profiles import BUILTIN_PROFILES
+
+    for _name, _desc, _sev, rules in BUILTIN_PROFILES:
+        for rule in rules:
+            if rule["name"] == "Login local for console fallback":
+                return rule
+    raise AssertionError("builtin console login rule not found")
+
+
+def test_console_login_rule_matches_login_inside_con_block():
+    rule = _console_login_rule()
+    cfg = "line con 0\n exec-timeout 5 0\n login authentication default\nline vty 0 4\n login local\n"
+    assert _evaluate_rule(rule, cfg)["passed"] is True
+    assert _evaluate_rule(rule, cfg.replace("\n", "\r\n"))["passed"] is True
+
+
+def test_console_login_rule_ignores_login_in_later_sections():
+    # The vty block's "login local" must not satisfy the console check when
+    # the con 0 block itself has no login directive.
+    rule = _console_login_rule()
+    cfg = "line con 0\n exec-timeout 5 0\nline vty 0 4\n login local\n"
+    assert _evaluate_rule(rule, cfg)["passed"] is False

@@ -356,7 +356,10 @@ BUILTIN_PROFILES = [
             {
                 "name": "Login local for console fallback",
                 "type": "regex_match",
-                "pattern": r"line con 0[\s\S]*?login\s+(authentication|local)",
+                # Only indented continuation lines may sit between "line con 0"
+                # and the login directive - crossing into the next top-level
+                # section (e.g. "line vty 0 4") must not count as console auth.
+                "pattern": r"line con 0(?:\r?\n[ \t][^\r\n]*)*?\r?\n[ \t]+login\s+(authentication|local)",
                 "remediation": ["line con 0", "login local"],
             },
         ],

@@ -109,6 +109,7 @@ class RadiusConfigRequest(BaseModel):
     port: int = 1812
     secret: str = ""
     timeout: int = 5
+    enforce_message_authenticator: bool = False
     fallback_to_local: bool = True
     fallback_on_reject: bool = False
     default_group_ids: list[int] = []
@@ -119,6 +120,9 @@ class LdapConfigRequest(BaseModel):
     server: str = ""
     port: int = 389
     use_ssl: bool = False
+    use_starttls: bool = False
+    tls_verify: str = "demand"
+    ca_cert_file: str = ""
     bind_dn: str = ""
     bind_password: str = ""
     base_dn: str = ""
@@ -131,6 +135,7 @@ class LdapConfigRequest(BaseModel):
     timeout: int = 10
     fallback_to_local: bool = True
     fallback_on_reject: bool = False
+    default_group_ids: list[int] = []
 
 
 class AuthConfigRequest(BaseModel):

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import secrets
 import sys
 import time
@@ -146,6 +147,10 @@ def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) ->
             dict=RadiusDictionary(dictionary_path),
             authport=int(radius_cfg.get("port", 1812)),
             timeout=int(radius_cfg.get("timeout", 5)),
+            # Blast-RADIUS (CVE-2024-3596) mitigation: adds Message-Authenticator
+            # to the Access-Request and rejects replies that omit or fail it.
+            # Requires a server that echoes the attribute (post-CVE releases do).
+            enforce_ma=bool(radius_cfg.get("enforce_message_authenticator", False)),
         )
         req = client.CreateAuthPacket(code=radius_packet.AccessRequest, User_Name=username)
         req["User-Password"] = req.PwCrypt(password)
@@ -173,7 +178,13 @@ async def verify_radius_user(username: str, password: str) -> tuple[bool, str]:
     return await asyncio.to_thread(_radius_authenticate_sync, username, password, radius_cfg)
 
 
-async def upsert_external_user(username: str, display_name: str = "", role: str = "user") -> dict | None:
+async def upsert_external_user(
+    username: str,
+    display_name: str = "",
+    role: str = "user",
+    provider: str = "",
+    sync_role: bool = False,
+) -> dict | None:
     """Ensure a local shadow user exists for externally-authenticated identities (RADIUS/LDAP).
 
     Guards against directory name-collision privilege escalation: if a local
@@ -184,16 +195,44 @@ async def upsert_external_user(username: str, display_name: str = "", role: str 
     local admin account. Legitimate local admins still log in via the
     break-glass local-password path; LDAP admin-group members pass ``role=admin``
     and are allowed through.
+
+    Provenance and re-sync: ``users.auth_provider`` records which provider
+    manages an account. Adopting an unmanaged account claims it (stamps the
+    provider) so pre-provenance shadow users converge after one login. When
+    ``sync_role`` is set (LDAP, whose directory groups are authoritative), the
+    role and display name are re-synced on every login - directory promotion
+    AND demotion both propagate, including demotion of accounts promoted only
+    in the Plexus UI. RADIUS asserts no role, so it never passes sync_role.
     """
     user = await db.get_user_by_username(username)
     if user:
-        if (user.get("role") or "").lower() == "admin" and role != "admin":
-            LOGGER.warning(
-                "auth: refusing to bind external identity '%s' onto pre-existing "
-                "local admin account (external mapping did not grant admin)",
-                username,
-            )
-            return None
+        current_role = (user.get("role") or "").lower()
+        managed = bool(provider) and (user.get("auth_provider") or "") == provider
+        if not managed:
+            if current_role == "admin" and role != "admin":
+                LOGGER.warning(
+                    "auth: refusing to bind external identity '%s' onto pre-existing "
+                    "local admin account (external mapping did not grant admin)",
+                    username,
+                )
+                return None
+            if provider:
+                await db.set_user_auth_provider(int(user["id"]), provider)
+        if sync_role:
+            updates: dict = {}
+            if role != current_role:
+                updates["role"] = role
+            if display_name and display_name != (user.get("display_name") or ""):
+                updates["display_name"] = display_name
+            if updates:
+                await db.update_user_admin(int(user["id"]), **updates)
+                LOGGER.info(
+                    "auth: re-synced %s-managed account '%s' from directory (%s)",
+                    provider,
+                    username,
+                    ", ".join(sorted(updates)),
+                )
+                user = await db.get_user_by_username(username)
         return user
 
     salt = secrets.token_hex(16)
@@ -206,6 +245,7 @@ async def upsert_external_user(username: str, display_name: str = "", role: str 
             salt,
             display_name=display_name or username,
             role=role,
+            auth_provider=provider,
         )
     except ValueError:
         return await db.get_user_by_username(username)
@@ -215,7 +255,7 @@ async def upsert_external_user(username: str, display_name: str = "", role: str 
 async def upsert_radius_user(username: str) -> dict | None:
     """Ensure a local shadow user exists for RADIUS-authenticated identities."""
     existing = await db.get_user_by_username(username)
-    user = existing or await upsert_external_user(username)
+    user = existing or await upsert_external_user(username, provider="radius")
     if user and not existing:
         group_ids = state.AUTH_CONFIG.get("radius", {}).get("default_group_ids", [])
         if group_ids:
@@ -228,6 +268,75 @@ async def upsert_radius_user(username: str) -> dict | None:
 
 
 # ── LDAP / Active Directory helpers ──────────────────────────────────────────
+
+
+def _normalize_dn(dn: str) -> str:
+    """Normalize a DN for comparison: lowercase, whitespace stripped around
+    unescaped component separators, so "CN=Admins, OU=IT" == "cn=admins,ou=it".
+
+    Pure-Python (no python-ldap) so role mapping also works on platforms where
+    the library is unavailable and in tests."""
+    parts = re.split(r"(?<!\\),", dn)
+    return ",".join(p.strip() for p in parts).lower()
+
+
+def _upn_domain_from_base_dn(base_dn: str) -> str:
+    """Derive the AD UPN domain from a base DN's DC components:
+    "DC=corp,DC=local" -> "corp.local". Returns "" if there are none."""
+    parts = re.split(r"(?<!\\),", base_dn)
+    dcs = []
+    for part in parts:
+        key, _, value = part.strip().partition("=")
+        if key.strip().lower() == "dc" and value.strip():
+            dcs.append(value.strip())
+    return ".".join(dcs)
+
+
+def _safe_unbind(conn) -> None:
+    if conn is None:
+        return
+    try:
+        conn.unbind_s()
+    except Exception:
+        pass
+
+
+def _ldap_open_connection(uri: str, ldap_cfg: dict, *, timeout: int):
+    """Initialize a connection with timeouts, referral handling, and the
+    admin-configured TLS policy; performs STARTTLS when configured.
+
+    Every connection (service-account search AND user-credential bind) goes
+    through here so no path can silently downgrade the TLS policy."""
+    conn = python_ldap.initialize(uri)
+    conn.set_option(python_ldap.OPT_NETWORK_TIMEOUT, timeout)
+    conn.set_option(python_ldap.OPT_TIMEOUT, timeout)
+    conn.set_option(python_ldap.OPT_REFERRALS, 0)
+    conn.protocol_version = python_ldap.VERSION3
+
+    use_ssl = bool(ldap_cfg.get("use_ssl", False))
+    use_starttls = bool(ldap_cfg.get("use_starttls", False)) and not use_ssl
+    if use_ssl or use_starttls:
+        tls_verify = str(ldap_cfg.get("tls_verify", "demand")).lower().strip()
+        tls_level = {
+            "never": python_ldap.OPT_X_TLS_NEVER,
+            "allow": python_ldap.OPT_X_TLS_ALLOW,
+            "try": python_ldap.OPT_X_TLS_TRY,
+            "demand": python_ldap.OPT_X_TLS_DEMAND,
+            "hard": python_ldap.OPT_X_TLS_HARD,
+        }.get(tls_verify, python_ldap.OPT_X_TLS_DEMAND)
+        conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, tls_level)
+        ca_cert_file = str(ldap_cfg.get("ca_cert_file", "")).strip()
+        if ca_cert_file:
+            conn.set_option(python_ldap.OPT_X_TLS_CACERTFILE, ca_cert_file)
+        # NEWCTX must come last: it builds the TLS context from the options above.
+        conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
+        if tls_verify in ("never", "allow"):
+            LOGGER.warning(
+                "ldap: TLS certificate verification is permissive (%s) - use 'demand' in production", tls_verify
+            )
+        if use_starttls:
+            conn.start_tls_s()
+    return conn
 
 
 def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tuple[bool, str, dict]:
@@ -261,33 +370,12 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
     user_dn_template = ldap_cfg.get("user_dn_template", "").strip()
     group_search_base = ldap_cfg.get("group_search_base", "").strip()
     group_search_filter = ldap_cfg.get("group_search_filter", "").strip()
-    tls_verify = str(ldap_cfg.get("tls_verify", "demand")).lower().strip()
 
     protocol = "ldaps" if use_ssl else "ldap"
     uri = f"{protocol}://{server}:{port}"
 
-    _TLS_LEVEL_MAP = {
-        "never": python_ldap.OPT_X_TLS_NEVER,
-        "allow": python_ldap.OPT_X_TLS_ALLOW,
-        "try": python_ldap.OPT_X_TLS_TRY,
-        "demand": python_ldap.OPT_X_TLS_DEMAND,
-        "hard": python_ldap.OPT_X_TLS_HARD,
-    }
-
+    conn = None
     try:
-        conn = python_ldap.initialize(uri)
-        conn.set_option(python_ldap.OPT_NETWORK_TIMEOUT, timeout)
-        conn.set_option(python_ldap.OPT_TIMEOUT, timeout)
-        conn.set_option(python_ldap.OPT_REFERRALS, 0)
-        conn.protocol_version = python_ldap.VERSION3
-
-        if use_ssl:
-            tls_level = _TLS_LEVEL_MAP.get(tls_verify, python_ldap.OPT_X_TLS_DEMAND)
-            conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, tls_level)
-            conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
-            if tls_verify == "allow":
-                LOGGER.warning("ldap: TLS certificate verification is permissive (allow) - use 'demand' in production")
-
         user_dn = None
         user_attrs: dict = {}
 
@@ -295,7 +383,15 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             # Direct bind: template like "CN={username},OU=Users,DC=corp,DC=local"
             user_dn = user_dn_template.replace("{username}", _escape_dn_chars(username))
         elif bind_dn and base_dn:
+            # The user-bind guard above, applied to the service account: an
+            # empty bind_password would be the same RFC 4513 unauthenticated
+            # bind, silently searching the directory with no credential.
+            if not bind_password:
+                LOGGER.warning("ldap: bind_dn is set but bind_password is empty - refusing unauthenticated bind")
+                return False, "error", {}
+
             # Search bind: first bind as service account, then search for user
+            conn = _ldap_open_connection(uri, ldap_cfg, timeout=timeout)
             try:
                 conn.simple_bind_s(bind_dn, bind_password)
             except python_ldap.INVALID_CREDENTIALS:
@@ -317,6 +413,16 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             entries = [(dn, attrs) for dn, attrs in result if dn is not None]
             if not entries:
                 return False, "reject", {}
+            if len(entries) > 1:
+                # Which account would authenticate depends on directory return
+                # order - fail closed instead of picking one.
+                LOGGER.warning(
+                    "ldap: user search for '%s' matched %d entries - refusing ambiguous match "
+                    "(tighten user_search_filter or base_dn)",
+                    username,
+                    len(entries),
+                )
+                return False, "reject", {}
 
             user_dn = entries[0][0]
             raw_attrs = entries[0][1]
@@ -336,29 +442,21 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             ]
 
             # Unbind the service account before re-binding as the user
-            conn.unbind_s()
-            conn = python_ldap.initialize(uri)
-            conn.set_option(python_ldap.OPT_NETWORK_TIMEOUT, timeout)
-            conn.set_option(python_ldap.OPT_TIMEOUT, timeout)
-            conn.set_option(python_ldap.OPT_REFERRALS, 0)
-            conn.protocol_version = python_ldap.VERSION3
-            if use_ssl:
-                # This connection carries the end user's real password, so it
-                # MUST honor the admin-configured tls_verify policy - not a
-                # hardcoded permissive level. Downgrading to ALLOW here would
-                # expose the user credential bind to MITM even when the admin
-                # selected demand/hard.
-                tls_level = _TLS_LEVEL_MAP.get(tls_verify, python_ldap.OPT_X_TLS_DEMAND)
-                conn.set_option(python_ldap.OPT_X_TLS_REQUIRE_CERT, tls_level)
-                conn.set_option(python_ldap.OPT_X_TLS_NEWCTX, 0)
+            _safe_unbind(conn)
+            conn = None
         else:
-            # No service account and no template - try direct bind with UPN
-            user_dn = f"{username}@{base_dn}" if base_dn else username
+            # No service account and no template - direct bind with a UPN
+            # derived from the base DN's DC components (DC=corp,DC=local ->
+            # user@corp.local); plain username as a last resort.
+            domain = _upn_domain_from_base_dn(base_dn)
+            user_dn = f"{username}@{domain}" if domain else username
 
         if not user_dn:
             return False, "error", {}
 
         # Authenticate the user by binding with their credentials
+        if conn is None:
+            conn = _ldap_open_connection(uri, ldap_cfg, timeout=timeout)
         try:
             conn.simple_bind_s(user_dn, password)
         except python_ldap.INVALID_CREDENTIALS:
@@ -393,18 +491,23 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             except Exception as exc:
                 LOGGER.warning("ldap: failed to retrieve user attributes for '%s': %s", username, exc)
 
-        # Fetch group memberships if a group search is configured
-        if group_search_base and group_search_filter and not user_attrs.get("groups"):
+        # Merge in a configured group search. This runs even when memberOf
+        # returned direct groups: AD's memberOf omits nested memberships, and a
+        # matching-rule-in-chain filter here (1.2.840.113556.1.4.1941) is the
+        # supported way to resolve them - it must not be skipped just because
+        # direct groups exist.
+        if group_search_base and group_search_filter:
             try:
                 gfilter = group_search_filter.replace("{user_dn}", _escape_filter_chars(user_dn)).replace(
                     "{username}", _escape_filter_chars(username)
                 )
                 g_result = conn.search_s(group_search_base, python_ldap.SCOPE_SUBTREE, gfilter, ["dn", "cn"])
-                user_attrs["groups"] = [dn for dn, _ in g_result if dn is not None]
+                found = [dn for dn, _ in g_result if dn is not None]
+                existing = user_attrs.get("groups", [])
+                user_attrs["groups"] = existing + [g for g in found if g not in existing]
             except Exception as exc:
                 LOGGER.warning("ldap: group search failed for '%s': %s", username, exc)
 
-        conn.unbind_s()
         return True, "accept", user_attrs
 
     except python_ldap.SERVER_DOWN:
@@ -415,6 +518,8 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
     except Exception as exc:
         LOGGER.warning("ldap: authentication error: %s", str(exc))
         return False, "error", {}
+    finally:
+        _safe_unbind(conn)
 
 
 async def verify_ldap_user(username: str, password: str) -> tuple[bool, str, dict]:
@@ -427,20 +532,33 @@ async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
     """Ensure a local shadow user exists for LDAP-authenticated identities.
 
     If the user has groups that match admin_group_dn, promote to admin role.
+    Role and display name are re-synced from the directory on every login
+    (sync_role) - see upsert_external_user for the demotion semantics.
     """
     ldap_cfg = state.AUTH_CONFIG.get("ldap", {})
-    admin_group_dn = ldap_cfg.get("admin_group_dn", "").strip().lower()
+    admin_group_dn = _normalize_dn(ldap_cfg.get("admin_group_dn", "").strip())
     default_role = ldap_cfg.get("default_role", "user")
 
-    # Determine role from group membership
+    # Determine role from group membership. DNs are normalized on both sides
+    # so spacing variants ("CN=Admins, OU=IT") still match.
     role = default_role
-    user_groups = [g.lower() for g in ldap_attrs.get("groups", [])]
-    if admin_group_dn and any(g == admin_group_dn for g in user_groups):
+    user_groups = [_normalize_dn(g) for g in ldap_attrs.get("groups", [])]
+    if admin_group_dn and admin_group_dn in user_groups:
         role = "admin"
 
     display_name = ldap_attrs.get("display_name", "") or username
 
-    return await upsert_external_user(username, display_name=display_name, role=role)
+    existing = await db.get_user_by_username(username)
+    user = await upsert_external_user(username, display_name=display_name, role=role, provider="ldap", sync_role=True)
+    if user and not existing:
+        group_ids = ldap_cfg.get("default_group_ids", [])
+        if group_ids:
+            try:
+                await db.set_user_groups(int(user["id"]), group_ids)
+                user = await db.get_user_by_id(int(user["id"]))
+            except ValueError:
+                LOGGER.warning("ldap: default access group assignment failed for user '%s'", username)
+    return user
 
 
 def _dev_bootstrap_enabled() -> bool:
@@ -525,6 +643,8 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 
     _verify_radius = getattr(_app, "verify_radius_user", verify_radius_user)
     _upsert_radius = getattr(_app, "upsert_radius_user", upsert_radius_user)
+    _verify_ldap = getattr(_app, "verify_ldap_user", verify_ldap_user)
+    _upsert_ldap = getattr(_app, "upsert_ldap_user", upsert_ldap_user)
     _verify_local = getattr(_app, "verify_user", _verify_user_fn)
 
     # Dev bootstrap shortcut: deterministic local admin credentials.
@@ -569,9 +689,9 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
     ldap_enabled = bool(ldap_cfg.get("enabled"))
 
     if provider == "ldap" and ldap_enabled:
-        accepted, status, ldap_attrs = await verify_ldap_user(username, password)
+        accepted, status, ldap_attrs = await _verify_ldap(username, password)
         if accepted:
-            user = await upsert_ldap_user(username, ldap_attrs)
+            user = await _upsert_ldap(username, ldap_attrs)
             if user:
                 return user, "ldap", None
             return None, None, "LDAP login succeeded but local account provisioning failed"
