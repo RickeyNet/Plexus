@@ -1,5 +1,7 @@
 -r requirements.txt
 pytest==9.1.1
+# pygments is pytest's syntax-highlighting dep; <2.20 has PYSEC-2026-2987.
+pygments>=2.20.0
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 # Per-test wall-clock cap: a wedged event loop fails in minutes with a
