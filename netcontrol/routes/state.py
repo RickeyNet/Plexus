@@ -329,6 +329,11 @@ AUTH_CONFIG_DEFAULTS = {
         "port": 1812,
         "secret": "",
         "timeout": 5,
+        # Blast-RADIUS (CVE-2024-3596) mitigation: send Message-Authenticator
+        # in Access-Requests and require it on replies. Off by default because
+        # servers predating the CVE response may not echo the attribute, which
+        # would fail every login; admins should enable it once their server does.
+        "enforce_message_authenticator": False,
         "fallback_to_local": True,
         "fallback_on_reject": False,
         "default_group_ids": [],
@@ -338,6 +343,13 @@ AUTH_CONFIG_DEFAULTS = {
         "server": "",
         "port": 389,
         "use_ssl": False,
+        # STARTTLS on the plaintext port (mutually exclusive with use_ssl,
+        # which takes precedence). Without either, credentials transit clear.
+        "use_starttls": False,
+        # OpenLDAP certificate policy for ldaps/STARTTLS connections.
+        "tls_verify": "demand",
+        # Optional CA bundle path for internal PKI; empty = system trust store.
+        "ca_cert_file": "",
         "bind_dn": "",
         "bind_password": "",
         "base_dn": "",
@@ -350,8 +362,12 @@ AUTH_CONFIG_DEFAULTS = {
         "timeout": 10,
         "fallback_to_local": True,
         "fallback_on_reject": False,
+        "default_group_ids": [],
     },
 }
+
+_LDAP_TLS_VERIFY_LEVELS = {"never", "allow", "try", "demand", "hard"}
+_EXTERNAL_AUTH_ROLES = {"user", "admin"}
 
 # ── Feature Catalog ──────────────────────────────────────────────────────────
 # Single source of truth for feature keys. `gateable` entries are eligible for
@@ -687,6 +703,9 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                     "port": int(radius.get("port", cfg["radius"]["port"])),
                     "secret": str(radius.get("secret", cfg["radius"]["secret"])),
                     "timeout": int(radius.get("timeout", cfg["radius"]["timeout"])),
+                    "enforce_message_authenticator": bool(
+                        radius.get("enforce_message_authenticator", cfg["radius"]["enforce_message_authenticator"])
+                    ),
                     "fallback_to_local": bool(radius.get("fallback_to_local", cfg["radius"]["fallback_to_local"])),
                     "fallback_on_reject": bool(radius.get("fallback_on_reject", cfg["radius"]["fallback_on_reject"])),
                     "default_group_ids": _sanitize_positive_int_list(
@@ -707,6 +726,9 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "server": str(ldap.get("server", cfg["ldap"]["server"])).strip(),
                 "port": int(ldap.get("port", cfg["ldap"]["port"])),
                 "use_ssl": bool(ldap.get("use_ssl", cfg["ldap"]["use_ssl"])),
+                "use_starttls": bool(ldap.get("use_starttls", cfg["ldap"]["use_starttls"])),
+                "tls_verify": str(ldap.get("tls_verify", cfg["ldap"]["tls_verify"])).lower().strip(),
+                "ca_cert_file": str(ldap.get("ca_cert_file", cfg["ldap"]["ca_cert_file"])).strip(),
                 "bind_dn": str(ldap.get("bind_dn", cfg["ldap"]["bind_dn"])).strip(),
                 "bind_password": str(ldap.get("bind_password", cfg["ldap"]["bind_password"])),
                 "base_dn": str(ldap.get("base_dn", cfg["ldap"]["base_dn"])).strip(),
@@ -715,14 +737,23 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "group_search_base": str(ldap.get("group_search_base", cfg["ldap"]["group_search_base"])).strip(),
                 "group_search_filter": str(ldap.get("group_search_filter", cfg["ldap"]["group_search_filter"])).strip(),
                 "admin_group_dn": str(ldap.get("admin_group_dn", cfg["ldap"]["admin_group_dn"])).strip(),
-                "default_role": str(ldap.get("default_role", cfg["ldap"]["default_role"])).strip(),
+                "default_role": str(ldap.get("default_role", cfg["ldap"]["default_role"])).strip().lower(),
                 "timeout": int(ldap.get("timeout", cfg["ldap"]["timeout"])),
                 "fallback_to_local": bool(ldap.get("fallback_to_local", cfg["ldap"]["fallback_to_local"])),
                 "fallback_on_reject": bool(ldap.get("fallback_on_reject", cfg["ldap"]["fallback_on_reject"])),
+                "default_group_ids": _sanitize_positive_int_list(
+                    ldap.get("default_group_ids", cfg["ldap"]["default_group_ids"])
+                ),
             }
         )
     cfg["ldap"]["port"] = max(1, cfg["ldap"]["port"])
     cfg["ldap"]["timeout"] = max(1, cfg["ldap"]["timeout"])
+    if cfg["ldap"]["tls_verify"] not in _LDAP_TLS_VERIFY_LEVELS:
+        cfg["ldap"]["tls_verify"] = "demand"
+    # A typo'd role would fail closed everywhere role == "admin" is checked,
+    # silently stranding every LDAP user as feature-less; normalize instead.
+    if cfg["ldap"]["default_role"] not in _EXTERNAL_AUTH_ROLES:
+        cfg["ldap"]["default_role"] = "user"
     return cfg
 
 

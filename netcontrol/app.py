@@ -83,7 +83,9 @@ from netcontrol.routes.auth import (
     login,
     register,
     router as auth_router,
+    upsert_ldap_user,
     upsert_radius_user,
+    verify_ldap_user,
     verify_radius_user,
 )
 from netcontrol.routes.baseline_alerting import router as baseline_alerting_router

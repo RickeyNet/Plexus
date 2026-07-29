@@ -167,6 +167,12 @@ def test_sanitize_auth_config_enforces_job_retention_minimum():
     assert cfg["job_retention_days"] == 30
 
 
+def test_sanitize_auth_config_message_authenticator_defaults_off_and_persists():
+    assert app_module._sanitize_auth_config({"provider": "radius"})["radius"]["enforce_message_authenticator"] is False
+    cfg = app_module._sanitize_auth_config({"provider": "radius", "radius": {"enforce_message_authenticator": True}})
+    assert cfg["radius"]["enforce_message_authenticator"] is True
+
+
 def test_sanitize_auth_config_keeps_radius_default_groups():
     cfg = app_module._sanitize_auth_config(
         {

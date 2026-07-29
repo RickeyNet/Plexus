@@ -34,6 +34,7 @@ __all__ = [
     "bump_user_session_epoch",
     "update_user_profile",
     "update_user_admin",
+    "set_user_auth_provider",
     "get_all_users",
     "delete_user",
     "delete_user_guarded",
@@ -82,12 +83,13 @@ async def create_user(
     display_name: str = "",
     role: str = "user",
     must_change_password: bool = False,
+    auth_provider: str = "",
 ) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO users (username, password_hash, salt, display_name, role, must_change_password) VALUES (?,?,?,?,?,?)",
-            (username, password_hash, salt, display_name, role, int(must_change_password)),
+            "INSERT INTO users (username, password_hash, salt, display_name, role, must_change_password, auth_provider) VALUES (?,?,?,?,?,?,?)",
+            (username, password_hash, salt, display_name, role, int(must_change_password), auth_provider),
         )
         await db.commit()
         return cursor.lastrowid
@@ -130,6 +132,19 @@ async def bump_user_session_epoch(user_id: int) -> int:
         cursor = await db.execute("SELECT session_epoch FROM users WHERE id = ?", (user_id,))
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
+    finally:
+        await db.close()
+
+
+async def set_user_auth_provider(user_id: int, provider: str):
+    """Mark an account as managed by an external auth provider ('ldap'/'radius').
+
+    Managed accounts have their role/display_name re-synced from the provider
+    on every successful login (see auth.upsert_external_user)."""
+    db = await _dbcore.get_db()
+    try:
+        await db.execute("UPDATE users SET auth_provider = ? WHERE id = ?", (provider, user_id))
+        await db.commit()
     finally:
         await db.close()
 
