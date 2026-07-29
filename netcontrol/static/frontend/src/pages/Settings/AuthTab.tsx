@@ -158,6 +158,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
     );
 
   const radiusGroupSet = new Set(draft.radius.default_group_ids);
+  const ldapGroupSet = new Set(draft.ldap.default_group_ids);
 
   return (
     <form
@@ -263,7 +264,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
         <RadiusPanel draft={draft} setDraft={setDraft} groups={groups} groupSet={radiusGroupSet} />
       )}
       {draft.provider === 'ldap' && (
-        <LdapPanel draft={draft} setDraft={setDraft} />
+        <LdapPanel draft={draft} setDraft={setDraft} groups={groups} groupSet={ldapGroupSet} />
       )}
 
       <div style={{ marginTop: '0.75rem' }}>
@@ -320,6 +321,11 @@ function RadiusPanel({
           label="Fallback on reject"
           checked={r.fallback_on_reject}
           onChange={(v) => setR({ fallback_on_reject: v })}
+        />
+        <CheckboxField
+          label="Require Message-Authenticator"
+          checked={r.enforce_message_authenticator}
+          onChange={(v) => setR({ enforce_message_authenticator: v })}
         />
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -387,9 +393,13 @@ function RadiusPanel({
 function LdapPanel({
   draft,
   setDraft,
+  groups,
+  groupSet,
 }: {
   draft: AuthConfig;
   setDraft: (next: AuthConfig) => void;
+  groups: AccessGroup[];
+  groupSet: Set<number>;
 }) {
   const l = draft.ldap;
   const setL = (patch: Partial<typeof l>) =>
@@ -415,6 +425,11 @@ function LdapPanel({
           label="Use SSL"
           checked={l.use_ssl}
           onChange={(v) => setL({ use_ssl: v })}
+        />
+        <CheckboxField
+          label="Use STARTTLS"
+          checked={l.use_starttls}
+          onChange={(v) => setL({ use_starttls: v })}
         />
         <CheckboxField
           label="Fallback to local"
@@ -444,6 +459,26 @@ function LdapPanel({
           value={l.timeout}
           onChange={(v) => setL({ timeout: v })}
         />
+        <div className="form-group" style={{ flex: '1 1 160px' }}>
+          <label className="form-label">TLS Certificate Verification</label>
+          <select
+            className="form-select"
+            value={l.tls_verify}
+            onChange={(e) => setL({ tls_verify: e.target.value })}
+          >
+            <option value="demand">demand (verify, recommended)</option>
+            <option value="hard">hard (verify, strict)</option>
+            <option value="try">try</option>
+            <option value="allow">allow (permissive)</option>
+            <option value="never">never (no verification)</option>
+          </select>
+        </div>
+        <TextField
+          label="CA Certificate File (optional)"
+          value={l.ca_cert_file}
+          onChange={(v) => setL({ ca_cert_file: v })}
+          flex="1 1 220px"
+        />
       </div>
       <TextField
         label="Bind DN"
@@ -471,6 +506,39 @@ function LdapPanel({
         value={l.admin_group_dn}
         onChange={(v) => setL({ admin_group_dn: v })}
       />
+      <div className="form-group">
+        <label className="form-label">Default Access Groups</label>
+        {groups.length === 0 ? (
+          <span className="card-description">Create access groups first.</span>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gap: '0.4rem',
+            }}
+          >
+            {groups.map((g) => (
+              <label
+                key={g.id}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={groupSet.has(g.id)}
+                  onChange={(e) => {
+                    const next = new Set(groupSet);
+                    if (e.target.checked) next.add(g.id);
+                    else next.delete(g.id);
+                    setL({ default_group_ids: Array.from(next) });
+                  }}
+                />
+                <span>{g.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
     </fieldset>
   );
 }
