@@ -709,6 +709,34 @@ PASSWORD_CHANGE_ALLOWED_PATHS = {
 # State-changing methods that require CSRF validation for cookie-auth
 _CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# Sentinel distinguishing "not resolved yet this request" from a legitimate
+# None result in the per-request auth caches on request.state.
+_AUTH_STATE_UNSET = object()
+
+
+async def _load_request_user(request: Request, session: dict) -> dict | None:
+    """Fetch the session's user record once per request.
+
+    require_auth and every feature/admin gate need the same row; without the
+    request.state cache each Depends chain re-queried it 3-4 times per call.
+    """
+    cached = getattr(request.state, "auth_user", _AUTH_STATE_UNSET)
+    if cached is not _AUTH_STATE_UNSET:
+        return cached
+    user = await db.get_user_by_id(session["user_id"])
+    request.state.auth_user = user
+    return user
+
+
+async def _load_request_features(request: Request, user: dict) -> list[str]:
+    """Resolve the user's effective feature keys once per request."""
+    cached = getattr(request.state, "auth_features", _AUTH_STATE_UNSET)
+    if cached is not _AUTH_STATE_UNSET:
+        return cached
+    features = await _get_user_features(user)
+    request.state.auth_features = features
+    return features
+
 
 async def require_auth(request: Request, response: Response = None):
     """Dependency that checks for a valid session cookie. Returns session dict.
@@ -718,6 +746,13 @@ async def require_auth(request: Request, response: Response = None):
     Users with users.session_never_expires=1 bypass both the idle check and
     the absolute lifetime - intended for kiosk/display accounts.
     """
+    # Per-request cache: routers register require_auth alongside feature
+    # gates that call it again as a plain function, so without this the
+    # whole check (token verify, user fetch, cookie re-issue) ran 2-3x.
+    cached = getattr(request.state, "auth_session", _AUTH_STATE_UNSET)
+    if cached is not _AUTH_STATE_UNSET:
+        return cached
+
     path = request.url.path
     if path.startswith("/static/"):
         return None
@@ -726,7 +761,9 @@ async def require_auth(request: Request, response: Response = None):
 
     api_token = _extract_api_token(request)
     if APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN):
-        return {"user": "api-token", "user_id": 0, "auth_mode": "token"}
+        session = {"user": "api-token", "user_id": 0, "auth_mode": "token"}
+        request.state.auth_session = session
+        return session
 
     if _env_flag("APP_REQUIRE_API_TOKEN", False) and path.startswith("/api/"):
         raise HTTPException(status_code=401, detail="Missing or invalid API token")
@@ -734,11 +771,13 @@ async def require_auth(request: Request, response: Response = None):
     token = request.cookies.get("session")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    session = verify_session_token(token)
+    # Reuse the rate-limit middleware's verification of this same cookie
+    # when it already succeeded earlier in the request.
+    session = getattr(request.state, "session_precheck", None) or verify_session_token(token)
     if not session:
         raise HTTPException(status_code=401, detail="Session expired")
 
-    user = await db.get_user_by_id(session["user_id"])
+    user = await _load_request_user(request, session)
     # Session revocation: reject tokens minted before the user's current
     # epoch (bumped on password change, admin reset, privilege change).
     if user is not None:
@@ -793,6 +832,7 @@ async def require_auth(request: Request, response: Response = None):
             secure=APP_COOKIE_SECURE,
         )
 
+    request.state.auth_session = session
     return session
 
 
@@ -1023,7 +1063,7 @@ def require_feature(feature_key: str):
         # full admin access by design - they bypass per-user feature checks.
         if session and session.get("auth_mode") == "token":
             return session
-        user = await db.get_user_by_id(session["user_id"])
+        user = await _load_request_user(request, session)
         if not user:
             # Session is valid but the user record is gone (deleted, renamed
             # via a different user_id, etc.). Clear the orphan cookie so the
@@ -1031,7 +1071,7 @@ def require_feature(feature_key: str):
             if response is not None:
                 response.delete_cookie("session", samesite="strict")
             raise HTTPException(status_code=401, detail="Session user not found")
-        features = await _get_user_features(user)
+        features = await _load_request_features(request, user)
         if user.get("role") != "admin" and feature_key not in features:
             raise HTTPException(status_code=403, detail=f"Access denied for feature '{feature_key}'")
         return session
@@ -1056,14 +1096,14 @@ def require_feature_method(feature_key: str):
         session = await require_auth(request, response)
         if session and session.get("auth_mode") == "token":
             return session
-        user = await db.get_user_by_id(session["user_id"])
+        user = await _load_request_user(request, session)
         if not user:
             if response is not None:
                 response.delete_cookie("session", samesite="strict")
             raise HTTPException(status_code=401, detail="Session user not found")
         if user.get("role") == "admin":
             return session
-        features = set(await _get_user_features(user))
+        features = set(await _load_request_features(request, user))
         if feature_key not in features:
             raise HTTPException(status_code=403, detail=f"Access denied for feature '{feature_key}'")
         if request.method.upper() not in _READ_METHODS:
@@ -1090,7 +1130,7 @@ async def require_admin(request: Request, response: Response = None):
     # editing their own account; their existing session keeps the old name,
     # so a username-based lookup would silently strip their admin rights
     # for the rest of the session.
-    user = await db.get_user_by_id(session["user_id"])
+    user = await _load_request_user(request, session)
     if not user:
         if response is not None:
             response.delete_cookie("session", samesite="strict")
@@ -1709,9 +1749,13 @@ async def api_rate_limit_middleware(request: Request, call_next):
     if cfg.get("enabled") and request.url.path.startswith("/api/") and request.url.path not in PUBLIC_PATHS:
         # Skip counting for authenticated requests - see docstring.
         api_token = _extract_api_token(request)
+        session_cookie = request.cookies.get("session")
+        verified_session = verify_session_token(session_cookie) if session_cookie else None
+        if verified_session:
+            # Stash for require_auth so the same cookie isn't decoded again.
+            request.state.session_precheck = verified_session
         is_authenticated = bool(
-            (APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN))
-            or (request.cookies.get("session") and verify_session_token(request.cookies["session"]))
+            (APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN)) or verified_session
         )
         if is_authenticated:
             return await call_next(request)
