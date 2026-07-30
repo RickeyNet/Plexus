@@ -59,6 +59,7 @@ __all__ = [
     "upsert_vendor_oid",
     "delete_vendor_oid",
     "create_trap_syslog_event",
+    "create_trap_syslog_events_batch",
     "get_trap_syslog_events",
     "delete_old_trap_syslog_events",
     "list_dashboards",
@@ -907,6 +908,30 @@ async def create_trap_syslog_event(
         )
         await db.commit()
         return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def create_trap_syslog_events_batch(rows: list[tuple]) -> int:
+    """Insert many trap/syslog events in one transaction.
+
+    ``rows`` are (source_ip, host_id, event_type, facility, severity, oid,
+    message, raw_data) tuples. The UDP receivers buffer per-datagram events
+    and flush here so a device log storm costs one commit per flush tick
+    instead of one per packet.
+    """
+    if not rows:
+        return 0
+    db = await _dbcore.get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO trap_syslog_events
+               (source_ip, host_id, event_type, facility, severity, oid, message, raw_data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        await db.commit()
+        return len(rows)
     finally:
         await db.close()
 

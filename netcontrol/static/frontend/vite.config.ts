@@ -19,7 +19,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         // Pull the heavy viz libraries into their own vendor chunks. echarts is
         // imported by several lazy pages (Dashboard, DeviceDetail, Reports,
@@ -28,25 +28,20 @@ export default defineConfig({
         // chunk stays lazy - it's only requested when a page that uses it
         // loads - and splitting vendor from page code means editing a page no
         // longer busts the big library cache.
-        manualChunks(id) {
-          if (id.includes('node_modules/echarts') || id.includes('node_modules/zrender')) {
-            return 'echarts';
-          }
-          if (
-            id.includes('node_modules/vis-network') ||
-            id.includes('node_modules/vis-data') ||
-            id.includes('node_modules/vis-util')
-          ) {
-            return 'vis-network';
-          }
-          if (
-            id.includes('node_modules/@codemirror') ||
-            id.includes('node_modules/@lezer') ||
-            id.includes('node_modules/@uiw') ||
-            id.includes('node_modules/codemirror')
-          ) {
-            return 'codemirror';
-          }
+        //
+        // Rolldown-native advancedChunks (the deprecated manualChunks compat
+        // path silently kept React inside the codemirror group even when the
+        // function returned 'react-vendor'). Groups match in order: React
+        // must come first, or @uiw/react-codemirror drags it into the
+        // codemirror chunk and the entry statically imports the ~488 KB
+        // editor bundle on every page load.
+        advancedChunks: {
+          groups: [
+            { name: 'react-vendor', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+            { name: 'echarts', test: /node_modules[\\/](echarts|zrender)[\\/]/ },
+            { name: 'vis-network', test: /node_modules[\\/](vis-network|vis-data|vis-util)[\\/]/ },
+            { name: 'codemirror', test: /node_modules[\\/](@codemirror|@lezer|@uiw|codemirror)[\\/]/ },
+          ],
         },
       },
     },

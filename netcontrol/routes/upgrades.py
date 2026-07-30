@@ -578,16 +578,28 @@ async def _mark_upgrade_operation_failed(
 
 
 async def _broadcast_upgrade_event(campaign_id: int, event: dict):
-    """Send event to all connected WebSocket clients for a campaign."""
+    """Send event to all connected WebSocket clients for a campaign.
+
+    Serialized once and fanned out concurrently, so one slow viewer only
+    delays itself (bounded by the per-socket timeout), not the other
+    subscribers or the device workflow emitting the event.
+    """
     async with _campaign_sockets_lock:
         sockets = list(_campaign_sockets.get(campaign_id, []))
-    dead = []
-    for ws in sockets:
+    if not sockets:
+        return
+    text = json.dumps(event)
+
+    async def _send(ws):
         try:
-            await asyncio.wait_for(ws.send_json(event), timeout=5)
+            await asyncio.wait_for(ws.send_text(text), timeout=5)
+            return None
         except Exception:
             LOGGER.debug("upgrade broadcast: dropping dead WS for campaign %s", campaign_id)
-            dead.append(ws)
+            return ws
+
+    results = await asyncio.gather(*(_send(ws) for ws in sockets))
+    dead = [ws for ws in results if ws is not None]
     if dead:
         async with _campaign_sockets_lock:
             for ws in dead:
@@ -597,9 +609,54 @@ async def _broadcast_upgrade_event(campaign_id: int, event: dict):
                     LOGGER.debug("upgrade broadcast: dead WS already removed for campaign %s: %s", campaign_id, exc)
 
 
+# ── Buffered event persistence ────────────────────────────────────────────────
+#
+# Eight concurrent device workflows each emit hundreds of log lines per
+# phase; persisting one transaction per line gated device progress on the
+# global writer lock. Events queue here and a single writer task flushes
+# them with executemany on a size/time trigger.
+
+_UPGRADE_EVENT_BATCH_SIZE = 50
+_UPGRADE_EVENT_FLUSH_SECONDS = 0.1
+_upgrade_event_queue: asyncio.Queue = asyncio.Queue()
+_upgrade_event_writer_task: asyncio.Task | None = None
+
+
+async def _upgrade_event_writer_loop() -> None:
+    while True:
+        batch = [await _upgrade_event_queue.get()]
+        while len(batch) < _UPGRADE_EVENT_BATCH_SIZE:
+            try:
+                batch.append(
+                    await asyncio.wait_for(_upgrade_event_queue.get(), timeout=_UPGRADE_EVENT_FLUSH_SECONDS)
+                )
+            except TimeoutError:
+                break
+        try:
+            await db.add_upgrade_events(batch)
+        except Exception as exc:
+            LOGGER.warning(
+                "upgrade events: batch write failed (%s); retrying once for %d events",
+                type(exc).__name__,
+                len(batch),
+            )
+            try:
+                await asyncio.sleep(0.5)
+                await db.add_upgrade_events(batch)
+            except Exception:
+                LOGGER.exception("upgrade events: dropping %d events after retry", len(batch))
+
+
+def _enqueue_upgrade_event(campaign_id: int, device_id: int | None, level: str, message: str, host: str) -> None:
+    global _upgrade_event_writer_task
+    if _upgrade_event_writer_task is None or _upgrade_event_writer_task.done():
+        _upgrade_event_writer_task = asyncio.create_task(_upgrade_event_writer_loop())
+    _upgrade_event_queue.put_nowait((campaign_id, device_id, level, message, host))
+
+
 async def _emit(campaign_id: int, device_id: int | None, level: str, message: str, host: str = ""):
-    """Persist event to DB and broadcast to WebSocket clients."""
-    event_id = await db.add_upgrade_event(campaign_id, device_id, level, message, host=host)
+    """Queue event for batched persistence and broadcast to WebSocket clients."""
+    _enqueue_upgrade_event(campaign_id, device_id, level, message, host)
     event = {
         "type": "upgrade_event",
         "campaign_id": campaign_id,
@@ -608,7 +665,6 @@ async def _emit(campaign_id: int, device_id: int | None, level: str, message: st
         "message": message,
         "host": host,
         "timestamp": datetime.now(UTC).isoformat(),
-        "event_id": event_id,
     }
     await _broadcast_upgrade_event(campaign_id, event)
 
