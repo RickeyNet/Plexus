@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
@@ -32,6 +33,9 @@ class DummyRequest:
 
         self.headers = HeaderMap(normalized)
         self.cookies = cookies or {}
+        # Real Starlette requests always expose .state; require_auth uses it
+        # as a per-request cache for the resolved session/user.
+        self.state = SimpleNamespace()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

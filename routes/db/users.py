@@ -65,7 +65,9 @@ async def get_user_by_username(username: str) -> dict | None:
 
 
 async def get_user_by_id(user_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    # Runs on every authenticated request (auth dependencies) - use the
+    # read pool so it doesn't serialize behind the SQLite writer lock.
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT id, username, display_name, role, must_change_password, session_never_expires, session_epoch, created_at FROM users WHERE id = ?",
@@ -402,7 +404,8 @@ async def get_user_effective_features(user_id: int) -> list[str] | None:
     Returns ``None`` if the user has **no** group memberships at all (so the
     caller can distinguish "unassigned" from "assigned but zero features").
     """
-    db = await _dbcore.get_db()
+    # Hot path: called from feature-gate dependencies on most requests.
+    db = await _dbcore.get_db(read_only=True)
     try:
         # First check whether the user has any group membership rows
         cursor = await db.execute(

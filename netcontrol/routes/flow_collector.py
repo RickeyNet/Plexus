@@ -677,8 +677,10 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
             )
 
         # Per-exporter telemetry: count this packet (not per-record) so the
-        # number matches what the device actually sent over the wire.
-        self._spawn(_record_exporter_packet(exporter_ip, flow_type, host_id, last_record_at, sampling_rate))
+        # number matches what the device actually sent over the wire. Pure
+        # in-memory accumulate — flushed to the DB on the periodic tick, so
+        # the hot UDP path never touches the writer lock.
+        _note_exporter_packet(exporter_ip, flow_type, host_id, last_record_at, sampling_rate)
 
         if len(self._buffer) >= FLOW_COLLECTOR_CONFIG.get("batch_size", 100):
             self._spawn(self._flush_buffer())
@@ -703,10 +705,11 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
             LOGGER.warning("flow_collector: flush error: %s", str(exc))
 
     async def _periodic_flush(self):
-        """Flush buffer periodically (every 10 seconds)."""
+        """Flush buffer and pending exporter stats periodically (every 10 seconds)."""
         while True:
             await asyncio.sleep(10)
             await self._flush_buffer()
+            await _flush_exporter_stats()
 
     def connection_lost(self, exc):
         if self._flush_task:
@@ -758,25 +761,59 @@ async def on_host_changed(
         LOGGER.warning("flow_collector: exporter host_id sync failed: %s", type(exc).__name__)
 
 
-async def _record_exporter_packet(
+# Pending per-exporter packet counters, keyed by (exporter_ip, flow_type).
+# Written synchronously from datagram_received (single-threaded on the event
+# loop, so no lock needed) and drained by _flush_exporter_stats.
+_pending_exporter_stats: dict[tuple[str, str], dict] = {}
+
+
+def _note_exporter_packet(
     exporter_ip: str,
     flow_type: str,
     host_id: int | None,
     last_record_at: str | None,
     sampling_rate: int = 0,
 ) -> None:
-    """Persist per-exporter packet telemetry. Best-effort: never raises."""
-    try:
-        await db.upsert_flow_exporter(
-            exporter_ip=exporter_ip,
-            flow_type=flow_type,
-            host_id=host_id,
-            packets_delta=1,
-            sampling_rate=sampling_rate,
-            last_record_at=last_record_at,
-        )
-    except Exception as exc:
-        LOGGER.debug("flow_collector: exporter upsert failed for %s: %s", exporter_ip, type(exc).__name__)
+    """Accumulate per-exporter packet telemetry in memory (no DB access)."""
+    entry = _pending_exporter_stats.get((exporter_ip, flow_type))
+    if entry is None:
+        _pending_exporter_stats[(exporter_ip, flow_type)] = {
+            "host_id": host_id,
+            "packets": 1,
+            "sampling_rate": int(sampling_rate or 0),
+            "last_record_at": last_record_at,
+        }
+        return
+    entry["packets"] += 1
+    entry["host_id"] = host_id
+    if sampling_rate:
+        entry["sampling_rate"] = int(sampling_rate)
+    if last_record_at:
+        entry["last_record_at"] = last_record_at
+
+
+async def _flush_exporter_stats() -> None:
+    """Persist accumulated exporter counters. Best-effort: never raises.
+
+    One upsert per active (exporter, flow_type) pair per flush tick instead
+    of one per received packet.
+    """
+    if not _pending_exporter_stats:
+        return
+    pending = dict(_pending_exporter_stats)
+    _pending_exporter_stats.clear()
+    for (exporter_ip, flow_type), stats in pending.items():
+        try:
+            await db.upsert_flow_exporter(
+                exporter_ip=exporter_ip,
+                flow_type=flow_type,
+                host_id=stats["host_id"],
+                packets_delta=stats["packets"],
+                sampling_rate=stats["sampling_rate"],
+                last_record_at=stats["last_record_at"],
+            )
+        except Exception as exc:
+            LOGGER.debug("flow_collector: exporter upsert failed for %s: %s", exporter_ip, type(exc).__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -856,6 +893,7 @@ async def stop_flow_collector() -> bool:
         _flow_transport = None
         _flow_protocol = None
 
+    await _flush_exporter_stats()
     FLOW_COLLECTOR_CONFIG["enabled"] = False
     LOGGER.info("flow_collector: stopped")
     return True
