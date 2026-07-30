@@ -363,7 +363,7 @@ def _parse_insights_timestamp(value) -> datetime | None:
     if text.isdigit():
         try:
             return datetime.fromtimestamp(int(text), tz=UTC)
-        except ValueError, OSError, OverflowError:
+        except (ValueError, OSError, OverflowError):
             return None
     try:
         parsed = datetime.fromisoformat(text)
@@ -485,7 +485,7 @@ def _azure_tuple_epoch(flow_tuple) -> int | None:
     """Epoch seconds from an NSG flow tuple (first comma-separated field)."""
     try:
         return int(str(flow_tuple).split(",", 1)[0])
-    except ValueError, IndexError:
+    except (ValueError, IndexError):
         return None
 
 
@@ -520,7 +520,7 @@ def _read_azure_blobs(container_client, start: datetime, end: datetime) -> tuple
         blob_data = container_client.download_blob(blob_props.name).readall()
         try:
             parsed = json.loads(blob_data)
-        except json.JSONDecodeError, UnicodeDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             continue
 
         # NSG flow log JSON structure: { records: [ { properties: { flows: [...] } } ] }
