@@ -31,6 +31,7 @@ __all__ = [
     "query_metric_samples",
     "delete_old_metric_samples",
     "create_metric_rollup",
+    "create_metric_rollups_batch",
     "query_metric_rollups",
     "get_raw_samples_for_rollup",
     "delete_old_metric_rollups",
@@ -139,7 +140,7 @@ async def query_metric_samples(
     end: str | None = None,
     limit: int = 5000,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["metric_name = ?"]
         params: list = [metric_name]
@@ -169,16 +170,11 @@ async def query_metric_samples(
 
 
 async def delete_old_metric_samples(hours: int = 48) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM metric_samples WHERE sampled_at < datetime('now', '-' || ? || ' hours')",
-            (hours,),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "metric_samples",
+        "sampled_at < datetime('now', '-' || ? || ' hours')",
+        (hours,),
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -227,6 +223,34 @@ async def create_metric_rollup(
         await db.close()
 
 
+async def create_metric_rollups_batch(rows: list[tuple]) -> int:
+    """Insert many rollup rows in one transaction.
+
+    ``rows`` are 11-tuples matching create_metric_rollup's column order:
+    (host_id, metric_name, labels_json, time_window, period_start,
+    period_end, val_min, val_avg, val_max, val_p95, sample_count).
+    The downsampling engine produces one row per (host, metric, labels) per
+    window - batching them avoids one commit (and writer-lock acquisition)
+    per row.
+    """
+    if not rows:
+        return 0
+    db = await _dbcore.get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO metric_rollups
+               (host_id, metric_name, labels_json, time_window,
+                period_start, period_end,
+                val_min, val_avg, val_max, val_p95, sample_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        await db.commit()
+        return len(rows)
+    finally:
+        await db.close()
+
+
 async def query_metric_rollups(
     metric_name: str,
     time_window: str = "hourly",
@@ -235,7 +259,7 @@ async def query_metric_rollups(
     end: str | None = None,
     limit: int = 5000,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["metric_name = ?", "time_window = ?"]
         params: list = [metric_name, time_window]
@@ -271,7 +295,7 @@ async def get_raw_samples_for_rollup(
 ) -> list[dict]:
     """Fetch raw samples in a time range, grouped by host+labels,
     for the downsampling engine to aggregate."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT host_id, labels_json, value
@@ -286,16 +310,11 @@ async def get_raw_samples_for_rollup(
 
 
 async def delete_old_metric_rollups(time_window: str, retention_days: int) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM metric_rollups WHERE time_window = ? AND period_start < datetime('now', '-' || ? || ' days')",
-            (time_window, retention_days),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "metric_rollups",
+        "time_window = ? AND period_start < datetime('now', '-' || ? || ' days')",
+        (time_window, retention_days),
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -369,7 +388,7 @@ async def get_top_interfaces_by_bandwidth(
 
     Used by the dashboard bandwidth-trend panel to pick which interfaces to chart.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT t.host_id,
@@ -400,7 +419,7 @@ async def query_interface_ts(
     end: str | None = None,
     limit: int = 2000,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["host_id = ?"]
         params: list = [host_id]
@@ -470,16 +489,11 @@ async def query_interface_ts_multi(
 
 
 async def delete_old_interface_ts(retention_days: int = 30) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM interface_ts WHERE sampled_at < datetime('now', '-' || ? || ' days')",
-            (retention_days,),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "interface_ts",
+        "sampled_at < datetime('now', '-' || ? || ' days')",
+        (retention_days,),
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -489,7 +503,7 @@ async def delete_old_interface_ts(retention_days: int = 30) -> int:
 
 async def get_interface_error_stats_for_host(host_id: int) -> list[dict]:
     """Fetch current error counter state for all interfaces on a host."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM interface_error_stats WHERE host_id = ?",
@@ -616,7 +630,7 @@ async def get_interface_error_events(
     unresolved_only: bool = False,
     limit: int = 200,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -644,7 +658,7 @@ async def get_interface_error_events(
 
 
 async def get_interface_error_event(event_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT e.*, h.hostname, h.ip_address
@@ -690,7 +704,7 @@ async def get_interface_error_summary(
     days: int = 1,
 ) -> list[dict]:
     """Per-interface error/discard rate summary with totals."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT ms.host_id, ms.labels_json, ms.metric_name,
@@ -720,7 +734,7 @@ async def get_interface_error_trending(
     limit: int = 5000,
 ) -> list[dict]:
     """Query error/discard metric_samples for a host, optionally filtered by interface."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = [
             "host_id = ?",
@@ -748,16 +762,11 @@ async def get_interface_error_trending(
 
 
 async def delete_old_interface_error_events(retention_days: int = 90) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM interface_error_events WHERE created_at < datetime('now', '-' || ? || ' days')",
-            (retention_days,),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "interface_error_events",
+        "created_at < datetime('now', '-' || ? || ' days')",
+        (retention_days,),
+    )
 
 
 async def get_trap_syslog_events_in_range(
@@ -767,7 +776,7 @@ async def get_trap_syslog_events_in_range(
     limit: int = 100,
 ) -> list[dict]:
     """Return trap/syslog events for a host within a time range (for error correlation)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM trap_syslog_events
@@ -787,7 +796,7 @@ async def get_topology_changes_in_range(
     limit: int = 50,
 ) -> list[dict]:
     """Return topology changes for a host within a time range."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM topology_changes
@@ -806,7 +815,7 @@ async def get_topology_changes_in_range(
 
 
 async def get_vendor_oid_entries() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM vendor_oid_registry ORDER BY vendor, device_type")
         return rows_to_list(await cursor.fetchall())
@@ -816,7 +825,7 @@ async def get_vendor_oid_entries() -> list[dict]:
 
 async def get_vendor_oid_for_host(device_type: str) -> dict | None:
     """Lookup OIDs by matching device_type substring (case-insensitive)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         # COLLATE NOCASE is sqlite-only; postgres has no built-in case-folding
         # collation by that name. Lowercasing both sides works on every engine
@@ -908,7 +917,7 @@ async def get_trap_syslog_events(
     severity: str | None = None,
     limit: int = 200,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -937,23 +946,18 @@ async def get_trap_syslog_events(
 
 
 async def delete_old_trap_syslog_events(retention_days: int = 30) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM trap_syslog_events WHERE received_at < datetime('now', '-' || ? || ' days')",
-            (retention_days,),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "trap_syslog_events",
+        "received_at < datetime('now', '-' || ? || ' days')",
+        (retention_days,),
+    )
 
 
 # ── Dashboards ─────────────────────────────────────────────────────────────────
 
 
 async def list_dashboards(owner: str | None = None) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if owner:
             cursor = await db.execute("SELECT * FROM dashboards WHERE owner = ? ORDER BY updated_at DESC", (owner,))
@@ -1217,7 +1221,7 @@ async def get_config_drift_events_in_range(
     """Return config drift events for the given hosts within a time range."""
     if not host_ids:
         return []
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" for _ in host_ids)
         cursor = await db.execute(
@@ -1242,7 +1246,7 @@ async def get_monitoring_alerts_in_range(
     """Return monitoring alerts for the given hosts within a time range."""
     if not host_ids:
         return []
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" for _ in host_ids)
         cursor = await db.execute(
@@ -1265,7 +1269,7 @@ async def get_deployments_for_host_in_range(
     end: str,
 ) -> list[dict]:
     """Return deployments that include the given host within a time range."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         # Explicit columns: consumers (alert-correlation API, root-cause
         # classifier) need identity/status fields only - proposed_commands
@@ -1298,7 +1302,7 @@ async def get_audit_events_for_deployment(
     end: str,
 ) -> list[dict]:
     """Return audit events related to a deployment within a time range."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM audit_events
@@ -1357,7 +1361,7 @@ async def get_last_availability_states(
     entity_type: str,
 ) -> dict[str, str]:
     """Return the latest new_state keyed by entity_id for one host + type."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT a.entity_id, a.new_state
@@ -1403,7 +1407,7 @@ async def get_availability_transitions(
     end: str | None = None,
     limit: int = 500,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["1=1"]
         params: list = []
@@ -1588,7 +1592,7 @@ async def get_outage_history(
     limit: int = 200,
 ) -> list[dict]:
     """Get outage records (down transitions paired with recovery)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
         params: list = [days]
@@ -1725,7 +1729,7 @@ async def get_port_detail_ts(
     limit: int = 5000,
 ) -> dict:
     """Detailed time-series for a single port with summary stats."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["host_id = ?", "if_index = ?"]
         params: list = [host_id, if_index]
@@ -1784,7 +1788,7 @@ async def get_port_detail_ts(
 async def get_custom_oid_profiles(
     vendor: str | None = None,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if vendor:
             cursor = await db.execute(
@@ -1799,7 +1803,7 @@ async def get_custom_oid_profiles(
 
 
 async def get_custom_oid_profile(profile_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM custom_oid_profiles WHERE id = ?", (profile_id,))
         row = await cursor.fetchone()

@@ -125,7 +125,7 @@ async def upsert_metric_baseline(
 async def get_metric_baseline(
     host_id: int, metric_name: str, day_of_week: int, hour_of_day: int, labels_json: str = "{}"
 ) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM metric_baselines
@@ -140,7 +140,7 @@ async def get_metric_baseline(
 
 
 async def get_baselines_for_host(host_id: int, metric_name: str | None = None) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if metric_name:
             cursor = await db.execute(
@@ -161,7 +161,7 @@ async def get_baselines_for_host(host_id: int, metric_name: str | None = None) -
 
 
 async def list_baseline_alert_rules(enabled_only: bool = False) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         q = "SELECT * FROM baseline_alert_rules"
         if enabled_only:
@@ -174,7 +174,7 @@ async def list_baseline_alert_rules(enabled_only: bool = False) -> list[dict]:
 
 
 async def get_baseline_alert_rule(rule_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM baseline_alert_rules WHERE id = ?", (rule_id,))
         row = await cursor.fetchone()
@@ -277,7 +277,7 @@ async def create_upgrade_image(
 
 
 async def get_all_upgrade_images():
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM upgrade_images ORDER BY created_at DESC")
         return [dict(r) for r in await cursor.fetchall()]
@@ -286,7 +286,7 @@ async def get_all_upgrade_images():
 
 
 async def get_upgrade_image(image_id):
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM upgrade_images WHERE id = ?", (image_id,))
         row = await cursor.fetchone()
@@ -296,7 +296,7 @@ async def get_upgrade_image(image_id):
 
 
 async def get_upgrade_image_by_filename(filename):
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM upgrade_images WHERE filename = ?",
@@ -350,7 +350,7 @@ async def create_upgrade_campaign(name, description, image_map, options, created
 
 
 async def get_all_upgrade_campaigns():
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM upgrade_campaigns ORDER BY created_at DESC")
         return [dict(r) for r in await cursor.fetchall()]
@@ -359,7 +359,7 @@ async def get_all_upgrade_campaigns():
 
 
 async def get_upgrade_campaign(campaign_id):
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM upgrade_campaigns WHERE id = ?", (campaign_id,))
         row = await cursor.fetchone()
@@ -483,7 +483,7 @@ async def update_upgrade_operation(operation_id, **kwargs):
 
 
 async def get_upgrade_operations(campaign_id, limit=20):
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM upgrade_operations WHERE campaign_id = ? "
@@ -496,7 +496,7 @@ async def get_upgrade_operations(campaign_id, limit=20):
 
 
 async def get_latest_upgrade_operation(campaign_id, phase=None, statuses=None):
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["campaign_id = ?"]
         params = [campaign_id]
@@ -533,7 +533,7 @@ async def add_upgrade_device(campaign_id, host_id, ip_address, hostname):
 
 
 async def get_upgrade_devices(campaign_id):
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM upgrade_devices WHERE campaign_id = ? ORDER BY hostname, ip_address",
@@ -552,7 +552,7 @@ async def get_upgrade_device_counts():
     materialized every device row of every campaign just to count them).
     Returns ``{campaign_id: {device_count, devices_completed, devices_failed}}``.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT campaign_id, "
@@ -575,7 +575,7 @@ async def get_upgrade_device_counts():
 
 
 async def get_upgrade_device(device_id):
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM upgrade_devices WHERE id = ?", (device_id,))
         row = await cursor.fetchone()
@@ -638,7 +638,7 @@ async def get_upgrade_events(campaign_id, device_id=None, limit=1000):
     capping the tail keeps the payload and the DB scan bounded while still
     showing the latest activity. ``id`` breaks ties on same-second timestamps.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if device_id:
             cursor = await db.execute(
