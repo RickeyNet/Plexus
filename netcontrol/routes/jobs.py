@@ -80,6 +80,42 @@ _job_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_JOBS)
 # Active WebSocket connections keyed by job_id
 _job_sockets: dict[int, list[WebSocket]] = {}
 _job_sockets_lock = asyncio.Lock()
+
+# Cap for the history replay a WS client gets on connect; the full log is
+# available via GET /api/jobs/{id}/events (limit up to 100k).
+_WS_HISTORY_REPLAY_LIMIT = 2000
+
+
+async def _broadcast_to_job_sockets(job_id: int, payload: dict) -> None:
+    """Send one payload to every subscriber of a job, concurrently.
+
+    The payload is serialized once (N viewers used to cost N identical
+    json encodes) and sends run in parallel, so a slow client only delays
+    itself - bounded by the per-socket timeout - instead of holding up the
+    other subscribers and the job's event loop. Dead sockets are pruned.
+    """
+    async with _job_sockets_lock:
+        sockets = list(_job_sockets.get(job_id, []))
+    if not sockets:
+        return
+    text = json.dumps(payload)
+
+    async def _send(ws: WebSocket) -> WebSocket | None:
+        try:
+            await asyncio.wait_for(ws.send_text(text), timeout=5)
+            return None
+        except Exception:
+            return ws
+
+    results = await asyncio.gather(*(_send(ws) for ws in sockets))
+    dead = [ws for ws in results if ws is not None]
+    if dead:
+        async with _job_sockets_lock:
+            for ws in dead:
+                try:
+                    _job_sockets[job_id].remove(ws)
+                except (ValueError, KeyError) as exc:
+                    LOGGER.debug("job %s: dead WS already removed: %s", job_id, exc)
 _running_job_tasks: dict[int, asyncio.Task] = {}  # job_id -> asyncio.Task for cancellation
 _running_tasks_lock = asyncio.Lock()
 
@@ -664,21 +700,7 @@ async def _run_ansible_job(
 
     async def on_event(event: LogEvent):
         event_writer.enqueue(event)
-        async with _job_sockets_lock:
-            sockets = list(_job_sockets.get(job_id, []))
-        dead = []
-        for ws in sockets:
-            try:
-                await asyncio.wait_for(ws.send_json(event.to_dict()), timeout=5)
-            except Exception:
-                dead.append(ws)
-        if dead:
-            async with _job_sockets_lock:
-                for ws in dead:
-                    try:
-                        _job_sockets[job_id].remove(ws)
-                    except (ValueError, KeyError) as exc:
-                        LOGGER.debug("job %s: dead WS already removed: %s", job_id, exc)
+        await _broadcast_to_job_sockets(job_id, event.to_dict())
 
     job_succeeded = False
     try:
@@ -724,14 +746,9 @@ async def _run_ansible_job(
             LOGGER.exception("job %s: failed to close Ansible event writer", job_id)
 
     # Notify WebSocket clients that job is done
-    done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
+    await _broadcast_to_job_sockets(job_id, {"type": "job_complete", "job_id": job_id, "status": "done"})
     async with _job_sockets_lock:
-        sockets = _job_sockets.pop(job_id, [])
-    for ws in sockets:
-        try:
-            await asyncio.wait_for(ws.send_json(done_msg), timeout=5)
-        except Exception:
-            LOGGER.debug("job broadcast: dropping dead WS for job %s", job_id)
+        _job_sockets.pop(job_id, None)
 
     # Re-probe affected hosts via SNMP after a successful live job.
     if job_succeeded:
@@ -777,21 +794,7 @@ async def _run_job(
             hosts_failed += 1
 
         # Broadcast to WebSocket subscribers
-        async with _job_sockets_lock:
-            sockets = list(_job_sockets.get(job_id, []))
-        dead = []
-        for ws in sockets:
-            try:
-                await asyncio.wait_for(ws.send_json(event.to_dict()), timeout=5)
-            except Exception:
-                dead.append(ws)
-        if dead:
-            async with _job_sockets_lock:
-                for ws in dead:
-                    try:
-                        _job_sockets[job_id].remove(ws)
-                    except (ValueError, KeyError) as exc:
-                        LOGGER.debug("job %s: dead WS already removed: %s", job_id, exc)
+        await _broadcast_to_job_sockets(job_id, event.to_dict())
 
     job_succeeded = False
     try:
@@ -839,15 +842,9 @@ async def _run_job(
             LOGGER.exception("job %s: failed to close event writer", job_id)
 
     # Notify WebSocket clients that job is done
-    done_msg = {"type": "job_complete", "job_id": job_id, "status": "done"}
+    await _broadcast_to_job_sockets(job_id, {"type": "job_complete", "job_id": job_id, "status": "done"})
     async with _job_sockets_lock:
-        sockets = _job_sockets.pop(job_id, [])
-    for ws in sockets:
-        try:
-            # Timeout so one wedged client socket can't stall job teardown.
-            await asyncio.wait_for(ws.send_json(done_msg), timeout=5)
-        except Exception as exc:
-            LOGGER.debug("job %s: failed to send job_complete to WS client: %s", job_id, exc)
+        _job_sockets.pop(job_id, None)
 
     # Re-probe affected hosts via SNMP after a successful live job so that
     # any transient SNMP agent restart doesn't leave inventory stale.
@@ -1288,16 +1285,21 @@ async def websocket_job(websocket: WebSocket, job_id: int):
 
     await websocket.accept()
 
-    # Send historical events first
-    events = await db.get_job_events(job_id)
+    # Send historical events first. Replay is capped to the most recent
+    # lines - a verbose multi-host job can log tens of thousands, and
+    # replaying them one frame at a time stalled the event loop on every
+    # page open. Full history: GET /api/jobs/{id}/events.
+    events = await db.get_job_events(job_id, limit=_WS_HISTORY_REPLAY_LIMIT)
     for event in events:
-        await websocket.send_json(
-            {
-                "level": event["level"],
-                "message": event["message"],
-                "host": event["host"],
-                "timestamp": event["timestamp"],
-            }
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "level": event["level"],
+                    "message": event["message"],
+                    "host": event["host"],
+                    "timestamp": event["timestamp"],
+                }
+            )
         )
 
     # Check if job is already done

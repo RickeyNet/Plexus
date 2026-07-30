@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import socket
 import struct
 import time
@@ -800,6 +801,11 @@ async def _downsampling_loop() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+# Runs of >=6 printable ASCII chars in a trap PDU - the readable candidates
+# the old byte-by-byte Python scan extracted, as a single compiled regex.
+_PRINTABLE_RUN = re.compile(rb"[ -~]{6,}")
+
+
 class _TrapSyslogProtocol(asyncio.DatagramProtocol):
     """Async UDP listener for SNMP traps (port 162) and syslog (port 514)."""
 
@@ -821,30 +827,19 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
 
     def _handle_trap(self, data: bytes, source_ip: str):
         # Basic SNMPv2c trap parsing - extract OID and value from the PDU.
-        # Full ASN.1 parsing would need pysnmp; this extracts the readable parts.
-        raw_hex = data.hex()
+        # Full ASN.1 parsing would need pysnmp; this extracts the readable
+        # parts. Only the stored prefix is hexed (raw_data is capped at 2000
+        # chars = 1000 bytes anyway).
+        raw_hex = data[:1000].hex()
         message = f"SNMP trap from {source_ip} ({len(data)} bytes)"
         oid = ""
-        # Try to find OID in the raw data (basic BER TLV scan)
-        try:
-            text_parts = []
-            for i in range(len(data)):
-                if 32 <= data[i] < 127:
-                    text_parts.append(chr(data[i]))
-                else:
-                    if text_parts:
-                        candidate = "".join(text_parts)
-                        if "." in candidate and len(candidate) > 5:
-                            oid = candidate
-                        text_parts = []
-            if text_parts:
-                candidate = "".join(text_parts)
-                if "." in candidate and len(candidate) > 5:
-                    oid = candidate
-        except Exception as exc:
-            LOGGER.debug("metrics: trap OID extraction failed from %s: %s", source_ip, exc)
+        # Last printable run that looks like an OID wins (matches the old scan)
+        for m in _PRINTABLE_RUN.finditer(data):
+            candidate = m.group().decode("ascii")
+            if "." in candidate:
+                oid = candidate
 
-        _spawn_bg(_store_event(source_ip, "trap", "", "info", oid, message, raw_hex[:2000]))
+        _queue_trap_syslog_event(source_ip, "trap", "", "info", oid, message, raw_hex)
 
     def _handle_syslog(self, data: bytes, source_ip: str):
         try:
@@ -882,11 +877,42 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
             except (ValueError, IndexError) as exc:
                 LOGGER.debug("metrics: syslog priority parse failed from %s: %s", source_ip, exc)
 
-        _spawn_bg(_store_event(source_ip, "syslog", facility, severity, "", message, text[:2000]))
+        _queue_trap_syslog_event(source_ip, "syslog", facility, severity, "", message, text[:2000])
 
 
-async def _store_event(source_ip, event_type, facility, severity, oid, message, raw_data):
-    # Try to resolve source_ip to a host_id
+# ── Buffered trap/syslog persistence ─────────────────────────────────────────
+#
+# The old path did a host lookup plus a single-row INSERT+commit per
+# datagram - two writer-lock round-trips per syslog line, so a device log
+# storm on port 514 stalled the whole app. Events buffer in memory (bounded,
+# drop-newest with a counter) and a single writer flushes them in batches,
+# resolving source IPs through a short-lived cache.
+
+_TRAP_EVENT_FLUSH_SECONDS = 1.0
+_TRAP_EVENT_BUFFER_MAX = 10000
+_HOST_IP_CACHE_TTL_SECONDS = 300.0
+
+_trap_event_buffer: list[tuple] = []  # (source_ip, event_type, facility, severity, oid, message, raw_data)
+_trap_events_dropped = 0
+_trap_event_writer_task: asyncio.Task | None = None
+_host_ip_cache: dict[str, tuple[int | None, float]] = {}
+
+
+def _queue_trap_syslog_event(source_ip, event_type, facility, severity, oid, message, raw_data) -> None:
+    global _trap_events_dropped, _trap_event_writer_task
+    if len(_trap_event_buffer) >= _TRAP_EVENT_BUFFER_MAX:
+        _trap_events_dropped += 1
+        return
+    _trap_event_buffer.append((source_ip, event_type, facility, severity, oid, message[:2000], raw_data[:2000]))
+    if _trap_event_writer_task is None or _trap_event_writer_task.done():
+        _trap_event_writer_task = asyncio.ensure_future(_trap_event_writer_loop())
+
+
+async def _resolve_host_id_cached(source_ip: str) -> int | None:
+    now = time.monotonic()
+    cached = _host_ip_cache.get(source_ip)
+    if cached is not None and cached[1] > now:
+        return cached[0]
     host_id = None
     try:
         host = await db.find_host_by_ip(source_ip)
@@ -894,17 +920,35 @@ async def _store_event(source_ip, event_type, facility, severity, oid, message, 
             host_id = host["id"]
     except Exception as exc:
         LOGGER.debug("metrics: host lookup failed for %s: %s", source_ip, exc)
+    _host_ip_cache[source_ip] = (host_id, now + _HOST_IP_CACHE_TTL_SECONDS)
+    # Bound the cache: a scanner spraying spoofed sources shouldn't grow it forever.
+    if len(_host_ip_cache) > 4096:
+        for ip, (_, expires) in list(_host_ip_cache.items()):
+            if expires <= now:
+                _host_ip_cache.pop(ip, None)
+    return host_id
 
-    await db.create_trap_syslog_event(
-        source_ip=source_ip,
-        event_type=event_type,
-        facility=facility,
-        severity=severity,
-        oid=oid,
-        message=message[:2000],
-        raw_data=raw_data[:2000],
-        host_id=host_id,
-    )
+
+async def _trap_event_writer_loop() -> None:
+    global _trap_events_dropped
+    while True:
+        await asyncio.sleep(_TRAP_EVENT_FLUSH_SECONDS)
+        if not _trap_event_buffer:
+            continue
+        batch = _trap_event_buffer[:]
+        _trap_event_buffer.clear()
+        if _trap_events_dropped:
+            LOGGER.warning("metrics: trap/syslog buffer overflow - dropped %d events", _trap_events_dropped)
+            _trap_events_dropped = 0
+        try:
+            host_ids = {ip: await _resolve_host_id_cached(ip) for ip in {row[0] for row in batch}}
+            rows = [
+                (source_ip, host_ids.get(source_ip), event_type, facility, severity, oid, message, raw_data)
+                for (source_ip, event_type, facility, severity, oid, message, raw_data) in batch
+            ]
+            await db.create_trap_syslog_events_batch(rows)
+        except Exception as exc:
+            LOGGER.warning("metrics: trap/syslog batch write failed, dropping %d events: %s", len(batch), exc)
 
 
 _trap_transport = None

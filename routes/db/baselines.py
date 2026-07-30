@@ -56,6 +56,7 @@ __all__ = [
     "get_upgrade_device",
     "update_upgrade_device",
     "add_upgrade_event",
+    "add_upgrade_events",
     "get_upgrade_events",
 ]
 
@@ -626,6 +627,27 @@ async def add_upgrade_event(campaign_id, device_id, level, message, host=""):
         )
         await db.commit()
         return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def add_upgrade_events(rows: list[tuple]) -> int:
+    """Insert many upgrade events in one transaction.
+
+    ``rows`` are (campaign_id, device_id, level, message, host) tuples.
+    Used by the campaign runner's buffered writer so eight concurrent
+    device workflows don't pay one commit per log line.
+    """
+    if not rows:
+        return 0
+    db = await _dbcore.get_db()
+    try:
+        await db.executemany(
+            "INSERT INTO upgrade_events (campaign_id, device_id, level, message, host) VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+        await db.commit()
+        return len(rows)
     finally:
         await db.close()
 
