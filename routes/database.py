@@ -1372,6 +1372,7 @@ CREATE INDEX IF NOT EXISTS idx_flow_exporter ON flow_records(exporter_ip, receiv
 CREATE INDEX IF NOT EXISTS idx_flow_src ON flow_records(src_ip, received_at);
 CREATE INDEX IF NOT EXISTS idx_flow_dst ON flow_records(dst_ip, received_at);
 CREATE INDEX IF NOT EXISTS idx_flow_records_flow_type_received ON flow_records(flow_type, received_at);
+CREATE INDEX IF NOT EXISTS idx_flow_host_received ON flow_records(host_id, received_at);
 
 CREATE TABLE IF NOT EXISTS flow_summaries (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -7,7 +7,7 @@ import logging.handlers
 import re
 import socket
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any
 
 _SENSITIVE_FIELD_PATTERN = re.compile(
@@ -22,7 +22,11 @@ _SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
 
 _METRICS_LOCK = threading.Lock()
 _COUNTERS: dict[str, int] = defaultdict(int)
-_TIMINGS: dict[str, list[float]] = defaultdict(list)
+# Bounded window of recent samples per metric: avg/max are computed over this
+# window while _TIMING_COUNTS keeps the true lifetime observation count.
+_TIMINGS_MAXLEN = 1000
+_TIMINGS: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=_TIMINGS_MAXLEN))
+_TIMING_COUNTS: dict[str, int] = defaultdict(int)
 _SYSLOG_LOCK = threading.Lock()
 _SYSLOG_HANDLER: logging.Handler | None = None
 _SYSLOG_CONFIG: dict[str, Any] | None = None
@@ -201,6 +205,7 @@ def increment_metric(name: str, value: int = 1) -> None:
 def observe_timing(name: str, duration_ms: float) -> None:
     with _METRICS_LOCK:
         _TIMINGS[name].append(duration_ms)
+        _TIMING_COUNTS[name] += 1
 
 
 def snapshot_metrics() -> dict[str, Any]:
@@ -210,7 +215,7 @@ def snapshot_metrics() -> dict[str, Any]:
             if not values:
                 continue
             timings_summary[metric_name] = {
-                "count": float(len(values)),
+                "count": float(_TIMING_COUNTS[metric_name]),
                 "avg_ms": round(sum(values) / len(values), 2),
                 "max_ms": round(max(values), 2),
             }
