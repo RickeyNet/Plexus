@@ -480,7 +480,7 @@ async def get_monitoring_alerts(
 
 async def get_monitoring_alert(alert_id: int) -> dict | None:
     """Return a single monitoring alert by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT a.*, h.hostname, h.ip_address
@@ -554,7 +554,7 @@ async def get_route_snapshots(
     host_id: int,
     limit: int = 50,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT r.*, h.hostname, h.ip_address
@@ -666,7 +666,7 @@ async def get_alert_rules(enabled_only: bool = False) -> list[dict]:
 
 
 async def get_alert_rule(rule_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT r.*, h.hostname, h.ip_address, g.name as group_name
@@ -765,7 +765,7 @@ async def create_alert_suppression(
 
 
 async def get_alert_suppressions(active_only: bool = False) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE s.ends_at > datetime('now')" if active_only else ""
         cursor = await db.execute(
@@ -805,7 +805,7 @@ async def is_alert_suppressed(
     group_id: int | None = None,
 ) -> bool:
     """Check if alerts for this host+metric are currently suppressed."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT COUNT(*) FROM alert_suppressions
@@ -853,7 +853,7 @@ async def delete_expired_suppressions() -> int:
 
 async def get_alerts_for_escalation(escalate_after_minutes: int) -> list[dict]:
     """Return unacknowledged, non-escalated alerts older than the escalation threshold."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT a.*, h.hostname, h.ip_address
@@ -913,7 +913,7 @@ async def get_sla_targets(
     host_id: int | None = None,
     group_id: int | None = None,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = ["1=1"]
         params: list = []
@@ -940,7 +940,7 @@ async def get_sla_targets(
 
 
 async def get_sla_target(target_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT t.*, h.hostname AS host_name, g.name AS group_name
@@ -1012,7 +1012,7 @@ async def get_sla_summary(
     days: int = 30,
 ) -> dict:
     """Compute SLA summary from monitoring_polls data directly."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
         params: list = [days]
@@ -1153,7 +1153,7 @@ async def get_sla_host_detail(
     days: int = 30,
 ) -> dict:
     """Detailed SLA metrics for a single host over time."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         # Daily uptime/latency/packet_loss trend
         cursor = await db.execute(

@@ -220,7 +220,7 @@ async def get_topology_links(group_id: int | None = None) -> list[dict]:
 
 async def get_topology_links_for_host(host_id: int) -> list[dict]:
     """Return all topology links where the given host is source or resolved target."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT tl.*, h.hostname AS source_hostname, h.device_type AS source_device_type,
@@ -379,7 +379,7 @@ async def upsert_interface_stats_batch(rows: list[tuple]) -> int:
 
 async def get_interface_stats_for_host(host_id: int) -> list[dict]:
     """Return all interface stats for a host."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM interface_stats WHERE host_id = ? ORDER BY if_index",
@@ -466,7 +466,7 @@ async def upsert_interface_inventory(
 
 
 async def get_interface_inventory_for_host(host_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM interface_inventory WHERE host_id = ? ORDER BY if_index",
@@ -482,7 +482,7 @@ async def get_interface_inventory_by_name(host_id: int, name: str) -> dict | Non
     and port-hygiene rules to cross-reference topology edges)."""
     if not name:
         return None
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM interface_inventory WHERE host_id = ? AND name = ? LIMIT 1",
@@ -524,7 +524,7 @@ async def upsert_vlan_definition(
 
 
 async def get_vlan_definitions_for_host(host_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM vlan_definitions WHERE host_id = ? ORDER BY vlan_id",
@@ -577,7 +577,7 @@ async def insert_topology_change(
 
 async def get_topology_changes(unacknowledged_only: bool = False, limit: int = 100) -> list[dict]:
     """Return recent topology changes."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE acknowledged = 0" if unacknowledged_only else ""
         cursor = await db.execute(
@@ -591,7 +591,7 @@ async def get_topology_changes(unacknowledged_only: bool = False, limit: int = 1
 
 async def get_topology_changes_count(unacknowledged_only: bool = True) -> int:
     """Return count of topology changes."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE acknowledged = 0" if unacknowledged_only else ""
         cursor = await db.execute(f"SELECT COUNT(*) FROM topology_changes {where}")
@@ -718,7 +718,7 @@ async def get_stp_port_states(
     limit: int = 5000,
 ) -> list[dict]:
     """Return latest STP port states joined with host metadata."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -789,7 +789,7 @@ async def get_stp_topology_events(
     limit: int = 200,
 ) -> list[dict]:
     """Return STP events newest-first with host context."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where_sql = "WHERE e.acknowledged = 0" if unacknowledged_only else ""
         cursor = await db.execute(
@@ -808,7 +808,7 @@ async def get_stp_topology_events(
 
 async def get_stp_topology_events_count(unacknowledged_only: bool = True) -> int:
     """Return count of STP events."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where_sql = "WHERE acknowledged = 0" if unacknowledged_only else ""
         cursor = await db.execute(f"SELECT COUNT(*) FROM stp_topology_events {where_sql}")
@@ -932,7 +932,7 @@ async def upsert_stp_root_policy(
 
 async def get_stp_root_policy(group_id: int, vlan_id: int) -> dict | None:
     """Return one STP root policy for group/VLAN, or None when absent."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT p.*, g.name AS group_name
@@ -958,7 +958,7 @@ async def get_stp_root_policies(
     limit: int = 2000,
 ) -> list[dict]:
     """Return STP root-bridge policies with inventory group context."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -1008,7 +1008,7 @@ async def delete_stp_root_policy(policy_id: int) -> int:
 
 async def get_topology_positions() -> dict:
     """Return all saved node positions as {node_id: {x, y}}."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT node_id, x, y FROM topology_node_positions")
         rows = await cursor.fetchall()
@@ -1092,7 +1092,7 @@ async def create_config_baseline(
 
 async def get_config_baseline(baseline_id: int) -> dict | None:
     """Return a single config baseline by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM config_baselines WHERE id = ?", (baseline_id,))
         row = await cursor.fetchone()
@@ -1103,7 +1103,7 @@ async def get_config_baseline(baseline_id: int) -> dict | None:
 
 async def get_config_baseline_for_host(host_id: int) -> dict | None:
     """Return the config baseline for a specific host."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM config_baselines WHERE host_id = ?", (host_id,))
         row = await cursor.fetchone()
@@ -1117,7 +1117,7 @@ async def get_config_baselines(
     limit: int = 200,
 ) -> list[dict]:
     """Return config baselines, optionally filtered by host_id."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if host_id is not None:
             cursor = await db.execute(
@@ -1148,7 +1148,7 @@ async def get_baselined_host_ids(limit: int = 200) -> list[int]:
     get_config_baselines() pulls every baseline's full config_text blob, which
     is wasted I/O when the caller discards everything but host_id.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT host_id FROM config_baselines ORDER BY updated_at DESC LIMIT ?",
@@ -1226,7 +1226,7 @@ async def create_config_snapshot(
 
 async def get_config_snapshot(snapshot_id: int) -> dict | None:
     """Return a single config snapshot by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM config_snapshots WHERE id = ?", (snapshot_id,))
         row = await cursor.fetchone()
@@ -1239,7 +1239,7 @@ async def get_config_snapshots_by_ids(snapshot_ids: list[int]) -> list[dict]:
     """Return config snapshots (including config_text) for a set of IDs in one query."""
     if not snapshot_ids:
         return []
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" for _ in snapshot_ids)
         cursor = await db.execute(
@@ -1253,7 +1253,7 @@ async def get_config_snapshots_by_ids(snapshot_ids: list[int]) -> list[dict]:
 
 async def get_config_snapshots_for_host(host_id: int, limit: int = 50) -> list[dict]:
     """Return config snapshots for a host, newest first."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, host_id, capture_method, captured_at,
@@ -1270,7 +1270,7 @@ async def get_config_snapshots_for_host(host_id: int, limit: int = 50) -> list[d
 
 async def get_latest_config_snapshot(host_id: int) -> dict | None:
     """Return the most recent snapshot for a host."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM config_snapshots
@@ -1361,7 +1361,7 @@ async def create_config_drift_event_history(
 
 async def get_config_drift_event_history(event_id: int, limit: int = 200) -> list[dict]:
     """Return history entries for a drift event (newest first)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT h.id, h.event_id, h.host_id, h.action, h.from_status, h.to_status,
@@ -1383,7 +1383,7 @@ async def get_config_drift_event_history(event_id: int, limit: int = 200) -> lis
 
 async def get_config_drift_event(event_id: int) -> dict | None:
     """Return a single drift event with host info."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT e.*, h.hostname, h.ip_address, h.device_type
@@ -1402,7 +1402,7 @@ async def get_config_drift_events_by_ids(event_ids: list[int]) -> list[dict]:
     """Return drift events (with host info) for a set of IDs in one query."""
     if not event_ids:
         return []
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" for _ in event_ids)
         cursor = await db.execute(
@@ -1423,7 +1423,7 @@ async def get_config_drift_events(
     limit: int = 100,
 ) -> list[dict]:
     """Return drift events with optional filters."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -1453,7 +1453,7 @@ async def get_config_drift_events(
 
 async def get_config_drift_summary() -> dict:
     """Return drift summary stats."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         # Count hosts with baselines
         cursor = await db.execute("SELECT COUNT(*) FROM config_baselines")
@@ -1549,7 +1549,7 @@ async def create_config_backup_policy(
 
 async def get_config_backup_policies(group_id: int | None = None) -> list[dict]:
     """List all backup policies, optionally filtered by group."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if group_id is not None:
             cursor = await db.execute(
@@ -1576,7 +1576,7 @@ async def get_config_backup_policies(group_id: int | None = None) -> list[dict]:
 
 async def get_config_backup_policy(policy_id: int) -> dict | None:
     """Get a single backup policy by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT p.*, g.name as group_name,
@@ -1627,7 +1627,7 @@ async def delete_config_backup_policy(policy_id: int) -> None:
 
 async def get_config_backup_policies_due() -> list[dict]:
     """Get enabled policies that are due for a backup run."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT p.*, g.name as group_name
@@ -1912,7 +1912,7 @@ async def create_config_backup(
 
 async def get_latest_config_backup(policy_id: int, host_id: int) -> dict | None:
     """Get the most recent successful backup for a policy+host, including config_text."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, config_text FROM config_backups
@@ -1932,7 +1932,7 @@ async def get_config_backups(
     limit: int = 100,
 ) -> list[dict]:
     """List backups with host info, optionally filtered."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         conditions = []
         params: list = []
@@ -1961,7 +1961,7 @@ async def get_config_backups(
 
 async def get_latest_config_backups_per_host() -> list[dict]:
     """Return the most recent backup row for each host (dashboard rollup)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT b.id, b.policy_id, b.host_id, b.capture_method, b.status,
@@ -1984,7 +1984,7 @@ async def get_latest_config_backups_per_host() -> list[dict]:
 
 async def get_config_backup(backup_id: int) -> dict | None:
     """Get a single backup record including config text."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT b.*, h.hostname, h.ip_address, h.device_type
@@ -2000,7 +2000,7 @@ async def get_config_backup(backup_id: int) -> dict | None:
 
 async def get_previous_successful_config_backup(backup_id: int) -> dict | None:
     """Return the previous successful backup for the same host as backup_id."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT prev.id, prev.policy_id, prev.host_id, prev.capture_method, prev.status,
@@ -2063,7 +2063,7 @@ async def search_config_backups(
         LEFT JOIN hosts h ON h.id = b.host_id
     """
     cursor = None
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if requested_mode == "fulltext":
             if _dbcore.DB_ENGINE == "postgres":
@@ -2232,7 +2232,7 @@ async def delete_old_config_backups(days: int = 30) -> int:
 
 async def get_config_backup_summary() -> dict:
     """Return summary stats for config backups."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM config_backup_policies")
         row = await cursor.fetchone()
@@ -2287,7 +2287,7 @@ async def create_compliance_profile(
 
 async def get_compliance_profiles() -> list[dict]:
     """List all compliance profiles."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT p.*,
@@ -2302,7 +2302,7 @@ async def get_compliance_profiles() -> list[dict]:
 
 async def get_compliance_profile(profile_id: int) -> dict | None:
     """Get a single compliance profile by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM compliance_profiles WHERE id = ?", (profile_id,))
         return row_to_dict(await cursor.fetchone())
@@ -2368,7 +2368,7 @@ async def create_compliance_assignment(
 
 async def get_compliance_assignments(profile_id: int | None = None, group_id: int | None = None) -> list[dict]:
     """List compliance assignments, optionally filtered."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where_clauses = []
         params = []
@@ -2397,7 +2397,7 @@ async def get_compliance_assignments(profile_id: int | None = None, group_id: in
 
 async def get_compliance_assignment(assignment_id: int) -> dict | None:
     """Get a single compliance assignment by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT a.*, p.name as profile_name, g.name as group_name
@@ -2444,7 +2444,7 @@ async def delete_compliance_assignment(assignment_id: int) -> None:
 
 async def get_compliance_assignments_due() -> list[dict]:
     """Get enabled assignments that are due for a compliance scan."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT a.*, p.name as profile_name, p.rules as profile_rules,
@@ -2522,7 +2522,7 @@ async def get_compliance_scan_results(
     limit: int = 200,
 ) -> list[dict]:
     """List compliance scan results with optional filters."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where_clauses = []
         params: list = []
@@ -2557,7 +2557,7 @@ async def get_compliance_scan_results(
 
 async def get_compliance_scan_result(result_id: int) -> dict | None:
     """Get a single scan result by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT r.*, p.name as profile_name, h.hostname, h.ip_address
@@ -2598,7 +2598,7 @@ async def delete_old_compliance_scan_results(days: int = 90) -> int:
 
 async def get_compliance_summary() -> dict:
     """Return summary stats for compliance scanning."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM compliance_profiles")
         row = await cursor.fetchone()
@@ -2637,7 +2637,7 @@ async def get_compliance_summary() -> dict:
 
 async def get_compliance_host_status(profile_id: int | None = None) -> list[dict]:
     """Get latest compliance status per host (optionally filtered by profile)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where_clause = "WHERE r.profile_id = ?" if profile_id is not None else ""
         params = (profile_id,) if profile_id is not None else ()
@@ -2718,7 +2718,7 @@ async def get_risk_analyses(
     limit: int = 100,
 ) -> list[dict]:
     """List risk analyses with optional filters."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where_clauses = []
         params: list = []
@@ -2750,7 +2750,7 @@ async def get_risk_analyses(
 
 async def get_risk_analysis(analysis_id: int) -> dict | None:
     """Get a single risk analysis by ID."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT r.*, h.hostname, h.ip_address, g.name as group_name
@@ -2790,7 +2790,7 @@ async def delete_risk_analysis(analysis_id: int) -> None:
 
 async def get_risk_analysis_summary() -> dict:
     """Return summary stats for risk analyses."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses")
         row = await cursor.fetchone()
@@ -2870,7 +2870,7 @@ async def get_deployments(
     group_id: int | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where_clauses = []
         params: list = []
@@ -2897,7 +2897,7 @@ async def get_deployments(
 
 
 async def get_deployment(deployment_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT d.*, g.name as group_name
@@ -2978,7 +2978,7 @@ async def delete_deployment(deployment_id: int) -> None:
 
 
 async def get_deployment_summary() -> dict:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM deployments")
         total = (await cursor.fetchone())[0]
@@ -3055,7 +3055,7 @@ async def update_deployment_checkpoint(
 
 
 async def get_deployment_checkpoints(deployment_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT c.*, h.hostname, h.ip_address
@@ -3097,7 +3097,7 @@ async def get_deployment_snapshots(
     deployment_id: int,
     phase: str | None = None,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if phase:
             cursor = await db.execute(

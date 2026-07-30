@@ -88,7 +88,7 @@ async def list_graph_templates(
     scope: str | None = None,
     built_in: bool | None = None,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -449,7 +449,7 @@ async def list_host_graphs(
     graph_template_id: int | None = None,
     enabled_only: bool = False,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -665,7 +665,7 @@ async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list
 
 
 async def list_graph_trees() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM graph_trees ORDER BY sort_order, name")
         return rows_to_list(await cursor.fetchall())
@@ -801,7 +801,7 @@ async def delete_graph_tree_node(node_id: int) -> bool:
 
 
 async def list_data_source_profiles(host_id: int | None = None) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if host_id is not None:
             cursor = await db.execute(
@@ -816,7 +816,7 @@ async def list_data_source_profiles(host_id: int | None = None) -> list[dict]:
 
 
 async def get_data_source_profile(profile_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM data_source_profiles WHERE id = ?", (profile_id,))
         row = await cursor.fetchone()
@@ -1442,7 +1442,7 @@ async def seed_built_in_graph_templates() -> int:
 
 
 async def list_snmp_data_sources(host_id: int, ds_type: str | None = None) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if ds_type:
             cursor = await db.execute(
@@ -1460,7 +1460,7 @@ async def list_snmp_data_sources(host_id: int, ds_type: str | None = None) -> li
 
 
 async def get_snmp_data_source(ds_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM snmp_data_sources WHERE id = ?", (ds_id,))
         row = await cursor.fetchone()
@@ -1612,7 +1612,7 @@ BUILT_IN_CDEFS = [
 
 
 async def list_cdef_definitions() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM cdef_definitions ORDER BY built_in DESC, name")
         return rows_to_list(await cursor.fetchall())
@@ -1621,7 +1621,7 @@ async def list_cdef_definitions() -> list[dict]:
 
 
 async def get_cdef_definition(cdef_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM cdef_definitions WHERE id = ?", (cdef_id,))
         row = await cursor.fetchone()

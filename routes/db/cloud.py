@@ -183,7 +183,7 @@ async def create_cloud_account(
 
 
 async def get_cloud_account(account_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT ca.*,
@@ -210,7 +210,7 @@ async def list_cloud_accounts(
     provider: str | None = None,
     enabled_only: bool = False,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -570,7 +570,7 @@ async def get_cloud_policy_rules(
     action: str | None = None,
     limit: int = 500,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -620,7 +620,7 @@ async def get_cloud_policy_effective_views(
     account_id: int | None = None,
     provider: str | None = None,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = [
             "cr.resource_type IN ('security_group', 'network_security_group', 'firewall_policy')",
@@ -688,7 +688,7 @@ async def get_cloud_resources(
     provider: str | None = None,
     resource_type: str | None = None,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -719,7 +719,7 @@ async def get_cloud_connections(
     account_id: int | None = None,
     provider: str | None = None,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -758,7 +758,7 @@ async def get_cloud_hybrid_links(
     account_id: int | None = None,
     provider: str | None = None,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -824,7 +824,7 @@ async def get_cloud_topology_snapshot(
 
 
 async def get_cloud_flow_sync_cursor(account_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM cloud_flow_sync_cursors WHERE account_id = ?",
@@ -861,7 +861,7 @@ async def upsert_cloud_flow_sync_cursor(
 
 
 async def list_cloud_flow_sync_cursors() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT c.*, ca.provider, ca.name AS account_name
@@ -875,7 +875,7 @@ async def list_cloud_flow_sync_cursors() -> list[dict]:
 
 
 async def get_cloud_traffic_metric_sync_cursor(account_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM cloud_traffic_metric_sync_cursors WHERE account_id = ?",
@@ -912,7 +912,7 @@ async def upsert_cloud_traffic_metric_sync_cursor(
 
 
 async def list_cloud_traffic_metric_sync_cursors() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT c.*, ca.provider, ca.name AS account_name
@@ -993,7 +993,7 @@ async def get_cloud_traffic_metric_summary(
     provider: str | None = None,
     hours: int = 24,
 ) -> dict:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = [
             "interval_end >= ?",
@@ -1043,7 +1043,7 @@ async def get_cloud_traffic_metric_timeline(
     bucket_minutes: int = 5,
 ) -> list[dict]:
     bucket_minutes = max(1, min(int(bucket_minutes), 60))
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = [
             "interval_end >= ?",
@@ -1085,7 +1085,7 @@ async def get_cloud_traffic_metric_top_resources(
     hours: int = 24,
     limit: int = 20,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = [
             "interval_end >= ?",

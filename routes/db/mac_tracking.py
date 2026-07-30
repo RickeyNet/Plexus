@@ -455,7 +455,7 @@ async def get_mac_move_events(status: str = "", limit: int = 200, host_id: int |
     host_id matches when the device is on either the from- or to-side, since
     a move is inherently a between-devices event.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -484,7 +484,7 @@ async def get_mac_move_events(status: str = "", limit: int = 200, host_id: int |
 
 async def get_mac_move_event_summary() -> dict:
     """Counts by status for the summary cards."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT status, COUNT(*) AS n FROM mac_move_events GROUP BY status")
         rows = rows_to_list(await cursor.fetchall())
@@ -500,7 +500,7 @@ async def get_mac_move_event_summary() -> dict:
 
 async def get_mac_move_event_history(event_id: int, limit: int = 500) -> list[dict]:
     """Lifecycle timeline for a single move event, newest first."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM mac_move_event_history
@@ -677,7 +677,7 @@ async def get_mac_collection_by_host() -> list[dict]:
     out which devices aren't contributing — this is the diagnostic for
     "Switches Reporting (23/27)".
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT h.id              AS host_id,
@@ -723,7 +723,7 @@ async def get_mac_tracking_stats() -> dict:
     most recent ``last_seen`` timestamp (interpreted by the UI as the freshest
     collection time).
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT COUNT(*)                          AS total_entries,
@@ -752,7 +752,7 @@ async def get_mac_tracking_stats() -> dict:
 
 
 async def get_mac_history(mac_address: str, limit: int = 100) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT mh.*, h.hostname, h.ip_address as host_ip
@@ -768,7 +768,7 @@ async def get_mac_history(mac_address: str, limit: int = 100) -> list[dict]:
 
 
 async def get_mac_table_for_host(host_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM mac_address_table WHERE host_id = ? ORDER BY vlan, port_name",
@@ -780,7 +780,7 @@ async def get_mac_table_for_host(host_id: int) -> list[dict]:
 
 
 async def get_arp_table_for_host(host_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM arp_table WHERE host_id = ? ORDER BY ip_address",
@@ -792,7 +792,7 @@ async def get_arp_table_for_host(host_id: int) -> list[dict]:
 
 
 async def get_macs_on_port(host_id: int, port_name: str) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM mac_address_table WHERE host_id = ? AND port_name = ? ORDER BY mac_address",

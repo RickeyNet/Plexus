@@ -1987,24 +1987,42 @@ async def version():
     return {"version": APP_VERSION, "git_sha": APP_GIT_SHA}
 
 
+# The dashboard is the landing page and every SPA tab polls it; the data it
+# aggregates changes on the order of poll cycles, not per request. A short
+# shared TTL cache absorbs the fan-out (same pattern as /api/topology).
+_DASHBOARD_CACHE_TTL_SECONDS = 10.0
+_dashboard_cache: dict = {"data": None, "expires": 0.0}
+_dashboard_cache_lock = asyncio.Lock()
+
+
 @app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
 async def dashboard():
-    stats, recent_jobs, groups, monitoring, latest_polls, alerts = await asyncio.gather(
-        db.get_dashboard_stats(),
-        db.get_all_jobs(limit=5),
-        db.get_all_groups(),
-        db.get_monitoring_summary(),
-        db.get_latest_monitoring_polls(),
-        db.get_monitoring_alerts(acknowledged=False, limit=50),
-    )
-    return {
-        "stats": stats,
-        "recent_jobs": recent_jobs,
-        "groups": groups,
-        "monitoring": monitoring,
-        "device_health": latest_polls,
-        "open_alerts": alerts,
-    }
+    if _dashboard_cache["data"] is not None and time.monotonic() < _dashboard_cache["expires"]:
+        return _dashboard_cache["data"]
+    async with _dashboard_cache_lock:
+        # Double-checked: a concurrent request may have refreshed it while
+        # this one waited on the lock.
+        if _dashboard_cache["data"] is not None and time.monotonic() < _dashboard_cache["expires"]:
+            return _dashboard_cache["data"]
+        stats, recent_jobs, groups, monitoring, latest_polls, alerts = await asyncio.gather(
+            db.get_dashboard_stats(),
+            db.get_all_jobs(limit=5),
+            db.get_all_groups(),
+            db.get_monitoring_summary(),
+            db.get_latest_monitoring_polls(),
+            db.get_monitoring_alerts(acknowledged=False, limit=50),
+        )
+        data = {
+            "stats": stats,
+            "recent_jobs": recent_jobs,
+            "groups": groups,
+            "monitoring": monitoring,
+            "device_health": latest_polls,
+            "open_alerts": alerts,
+        }
+        _dashboard_cache["data"] = data
+        _dashboard_cache["expires"] = time.monotonic() + _DASHBOARD_CACHE_TTL_SECONDS
+        return data
 
 
 # ═════════════════════════════════════════════════════════════════════════════

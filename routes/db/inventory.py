@@ -149,7 +149,7 @@ async def get_all_groups_for_user(user_id: int) -> list[dict]:
     Groups the user has not explicitly positioned fall to the bottom
     alphabetically (COALESCE(position, large sentinel)).
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """
@@ -173,7 +173,7 @@ async def get_all_groups_for_user(user_id: int) -> list[dict]:
 
 async def get_all_groups_with_hosts_for_user(user_id: int) -> list[dict]:
     """Per-user-ordered variant of get_all_groups_with_hosts."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """
@@ -263,7 +263,7 @@ async def set_user_group_order(user_id: int, ordered_group_ids: list[int]) -> No
 
 
 async def get_group(group_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM inventory_groups WHERE id = ?", (group_id,))
         return row_to_dict(await cursor.fetchone())
@@ -338,7 +338,7 @@ async def get_hosts_by_ids(host_ids: list[int]) -> list[dict]:
     """Get multiple hosts by their IDs."""
     if not host_ids:
         return []
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" * len(host_ids))
         cursor = await db.execute(
@@ -351,7 +351,7 @@ async def get_hosts_by_ids(host_ids: list[int]) -> list[dict]:
 
 async def get_all_hosts() -> list[dict]:
     """Get every host across all groups, ordered by hostname."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM hosts ORDER BY hostname, ip_address")
         return rows_to_list(await cursor.fetchall())
@@ -360,7 +360,7 @@ async def get_all_hosts() -> list[dict]:
 
 
 async def find_host_by_ip(ip_address: str) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM hosts WHERE ip_address = ? LIMIT 1", (ip_address,))
         row = await cursor.fetchone()
@@ -381,7 +381,7 @@ async def find_host_by_ip(ip_address: str) -> dict | None:
 async def get_host_ip_index(group_id: int) -> dict[str, int]:
     """Return {ip_address: host_id} covering every host in the group across both
     its primary IP and its recorded interface-IP aliases."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         index: dict[str, int] = {}
         cursor = await db.execute("SELECT id, ip_address FROM hosts WHERE group_id = ?", (group_id,))
@@ -438,7 +438,7 @@ async def get_ip_aliases_for_hosts(host_ids: list[int]) -> list[dict]:
     """
     if not host_ids:
         return []
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" * len(host_ids))
         cursor = await db.execute(
@@ -453,7 +453,7 @@ async def get_ip_aliases_for_hosts(host_ids: list[int]) -> list[dict]:
 async def get_hosts_with_identity(group_id: int) -> list[dict]:
     """Hosts in the group with the fields discovery dedups on (id, hostname,
     ip_address, serial_number)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT id, hostname, ip_address, serial_number, device_type, "
@@ -473,7 +473,7 @@ async def get_fdm_hosts() -> list[dict]:
     row carries fdm_credential_id / fdm_port / fdm_verify_tls used to build the
     per-host FdmClient.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM hosts WHERE fdm_api_enabled = 1 ORDER BY hostname, ip_address")
         return rows_to_list(await cursor.fetchall())
@@ -691,7 +691,7 @@ async def update_host_serial(host_id: int, serial_number: str) -> None:
 
 async def get_all_hosts_for_export() -> list[dict]:
     """Return all hosts with group name for CSV export."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("""
             SELECT h.hostname, h.ip_address, h.device_type, h.status,

@@ -159,7 +159,7 @@ async def delete_maintenance_window(window_id: int) -> None:
 
 
 async def get_maintenance_window(window_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM maintenance_windows WHERE id = ?", (window_id,))
         row = row_to_dict(await cursor.fetchone())
@@ -176,7 +176,7 @@ async def get_maintenance_window(window_id: int) -> dict | None:
 
 
 async def list_maintenance_windows() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM maintenance_windows ORDER BY start_at DESC")
         windows = rows_to_list(await cursor.fetchall())
@@ -202,7 +202,7 @@ async def get_windows_for_groups(group_ids: list[int]) -> list[dict]:
     windows with no scope (global). Used to decide if a change is allowed
     right now.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT w.* FROM maintenance_windows w

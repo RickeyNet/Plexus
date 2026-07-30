@@ -126,7 +126,7 @@ async def get_ipam_overview(
     include_external: bool = True,
 ) -> dict:
     """Return a merged IPAM overview across inventory, cloud, and external sources."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         # ── 1. Inventory hosts ──────────────────────────────────────────────
         if group_id is not None:
@@ -332,7 +332,7 @@ async def get_ipam_subnet_detail(
     include_external: bool = True,
 ) -> dict:
     """Return per-subnet utilisation detail: allocations, reservations, available preview."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         net = ipaddress.ip_network(subnet, strict=False)
         net_str = str(net)
@@ -551,7 +551,7 @@ async def list_ipam_sources(
     provider: str | None = None,
     enabled_only: bool = False,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -622,7 +622,7 @@ async def create_ipam_source(
 
 
 async def get_ipam_source(source_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT s.*,
@@ -642,7 +642,7 @@ async def get_ipam_source_auth_config(source_id: int) -> dict:
     """Return the decrypted auth_config dict for an IPAM source."""
     from routes.crypto import decrypt as _dec
 
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT auth_config_enc FROM ipam_sources WHERE id = ?",
@@ -844,7 +844,7 @@ async def list_ipam_reservations(subnet: str) -> list[dict]:
     except ValueError:
         subnet_key = subnet
 
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM ipam_reservations WHERE subnet = ? ORDER BY start_ip",
@@ -959,7 +959,7 @@ async def create_ipam_prefix(
 
 
 async def get_ipam_prefix(prefix_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM ipam_prefixes WHERE id = ?", (prefix_id,))
         row = await cursor.fetchone()
@@ -1077,7 +1077,7 @@ async def delete_ipam_allocation(allocation_id: int) -> bool:
 
 
 async def list_ipam_allocations_for_source(source_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, source_id, prefix_subnet, address, dns_name,
@@ -1271,7 +1271,7 @@ async def allocate_next_ip(
 
 
 async def get_pending_allocation(allocation_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cur = await db.execute("SELECT * FROM ipam_pending_allocations WHERE id = ?", (int(allocation_id),))
         row = await cur.fetchone()
@@ -1507,7 +1507,7 @@ async def get_ip_history(
     if not address:
         return []
     vrf_name = (vrf_name or "").strip()
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cur = await db.execute(
             """SELECT * FROM ipam_ip_history
@@ -1532,7 +1532,7 @@ async def find_ip_owner_at(
     if not address or not when_iso:
         return None
     vrf_name = (vrf_name or "").strip()
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cur = await db.execute(
             """SELECT * FROM ipam_ip_history
@@ -1553,7 +1553,7 @@ async def list_ip_history_for_hostname(hostname: str, limit: int = 200) -> list[
     hostname = (hostname or "").strip()
     if not hostname:
         return []
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cur = await db.execute(
             """SELECT * FROM ipam_ip_history
@@ -1776,7 +1776,7 @@ async def list_subnet_utilization(
         params.append(until)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(int(limit))
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cur = await db.execute(
             f"SELECT * FROM ipam_subnet_utilization{where} ORDER BY captured_at DESC LIMIT ?",
@@ -2224,7 +2224,7 @@ async def list_reconciliation_runs(
     source_id: int | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if source_id is not None:
             cursor = await db.execute(
@@ -2265,7 +2265,7 @@ async def list_reconciliation_diffs(
         clauses.append("(resolution IS NULL OR resolution = '')")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(int(max(1, limit)))
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             f"""SELECT * FROM ipam_reconciliation_diffs
@@ -2280,7 +2280,7 @@ async def list_reconciliation_diffs(
 
 
 async def get_reconciliation_diff(diff_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM ipam_reconciliation_diffs WHERE id = ?", (diff_id,))
         row = await cursor.fetchone()
@@ -2352,7 +2352,7 @@ def _serialize_dhcp_server(row: dict) -> dict:
 
 
 async def list_dhcp_servers(enabled_only: bool = False) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = " WHERE s.enabled = 1" if enabled_only else ""
         cursor = await db.execute(
@@ -2369,7 +2369,7 @@ async def list_dhcp_servers(enabled_only: bool = False) -> list[dict]:
 
 
 async def get_dhcp_server(server_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT s.*,
@@ -2486,7 +2486,7 @@ async def delete_dhcp_server(server_id: int) -> bool:
 async def get_dhcp_server_auth_config(server_id: int) -> dict:
     from routes.crypto import decrypt as _dec
 
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT auth_config_enc FROM dhcp_servers WHERE id = ?",
@@ -2601,7 +2601,7 @@ async def set_dhcp_server_sync_status(
 
 
 async def list_dhcp_scopes(server_id: int | None = None) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if server_id is not None:
             cursor = await db.execute(
@@ -2622,7 +2622,7 @@ async def list_dhcp_leases(
     scope_subnet: str | None = None,
     limit: int = 500,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
