@@ -88,7 +88,7 @@ async def create_lab_environment(
 
 async def list_lab_environments(user_id: int | None = None, is_admin: bool = False) -> list[dict]:
     """List visible environments. Admins see all; non-admins see their own + shared."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if is_admin or user_id is None:
             cursor = await db.execute(
@@ -114,7 +114,7 @@ async def list_lab_environments(user_id: int | None = None, is_admin: bool = Fal
 
 
 async def get_lab_environment(env_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM lab_environments WHERE id = ?",
@@ -205,7 +205,7 @@ async def create_lab_device(
 
 
 async def list_lab_devices(environment_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT d.id, d.environment_id, d.hostname, d.ip_address,
@@ -226,7 +226,7 @@ async def list_lab_devices(environment_id: int) -> list[dict]:
 
 
 async def get_lab_device(device_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM lab_devices WHERE id = ?",
@@ -343,7 +343,7 @@ async def create_lab_run(
 
 
 async def list_lab_runs(lab_device_id: int, limit: int = 50) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, lab_device_id, submitted_by, diff_added, diff_removed,
@@ -360,7 +360,7 @@ async def list_lab_runs(lab_device_id: int, limit: int = 50) -> list[dict]:
 
 
 async def get_lab_run(run_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM lab_runs WHERE id = ?",
@@ -490,7 +490,7 @@ async def add_lab_runtime_event(
 
 
 async def list_lab_runtime_events(lab_device_id: int, limit: int = 50) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, lab_device_id, action, status, actor, detail, created_at
@@ -510,7 +510,7 @@ async def list_running_lab_devices() -> list[dict]:
     Used at startup to reconcile in-memory state with whatever containerlab is
     actually still running (or to surface stale rows after a crash).
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM lab_devices
@@ -546,7 +546,7 @@ async def create_lab_topology(
 
 
 async def list_lab_topologies(environment_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT t.*,
@@ -563,7 +563,7 @@ async def list_lab_topologies(environment_id: int) -> list[dict]:
 
 
 async def get_lab_topology(topology_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM lab_topologies WHERE id = ?",
@@ -647,7 +647,7 @@ async def set_lab_device_topology(device_id: int, topology_id: int | None) -> bo
 
 
 async def list_topology_devices(topology_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM lab_devices
@@ -682,7 +682,7 @@ async def create_lab_topology_link(
 
 
 async def list_topology_links(topology_id: int) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM lab_topology_links WHERE topology_id = ? ORDER BY id",
@@ -707,7 +707,7 @@ async def delete_lab_topology_link(link_id: int) -> bool:
 
 
 async def list_running_lab_topologies() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT * FROM lab_topologies
@@ -760,7 +760,7 @@ async def create_lab_drift_run(
 
 
 async def list_lab_drift_runs(lab_device_id: int, limit: int = 50) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, lab_device_id, source_host_id, status,
@@ -777,7 +777,7 @@ async def list_lab_drift_runs(lab_device_id: int, limit: int = 50) -> list[dict]
 
 
 async def get_lab_drift_run(run_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM lab_drift_runs WHERE id = ?",
@@ -790,7 +790,7 @@ async def get_lab_drift_run(run_id: int) -> dict | None:
 
 async def get_latest_lab_drift_run(lab_device_id: int) -> dict | None:
     """Return the most recent drift run for a lab device, sans diff_text."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, lab_device_id, source_host_id, status,
@@ -810,7 +810,7 @@ async def list_drift_eligible_devices() -> list[dict]:
     """Lab devices with a source host attached - the only ones drift checks
     can compare. Used by the scheduler to decide what to walk each tick.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, environment_id, hostname, source_host_id, running_config

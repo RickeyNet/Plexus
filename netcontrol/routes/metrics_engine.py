@@ -677,7 +677,7 @@ async def _downsample_window(
     period_end: str,
 ) -> int:
     """Aggregate raw metric_samples into a rollup row for each host+metric+labels."""
-    total_created = 0
+    rows: list[tuple] = []
 
     for metric in _DOWNSAMPLE_METRICS:
         raw = await db.get_raw_samples_for_rollup(metric, period_start, period_end)
@@ -691,22 +691,26 @@ async def _downsample_window(
             groups.setdefault(key, []).append(r["value"])
 
         for (host_id, labels_json), values in groups.items():
-            await db.create_metric_rollup(
-                host_id=host_id,
-                metric_name=metric,
-                time_window=time_window,
-                period_start=period_start,
-                period_end=period_end,
-                val_min=min(values),
-                val_avg=sum(values) / len(values),
-                val_max=max(values),
-                val_p95=_percentile(values, 95),
-                sample_count=len(values),
-                labels_json=labels_json,
+            rows.append(
+                (
+                    host_id,
+                    metric,
+                    labels_json,
+                    time_window,
+                    period_start,
+                    period_end,
+                    min(values),
+                    sum(values) / len(values),
+                    max(values),
+                    _percentile(values, 95),
+                    len(values),
+                )
             )
-            total_created += 1
 
-    return total_created
+    # One transaction for the whole window instead of one commit per
+    # (host, metric, labels) row - with 500 hosts that was ~10k commits,
+    # each taking the global writer lock.
+    return await db.create_metric_rollups_batch(rows)
 
 
 async def run_hourly_rollup() -> int:

@@ -72,7 +72,7 @@ async def create_report_definition(
 
 
 async def get_report_definition(report_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM report_definitions WHERE id = ?", (report_id,))
         row = await cursor.fetchone()
@@ -82,7 +82,7 @@ async def get_report_definition(report_id: int) -> dict | None:
 
 
 async def list_report_definitions() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM report_definitions ORDER BY updated_at DESC")
         return rows_to_list(await cursor.fetchall())
@@ -202,7 +202,7 @@ async def get_report_artifacts(
     limit: int = 20,
 ) -> list[dict]:
     """List report artifacts for a run (without content payload)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT id, run_id, report_id, artifact_type, file_name, media_type, size_bytes, created_at
@@ -219,7 +219,7 @@ async def get_report_artifacts(
 
 async def get_report_artifact(artifact_id: int) -> dict | None:
     """Get one report artifact including content payload."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT * FROM report_artifacts WHERE id = ?",
@@ -246,7 +246,7 @@ async def delete_old_report_runs(days: int = 90) -> int:
 
 
 async def get_report_runs(report_id: int | None = None, limit: int = 50) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if report_id is not None:
             cursor = await db.execute(
@@ -264,7 +264,7 @@ async def get_report_runs(report_id: int | None = None, limit: int = 50) -> list
 
 
 async def get_report_run(run_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM report_runs WHERE id = ?", (run_id,))
         row = await cursor.fetchone()
@@ -278,7 +278,7 @@ async def generate_availability_report_data(
     days: int = 30,
 ) -> list[dict]:
     """Generate availability report rows for CSV export."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
         params: list = [days]
@@ -327,7 +327,7 @@ async def generate_compliance_report_data(
     group_id: int | None = None,
 ) -> list[dict]:
     """Generate compliance report rows for CSV export."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
         params: list = []
@@ -360,7 +360,7 @@ async def generate_interface_report_data(
     days: int = 1,
 ) -> list[dict]:
     """Generate interface utilization report rows for CSV export."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["1=1"]
         params: list = [days]

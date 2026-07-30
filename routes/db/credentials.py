@@ -151,7 +151,7 @@ async def get_all_credentials(owner_id: int | None = None) -> list[dict]:
     get_service_credentials() and are never returned by this function so
     they don't pollute the per-user credential picker.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         if owner_id is not None:
             cursor = await db.execute(
@@ -177,7 +177,7 @@ async def get_service_credentials() -> list[dict]:
     (monitoring polls, scheduled discovery) where there is no interactive
     user. owner_id is typically NULL but not enforced at the DB level.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT id, name, username, owner_id, is_service, created_at "
@@ -190,7 +190,7 @@ async def get_service_credentials() -> list[dict]:
 
 async def get_credential_raw(cred_id: int) -> dict | None:
     """Return full credential including encrypted password/secret."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM credentials WHERE id = ?", (cred_id,))
         return row_to_dict(await cursor.fetchone())

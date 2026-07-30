@@ -48,7 +48,7 @@ __all__ = [
 
 
 async def get_all_playbooks() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("""
             SELECT p.*,
@@ -67,7 +67,7 @@ async def get_all_playbooks() -> list[dict]:
 
 
 async def get_playbook(playbook_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM playbooks WHERE id = ?", (playbook_id,))
         row = row_to_dict(await cursor.fetchone())
@@ -186,7 +186,7 @@ async def delete_playbook(playbook_id: int):
 
 
 async def get_all_templates() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM templates ORDER BY name")
         return rows_to_list(await cursor.fetchall())
@@ -195,7 +195,7 @@ async def get_all_templates() -> list[dict]:
 
 
 async def get_template(template_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM templates WHERE id = ?", (template_id,))
         return row_to_dict(await cursor.fetchone())
@@ -236,7 +236,7 @@ async def get_template_variants(name: str) -> list[dict]:
     only by a vendor-specific variant is still caught before the job is
     queued, not mid-run.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM templates WHERE name = ? ORDER BY device_type", (name,))
         return rows_to_list(await cursor.fetchall())

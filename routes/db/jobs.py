@@ -50,7 +50,7 @@ __all__ = [
 
 
 async def get_all_jobs(limit: int = 50) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """
@@ -68,7 +68,7 @@ async def get_all_jobs(limit: int = 50) -> list[dict]:
 
 
 async def get_job(job_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """
@@ -171,7 +171,7 @@ async def get_job_events(job_id: int, limit: int = 10000) -> list[dict]:
     both the REST endpoint and the WebSocket history replay bound the payload
     so a reconnect can't stream the whole unbounded log.
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         safe_limit = max(1, int(limit))
         cursor = await db.execute(
@@ -265,7 +265,7 @@ async def update_job_priority(job_id: int, priority: int) -> bool:
 
 async def get_job_queue() -> list[dict]:
     """Get all queued and running jobs ordered by priority (desc) then queued_at (asc)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT j.*, p.name AS playbook_name, g.name AS group_name
@@ -282,7 +282,7 @@ async def get_job_queue() -> list[dict]:
 
 async def get_next_queued_job() -> dict | None:
     """Get the next job to run: highest priority first, then earliest queued."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT j.* FROM jobs j
@@ -297,7 +297,7 @@ async def get_next_queued_job() -> dict | None:
 
 async def check_job_dependencies_met(job_id: int) -> bool:
     """Check if all dependency jobs have completed successfully."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT depends_on FROM jobs WHERE id = ?", (job_id,))
         row = await cursor.fetchone()
@@ -319,7 +319,7 @@ async def check_job_dependencies_met(job_id: int) -> bool:
 
 
 async def get_running_job_count() -> int:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM jobs WHERE status = 'running'")
         return (await cursor.fetchone())[0]
@@ -360,17 +360,23 @@ async def reap_orphaned_running_jobs() -> list[int]:
 
 
 async def get_dashboard_stats() -> dict:
-    db = await _dbcore.get_db()
+    # One round-trip, one pass over jobs (was seven separate COUNT scans,
+    # four of them over jobs), on a read-pool connection.
+    db = await _dbcore.get_db(read_only=True)
     try:
-        total_hosts = (await (await db.execute("SELECT COUNT(*) FROM hosts")).fetchone())[0]
-        total_groups = (await (await db.execute("SELECT COUNT(*) FROM inventory_groups")).fetchone())[0]
-        total_playbooks = (await (await db.execute("SELECT COUNT(*) FROM playbooks")).fetchone())[0]
-        total_jobs = (await (await db.execute("SELECT COUNT(*) FROM jobs")).fetchone())[0]
-        running_jobs = (await (await db.execute("SELECT COUNT(*) FROM jobs WHERE status='running'")).fetchone())[0]
-        successful_jobs = (await (await db.execute("SELECT COUNT(*) FROM jobs WHERE status='success'")).fetchone())[0]
-        completed_jobs = (
-            await (await db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('success','failed')")).fetchone()
-        )[0]
+        cursor = await db.execute(
+            """SELECT
+                   (SELECT COUNT(*) FROM hosts),
+                   (SELECT COUNT(*) FROM inventory_groups),
+                   (SELECT COUNT(*) FROM playbooks),
+                   COUNT(*),
+                   COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN status IN ('success', 'failed') THEN 1 ELSE 0 END), 0)
+               FROM jobs"""
+        )
+        row = await cursor.fetchone()
+        total_hosts, total_groups, total_playbooks, total_jobs, running_jobs, successful_jobs, completed_jobs = row
         success_rate = round(successful_jobs / completed_jobs * 100) if completed_jobs > 0 else 0
 
         return {

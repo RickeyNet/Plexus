@@ -93,7 +93,7 @@ async def create_billing_circuit(
 
 
 async def get_billing_circuit(circuit_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM billing_circuits WHERE id = ?", (circuit_id,))
         row = await cursor.fetchone()
@@ -107,7 +107,7 @@ async def list_billing_circuits(
     host_id: int | None = None,
     enabled_only: bool = False,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -230,7 +230,7 @@ async def create_billing_period(
 
 
 async def get_billing_period(period_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT bp.*, bc.name AS circuit_name, bc.customer,
@@ -253,7 +253,7 @@ async def list_billing_periods(
     start_after: str | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
@@ -301,7 +301,7 @@ async def get_billing_samples_for_period(
     period_end: str,
 ) -> list[dict]:
     """Fetch raw interface_ts samples for 95th percentile billing calculation."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT in_rate_bps, out_rate_bps, sampled_at
@@ -324,7 +324,7 @@ async def get_billing_rollups_for_period(
     period_end: str,
 ) -> list[dict]:
     """Fetch hourly rollups for longer billing periods (falls back from raw)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         labels_pattern = f'%"if_index": {if_index}%'
         cursor = await db.execute(
@@ -346,7 +346,7 @@ async def get_billing_rollups_for_period(
 
 async def get_billing_customers() -> list[str]:
     """Get distinct customer names from billing circuits."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT DISTINCT customer FROM billing_circuits WHERE customer != '' ORDER BY customer"

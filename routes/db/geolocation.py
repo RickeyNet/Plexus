@@ -48,7 +48,7 @@ __all__ = [
 
 
 async def list_geo_sites() -> list:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT s.*,
@@ -66,7 +66,7 @@ async def list_geo_sites() -> list:
 
 
 async def get_geo_site(site_id: int) -> dict:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM geo_sites WHERE id = ?", (site_id,))
         return row_to_dict(await cursor.fetchone())
@@ -138,7 +138,7 @@ async def delete_geo_site(site_id: int) -> bool:
 
 
 async def list_geo_floors(site_id: int) -> list:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT f.*,
@@ -156,7 +156,7 @@ async def list_geo_floors(site_id: int) -> list:
 
 
 async def get_geo_floor(floor_id: int) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM geo_floors WHERE id = ?", (floor_id,))
         return row_to_dict(await cursor.fetchone())
@@ -220,7 +220,7 @@ async def delete_geo_floor(floor_id: int) -> bool:
 
 
 async def get_geo_placements(floor_id: int) -> list:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT p.id, p.floor_id, p.host_id, p.x_pct, p.y_pct,
@@ -273,7 +273,7 @@ async def delete_geo_placement(floor_id: int, host_id: int) -> bool:
 
 async def get_geo_overview() -> list:
     """Return all sites enriched with floor count and device status counts."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT s.id, s.name, s.description, s.address, s.lat, s.lng,

@@ -74,7 +74,7 @@ async def create_flow_records_batch(rows: list[tuple]) -> int:
 async def get_flow_top_talkers(
     host_id: int | None = None, hours: int = 1, direction: str = "src", limit: int = 20
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         col = "src_ip" if direction == "src" else "dst_ip"
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
@@ -96,7 +96,7 @@ async def get_flow_top_talkers(
 
 
 async def get_flow_top_applications(host_id: int | None = None, hours: int = 1, limit: int = 20) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
         params: list = [f"-{hours}"]
@@ -117,7 +117,7 @@ async def get_flow_top_applications(host_id: int | None = None, hours: int = 1, 
 
 
 async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1, limit: int = 20) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
         params: list = [f"-{hours}"]
@@ -141,7 +141,7 @@ async def get_flow_timeline(host_id: int | None = None, hours: int = 6, bucket_m
     """Aggregate flow data into time buckets."""
     # Validate bucket_minutes to prevent SQL injection via f-string
     bucket_minutes = max(1, min(int(bucket_minutes), 60))
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
         params: list = [f"-{max(1, int(hours))}"]
@@ -182,16 +182,11 @@ async def create_flow_summary(
 
 
 async def cleanup_old_flow_records(hours: int = 48) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM flow_records WHERE received_at < datetime('now', ? || ' hours')",
-            (f"-{hours}",),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "flow_records",
+        "received_at < datetime('now', ? || ' hours')",
+        (f"-{hours}",),
+    )
 
 
 async def get_exporter_host_map() -> dict[str, int]:
@@ -202,7 +197,7 @@ async def get_exporter_host_map() -> dict[str, int]:
     Last-wins on collisions (same IP across multiple groups), which matches
     how the flow collector treats exporter identity (per IP, not per group).
     """
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT id, ip_address FROM hosts WHERE ip_address IS NOT NULL AND ip_address != ''")
         rows = await cursor.fetchall()
@@ -293,7 +288,7 @@ async def update_flow_exporter_host_id(exporter_ip: str, host_id: int | None) ->
 
 async def list_flow_exporters() -> list[dict]:
     """Return all flow exporters joined with host hostname when known."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """
@@ -334,7 +329,7 @@ async def get_cloud_flow_summary(
     provider: str | None = None,
     hours: int = 24,
 ) -> dict:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = [
             "received_at >= datetime('now', ? || ' hours')",
@@ -380,7 +375,7 @@ async def get_cloud_flow_top_talkers(
     direction: str = "src",
     limit: int = 20,
 ) -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         col = "src_ip" if direction == "src" else "dst_ip"
         clauses = [
@@ -420,7 +415,7 @@ async def get_cloud_flow_timeline(
     bucket_minutes: int = 5,
 ) -> list[dict]:
     bucket_minutes = max(1, min(int(bucket_minutes), 60))
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         clauses = [
             "received_at >= datetime('now', ? || ' hours')",

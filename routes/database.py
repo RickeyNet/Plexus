@@ -978,12 +978,18 @@ CREATE INDEX IF NOT EXISTS idx_metric_samples_lookup
     ON metric_samples (metric_name, sampled_at);
 CREATE INDEX IF NOT EXISTS idx_metric_samples_host
     ON metric_samples (host_id, metric_name, sampled_at);
+CREATE INDEX IF NOT EXISTS idx_metric_samples_sampled_at
+    ON metric_samples (sampled_at);
 CREATE INDEX IF NOT EXISTS idx_metric_rollups_lookup
     ON metric_rollups (metric_name, time_window, period_start);
 CREATE INDEX IF NOT EXISTS idx_metric_rollups_host
     ON metric_rollups (host_id, metric_name, time_window, period_start);
+CREATE INDEX IF NOT EXISTS idx_metric_rollups_window_start
+    ON metric_rollups (time_window, period_start);
 CREATE INDEX IF NOT EXISTS idx_interface_ts_lookup
     ON interface_ts (host_id, if_index, sampled_at);
+CREATE INDEX IF NOT EXISTS idx_interface_ts_sampled_at
+    ON interface_ts (sampled_at);
 CREATE INDEX IF NOT EXISTS idx_trap_syslog_received
     ON trap_syslog_events (received_at);
 CREATE INDEX IF NOT EXISTS idx_trap_syslog_host
@@ -1593,6 +1599,8 @@ CREATE INDEX IF NOT EXISTS idx_interface_error_events_host
     ON interface_error_events (host_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_interface_error_events_unresolved
     ON interface_error_events (resolved_at, severity);
+CREATE INDEX IF NOT EXISTS idx_interface_error_events_created
+    ON interface_error_events (created_at);
 
 -- 0009: bandwidth billing
 CREATE TABLE IF NOT EXISTS billing_circuits (
@@ -2970,6 +2978,36 @@ async def get_db(*, read_only: bool = False):
     await _sqlite_access_lock.acquire()
     _held.set({"conn": conn, "depth": 1, "engine": "sqlite"})
     return _ConnProxy(conn)
+
+
+_DELETE_CHUNK_SIZE = 5000
+
+
+async def chunked_delete(table: str, where_sql: str, params: tuple = ()) -> int:
+    """Delete every row matching ``where_sql`` in bounded chunks.
+
+    Retention passes can match millions of rows; a single DELETE holds the
+    writer lock (and on SQLite the whole app's write path) for the full
+    scan. Each chunk here runs in its own get_db() section, so the lock is
+    released between chunks and other writers interleave. ``table`` and
+    ``where_sql`` are trusted SQL fragments from db helpers, never user
+    input. Returns the total number of rows deleted.
+    """
+    total = 0
+    while True:
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE {where_sql} LIMIT ?)",
+                (*params, _DELETE_CHUNK_SIZE),
+            )
+            await db.commit()
+            deleted = cursor.rowcount or 0
+        finally:
+            await db.close()
+        total += deleted
+        if deleted < _DELETE_CHUNK_SIZE:
+            return total
 
 
 async def _release_db():

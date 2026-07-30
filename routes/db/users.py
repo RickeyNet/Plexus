@@ -56,7 +56,7 @@ __all__ = [
 
 
 async def get_user_by_username(username: str) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM users WHERE username = ?", (username,))
         return row_to_dict(await cursor.fetchone())
@@ -199,7 +199,7 @@ async def update_user_admin(
 
 
 async def get_all_users() -> list[dict]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT id, username, display_name, role, must_change_password, created_at FROM users ORDER BY username"
@@ -260,7 +260,7 @@ async def delete_user_guarded(user_id: int) -> str:
 
 
 async def get_user_group_ids(user_id: int) -> list[int]:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT group_id FROM user_group_memberships WHERE user_id = ? ORDER BY group_id",
@@ -452,7 +452,7 @@ async def set_auth_setting(key: str, value: dict):
 
 
 async def get_auth_setting(key: str) -> dict | None:
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT value FROM auth_settings WHERE key = ?", (key,))
         row = await cursor.fetchone()

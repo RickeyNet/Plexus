@@ -124,7 +124,7 @@ def _is_missing_federation_table_error(exc: Exception) -> bool:
 
 async def _get_peer_or_404(peer_id: int) -> dict:
     """Fetch a peer by ID or raise 404."""
-    cur = await db.get_db()
+    cur = await db.get_db(read_only=True)
     try:
         c = await cur.execute("SELECT * FROM federation_peers WHERE id = ?", (peer_id,))
         row = await c.fetchone()
@@ -227,7 +227,7 @@ def _sync_status_from(data: dict) -> tuple[str, str]:
 @router.get("/api/federation/peers")
 async def list_peers(request: Request, _user=Depends(_require_admin_dep)):
     """List all registered federation peers."""
-    cur = await db.get_db()
+    cur = await db.get_db(read_only=True)
     try:
         c = await cur.execute("SELECT * FROM federation_peers ORDER BY name")
         rows = await c.fetchall()
@@ -465,7 +465,7 @@ async def sync_peer(peer_id: int, request: Request, _user=Depends(_require_admin
 @router.get("/api/federation/overview")
 async def federation_overview(request: Request, _user=Depends(_require_admin_dep)):
     """Aggregated overview across all federation peers."""
-    cur = await db.get_db()
+    cur = await db.get_db(read_only=True)
     try:
         c = await cur.execute("SELECT * FROM federation_peers WHERE enabled = 1 ORDER BY name")
         peers = await c.fetchall()
