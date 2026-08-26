@@ -8,7 +8,7 @@ uvicorn[standard]==0.51.0
 click>=8.3.3,<9
 aiosqlite==0.22.1
 aiofiles==25.1.0
-cryptography==49.0.0
+cryptography==50.0.1
 pyyaml==6.0.3
 itsdangerous==2.2.0
 python-multipart==0.0.32
@@ -25,7 +25,9 @@ pyrad==2.5.4
 # python-ldap requires OpenLDAP headers (libldap/lber.h) which Windows does
 # not ship. Skip on Windows; the LDAP auth backend in netcontrol/routes/auth.py
 # is wrapped in a try/except and degrades to LDAP_AVAILABLE=False there.
-python-ldap>=3.4,<3.5; sys_platform != "win32"
+# <3.4.5 has two ldap.filter.escape_filter_chars bypasses (GHSA-p34h-wq7j-h5v6,
+# GHSA-r7r6-cc7p-4v5m); the LDAP auth backend builds filters from user input.
+python-ldap>=3.4.5,<3.5; sys_platform != "win32"
 pysnmp>=7.1.26,<7.2
 # ICMP liveness probes for the monitoring poll and ICMP-only host onboarding.
 # icmplib runs unprivileged on both Linux (SOCK_DGRAM) and Windows, so the
