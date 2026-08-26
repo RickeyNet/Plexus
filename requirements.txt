@@ -29,6 +29,9 @@ pyrad==2.5.4
 # GHSA-r7r6-cc7p-4v5m); the LDAP auth backend builds filters from user input.
 python-ldap>=3.4.5,<3.5; sys_platform != "win32"
 pysnmp>=7.1.26,<7.2
+# pyasn1 is pysnmp's BER/CER/DER decoder - it parses untrusted SNMP input.
+# <0.6.4 has PYSEC-2026-3455/3456/3457 (GHSA-m4p7-r5rc-7g4j et al).
+pyasn1>=0.6.4
 # ICMP liveness probes for the monitoring poll and ICMP-only host onboarding.
 # icmplib runs unprivileged on both Linux (SOCK_DGRAM) and Windows, so the
 # Plexus process does not need to be elevated.
