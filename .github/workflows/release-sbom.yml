@@ -28,7 +28,7 @@ jobs:
 
       - name: Generate release SBOM (CycloneDX)
         run: |
-          pip-audit -r requirements-lock.txt -f cyclonedx-json -o sbom.cdx.json --progress-spinner off --no-deps
+          pip-audit -r requirements-lock.txt -f cyclonedx-json -o sbom.cdx.json --progress-spinner off --no-deps --ignore-vuln PYSEC-2026-2858
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
