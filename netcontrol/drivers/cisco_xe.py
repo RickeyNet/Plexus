@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from netcontrol.drivers.base import Driver, NetflowConfig, register_driver
 
 
@@ -111,13 +113,73 @@ class CiscoXEDriver(Driver):
         # is the device-side full path (e.g. ``flash:cat9k.bin``).
         return f"install add file {image_path}"
 
-    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+    def upgrade_activate_commands(self, image_path: str, *, issu: bool = False) -> list[str]:
         # ``prompt-level none`` suppresses the interactive y/n prompt so
         # the command can be sent non-interactively before the reload
         # drops the SSH session.  ``image_path`` isn't interpolated
         # because in install mode the activate operates on whatever
         # was just added, not a path argument.
+        #
+        # ``issu`` inserts the in-service keyword: on a dual-sup
+        # chassis (9400/9600) or StackWise Virtual pair (9500) the
+        # standby reloads onto the new image first, an SSO switchover
+        # follows, then the old active reloads - the chassis stays
+        # forwarding throughout.  Requires SSO + STANDBY HOT; the
+        # route gates on ``show redundancy`` before sending this.
+        if issu:
+            return ["install activate issu prompt-level none"]
         return ["install activate prompt-level none"]
+
+    def upgrade_supports_issu(self) -> bool:
+        return True
+
+    def upgrade_redundancy_show_command(self) -> str:
+        return "show redundancy"
+
+    def parse_redundancy_state(self, output: str) -> dict:
+        # Representative IOS-XE output (dual-sup / SVL):
+        #
+        #                  Hardware Mode = Duplex
+        #     Configured Redundancy Mode = sso
+        #      Operating Redundancy Mode = sso
+        #   ...
+        #   Peer Processor Information :
+        #   ----------------------------
+        #                 Standby Location = slot 2
+        #           Current Software state = STANDBY HOT
+        #
+        # Standalone box prints ``Hardware Mode = Simplex`` and, instead
+        # of a Peer block, "Peer (slot: 2) information is not available
+        # because it is in 'DISABLED' state".  The active's own block
+        # also has a ``Current Software state = ACTIVE`` line, so the
+        # peer state is only read from text *after* the Peer header.
+        text = output or ""
+
+        def _field(label: str, src: str) -> str | None:
+            m = re.search(rf"{label}\s*=\s*(.+)", src)
+            return m.group(1).strip() if m else None
+
+        hardware_mode = _field("Hardware Mode", text)
+        operating_mode = _field("Operating Redundancy Mode", text)
+
+        peer_state: str | None = None
+        _, sep, peer_block = text.partition("Peer Processor Information")
+        if sep:
+            peer_state = _field("Current Software state", peer_block)
+        if peer_state is None:
+            m = re.search(r"Peer .*?information is not available because it is in '([^']+)' state", text)
+            if m:
+                peer_state = m.group(1).strip()
+
+        redundant = (hardware_mode or "").lower() == "duplex" or "STANDBY" in (peer_state or "").upper()
+        standby_hot = (peer_state or "").upper() == "STANDBY HOT"
+        return {
+            "redundant": redundant,
+            "standby_hot": standby_hot,
+            "hardware_mode": hardware_mode,
+            "operating_mode": (operating_mode or "").lower() or None,
+            "peer_state": peer_state,
+        }
 
     def upgrade_commit_command(self) -> str:
         # Without ``install commit`` an IOS-XE box auto-rolls-back to
