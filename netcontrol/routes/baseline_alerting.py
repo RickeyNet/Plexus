@@ -375,7 +375,7 @@ async def create_rule(body: BaselineAlertRuleCreate, request: Request):
     user = getattr(request.state, "user", None)
     username = user.get("username", "") if user else ""
     rule_id = await db.create_baseline_alert_rule(
-        **body.dict(),
+        **body.model_dump(),
         created_by=username,
     )
     return {"id": rule_id}
