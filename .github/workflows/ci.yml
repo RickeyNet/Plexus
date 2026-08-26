@@ -67,7 +67,11 @@ jobs:
         run: mypy netcontrol templates
 
       - name: Security audit (pip-audit)
-        run: pip-audit --progress-spinner off
+        # PYSEC-2026-2858 / GHSA-r374-rxx8-8654: paramiko rsakey.py allows
+        # SHA-1 (LOW). No paramiko release fixes it and netmiko 4.x pins
+        # paramiko<5, so it cannot be resolved by upgrading. Re-check when
+        # netmiko lifts the cap.
+        run: pip-audit --progress-spinner off --ignore-vuln PYSEC-2026-2858
 
       - name: Generate SBOM (CycloneDX)
         run: pip-audit -r requirements-lock.txt -f cyclonedx-json -o sbom.cdx.json --progress-spinner off --no-deps
