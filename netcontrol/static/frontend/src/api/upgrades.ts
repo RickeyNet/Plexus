@@ -237,6 +237,8 @@ export interface UpgradeCampaignOptions {
   skip_md5?: boolean;
   skip_health_check?: boolean;
   verify_upgrade?: boolean;
+  // In-service upgrade (install activate issu) - dual-sup chassis / SVL only.
+  issu?: boolean;
   parallel?: number;
   retries?: number;
 }

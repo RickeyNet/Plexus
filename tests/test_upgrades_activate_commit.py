@@ -31,11 +31,14 @@ class _FakeConn:
         versions: list[str],
         commit_raises: bool = False,
         commit_output: str = "SUCCESS: install_commit",
+        redundancy: str = "",
     ) -> None:
         # One version string per ``show version`` call, consumed in order.
         self._versions = list(versions)
         self._commit_raises = commit_raises
         self._commit_output = commit_output
+        # ``show redundancy`` output; empty = standalone (no peer).
+        self._redundancy = redundancy
         self.commands: list[str] = []
 
     def send_command(self, command: str, **_: object) -> str:
@@ -49,6 +52,8 @@ class _FakeConn:
             else:
                 v = self._versions[0]
             return f"Cisco IOS XE Software, Version {v}\n"
+        if command == "show redundancy":
+            return self._redundancy
         if command == "install commit":
             if self._commit_raises:
                 raise OSError("The process for the command is not responding or is otherwise unavailable")
@@ -231,3 +236,139 @@ async def test_verify_mismatch_marks_activate_failed(monkeypatch: pytest.MonkeyP
     assert _final_status(_patched["db"], "activate_status") == "failed"
     assert err and "version mismatch" in err.lower()
     assert any(w.get("activate_status") == "failed" and w.get("verify_status") == "failed" for w in _patched["status"])
+
+
+# ── Redundancy gate + ISSU ──────────────────────────────────────────────────
+
+_DUPLEX_HOT = """\
+                 Hardware Mode = Duplex
+     Operating Redundancy Mode = sso
+Current Processor Information :
+        Current Software state = ACTIVE
+Peer Processor Information :
+        Current Software state = STANDBY HOT
+"""
+_DUPLEX_COLD = _DUPLEX_HOT.replace("STANDBY HOT", "STANDBY COLD")
+_DUPLEX_RPR = _DUPLEX_HOT.replace("= sso", "= rpr")
+_SIMPLEX = """\
+                 Hardware Mode = Simplex
+     Operating Redundancy Mode = Non-redundant
+Current Processor Information :
+        Current Software state = ACTIVE
+Peer (slot: 2) information is not available because it is in 'DISABLED' state
+"""
+
+_DEV = {"id": 42, "ip_address": "10.0.0.1", "target_image": "cat9k_iosxe.17.15.05.SPA.bin"}
+
+
+def _activate_cmds(conn: _FakeConn) -> list[str]:
+    return [c for c in conn.commands if c.startswith("install activate")]
+
+
+@pytest.mark.asyncio
+async def test_issu_sends_issu_verb_when_standby_hot(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], redundancy=_DUPLEX_HOT)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"issu": True})
+    assert _activate_cmds(conn) == ["install activate issu prompt-level none"]
+    assert _final_status(_patched["db"], "activate_status") == "completed"
+    assert "show redundancy" in conn.commands
+
+
+@pytest.mark.asyncio
+async def test_issu_refused_on_standalone(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    conn = _FakeConn(versions=["17.15.04"], redundancy=_SIMPLEX)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"issu": True})
+    assert _activate_cmds(conn) == [], "must not send any activate when ISSU gate fails"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert "not redundant" in (err or "")
+
+
+@pytest.mark.asyncio
+async def test_issu_refused_without_sso(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    conn = _FakeConn(versions=["17.15.04"], redundancy=_DUPLEX_RPR)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"issu": True})
+    assert _activate_cmds(conn) == []
+    _, err = _final_verify_state(_patched["db"])
+    assert "requires SSO" in (err or "")
+
+
+@pytest.mark.asyncio
+async def test_issu_ignores_skip_health_check(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    # ISSU on a cold standby fails on-box anyway; skip_health_check must
+    # not let it through to a confusing mid-install error.
+    conn = _FakeConn(versions=["17.15.04"], redundancy=_DUPLEX_COLD)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"issu": True, "skip_health_check": True}
+    )
+    assert _activate_cmds(conn) == []
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+
+
+@pytest.mark.asyncio
+async def test_issu_refused_on_platform_without_support(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    async def fake_resolve_device_type(_dev):
+        return "cisco_nxos"
+
+    monkeypatch.setattr(upgrades, "_resolve_device_type", fake_resolve_device_type)
+    conn = _FakeConn(versions=["10.3.4a"])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"issu": True})
+    assert not [c for c in conn.commands if c.startswith("install")]
+    _, err = _final_verify_state(_patched["db"])
+    assert "ISSU not supported on cisco_nxos" in (err or "")
+
+
+@pytest.mark.asyncio
+async def test_cold_standby_blocks_plain_activate(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    conn = _FakeConn(versions=["17.15.04"], redundancy=_DUPLEX_COLD)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _activate_cmds(conn) == []
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert "STANDBY COLD" in (err or "")
+
+
+@pytest.mark.asyncio
+async def test_cold_standby_plain_activate_overridable(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], redundancy=_DUPLEX_COLD)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"skip_health_check": True}
+    )
+    assert _activate_cmds(conn) == ["install activate prompt-level none"]
+    assert any(lvl == "warn" and "Proceeding despite" in msg for lvl, msg in _patched["emits"])
+
+
+@pytest.mark.asyncio
+async def test_hot_standby_plain_activate_uses_disruptive_verb(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    # Redundant chassis without the ISSU option → normal full reload,
+    # never auto-upgraded to ISSU.
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], redundancy=_DUPLEX_HOT)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _activate_cmds(conn) == ["install activate prompt-level none"]
+
+
+@pytest.mark.asyncio
+async def test_health_check_flags_cold_standby() -> None:
+    conn = _FakeConn(versions=["17.15.04"], redundancy=_DUPLEX_COLD)
+    passed, warnings = await upgrades._health_check(conn, "10.0.0.1", device_type="cisco_xe")
+    assert passed is False
+    assert any("STANDBY COLD" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_health_check_issu_requires_redundancy() -> None:
+    conn = _FakeConn(versions=["17.15.04"], redundancy=_SIMPLEX)
+    passed, warnings = await upgrades._health_check(conn, "10.0.0.1", device_type="cisco_xe", issu=True)
+    assert passed is False
+    assert any("not redundant" in w for w in warnings)
+    # Same box, no ISSU: standalone is fine.
+    passed, warnings = await upgrades._health_check(conn, "10.0.0.1", device_type="cisco_xe")
+    assert passed is True

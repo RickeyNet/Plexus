@@ -336,7 +336,7 @@ class Driver:
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_install_add_command()")
 
-    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+    def upgrade_activate_commands(self, image_path: str, *, issu: bool = False) -> list[str]:
         """Return the command(s) that activate the staged image and reboot.
 
         Returns a list because some platforms need multiple steps
@@ -344,8 +344,50 @@ class Driver:
         then ``request system reboot``).  The final command in the
         list is expected to trigger the reload - the caller treats a
         dropped SSH session after the last command as success.
+
+        ``issu=True`` requests an in-service upgrade (standby reloads
+        first, switchover, then the old active reloads) so a dual-sup
+        chassis or StackWise Virtual pair never fully leaves the
+        network.  Callers must check ``upgrade_supports_issu()`` first;
+        drivers that don't override this default ignore the flag, so
+        passing it blindly would silently run a disruptive reload.
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_activate_commands()")
+
+    def upgrade_supports_issu(self) -> bool:
+        """Return True if ``upgrade_activate_commands(issu=True)`` is meaningful.
+
+        Default False.  IOS-XE install mode supports ``install activate
+        issu`` on redundant platforms (Catalyst 9400/9600 dual-sup,
+        9500 StackWise Virtual).  The route refuses an ISSU campaign
+        on any driver that returns False rather than downgrading to a
+        disruptive reload behind the operator's back.
+        """
+        return False
+
+    def upgrade_redundancy_show_command(self) -> str:
+        """Return the command that reports supervisor/SVL redundancy state.
+
+        IOS-XE: ``show redundancy``.  Used by the upgrade pre-flight
+        health check (standby must be STANDBY HOT before an activate
+        on a redundant chassis) and as a hard gate before an ISSU
+        activate (which additionally requires SSO).  Platforms with no
+        redundancy concept should leave this unimplemented - the route
+        treats ``DriverCapabilityError`` as "standalone, skip check".
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_redundancy_show_command()")
+
+    def parse_redundancy_state(self, output: str) -> dict:
+        """Parse ``upgrade_redundancy_show_command()`` output.
+
+        Returns a dict with at least:
+
+        - ``redundant`` (bool): a peer supervisor / SVL member exists
+        - ``standby_hot`` (bool): peer is fully synced (STANDBY HOT)
+        - ``hardware_mode`` / ``operating_mode`` / ``peer_state``
+          (str | None): raw fields for the operator log
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_redundancy_state()")
 
     def upgrade_commit_command(self) -> str:
         """Return the command that makes the new image permanent.

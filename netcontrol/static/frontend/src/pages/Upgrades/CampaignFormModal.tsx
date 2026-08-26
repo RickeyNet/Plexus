@@ -51,6 +51,7 @@ const DEFAULT_OPTIONS: Required<UpgradeCampaignOptions> = {
   skip_md5: false,
   skip_health_check: false,
   verify_upgrade: true,
+  issu: false,
   parallel: 4,
   retries: 2,
 };
@@ -145,6 +146,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
           skip_md5: Boolean(opts.skip_md5),
           skip_health_check: Boolean(opts.skip_health_check),
           verify_upgrade: opts.verify_upgrade !== false,
+          issu: Boolean(opts.issu),
           parallel: typeof opts.parallel === 'number' ? opts.parallel : 4,
           retries: typeof opts.retries === 'number' ? opts.retries : 2,
         });
@@ -491,6 +493,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                   ['skip_md5', 'Skip MD5 verification'],
                   ['skip_health_check', 'Skip health check'],
                   ['verify_upgrade', 'Verify upgrade after reboot'],
+                  ['issu', 'ISSU (in-service; dual-sup / StackWise Virtual only)'],
                 ] as const
               ).map(([key, label]) => (
                 <label

@@ -2071,7 +2071,7 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
         # Health check
         if not options.get("skip_health_check"):
             await _emit(campaign_id, dev_id, "info", "Running pre-flight health check...", host=ip)
-            passed, warnings = await _health_check(conn, ip)
+            passed, warnings = await _health_check(conn, ip, device_type=device_type, issu=bool(options.get("issu")))
             health = "passed" if passed else "failed"
             await db.update_upgrade_device(dev_id, health_status=health)
 
@@ -2628,6 +2628,29 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
         await _emit(campaign_id, dev_id, "info", f"Image verified on flash: {dest_path}{image_name}", host=ip)
 
+        # Redundancy gate.  On a dual-sup chassis / SVL pair the standby
+        # must be STANDBY HOT before any activate: install-mode syncs
+        # packages to the standby, and activating with a cold/absent
+        # standby leaves the chassis one failure away from a hard down
+        # (or, for ISSU, simply fails mid-way).  ISSU additionally
+        # requires SSO and a driver that implements the in-service
+        # verb - refuse rather than silently fall back to a disruptive
+        # reload the operator didn't ask for.
+        issu = bool(options.get("issu"))
+        driver = get_driver(device_type)
+        if issu and not driver.upgrade_supports_issu():
+            msg = f"ISSU not supported on {device_type}; disable the ISSU option or use a full reload"
+            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=msg)
+            await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=msg)
+            await _emit(campaign_id, dev_id, "error", msg, host=ip)
+            return
+        red_err = await _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, options)
+        if red_err:
+            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=red_err)
+            await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=red_err)
+            await _emit(campaign_id, dev_id, "error", red_err, host=ip)
+            return
+
         # Image already pre-staged during transfer (install add), just activate.
         # The driver supplies the platform-specific activate verb(s); for
         # IOS-XE that's a single "install activate prompt-level none" line,
@@ -2636,7 +2659,10 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
         # is expected to drop the SSH session.
         full_path = f"{dest_path}{image_name}"
         try:
-            activate_commands = get_driver(device_type).upgrade_activate_commands(full_path)
+            if issu:
+                activate_commands = driver.upgrade_activate_commands(full_path, issu=True)
+            else:
+                activate_commands = driver.upgrade_activate_commands(full_path)
         except DriverCapabilityError as e:
             await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=str(e))
             await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=str(e))
@@ -2644,7 +2670,16 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             return
         for command in activate_commands:
             await _emit(campaign_id, dev_id, "cmd", f"Executing: {command}", host=ip)
-            await _emit(campaign_id, dev_id, "info", "This will trigger a reload (5-15 minutes)...", host=ip)
+            if issu:
+                await _emit(
+                    campaign_id,
+                    dev_id,
+                    "info",
+                    "ISSU: standby reloads first, then switchover, then old active reloads (20-45 minutes)...",
+                    host=ip,
+                )
+            else:
+                await _emit(campaign_id, dev_id, "info", "This will trigger a reload (5-15 minutes)...", host=ip)
 
             try:
                 await asyncio.to_thread(
@@ -2662,10 +2697,14 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
         await _emit(campaign_id, dev_id, "success", "Activate sent - switch is rebooting", host=ip)
 
-        # Wait for switch to come back
+        # Wait for switch to come back.  ISSU takes far longer to reach
+        # the SSH-drop point (the standby has to fully reload before
+        # the switchover kills our session) and longer overall, so
+        # both windows are widened when the in-service path was used.
         if options.get("verify_upgrade", True):
-            verify_wait = options.get("verify_wait", 1200)
+            verify_wait = options.get("verify_wait", 3600 if issu else 1200)
             check_interval = options.get("check_interval", 30)
+            down_timeout = 1800 if issu else 300
 
             await _emit(
                 campaign_id,
@@ -2677,7 +2716,9 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
             # First: wait for switch to go DOWN (confirm reboot started)
             await _emit(campaign_id, dev_id, "info", "Waiting for switch to go offline...", host=ip)
-            went_down = await _wait_for_down(ip, timeout=300, check_interval=10, campaign_id=campaign_id, dev_id=dev_id)
+            went_down = await _wait_for_down(
+                ip, timeout=down_timeout, check_interval=10, campaign_id=campaign_id, dev_id=dev_id
+            )
             if went_down:
                 await _emit(campaign_id, dev_id, "info", "Switch is offline - reboot in progress", host=ip)
             else:
@@ -3159,8 +3200,96 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def _health_check(conn, hostname):
-    """Run CPU, memory, and stack health checks. Returns (passed, warnings)."""
+async def _check_redundancy(conn, device_type="cisco_xe"):
+    """Read supervisor/SVL redundancy state via the driver.
+
+    Returns the driver's parsed dict, or ``None`` when the platform has
+    no redundancy concept (driver raises ``DriverCapabilityError``) -
+    callers treat ``None`` as "standalone, nothing to gate on".
+    """
+    driver = get_driver(device_type)
+    try:
+        show_cmd = driver.upgrade_redundancy_show_command()
+    except DriverCapabilityError:
+        return None
+    output = await asyncio.to_thread(conn.send_command, show_cmd, read_timeout=30)
+    return driver.parse_redundancy_state(output or "")
+
+
+def _redundancy_problems(red: dict | None, issu: bool) -> list[str]:
+    """Translate a redundancy dict into blocking problems for an activate.
+
+    Shared by the prestage health check and the activate gate so both
+    apply the same policy:
+
+    - redundant chassis whose standby isn't STANDBY HOT: always blocks
+    - ISSU requested on a non-redundant / non-SSO / unknown platform: blocks
+    """
+    problems: list[str] = []
+    if red is None:
+        if issu:
+            problems.append("ISSU requested but platform has no redundancy state to verify")
+        return problems
+    if not red.get("redundant"):
+        if issu:
+            problems.append(
+                f"ISSU requested but device is not redundant (hardware mode: {red.get('hardware_mode') or 'unknown'})"
+            )
+        return problems
+    if not red.get("standby_hot"):
+        problems.append(f"Standby supervisor/member not STANDBY HOT (state: {red.get('peer_state') or 'unknown'})")
+    if issu and (red.get("operating_mode") or "") != "sso":
+        problems.append(f"ISSU requires SSO (operating mode: {red.get('operating_mode') or 'unknown'})")
+    return problems
+
+
+async def _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, options) -> str | None:
+    """Pre-activate redundancy check. Returns an error string to abort on, else None.
+
+    Runs even when ``skip_health_check`` is set if ISSU was requested -
+    an ISSU on a non-SSO box fails on-device anyway, so the check only
+    turns a confusing mid-install error into a clear pre-flight one.
+    Without ISSU, ``skip_health_check`` downgrades a cold standby to a
+    warning so an operator can knowingly push through.
+    """
+    await _emit(campaign_id, dev_id, "info", "Checking redundancy state...", host=ip)
+    try:
+        red = await _check_redundancy(conn, device_type)
+    except Exception as e:
+        if issu:
+            return f"ISSU requested but redundancy check failed: {e}"
+        await _emit(campaign_id, dev_id, "warn", f"Redundancy check failed: {e}", host=ip)
+        return None
+    if red is None:
+        await _emit(
+            campaign_id, dev_id, "info", "Platform reports no redundancy state - treating as standalone", host=ip
+        )
+    elif red.get("redundant"):
+        await _emit(
+            campaign_id,
+            dev_id,
+            "info",
+            f"Redundancy: {red.get('hardware_mode') or '?'} / {red.get('operating_mode') or '?'}, "
+            f"peer {red.get('peer_state') or 'unknown'}",
+            host=ip,
+        )
+    else:
+        await _emit(campaign_id, dev_id, "info", "Standalone (no standby supervisor/member)", host=ip)
+    problems = _redundancy_problems(red, issu)
+    if not problems:
+        if issu:
+            await _emit(campaign_id, dev_id, "success", "Redundancy OK - ISSU permitted", host=ip)
+        return None
+    if not issu and options.get("skip_health_check"):
+        await _emit(
+            campaign_id, dev_id, "warn", f"Proceeding despite: {'; '.join(problems)} (skip_health_check set)", host=ip
+        )
+        return None
+    return "Redundancy check failed: " + "; ".join(problems)
+
+
+async def _health_check(conn, hostname, device_type="cisco_xe", issu=False):
+    """Run CPU, memory, stack, and redundancy health checks. Returns (passed, warnings)."""
     warnings = []
     critical = False
 
@@ -3206,6 +3335,21 @@ async def _health_check(conn, hostname):
                     critical = True
     except Exception as exc:
         LOGGER.debug("Stack check skipped on %s (not a stack?): %s", hostname, exc)
+
+    # Supervisor / StackWise Virtual redundancy.  ``show switch`` above
+    # covers stack members, but a 9400/9600 chassis has no stack table -
+    # its standby sup only shows up in ``show redundancy``.
+    try:
+        red = await _check_redundancy(conn, device_type)
+        for problem in _redundancy_problems(red, issu):
+            warnings.append(problem)
+            critical = True
+    except Exception as exc:
+        if issu:
+            warnings.append(f"Redundancy check failed (required for ISSU): {exc}")
+            critical = True
+        else:
+            LOGGER.debug("Redundancy check skipped on %s: %s", hostname, exc)
 
     return not critical, warnings
 

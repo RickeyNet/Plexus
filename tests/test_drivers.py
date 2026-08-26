@@ -1455,3 +1455,93 @@ def test_firewall_drivers_do_not_collide_with_switch_parsers() -> None:
     # PAN-OS's lowercase ``serial:`` and XR's capital ``Serial Number``.
     assert forti.parse_serial_number(pan_line) is None
     assert forti.parse_serial_number(xr_line) is None
+
+
+# ── ISSU + redundancy surface ────────────────────────────────────────────
+
+_XE_REDUNDANCY_DUPLEX_HOT = """\
+Redundant System Information :
+------------------------------
+       Available system uptime = 2 weeks, 3 days, 4 hours, 21 minutes
+Switchovers system experienced = 0
+
+                 Hardware Mode = Duplex
+    Configured Redundancy Mode = sso
+     Operating Redundancy Mode = sso
+              Maintenance Mode = Disabled
+                Communications = Up
+
+Current Processor Information :
+-------------------------------
+               Active Location = slot 1
+        Current Software state = ACTIVE
+
+Peer Processor Information :
+----------------------------
+              Standby Location = slot 2
+        Current Software state = STANDBY HOT
+"""
+
+_XE_REDUNDANCY_SIMPLEX = """\
+Redundant System Information :
+------------------------------
+                 Hardware Mode = Simplex
+    Configured Redundancy Mode = sso
+     Operating Redundancy Mode = Non-redundant
+                Communications = Down      Reason: Failure
+
+Current Processor Information :
+-------------------------------
+        Current Software state = ACTIVE
+
+Peer (slot: 2) information is not available because it is in 'DISABLED' state
+"""
+
+
+def test_cisco_xe_activate_issu_inserts_keyword() -> None:
+    drv = get_driver("cisco_xe")
+    assert drv.upgrade_supports_issu() is True
+    assert drv.upgrade_activate_commands("flash:img.bin", issu=True) == ["install activate issu prompt-level none"]
+    # Default path unchanged - a regression here would make every
+    # non-ISSU campaign silently attempt an in-service upgrade.
+    assert drv.upgrade_activate_commands("flash:img.bin") == ["install activate prompt-level none"]
+
+
+def test_cisco_xe_redundancy_parse_duplex_hot() -> None:
+    drv = get_driver("cisco_xe")
+    assert drv.upgrade_redundancy_show_command() == "show redundancy"
+    red = drv.parse_redundancy_state(_XE_REDUNDANCY_DUPLEX_HOT)
+    assert red["redundant"] is True
+    assert red["standby_hot"] is True
+    assert red["hardware_mode"] == "Duplex"
+    assert red["operating_mode"] == "sso"
+    # Must NOT pick up the active's own "Current Software state = ACTIVE".
+    assert red["peer_state"] == "STANDBY HOT"
+
+
+def test_cisco_xe_redundancy_parse_simplex() -> None:
+    red = get_driver("cisco_xe").parse_redundancy_state(_XE_REDUNDANCY_SIMPLEX)
+    assert red["redundant"] is False
+    assert red["standby_hot"] is False
+    assert red["peer_state"] == "DISABLED"
+
+
+def test_cisco_xe_redundancy_parse_duplex_cold() -> None:
+    cold = _XE_REDUNDANCY_DUPLEX_HOT.replace("STANDBY HOT", "STANDBY COLD")
+    red = get_driver("cisco_xe").parse_redundancy_state(cold)
+    assert red["redundant"] is True
+    assert red["standby_hot"] is False
+    assert red["peer_state"] == "STANDBY COLD"
+
+
+def test_cisco_xe_redundancy_parse_empty_is_standalone() -> None:
+    red = get_driver("cisco_xe").parse_redundancy_state("")
+    assert red["redundant"] is False and red["standby_hot"] is False
+
+
+def test_non_xe_drivers_do_not_claim_issu() -> None:
+    for dt in ("cisco_nxos", "cisco_xr", "juniper_junos", "arista_eos", "cisco_ios"):
+        drv = get_driver(dt)
+        assert drv.upgrade_supports_issu() is False, dt
+        with pytest.raises(DriverCapabilityError):
+            drv.upgrade_redundancy_show_command()
