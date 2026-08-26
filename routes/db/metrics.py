@@ -1545,11 +1545,11 @@ async def get_availability_summary(
                 # If still down at end of window, add remaining time
                 if current_state == "down" and last_ts:
                     try:
-                        from datetime import datetime as dt
-
                         fmt = "%Y-%m-%d %H:%M:%S"
-                        t1 = dt.strptime(last_ts[:19], fmt)
-                        now = dt.utcnow()
+                        t1 = datetime.strptime(last_ts[:19], fmt)
+                        # Stored transition timestamps are naive UTC strings, so
+                        # compare against a naive UTC "now" (utcnow() is deprecated).
+                        now = datetime.now(UTC).replace(tzinfo=None)
                         down_seconds += (now - t1).total_seconds()
                     except Exception as exc:
                         _LOGGER.warning("uptime: failed to parse transition timestamp '%s': %s", last_ts, exc)

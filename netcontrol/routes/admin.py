@@ -604,7 +604,7 @@ async def admin_get_login_rules():
 
 @router.put("/api/admin/login-rules")
 async def admin_update_login_rules(body: AdminLoginRulesRequest):
-    state.LOGIN_RULES = state._sanitize_login_rules(body.dict())
+    state.LOGIN_RULES = state._sanitize_login_rules(body.model_dump())
     await db.set_auth_setting("login_rules", state.LOGIN_RULES)
     return state.LOGIN_RULES
 
@@ -631,7 +631,7 @@ async def admin_get_auth_config():
 
 @router.put("/api/admin/auth-config")
 async def admin_update_auth_config(body: AuthConfigRequest):
-    data = body.dict()
+    data = body.model_dump()
     # Preserve existing secrets when client sends back the redaction mask
     if data.get("radius", {}).get("secret") == _SECRET_MASK:
         data["radius"]["secret"] = state.AUTH_CONFIG.get("radius", {}).get("secret", "")
@@ -655,7 +655,7 @@ async def admin_get_syslog_config():
 
 @router.put("/api/admin/syslog-config")
 async def admin_update_syslog_config(body: SyslogConfigRequest, request: Request):
-    data = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    data = body.model_dump()
     if data.get("enabled") and not str(data.get("host", "")).strip():
         raise HTTPException(status_code=400, detail="Syslog host is required when enabled")
 

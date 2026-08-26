@@ -29,9 +29,12 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
     libldap2-dev libsasl2-dev libssl-dev gcc gosu \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-cloud.txt ./
+# Install from the hashed lock so the image contains exactly what the SBOM
+# (built from the same file in CI) declares. requirements.txt is copied only
+# so the lock's "-r requirements.txt" provenance comments resolve.
+COPY requirements.txt requirements-lock.txt requirements-cloud.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir --require-hashes -r requirements-lock.txt
 
 # Cloud Visibility provider SDKs (AWS/Azure/GCP). Off by default to keep the
 # base image small; build with --build-arg INSTALL_CLOUD_SDKS=true to enable
