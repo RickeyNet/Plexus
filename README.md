@@ -53,8 +53,19 @@ python -m pip install -r requirements.txt
 # (optional) install with PostgreSQL support (Linux/production)
 python -m pip install -r requirements-postgres.txt
 
+# (optional) reproducible install from the hashed lock (what the SBOM is built from)
+python -m pip install --require-hashes -r requirements-lock.txt
+
 # run app
 python templates/run.py --host 127.0.0.1 --port 8080
+```
+
+Regenerate `requirements-lock.txt` after changing `requirements.txt` (needs `uv`,
+included in `requirements-dev.txt`; `--universal` keeps Linux-only markers such as
+`python-ldap` and `uvloop` so the lock is valid on every platform):
+
+```bash
+uv pip compile requirements.txt --universal --generate-hashes --python-version 3.14 -o requirements-lock.txt
 ```
 
 Common run options:
