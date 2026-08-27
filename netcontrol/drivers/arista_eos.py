@@ -30,7 +30,7 @@ differences that motivate a dedicated driver instead of reusing
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, NetflowConfig, register_driver
+from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, register_driver
 
 
 @register_driver
@@ -161,7 +161,9 @@ class AristaEOSDriver(Driver):
     # gate the raise surfaces the bug instead of silently shipping
     # IOS-XE syntax at an EOS session.
 
-    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+    def upgrade_activate_commands(self, image_path: str, *, issu: bool = False) -> list[str]:
+        if issu:
+            raise DriverCapabilityError("EOS driver has no in-service (ISSU) activate; use a full reload")
         # Two-command activate: ``install source`` is the validate +
         # set-boot-image step (executes synchronously and prints any
         # validation error before the prompt comes back); ``reload

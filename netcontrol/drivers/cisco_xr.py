@@ -36,7 +36,7 @@ The differences that motivate a dedicated driver instead of reusing
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, NetflowConfig, register_driver
+from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, register_driver
 
 
 @register_driver
@@ -207,7 +207,9 @@ class CiscoXRDriver(Driver):
         # format.
         return f"install add source {image_path}"
 
-    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+    def upgrade_activate_commands(self, image_path: str, *, issu: bool = False) -> list[str]:
+        if issu:
+            raise DriverCapabilityError("IOS-XR driver has no in-service (ISSU) activate; use a full reload")
         # Bare ``install activate`` activates every newly-added
         # inactive package - no ID argument needed when staging and
         # activate run back-to-back in the route, which is the only
