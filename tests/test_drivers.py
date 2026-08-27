@@ -1545,3 +1545,8 @@ def test_non_xe_drivers_do_not_claim_issu() -> None:
         assert drv.upgrade_supports_issu() is False, dt
         with pytest.raises(DriverCapabilityError):
             drv.upgrade_redundancy_show_command()
+        # Overrides accept the base-class ``issu`` kwarg (mypy override
+        # compatibility) but must refuse it rather than silently reload.
+        if dt != "cisco_ios":
+            with pytest.raises(DriverCapabilityError, match="ISSU"):
+                drv.upgrade_activate_commands("flash:img.bin", issu=True)
