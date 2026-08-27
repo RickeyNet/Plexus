@@ -15,8 +15,5 @@ pre-commit==4.6.1
 types-requests==2.33.0.20260712
 pip-audit==2.10.1
 bandit==1.9.4
-# safety 3.5.2 pinned pydantic<2.10, blocking Python 3.14 (which needs
-# pydantic-core ≥2.27 with PyO3 ≥0.23). 3.7.0 dropped that cap.
-safety>=3.7.0,<4
 # Lock-file generator: `uv pip compile --universal --generate-hashes` (see README).
 uv>=0.12,<1

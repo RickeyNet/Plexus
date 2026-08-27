@@ -966,7 +966,7 @@ async def start_trap_receiver(port: int = 10162) -> bool:
         loop = asyncio.get_running_loop()
         transport, _ = await loop.create_datagram_endpoint(
             lambda: _TrapSyslogProtocol("trap"),
-            local_addr=("0.0.0.0", port),
+            local_addr=("0.0.0.0", port),  # nosec B104 - trap/syslog listener must accept devices on any interface
         )
         _trap_transport = transport
         LOGGER.info("metrics: SNMP trap receiver started on UDP port %d", port)
@@ -986,7 +986,7 @@ async def start_syslog_receiver(port: int = 10514) -> bool:
         loop = asyncio.get_running_loop()
         transport, _ = await loop.create_datagram_endpoint(
             lambda: _TrapSyslogProtocol("syslog"),
-            local_addr=("0.0.0.0", port),
+            local_addr=("0.0.0.0", port),  # nosec B104 - trap/syslog listener must accept devices on any interface
         )
         _syslog_transport = transport
         LOGGER.info("metrics: syslog receiver started on UDP port %d", port)
