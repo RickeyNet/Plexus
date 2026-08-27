@@ -19,6 +19,7 @@ import socket
 import struct
 import time
 from datetime import UTC, datetime, timedelta, timezone
+from typing import Any
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -282,8 +283,8 @@ async def store_interface_ts_from_poll(host_id: int, if_details: list[dict]) -> 
         utilization_pct = None
 
         prev = prev_map.get(str(if_index))
-        t_prev = _parse_db_time(prev.get("polled_at")) if prev else None
-        if t_prev is not None:
+        t_prev = _parse_db_time(prev.get("polled_at")) if prev is not None else None
+        if prev is not None and t_prev is not None:
             dt_sec = (datetime.now(UTC) - t_prev).total_seconds()
             if dt_sec > 0:
                 delta_in = _counter_delta(prev.get("in_octets") or 0, in_octets)
@@ -379,8 +380,8 @@ async def store_interface_error_metrics_from_poll(
             metric_rows.append((host_id, metric_name, labels, float(counter_val)))
 
             # Compute rate if we have a previous sample
-            t_prev = _parse_db_time(prev.get("polled_at")) if prev and prev.get("prev_polled_at") else None
-            if t_prev is not None:
+            t_prev = _parse_db_time(prev.get("polled_at")) if prev is not None and prev.get("prev_polled_at") else None
+            if prev is not None and t_prev is not None:
                 dt_sec = (datetime.now(UTC) - t_prev).total_seconds()
                 delta = _counter_delta(prev.get(field) or 0, counter_val)
                 if dt_sec > 0 and delta is not None:
@@ -1104,7 +1105,7 @@ async def metrics_query(
 async def capacity_planning(
     metric: str = Query(..., description="Metric name, e.g. cpu_percent"),
     host: str = Query(default="*", description="Host ID, comma-separated IDs, or * for all"),
-    range: str = Query(default="90d", description="Time range: 30d, 90d, 365d"),
+    time_range: str = Query(default="90d", alias="range", description="Time range: 30d, 90d, 365d"),
     group: int | None = Query(default=None, description="Filter by inventory group ID"),
     projection_days: int = Query(default=30, ge=1, le=365, description="Days to project forward"),
     threshold: float = Query(default=90.0, description="Capacity threshold for ETA calculation"),
@@ -1132,7 +1133,7 @@ async def capacity_planning(
         "180d": timedelta(days=180),
         "365d": timedelta(days=365),
     }
-    delta = range_map.get(range)
+    delta = range_map.get(time_range)
     if not delta:
         raise HTTPException(400, f"Invalid range - use one of: {', '.join(range_map.keys())}")
 
@@ -1152,7 +1153,7 @@ async def capacity_planning(
     if not data:
         return {
             "metric": metric,
-            "range": range,
+            "range": time_range,
             "count": 0,
             "data": [],
             "trend": None,
@@ -1168,7 +1169,7 @@ async def capacity_planning(
             by_host[key] = []
         by_host[key].append(d)
 
-    per_host_results = []
+    per_host_results: list[dict[str, Any]] = []
 
     for hostname, points in by_host.items():
         # Convert to (day_offset, value) for regression
@@ -1237,7 +1238,7 @@ async def capacity_planning(
 
     return {
         "metric": metric,
-        "range": range,
+        "range": time_range,
         "threshold": threshold,
         "projection_days": projection_days,
         "count": len(data),

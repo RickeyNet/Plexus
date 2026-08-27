@@ -256,9 +256,9 @@ async def create_ipam_source_api(body: IpamSourceCreate, request: Request):
         auth_config=body.auth_config,
         sync_scope=body.sync_scope.strip(),
         notes=body.notes.strip(),
-        enabled=1 if body.enabled else 0,
-        push_enabled=1 if body.push_enabled else 0,
-        verify_tls=1 if body.verify_tls else 0,
+        enabled=body.enabled,
+        push_enabled=body.push_enabled,
+        verify_tls=body.verify_tls,
         created_by=session.get("user", ""),
     )
     if not source:
@@ -392,7 +392,7 @@ async def create_ipam_reservation_api(subnet: str, body: IpamReservationCreate, 
         reservation = await db.create_ipam_reservation(
             subnet,
             start_ip=body.start_ip,
-            end_ip=body.end_ip,
+            end_ip=body.end_ip or body.start_ip,
             reason=body.reason,
             created_by=session.get("user", ""),
         )

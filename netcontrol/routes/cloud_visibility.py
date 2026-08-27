@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Any, overload
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -236,7 +237,7 @@ def _serialize_account(account: dict) -> dict:
     if not isinstance(auth, dict):
         auth = {}
     item["has_auth_config"] = bool(auth)
-    item["sync_readiness"] = _compute_sync_readiness(item.get("provider"), auth)
+    item["sync_readiness"] = _compute_sync_readiness(str(item.get("provider") or ""), auth)
     return item
 
 
@@ -314,7 +315,15 @@ class CloudTrafficMetricIngestRequest(BaseModel):
     emit_event: bool = True
 
 
-def _safe_float(value, default: float = 0.0) -> float:
+@overload
+def _safe_float(value: object, default: float = 0.0) -> float: ...
+
+
+@overload
+def _safe_float(value: object, default: None) -> float | None: ...
+
+
+def _safe_float(value: object, default: float | None = 0.0) -> float | None:
     try:
         if value is None:
             return default
@@ -510,7 +519,8 @@ def _normalize_gcp_flow_records(records: list[dict]) -> list[dict]:
     for item in records:
         if not isinstance(item, dict):
             continue
-        conn = item.get("connection") if isinstance(item.get("connection"), dict) else {}
+        raw_conn = item.get("connection")
+        conn = raw_conn if isinstance(raw_conn, dict) else {}
         src_ip = str(item.get("src_ip") or item.get("srcIp") or conn.get("src_ip") or conn.get("srcIp") or "").strip()
         dst_ip = str(
             item.get("dst_ip")
@@ -828,14 +838,17 @@ def _normalize_gcp_traffic_metric_records(records: list[dict]) -> list[dict]:
     for item in records:
         if not isinstance(item, dict):
             continue
-        metric = item.get("metric") if isinstance(item.get("metric"), dict) else {}
-        resource = item.get("resource") if isinstance(item.get("resource"), dict) else {}
+        raw_metric = item.get("metric")
+        metric = raw_metric if isinstance(raw_metric, dict) else {}
+        raw_resource = item.get("resource")
+        resource = raw_resource if isinstance(raw_resource, dict) else {}
         points = item.get("points") if isinstance(item.get("points"), list) else []
         metric_name = str(item.get("metric_name") or item.get("metricType") or metric.get("type") or "").strip()
         if not metric_name:
             normalized.extend(_normalize_generic_traffic_metric_records([item]))
             continue
-        resource_labels = resource.get("labels") if isinstance(resource.get("labels"), dict) else {}
+        raw_resource_labels = resource.get("labels")
+        resource_labels = raw_resource_labels if isinstance(raw_resource_labels, dict) else {}
         resource_uid = str(
             resource_labels.get("instance_id")
             or resource_labels.get("subnetwork_name")
@@ -866,8 +879,10 @@ def _normalize_gcp_traffic_metric_records(records: list[dict]) -> list[dict]:
         for point in points:
             if not isinstance(point, dict):
                 continue
-            interval = point.get("interval") if isinstance(point.get("interval"), dict) else {}
-            value_obj = point.get("value") if isinstance(point.get("value"), dict) else {}
+            raw_interval = point.get("interval")
+            interval = raw_interval if isinstance(raw_interval, dict) else {}
+            raw_value_obj = point.get("value")
+            value_obj = raw_value_obj if isinstance(raw_value_obj, dict) else {}
             value = None
             for key in ("doubleValue", "int64Value", "distributionValue"):
                 if key == "distributionValue":
@@ -982,6 +997,8 @@ def _summarize_traffic_metric_records(records: list[dict]) -> dict:
 
 
 def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]]:
+    resources: list[dict[str, Any]]
+    connections: list[dict[str, Any]]
     if provider == "aws":
         resources = [
             {
@@ -1471,7 +1488,7 @@ async def run_scheduled_discovery() -> dict:
         account_id = int(account["id"])
         try:
             existing_links = await db.get_cloud_hybrid_links(account_id=account_id)
-            host_ids = sorted({int(link.get("host_id")) for link in existing_links if link.get("host_id")})
+            host_ids = sorted({int(link["host_id"]) for link in existing_links if link.get("host_id")})
             resources, connections, hybrid_links = await _build_live_discovery_snapshot(
                 account,
                 host_ids,

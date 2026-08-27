@@ -83,7 +83,8 @@ async def _resolve_campaign_credential(
         )
 
     fallback_id = state.AUTH_CONFIG.get("service_credential_id") or state.AUTH_CONFIG.get("default_credential_id")
-    if not fallback_id:
+    # AUTH_CONFIG is a heterogeneous dict; the loader coerces these ids to int.
+    if not isinstance(fallback_id, int) or not fallback_id:
         raise HTTPException(
             400,
             "No credential set on the campaign and no service/default "
@@ -627,9 +628,7 @@ async def _upgrade_event_writer_loop() -> None:
         batch = [await _upgrade_event_queue.get()]
         while len(batch) < _UPGRADE_EVENT_BATCH_SIZE:
             try:
-                batch.append(
-                    await asyncio.wait_for(_upgrade_event_queue.get(), timeout=_UPGRADE_EVENT_FLUSH_SECONDS)
-                )
+                batch.append(await asyncio.wait_for(_upgrade_event_queue.get(), timeout=_UPGRADE_EVENT_FLUSH_SECONDS))
             except TimeoutError:
                 break
         try:
@@ -1110,7 +1109,10 @@ async def delete_campaign(campaign_id: int, request: Request):
 
 @router.get("/api/upgrades/campaigns/{campaign_id}/events")
 async def get_campaign_events(
-    campaign_id: int, request: Request, device_id: int = None, limit: int = Query(default=1000, ge=1, le=10000)
+    campaign_id: int,
+    request: Request,
+    device_id: int | None = None,
+    limit: int = Query(default=1000, ge=1, le=10000),
 ):
     campaign = await db.get_upgrade_campaign(campaign_id)
     if not campaign:
@@ -1519,6 +1521,9 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
     # idle/absolute-lifetime, user-existence, and feature checks the other WS
     # endpoints use (fail closed rather than fail open).
     token = ws.cookies.get("session")
+    if not token:
+        await ws.close(code=4001, reason="Unauthorized")
+        return
     session = await verify_ws_session(token)
     if not session:
         await ws.close(code=4001, reason="Unauthorized")

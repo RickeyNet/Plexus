@@ -136,13 +136,13 @@ def _extract_cpu_percent(metrics: dict) -> float | None:
         return _clamp_pct(agg)
     cores = _first(metrics, *_CPU_CORES_PATHS)
     if isinstance(cores, list) and cores:
-        vals = []
+        raw_vals: list[float | None] = []
         for core in cores:
             if isinstance(core, dict):
-                vals.append(_to_float(core.get("percentUsed") or core.get("load")))
+                raw_vals.append(_to_float(core.get("percentUsed") or core.get("load")))
             else:
-                vals.append(_to_float(core))
-        vals = [v for v in vals if v is not None]
+                raw_vals.append(_to_float(core))
+        vals = [v for v in raw_vals if v is not None]
         if vals:
             return _clamp_pct(sum(vals) / len(vals))
     return None

@@ -438,19 +438,19 @@ async def get_baseline_chart_data(host_id: int, metric: str):
 
     chart_data = []
     for hour in range(24):
-        b = hourly.get(hour)
-        if b:
+        entry = hourly.get(hour)
+        if entry:
             chart_data.append(
                 {
                     "hour": hour,
-                    "avg": b["baseline_avg"],
-                    "stddev": b["baseline_stddev"],
-                    "min": b["baseline_min"],
-                    "max": b["baseline_max"],
-                    "p95": b["baseline_p95"],
-                    "upper_band": round(b["baseline_avg"] + 2 * b["baseline_stddev"], 2),
-                    "lower_band": round(max(0, b["baseline_avg"] - 2 * b["baseline_stddev"]), 2),
-                    "sample_count": b["sample_count"],
+                    "avg": entry["baseline_avg"],
+                    "stddev": entry["baseline_stddev"],
+                    "min": entry["baseline_min"],
+                    "max": entry["baseline_max"],
+                    "p95": entry["baseline_p95"],
+                    "upper_band": round(entry["baseline_avg"] + 2 * entry["baseline_stddev"], 2),
+                    "lower_band": round(max(0, entry["baseline_avg"] - 2 * entry["baseline_stddev"]), 2),
+                    "sample_count": entry["sample_count"],
                 }
             )
         else:

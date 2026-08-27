@@ -87,7 +87,7 @@ class FdmClient:
         api_version: str = DEFAULT_API_VERSION,
         verify_tls: bool = False,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         # FDM management certs are self-signed out of the box, so verify_tls
         # defaults to False; deployments that install a trusted cert can flip

@@ -659,6 +659,9 @@ async def simulate_live_endpoint(
         diff_removed,
         compliance_violations,
     )
+    risk_factors: list[str] = []
+    if compliance_violations > 0:
+        risk_factors.append(f"Introduces {compliance_violations} new compliance violation(s)")
     risk_detail = {
         "change_volume": {
             "total_commands": len(commands),
@@ -668,11 +671,9 @@ async def simulate_live_endpoint(
         "affected_areas": affected_areas,
         "compliance_impact": compliance_impact,
         "compliance_violations_introduced": compliance_violations,
-        "risk_factors": [],
+        "risk_factors": risk_factors,
         "live": True,
     }
-    if compliance_violations > 0:
-        risk_detail["risk_factors"].append(f"Introduces {compliance_violations} new compliance violation(s)")
 
     # Persist the new running-config back to the twin's snapshot so subsequent
     # Phase A simulations operate against the real post-state.

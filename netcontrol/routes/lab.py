@@ -130,7 +130,10 @@ async def _resolve_session_user(request: Request) -> tuple[dict | None, dict | N
         return None, None, ""
     if session.get("auth_mode") == "token":
         return session, None, "admin"
-    user = await db.get_user_by_id(session.get("user_id"))
+    user_id = session.get("user_id")
+    if user_id is None:
+        return session, None, ""
+    user = await db.get_user_by_id(user_id)
     role = user.get("role", "") if user else ""
     return session, user, role
 
@@ -228,7 +231,7 @@ async def _resolve_commands(
 @router.get("/api/lab/environments")
 async def list_environments(request: Request):
     session, user, role = await _resolve_session_user(request)
-    is_admin = role == "admin" or (session and session.get("auth_mode") == "token")
+    is_admin = role == "admin" or bool(session and session.get("auth_mode") == "token")
     user_id = session.get("user_id") if session else None
     return await db.list_lab_environments(user_id=user_id, is_admin=is_admin)
 
@@ -504,6 +507,15 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
         diff_removed,
         compliance_violations,
     )
+    risk_factors: list[str] = []
+    if affected_areas:
+        risk_factors.append(f"Touches critical areas: {', '.join(a['label'] for a in affected_areas)}")
+    if diff_removed > 0:
+        risk_factors.append(f"Removes {diff_removed} line(s) from config")
+    if compliance_violations > 0:
+        risk_factors.append(f"Introduces {compliance_violations} new compliance violation(s)")
+    if len(commands) > 20:
+        risk_factors.append(f"Large change set ({len(commands)} commands)")
     risk_detail = {
         "change_volume": {
             "total_commands": len(commands),
@@ -513,16 +525,8 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
         "affected_areas": affected_areas,
         "compliance_impact": compliance_impact,
         "compliance_violations_introduced": compliance_violations,
-        "risk_factors": [],
+        "risk_factors": risk_factors,
     }
-    if affected_areas:
-        risk_detail["risk_factors"].append(f"Touches critical areas: {', '.join(a['label'] for a in affected_areas)}")
-    if diff_removed > 0:
-        risk_detail["risk_factors"].append(f"Removes {diff_removed} line(s) from config")
-    if compliance_violations > 0:
-        risk_detail["risk_factors"].append(f"Introduces {compliance_violations} new compliance violation(s)")
-    if len(commands) > 20:
-        risk_detail["risk_factors"].append(f"Large change set ({len(commands)} commands)")
 
     status = "applied" if body.apply_to_device else "simulated"
     if body.apply_to_device:
