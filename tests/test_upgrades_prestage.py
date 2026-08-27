@@ -233,3 +233,88 @@ async def test_run_install_add_prestage_runs_for_cisco_xe(
     # The install-add command must include the full device path so
     # IOS-XE finds the staged .bin.
     assert any(c.startswith("install add file flash:cat9k_iosxe.17.09.04a.SPA.bin") for c in conn.commands)
+
+
+# ── Boot-mode gate + chassis-aware install-add budget ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_install_add_prestage_refuses_bundle_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    _stub_emit: list[tuple],
+) -> None:
+    """A BUNDLE-mode Cat9k must fail fast before ``install add`` is sent.
+
+    ``install add`` only works when the box booted from packages.conf;
+    on a bundle boot it errors out mid-transfer with a cryptic message.
+    The gate reads the Mode column of ``show version`` first.
+    """
+
+    class _BundleConn:
+        def __init__(self) -> None:
+            self.commands: list[str] = []
+
+        def send_command(self, command: str, **_: object) -> str:
+            self.commands.append(command)
+            if command.startswith("show version"):
+                return "*    1 52    C9410R          17.12.04          CAT9K_IOSXE           BUNDLE\n"
+            return ""
+
+    conn = _BundleConn()
+    ok, err = await upgrades._run_install_add_prestage(
+        conn,
+        campaign_id=1,
+        dev_id=42,
+        ip="10.0.0.1",
+        image_name="cat9k_iosxe.17.12.04.SPA.bin",
+        dest_path="flash:",
+        device_type="cisco_xe",
+    )
+    assert ok is False
+    assert "BUNDLE" in (err or "")
+    assert not any(c.startswith("install add") for c in conn.commands)
+
+
+@pytest.mark.asyncio
+async def test_run_install_add_prestage_uses_custom_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    _stub_emit: list[tuple],
+) -> None:
+    """The install-add prompt budget is threaded through to Netmiko."""
+
+    class _TimeoutRecordingConn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def send_command(self, command: str, **kw: object) -> str:
+            self.calls.append((command, kw.get("read_timeout")))
+            if command.startswith("install add file"):
+                return "Image added successfully"
+            if command.startswith("show version"):
+                return "*    1 52    C9410R          17.12.04          CAT9K_IOSXE           INSTALL\n"
+            if command.startswith("dir"):
+                return "  -rw- 12345 Jan 1 2024 cat9k-rpbase.17.12.04.SPA.pkg\n"
+            return ""
+
+    conn = _TimeoutRecordingConn()
+    ok, _ = await upgrades._run_install_add_prestage(
+        conn,
+        campaign_id=1,
+        dev_id=42,
+        ip="10.0.0.1",
+        image_name="cat9k_iosxe.17.12.04.SPA.bin",
+        dest_path="flash:",
+        device_type="cisco_xe",
+        install_add_timeout=2400,
+    )
+    assert ok is True
+    add_calls = [t for (c, t) in conn.calls if c.startswith("install add file")]
+    assert add_calls == [2400]
+
+
+def test_install_add_timeout_widens_for_redundant_chassis() -> None:
+    assert upgrades._install_add_timeout({}, redundant=False) == upgrades.DEFAULT_INSTALL_ADD_TIMEOUT
+    assert upgrades._install_add_timeout({}, redundant=True) == upgrades.REDUNDANT_INSTALL_ADD_TIMEOUT
+    assert upgrades.REDUNDANT_INSTALL_ADD_TIMEOUT > upgrades.DEFAULT_INSTALL_ADD_TIMEOUT
+    # Explicit operator override always wins.
+    assert upgrades._install_add_timeout({"install_add_timeout": 900}, redundant=True) == 900

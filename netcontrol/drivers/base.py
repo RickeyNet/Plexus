@@ -389,6 +389,29 @@ class Driver:
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_redundancy_state()")
 
+    def upgrade_boot_mode_show_command(self) -> str:
+        """Return the command that reports the software boot mode.
+
+        IOS-XE Catalyst 9k boots either in INSTALL mode (packages.conf
+        + unpacked .pkg files - the only mode ``install add`` /
+        ``install activate`` work in) or BUNDLE mode (boots the .bin
+        directly; ``install add`` errors out).  The route runs this
+        before the first install verb so a BUNDLE-mode chassis fails
+        fast with a clear message instead of a cryptic CLI error.
+        Platforms without the concept leave this unimplemented - the
+        route treats ``DriverCapabilityError`` as "no gate".
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_boot_mode_show_command()")
+
+    def parse_boot_mode(self, output: str) -> str | None:
+        """Parse ``upgrade_boot_mode_show_command()`` output.
+
+        Returns ``"install"``, ``"bundle"``, or ``None`` when the mode
+        can't be determined (the route only *blocks* on ``"bundle"``;
+        unknown is logged as a warning and allowed through).
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_boot_mode()")
+
     def upgrade_commit_command(self) -> str:
         """Return the command that makes the new image permanent.
 
