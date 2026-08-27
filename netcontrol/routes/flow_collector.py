@@ -837,7 +837,7 @@ async def start_flow_collector(port: int = 2055, sflow_port: int | None = None) 
         loop = asyncio.get_event_loop()
         _flow_transport, _flow_protocol = await loop.create_datagram_endpoint(
             lambda: _FlowCollectorProtocol(mode="netflow"),
-            local_addr=("0.0.0.0", port),
+            local_addr=("0.0.0.0", port),  # nosec B104 - NetFlow/IPFIX listener must accept exporters on any interface
         )
         FLOW_COLLECTOR_CONFIG["enabled"] = True
         FLOW_COLLECTOR_CONFIG["netflow_port"] = port
@@ -851,7 +851,7 @@ async def start_flow_collector(port: int = 2055, sflow_port: int | None = None) 
         try:
             _sflow_transport, _sflow_protocol = await loop.create_datagram_endpoint(
                 lambda: _FlowCollectorProtocol(mode="sflow"),
-                local_addr=("0.0.0.0", sflow_port),
+                local_addr=("0.0.0.0", sflow_port),  # nosec B104 - sFlow listener must accept exporters on any interface
             )
             FLOW_COLLECTOR_CONFIG["sflow_port"] = sflow_port
             LOGGER.info("flow_collector: sFlow listener started on UDP port %d", sflow_port)
