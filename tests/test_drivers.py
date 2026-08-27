@@ -1550,3 +1550,32 @@ def test_non_xe_drivers_do_not_claim_issu() -> None:
         if dt != "cisco_ios":
             with pytest.raises(DriverCapabilityError, match="ISSU"):
                 drv.upgrade_activate_commands("flash:img.bin", issu=True)
+
+
+# ── Boot mode (INSTALL vs BUNDLE) ────────────────────────────────────────
+
+_XE_SHOW_VERSION_MODE_INSTALL = """\
+*    1 52    C9410R          17.12.04          CAT9K_IOSXE           INSTALL
+"""
+_XE_SHOW_VERSION_MODE_BUNDLE = _XE_SHOW_VERSION_MODE_INSTALL.replace("INSTALL", "BUNDLE")
+
+
+def test_cisco_xe_boot_mode_parse() -> None:
+    drv = get_driver("cisco_xe")
+    assert drv.upgrade_boot_mode_show_command() == "show version | include INSTALL|BUNDLE"
+    assert drv.parse_boot_mode(_XE_SHOW_VERSION_MODE_INSTALL) == "install"
+    assert drv.parse_boot_mode(_XE_SHOW_VERSION_MODE_BUNDLE) == "bundle"
+    # Header row / prose must not register; empty output is "unknown".
+    assert drv.parse_boot_mode("Switch Ports Model  SW Version  SW Image  Mode\ninstalled") is None
+    assert drv.parse_boot_mode("") is None
+    # BUNDLE anywhere wins - it's the blocking state.
+    assert drv.parse_boot_mode(_XE_SHOW_VERSION_MODE_INSTALL + _XE_SHOW_VERSION_MODE_BUNDLE) == "bundle"
+
+
+def test_non_xe_drivers_have_no_boot_mode_concept() -> None:
+    for dt in ("cisco_nxos", "cisco_xr", "juniper_junos", "arista_eos", "cisco_ios"):
+        drv = get_driver(dt)
+        with pytest.raises(DriverCapabilityError):
+            drv.upgrade_boot_mode_show_command()
+        with pytest.raises(DriverCapabilityError):
+            drv.parse_boot_mode("")

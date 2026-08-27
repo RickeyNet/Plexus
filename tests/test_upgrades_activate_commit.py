@@ -372,3 +372,146 @@ async def test_health_check_issu_requires_redundancy() -> None:
     # Same box, no ISSU: standalone is fine.
     passed, warnings = await upgrades._health_check(conn, "10.0.0.1", device_type="cisco_xe")
     assert passed is True
+
+
+# ── Boot-mode gate, chassis-aware reboot windows, ISSU commit timing ────────
+
+_BUNDLE_LINE = "*    1 52    C9410R          17.12.04          CAT9K_IOSXE           BUNDLE\n"
+
+
+class _SeqConn(_FakeConn):
+    """``_FakeConn`` whose ``show redundancy`` output is scripted per call.
+
+    Lets a test model the ISSU timeline: STANDBY HOT at the pre-flight
+    gate, then STANDBY COLD after switchover while the old active is
+    reloading, then HOT again once it's back.  Once the list is
+    exhausted the last entry repeats.  ``boot_mode`` is returned for
+    the ``show version | include ...`` gate.
+    """
+
+    def __init__(self, versions: list[str], redundancy_seq: list[str], boot_mode: str = "") -> None:
+        super().__init__(versions)
+        self._red_seq = list(redundancy_seq)
+        self._boot_mode = boot_mode
+
+    def send_command(self, command: str, **kw: object) -> str:
+        if command == "show redundancy":
+            self.commands.append(command)
+            if len(self._red_seq) > 1:
+                return self._red_seq.pop(0)
+            return self._red_seq[0]
+        if command.startswith("show version | include"):
+            self.commands.append(command)
+            return self._boot_mode
+        return super().send_command(command, **kw)
+
+
+@pytest.mark.asyncio
+async def test_bundle_mode_blocks_activate(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    conn = _SeqConn(versions=["17.15.04"], redundancy_seq=[_SIMPLEX], boot_mode=_BUNDLE_LINE)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _activate_cmds(conn) == [], "must not send activate on a BUNDLE-mode box"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert "BUNDLE" in (err or "")
+
+
+@pytest.mark.asyncio
+async def test_unknown_boot_mode_does_not_block(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    # ``_FakeConn`` returns "" for the mode query - a box whose ``show
+    # version`` table couldn't be parsed must still be upgradeable.
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], redundancy=_SIMPLEX)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _activate_cmds(conn) == ["install activate prompt-level none"]
+    assert _final_status(_patched["db"], "activate_status") == "completed"
+
+
+@pytest.mark.asyncio
+async def test_redundant_chassis_widens_reboot_window(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    """A dual-sup chassis reloads both sups + all linecards; give it longer."""
+    seen: dict = {}
+
+    async def fake_wait_for_reboot(ip, credentials, options, max_wait, check_interval, *a, **k):
+        seen["max_wait"] = max_wait
+        return _patched["holder"]["conn"]
+
+    monkeypatch.setattr(upgrades, "_wait_for_reboot", fake_wait_for_reboot)
+
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], redundancy=_DUPLEX_HOT)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert seen["max_wait"] == upgrades.REDUNDANT_VERIFY_WAIT
+
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], redundancy=_SIMPLEX)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert seen["max_wait"] == upgrades.DEFAULT_VERIFY_WAIT
+
+    # Operator override still wins.
+    conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], redundancy=_DUPLEX_HOT)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"verify_wait": 777})
+    assert seen["max_wait"] == 777
+
+
+@pytest.mark.asyncio
+async def test_issu_waits_for_standby_hot_before_commit(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    """After the ISSU switchover the old active is still reloading.
+
+    ``install commit`` sent while the peer is STANDBY COLD aborts the
+    ISSU.  The activate phase must poll ``show redundancy`` until HOT
+    and only then commit.
+    """
+    monkeypatch.setattr(upgrades, "ISSU_STANDBY_CHECK_INTERVAL", 0)
+    # gate: HOT -> post-switchover: COLD, COLD -> back: HOT
+    conn = _SeqConn(
+        versions=["17.15.04", "17.15.05", "17.15.05"],
+        redundancy_seq=[_DUPLEX_HOT, _DUPLEX_COLD, _DUPLEX_COLD, _DUPLEX_HOT],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"issu": True})
+    assert _activate_cmds(conn) == ["install activate issu prompt-level none"]
+    assert "install commit" in conn.commands
+    assert _final_status(_patched["db"], "activate_status") == "completed"
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+    # Commit must come after the *last* redundancy poll (the one that
+    # reported HOT), and there must have been polls after the activate.
+    activate_idx = conn.commands.index("install activate issu prompt-level none")
+    commit_idx = conn.commands.index("install commit")
+    polls_after_activate = [i for i, c in enumerate(conn.commands) if c == "show redundancy" and i > activate_idx]
+    assert len(polls_after_activate) >= 3, conn.commands
+    assert commit_idx > max(polls_after_activate)
+
+
+@pytest.mark.asyncio
+async def test_issu_standby_timeout_skips_commit_and_fails(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    monkeypatch.setattr(upgrades, "ISSU_STANDBY_CHECK_INTERVAL", 0)
+    conn = _SeqConn(
+        versions=["17.15.04", "17.15.05", "17.15.05"],
+        redundancy_seq=[_DUPLEX_HOT, _DUPLEX_COLD],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"issu": True, "standby_wait": 0}
+    )
+    assert "install commit" not in conn.commands, "must never commit with a cold standby mid-ISSU"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    assert _final_status(_patched["db"], "verify_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert "STANDBY HOT" in (err or "")
+    assert "install commit" in (err or "")
+
+
+@pytest.mark.asyncio
+async def test_plain_activate_does_not_wait_for_standby(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    """Non-ISSU full reload: both sups come up together; no standby wait."""
+    conn = _SeqConn(
+        versions=["17.15.04", "17.15.05", "17.15.05"],
+        redundancy_seq=[_DUPLEX_HOT, _DUPLEX_COLD],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert "install commit" in conn.commands
+    assert _final_status(_patched["db"], "verify_status") == "completed"

@@ -1743,6 +1743,137 @@ async def _run_phase(
     )
 
 
+# Prompt-return budget for ``install add``.  A standalone Cat9k unpacks
+# a ~1.2 GB image in 5-10 minutes; a dual-sup chassis also copies every
+# package to the standby's bootflash inside the same command, which
+# roughly doubles it on a loaded 9410R.
+DEFAULT_INSTALL_ADD_TIMEOUT = 1200
+REDUNDANT_INSTALL_ADD_TIMEOUT = 2400
+
+# Reboot windows for a plain (non-ISSU) ``install activate``.  A
+# fully-populated 9400/9600 with two sups reloads both sups and every
+# linecard together and can take 15-20 minutes to answer SSH again,
+# versus ~5-10 for a fixed-config 9300.
+DEFAULT_VERIFY_WAIT = 1200
+REDUNDANT_VERIFY_WAIT = 2400
+DEFAULT_DOWN_TIMEOUT = 300
+REDUNDANT_DOWN_TIMEOUT = 600
+
+# ISSU: standby reloads onto the new image, SSO switchover drops our
+# session, then the old active reloads as the new standby.
+ISSU_VERIFY_WAIT = 3600
+ISSU_DOWN_TIMEOUT = 1800
+# After the switchover ``install commit`` must not run until the former
+# active is back as STANDBY HOT - committing mid-ISSU aborts the
+# operation and the chassis rolls back.
+ISSU_STANDBY_WAIT = 1800
+ISSU_STANDBY_CHECK_INTERVAL = 30
+
+
+def _install_add_timeout(options: dict, redundant: bool) -> int:
+    """Resolve the ``install add`` prompt budget for this device."""
+    explicit = options.get("install_add_timeout")
+    if explicit:
+        return int(explicit)
+    return REDUNDANT_INSTALL_ADD_TIMEOUT if redundant else DEFAULT_INSTALL_ADD_TIMEOUT
+
+
+async def _probe_redundant(conn, device_type: str) -> bool:
+    """Best-effort "does this box have a standby sup / SVL peer?".
+
+    Used only to widen timeouts; any failure means "assume standalone"
+    so a flaky ``show redundancy`` never blocks a transfer.
+    """
+    try:
+        red = await _check_redundancy(conn, device_type)
+    except Exception:
+        return False
+    return bool(red and red.get("redundant"))
+
+
+async def _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type) -> str | None:
+    """Refuse install-mode verbs on a BUNDLE-mode IOS-XE box.
+
+    ``install add`` / ``install activate`` only work when the switch
+    booted from ``packages.conf`` (INSTALL mode).  A chassis still
+    booting the monolithic .bin (BUNDLE mode) errors out with an
+    unhelpful message part-way through the transfer phase, so this
+    reads the mode column of ``show version`` first.  Returns an error
+    string to abort on, or None to proceed.  Platforms whose driver
+    has no boot-mode concept, and an unparseable mode, both proceed -
+    only a positive BUNDLE reading blocks.
+    """
+    driver = get_driver(device_type)
+    try:
+        show_cmd = driver.upgrade_boot_mode_show_command()
+    except DriverCapabilityError:
+        return None
+    try:
+        output = await asyncio.to_thread(conn.send_command, show_cmd, read_timeout=60)
+        mode = driver.parse_boot_mode(output or "")
+    except DriverCapabilityError:
+        return None
+    except Exception as exc:
+        await _emit(campaign_id, dev_id, "warn", f"Boot mode check failed ({exc}) - continuing", host=ip)
+        return None
+    if mode == "bundle":
+        return (
+            "Device is booted in BUNDLE mode - install-mode upgrade verbs will fail. "
+            "Convert to INSTALL mode first (install add file <image> activate commit "
+            "from a bundle boot, or boot flash:packages.conf) and re-run."
+        )
+    if mode == "install":
+        await _emit(campaign_id, dev_id, "info", "Boot mode: INSTALL", host=ip)
+    else:
+        await _emit(
+            campaign_id,
+            dev_id,
+            "warn",
+            "Boot mode could not be determined from show version - assuming INSTALL mode",
+            host=ip,
+        )
+    return None
+
+
+async def _wait_for_standby_hot(conn, campaign_id, dev_id, ip, device_type, max_wait, check_interval):
+    """Poll ``show redundancy`` until the peer reports STANDBY HOT.
+
+    After an ISSU switchover the SSH session lands on the new active
+    while the old active is still reloading onto the new image.
+    ``install commit`` sent in that window is rejected (or worse,
+    aborts the ISSU and rolls the chassis back), so the activate
+    phase blocks here first.  Returns ``(True, red)`` once hot,
+    ``(False, last_red)`` on timeout.  A driver with no redundancy
+    concept returns ``(True, None)`` immediately.
+    """
+    start = time.time()
+    last_red: dict | None = None
+    while True:
+        try:
+            last_red = await _check_redundancy(conn, device_type)
+        except Exception as exc:
+            LOGGER.debug("show redundancy failed on %s while waiting for standby: %s", ip, exc)
+        else:
+            if last_red is None:
+                # Platform has no redundancy concept - nothing to wait for.
+                return True, None
+        if last_red and last_red.get("standby_hot"):
+            return True, last_red
+        elapsed = int(time.time() - start)
+        if elapsed >= max_wait:
+            return False, last_red
+        if elapsed % 120 < check_interval:
+            await _emit(
+                campaign_id,
+                dev_id,
+                "dim",
+                f"Standby is {(last_red or {}).get('peer_state') or 'unknown'} - waiting for STANDBY HOT "
+                f"({elapsed}s elapsed)...",
+                host=ip,
+            )
+        await asyncio.sleep(check_interval)
+
+
 async def _resolve_device_type(dev) -> str:
     """Look up the host's stored device_type, falling back to ``cisco_xe``.
 
@@ -1815,7 +1946,16 @@ def _resolve_image(model, image_map):
     return None
 
 
-async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, dest_path, device_type="cisco_xe"):
+async def _run_install_add_prestage(
+    conn,
+    campaign_id,
+    dev_id,
+    ip,
+    image_name,
+    dest_path,
+    device_type="cisco_xe",
+    install_add_timeout=DEFAULT_INSTALL_ADD_TIMEOUT,
+):
     """Pre-stage packages so activate can run without a new add.
 
     Delegates the actual install-add verb to the driver so non-Cisco-XE
@@ -1829,6 +1969,11 @@ async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, d
     The function returns ``(True, None)`` in that case so the transfer
     phase can complete and the activate phase can do both halves of
     the operation at once.
+
+    ``install_add_timeout`` bounds the wait for the CLI prompt to
+    return.  A dual-sup chassis (9400/9600) syncs every unpacked
+    package to the standby's bootflash inside the same command, so
+    callers pass a wider window there.
     """
     driver = get_driver(device_type)
     if not driver.upgrade_has_discrete_prestage():
@@ -1840,6 +1985,10 @@ async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, d
             host=ip,
         )
         return True, None
+    boot_err = await _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type)
+    if boot_err:
+        await _emit(campaign_id, dev_id, "error", boot_err, host=ip)
+        return False, boot_err
     full_path = f"{dest_path}{image_name}"
     try:
         install_add_cmd = driver.upgrade_install_add_command(full_path)
@@ -1855,14 +2004,14 @@ async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, d
             conn.send_command,
             install_add_cmd,
             expect_string=r"#|>|proceed|y/n|\[yes/no\]|\[y/n\]",
-            read_timeout=1200,
+            read_timeout=install_add_timeout,
         )
         if any(x in install_output.lower() for x in ["proceed", "y/n", "yes/no"]):
             install_output += await asyncio.to_thread(
                 conn.send_command,
                 "y",
                 expect_string=r"#|>",
-                read_timeout=1200,
+                read_timeout=install_add_timeout,
             )
     except Exception as e:
         err_text = str(e).lower()
@@ -1878,7 +2027,7 @@ async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, d
                 install_output = await asyncio.to_thread(
                     conn.send_command_timing,
                     install_add_cmd,
-                    read_timeout=1200,
+                    read_timeout=install_add_timeout,
                     strip_prompt=False,
                     strip_command=False,
                 )
@@ -1886,7 +2035,7 @@ async def _run_install_add_prestage(conn, campaign_id, dev_id, ip, image_name, d
                     install_output += await asyncio.to_thread(
                         conn.send_command_timing,
                         "y",
-                        read_timeout=1200,
+                        read_timeout=install_add_timeout,
                         strip_prompt=False,
                         strip_command=False,
                     )
@@ -2168,6 +2317,9 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
     dev_id = dev["id"]
     dest_path = options.get("dest_path", "flash:")
     device_type = await _resolve_device_type(dev)
+    # Widened once we learn the box has a standby sup (see
+    # ``_install_add_timeout``); resolved after connect.
+    install_add_timeout = _install_add_timeout(options, redundant=False)
 
     await db.update_upgrade_device(
         dev_id, transfer_status="running", phase="transfer", started_at=datetime.now(UTC).isoformat()
@@ -2191,6 +2343,16 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
 
     try:
         await _emit(campaign_id, dev_id, "success", "Connected", host=ip)
+        chassis_redundant = await _probe_redundant(conn, device_type)
+        install_add_timeout = _install_add_timeout(options, redundant=chassis_redundant)
+        if chassis_redundant:
+            await _emit(
+                campaign_id,
+                dev_id,
+                "info",
+                f"Redundant chassis detected - install add budget {install_add_timeout // 60} min",
+                host=ip,
+            )
 
         # Resolve target image
         target_image = dev.get("target_image", "")
@@ -2344,6 +2506,7 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                     image_name,
                     dest_path,
                     device_type=device_type,
+                    install_add_timeout=install_add_timeout,
                 )
                 if not prestage_ok:
                     await db.update_upgrade_device(
@@ -2401,6 +2564,7 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 image_name,
                 dest_path,
                 device_type=device_type,
+                install_add_timeout=install_add_timeout,
             )
             if not prestage_ok:
                 await db.update_upgrade_device(
@@ -2471,6 +2635,7 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                             image_name,
                             dest_path,
                             device_type=device_type,
+                            install_add_timeout=install_add_timeout,
                         )
                         if not prestage_ok:
                             await db.update_upgrade_device(
@@ -2651,7 +2816,14 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=msg)
             await _emit(campaign_id, dev_id, "error", msg, host=ip)
             return
-        red_err = await _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, options)
+        boot_err = await _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type)
+        if boot_err:
+            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=boot_err)
+            await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=boot_err)
+            await _emit(campaign_id, dev_id, "error", boot_err, host=ip)
+            return
+        red_err, red = await _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, options)
+        chassis_redundant = bool(red and red.get("redundant"))
         if red_err:
             await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=red_err)
             await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=red_err)
@@ -2709,9 +2881,14 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
         # the switchover kills our session) and longer overall, so
         # both windows are widened when the in-service path was used.
         if options.get("verify_upgrade", True):
-            verify_wait = options.get("verify_wait", 3600 if issu else 1200)
+            if issu:
+                default_verify_wait, down_timeout = ISSU_VERIFY_WAIT, ISSU_DOWN_TIMEOUT
+            elif chassis_redundant:
+                default_verify_wait, down_timeout = REDUNDANT_VERIFY_WAIT, REDUNDANT_DOWN_TIMEOUT
+            else:
+                default_verify_wait, down_timeout = DEFAULT_VERIFY_WAIT, DEFAULT_DOWN_TIMEOUT
+            verify_wait = options.get("verify_wait", default_verify_wait)
             check_interval = options.get("check_interval", 30)
-            down_timeout = 1800 if issu else 300
 
             await _emit(
                 campaign_id,
@@ -2757,6 +2934,61 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                             f"Version verified: {running_version} (expected {expected_version})",
                             host=ip,
                         )
+
+                        # ISSU: we're now on the *new* active while the old
+                        # one is still reloading as standby.  ``install
+                        # commit`` in that window aborts the ISSU, so hold
+                        # until the peer is STANDBY HOT again.
+                        if issu:
+                            standby_wait = int(options.get("standby_wait", ISSU_STANDBY_WAIT))
+                            await _emit(
+                                campaign_id,
+                                dev_id,
+                                "info",
+                                f"ISSU: waiting for former active to return as STANDBY HOT "
+                                f"(up to {standby_wait // 60} minutes) before commit...",
+                                host=ip,
+                            )
+                            hot, red_after = await _wait_for_standby_hot(
+                                new_conn,
+                                campaign_id,
+                                dev_id,
+                                ip,
+                                device_type,
+                                standby_wait,
+                                ISSU_STANDBY_CHECK_INTERVAL,
+                            )
+                            if not hot:
+                                peer = (red_after or {}).get("peer_state") or "unknown"
+                                msg = (
+                                    f"ISSU standby never reached STANDBY HOT within {standby_wait // 60} min "
+                                    f"(peer state: {peer}). install commit NOT sent - check the chassis and "
+                                    "run 'install commit' manually before the ISSU auto-abort timer expires"
+                                )
+                                await _emit(campaign_id, dev_id, "error", msg, host=ip)
+                                await db.update_upgrade_device(
+                                    dev_id,
+                                    activate_status="failed",
+                                    verify_status="failed",
+                                    phase="failed",
+                                    current_version=running_version,
+                                    error_message=msg,
+                                )
+                                await _emit_device_status(
+                                    campaign_id,
+                                    dev_id,
+                                    activate_status="failed",
+                                    verify_status="failed",
+                                    error_message=msg,
+                                )
+                                try:
+                                    await asyncio.to_thread(new_conn.disconnect)
+                                except Exception as exc:
+                                    LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
+                                return
+                            await _emit(
+                                campaign_id, dev_id, "success", "Standby is STANDBY HOT - safe to commit", host=ip
+                            )
 
                         # Commit the install to make the new version permanent.
                         # Driver returns an empty string for platforms that
@@ -3250,8 +3482,13 @@ def _redundancy_problems(red: dict | None, issu: bool) -> list[str]:
     return problems
 
 
-async def _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, options) -> str | None:
-    """Pre-activate redundancy check. Returns an error string to abort on, else None.
+async def _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, options) -> tuple[str | None, dict | None]:
+    """Pre-activate redundancy check.
+
+    Returns ``(error, red)``: ``error`` is a string to abort on (else
+    None) and ``red`` is the parsed redundancy dict (None when the
+    platform has no redundancy concept) so the caller can size its
+    reboot windows for a dual-sup chassis.
 
     Runs even when ``skip_health_check`` is set if ISSU was requested -
     an ISSU on a non-SSO box fails on-device anyway, so the check only
@@ -3264,9 +3501,9 @@ async def _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, opt
         red = await _check_redundancy(conn, device_type)
     except Exception as e:
         if issu:
-            return f"ISSU requested but redundancy check failed: {e}"
+            return f"ISSU requested but redundancy check failed: {e}", None
         await _emit(campaign_id, dev_id, "warn", f"Redundancy check failed: {e}", host=ip)
-        return None
+        return None, None
     if red is None:
         await _emit(
             campaign_id, dev_id, "info", "Platform reports no redundancy state - treating as standalone", host=ip
@@ -3286,13 +3523,13 @@ async def _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, opt
     if not problems:
         if issu:
             await _emit(campaign_id, dev_id, "success", "Redundancy OK - ISSU permitted", host=ip)
-        return None
+        return None, red
     if not issu and options.get("skip_health_check"):
         await _emit(
             campaign_id, dev_id, "warn", f"Proceeding despite: {'; '.join(problems)} (skip_health_check set)", host=ip
         )
-        return None
-    return "Redundancy check failed: " + "; ".join(problems)
+        return None, red
+    return "Redundancy check failed: " + "; ".join(problems), red
 
 
 async def _health_check(conn, hostname, device_type="cisco_xe", issu=False):
