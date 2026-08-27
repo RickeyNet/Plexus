@@ -53,7 +53,7 @@ def _allow_list() -> set[str]:
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
-def _ip_is_blocked(ip: ipaddress._BaseAddress, *, block_private: bool) -> bool:
+def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, *, block_private: bool) -> bool:
     # Link-local covers the cloud instance-metadata endpoints (169.254.169.254,
     # fd00:ec2::254 / fe80::/10) - the classic SSRF escalation target. Always
     # block link-local plus multicast/reserved/unspecified. Loopback and
@@ -66,7 +66,7 @@ def _ip_is_blocked(ip: ipaddress._BaseAddress, *, block_private: bool) -> bool:
     return False
 
 
-def _resolve_ips(host: str) -> list[ipaddress._BaseAddress]:
+def _resolve_ips(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     """Resolve a host to IPs. Returns [] on resolution failure (fail-open)."""
     # If host is already a literal IP, use it directly.
     try:
@@ -80,7 +80,7 @@ def _resolve_ips(host: str) -> list[ipaddress._BaseAddress]:
         # failing closed would break offline/test/mock environments.
         LOGGER.debug("net_guard: could not resolve host %r; allowing (fail-open)", host)
         return []
-    ips: list[ipaddress._BaseAddress] = []
+    ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
     for info in infos:
         sockaddr = info[4]
         try:

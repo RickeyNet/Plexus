@@ -34,6 +34,25 @@ _CLIENTS: dict[int, tuple[tuple, FdmClient]] = {}
 _CLIENTS_LOCK = asyncio.Lock()
 
 
+def _as_int(val: object) -> int:
+    """Coerce a config value (int/float/str) to int; mirrors ``int(val)``."""
+    if isinstance(val, (int, float, str)):
+        return int(val)
+    raise TypeError(f"expected a numeric config value, got {type(val).__name__}")
+
+
+def _as_float(val: object) -> float:
+    """Coerce a config value (int/float/str) to float; mirrors ``float(val)``."""
+    if isinstance(val, (int, float, str)):
+        return float(val)
+    raise TypeError(f"expected a numeric config value, got {type(val).__name__}")
+
+
+def _cfg(key: str) -> object:
+    """Read an FDM setting, falling back to its documented default."""
+    return state.FDM_CONFIG.get(key, state.FDM_DEFAULTS[key])
+
+
 def _verify_tls(host: dict) -> bool:
     """Resolve the per-host TLS-verify setting, secure by default.
 
@@ -74,7 +93,7 @@ async def _get_client(host: dict, cred: dict, password: str) -> FdmClient:
             password,
             port=int(host.get("fdm_port") or 443),
             verify_tls=_verify_tls(host),
-            api_version=state.FDM_CONFIG.get("api_version", state.FDM_DEFAULTS["api_version"]),
+            api_version=str(_cfg("api_version")),
         )
         _CLIENTS[host_id] = (fp, client)
         return client
@@ -139,8 +158,8 @@ async def run_fdm_poll_once(*, force: bool = False) -> dict:
         return {"enabled": True, "hosts_polled": 0, "alerts_created": 0, "errors": 0}
 
     alert_rules_cache = await db.get_alert_rules(enabled_only=True)
-    max_concurrency = max(1, int(state.FDM_CONFIG.get("poll_concurrency", state.FDM_DEFAULTS["poll_concurrency"])))
-    timeout = float(state.FDM_CONFIG.get("per_host_timeout_seconds", state.FDM_DEFAULTS["per_host_timeout_seconds"]))
+    max_concurrency = max(1, _as_int(_cfg("poll_concurrency")))
+    timeout = _as_float(_cfg("per_host_timeout_seconds"))
     sem = asyncio.Semaphore(max_concurrency)
 
     polled = alerts = errors = 0
@@ -185,11 +204,11 @@ async def fdm_poll_loop() -> None:
     """Infinite loop that polls FDM-managed firewalls at configurable intervals."""
     while True:
         try:
-            await asyncio.sleep(int(state.FDM_CONFIG.get("interval_seconds", state.FDM_DEFAULTS["interval_seconds"])))
+            await asyncio.sleep(_as_int(_cfg("interval_seconds")))
             await run_fdm_poll_once()
         except asyncio.CancelledError:
             await close_all_clients()
             raise
         except Exception as exc:  # noqa: BLE001 - loop must survive a bad cycle
             LOGGER.warning("cisco_fdm poll loop failure: %s", redact_value(str(exc)))
-            await asyncio.sleep(state.FDM_DEFAULTS["interval_seconds"])
+            await asyncio.sleep(_as_int(state.FDM_DEFAULTS["interval_seconds"]))

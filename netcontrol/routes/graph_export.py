@@ -9,6 +9,7 @@ Provides:
 """
 
 import json
+from typing import Any
 from xml.sax.saxutils import escape as _xml_escape
 
 import routes.database as db
@@ -67,7 +68,7 @@ def _build_echart_option(
 
         series.append(series_item)
 
-    option = {
+    option: dict[str, Any] = {
         "backgroundColor": bg_color,
         "title": {
             "text": template.get("title_format", template.get("name", "")),

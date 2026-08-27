@@ -263,7 +263,7 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
 
             rec_offset = 0
             while rec_offset + record_len <= len(flowset_data):
-                rec = {}
+                rec: dict[str, str | int] = {}
                 field_offset = rec_offset
                 for f_type, f_len in template:
                     raw = flowset_data[field_offset : field_offset + f_len]

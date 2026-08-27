@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -46,8 +47,8 @@ VERIFICATION_DELAY_SECONDS = 60
 # Route-level auth comes from app.py's include_router dependencies; only the
 # WebSocket session check needs late-bound callables here.
 
-_verify_session_token = None
-_get_user_features = None
+_verify_session_token: Callable[[str], dict | None] | None = None
+_get_user_features: Callable[[dict], Awaitable[list[str]]] | None = None
 
 
 def init_deployments(verify_session_token_fn=None, get_user_features_fn=None):
@@ -1250,6 +1251,9 @@ async def get_deployment_job_status(job_id: str):
 async def ws_deployment(websocket: WebSocket, job_id: str):
     """WebSocket for streaming deployment/rollback job output."""
     token = websocket.cookies.get("session")
+    if not token:
+        await websocket.close(code=1008)
+        return
     session = await verify_ws_session(token)
     if not session:
         await websocket.close(code=1008)
@@ -1260,7 +1264,7 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
         await websocket.close(code=1008)
         return
 
-    features = await _get_user_features(user)
+    features = await _get_user_features(user) if _get_user_features else []
     if user.get("role") != "admin" and "deployments" not in features:
         await websocket.close(code=1008)
         return
