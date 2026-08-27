@@ -158,7 +158,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    bind_host = args.host or ("0.0.0.0" if args.expose else "127.0.0.1")
+    bind_host = args.host or ("0.0.0.0" if args.expose else "127.0.0.1")  # nosec B104 - only with explicit --expose
     protocol = "https" if args.https else "http"
 
     ssl_kwargs = {}
@@ -166,7 +166,7 @@ if __name__ == "__main__":
         cert_file, key_file = generate_self_signed_cert()
         ssl_kwargs = {"ssl_certfile": cert_file, "ssl_keyfile": key_file}
 
-    access_note = "network" if bind_host == "0.0.0.0" else "localhost only"
+    access_note = "network" if bind_host == "0.0.0.0" else "localhost only"  # nosec B104 - string compare for the banner
 
     dev_bootstrap = _env_flag("PLEXUS_DEV_BOOTSTRAP", False) or os.getenv("APP_ENV", "").strip().lower() in {
         "dev",

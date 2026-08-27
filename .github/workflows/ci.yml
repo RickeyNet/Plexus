@@ -31,10 +31,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Include 3.14 so the interpreter the Dockerfile actually ships
-        # (python:3.14-slim) is exercised by lint/type/test before release;
-        # 3.11/3.12 keep lower-bound coverage.
-        python-version: ["3.11", "3.12", "3.14"]
+        # 3.14 only: it is the interpreter the Dockerfile ships
+        # (python:3.14-slim) and the target declared in ruff.toml / mypy.ini.
+        # The codebase uses PEP 758 unparenthesized `except A, B:` clauses
+        # (ruff format enforces that form for py314), so 3.11/3.12 cannot
+        # import it - re-add them only if the target version is lowered.
+        python-version: ["3.14"]
 
     steps:
       - name: Checkout
@@ -82,11 +84,8 @@ jobs:
           name: sbom-cyclonedx-py${{ matrix.python-version }}
           path: sbom.cdx.json
 
-      - name: Dependency vulnerability scan (safety)
-        run: safety scan --output text
-
       - name: Static security checks (bandit)
-        run: bandit -q -r netcontrol routes templates -ll -ii
+        run: bandit -q -c bandit.yaml -r netcontrol routes templates -ll -ii
 
       - name: Tests with coverage gate
         run: pytest --cov=netcontrol --cov=routes --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=30

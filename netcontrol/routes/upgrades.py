@@ -760,8 +760,10 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 
     dest = os.path.join(SOFTWARE_IMAGES_DIR, filename)
 
-    # Stream to disk and compute MD5, enforcing size limit
-    md5 = hashlib.md5()
+    # Stream to disk and compute MD5, enforcing size limit.  MD5 is the
+    # checksum IOS-XE's `verify /md5` reports, so it must be MD5; it is an
+    # integrity check against the vendor image, not a security primitive.
+    md5 = hashlib.md5(usedforsecurity=False)
     size = 0
     try:
         with open(dest, "wb") as f:
@@ -3360,8 +3362,8 @@ async def _health_check(conn, hostname, device_type="cisco_xe", issu=False):
 
 
 def _compute_md5(filepath):
-    """Compute MD5 of a local file in chunks."""
-    md5 = hashlib.md5()
+    """Compute MD5 of a local file in chunks (matches `verify /md5` on the switch)."""
+    md5 = hashlib.md5(usedforsecurity=False)
     with open(filepath, "rb") as f:
         while True:
             chunk = f.read(8 * 1024 * 1024)
