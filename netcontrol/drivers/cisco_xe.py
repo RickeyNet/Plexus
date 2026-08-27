@@ -181,6 +181,28 @@ class CiscoXEDriver(Driver):
             "peer_state": peer_state,
         }
 
+    def upgrade_boot_mode_show_command(self) -> str:
+        # ``show version`` on Catalyst 9k ends with a per-switch table
+        # whose last column is ``Mode`` (INSTALL / BUNDLE).  ``include``
+        # takes a regex on IOS-XE so a single filter catches either.
+        return "show version | include INSTALL|BUNDLE"
+
+    def parse_boot_mode(self, output: str) -> str | None:
+        # Representative filtered lines:
+        #
+        #   *    1 52    C9410R          17.12.04          CAT9K_IOSXE           INSTALL
+        #   *    1 52    C9410R          17.12.04          CAT9K_IOSXE           BUNDLE
+        #
+        # Case-sensitive whole-word match so the header row (``Mode``)
+        # and prose like "installed" never register.  BUNDLE wins if
+        # both somehow appear - it's the blocking state.
+        text = output or ""
+        if re.search(r"\bBUNDLE\b", text):
+            return "bundle"
+        if re.search(r"\bINSTALL\b", text):
+            return "install"
+        return None
+
     def upgrade_commit_command(self) -> str:
         # Without ``install commit`` an IOS-XE box auto-rolls-back to
         # the prior image on the *next* reload.  This finalizes it.
