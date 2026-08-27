@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, NetflowConfig, register_driver
+from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, register_driver
 
 
 @register_driver
@@ -131,7 +131,9 @@ class CiscoNXOSDriver(Driver):
     # caller bypasses the gate the raise surfaces the bug instead of
     # silently sending IOS-XE syntax at an NX-OS session.
 
-    def upgrade_activate_commands(self, image_path: str) -> list[str]:
+    def upgrade_activate_commands(self, image_path: str, *, issu: bool = False) -> list[str]:
+        if issu:
+            raise DriverCapabilityError("NX-OS driver has no in-service (ISSU) activate; use a full reload")
         # Single combined add-and-reboot.  ``install all nxos`` does
         # the compatibility check, sets the boot variable, copies the
         # image to standby if applicable (dual-sup chassis), and
