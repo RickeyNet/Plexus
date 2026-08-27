@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -163,7 +164,7 @@ async def _fetch_peer_data(peer) -> dict:
     """
     headers = _build_headers(peer["api_token_enc"])
     base = peer["url"].rstrip("/")
-    result = {
+    result: dict[str, Any] = {
         "devices": {"total": 0, "up": 0, "down": 0, "groups": 0},
         "alerts": {"active": 0, "critical": 0, "warning": 0},
         "compliance": {"total_profiles": 0, "compliant_pct": 0},
@@ -289,7 +290,7 @@ async def update_peer(
 ):
     """Update a federation peer."""
     existing = await _get_peer_or_404(peer_id)
-    updates = {}
+    updates: dict[str, str | int] = {}
     if body.name is not None:
         updates["name"] = body.name
     if body.url is not None:

@@ -157,7 +157,9 @@ def _coerce_list(payload: Any) -> list[dict]:
     return []
 
 
-def _best_matching_prefix(address: str, prefixes: list[tuple[ipaddress._BaseNetwork, str]]) -> str:
+def _best_matching_prefix(
+    address: str, prefixes: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]]
+) -> str:
     address_obj = ipaddress.ip_address(address)
     matches = [
         (network.prefixlen, subnet)
@@ -210,7 +212,9 @@ def _extract_netbox_prefix(item: dict) -> dict | None:
     }
 
 
-def _netbox_address_rows(items: list[dict], prefixes: list[tuple[ipaddress._BaseNetwork, str]]) -> list[dict]:
+def _netbox_address_rows(
+    items: list[dict], prefixes: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]]
+) -> list[dict]:
     rows: list[dict] = []
     for item in items:
         raw_address = str(item.get("address") or "").strip()
@@ -340,7 +344,7 @@ async def _collect_infoblox(source: dict, auth_config: dict, fetch_json) -> dict
         verify=verify,
     )
     prefix_rows: list[dict] = []
-    prefix_networks: list[tuple[ipaddress._BaseNetwork, str]] = []
+    prefix_networks: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]] = []
     for item in _coerce_list(prefix_payload):
         subnet = _normalize_subnet(str(item.get("network") or ""))
         if not subnet:

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from netcontrol.telemetry import configure_logging
 
@@ -36,8 +37,9 @@ _jobs: dict[str, dict] = {}
 
 def create_job(kind: str, progress: dict | None = None) -> dict:
     """Register a new running job and return its record."""
-    job = {
-        "job_id": uuid.uuid4().hex,
+    job_id = uuid.uuid4().hex
+    job: dict[str, Any] = {
+        "job_id": job_id,
         "kind": kind,
         "status": "running",
         "started_at": datetime.now(UTC).isoformat(),
@@ -46,7 +48,7 @@ def create_job(kind: str, progress: dict | None = None) -> dict:
         "result": None,
         "error": None,
     }
-    _jobs[job["job_id"]] = job
+    _jobs[job_id] = job
     return job
 
 

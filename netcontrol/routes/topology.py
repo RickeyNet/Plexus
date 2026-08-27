@@ -117,8 +117,8 @@ def _normalize_ip_text(raw_ip: str) -> str:
         return ""
 
 
-def _build_ipam_subnet_index(subnets: list[dict]) -> list[tuple[ipaddress._BaseNetwork, dict]]:
-    indexed: list[tuple[ipaddress._BaseNetwork, dict]] = []
+def _build_ipam_subnet_index(subnets: list[dict]) -> list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, dict]]:
+    indexed: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, dict]] = []
     for row in subnets:
         subnet_text = str(row.get("subnet") or "").strip()
         if not subnet_text:
@@ -131,7 +131,9 @@ def _build_ipam_subnet_index(subnets: list[dict]) -> list[tuple[ipaddress._BaseN
     return indexed
 
 
-def _match_ipam_subnet(ip_text: str, subnet_index: list[tuple[ipaddress._BaseNetwork, dict]]) -> dict | None:
+def _match_ipam_subnet(
+    ip_text: str, subnet_index: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, dict]]
+) -> dict | None:
     normalized = _normalize_ip_text(ip_text)
     if not normalized:
         return None

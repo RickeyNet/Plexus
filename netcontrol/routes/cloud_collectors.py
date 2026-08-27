@@ -344,8 +344,10 @@ def _dedupe_resources(resources: list[dict]) -> list[dict]:
             if not current.get(key) and resource.get(key):
                 current[key] = resource.get(key)
         if resource.get("metadata"):
-            current_meta = current.get("metadata") if isinstance(current.get("metadata"), dict) else {}
-            next_meta = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
+            raw_current_meta = current.get("metadata")
+            raw_next_meta = resource.get("metadata")
+            current_meta = raw_current_meta if isinstance(raw_current_meta, dict) else {}
+            next_meta = raw_next_meta if isinstance(raw_next_meta, dict) else {}
             current["metadata"] = {**current_meta, **next_meta}
     return list(merged.values())
 
@@ -365,8 +367,10 @@ def _dedupe_connections(connections: list[dict]) -> list[dict]:
         if not merged[key].get("state") and edge.get("state"):
             merged[key]["state"] = edge.get("state")
         if edge.get("metadata"):
-            current_meta = merged[key].get("metadata") if isinstance(merged[key].get("metadata"), dict) else {}
-            next_meta = edge.get("metadata") if isinstance(edge.get("metadata"), dict) else {}
+            raw_current_meta = merged[key].get("metadata")
+            raw_next_meta = edge.get("metadata")
+            current_meta = raw_current_meta if isinstance(raw_current_meta, dict) else {}
+            next_meta = raw_next_meta if isinstance(raw_next_meta, dict) else {}
             merged[key]["metadata"] = {**current_meta, **next_meta}
     return list(merged.values())
 

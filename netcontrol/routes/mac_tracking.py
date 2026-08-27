@@ -14,6 +14,7 @@ import asyncio
 import json
 import socket
 import time
+from typing import Any, TypedDict
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -120,6 +121,23 @@ def _extract_mac_from_oid_suffix(suffix: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+class _CollectDiag(TypedDict):
+    """Per-host collection diagnostics returned under ``result["diag"]``."""
+
+    device_type: str
+    snmp_version: str
+    ports: int
+    port_vlans: int
+    vlans_discovered: int
+    vlan_ctx_attempted: int
+    vlan_ctx_succeeded: int
+    vlan_ctx_skipped: int
+    per_vlan_block_ran: bool
+    cli_attempted: bool
+    cli_succeeded: bool
+    cli_mac_count: int
+
+
 async def collect_mac_arp_tables(
     host_id: int,
     ip_address: str,
@@ -152,24 +170,28 @@ async def collect_mac_arp_tables(
     # operators can tell "per-VLAN block never ran" apart from "per-VLAN
     # block ran but every walk failed" without needing shell access to the
     # app server's logs.
-    result = {
+    errors: list[str] = []
+    diag: _CollectDiag = {
+        "device_type": device_type,
+        "snmp_version": str(snmp_config.get("version", "")),
+        "ports": 0,
+        "port_vlans": 0,
+        "vlans_discovered": 0,
+        "vlan_ctx_attempted": 0,
+        "vlan_ctx_succeeded": 0,
+        "vlan_ctx_skipped": 0,
+        "per_vlan_block_ran": False,
+        "cli_attempted": False,
+        "cli_succeeded": False,
+        "cli_mac_count": 0,
+    }
+    # ``errors`` and ``diag`` are the same objects stored in ``result`` — the
+    # typed locals are what get mutated below; ``result`` just carries them.
+    result: dict[str, Any] = {
         "macs_found": 0,
         "arps_found": 0,
-        "errors": [],
-        "diag": {
-            "device_type": device_type,
-            "snmp_version": str(snmp_config.get("version", "")),
-            "ports": 0,
-            "port_vlans": 0,
-            "vlans_discovered": 0,
-            "vlan_ctx_attempted": 0,
-            "vlan_ctx_succeeded": 0,
-            "vlan_ctx_skipped": 0,
-            "per_vlan_block_ran": False,
-            "cli_attempted": False,
-            "cli_succeeded": False,
-            "cli_mac_count": 0,
-        },
+        "errors": errors,
+        "diag": diag,
     }
 
     # ── Preferred path: collect MACs via CLI (SSH + ntc-templates) ──
@@ -203,30 +225,30 @@ async def collect_mac_arp_tables(
                 cred_id = state.AUTH_CONFIG.get("service_credential_id") or state.AUTH_CONFIG.get(
                     "default_credential_id"
                 )
-                service_cred = await db.get_credential_raw(cred_id) if cred_id else None
+                # AUTH_CONFIG is a heterogeneous settings dict; the credential
+                # id slots only ever hold ``int | None`` (state.py coerces them).
+                service_cred = await db.get_credential_raw(cred_id) if isinstance(cred_id, int) and cred_id else None
                 if service_cred is None:
-                    result["errors"].append(
+                    errors.append(
                         "CLI MAC collection skipped: no service or default "
                         "credential configured (set one in Settings); using SNMP."
                     )
                 else:
-                    result["diag"]["cli_attempted"] = True
+                    diag["cli_attempted"] = True
                     try:
                         cli_macs = await _collect_mac_table_via_cli(host, service_cred)
-                        result["diag"]["cli_succeeded"] = True
-                        result["diag"]["cli_mac_count"] = len(cli_macs)
+                        diag["cli_succeeded"] = True
+                        diag["cli_mac_count"] = len(cli_macs)
                     except Exception as exc:
                         # SSH/auth/timeout errors land here. Don't abort —
                         # the SNMP fallback below may still produce useful
                         # data. The operator sees the failure in the
                         # returned errors array.
-                        result["errors"].append(
-                            f"CLI MAC collection failed ({type(exc).__name__}): {exc}; falling back to SNMP"
-                        )
+                        errors.append(f"CLI MAC collection failed ({type(exc).__name__}): {exc}; falling back to SNMP")
         except Exception as exc:
             # Defensive: anything that goes wrong in the CLI setup path
             # (e.g. import error, db lookup) shouldn't break SNMP.
-            result["errors"].append(f"CLI MAC setup failed: {exc}")
+            errors.append(f"CLI MAC setup failed: {exc}")
 
     def _walk(oid: str, max_rows: int = 2000):
         return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
@@ -277,7 +299,7 @@ async def collect_mac_arp_tables(
             _walk(DOT1Q_VLAN_STATIC_NAME_OID),
         )
     except Exception as exc:
-        result["errors"].append(f"SNMP walk failed: {str(exc)}")
+        errors.append(f"SNMP walk failed: {str(exc)}")
         return result
 
     arp_phys, arp_phys_err = arp_phys_pair
@@ -290,13 +312,13 @@ async def collect_mac_arp_tables(
     fdb_errors = {e for e in (fdb_addr_err, q_fdb_port_err) if e}
     if fdb_errors:
         if len(fdb_errors) == 1:
-            result["errors"].append(f"FDB walk failed: {next(iter(fdb_errors))}")
+            errors.append(f"FDB walk failed: {next(iter(fdb_errors))}")
         else:
             for tag, err in (("dot1dTpFdb", fdb_addr_err), ("dot1qTpFdb", q_fdb_port_err)):
                 if err:
-                    result["errors"].append(f"{tag} walk failed: {err}")
+                    errors.append(f"{tag} walk failed: {err}")
     if arp_phys_err:
-        result["errors"].append(f"ARP walk failed: {arp_phys_err}")
+        errors.append(f"ARP walk failed: {arp_phys_err}")
 
     # NB: the "device responded but returned no FDB entries" advisory used to
     # live here, but on Cisco the default-context walk is *expected* to be
@@ -403,7 +425,7 @@ async def collect_mac_arp_tables(
     # same-MAC-in-many-VLANs entries (HSRP/VRRP virtual MACs) collapse onto
     # whichever parallel context happened to finish last.
     per_vlan_dot1d: list[tuple[int, dict, dict, dict]] = []
-    result["diag"]["vlans_discovered"] = len(vlans_in_use)
+    diag["vlans_discovered"] = len(vlans_in_use)
     # When the CLI already gave us the full MAC table, skip the per-VLAN
     # SNMP block entirely — it's the slow, fragile part and CLI is
     # authoritative. The default-context SNMP FDB processing further down
@@ -412,7 +434,7 @@ async def collect_mac_arp_tables(
     if cli_macs is not None and cli_macs:
         pass  # CLI succeeded; skip per-VLAN block
     elif is_cisco and version in ("v3", "3") and vlans_in_use:
-        result["diag"]["per_vlan_block_ran"] = True
+        diag["per_vlan_block_ran"] = True
         # Walk per-VLAN contexts with bounded concurrency. The old loop ran
         # strictly sequentially with 4 walks per VLAN (q-bridge + three
         # dot1d) — at ~3s/walk that's >20 minutes on a switch carrying a
@@ -494,7 +516,10 @@ async def collect_mac_arp_tables(
         )
 
         for r in vlan_results:
-            if isinstance(r, Exception):
+            if isinstance(r, BaseException):
+                if not isinstance(r, Exception):
+                    # CancelledError / KeyboardInterrupt must keep propagating.
+                    raise r
                 per_vlan_errors.append(f"unexpected: {type(r).__name__}: {r}")
                 continue
             if r.get("skipped"):
@@ -529,7 +554,7 @@ async def collect_mac_arp_tables(
                 per_vlan_dot1d.append((vid, d_addr_rows, d_port_rows, d_status_rows))
 
         if per_vlan_skipped:
-            result["errors"].append(
+            errors.append(
                 f"Per-VLAN walks hit 60s budget — skipped {per_vlan_skipped} "
                 f"of {per_vlan_attempts} VLAN contexts. Increase budget or "
                 f"reduce VTP scope if MACs on those VLANs are missing."
@@ -538,7 +563,7 @@ async def collect_mac_arp_tables(
             # Every VLAN context failed — the device is reachable (we got the
             # vmVlan map) but the operator can't see any FDB view. That's a
             # configuration problem on the device, surface it loudly.
-            result["errors"].append(
+            errors.append(
                 f"All {per_vlan_attempts} per-VLAN FDB walks failed "
                 f"(SNMPv3 user likely lacks 'snmp-server group ... read' on the per-VLAN views)."
             )
@@ -547,7 +572,7 @@ async def collect_mac_arp_tables(
             # Cap the list so we don't dump 50 lines for a chatty device.
             preview = "; ".join(per_vlan_errors[:5])
             suffix = f" (+{len(per_vlan_errors) - 5} more)" if len(per_vlan_errors) > 5 else ""
-            result["errors"].append(f"Per-VLAN FDB walks partially failed: {preview}{suffix}")
+            errors.append(f"Per-VLAN FDB walks partially failed: {preview}{suffix}")
 
     # ── Assemble the authoritative (mac, vlan) → location map ────────────
     # One sighting per (mac, vlan), chosen by source priority so the most
@@ -628,7 +653,7 @@ async def collect_mac_arp_tables(
     # Final empty-FDB advisory — only when nothing at all turned up and no
     # protocol error explains it: the genuine "this device doesn't bridge" case.
     if not sightings and not fdb_errors and not per_vlan_errors:
-        result["errors"].append(
+        errors.append(
             "Device responded but returned no FDB entries "
             "(likely a router / L3-only device, or FDB hidden behind a non-default SNMPv3 context)."
         )
@@ -664,7 +689,7 @@ async def collect_mac_arp_tables(
         LOGGER.warning(
             "mac_tracking: host %s MAC batch write failed (%d sightings): %s", host_id, len(sighting_batch), exc
         )
-        result["errors"].append(f"MAC table write failed: {exc}")
+        errors.append(f"MAC table write failed: {exc}")
 
     # ── ARP table (global, ipNetToMediaTable) ──
     arp_batch: list[dict] = []
@@ -705,13 +730,13 @@ async def collect_mac_arp_tables(
             LOGGER.warning(
                 "mac_tracking: host %s ARP batch write failed (%d entries): %s", host_id, len(arp_batch), exc
             )
-            result["errors"].append(f"ARP table write failed: {exc}")
+            errors.append(f"ARP table write failed: {exc}")
 
-    result["diag"]["ports"] = len(if_index_to_name)
-    result["diag"]["port_vlans"] = len(if_index_to_vlan)
-    result["diag"]["vlan_ctx_attempted"] = per_vlan_attempts
-    result["diag"]["vlan_ctx_succeeded"] = per_vlan_successes
-    result["diag"]["vlan_ctx_skipped"] = per_vlan_skipped
+    diag["ports"] = len(if_index_to_name)
+    diag["port_vlans"] = len(if_index_to_vlan)
+    diag["vlan_ctx_attempted"] = per_vlan_attempts
+    diag["vlan_ctx_succeeded"] = per_vlan_successes
+    diag["vlan_ctx_skipped"] = per_vlan_skipped
     LOGGER.info(
         "mac_tracking: host %s (%s) ports=%d port_vlans=%d "
         "vlans_discovered=%d vlan_ctx=%d/%d (skipped=%d) "
@@ -724,8 +749,8 @@ async def collect_mac_arp_tables(
         per_vlan_successes,
         per_vlan_attempts,
         per_vlan_skipped,
-        "ok" if result["diag"]["cli_succeeded"] else ("fail" if result["diag"]["cli_attempted"] else "skip"),
-        result["diag"]["cli_mac_count"],
+        "ok" if diag["cli_succeeded"] else ("fail" if diag["cli_attempted"] else "skip"),
+        diag["cli_mac_count"],
         result["macs_found"],
         result["arps_found"],
     )
@@ -817,7 +842,9 @@ async def collect_interface_inventory(
     Writes to ``interface_inventory`` (one row per ifIndex) and
     ``vlan_definitions`` (one row per VLAN). Returns counts.
     """
-    result = {"ports_written": 0, "vlans_written": 0, "errors": []}
+    ports_written = 0
+    vlans_written = 0
+    errors: list[str] = []
 
     def _walk(oid: str, max_rows: int = 2500):
         return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
@@ -863,8 +890,8 @@ async def collect_interface_inventory(
             _walk(VTP_TRUNK_VLANS_4K_OID),
         )
     except Exception as exc:
-        result["errors"].append(f"SNMP walk failed: {str(exc)}")
-        return result
+        errors.append(f"SNMP walk failed: {str(exc)}")
+        return {"ports_written": ports_written, "vlans_written": vlans_written, "errors": errors}
 
     # ── Build ifIndex-keyed lookups ────────────────────────────────────
     def _idx_map(walk: dict[str, str]) -> dict[str, str]:
@@ -975,7 +1002,7 @@ async def collect_interface_inventory(
                 access_vlan=_access_vlan(if_idx),
                 trunk_vlans=_trunk_vlans_for_idx(if_idx),
             )
-            result["ports_written"] += 1
+            ports_written += 1
         except Exception as exc:
             LOGGER.warning(
                 "interface_inventory: host %s port upsert failed for ifIndex %s (%s): %s", host_id, if_idx, name, exc
@@ -1008,7 +1035,7 @@ async def collect_interface_inventory(
                 name=_snmp_str(val),
                 state=vlan_state_by_id.get(vid, "operational"),
             )
-            result["vlans_written"] += 1
+            vlans_written += 1
         except Exception as exc:
             LOGGER.warning("interface_inventory: host %s VLAN upsert failed for vlan %s: %s", host_id, vid, exc)
 
@@ -1016,10 +1043,10 @@ async def collect_interface_inventory(
         "interface_inventory: host %s (%s) - %d ports, %d VLANs collected",
         host_id,
         ip_address,
-        result["ports_written"],
-        result["vlans_written"],
+        ports_written,
+        vlans_written,
     )
-    return result
+    return {"ports_written": ports_written, "vlans_written": vlans_written, "errors": errors}
 
 
 # ═════════════════════════════════════════════════════════════════════════════

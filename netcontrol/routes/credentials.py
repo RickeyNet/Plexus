@@ -86,8 +86,7 @@ async def list_service_credentials(request: Request):
 
 @router.post("/api/credentials/service", status_code=201)
 async def create_service_credential(body: CredentialCreate, request: Request):
-    session = _get_session(request)
-    await _require_admin_session(session)
+    session = await _require_admin_session(_get_session(request))
     cid = await db.create_credential(
         body.name,
         body.username,
@@ -108,8 +107,7 @@ async def create_service_credential(body: CredentialCreate, request: Request):
 
 @router.put("/api/credentials/service/{cred_id}")
 async def update_service_credential(cred_id: int, body: CredentialUpdate, request: Request):
-    session = _get_session(request)
-    await _require_admin_session(session)
+    session = await _require_admin_session(_get_session(request))
     cred = await db.get_credential_raw(cred_id)
     if not cred or not cred.get("is_service"):
         raise HTTPException(404, "Service credential not found")
@@ -143,8 +141,7 @@ async def update_service_credential(cred_id: int, body: CredentialUpdate, reques
 
 @router.delete("/api/credentials/service/{cred_id}")
 async def delete_service_credential(cred_id: int, request: Request):
-    session = _get_session(request)
-    await _require_admin_session(session)
+    session = await _require_admin_session(_get_session(request))
     cred = await db.get_credential_raw(cred_id)
     if not cred or not cred.get("is_service"):
         raise HTTPException(404, "Service credential not found")
