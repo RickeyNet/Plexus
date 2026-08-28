@@ -62,6 +62,29 @@ export interface RadiusConfig {
   default_group_ids: number[];
 }
 
+export interface TacacsConfig {
+  enabled: boolean;
+  server: string;
+  port: number;
+  secret: string;
+  timeout: number;
+  // ascii = interactive login flow (IOS default); pap = password in START.
+  authen_type: 'ascii' | 'pap' | string;
+  // Send an exec authorization (service=shell cmd=) after PASS and map the
+  // reply's AV pairs onto a Plexus role. Off = authenticate only.
+  authorize: boolean;
+  service: string;
+  // AV pair whose value (admin|user) sets the role; add it as a custom
+  // attribute on the ISE TACACS profile.
+  role_attribute: string;
+  // priv-lvl >= this maps to admin; 0 disables the rule.
+  admin_priv_lvl: number;
+  default_role?: string;
+  fallback_to_local: boolean;
+  fallback_on_reject: boolean;
+  default_group_ids: number[];
+}
+
 export interface LdapConfig {
   enabled: boolean;
   server: string;
@@ -89,11 +112,12 @@ export interface LdapConfig {
 }
 
 export interface AuthConfig {
-  provider: 'local' | 'radius' | 'ldap' | string;
+  provider: 'local' | 'radius' | 'tacacs' | 'ldap' | string;
   default_credential_id: number | null;
   service_credential_id: number | null;
   job_retention_days: number;
   radius: RadiusConfig;
+  tacacs: TacacsConfig;
   ldap: LdapConfig;
 }
 

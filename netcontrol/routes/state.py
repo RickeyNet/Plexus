@@ -338,6 +338,33 @@ AUTH_CONFIG_DEFAULTS = {
         "fallback_on_reject": False,
         "default_group_ids": [],
     },
+    "tacacs": {
+        "enabled": False,
+        "server": "",
+        "port": 49,
+        "secret": "",
+        "timeout": 5,
+        # Authentication method inside the TACACS+ exchange. ``ascii`` is the
+        # interactive login flow IOS uses (server prompts, client answers);
+        # ``pap`` sends the password in the START packet. Both travel inside
+        # the obfuscated body; ISE accepts either.
+        "authen_type": "ascii",
+        # After a PASS, send an exec authorization request (service=shell
+        # cmd=) and require it to PASS too. The reply's AV pairs drive the
+        # role mapping below. Off = authenticate only, RADIUS-style (no role
+        # assertion, roles managed locally).
+        "authorize": True,
+        "service": "shell",
+        # AV pair name whose value (admin|user) sets the Plexus role. Add it
+        # as a custom attribute on the ISE TACACS profile.
+        "role_attribute": "plexus-role",
+        # Fallback rule: priv-lvl >= this maps to admin (0 disables).
+        "admin_priv_lvl": 15,
+        "default_role": "user",
+        "fallback_to_local": True,
+        "fallback_on_reject": False,
+        "default_group_ids": [],
+    },
     "ldap": {
         "enabled": False,
         "server": "",
@@ -368,6 +395,8 @@ AUTH_CONFIG_DEFAULTS = {
 
 _LDAP_TLS_VERIFY_LEVELS = {"never", "allow", "try", "demand", "hard"}
 _EXTERNAL_AUTH_ROLES = {"user", "admin"}
+_TACACS_AUTHEN_TYPES = {"ascii", "pap"}
+_AUTH_PROVIDERS = {"local", "radius", "ldap", "tacacs"}
 
 # ── Feature Catalog ──────────────────────────────────────────────────────────
 # Single source of truth for feature keys. `gateable` entries are eligible for
@@ -682,9 +711,10 @@ def _sanitize_positive_int_list(value) -> list[int]:
 def _sanitize_auth_config(data: dict | None) -> dict:
     cfg = dict(AUTH_CONFIG_DEFAULTS)
     cfg["radius"] = dict(AUTH_CONFIG_DEFAULTS["radius"])
+    cfg["tacacs"] = dict(AUTH_CONFIG_DEFAULTS["tacacs"])
     cfg["ldap"] = dict(AUTH_CONFIG_DEFAULTS["ldap"])
     if isinstance(data, dict):
-        if data.get("provider") in {"local", "radius", "ldap"}:
+        if data.get("provider") in _AUTH_PROVIDERS:
             cfg["provider"] = data["provider"]
         if "job_retention_days" in data:
             cfg["job_retention_days"] = int(data.get("job_retention_days", cfg["job_retention_days"]))
@@ -717,6 +747,41 @@ def _sanitize_auth_config(data: dict | None) -> dict:
     cfg["radius"]["port"] = max(1, min(65535, cfg["radius"]["port"]))
     cfg["radius"]["timeout"] = max(1, min(30, cfg["radius"]["timeout"]))
     cfg["radius"]["default_group_ids"] = _sanitize_positive_int_list(cfg["radius"].get("default_group_ids", []))
+    # TACACS+ config sanitization
+    tacacs = data.get("tacacs") if isinstance(data, dict) else None
+    if isinstance(tacacs, dict):
+        cfg["tacacs"].update(
+            {
+                "enabled": bool(tacacs.get("enabled", cfg["tacacs"]["enabled"])),
+                "server": str(tacacs.get("server", cfg["tacacs"]["server"])).strip(),
+                "port": int(tacacs.get("port", cfg["tacacs"]["port"])),
+                "secret": str(tacacs.get("secret", cfg["tacacs"]["secret"])),
+                "timeout": int(tacacs.get("timeout", cfg["tacacs"]["timeout"])),
+                "authen_type": str(tacacs.get("authen_type", cfg["tacacs"]["authen_type"])).strip().lower(),
+                "authorize": bool(tacacs.get("authorize", cfg["tacacs"]["authorize"])),
+                "service": str(tacacs.get("service", cfg["tacacs"]["service"])).strip(),
+                "role_attribute": str(tacacs.get("role_attribute", cfg["tacacs"]["role_attribute"])).strip().lower(),
+                "admin_priv_lvl": int(tacacs.get("admin_priv_lvl", cfg["tacacs"]["admin_priv_lvl"])),
+                "default_role": str(tacacs.get("default_role", cfg["tacacs"]["default_role"])).strip().lower(),
+                "fallback_to_local": bool(tacacs.get("fallback_to_local", cfg["tacacs"]["fallback_to_local"])),
+                "fallback_on_reject": bool(tacacs.get("fallback_on_reject", cfg["tacacs"]["fallback_on_reject"])),
+                "default_group_ids": _sanitize_positive_int_list(
+                    tacacs.get("default_group_ids", cfg["tacacs"]["default_group_ids"])
+                ),
+            }
+        )
+    cfg["tacacs"]["port"] = max(1, min(65535, cfg["tacacs"]["port"]))
+    cfg["tacacs"]["timeout"] = max(1, min(30, cfg["tacacs"]["timeout"]))
+    cfg["tacacs"]["admin_priv_lvl"] = max(0, min(15, cfg["tacacs"]["admin_priv_lvl"]))
+    if cfg["tacacs"]["authen_type"] not in _TACACS_AUTHEN_TYPES:
+        cfg["tacacs"]["authen_type"] = "ascii"
+    if not cfg["tacacs"]["service"]:
+        cfg["tacacs"]["service"] = "shell"
+    if not cfg["tacacs"]["role_attribute"]:
+        cfg["tacacs"]["role_attribute"] = "plexus-role"
+    if cfg["tacacs"]["default_role"] not in _EXTERNAL_AUTH_ROLES:
+        cfg["tacacs"]["default_role"] = "user"
+    cfg["tacacs"]["default_group_ids"] = _sanitize_positive_int_list(cfg["tacacs"].get("default_group_ids", []))
     # LDAP config sanitization
     ldap = data.get("ldap") if isinstance(data, dict) else None
     if isinstance(ldap, dict):

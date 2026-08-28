@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Authentication
+- Add a TACACS+ login provider (`provider: tacacs`) alongside local/RADIUS/LDAP, aimed at Cisco ISE Device Administration. Plexus authenticates like an IOS device (ASCII or PAP inside the obfuscated TACACS+ body, TCP/49) and then sends an exec authorization (`service=shell cmd=`); the reply's `plexus-role` custom attribute or `priv-lvl` maps to the Plexus role and is re-synced on every login, so ISE policy is authoritative. Authorization FAIL is a reject, never a default role. Same fallback controls as RADIUS/LDAP; secret is redacted in the admin API. New `tacacs_plus` dependency (optional import). Settings UI gains a TACACS+ panel. Guide: `TACACS_CONFIGURATION_GUIDE.md`.
+
 ### Reliability and performance
 - Run inventory discovery scans and all-hosts MAC/ARP fleet collection as background jobs instead of inline HTTP handlers: `POST .../discovery/scan` and `POST /api/mac-tracking/collect` (all-hosts mode) now return `202` with a `job_id`, pollable via `GET /api/inventory/discovery/jobs/{id}` and `GET /api/mac-tracking/collect/jobs/{id}`. The MAC Tracking page shows live collection progress; the SSE discovery stream and single-host collect are unchanged.
 - Batch MAC/ARP persistence: each host's FDB sightings and ARP table now write in one transaction (`record_mac_sightings_batch`, `upsert_arp_entries_batch`) instead of two connection round-trips per MAC, eliminating tens of thousands of connection cycles per fleet collection. Move-detection semantics are unchanged.

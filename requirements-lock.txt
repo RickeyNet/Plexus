@@ -923,12 +923,20 @@ scp==0.16.1 \
     --hash=sha256:3f2b260bf9bd4c2b6857f697a1d7e8edc26fa569282b77027e849dfe1e48580a \
     --hash=sha256:52d48423ffb0d22afcec738d66c2c8d5865ab9b45e040a7508789f58b39533fe
     # via netmiko
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
+    --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
+    # via tacacs-plus
 starlette==1.6.0 \
     --hash=sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c \
     --hash=sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b
     # via
     #   -r requirements.txt
     #   fastapi
+tacacs-plus==2.6 \
+    --hash=sha256:55aa4e733b0c4366cf5ab2d36deb03729466554319b239b9221b509b256128ff \
+    --hash=sha256:f5e3a6e13760656aa69a4e98fc3da3e4728553375569fad757b1800c020dcb36
+    # via -r requirements.txt
 textfsm==2.1.0 \
     --hash=sha256:45c18ff2b7c90163dfdff7e20d3f482514cc7aac26bc2547744e79dfa761e458 \
     --hash=sha256:55886490474890fa09ade0e8c9555a913fd325724842293364dc44ea705b3616

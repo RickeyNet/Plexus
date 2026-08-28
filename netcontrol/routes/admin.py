@@ -115,6 +115,23 @@ class RadiusConfigRequest(BaseModel):
     default_group_ids: list[int] = []
 
 
+class TacacsConfigRequest(BaseModel):
+    enabled: bool = False
+    server: str = ""
+    port: int = 49
+    secret: str = ""
+    timeout: int = 5
+    authen_type: str = "ascii"
+    authorize: bool = True
+    service: str = "shell"
+    role_attribute: str = "plexus-role"
+    admin_priv_lvl: int = 15
+    default_role: str = "user"
+    fallback_to_local: bool = True
+    fallback_on_reject: bool = False
+    default_group_ids: list[int] = []
+
+
 class LdapConfigRequest(BaseModel):
     enabled: bool = False
     server: str = ""
@@ -144,6 +161,7 @@ class AuthConfigRequest(BaseModel):
     service_credential_id: int | None = None
     job_retention_days: int = Field(default=30, ge=30)
     radius: RadiusConfigRequest = RadiusConfigRequest()
+    tacacs: TacacsConfigRequest = TacacsConfigRequest()
     ldap: LdapConfigRequest = LdapConfigRequest()
 
 
@@ -326,7 +344,7 @@ def _admin_dep():
 async def admin_capabilities():
     return {
         "feature_flags": FEATURE_FLAGS,
-        "auth_providers": ["local", "radius", "ldap"],
+        "auth_providers": ["local", "radius", "tacacs", "ldap"],
         "feature_visibility": {
             "catalog": state.FEATURE_VISIBILITY_CATALOG,
             "hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
@@ -619,6 +637,8 @@ def _redact_auth_config(cfg: dict) -> dict:
     redacted = copy.deepcopy(cfg)
     if redacted.get("radius", {}).get("secret"):
         redacted["radius"]["secret"] = _SECRET_MASK
+    if redacted.get("tacacs", {}).get("secret"):
+        redacted["tacacs"]["secret"] = _SECRET_MASK
     if redacted.get("ldap", {}).get("bind_password"):
         redacted["ldap"]["bind_password"] = _SECRET_MASK
     return redacted
@@ -635,6 +655,8 @@ async def admin_update_auth_config(body: AuthConfigRequest):
     # Preserve existing secrets when client sends back the redaction mask
     if data.get("radius", {}).get("secret") == _SECRET_MASK:
         data["radius"]["secret"] = state.AUTH_CONFIG.get("radius", {}).get("secret", "")
+    if data.get("tacacs", {}).get("secret") == _SECRET_MASK:
+        data["tacacs"]["secret"] = state.AUTH_CONFIG.get("tacacs", {}).get("secret", "")
     if data.get("ldap", {}).get("bind_password") == _SECRET_MASK:
         data["ldap"]["bind_password"] = state.AUTH_CONFIG.get("ldap", {}).get("bind_password", "")
     state.AUTH_CONFIG = state._sanitize_auth_config(data)

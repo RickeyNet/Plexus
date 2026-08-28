@@ -1,7 +1,7 @@
 """
 auth.py -- Authentication routes: login, register, logout, status, profile, change-password.
 
-Includes RADIUS authentication helpers and login rate-limiting logic.
+Includes RADIUS, TACACS+ and LDAP authentication helpers and login rate-limiting logic.
 """
 
 from __future__ import annotations
@@ -39,6 +39,24 @@ except Exception:
     RadiusDictionary = None
     radius_packet = None
     PYRAD_AVAILABLE = False
+
+# ── tacacs_plus imports (optional) ───────────────────────────────────────────
+
+try:
+    from tacacs_plus.client import TACACSClient
+    from tacacs_plus.flags import (
+        TAC_PLUS_AUTHEN_TYPE_ASCII,
+        TAC_PLUS_AUTHEN_TYPE_PAP,
+        TAC_PLUS_AUTHOR_STATUS_ERROR,
+    )
+
+    TACACS_AVAILABLE = True
+except Exception:
+    TACACSClient = None
+    TAC_PLUS_AUTHEN_TYPE_ASCII = 0x01
+    TAC_PLUS_AUTHEN_TYPE_PAP = 0x02
+    TAC_PLUS_AUTHOR_STATUS_ERROR = 0x11
+    TACACS_AVAILABLE = False
 
 # ── python-ldap imports (optional) ───────────────────────────────────────────
 
@@ -264,6 +282,215 @@ async def upsert_radius_user(username: str) -> dict | None:
                 user = await db.get_user_by_id(int(user["id"]))
             except ValueError:
                 LOGGER.warning("radius: default access group assignment failed for user '%s'", username)
+    return user
+
+
+# ── TACACS+ helpers ──────────────────────────────────────────────────────────
+#
+# TACACS+ (RFC 8907) is the protocol Cisco ISE "Device Admin" speaks to
+# switches and routers.  Compared with the RADIUS-PAP path above it (a)
+# obfuscates the *whole* packet body under the shared secret rather than
+# only the password, (b) runs over TCP/49 so replies can't be spoofed by
+# an off-path attacker, and (c) has a separate authorization exchange
+# that lets the server hand back attributes - which Plexus uses to map
+# an ISE shell profile onto a Plexus role.  The obfuscation is an MD5
+# keystream (the RFC calls it obfuscation, not encryption) so it belongs
+# on a trusted management network, exactly like the switches it fronts.
+
+_TACACS_AUTHEN_TYPES = ("ascii", "pap")
+_TACACS_DEFAULT_ROLE_ATTRIBUTE = "plexus-role"
+
+
+def _parse_tacacs_av_pairs(raw_args) -> dict[str, str]:
+    """Decode TACACS+ authorization AV pairs into a ``{name: value}`` dict.
+
+    RFC 8907 §6.1: mandatory attributes use ``name=value``, optional ones
+    ``name*value``.  Both forms are accepted; a later duplicate wins.
+    Names are lower-cased for lookup, values are kept verbatim.
+    """
+    out: dict[str, str] = {}
+    for arg in raw_args or []:
+        if isinstance(arg, bytes):
+            try:
+                arg = arg.decode("utf-8", errors="replace")
+            except Exception:  # pragma: no cover - decode never raises with replace
+                continue
+        arg = str(arg)
+        eq, star = arg.find("="), arg.find("*")
+        cut = min(i for i in (eq, star) if i >= 0) if (eq >= 0 or star >= 0) else -1
+        if cut <= 0:
+            continue
+        out[arg[:cut].strip().lower()] = arg[cut + 1 :].strip()
+    return out
+
+
+def _tacacs_role_from_attrs(attrs: dict[str, str], tacacs_cfg: dict) -> tuple[str, int | None]:
+    """Map authorization attributes onto a Plexus role.
+
+    Precedence:
+      1. ``role_attribute`` (default ``plexus-role``) present with value
+         ``admin`` / ``user`` - an explicit assertion from the ISE shell
+         profile's custom attributes.
+      2. ``priv-lvl`` >= ``admin_priv_lvl`` (default 15) - the same
+         signal switches use for enable-level access.  ``admin_priv_lvl``
+         of 0 disables this rule.
+      3. ``default_role``.
+
+    Returns ``(role, priv_lvl)``; ``priv_lvl`` is None when the server
+    sent none or it wasn't an integer.
+    """
+    role_attr = (tacacs_cfg.get("role_attribute") or _TACACS_DEFAULT_ROLE_ATTRIBUTE).strip().lower()
+    default_role = tacacs_cfg.get("default_role") or "user"
+    if default_role not in ("user", "admin"):
+        default_role = "user"
+
+    priv_lvl: int | None = None
+    raw_priv = attrs.get("priv-lvl")
+    if raw_priv is not None:
+        try:
+            priv_lvl = int(raw_priv)
+        except TypeError, ValueError:
+            priv_lvl = None
+
+    asserted = (attrs.get(role_attr) or "").strip().lower()
+    if asserted in ("admin", "user"):
+        return asserted, priv_lvl
+
+    try:
+        admin_priv_lvl = int(tacacs_cfg.get("admin_priv_lvl", 15))
+    except TypeError, ValueError:
+        admin_priv_lvl = 15
+    if admin_priv_lvl > 0 and priv_lvl is not None and priv_lvl >= admin_priv_lvl:
+        return "admin", priv_lvl
+
+    return default_role, priv_lvl
+
+
+def _tacacs_authenticate_sync(username: str, password: str, tacacs_cfg: dict) -> tuple[bool, str, dict]:
+    """Blocking TACACS+ authentication (+ optional authorization).
+
+    Returns ``(accepted, status, attrs)`` where ``status`` is one of
+    ``accept`` / ``reject`` / ``error`` and ``attrs`` carries
+    ``role``, ``priv_lvl`` and the raw ``attributes`` dict from the
+    authorization reply (empty when authorization is disabled).
+
+    Authorization is a *second* exchange after a PASS: Plexus asks for
+    ``service=shell cmd=`` (the exec-authorization request every Cisco
+    device sends at login) so an ISE TACACS profile / shell profile
+    applies unchanged.  An authorization FAIL is surfaced as ``reject``
+    - the user is who they say they are but ISE policy doesn't grant
+    them Plexus - and never falls through to a default role.
+    """
+    # Defense in depth (mirrors the RADIUS and LDAP guards): never send an
+    # empty password - the API layer already rejects it, but no future
+    # caller should be able to reach the wire with one.
+    if not password:
+        LOGGER.warning("tacacs: refusing to authenticate '%s' with an empty password", username)
+        return False, "reject", {}
+    if not TACACS_AVAILABLE:
+        LOGGER.warning("tacacs: tacacs_plus library is not installed - cannot authenticate")
+        return False, "error", {}
+    assert TACACSClient is not None
+    server = (tacacs_cfg.get("server") or "").strip()
+    secret = tacacs_cfg.get("secret") or ""
+    if not server or not secret:
+        # tacacs_plus accepts secret=None to send cleartext bodies; refuse
+        # rather than silently downgrade to an unobfuscated exchange.
+        LOGGER.warning("tacacs: server or shared secret not configured")
+        return False, "error", {}
+
+    authen_type_name = str(tacacs_cfg.get("authen_type") or "ascii").lower()
+    authen_type = TAC_PLUS_AUTHEN_TYPE_PAP if authen_type_name == "pap" else TAC_PLUS_AUTHEN_TYPE_ASCII
+    port = int(tacacs_cfg.get("port", 49))
+    timeout = int(tacacs_cfg.get("timeout", 5))
+
+    try:
+        client = TACACSClient(server, port, secret, timeout=timeout)
+        reply = client.authenticate(username, password, authen_type=authen_type)
+    except (OSError, TimeoutError) as exc:
+        LOGGER.warning("tacacs: server %s unreachable for user '%s': %s", server, username, exc)
+        return False, "error", {}
+    except Exception as exc:
+        LOGGER.warning("tacacs: authentication error for user '%s': %s", username, exc)
+        return False, "error", {}
+
+    if getattr(reply, "error", False):
+        LOGGER.warning("tacacs: server %s returned ERROR for user '%s'", server, username)
+        return False, "error", {}
+    if not getattr(reply, "valid", False):
+        LOGGER.info("tacacs: user '%s' rejected by %s", username, server)
+        return False, "reject", {}
+    LOGGER.info("tacacs: user '%s' authenticated by %s", username, server)
+
+    if not bool(tacacs_cfg.get("authorize", True)):
+        return True, "accept", {"role": None, "priv_lvl": None, "attributes": {}}
+
+    service = (tacacs_cfg.get("service") or "shell").strip() or "shell"
+    try:
+        # A fresh client per exchange: tacacs_plus closes the socket after
+        # each request and reuses the session id, which some servers
+        # (ISE included) reject for a second START on the same session.
+        authz_client = TACACSClient(server, port, secret, timeout=timeout)
+        authz = authz_client.authorize(
+            username,
+            arguments=[f"service={service}".encode(), b"cmd="],
+            authen_type=authen_type,
+        )
+    except (OSError, TimeoutError) as exc:
+        LOGGER.warning("tacacs: authorization to %s failed for user '%s': %s", server, username, exc)
+        return False, "error", {}
+    except Exception as exc:
+        LOGGER.warning("tacacs: authorization error for user '%s': %s", username, exc)
+        return False, "error", {}
+
+    authz_status = getattr(authz, "status", None)
+    if authz_status == TAC_PLUS_AUTHOR_STATUS_ERROR:
+        LOGGER.warning("tacacs: server %s returned authorization ERROR for user '%s'", server, username)
+        return False, "error", {}
+    if not getattr(authz, "valid", False):
+        LOGGER.info("tacacs: user '%s' authenticated but not authorized by %s", username, server)
+        return False, "reject", {}
+
+    attributes = _parse_tacacs_av_pairs(getattr(authz, "arguments", None))
+    role, priv_lvl = _tacacs_role_from_attrs(attributes, tacacs_cfg)
+    LOGGER.info("tacacs: user '%s' authorized by %s (priv-lvl=%s, role=%s)", username, server, priv_lvl, role)
+    return True, "accept", {"role": role, "priv_lvl": priv_lvl, "attributes": attributes}
+
+
+async def verify_tacacs_user(username: str, password: str) -> tuple[bool, str, dict]:
+    """Returns (is_authenticated, status, attrs)."""
+    tacacs_cfg = state.AUTH_CONFIG.get("tacacs", {})
+    return await asyncio.to_thread(_tacacs_authenticate_sync, username, password, tacacs_cfg)
+
+
+async def upsert_tacacs_user(username: str, tacacs_attrs: dict) -> dict | None:
+    """Ensure a local shadow user exists for TACACS+-authenticated identities.
+
+    With authorization enabled the ISE shell profile is authoritative for
+    the role, so it is re-synced on every login (``sync_role``) exactly
+    like LDAP group membership - a user dropped from the admin profile is
+    demoted on their next login.  With authorization disabled TACACS+
+    asserts nothing and the RADIUS semantics apply: the role is whatever
+    a Plexus admin set locally.
+    """
+    tacacs_cfg = state.AUTH_CONFIG.get("tacacs", {})
+    authorize = bool(tacacs_cfg.get("authorize", True))
+    role = (tacacs_attrs or {}).get("role") if authorize else None
+    if role not in ("user", "admin"):
+        role = tacacs_cfg.get("default_role") or "user"
+        if role not in ("user", "admin"):
+            role = "user"
+
+    existing = await db.get_user_by_username(username)
+    user = await upsert_external_user(username, role=role, provider="tacacs", sync_role=authorize)
+    if user and not existing:
+        group_ids = tacacs_cfg.get("default_group_ids", [])
+        if group_ids:
+            try:
+                await db.set_user_groups(int(user["id"]), group_ids)
+                user = await db.get_user_by_id(int(user["id"]))
+            except ValueError:
+                LOGGER.warning("tacacs: default access group assignment failed for user '%s'", username)
     return user
 
 
@@ -631,7 +858,8 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 
     Returns (user, auth_source, error_detail)
 
-    Looks up ``verify_radius_user``, ``upsert_radius_user``, ``verify_user``
+    Looks up ``verify_radius_user``, ``upsert_radius_user``,
+    ``verify_tacacs_user``, ``upsert_tacacs_user``, ``verify_user``
     and ``AUTH_CONFIG`` through the app module so that tests can monkeypatch
     ``app_module.X`` and the patched version is used here.
     """
@@ -645,6 +873,8 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
     _upsert_radius = getattr(_app, "upsert_radius_user", upsert_radius_user)
     _verify_ldap = getattr(_app, "verify_ldap_user", verify_ldap_user)
     _upsert_ldap = getattr(_app, "upsert_ldap_user", upsert_ldap_user)
+    _verify_tacacs = getattr(_app, "verify_tacacs_user", verify_tacacs_user)
+    _upsert_tacacs = getattr(_app, "upsert_tacacs_user", upsert_tacacs_user)
     _verify_local = getattr(_app, "verify_user", _verify_user_fn)
 
     # Dev bootstrap shortcut: deterministic local admin credentials.
@@ -682,6 +912,33 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 
         if status == "error":
             return None, None, "RADIUS authentication service unavailable"
+        return None, None, "Invalid username or password"
+
+    # TACACS+ provider (Cisco ISE Device Admin and friends)
+    tacacs_cfg = auth_config.get("tacacs", {})
+    tacacs_enabled = bool(tacacs_cfg.get("enabled"))
+
+    if provider == "tacacs" and tacacs_enabled:
+        accepted, status, tacacs_attrs = await _verify_tacacs(username, password)
+        if accepted:
+            user = await _upsert_tacacs(username, tacacs_attrs)
+            if user:
+                return user, "tacacs", None
+            return None, None, "TACACS+ login succeeded but local account provisioning failed"
+
+        if status == "reject" and not bool(tacacs_cfg.get("fallback_on_reject", False)):
+            return None, None, "Invalid username or password"
+
+        if bool(tacacs_cfg.get("fallback_to_local", True)):
+            local_user = await _verify_local(username, password)
+            if local_user:
+                return local_user, "local-fallback", None
+            if status == "error":
+                return None, None, "TACACS+ server is unavailable and local fallback credentials failed"
+            return None, None, "Invalid username or password"
+
+        if status == "error":
+            return None, None, "TACACS+ authentication service unavailable"
         return None, None, "Invalid username or password"
 
     # LDAP / Active Directory provider

@@ -8,9 +8,14 @@ This guide walks through setting up RADIUS authentication end-to-end:
 
 ## 1. What Plexus Supports Today
 
-Plexus login supports two auth providers:
+Plexus login supports four auth providers:
 - `local` (SQLite user database)
 - `radius` (RADIUS Access-Request with local fallback options)
+- `tacacs` (TACACS+ - the protocol switches use with Cisco ISE Device Admin;
+  obfuscates the whole exchange and can assert the Plexus role from an ISE
+  shell profile. Prefer it over RADIUS-PAP when ISE is the auth server -
+  see `TACACS_CONFIGURATION_GUIDE.md`)
+- `ldap` (LDAP/LDAPS bind with group-based role mapping)
 
 When RADIUS auth succeeds, Plexus will create a local shadow user automatically if needed.
 This allows sessions, roles, and feature access policies to continue working in-app.
