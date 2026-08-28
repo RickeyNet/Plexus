@@ -1778,17 +1778,45 @@ def _install_add_timeout(options: dict, redundant: bool) -> int:
     return REDUNDANT_INSTALL_ADD_TIMEOUT if redundant else DEFAULT_INSTALL_ADD_TIMEOUT
 
 
-async def _probe_redundant(conn, device_type: str) -> bool:
-    """Best-effort "does this box have a standby sup / SVL peer?".
+async def _probe_redundancy(conn, device_type: str) -> dict | None:
+    """Best-effort ``show redundancy`` read for the transfer phase.
 
-    Used only to widen timeouts; any failure means "assume standalone"
-    so a flaky ``show redundancy`` never blocks a transfer.
+    Returns the parsed dict, or ``None`` when the platform has no
+    redundancy concept *or* the read failed - a flaky ``show
+    redundancy`` must never block a transfer on its own.  Callers use
+    it to widen timeouts and to run ``_transfer_standby_gate``.
     """
     try:
-        red = await _check_redundancy(conn, device_type)
+        return await _check_redundancy(conn, device_type)
     except Exception:
-        return False
-    return bool(red and red.get("redundant"))
+        return None
+
+
+async def _transfer_standby_gate(campaign_id, dev_id, ip, device_type, red, options) -> str | None:
+    """Refuse ``install add`` on a redundant chassis whose standby isn't HOT.
+
+    In install mode the add step copies every unpacked package to the
+    standby's bootflash.  With the peer STANDBY COLD / absent that
+    sync silently doesn't happen, the transfer phase reports success,
+    and the operator only finds out at activate time (which the
+    redundancy gate there refuses).  Catching it here saves the 30-60
+    minute SCP + unpack.  Only meaningful on platforms with a discrete
+    prestage step; ``skip_health_check`` downgrades it to a warning.
+    Returns an error string to abort on, else None.
+    """
+    if not red or not red.get("redundant") or red.get("standby_hot"):
+        return None
+    if not get_driver(device_type).upgrade_has_discrete_prestage():
+        return None
+    peer = red.get("peer_state") or "unknown"
+    problem = (
+        f"Standby supervisor is {peer}, not STANDBY HOT - install add would not sync "
+        "packages to it and activate would be refused"
+    )
+    if options.get("skip_health_check"):
+        await _emit(campaign_id, dev_id, "warn", f"Proceeding despite: {problem} (skip_health_check set)", host=ip)
+        return None
+    return problem
 
 
 async def _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type) -> str | None:
@@ -2343,14 +2371,16 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
 
     try:
         await _emit(campaign_id, dev_id, "success", "Connected", host=ip)
-        chassis_redundant = await _probe_redundant(conn, device_type)
+        red = await _probe_redundancy(conn, device_type)
+        chassis_redundant = bool(red and red.get("redundant"))
         install_add_timeout = _install_add_timeout(options, redundant=chassis_redundant)
         if chassis_redundant:
             await _emit(
                 campaign_id,
                 dev_id,
                 "info",
-                f"Redundant chassis detected - install add budget {install_add_timeout // 60} min",
+                f"Redundant chassis detected (peer {red.get('peer_state') or 'unknown'}) - "
+                f"install add budget {install_add_timeout // 60} min",
                 host=ip,
             )
 
@@ -2409,6 +2439,15 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                     error_message="",
                 )
                 return
+
+        # Standby must be HOT before install add on a dual-sup chassis -
+        # otherwise the package sync to the peer silently doesn't happen.
+        standby_err = await _transfer_standby_gate(campaign_id, dev_id, ip, device_type, red, options)
+        if standby_err:
+            await db.update_upgrade_device(dev_id, transfer_status="failed", phase="failed", error_message=standby_err)
+            await _emit_device_status(campaign_id, dev_id, transfer_status="failed", error_message=standby_err)
+            await _emit(campaign_id, dev_id, "error", standby_err, host=ip)
+            return
 
         try:
             image_path = _image_file_path(image_name)
