@@ -12,6 +12,7 @@ stream live job output - all through a REST API with WebSocket support.
 - Performance and scale notes: `PERFORMANCE_LIMITS.md`
 - Data handling and retention: `DATA_RETENTION.md`
 - RADIUS setup: `RADIUS_CONFIGURATION_GUIDE.md`
+- TACACS+ / Cisco ISE Device Admin login: `TACACS_CONFIGURATION_GUIDE.md`
 
 ## Architecture
 

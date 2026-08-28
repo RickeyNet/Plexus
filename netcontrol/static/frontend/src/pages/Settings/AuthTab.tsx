@@ -158,6 +158,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
     );
 
   const radiusGroupSet = new Set(draft.radius.default_group_ids);
+  const tacacsGroupSet = new Set(draft.tacacs.default_group_ids);
   const ldapGroupSet = new Set(draft.ldap.default_group_ids);
 
   return (
@@ -195,6 +196,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
           >
             <option value="local">Local</option>
             <option value="radius">RADIUS</option>
+            <option value="tacacs">TACACS+</option>
             <option value="ldap">LDAP</option>
           </select>
         </div>
@@ -262,6 +264,9 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
 
       {draft.provider === 'radius' && (
         <RadiusPanel draft={draft} setDraft={setDraft} groups={groups} groupSet={radiusGroupSet} />
+      )}
+      {draft.provider === 'tacacs' && (
+        <TacacsPanel draft={draft} setDraft={setDraft} groups={groups} groupSet={tacacsGroupSet} />
       )}
       {draft.provider === 'ldap' && (
         <LdapPanel draft={draft} setDraft={setDraft} groups={groups} groupSet={ldapGroupSet} />
@@ -378,6 +383,170 @@ function RadiusPanel({
                     if (e.target.checked) next.add(g.id);
                     else next.delete(g.id);
                     setR({ default_group_ids: Array.from(next) });
+                  }}
+                />
+                <span>{g.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </fieldset>
+  );
+}
+
+function TacacsPanel({
+  draft,
+  setDraft,
+  groups,
+  groupSet,
+}: {
+  draft: AuthConfig;
+  setDraft: (next: AuthConfig) => void;
+  groups: AccessGroup[];
+  groupSet: Set<number>;
+}) {
+  const t = draft.tacacs;
+  const setT = (patch: Partial<typeof t>) =>
+    setDraft({ ...draft, tacacs: { ...t, ...patch } });
+
+  return (
+    <fieldset
+      style={{
+        marginTop: '1rem',
+        padding: '0.75rem',
+        border: '1px solid var(--border)',
+        borderRadius: '0.375rem',
+      }}
+    >
+      <legend style={{ padding: '0 0.4rem' }}>TACACS+</legend>
+      <small className="card-description">
+        Cisco ISE Device Admin style login: the whole exchange is obfuscated under the
+        shared secret and an ISE shell profile can assert the Plexus role. Register the
+        Plexus host as a Network Device in ISE with TACACS+ enabled.
+      </small>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <CheckboxField
+          label="Enabled"
+          checked={t.enabled}
+          onChange={(v) => setT({ enabled: v })}
+        />
+        <CheckboxField
+          label="Fallback to local"
+          checked={t.fallback_to_local}
+          onChange={(v) => setT({ fallback_to_local: v })}
+        />
+        <CheckboxField
+          label="Fallback on reject"
+          checked={t.fallback_on_reject}
+          onChange={(v) => setT({ fallback_on_reject: v })}
+        />
+        <CheckboxField
+          label="Authorize (map ISE shell profile to role)"
+          checked={t.authorize}
+          onChange={(v) => setT({ authorize: v })}
+        />
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <TextField
+          label="Server"
+          value={t.server}
+          onChange={(v) => setT({ server: v })}
+          flex="1 1 220px"
+        />
+        <NumberField
+          label="Port"
+          value={t.port}
+          onChange={(v) => setT({ port: v })}
+        />
+        <TextField
+          label="Shared Secret"
+          type="password"
+          value={t.secret}
+          onChange={(v) => setT({ secret: v })}
+          flex="1 1 200px"
+        />
+        <NumberField
+          label="Timeout (s)"
+          value={t.timeout}
+          onChange={(v) => setT({ timeout: v })}
+        />
+        <div className="form-group" style={{ flex: '1 1 160px' }}>
+          <label className="form-label">Authentication Type</label>
+          <select
+            className="form-select"
+            value={t.authen_type}
+            onChange={(e) => setT({ authen_type: e.target.value })}
+          >
+            <option value="ascii">ASCII (interactive login, IOS default)</option>
+            <option value="pap">PAP</option>
+          </select>
+        </div>
+      </div>
+      {t.authorize && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <TextField
+            label="Authorization Service"
+            value={t.service}
+            onChange={(v) => setT({ service: v })}
+            flex="1 1 160px"
+          />
+          <TextField
+            label="Role Attribute"
+            value={t.role_attribute}
+            onChange={(v) => setT({ role_attribute: v })}
+            flex="1 1 200px"
+          />
+          <NumberField
+            label="Admin priv-lvl (0 = off)"
+            value={t.admin_priv_lvl}
+            onChange={(v) => setT({ admin_priv_lvl: v })}
+          />
+          <div className="form-group" style={{ flex: '1 1 140px' }}>
+            <label className="form-label">Default Role</label>
+            <select
+              className="form-select"
+              value={t.default_role ?? 'user'}
+              onChange={(e) => setT({ default_role: e.target.value })}
+            >
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+        </div>
+      )}
+      {t.authorize && (
+        <small className="card-description">
+          Role precedence: <code>{t.role_attribute || 'plexus-role'}=admin|user</code> from the
+          shell profile&apos;s custom attributes, then <code>priv-lvl</code> &ge;{' '}
+          {t.admin_priv_lvl || '(off)'}, then the default role. Re-synced on every login.
+        </small>
+      )}
+      <div className="form-group">
+        <label className="form-label">Default Access Groups</label>
+        {groups.length === 0 ? (
+          <span className="card-description">Create access groups first.</span>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gap: '0.4rem',
+            }}
+          >
+            {groups.map((g) => (
+              <label
+                key={g.id}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={groupSet.has(g.id)}
+                  onChange={(e) => {
+                    const next = new Set(groupSet);
+                    if (e.target.checked) next.add(g.id);
+                    else next.delete(g.id);
+                    setT({ default_group_ids: Array.from(next) });
                   }}
                 />
                 <span>{g.name}</span>
