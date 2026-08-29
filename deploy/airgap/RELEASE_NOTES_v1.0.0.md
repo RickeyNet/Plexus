@@ -58,12 +58,18 @@ Plexus supports both SQLite (default, simplest) and PostgreSQL (recommended for 
 
 ## First login
 
-After `docker compose up -d`, browse to `https://<vm-ip-or-hostname>` and log in:
+After `docker compose up -d`, Plexus generates a **random one-time password**
+for the bootstrap `admin` account and prints it once to the app container's
+log. Retrieve it:
 
-- Username: `admin`
-- Password: `netcontrol`
+```bash
+docker compose logs plexus | grep -A3 'default admin'
+```
 
-You will be forced to change the password on first login. Then configure your authentication provider (LDAP/AD or RADIUS) under Settings → Authentication Provider.
+Then browse to `https://<vm-ip-or-hostname>` and log in as `admin` with that
+password. You will be forced to change the password on first login. (To pick
+the initial password yourself, set `PLEXUS_INITIAL_ADMIN_PASSWORD` in `.env`
+before the first start.) Then configure your authentication provider (LDAP/AD or RADIUS) under Settings → Authentication Provider.
 
 ## Security notes
 
