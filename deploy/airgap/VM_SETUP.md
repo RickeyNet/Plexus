@@ -324,7 +324,9 @@ can log into Plexus's web UI.
 
 After the Plexus stack is running (per the main README):
 
-1. Browse to `https://<HOSTNAME>` and log in as `admin` / `netcontrol`.
+1. Browse to `https://<HOSTNAME>` and log in as `admin` with the random
+   one-time password printed to the app log on first boot (see "Step 4 -
+   First login" in [README.md](README.md) for how to retrieve it).
 2. Force-change the admin password.
 3. Settings → Authentication Provider → **LDAP / Active Directory**.
 4. Fill in:
