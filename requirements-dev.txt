@@ -9,11 +9,11 @@ pytest-cov==7.1.0
 pytest-timeout==2.4.0
 # Parallel test execution: run `pytest -n auto` (~4 min vs ~18 min serial)
 pytest-xdist==3.8.0
-ruff==0.16.0
-mypy==2.3.0
-pre-commit==4.6.1
+ruff==0.16.5
+mypy==2.3.1
+pre-commit==4.6.2
 types-requests==2.33.0.20260712
 pip-audit==2.10.1
 bandit==1.9.4
 # Lock-file generator: `uv pip compile --universal --generate-hashes` (see README).
-uv>=0.12,<1
+uv>=0.12.7,<1
