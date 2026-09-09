@@ -98,6 +98,20 @@ docker run --rm --platform "$PLATFORM" \
         set -euo pipefail
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
+        apt-get install -y --no-install-recommends ca-certificates curl
+        # Ubuntu archive "firefox" is a transitional stub that runs
+        # "snap install firefox" at install time - useless offline. Pull the
+        # real deb from Mozilla apt repo instead, pinned above the stub
+        # (the stub carries epoch 1, so it outranks Mozilla without a pin).
+        install -d -m 0755 /etc/apt/keyrings
+        curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg \
+            -o /etc/apt/keyrings/packages.mozilla.org.asc
+        echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] \
+            https://packages.mozilla.org/apt mozilla main" \
+            > /etc/apt/sources.list.d/mozilla.list
+        printf "Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n" \
+            > /etc/apt/preferences.d/mozilla
+        apt-get update
         cd /out
         apt-get install -y --download-only \
             xfce4 xfce4-goodies \
