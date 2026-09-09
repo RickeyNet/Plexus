@@ -784,7 +784,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <PhaseStep
                   n={1}
                   title="Prestage"
-                  desc="Copy the firmware image onto each device and verify it. Safe — no reboot."
+                  desc="Health-check each device, back up its config, and free flash space. Safe — no reboot."
                   status={<StepStatus c={phaseCounts.prestage} />}
                 >
                   <button
@@ -806,7 +806,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <PhaseStep
                   n={2}
                   title="Transfer"
-                  desc="Install and expand the image so it is ready to boot. Still no reboot."
+                  desc="Copy the image to each device, verify it, and expand it ready to boot. Still no reboot."
                   status={<StepStatus c={phaseCounts.transfer} />}
                 >
                   <button

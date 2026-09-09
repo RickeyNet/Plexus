@@ -9,7 +9,7 @@ it to the VM, and run one installer script.
 **On the online machine** (Linux/macOS/WSL2 with Docker Desktop or Engine):
 - Docker 24+ with `buildx` enabled (default on modern Docker)
 - ~3 GB free disk for the bundle
-- Network access to Docker Hub and `download.docker.com`
+- Network access to Docker Hub, `download.docker.com`, and `packages.mozilla.org`
 
 **On the offline VM:**
 - Ubuntu 26.04 amd64
@@ -43,7 +43,9 @@ plexus-airgap-bundle/
 │   └── docker-*.deb        # Docker Engine + compose plugin (resolute/amd64)
 ├── desktop-debs/
 │   └── *.deb               # XFCE + xrdp + AD-join (realmd/sssd/adcli) +
-│                           # chrony + openssh-server + ufw + firefox.
+│                           # chrony + openssh-server + ufw + firefox
+│                           # (real deb from Mozilla apt repo, not the
+│                           # snap transitional stub in the Ubuntu archive).
 │                           # Used by VM_SETUP.md, NOT installed automatically.
 ├── repo/
 │   ├── docker-compose.yml
