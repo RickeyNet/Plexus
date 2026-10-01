@@ -95,6 +95,10 @@ Socket and a Meraki switch at the same location are cabled together unless
 one of them reports the other as a neighbor, so a path between a Meraki
 subnet and a Cato subnet may show as "no path".
 
+A Cato site that connects to AWS is joined to the AWS side of the map by
+public address: a vSocket to its instance, an IPsec site to the AWS VPN
+gateway it terminates on. See [aws-topology.md](aws-topology.md).
+
 ## What is collected
 
 | Data | Cato API query | Option |

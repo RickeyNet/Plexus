@@ -1599,7 +1599,8 @@ async def _merge_meraki(
     ext_to_host: dict[str, int],
     ip_to_host: dict[str, int],
 ) -> None:
-    """Fold the latest Meraki snapshot of each organization into the graph."""
+    """Fold the latest snapshot of each Meraki organization and Cato account,
+    and the AWS discovery, into the graph."""
     from netcontrol.integrations.meraki.enrich import load_inventory_index
     from netcontrol.integrations.meraki.unified import external_key, merge_meraki_into_graph
     from netcontrol.routes.meraki_topology import latest_snapshots
@@ -1623,7 +1624,7 @@ async def _merge_meraki(
             label = n.get("label") or ""
             host = inventory.match(
                 serial=n.get("serial") or "",
-                ips=[n.get("ip") or ""],
+                ips=[n.get("ip") or "", *(n.get("alias_ips") or [])],
                 name=label if n["kind"] == "external" else "",
             )
             if host:

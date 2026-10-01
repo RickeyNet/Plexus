@@ -56,7 +56,7 @@ function tierRank(node: TopologyNode): number {
   const kind = node.meraki?.kind ?? '';
   const category = (node.device_category ?? '').toLowerCase();
   if (kind === 'wan' || kind === 'vpn_peer') return 5;
-  if (kind === 'appliance' || category === 'firewall' || category === 'router') return 0;
+  if (kind === 'appliance' || kind === 'vpc' || category === 'firewall' || category === 'router') return 0;
   if (node.device_type && GATEWAY_TYPES.has(node.device_type)) return 0;
   if (kind === 'switch' || category === 'switch') return 1;
   if (kind === 'external' || (!node.in_inventory && node.source !== 'meraki')) return 4;

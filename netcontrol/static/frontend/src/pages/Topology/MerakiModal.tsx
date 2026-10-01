@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
 import {
@@ -80,7 +81,7 @@ export function MerakiModal({ isOpen, onClose }: Props) {
     }
   };
 
-  const handleSample = async (provider: CloudProvider) => {
+  const handleSample = async (provider: CloudProvider | 'aws') => {
     setJobId(null);
     try {
       await buildSample.mutateAsync(provider);
@@ -96,6 +97,14 @@ export function MerakiModal({ isOpen, onClose }: Props) {
         devices, LAN links, WAN uplinks and VPN tunnels, with VLANs, routes, firewall rules and port
         configuration behind each device. A Cato account adds its sites, Sockets, WAN links, the PoPs
         they connect to and the connected remote users. Collect again whenever you want a fresh picture.
+      </p>
+      <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
+        AWS is not added here: every enabled AWS account under{' '}
+        <Link to="/cloud-visibility" onClick={onClose}>
+          Cloud Visibility
+        </Link>{' '}
+        joins this map with its VPCs, subnets, gateways and VPN connections each time it is discovered. Load
+        AWS Sample adds a demo account there.
       </p>
 
       <div
@@ -120,6 +129,15 @@ export function MerakiModal({ isOpen, onClose }: Props) {
               onClick={() => handleSample('cato')}
             >
               {buildSample.isPending ? 'Building…' : 'Load Cato Sample'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={buildSample.isPending}
+              title="Add a demo AWS account to Cloud Visibility and the map - no credentials needed"
+              onClick={() => handleSample('aws')}
+            >
+              {buildSample.isPending ? 'Building…' : 'Load AWS Sample'}
             </button>
           </>
         )}

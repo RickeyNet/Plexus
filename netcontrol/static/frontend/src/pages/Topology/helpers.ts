@@ -24,6 +24,7 @@ export interface TopoThemeColors {
   meraki: VendorColor;
   edgeVpn: EdgeColor;
   edgeWan: EdgeColor;
+  edgeCloud: EdgeColor;
   pathGlow: string;
   dimColor: { background: string; border: string };
   dimEdge: EdgeColor;
@@ -72,6 +73,7 @@ export function getTopoThemeColors(): TopoThemeColors {
     meraki: vendor(v, 'meraki', '#33691e', '#8bc34a', '#558b2f', '#c5e1a5'),
     edgeVpn: edge(v, 'vpn', '#ba68c8', '#ce93d8', 0.6),
     edgeWan: edge(v, 'wan', '#4fc3f7', '#81d4fa', 0.8),
+    edgeCloud: edge(v, 'cloud', '#ff9800', '#ffb74d', 0.8),
     pathGlow: v('--topo-path-glow', 'rgba(255,255,255,0.6)'),
     dimColor: {
       background: v('--topo-dim-bg', 'rgba(40,50,60,0.4)'),
@@ -151,7 +153,20 @@ export function isManagedNode(node: TopologyNode): boolean {
 
 /** Display name of the integration a snapshot node came from. */
 export function providerLabel(provider?: string | null): string {
+  if (provider === 'aws') return 'AWS';
   return provider === 'cato' ? 'Cato' : 'Meraki';
+}
+
+/** Where the integration's data is read from. */
+export function providerSourceName(provider?: string | null): string {
+  if (provider === 'aws') return 'AWS API';
+  return provider === 'cato' ? 'Cato API' : 'Meraki Dashboard';
+}
+
+/** What one entry of the integration is called. */
+export function providerScopeName(provider?: string | null): string {
+  if (provider === 'aws') return 'AWS account';
+  return provider === 'cato' ? 'Cato account' : 'Meraki organization';
 }
 
 /** WAN uplink stubs and non-Meraki VPN peers: endpoints, not devices. */
@@ -175,6 +190,8 @@ export function merakiNodeShape(node: TopologyNode): string {
   // A SASE cloud: its PoPs and backbone, and the remote-user group.
   if (kind === 'cloud') return 'hexagon';
   if (kind === 'users') return 'star';
+  // A VPC's own router.
+  if (kind === 'vpc') return 'diamond';
   return 'square';
 }
 
@@ -229,6 +246,7 @@ export function edgeProtocolColor(protocol: string | null | undefined, tc: TopoT
   if (protocol === 'inferred-fdb') return tc.edgeInferred;
   if (protocol === 'vpn' || protocol === 'vpn-ipsec') return tc.edgeVpn;
   if (protocol === 'wan') return tc.edgeWan;
+  if (protocol === 'cloud') return tc.edgeCloud;
   return tc.edgeCdp;
 }
 

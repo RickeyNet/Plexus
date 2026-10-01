@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
 from netcontrol.routes.cloud_collectors import (
     CloudCollectorAuthError,
     CloudCollectorError,
@@ -86,6 +87,13 @@ async def _require_admin_dep(request: Request):
     if _require_admin is None:
         raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
     return await _require_admin(request)
+
+
+def _topology_changed() -> None:
+    """AWS discovery feeds the Topology map; drop its cached graph."""
+    from netcontrol.routes.topology import invalidate_topology_cache
+
+    invalidate_topology_cache()
 
 
 def _normalize_provider(raw: str | None) -> str:
@@ -1000,123 +1008,8 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
     resources: list[dict[str, Any]]
     connections: list[dict[str, Any]]
     if provider == "aws":
-        resources = [
-            {
-                "resource_uid": "aws:vpc:core",
-                "resource_type": "vpc",
-                "name": "prod-core-vpc",
-                "region": "us-east-1",
-                "cidr": "10.200.0.0/16",
-                "status": "active",
-            },
-            {
-                "resource_uid": "aws:tgw:global",
-                "resource_type": "transit_gateway",
-                "name": "global-tgw",
-                "region": "us-east-1",
-                "status": "active",
-            },
-            {
-                "resource_uid": "aws:dx:primary",
-                "resource_type": "direct_connect",
-                "name": "dx-primary",
-                "region": "us-east-1",
-                "status": "up",
-            },
-            {
-                "resource_uid": "aws:internet_gateway:igw-core",
-                "resource_type": "internet_gateway",
-                "name": "igw-core",
-                "region": "us-east-1",
-                "status": "attached",
-            },
-            {
-                "resource_uid": "aws:nat_gateway:nat-core-a",
-                "resource_type": "nat_gateway",
-                "name": "nat-core-a",
-                "region": "us-east-1",
-                "status": "available",
-            },
-            {
-                "resource_uid": "aws:route_table:rtb-core",
-                "resource_type": "route_table",
-                "name": "rtb-core",
-                "region": "us-east-1",
-                "status": "active",
-                "metadata": {"route_count": 3, "association_count": 2},
-            },
-            {
-                "resource_uid": "aws:sg:app-edge",
-                "resource_type": "security_group",
-                "name": "sg-app-edge",
-                "region": "us-east-1",
-                "status": "active",
-                "metadata": {
-                    "policy_rules": [
-                        {
-                            "rule_uid": "aws:sg:app-edge:ingress:https",
-                            "rule_name": "HTTPS ingress",
-                            "direction": "inbound",
-                            "action": "allow",
-                            "protocol": "tcp",
-                            "source_selector": "0.0.0.0/0",
-                            "destination_selector": "self",
-                            "port_expression": "443",
-                        },
-                        {
-                            "rule_uid": "aws:sg:app-edge:egress:any",
-                            "rule_name": "All egress",
-                            "direction": "outbound",
-                            "action": "allow",
-                            "protocol": "all",
-                            "source_selector": "self",
-                            "destination_selector": "0.0.0.0/0",
-                            "port_expression": "all",
-                        },
-                    ],
-                },
-            },
-        ]
-        connections = [
-            {
-                "source_resource_uid": "aws:vpc:core",
-                "target_resource_uid": "aws:tgw:global",
-                "connection_type": "transit_gateway_attachment",
-                "state": "attached",
-            },
-            {
-                "source_resource_uid": "aws:tgw:global",
-                "target_resource_uid": "aws:dx:primary",
-                "connection_type": "direct_connect_gateway",
-                "state": "up",
-            },
-            {
-                "source_resource_uid": "aws:vpc:core",
-                "target_resource_uid": "aws:internet_gateway:igw-core",
-                "connection_type": "internet_gateway_attachment",
-                "state": "attached",
-            },
-            {
-                "source_resource_uid": "aws:vpc:core",
-                "target_resource_uid": "aws:route_table:rtb-core",
-                "connection_type": "route_table_association",
-                "state": "attached",
-            },
-            {
-                "source_resource_uid": "aws:route_table:rtb-core",
-                "target_resource_uid": "aws:nat_gateway:nat-core-a",
-                "connection_type": "route_next_hop",
-                "state": "active",
-                "metadata": {"destination": "0.0.0.0/0"},
-            },
-            {
-                "source_resource_uid": "aws:vpc:core",
-                "target_resource_uid": "aws:sg:app-edge",
-                "connection_type": "security_boundary",
-                "state": "enforced",
-            },
-        ]
-        return resources, connections
+        # Shared with the Topology map, which draws this discovery too.
+        return build_aws_sample()
 
     if provider == "azure":
         resources = [
@@ -1486,6 +1379,8 @@ async def run_scheduled_discovery() -> dict:
     errors: list[str] = []
     for account in accounts:
         account_id = int(account["id"])
+        if account.get("auth_type") == "sample":
+            continue  # bundled demo data; there is nothing to discover live
         try:
             existing_links = await db.get_cloud_hybrid_links(account_id=account_id)
             host_ids = sorted({int(link["host_id"]) for link in existing_links if link.get("host_id")})
@@ -1503,6 +1398,7 @@ async def run_scheduled_discovery() -> dict:
                 sync_message="Scheduled live discovery refresh",
             )
             refreshed += 1
+            _topology_changed()
         except CloudCollectorError as exc:
             message = str(exc) or type(exc).__name__
             LOGGER.warning(
@@ -1618,6 +1514,7 @@ async def update_cloud_account_api(account_id: int, body: CloudAccountUpdate, re
     updated = await db.update_cloud_account(account_id, **updates)
     if not updated:
         raise HTTPException(status_code=404, detail="Cloud account not found")
+    _topology_changed()
 
     session = _get_session(request) or {}
     await _audit(
@@ -1638,6 +1535,7 @@ async def delete_cloud_account_api(account_id: int, request: Request):
     deleted = await db.delete_cloud_account(account_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Cloud account not found")
+    _topology_changed()
 
     session = _get_session(request) or {}
     await _audit(
@@ -1965,6 +1863,7 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
             sync_status=sync_status,
             sync_message=sync_message,
         )
+        _topology_changed()
     except HTTPException:
         raise
     except Exception:

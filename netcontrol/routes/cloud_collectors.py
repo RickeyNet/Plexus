@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from netcontrol.integrations.aws import collect as aws_detail
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.cloud_collectors")
@@ -395,6 +396,111 @@ def _aws_list_all(client, operation: str, result_key: str, **kwargs) -> list[dic
     return list(resp.get(result_key) or [])
 
 
+def _collect_aws_map_detail(session, ec2, region: str, cfg, resources: list[dict], connections: list[dict]) -> None:
+    """Detail the Topology map uses: subnets, instances, customer gateways and
+    how Direct Connect reaches a gateway.
+
+    These sections were added after the base discovery and need permissions
+    an existing read-only policy may lack (``ec2:DescribeInstances`` is not
+    part of the VPC read-only policy). One that cannot be read is skipped and
+    recorded as a ``collection_warning`` resource; it never fails discovery.
+    """
+
+    def optional(section: str, read) -> None:
+        try:
+            read()
+        except Exception as exc:  # noqa: BLE001 - best-effort detail; discovery goes on
+            LOGGER.warning(
+                "aws collector: skipped %s region=%s: %s", section, region, aws_detail.error_code(exc), exc_info=True
+            )
+            resources.append(aws_detail.warning_resource(section, region, exc))
+
+    def subnets() -> None:
+        for subnet in _aws_list_all(ec2, "describe_subnets", "Subnets"):
+            resource = aws_detail.subnet_resource(subnet, region)
+            if resource:
+                resources.append(resource)
+
+    def instances() -> None:
+        for reservation in _aws_list_all(ec2, "describe_instances", "Reservations"):
+            for instance in reservation.get("Instances") or []:
+                resource = aws_detail.instance_resource(instance, region)
+                if resource:
+                    resources.append(resource)
+
+    def customer_gateways() -> None:
+        for gateway in _aws_list_all(ec2, "describe_customer_gateways", "CustomerGateways"):
+            resource = aws_detail.customer_gateway_resource(gateway, region)
+            if resource:
+                resources.append(resource)
+
+    def direct_connect() -> None:
+        dx = session.client("directconnect", region_name=region, config=cfg)
+        for vif in _aws_list_all(dx, "describe_virtual_interfaces", "virtualInterfaces"):
+            conn_id = str(vif.get("connectionId") or "").strip()
+            vgw_id = str(vif.get("virtualGatewayId") or "").strip()
+            dxgw_id = str(vif.get("directConnectGatewayId") or "").strip()
+            target = f"aws:direct-connect-gateway:{dxgw_id}" if dxgw_id else f"aws:vpn_gateway:{vgw_id}"
+            if not conn_id or not (dxgw_id or vgw_id):
+                continue
+            connections.append(
+                _normalize_connection(
+                    "aws",
+                    f"aws:direct_connect:{conn_id}",
+                    target,
+                    "direct_connect_virtual_interface",
+                    state=str(vif.get("virtualInterfaceState") or ""),
+                    metadata=aws_detail.virtual_interface_metadata(vif),
+                )
+            )
+        for gateway in _aws_list_all(dx, "describe_direct_connect_gateways", "directConnectGateways"):
+            dxgw_id = str(gateway.get("directConnectGatewayId") or "").strip()
+            if not dxgw_id:
+                continue
+            dxgw_uid = f"aws:direct-connect-gateway:{dxgw_id}"
+            resources.append(
+                _normalize_resource(
+                    "aws",
+                    dxgw_uid,
+                    "direct_connect_gateway",
+                    name=str(gateway.get("directConnectGatewayName") or dxgw_id),
+                    # A Direct Connect gateway is global; every region lists it.
+                    region="global",
+                    status=str(gateway.get("directConnectGatewayState") or ""),
+                    metadata={
+                        "amazon_asn": str(gateway.get("amazonSideAsn") or "").strip(),
+                        "owner_id": str(gateway.get("ownerAccount") or "").strip(),
+                    },
+                )
+            )
+            for association in _aws_list_all(
+                dx,
+                "describe_direct_connect_gateway_associations",
+                "directConnectGatewayAssociations",
+                directConnectGatewayId=dxgw_id,
+            ):
+                associated = association.get("associatedGateway") or {}
+                gateway_id = str(associated.get("id") or "").strip()
+                if not gateway_id:
+                    continue
+                kind = "tgw" if str(associated.get("type") or "") == "transitGateway" else "vpn_gateway"
+                connections.append(
+                    _normalize_connection(
+                        "aws",
+                        dxgw_uid,
+                        f"aws:{kind}:{gateway_id}",
+                        "direct_connect_gateway_association",
+                        state=str(association.get("associationState") or ""),
+                        metadata={"region": str(associated.get("region") or "").strip()},
+                    )
+                )
+
+    optional("subnets", subnets)
+    optional("instances", instances)
+    optional("customer_gateways", customer_gateways)
+    optional("direct_connect_gateways", direct_connect)
+
+
 def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
     try:
         import boto3
@@ -541,6 +647,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             "vpc_id": vpc_id,
                             "subnet_id": str(gateway.get("SubnetId") or "").strip(),
                             "connectivity_type": str(gateway.get("ConnectivityType") or "").strip(),
+                            **aws_detail.nat_gateway_addresses(gateway),
                         },
                     )
                 )
@@ -596,6 +703,10 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         name=_aws_tag_name(tgw.get("Tags")),
                         region=region,
                         status=str(tgw.get("State") or ""),
+                        metadata={
+                            "owner_id": str(tgw.get("OwnerId") or "").strip(),
+                            "amazon_asn": str((tgw.get("Options") or {}).get("AmazonSideAsn") or "").strip(),
+                        },
                     )
                 )
         except BotoCoreError, ClientError:
@@ -619,6 +730,12 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         target_uid,
                         "transit_gateway_attachment",
                         state=str(attachment.get("State") or ""),
+                        metadata={
+                            "attachment_id": str(attachment.get("TransitGatewayAttachmentId") or "").strip(),
+                            "resource_type": res_type,
+                            "resource_id": res_id,
+                            "resource_owner_id": str(attachment.get("ResourceOwnerId") or "").strip(),
+                        },
                     )
                 )
         except BotoCoreError, ClientError:
@@ -641,7 +758,15 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         f"aws:vpc:{acc_vpc}",
                         "vpc_peering",
                         state=str((peering.get("Status") or {}).get("Code") or ""),
-                        metadata={"peering_id": str(peering.get("VpcPeeringConnectionId") or "")},
+                        metadata={
+                            "peering_id": str(peering.get("VpcPeeringConnectionId") or ""),
+                            "requester_cidr": str(req.get("CidrBlock") or ""),
+                            "requester_owner_id": str(req.get("OwnerId") or ""),
+                            "requester_region": str(req.get("Region") or ""),
+                            "accepter_cidr": str(acc.get("CidrBlock") or ""),
+                            "accepter_owner_id": str(acc.get("OwnerId") or ""),
+                            "accepter_region": str(acc.get("Region") or ""),
+                        },
                     )
                 )
         except BotoCoreError, ClientError:
@@ -717,6 +842,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                                 for item in associations
                                 if str(item.get("SubnetId") or "").strip()
                             ],
+                            **aws_detail.route_table_detail(route_table),
                         },
                     )
                 )
@@ -767,10 +893,22 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         name=_aws_tag_name(vpn.get("Tags")),
                         region=region,
                         status=str(vpn.get("State") or ""),
+                        metadata=aws_detail.vpn_connection_metadata(vpn),
                     )
                 )
                 tgw_id = str(vpn.get("TransitGatewayId") or "").strip()
                 vgw_id = str(vpn.get("VpnGatewayId") or "").strip()
+                cgw_id = str(vpn.get("CustomerGatewayId") or "").strip()
+                if cgw_id:
+                    connections.append(
+                        _normalize_connection(
+                            "aws",
+                            vpn_uid,
+                            f"aws:customer_gateway:{cgw_id}",
+                            "customer_gateway_attachment",
+                            state=str(vpn.get("State") or ""),
+                        )
+                    )
                 if tgw_id:
                     connections.append(
                         _normalize_connection(
@@ -817,6 +955,8 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
         except Exception:
             LOGGER.warning("aws collector: failed direct connect list region=%s", region, exc_info=True)
             section_errors.append(f"direct_connect:{region}")
+
+        _collect_aws_map_detail(session, ec2, region, _cfg, resources, connections)
 
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.
