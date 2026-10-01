@@ -58,8 +58,8 @@ python -m pip install -r requirements-postgres.txt
 python -m pip install --require-hashes -r requirements-lock.txt
 
 # run app
-python templates/run.py --host 127.0.0.1 --port 8080
-```
+python templates/run.py --port 8090 --https
+```wd
 
 Regenerate `requirements-lock.txt` after changing `requirements.txt` (needs `uv`,
 included in `requirements-dev.txt`; `--universal` keeps Linux-only markers such as

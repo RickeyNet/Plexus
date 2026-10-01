@@ -23,6 +23,7 @@ import {
   type TopologyNode,
   type UtilizationStreamEdge,
 } from '@/api/topology';
+import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch } from '@/api/meraki';
 import { PageHelp } from '@/components/PageHelp';
 import { AddToInventoryModal } from './AddToInventoryModal';
 import { ChangesModal } from './ChangesModal';
@@ -30,20 +31,30 @@ import { DiscoveryProgressModal } from './DiscoveryProgressModal';
 import { exportJSON, exportPNG, exportSVG } from './exporters';
 import {
   abbreviateInterface,
-  bfsShortestPath,
   edgeProtocolColor,
+  filterBySource,
   getTopoThemeColors,
+  isEdgeDown,
+  isManagedNode,
+  isMerakiEndpointNode,
+  merakiNodeKey,
+  merakiNodeShape,
   nodeColor,
   nodeIconUrl,
+  nodeSearchText,
   nodeShape,
   nodeTitle,
   stpPortKey,
   stpStyle,
   utilColor,
   utilShadow,
+  type SourceFilter,
   type TopoThemeColors,
 } from './helpers';
+import { crowdedGroups, tidyLabel, tidyTreeLayout, type XY } from './layout';
 import { EdgeDetails } from './EdgeDetails';
+import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, pathSites, subnetOptionLabel, type PathPick } from './paths';
+import { MerakiModal } from './MerakiModal';
 import { NodeDetails } from './NodeDetails';
 import { StpEventsModal } from './StpEventsModal';
 import {
@@ -51,7 +62,7 @@ import {
   type HighlightTarget,
 } from './TopologySearchPanel';
 
-type LayoutMode = 'physics' | 'circular' | 'hierarchical-UD' | 'hierarchical-DU' | 'hierarchical-LR' | 'hierarchical-RL';
+type LayoutMode = 'tidy' | 'physics' | 'circular' | 'hierarchical-UD' | 'hierarchical-DU' | 'hierarchical-LR' | 'hierarchical-RL';
 
 interface NodeMeta {
   raw: TopologyNode;
@@ -64,18 +75,43 @@ interface EdgeMeta {
   roundness: number;
 }
 
+interface SearchResult {
+  node: TopologyNode;
+  /** Where a deep (Meraki detail) match was found, e.g. "VLANs: 20 · Voice". */
+  snippet?: string;
+}
+
+const DOWN_EDGE_COLOR = { color: '#f44336', highlight: '#ef5350', hover: '#ef5350', opacity: 0.9 };
+const MAX_SEARCH_RESULTS = 40;
+// Site frame padding: roomy for free-form layouts, snug for the tidy tree,
+// whose rows leave just enough space between sites for a frame and its title.
+const SITE_FRAME = { padX: 75, padY: 75, font: 26 };
+const TIDY_SITE_FRAME = { padX: 60, padY: 34, font: 16 };
+// Past this size the per-frame canvas work matters more than polish: glows
+// are dropped, hover tracking is off and links hide while the view moves.
+const LARGE_MAP_NODES = 600;
+const LARGE_MAP_EDGES = 1200;
+// With more VPN tunnels than this, only the selected device's are drawn
+// unless the operator asks for all of them.
+const AUTO_HIDE_TUNNELS = 300;
+const TUNNEL_PROTOCOLS = new Set(['vpn', 'vpn-ipsec']);
+
+type SiteBoxes = Map<string, { name: string; x0: number; y0: number; x1: number; y1: number }>;
+
 export function Topology() {
   const qc = useQueryClient();
   const [groupFilter, setGroupFilter] = useState<string>('');
-  const [layout, setLayout] = useState<LayoutMode>('physics');
+  const [layout, setLayout] = useState<LayoutMode>('tidy');
   const [labelsVisible, setLabelsVisible] = useState(false);
   const [utilOverlay, setUtilOverlay] = useState(false);
   const [stpOverlay, setStpOverlay] = useState(false);
   const [stpVlan, setStpVlan] = useState(1);
   const [stpAllVlans, setStpAllVlans] = useState(false);
   const [pathMode, setPathMode] = useState(false);
-  const [pathSource, setPathSource] = useState<number | string | null>(null);
-  const [pathStatus, setPathStatus] = useState('');
+  const [pathPicks, setPathPicks] = useState<PathPick[]>([]);
+  const [pathSubnetInput, setPathSubnetInput] = useState('');
+  const [pathSiteInput, setPathSiteInput] = useState('');
+  const [pathNote, setPathNote] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [spacing, setSpacing] = useState(220);
   const [repulsion, setRepulsion] = useState(8000);
@@ -94,6 +130,15 @@ export function Topology() {
   const [stpBadge, setStpBadge] = useState(0);
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [statusOverlay, setStatusOverlay] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+  const [merakiOpen, setMerakiOpen] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Search text behind the current highlight / open details pane, so the
+  // Meraki tabs can mark the rows that matched.
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [highlightCount, setHighlightCount] = useState(0);
+  // null = automatic: all VPN tunnels on a small map, on demand on a large one.
+  const [tunnelPref, setTunnelPref] = useState<boolean | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const networkRef = useRef<Network | null>(null);
@@ -108,6 +153,16 @@ export function Topology() {
   const nodeMetaRef = useRef<Map<number | string, NodeMeta>>(new Map());
   const edgeMetaRef = useRef<Map<number | string, EdgeMeta>>(new Map());
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tidy-tree positions of the rendered graph; null in every other layout.
+  const tidyPosRef = useRef<Map<number | string, XY> | null>(null);
+  // Meraki sites whose frame would enclose other sites' devices (tidy layout).
+  const crowdedSitesRef = useRef<Set<string>>(new Set());
+  // Site frames of the tidy layout, kept until a node moves.
+  const siteBoxesRef = useRef<SiteBoxes | null>(null);
+  const largeMapRef = useRef(false);
+  const tunnelsByNodeRef = useRef<Map<number | string, TopologyEdge[]>>(new Map());
+  // The node whose details are open; its VPN tunnels are always drawn.
+  const revealedNodeRef = useRef<number | string | null>(null);
   const searchBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Live utilization keyed by edge id, kept off the react-query cache so we
   // don't mutate cached data structures.
@@ -129,8 +184,25 @@ export function Topology() {
   const stpScan = useDiscoverTopologyStp();
   const overlayStatusQuery = useTopologyOverlayStatus(statusOverlay);
 
-  const data = topologyQuery.data;
+  const rawData = topologyQuery.data;
+  const data = useMemo(() => filterBySource(rawData, sourceFilter), [rawData, sourceFilter]);
+  const hasMeraki = !!rawData?.nodes.some((n) => n.meraki);
+  const tunnelCount = useMemo(
+    () => data?.edges.filter((e) => TUNNEL_PROTOCOLS.has(e.protocol ?? '')).length ?? 0,
+    [data],
+  );
+  const showAllTunnels = tunnelPref ?? tunnelCount <= AUTO_HIDE_TUNNELS;
+  const showAllTunnelsRef = useRef(showAllTunnels);
+  showAllTunnelsRef.current = showAllTunnels;
   const positions = positionsQuery.data;
+  const deepSearch = useTopologyDeepSearch(hasMeraki ? debouncedSearch : '');
+
+  // Debounce the deep (server-side) search so typing doesn't fire a request
+  // per keystroke; the local name/IP match stays instant.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
   const statusByHostRef = useRef<Map<number, TopologyHostStatus>>(new Map());
 
   // Hook up theme colors once on mount.
@@ -227,6 +299,21 @@ export function Topology() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stpOverlay, stpVlan, stpAllVlans, groupFilter]);
+
+  useEffect(() => {
+    syncTunnelVisibility();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAllTunnels]);
+
+  // Opening a device's details draws its VPN tunnels; closing hides them again.
+  useEffect(() => {
+    const prev = revealedNodeRef.current;
+    const next = detailsNode?.id ?? null;
+    if (prev === next) return;
+    revealedNodeRef.current = next;
+    syncTunnelVisibility([prev, next].filter((id) => id != null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailsNode]);
 
   // Refresh edge labels in-place when toggled.
   useEffect(() => {
@@ -327,22 +414,50 @@ export function Topology() {
     return meta;
   }
 
+  // The soft glow behind nodes and links. Canvas shadows are by far the
+  // most expensive thing drawn, so a large map goes without.
+  function glow(color: string, size: number) {
+    return largeMapRef.current ? { enabled: false } : { enabled: true, color, size, x: 0, y: 0 };
+  }
+
+  function tunnelHidden(e: TopologyEdge): boolean {
+    if (showAllTunnelsRef.current || !TUNNEL_PROTOCOLS.has(e.protocol ?? '')) return false;
+    const revealed = revealedNodeRef.current;
+    return revealed == null || (e.from !== revealed && e.to !== revealed);
+  }
+
+  // Re-apply which VPN tunnels are drawn: all of them, or just those of the
+  // given nodes when only a selection changed.
+  function syncTunnelVisibility(nodeIds?: (number | string)[]) {
+    const edgesDS = edgesDSRef.current;
+    if (!edgesDS) return;
+    const lists = nodeIds
+      ? nodeIds.map((id) => tunnelsByNodeRef.current.get(id) ?? [])
+      : [...tunnelsByNodeRef.current.values()];
+    const updates = new Map<number | string, { id: number | string; hidden: boolean }>();
+    for (const list of lists) {
+      for (const e of list) updates.set(e.id, { id: e.id, hidden: tunnelHidden(e) });
+    }
+    if (updates.size) edgesDS.update([...updates.values()] as never);
+  }
+
   function buildVisNode(n: TopologyNode, savedPos: Record<string, { x: number; y: number }>, circularXY?: { x: number; y: number }): VisNode {
     const tc = themeRef.current ?? getTopoThemeColors();
     const overlay = nodeOverlayProps(n, tc);
     const iconUrl = nodeIconUrl(n);
+    const tidyXY = tidyPosRef.current?.get(n.id);
     const node: VisNode = {
       id: n.id as never,
-      label: n.label,
+      label: tidyPosRef.current ? tidyLabel(n.label) : n.label,
       title: nodeTitle(n),
-      shape: iconUrl ? 'circularImage' : nodeShape(n.device_type),
+      shape: iconUrl ? 'circularImage' : n.source === 'meraki' ? merakiNodeShape(n) : nodeShape(n.device_type),
       image: iconUrl,
       color: overlay.color,
-      size: n.in_inventory ? 25 : 18,
+      size: isMerakiEndpointNode(n) ? 11 : isManagedNode(n) ? 25 : 18,
       borderWidth: overlay.borderWidth,
       borderWidthSelected: 4,
-      shapeProperties: { borderDashes: n.in_inventory ? false : [5, 5] },
-      shadow: { enabled: true, color: overlay.shadowColor, size: overlay.shadowSize, x: 0, y: 0 },
+      shapeProperties: { borderDashes: isManagedNode(n) ? false : [5, 5] },
+      shadow: glow(overlay.shadowColor, overlay.shadowSize),
       font: {
         color: tc.nodeFont,
         size: 12,
@@ -357,6 +472,17 @@ export function Topology() {
       (node as Record<string, unknown>).y = savedPos[key].y;
       (node as Record<string, unknown>).fixed = { x: true, y: true };
       (node as Record<string, unknown>).physics = false;
+    } else if (tidyXY) {
+      (node as Record<string, unknown>).x = tidyXY.x;
+      (node as Record<string, unknown>).y = tidyXY.y;
+      (node as Record<string, unknown>).physics = false;
+    } else if (n.x != null && n.y != null) {
+      // Meraki sites arrive pre-arranged; keeping them out of the physics
+      // simulation is what lets a large organization open instantly. They
+      // stay draggable, and a drag pins them like any other node.
+      (node as Record<string, unknown>).x = n.x;
+      (node as Record<string, unknown>).y = n.y;
+      (node as Record<string, unknown>).physics = false;
     } else if (circularXY) {
       (node as Record<string, unknown>).x = circularXY.x;
       (node as Record<string, unknown>).y = circularXY.y;
@@ -366,7 +492,8 @@ export function Topology() {
 
   function nodeOverlayProps(n: TopologyNode, tc: TopoThemeColors) {
     const baseColor = nodeColor(n, tc);
-    const baseBorder = n.in_inventory ? 2.5 : 1.5;
+    const merakiProblem = n.source === 'meraki' && ['offline', 'alerting'].includes(n.meraki?.status ?? '');
+    const baseBorder = merakiProblem ? 4 : isManagedNode(n) ? 2.5 : 1.5;
     const pctRaw = n.ipam_utilization_pct;
     const hasIpamUtil = utilOverlay && pctRaw != null && !Number.isNaN(Number(pctRaw));
 
@@ -410,7 +537,7 @@ export function Topology() {
       color: baseColor,
       borderWidth: baseBorder,
       shadowColor: baseColor.border,
-      shadowSize: n.in_inventory ? 18 : 8,
+      shadowSize: isManagedNode(n) ? 18 : 8,
     };
   }
 
@@ -483,7 +610,13 @@ export function Topology() {
       : edge.protocol === 'ospf' ? [12, 4, 4, 4]
       : edge.protocol === 'bgp' ? [4, 4]
       : edge.protocol === 'inferred-fdb' ? [2, 4]
+      : edge.protocol === 'vpn' ? [10, 6]
+      : edge.protocol === 'vpn-ipsec' ? [3, 5]
+      : edge.protocol === 'wan' ? [4, 4]
       : false;
+    // A Meraki VPN tunnel / WAN uplink the Dashboard reports as down.
+    const downColor = isEdgeDown(edge) ? DOWN_EDGE_COLOR : null;
+    const baseWidth = edge.protocol === 'stack' ? Math.max(utilWidth, 4) : utilWidth;
     // Status overlay paints the edge with the worst-endpoint badge color
     // *only* when neither STP nor live-util is overriding (those are more
     // semantically loaded and the operator is already getting a heatmap
@@ -495,8 +628,8 @@ export function Topology() {
       label,
       color: stpStl
         ? stpStl.color
-        : (utilColorOverride || (statusHex ? { color: statusHex, highlight: statusHex, hover: statusHex, opacity: 0.9 } : edgeProtocolColor(edge.protocol, tc))),
-      width: stpStl ? Math.max(utilWidth, stpStl.width) : (statusHex ? Math.max(utilWidth, 3) : utilWidth),
+        : (utilColorOverride || (statusHex ? { color: statusHex, highlight: statusHex, hover: statusHex, opacity: 0.9 } : (downColor ?? edgeProtocolColor(edge.protocol, tc)))),
+      width: stpStl ? Math.max(utilWidth, stpStl.width) : (statusHex ? Math.max(utilWidth, 3) : baseWidth),
       dashes: protoDash,
       shadowColor: stpStl
         ? stpStl.shadow
@@ -525,23 +658,77 @@ export function Topology() {
       width: overlay.width,
       hoverWidth: 0.5,
       selectionWidth: 1,
-      shadow: { enabled: true, color: overlay.shadowColor, size: 6, x: 0, y: 0 },
+      hidden: tunnelHidden(e),
+      shadow: glow(overlay.shadowColor, 6),
       font: { size: 9, color: tc.edgeFont, strokeWidth: 2, strokeColor: tc.edgeFontStroke, align: 'middle' },
-      smooth: { type: 'continuous', roundness, enabled: true },
+      smooth: edgeSmooth(e, roundness),
       title: fullLabel || undefined,
     } as VisEdge;
+  }
+
+  // Tidy tree: links leave and enter nodes sideways, like branches. A link
+  // between two nodes of the same column bows out instead, so it does not
+  // run straight through the nodes stacked between them.
+  function edgeSmooth(e: TopologyEdge, roundness: number) {
+    const tidy = tidyPosRef.current;
+    if (!tidy) return { enabled: true, type: 'continuous', roundness };
+    const a = tidy.get(e.from);
+    const b = tidy.get(e.to);
+    if (a && b && a.x === b.x) return { enabled: true, type: 'curvedCW', roundness: 0.1 + roundness / 2 };
+    return { enabled: true, type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.3 + roundness / 2 };
+  }
+
+  function siteFrame() {
+    return tidyPosRef.current ? TIDY_SITE_FRAME : SITE_FRAME;
+  }
+
+  // Which Meraki site frames to leave out because they would swallow other
+  // sites' devices. Only the tidy layout has positions stable enough to tell.
+  function refreshCrowdedSites() {
+    const network = networkRef.current;
+    siteBoxesRef.current = null;
+    if (!network || !tidyPosRef.current) {
+      crowdedSitesRef.current = new Set();
+      return;
+    }
+    const live = network.getPositions();
+    const placed: { group: string; x: number; y: number }[] = [];
+    for (const meta of nodeMetaRef.current.values()) {
+      const pos = live[meta.raw.id as never];
+      if (!pos) continue;
+      const ref = meta.raw.meraki;
+      placed.push({ group: ref?.site_id ? merakiNodeKey(ref.org_ref, ref.site_id) : '', x: pos.x, y: pos.y });
+    }
+    const frame = siteFrame();
+    crowdedSitesRef.current = crowdedGroups(placed, frame.padX, frame.padY);
   }
 
   function renderGraph(d: typeof data, savedPos: Record<string, { x: number; y: number }>, mode: LayoutMode) {
     if (!d || !containerRef.current) return;
     themeRef.current = getTopoThemeColors();
+    const isTidy = mode === 'tidy';
+    const large = d.nodes.length > LARGE_MAP_NODES || d.edges.length > LARGE_MAP_EDGES;
+    largeMapRef.current = large;
+    tidyPosRef.current = isTidy ? tidyTreeLayout(d.nodes, d.edges) : null;
+
+    const tunnels = new Map<number | string, TopologyEdge[]>();
+    for (const e of d.edges) {
+      if (!TUNNEL_PROTOCOLS.has(e.protocol ?? '')) continue;
+      for (const end of [e.from, e.to]) {
+        const list = tunnels.get(end);
+        if (list) list.push(e);
+        else tunnels.set(end, [e]);
+      }
+    }
+    tunnelsByNodeRef.current = tunnels;
 
     nodeMetaRef.current = buildNodeMeta(d);
     edgeMetaRef.current = assignParallelEdgeRoundness(d.edges);
 
     const isHier = mode.startsWith('hierarchical-');
     const isCircular = mode === 'circular';
-    const allPinned = d.nodes.length > 0 && d.nodes.every((n) => savedPos[String(n.id)]);
+    const allPinned =
+      d.nodes.length > 0 && d.nodes.every((n) => savedPos[String(n.id)] || (n.x != null && n.y != null));
     const usePhysics = mode === 'physics' && !allPinned;
 
     const circularXYMap = new Map<number | string, { x: number; y: number }>();
@@ -575,7 +762,7 @@ export function Topology() {
     const options = {
       nodes: { brokenImage: '/static/img/topo/unknown.svg' },
       physics: {
-        enabled: isCircular ? false : usePhysics,
+        enabled: isCircular || isTidy ? false : usePhysics,
         barnesHut: {
           gravitationalConstant: -repulsion,
           centralGravity: 0.15,
@@ -587,13 +774,15 @@ export function Topology() {
         stabilization: { iterations: 300, updateInterval: 20 },
       },
       interaction: {
-        hover: true,
+        hover: !large,
+        hideEdgesOnDrag: large,
+        hideEdgesOnZoom: large,
         tooltipDelay: 150,
         navigationButtons: false,
         keyboard: { enabled: true },
         zoomSpeed: 0.6,
       },
-      layout: layoutConfig,
+      layout: { improvedLayout: !large, ...layoutConfig },
       edges: { smooth: { enabled: true, type: 'continuous', roundness: 0.4 } },
     };
 
@@ -603,8 +792,8 @@ export function Topology() {
     edgesDSRef.current = edges;
 
     networkRef.current.on('click', (params) => {
-      if (pathModeRef.current && params.nodes.length > 0) {
-        handlePathClick(params.nodes[0]);
+      if (pathModeRef.current) {
+        if (params.nodes.length > 0) togglePathPick(nodePick(params.nodes[0]));
         return;
       }
       if (params.nodes.length > 0) {
@@ -623,6 +812,13 @@ export function Topology() {
       }
     });
 
+    refreshCrowdedSites();
+    networkRef.current.on('beforeDrawing', drawMerakiSites);
+    networkRef.current.on('dragging', (params) => {
+      // A node is being moved: its site frame has to follow.
+      if (params.nodes.length) siteBoxesRef.current = null;
+    });
+
     networkRef.current.on('dragEnd', (params) => {
       if (!params.nodes.length) return;
       const network = networkRef.current!;
@@ -637,6 +833,7 @@ export function Topology() {
         nodes.update({ id: nid, fixed: { x: true, y: true }, physics: false } as never);
       }
       schedulePositionSave(updates);
+      refreshCrowdedSites();
     });
 
     networkRef.current.on('oncontext', (params) => {
@@ -646,7 +843,14 @@ export function Topology() {
       const key = String(nid);
       if (savedPositionsRef.current[key]) {
         delete savedPositionsRef.current[key];
-        nodes.update({ id: nid, fixed: false, physics: true } as never);
+        const home = tidyPosRef.current?.get(nid);
+        if (home) {
+          // Tidy layout: an unpinned node goes back to its place in the tree.
+          nodes.update({ id: nid, x: home.x, y: home.y, fixed: false, physics: false } as never);
+          refreshCrowdedSites();
+        } else {
+          nodes.update({ id: nid, fixed: false, physics: true } as never);
+        }
         savePositions.mutate({ [key]: null });
         flash('Node unpinned');
       }
@@ -671,18 +875,111 @@ export function Topology() {
       networkRef.current.once('stabilizationIterationsDone', () => {
         networkRef.current!.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
       });
-    } else if (allPinned || isCircular) {
+    } else if (allPinned || isCircular || isTidy) {
       setTimeout(() => {
         networkRef.current?.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
       }, 50);
     }
   }
 
-  // Keep pathMode/source in refs so the click handler always sees the latest.
+  // Frame each Meraki site (network) with a labelled box behind its devices.
+  // Boxes are derived from live node positions, so they follow drags.
+  function drawMerakiSites(ctx: CanvasRenderingContext2D) {
+    const network = networkRef.current;
+    if (!network) return;
+    const tc = themeRef.current ?? getTopoThemeColors();
+    // This runs on every frame. In the tidy layout nodes only move when
+    // dragged, so the boxes are worked out once and reused.
+    let boxes = tidyPosRef.current ? siteBoxesRef.current : null;
+    if (!boxes) {
+      boxes = new Map();
+      const positions = network.getPositions();
+      for (const meta of nodeMetaRef.current.values()) {
+        const ref = meta.raw.meraki;
+        const pos = positions[meta.raw.id as never];
+        if (!ref || !ref.site_id || !pos) continue;
+        const key = merakiNodeKey(ref.org_ref, ref.site_id);
+        if (crowdedSitesRef.current.has(key)) continue;
+        const box = boxes.get(key);
+        if (!box) {
+          boxes.set(key, { name: ref.site_name, x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y });
+        } else {
+          box.x0 = Math.min(box.x0, pos.x);
+          box.y0 = Math.min(box.y0, pos.y);
+          box.x1 = Math.max(box.x1, pos.x);
+          box.y1 = Math.max(box.y1, pos.y);
+        }
+      }
+      siteBoxesRef.current = boxes;
+    }
+    const frame = siteFrame();
+    // Zoomed far out the titles are a few unreadable pixels each; skip them.
+    const titles = frame.font * network.getScale() >= 5;
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.font = `600 ${frame.font}px Inter, sans-serif`;
+    for (const box of boxes.values()) {
+      const x = box.x0 - frame.padX;
+      const y = box.y0 - frame.padY;
+      const w = box.x1 - box.x0 + frame.padX * 2;
+      const h = box.y1 - box.y0 + frame.padY * 2;
+      ctx.fillStyle = 'rgba(139,195,74,0.05)';
+      ctx.strokeStyle = 'rgba(139,195,74,0.45)';
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.stroke();
+      if (!titles) continue;
+      ctx.fillStyle = tc.nodeFont;
+      ctx.globalAlpha = 0.75;
+      ctx.fillText(box.name, x + 4, y - (frame.font > 20 ? 8 : 4));
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+
+  // Keep pathMode/picks in refs so the click handler always sees the latest.
   const pathModeRef = useRef(pathMode);
-  const pathSourceRef = useRef(pathSource);
+  const pathPicksRef = useRef(pathPicks);
   useEffect(() => { pathModeRef.current = pathMode; }, [pathMode]);
-  useEffect(() => { pathSourceRef.current = pathSource; }, [pathSource]);
+  useEffect(() => { pathPicksRef.current = pathPicks; }, [pathPicks]);
+
+  const pathSiteList = useMemo(() => pathSites(data?.nodes ?? []), [data]);
+  const subnetsQuery = useMerakiSubnets(pathMode && pathSiteList.length > 0);
+  // Map node of every Meraki snapshot node (a device that is also an
+  // inventory host resolves to the host's node).
+  const merakiNodeIds = useMemo(() => {
+    const byMerakiKey = new Map<string, number | string>();
+    for (const n of data?.nodes ?? []) {
+      if (n.meraki) byMerakiKey.set(merakiNodeKey(n.meraki.org_ref, n.meraki.node_id), n.id);
+    }
+    return byMerakiKey;
+  }, [data]);
+  const resolveMerakiNode = useCallback(
+    (orgRef: number, nodeId: string) => merakiNodeIds.get(merakiNodeKey(orgRef, nodeId)),
+    [merakiNodeIds],
+  );
+  // Subnets whose owning device is on the map, with that device's node id.
+  const pathSubnets = useMemo(() => {
+    const owners = new Map<string, number | string>();
+    const list = (subnetsQuery.data?.subnets ?? []).filter((s) => {
+      const node = merakiNodeIds.get(merakiNodeKey(s.org_ref, s.node_id));
+      if (node === undefined) return false;
+      owners.set(subnetOptionLabel(s), node);
+      return true;
+    });
+    return { list, owners };
+  }, [subnetsQuery.data, merakiNodeIds]);
+  const pathResult = useMemo(() => connectPicks(pathPicks, data?.edges ?? []), [pathPicks, data]);
+  // Redraw the path whenever the picks change or the map is rebuilt.
+  useEffect(() => {
+    if (!pathMode) return;
+    restoreOriginalColors();
+    if (pathPicks.length) highlightPath(pathResult.nodeIds, pathResult.edgeIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathMode, pathResult, positions, layout]);
 
   // The search panel keeps `onHighlight` in a useEffect dep array, so the
   // callback identity must be stable across parent re-renders. Stash the
@@ -719,7 +1016,7 @@ export function Topology() {
         color: overlay.color,
         width: overlay.width,
         dashes: overlay.dashes,
-        shadow: { enabled: true, color: overlay.shadowColor, size: 6, x: 0, y: 0 },
+        shadow: glow(overlay.shadowColor, 6),
         font: {
           size: labelsVisible ? 9 : 0,
           color: tc.edgeFont,
@@ -749,7 +1046,7 @@ export function Topology() {
         id: n.id,
         color: overlay.color,
         borderWidth: overlay.borderWidth,
-        shadow: { enabled: true, color: overlay.shadowColor, size: overlay.shadowSize, x: 0, y: 0 },
+        shadow: glow(overlay.shadowColor, overlay.shadowSize),
         title: statusTitle ? `${baseTitle}\n\n${statusTitle}` : baseTitle,
       } as VisNode;
     });
@@ -806,6 +1103,11 @@ export function Topology() {
     try {
       await deletePositions.mutateAsync();
       savedPositionsRef.current = {};
+      if (layout === 'tidy') {
+        renderGraph(data, {}, layout);
+        flash('Node positions reset');
+        return;
+      }
       flash('Node positions reset - physics re-enabled');
       const network = networkRef.current;
       const nodesDS = nodesDSRef.current;
@@ -831,8 +1133,10 @@ export function Topology() {
     }
     if (!networkRef.current || !data?.nodes.length) return;
     setPathMode(true);
-    setPathSource(null);
-    setPathStatus('Click a source node...');
+    setPathPicks([]);
+    setPathSiteInput('');
+    setPathSubnetInput('');
+    setPathNote('');
     setDetailsNode(null);
     setDetailsEdge(null);
     // Search-highlight and path-mode share originalColorsRef; close the
@@ -852,49 +1156,98 @@ export function Topology() {
 
   function clearPathMode() {
     setPathMode(false);
-    setPathSource(null);
-    setPathStatus('');
-    const nodesDS = nodesDSRef.current;
-    const edgesDS = edgesDSRef.current;
-    const orig = originalColorsRef.current;
-    if (orig && nodesDS && edgesDS) {
-      for (const [id, color] of orig.nodes) {
-        nodesDS.update({ id, color, opacity: 1 } as never);
-      }
-      for (const [id, color] of orig.edges) {
-        edgesDS.update({ id, color, opacity: 1 } as never);
-      }
-      originalColorsRef.current = null;
-    }
+    setPathPicks([]);
+    setPathSiteInput('');
+    setPathSubnetInput('');
+    setPathNote('');
+    restoreOriginalColors();
   }
 
-  function handlePathClick(nodeId: number | string) {
-    const nodesDS = nodesDSRef.current;
-    const edgesDS = edgesDSRef.current;
-    if (!nodesDS || !edgesDS || !data) return;
-    if (!pathSourceRef.current) {
-      setPathSource(nodeId);
-      const meta = nodeMetaRef.current.get(nodeId);
-      const label = meta?.raw.label ?? String(nodeId);
-      setPathStatus(`Source: ${label}  -  click a destination node...`);
-      nodesDS.update({ id: nodeId, borderWidth: 4 } as never);
+  // Add the pick to the path, or take it off when it is already on it.
+  function togglePathPick(pick: PathPick) {
+    const current = pathPicksRef.current;
+    let next: PathPick[];
+    if (current.some((p) => p.key === pick.key)) {
+      next = current.filter((p) => p.key !== pick.key);
+    } else if (current.length >= MAX_PATH_ENDPOINTS) {
+      setPathNote(`A path connects up to ${MAX_PATH_ENDPOINTS} devices, sites or subnets. Remove one first.`);
+      return;
+    } else {
+      next = [...current, pick];
+    }
+    pathPicksRef.current = next;
+    setPathPicks(next);
+    setPathNote('');
+  }
+
+  function addPathPick(pick: PathPick) {
+    if (!pathPicksRef.current.some((p) => p.key === pick.key)) togglePathPick(pick);
+  }
+
+  function nodePick(nodeId: number | string): PathPick {
+    const raw = nodeMetaRef.current.get(nodeId)?.raw;
+    const site = raw?.meraki?.site_name;
+    const label = raw?.label ?? String(nodeId);
+    return { key: `n:${nodeId}`, node: nodeId, label: site && !label.includes(site) ? `${label} · ${site}` : label };
+  }
+
+  // `typed` is a finished entry (Enter) rather than a keystroke: then part of
+  // a site name is enough, and an address typed here goes to the subnets.
+  function handlePathSiteInput(value: string, typed = false) {
+    const wanted = value.trim().toLowerCase();
+    let site = wanted ? pathSiteList.find((s) => s.name.toLowerCase() === wanted) : undefined;
+    if (!site && typed && wanted) {
+      if (isAddressText(wanted)) {
+        if (handlePathSubnetInput(value, true)) setPathSiteInput('');
+        return;
+      }
+      const matches = pathSiteList.filter((s) => s.name.toLowerCase().includes(wanted));
+      if (matches.length === 1) site = matches[0];
+      else setPathNote(matches.length ? `${matches.length} sites match "${value.trim()}" - pick one from the list.` : `No site matches "${value.trim()}".`);
+    }
+    if (!site) {
+      setPathSiteInput(value);
       return;
     }
-    const targetId = nodeId;
-    if (targetId === pathSourceRef.current) return;
+    setPathSiteInput('');
+    addPathPick(nodePick(site.gateway));
+  }
 
-    const path = bfsShortestPath(pathSourceRef.current, targetId, data.edges);
-    if (!path) {
-      flash('No path found between these nodes.');
-      clearPathMode();
-      return;
+  // `typed` is a finished entry (Enter) rather than a keystroke: then an
+  // address or network is resolved to the subnet that contains it. Returns
+  // whether a subnet was added.
+  function handlePathSubnetInput(value: string, typed = false): boolean {
+    const node = pathSubnets.owners.get(value.trim());
+    const found = node !== undefined || typed ? findSubnets(value, pathSubnets.list) : [];
+    if (found.length !== 1) {
+      setPathSubnetInput(value);
+      if (typed && value.trim()) {
+        const sites = [...new Set(found.map((s) => s.site_name || s.name))];
+        setPathNote(
+          found.length
+            ? `${value.trim()} is in ${found[0].cidr}, which exists at ${found.length} places (${sites.slice(0, 4).join(', ')}${sites.length > 4 ? ', ...' : ''}) - pick the one you mean from the subnet list.`
+            : subnetsQuery.isPending
+              ? 'Subnets are still loading - try again in a moment.'
+              : `No collected subnet contains ${value.trim()}.`,
+        );
+      }
+      return false;
     }
+    const subnet = found[0];
+    const owner = pathSubnets.owners.get(subnetOptionLabel(subnet));
+    if (owner === undefined) return false;
+    setPathSubnetInput('');
+    addPathPick({
+      key: `s:${subnet.org_ref}:${subnet.cidr}:${subnet.node_id}`,
+      node: owner,
+      label: `${subnet.cidr} · ${subnet.site_name || subnet.name}`,
+      subnet,
+    });
+    return true;
+  }
 
-    highlightPath(path);
-    const srcLabel = nodeMetaRef.current.get(pathSourceRef.current)?.raw.label ?? '';
-    const tgtLabel = nodeMetaRef.current.get(targetId)?.raw.label ?? '';
-    setPathStatus(`Path: ${srcLabel} → ${tgtLabel}  (${path.length - 1} hop${path.length - 1 !== 1 ? 's' : ''})`);
-    setPathMode(false);
+  function pathLabel(nodeId: number | string): string {
+    return nodeMetaRef.current.get(nodeId)?.raw.label ?? String(nodeId);
   }
 
   function applySearchHighlight(target: HighlightTarget | null) {
@@ -932,32 +1285,38 @@ export function Topology() {
 
     const tc = themeRef.current ?? getTopoThemeColors();
     originalColorsRef.current = { nodes: [], edges: [] };
+    // One update per data set: thousands of single-item updates each make
+    // vis-network rework the item and queue a redraw.
+    const nodeUpdates: unknown[] = [];
     for (const node of nodesDS.get()) {
       const nid = node.id as number | string;
       originalColorsRef.current.nodes.push([nid, (node as never as { color: unknown }).color]);
       if (!hostSet.has(nid)) {
-        nodesDS.update({ id: nid, color: tc.dimColor, opacity: 0.25 } as never);
+        nodeUpdates.push({ id: nid, color: tc.dimColor, opacity: 0.25 });
       } else {
-        nodesDS.update({
+        nodeUpdates.push({
           id: nid,
           borderWidth: 4,
           shadow: { enabled: true, color: tc.pathGlow, size: 20, x: 0, y: 0 },
-        } as never);
+        });
       }
     }
+    nodesDS.update(nodeUpdates as never);
+    const edgeUpdates: unknown[] = [];
     for (const edge of edgesDS.get()) {
       const eid = edge.id as number | string;
       originalColorsRef.current.edges.push([eid, (edge as never as { color: unknown }).color]);
       if (!matchedEdges.has(eid)) {
-        edgesDS.update({ id: eid, color: tc.dimEdge, opacity: 0.15 } as never);
+        edgeUpdates.push({ id: eid, color: tc.dimEdge, opacity: 0.15 });
       } else {
-        edgesDS.update({
+        edgeUpdates.push({
           id: eid,
           width: 4,
           shadow: { enabled: true, color: tc.pathGlow, size: 12, x: 0, y: 0 },
-        } as never);
+        });
       }
     }
+    edgesDS.update(edgeUpdates as never);
 
     // Fit viewport to matching nodes so the operator's eye lands on them.
     const network = networkRef.current;
@@ -974,59 +1333,52 @@ export function Topology() {
     const edgesDS = edgesDSRef.current;
     const orig = originalColorsRef.current;
     if (!orig || !nodesDS || !edgesDS) return;
-    for (const [id, color] of orig.nodes) {
-      nodesDS.update({ id, color, opacity: 1, borderWidth: 2.5 } as never);
-    }
-    for (const [id, color] of orig.edges) {
-      edgesDS.update({ id, color, opacity: 1 } as never);
-    }
+    nodesDS.update(orig.nodes.map(([id, color]) => ({ id, color, opacity: 1, borderWidth: 2.5 })) as never);
+    edgesDS.update(orig.edges.map(([id, color]) => ({ id, color, opacity: 1 })) as never);
     originalColorsRef.current = null;
+    syncTunnelVisibility();
     // Re-apply styled overlays (util / STP) so refresh restores any overlay
     // state that the dim pass blew away.
     refreshEdgeStyles();
     refreshNodeStyles();
   }
 
-  function highlightPath(path: (number | string)[]) {
+  function highlightPath(pathSet: Set<number | string>, pathEdgeIds: Set<number | string>) {
     const nodesDS = nodesDSRef.current;
     const edgesDS = edgesDSRef.current;
     if (!nodesDS || !edgesDS || !data) return;
-    const pathSet = new Set(path);
-    const pathEdgeIds = new Set<number | string>();
-    for (let i = 0; i < path.length - 1; i++) {
-      const a = path[i];
-      const b = path[i + 1];
-      const matches = data.edges.filter(
-        (e) => (e.from === a && e.to === b) || (e.from === b && e.to === a),
-      );
-      for (const edge of matches) pathEdgeIds.add(edge.id);
-    }
     const tc = themeRef.current ?? getTopoThemeColors();
     originalColorsRef.current = { nodes: [], edges: [] };
+    const nodeUpdates: unknown[] = [];
     for (const node of nodesDS.get()) {
       originalColorsRef.current.nodes.push([node.id as number | string, (node as never as { color: unknown }).color]);
       if (!pathSet.has(node.id as number | string)) {
-        nodesDS.update({ id: node.id, color: tc.dimColor, opacity: 0.3 } as never);
+        nodeUpdates.push({ id: node.id, color: tc.dimColor, opacity: 0.3 });
       } else {
-        nodesDS.update({
+        nodeUpdates.push({
           id: node.id,
           borderWidth: 4,
           shadow: { enabled: true, color: tc.pathGlow, size: 20, x: 0, y: 0 },
-        } as never);
+        });
       }
     }
+    nodesDS.update(nodeUpdates as never);
+    const edgeUpdates: unknown[] = [];
     for (const edge of edgesDS.get()) {
       originalColorsRef.current.edges.push([edge.id as number | string, (edge as never as { color: unknown }).color]);
       if (!pathEdgeIds.has(edge.id as number | string)) {
-        edgesDS.update({ id: edge.id, color: tc.dimEdge, opacity: 0.15 } as never);
+        edgeUpdates.push({ id: edge.id, color: tc.dimEdge, opacity: 0.15 });
       } else {
-        edgesDS.update({
+        // A path may run over a VPN tunnel that is not being drawn.
+        edgeUpdates.push({
           id: edge.id,
           width: 4,
+          hidden: false,
           shadow: { enabled: true, color: tc.pathGlow, size: 12, x: 0, y: 0 },
-        } as never);
+        });
       }
     }
+    edgesDS.update(edgeUpdates as never);
   }
 
   async function handleScanStp() {
@@ -1101,14 +1453,61 @@ export function Topology() {
     if (meta) setDetailsNode(meta.raw);
   }
 
-  // Search results
-  const searchResults = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q || !data?.nodes.length) return [];
-    return data.nodes.filter(
-      (n) => (n.label ?? '').toLowerCase().includes(q) || (n.ip ?? '').includes(q),
-    ).slice(0, 12);
-  }, [search, data]);
+  // Search results: instant local matches on identity fields, followed by
+  // server-side deep matches inside Meraki details (VLANs, subnets, routes,
+  // VPN peers, firewall rules, ports...), resolved back to nodes on the map.
+  const searchResults = useMemo<SearchResult[]>(() => {
+    const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length || !data?.nodes.length) return [];
+    const results: SearchResult[] = [];
+    const seen = new Set<number | string>();
+    for (const n of data.nodes) {
+      const text = nodeSearchText(n);
+      if (terms.every((t) => text.includes(t))) {
+        results.push({ node: n });
+        seen.add(n.id);
+      }
+    }
+    // Deep hits belong to the debounced query; ignore them while it lags.
+    if (deepSearch.data && debouncedSearch === search) {
+      const byMerakiKey = new Map<string, TopologyNode>();
+      for (const n of data.nodes) {
+        if (n.meraki) byMerakiKey.set(merakiNodeKey(n.meraki.org_ref, n.meraki.node_id), n);
+      }
+      for (const hit of deepSearch.data.results) {
+        const node = byMerakiKey.get(merakiNodeKey(hit.org_ref, hit.node_id));
+        if (node && !seen.has(node.id)) {
+          results.push({ node, snippet: hit.snippet });
+          seen.add(node.id);
+        }
+      }
+    }
+    return results;
+  }, [search, debouncedSearch, data, deepSearch.data]);
+
+  function selectSearchResult(result: SearchResult) {
+    setAppliedSearch(search);
+    focusNode(result.node.id);
+    setSearch('');
+    setSearchResultsVisible(false);
+  }
+
+  // Light up every match at once (and dim the rest), like the MAC/IP/VLAN finder.
+  function highlightAllSearchResults() {
+    if (pathMode) clearPathMode();
+    if (searchPanelOpen) setSearchPanelOpen(false);
+    setAppliedSearch(search);
+    setHighlightCount(searchResults.length);
+    applySearchHighlight({ nodeIds: searchResults.map((r) => r.node.id), ports: [] });
+    setSearchResultsVisible(false);
+  }
+
+  function clearSearchHighlight() {
+    setHighlightCount(0);
+    setAppliedSearch('');
+    setSearch('');
+    applySearchHighlight(null);
+  }
 
   function handleSearchKey(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'ArrowDown') {
@@ -1119,12 +1518,14 @@ export function Topology() {
       setSearchHighlightIdx((i) => Math.max(i - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      const idx = searchHighlightIdx >= 0 ? searchHighlightIdx : 0;
-      const match = searchResults[idx];
-      if (match) {
-        focusNode(match.id);
-        setSearch('');
-        setSearchResultsVisible(false);
+      // Enter on a picked row (or a lone match) jumps to it; Enter on the
+      // bare query highlights every match on the map.
+      if (searchHighlightIdx >= 0 && searchResults[searchHighlightIdx]) {
+        selectSearchResult(searchResults[searchHighlightIdx]);
+      } else if (searchResults.length === 1) {
+        selectSearchResult(searchResults[0]);
+      } else if (searchResults.length > 1) {
+        highlightAllSearchResults();
       }
     } else if (e.key === 'Escape') {
       setSearchResultsVisible(false);
@@ -1136,7 +1537,7 @@ export function Topology() {
       <PageHelp
         pageKey="topology"
         title="Interactive Network Map"
-        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data."
+        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, from the Meraki Dashboard. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Export HTML saves the whole map as one shareable interactive file."
       />
 
       {actionMsg && (
@@ -1153,6 +1554,7 @@ export function Topology() {
           ))}
         </select>
         <select className="form-select" style={{ minWidth: 170 }} value={layout} onChange={(e) => setLayout(e.target.value as LayoutMode)}>
+          <option value="tidy">Tidy tree (left→right)</option>
           <option value="physics">Physics (force-directed)</option>
           <option value="circular">Circular</option>
           <option value="hierarchical-UD">Hierarchical (top→bottom)</option>
@@ -1160,13 +1562,26 @@ export function Topology() {
           <option value="hierarchical-LR">Hierarchical (left→right)</option>
           <option value="hierarchical-RL">Hierarchical (right→left)</option>
         </select>
+        {hasMeraki && (
+          <select
+            className="form-select"
+            style={{ minWidth: 150 }}
+            value={sourceFilter}
+            title="Which devices to show"
+            onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
+          >
+            <option value="all">All sources</option>
+            <option value="inventory">Inventory only</option>
+            <option value="meraki">Meraki / Cato only</option>
+          </select>
+        )}
 
         <div style={{ position: 'relative' }} className="topology-search-wrap">
           <input
             type="text"
             className="form-input"
-            placeholder="Search nodes..."
-            style={{ minWidth: 200 }}
+            placeholder={hasMeraki ? 'Search devices, IPs, VLANs, subnets, routes…' : 'Search nodes...'}
+            style={{ minWidth: hasMeraki ? 300 : 200 }}
             value={search}
             onChange={(e) => { setSearch(e.target.value); setSearchResultsVisible(true); setSearchHighlightIdx(-1); }}
             onFocus={() => {
@@ -1186,13 +1601,23 @@ export function Topology() {
             onKeyDown={handleSearchKey}
           />
           {searchResultsVisible && search && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: '0.3rem', maxHeight: 240, overflowY: 'auto', marginTop: '0.2rem' }}>
-              {searchResults.length === 0 ? (
-                <div className="text-muted" style={{ padding: '0.5rem 0.75rem' }}>No matches</div>
-              ) : searchResults.map((n, i) => (
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: '0.3rem', maxHeight: 340, overflowY: 'auto', marginTop: '0.2rem' }}>
+              {searchResults.length > 1 && (
                 <div
-                  key={String(n.id)}
-                  onMouseDown={(e) => { e.preventDefault(); focusNode(n.id); setSearch(''); setSearchResultsVisible(false); }}
+                  onMouseDown={(e) => { e.preventDefault(); highlightAllSearchResults(); }}
+                  style={{ padding: '0.4rem 0.65rem', cursor: 'pointer', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}
+                >
+                  Highlight all {searchResults.length} matches on the map (Enter)
+                </div>
+              )}
+              {searchResults.length === 0 ? (
+                <div className="text-muted" style={{ padding: '0.5rem 0.75rem' }}>
+                  {deepSearch.isFetching || debouncedSearch !== search ? 'Searching…' : 'No matches'}
+                </div>
+              ) : searchResults.slice(0, MAX_SEARCH_RESULTS).map((r, i) => (
+                <div
+                  key={String(r.node.id)}
+                  onMouseDown={(e) => { e.preventDefault(); selectSearchResult(r); }}
                   style={{
                     padding: '0.4rem 0.65rem',
                     cursor: 'pointer',
@@ -1200,20 +1625,41 @@ export function Topology() {
                     fontSize: '0.85rem',
                   }}
                 >
-                  <div>{n.label}</div>
-                  {n.ip && <div className="text-muted" style={{ fontSize: '0.75rem' }}>{n.ip}</div>}
+                  <div>{r.node.label}</div>
+                  <div className="text-muted" style={{ fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {r.snippet || [r.node.ip, r.node.meraki?.site_name || r.node.group_name].filter(Boolean).join(' · ')}
+                  </div>
                 </div>
               ))}
+              {searchResults.length > MAX_SEARCH_RESULTS && (
+                <div className="text-muted" style={{ padding: '0.4rem 0.65rem', fontSize: '0.75rem' }}>
+                  {searchResults.length - MAX_SEARCH_RESULTS} more - refine the search or highlight all.
+                </div>
+              )}
             </div>
           )}
         </div>
 
         <button className="btn btn-primary btn-sm" onClick={() => setDiscoveryOpen(true)}>Discover Neighbors</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => setMerakiOpen(true)} title="Meraki organizations and Cato accounts: add, collect, history">Meraki / Cato</button>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
         <button className="btn btn-secondary btn-sm" onClick={handleFit}>Fit</button>
-        <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode}>{pathMode ? 'Cancel Path' : 'Path Mode'}</button>
+        <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
         <button className={`btn btn-sm ${searchPanelOpen ? 'btn-primary' : 'btn-secondary'}`} onClick={toggleSearchPanel}>{searchPanelOpen ? 'Close Search' : 'Find MAC/IP/VLAN'}</button>
         <button className={`btn btn-sm ${labelsVisible ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setLabelsVisible((v) => !v)}>Labels</button>
+        {tunnelCount > 0 && (
+          <button
+            className={`btn btn-sm ${showAllTunnels ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setTunnelPref(!showAllTunnels)}
+            title={
+              showAllTunnels
+                ? `Showing all ${tunnelCount} VPN tunnels. Click to show only the tunnels of the selected device.`
+                : `Showing only the VPN tunnels of the selected device. Click to draw all ${tunnelCount}.`
+            }
+          >
+            VPN Tunnels
+          </button>
+        )}
         <button className={`btn btn-sm ${utilOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setUtilOverlay((v) => !v)}>Util Overlay</button>
         <button className={`btn btn-sm ${stpOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStpOverlay((v) => !v)}>STP Overlay</button>
         <button className={`btn btn-sm ${statusOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStatusOverlay((v) => !v)}>Status Overlay</button>
@@ -1229,7 +1675,31 @@ export function Topology() {
         <button className="btn btn-secondary btn-sm" onClick={handleExportPNG}>PNG</button>
         <button className="btn btn-secondary btn-sm" onClick={handleExportSVG}>SVG</button>
         <button className="btn btn-secondary btn-sm" onClick={handleExportJSON}>JSON</button>
+        <a
+          className="btn btn-secondary btn-sm"
+          href={topologyExportUrl(groupId, true)}
+          download
+          title="Download the whole map, with every device's details, as one interactive HTML file"
+        >
+          HTML
+        </a>
+        <a
+          className="btn btn-secondary btn-sm"
+          href={topologyExportUrl(groupId)}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open the interactive HTML map in a new tab"
+        >
+          Open HTML Map
+        </a>
       </div>
+
+      {highlightCount > 0 && (
+        <div className="card" style={{ padding: '0.5rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--primary)' }}>
+          {highlightCount} device{highlightCount === 1 ? '' : 's'} matching “{appliedSearch}” highlighted. Click one to see the matching details.
+          <button type="button" className="btn btn-sm btn-secondary" onClick={clearSearchHighlight} style={{ marginLeft: '0.6rem' }}>Clear</button>
+        </div>
+      )}
 
       {(stpOverlay || stpScan.isPending) && (
         <div className="card" style={{ padding: '0.5rem 0.75rem', marginBottom: '0.6rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1270,10 +1740,94 @@ export function Topology() {
         </div>
       )}
 
-      {pathMode && pathStatus && (
-        <div className="card" style={{ padding: '0.5rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--primary)' }}>
-          {pathStatus} {' '}
-          <button type="button" className="btn btn-sm btn-secondary" onClick={clearPathMode} style={{ marginLeft: '0.6rem' }}>Cancel</button>
+      {pathMode && (
+        <div className="card" style={{ padding: '0.5rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--primary)', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <strong>Path</strong>
+            <span className="text-muted">
+              Click two or more devices on the map{pathSiteList.length ? ', or add sites and subnets,' : ''} to see how they reach one another.
+            </span>
+            {pathSiteList.length > 0 && (
+              <>
+                <input
+                  className="form-input"
+                  list="topology-path-sites"
+                  placeholder="Add a site…"
+                  aria-label="Add a site to the path"
+                  title="Pick a site from the list, or type part of its name and press Enter"
+                  value={pathSiteInput}
+                  onChange={(e) => handlePathSiteInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handlePathSiteInput(e.currentTarget.value, true); }}
+                  style={{ minWidth: 200 }}
+                />
+                <datalist id="topology-path-sites">
+                  {pathSiteList.map((s) => <option key={s.key} value={s.name} />)}
+                </datalist>
+                <input
+                  className="form-input"
+                  list="topology-path-subnets"
+                  placeholder={subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet or IP address…'}
+                  aria-label="Add a subnet to the path"
+                  title="Pick a subnet from the list, or type an IP address or network and press Enter"
+                  value={pathSubnetInput}
+                  onChange={(e) => handlePathSubnetInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handlePathSubnetInput(e.currentTarget.value, true); }}
+                  style={{ minWidth: 260 }}
+                />
+                <datalist id="topology-path-subnets">
+                  {pathSubnets.list.map((s) => {
+                    const text = subnetOptionLabel(s);
+                    return <option key={`${s.org_ref}|${s.node_id}|${s.cidr}`} value={text} />;
+                  })}
+                </datalist>
+              </>
+            )}
+            <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); }} disabled={!pathPicks.length}>Clear</button>
+            <button type="button" className="btn btn-sm btn-secondary" onClick={clearPathMode}>Exit</button>
+          </div>
+          {pathNote && (
+            <div role="status" style={{ marginTop: '0.45rem', color: 'var(--warning, #f59f00)' }}>{pathNote}</div>
+          )}
+          {pathPicks.length === 1 && (
+            <div className="text-muted" style={{ marginTop: '0.45rem' }}>Add one more to see the path.</div>
+          )}
+          {pathPicks.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
+              {pathPicks.map((pick) => (
+                <button key={pick.key} type="button" className="btn btn-sm btn-secondary" onClick={() => togglePathPick(pick)} title="Remove from the path">
+                  {pick.label} ×
+                </button>
+              ))}
+            </div>
+          )}
+          {pathResult.legs.map((leg) => (
+            <div key={`${leg.from.key}|${leg.to.key}`} style={{ marginTop: '0.35rem' }}>
+              {(leg.from.subnet || leg.to.subnet) && (
+                <strong>{leg.from.subnet?.cidr ?? leg.from.label} ↔ {leg.to.subnet?.cidr ?? leg.to.label}: </strong>
+              )}
+              {leg.sameDevice ? (
+                <>Same device - routed locally by {pathLabel(leg.from.node)}.</>
+              ) : leg.path ? (
+                <>
+                  {leg.path.map((id) => pathLabel(id)).join(' → ')}{' '}
+                  <span className="text-muted">({leg.path.length - 1} hop{leg.path.length - 1 !== 1 ? 's' : ''})</span>
+                </>
+              ) : (
+                <span style={{ color: 'var(--danger)' }}>
+                  {pathLabel(leg.from.node)} and {pathLabel(leg.to.node)}: no path over links that are up.
+                </span>
+              )}
+              {leg.notes.map((note) => (
+                <div key={note} style={{ color: 'var(--warning, #f59f00)' }}>⚠ {note}</div>
+              ))}
+            </div>
+          ))}
+          {pathResult.legs.length > 0 && (
+            <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
+              Shortest way over the cables, uplinks and VPN tunnels on the map that are up. Route tables are not consulted;
+              a subnet is placed on the device that owns it (appliance, L3 switch or VPN peer).
+            </div>
+          )}
         </div>
       )}
 
@@ -1282,7 +1836,7 @@ export function Topology() {
 
       {data && !data.nodes.length && (
         <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
-          <p className="text-muted" style={{ margin: 0 }}>No topology data. Run discovery to populate links.</p>
+          <p className="text-muted" style={{ margin: 0 }}>No topology data. Run discovery to populate links, or add a Meraki organization or Cato account with the Meraki / Cato button.</p>
         </div>
       )}
 
@@ -1291,6 +1845,7 @@ export function Topology() {
         {searchPanelOpen && (
           <TopologySearchPanel
             onHighlight={stableApplySearchHighlight}
+            resolveMeraki={resolveMerakiNode}
             onClose={() => setSearchPanelOpen(false)}
           />
         )}
@@ -1309,15 +1864,17 @@ export function Topology() {
             allNodes={data.nodes}
             stpStateByPort={stpStateRef.current}
             onClose={() => setDetailsNode(null)}
+            searchText={appliedSearch}
             onAddToInventory={(n) => setAddInvTarget(n)}
             onCategoryUpdated={(hostId, newCategory) => {
-              if (!data) return;
-              const target = data.nodes.find((n) => n.id === hostId);
+              // Write to the unfiltered graph: `data` may be a source-filtered view.
+              if (!rawData) return;
+              const target = rawData.nodes.find((n) => n.id === hostId);
               if (!target) return;
               const updatedNode = { ...target, device_category: newCategory };
               qc.setQueryData(['topology', groupId ?? null], {
-                ...data,
-                nodes: data.nodes.map((n) => (n.id === hostId ? updatedNode : n)),
+                ...rawData,
+                nodes: rawData.nodes.map((n) => (n.id === hostId ? updatedNode : n)),
               });
               const iconUrl = nodeIconUrl(updatedNode);
               const nodesDS = nodesDSRef.current;
@@ -1340,6 +1897,14 @@ export function Topology() {
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-lldp" /> LLDP</span>
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-ospf" /> OSPF</span>
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
+          {hasMeraki && sourceFilter !== 'inventory' && (
+            <>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato Device</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ba68c8' }} /> VPN Tunnel</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#4fc3f7' }} /> WAN Uplink</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#f44336' }} /> Offline / Unreachable</span>
+            </>
+          )}
           {utilOverlay && (
             <span className="topology-legend-item">
               <span className="topology-legend-gradient" /> Utilization (links + IPAM nodes, 0–100%)
@@ -1420,6 +1985,7 @@ export function Topology() {
           qc.invalidateQueries({ queryKey: ['topology'] });
         }}
       />
+      <MerakiModal isOpen={merakiOpen} onClose={() => setMerakiOpen(false)} />
       <ChangesModal
         isOpen={changesOpen}
         onClose={() => setChangesOpen(false)}

@@ -1384,10 +1384,9 @@ async def _build_topology(group_id: int | None) -> dict:
         except Exception:
             ipam_subnet_index = []
 
-        # Build inventory nodes
-        for h in hosts:
+        def _host_node(h: dict) -> dict:
             ipam_match = _match_ipam_subnet(h.get("ip_address") or "", ipam_subnet_index)
-            nodes_by_id[h["id"]] = {
+            return {
                 "id": h["id"],
                 "label": h["hostname"],
                 "ip": h["ip_address"],
@@ -1402,6 +1401,10 @@ async def _build_topology(group_id: int | None) -> dict:
                 "ipam_utilization_pct": (ipam_match or {}).get("utilization_pct"),
                 "ipam_source_types": (ipam_match or {}).get("source_types", []),
             }
+
+        # Build inventory nodes
+        for h in hosts:
+            nodes_by_id[h["id"]] = _host_node(h)
 
         # Fetch interface stats for utilization overlay
         all_stats = await db.get_interface_stats_by_hosts(list(all_host_ids)) if all_host_ids else []
@@ -1569,6 +1572,15 @@ async def _build_topology(group_id: int | None) -> dict:
 
             edges.append(edge_data)
 
+        # Meraki organizations join the all-groups view (their devices belong
+        # to no inventory group). Best-effort: a problem with Meraki data must
+        # never take the SNMP-discovered map down with it.
+        if group_id is None:
+            try:
+                await _merge_meraki(nodes_by_id, edges, _host_node, _dup_host_map, _ext_to_host, _ip_to_host)
+            except Exception as exc:
+                LOGGER.warning("topology: Meraki merge skipped: %s", redact_value(str(exc)), exc_info=True)
+
         return {
             "nodes": list(nodes_by_id.values()),
             "edges": edges,
@@ -1577,6 +1589,76 @@ async def _build_topology(group_id: int | None) -> dict:
     except Exception as exc:
         LOGGER.error("topology: failed to build graph: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to build topology graph")
+
+
+async def _merge_meraki(
+    nodes_by_id: dict,
+    edges: list[dict],
+    host_node_factory,
+    dup_host_map: dict[int, int],
+    ext_to_host: dict[str, int],
+    ip_to_host: dict[str, int],
+) -> None:
+    """Fold the latest Meraki snapshot of each organization into the graph."""
+    from netcontrol.integrations.meraki.enrich import load_inventory_index
+    from netcontrol.integrations.meraki.unified import external_key, merge_meraki_into_graph
+    from netcontrol.routes.meraki_topology import latest_snapshots
+
+    snapshots = await latest_snapshots()
+    if not snapshots:
+        return
+
+    # Snapshots record the inventory match made when they were built; matching
+    # again here picks up hosts added to the inventory since.
+    inventory = await load_inventory_index()
+    live_match: dict[tuple[int, str], int] = {}
+    wanted: set[int] = set()
+    for org_ref, snap in snapshots:
+        for n in snap.get("nodes") or []:
+            built = (n.get("inventory") or {}).get("host_id")
+            if built is not None:
+                wanted.add(int(built))
+            if n["kind"] in ("wan", "vpn_peer", "cloud", "users"):
+                continue
+            label = n.get("label") or ""
+            host = inventory.match(
+                serial=n.get("serial") or "",
+                ips=[n.get("ip") or ""],
+                name=label if n["kind"] == "external" else "",
+            )
+            if host:
+                live_match[(org_ref, n["id"])] = host["id"]
+                wanted.add(host["id"])
+
+    # A Meraki node can match an inventory host that has no discovered links
+    # and so is not on the map yet; those are pulled in on demand.
+    missing = [hid for hid in wanted if dup_host_map.get(hid, hid) not in nodes_by_id]
+    extra_hosts = {h["id"]: h for h in await db.get_hosts_by_ids(missing)} if missing else {}
+
+    def host_node(host_id: int) -> dict | None:
+        canonical = dup_host_map.get(host_id, host_id)
+        if canonical not in nodes_by_id and canonical in extra_hosts:
+            nodes_by_id[canonical] = host_node_factory(extra_hosts[canonical])
+        return nodes_by_id.get(canonical)
+
+    def resolve_external(name: str, ip: str):
+        key = external_key(name, ip)
+        host_id = ext_to_host.get(key) or (ip_to_host.get(ip) if ip else None)
+        if host_id is not None and host_id in nodes_by_id:
+            return host_id
+        return key if key in nodes_by_id else None
+
+    def match_host(org_ref: int, node: dict) -> int | None:
+        return live_match.get((org_ref, node["id"]))
+
+    merge_meraki_into_graph(
+        nodes_by_id,
+        edges,
+        snapshots,
+        host_node=host_node,
+        resolve_external=resolve_external,
+        match_host=match_host,
+    )
 
 
 # Utilization map cache. Both the on-demand /utilization endpoint and the

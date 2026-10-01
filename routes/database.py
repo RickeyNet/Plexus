@@ -221,6 +221,8 @@ _INSERT_ID_TABLES = {
     "dhcp_servers",
     "geo_sites",
     "geo_floors",
+    "meraki_orgs",
+    "meraki_topology_snapshots",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
@@ -3119,6 +3121,7 @@ from routes.db.jobs import *  # noqa: E402,F403
 from routes.db.lab import *  # noqa: E402,F403
 from routes.db.mac_tracking import *  # noqa: E402,F403
 from routes.db.maintenance import *  # noqa: E402,F403
+from routes.db.meraki import *  # noqa: E402,F403
 from routes.db.metrics import *  # noqa: E402,F403
 from routes.db.monitoring import *  # noqa: E402,F403
 from routes.db.playbooks import *  # noqa: E402,F403
