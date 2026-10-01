@@ -69,7 +69,7 @@ export function MacTracking() {
       <PageHelp
         pageKey="mac-tracking"
         title="MAC & ARP Table Tracking"
-        text="Search and browse MAC address and ARP tables collected from network devices. Track where hosts are connected and trace MAC-to-IP mappings across the network. The Moves tab records every time a MAC relocates (switch, port, VLAN or IP binding change) so you can review and acknowledge them like config drift."
+        text="Search and browse MAC address and ARP tables collected from network devices, including the clients of Meraki devices (refreshed by each Meraki collection on the Topology page). Track where hosts are connected and trace MAC-to-IP mappings across the network. The Moves tab records every time a MAC relocates (switch, port, VLAN or IP binding change) so you can review and acknowledge them like config drift."
       />
 
       {jobStatus === 'running' && (
@@ -212,6 +212,9 @@ function SearchTab() {
           label="Switches Reporting"
           value={stats.data?.switches_reporting}
         />
+        {!!stats.data?.meraki_clients && (
+          <SummaryCard label="Meraki Clients" value={stats.data.meraki_clients} />
+        )}
         <SummaryCard
           label="Last Collected"
           textValue={formatTimestamp(stats.data?.last_collected_at ?? null) || '-'}
@@ -232,7 +235,7 @@ function SearchTab() {
           id="mac-tracking-search"
           className="form-input list-control-search"
           type="search"
-          placeholder="Search by MAC (any format), IP, or port name…"
+          placeholder="Search by MAC (any format), IP, port, or Meraki client name…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           style={{ flex: '1 1 22rem' }}
@@ -251,7 +254,7 @@ function SearchTab() {
         )}
         <span
           className="badge badge-sm"
-          title="Unique MAC addresses tracked across all switches"
+          title="Unique MAC addresses tracked across all switches and Meraki devices"
           style={{ marginLeft: 'auto' }}
         >
           {stats.data
@@ -295,7 +298,8 @@ function SearchTab() {
           ) : (
             <>
               No MAC/ARP entries collected yet. Click &ldquo;Collect Now&rdquo;
-              to gather them from your SNMP-enabled devices.
+              to gather them from your SNMP-enabled devices. Meraki clients
+              are added by a Meraki collection on the Topology page.
             </>
           )}
         </div>
@@ -981,7 +985,7 @@ function ResultsTable({
         <tr>
           <th>MAC Address</th>
           <th>IP Address</th>
-          <th>Switch</th>
+          <th>Seen On</th>
           <th>Port</th>
           <th>VLAN</th>
           <th>Type</th>
@@ -995,24 +999,47 @@ function ResultsTable({
           <tr key={`${r.mac_address}-${idx}`}>
             <td>
               <code style={{ fontSize: '0.85em' }}>{r.mac_address || '-'}</code>
+              {(r.description || r.manufacturer) && (
+                <div style={{ fontSize: '0.8em', opacity: 0.7 }}>
+                  {[r.description, r.manufacturer].filter(Boolean).join(' · ')}
+                </div>
+              )}
             </td>
             <td>{r.ip_address || '-'}</td>
-            <td>{r.hostname || `host-${r.host_id}`}</td>
-            <td>{r.port_name || '-'}</td>
-            <td>{r.vlan ?? '-'}</td>
+            <td>
+              {r.hostname || (r.host_id != null ? `host-${r.host_id}` : '-')}
+              {r.source === 'meraki' && (
+                <>
+                  <span
+                    className="badge badge-sm"
+                    style={{ marginLeft: '0.5rem' }}
+                    title={`Client reported by Meraki${r.org_name ? ` (${r.org_name})` : ''}`}
+                  >
+                    Meraki
+                  </span>
+                  {r.network_name && (
+                    <div style={{ fontSize: '0.8em', opacity: 0.7 }}>{r.network_name}</div>
+                  )}
+                </>
+              )}
+            </td>
+            <td>{r.port_name || (r.ssid ? `SSID ${r.ssid}` : '-')}</td>
+            <td>{r.vlan || '-'}</td>
             <td>
               <span className="badge badge-sm">{r.entry_type || 'dynamic'}</span>
             </td>
             <td style={{ fontSize: '0.85em' }}>{formatTimestamp(r.first_seen)}</td>
             <td style={{ fontSize: '0.85em' }}>{formatTimestamp(r.last_seen)}</td>
             <td>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => onShowHistory(r.mac_address)}
-              >
-                History
-              </button>
+              {r.source !== 'meraki' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => onShowHistory(r.mac_address)}
+                >
+                  History
+                </button>
+              )}
             </td>
           </tr>
         ))}

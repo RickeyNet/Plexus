@@ -22,7 +22,16 @@ import {
 } from '@/api/host-details';
 import { useConfigBackupDetail } from '@/api/configuration';
 import { Modal } from '@/components/Modal';
-import { abbreviateInterface, formatBps, stpPortKey } from './helpers';
+import { abbreviateInterface, formatBps, providerLabel, stpPortKey } from './helpers';
+import { useMerakiNodeDetails } from '@/api/meraki';
+import { MerakiDetails } from './MerakiDetails';
+import {
+  type MerakiView,
+  merakiViewSections,
+  merakiViewsWithData,
+  searchTerms,
+  sectionsMatch,
+} from './merakiHelpers';
 
 interface Props {
   node: TopologyNode;
@@ -32,26 +41,30 @@ interface Props {
   onClose: () => void;
   onAddToInventory: (node: TopologyNode) => void;
   onCategoryUpdated: (hostId: number, newCategory: string) => void;
+  /** Active map search text, so matching Meraki rows can be highlighted. */
+  searchText?: string;
 }
 
-type TabKey =
-  | 'overview'
-  | 'interfaces'
-  | 'vlans'
-  | 'mac'
-  | 'config'
-  | 'errors'
-  | 'audit';
+type TabKey = 'overview' | MerakiView | 'config' | 'errors' | 'audit';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
+  { key: 'meraki', label: 'Device' },
   { key: 'interfaces', label: 'Interfaces' },
   { key: 'vlans', label: 'VLANs' },
   { key: 'mac', label: 'MAC/ARP' },
+  { key: 'routing', label: 'Routing' },
+  { key: 'vpn', label: 'VPN' },
+  { key: 'firewall', label: 'Firewall' },
+  { key: 'switching', label: 'Switching' },
+  { key: 'wireless', label: 'Wireless' },
   { key: 'config', label: 'Config' },
   { key: 'errors', label: 'Errors' },
   { key: 'audit', label: 'Audit' },
 ];
+
+// Tabs backed by inventory (SNMP/SSH) data, keyed by host id.
+const INVENTORY_TABS: TabKey[] = ['interfaces', 'vlans', 'mac', 'config', 'errors', 'audit'];
 
 const SEVERITY_BADGE: Record<HostAuditFinding['severity'], string> = {
   critical: 'badge-danger',
@@ -69,19 +82,53 @@ export function NodeDetails({
   onClose,
   onAddToInventory,
   onCategoryUpdated,
+  searchText,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<TabKey>('overview');
+  // A Meraki-only device has nothing behind the inventory tabs, so it opens
+  // straight on its Meraki details.
+  const initialTab: TabKey = node.meraki && !node.in_inventory ? 'meraki' : 'overview';
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
 
-  // Reset to overview whenever the operator picks a different node
+  // Reset whenever the operator picks a different node
   const [prevNodeId, setPrevNodeId] = useState(node.id);
   if (node.id !== prevNodeId) {
     setPrevNodeId(node.id);
-    setActiveTab('overview');
+    setActiveTab(initialTab);
   }
 
   // Tabs other than overview are only meaningful for inventory devices --
   // the data sources are keyed by host_id and unknown nodes don't have one.
   const hostId = node.in_inventory ? Number(node.id) : null;
+  // Each category of collected Meraki data gets its own tab, shown only when
+  // the Dashboard reported something for it. (Same query MerakiDetails uses.)
+  const merakiDetails = useMerakiNodeDetails(node.meraki?.org_ref ?? null, node.meraki?.node_id ?? null);
+  const merakiData = node.meraki ? merakiDetails.data : undefined;
+  // Until the details load, only the device summary tab is offered.
+  const merakiViews: MerakiView[] = !node.meraki ? [] : merakiData ? merakiViewsWithData(merakiData) : ['meraki'];
+  const highlightTerms = searchTerms(searchText ?? '');
+
+  const tabs = TABS.filter((t) => {
+    if (t.key === 'overview') return true;
+    if (INVENTORY_TABS.includes(t.key) && (hostId != null || !node.meraki)) return true;
+    return merakiViews.includes(t.key as MerakiView);
+  }).map((t) => {
+    const fromMeraki = merakiViews.includes(t.key as MerakiView);
+    const { sections, siteSections } =
+      fromMeraki && merakiData
+        ? merakiViewSections(merakiData, t.key as MerakiView)
+        : { sections: [], siteSections: [] };
+    return {
+      ...t,
+      // Without a host there is nothing behind an inventory tab.
+      disabled: !fromMeraki && hostId == null && t.key !== 'overview',
+      // Points at the tabs holding rows that match the active map search.
+      matched: sectionsMatch(sections, highlightTerms) || sectionsMatch(siteSections, highlightTerms),
+    };
+  });
+  // A tab can go away once the details load (nothing collected for it).
+  const shownTab: TabKey = tabs.some((t) => t.key === activeTab && !t.disabled) ? activeTab : 'overview';
+  const merakiView = merakiViews.includes(shownTab as MerakiView) ? (shownTab as MerakiView) : null;
+  const tabLabel = tabs.find((t) => t.key === shownTab)?.label ?? '';
 
   return (
     <aside
@@ -89,7 +136,7 @@ export function NodeDetails({
         position: 'absolute',
         top: '0.75rem',
         right: '0.75rem',
-        width: 380,
+        width: merakiView ? 460 : 380,
         maxHeight: 'calc(100% - 1.5rem)',
         background: 'var(--card-bg)',
         border: '1px solid var(--border)',
@@ -119,14 +166,10 @@ export function NodeDetails({
         </button>
       </div>
 
-      <TabBar
-        active={activeTab}
-        onChange={setActiveTab}
-        disabledNonOverview={hostId == null}
-      />
+      <TabBar tabs={tabs} active={shownTab} onChange={setActiveTab} />
 
       <div style={{ marginTop: '0.6rem' }}>
-        {activeTab === 'overview' && (
+        {shownTab === 'overview' && (
           <OverviewTab
             node={node}
             edges={edges}
@@ -136,18 +179,33 @@ export function NodeDetails({
             onCategoryUpdated={onCategoryUpdated}
           />
         )}
-        {activeTab === 'interfaces' && hostId != null && (
+        {shownTab === 'interfaces' && hostId != null && (
           <InterfacesTab hostId={hostId} />
         )}
-        {activeTab === 'vlans' && hostId != null && <VlansTab hostId={hostId} />}
-        {activeTab === 'mac' && hostId != null && <MacArpTab hostId={hostId} />}
-        {activeTab === 'config' && hostId != null && (
+        {shownTab === 'vlans' && hostId != null && <VlansTab hostId={hostId} />}
+        {shownTab === 'mac' && hostId != null && <MacArpTab hostId={hostId} />}
+        {shownTab === 'config' && hostId != null && (
           <ConfigTab hostId={hostId} />
         )}
-        {activeTab === 'errors' && hostId != null && (
+        {shownTab === 'errors' && hostId != null && (
           <ErrorsTab hostId={hostId} />
         )}
-        {activeTab === 'audit' && hostId != null && <AuditTab hostId={hostId} />}
+        {shownTab === 'audit' && hostId != null && <AuditTab hostId={hostId} />}
+        {merakiView && node.meraki && (
+          <>
+            {/* An inventory host that is also a Meraki device shows both sources. */}
+            {hostId != null && INVENTORY_TABS.includes(merakiView) && (
+              <SubHeading label={node.meraki.provider === 'cato' ? 'Cato API' : 'Meraki Dashboard'} />
+            )}
+            <MerakiDetails
+              key={merakiView}
+              meraki={node.meraki}
+              highlight={searchText}
+              view={merakiView}
+              title={tabLabel}
+            />
+          </>
+        )}
       </div>
     </aside>
   );
@@ -156,9 +214,9 @@ export function NodeDetails({
 // ── Tab bar ────────────────────────────────────────────────────────────────
 
 function TabBar(props: {
+  tabs: { key: TabKey; label: string; disabled: boolean; matched: boolean }[];
   active: TabKey;
   onChange: (t: TabKey) => void;
-  disabledNonOverview: boolean;
 }) {
   return (
     <div
@@ -170,9 +228,8 @@ function TabBar(props: {
         paddingBottom: '0.3rem',
       }}
     >
-      {TABS.map((t) => {
-        const disabled =
-          t.key !== 'overview' && props.disabledNonOverview;
+      {props.tabs.map((t) => {
+        const disabled = t.disabled;
         const isActive = props.active === t.key;
         return (
           <button
@@ -180,6 +237,7 @@ function TabBar(props: {
             type="button"
             onClick={() => !disabled && props.onChange(t.key)}
             disabled={disabled}
+            title={t.matched ? 'Contains rows matching the map search' : undefined}
             style={{
               fontSize: '0.75rem',
               padding: '0.2rem 0.55rem',
@@ -196,6 +254,7 @@ function TabBar(props: {
             }}
           >
             {t.label}
+            {t.matched && <span style={{ color: '#ffc400', marginLeft: '0.25rem' }}>●</span>}
           </button>
         );
       })}
@@ -229,6 +288,7 @@ function OverviewTab(props: {
   const connectedEdges = edges.filter(
     (e) => e.from === node.id || e.to === node.id,
   );
+  const nodeById = useMemo(() => new Map(allNodes.map((n) => [n.id, n])), [allNodes]);
 
   async function handleCategoryChange(value: string) {
     setCategory(value);
@@ -282,7 +342,7 @@ function OverviewTab(props: {
           </>
         )}
         <span className="text-muted">Status</span>
-        <span className={`badge badge-${node.status === 'up' ? 'success' : node.status === 'down' ? 'danger' : 'secondary'}`}>{node.status || 'unknown'}</span>
+        <span className={`badge badge-${node.status === 'up' ? 'success' : node.status === 'down' ? 'danger' : node.status === 'alerting' ? 'warning' : 'secondary'}`}>{node.status || 'unknown'}</span>
         {node.group_name && (
           <>
             <span className="text-muted">Group</span>
@@ -291,6 +351,15 @@ function OverviewTab(props: {
         )}
         <span className="text-muted">In Inventory</span>
         <span>{node.in_inventory ? 'Yes' : 'No'}</span>
+        {node.meraki && (
+          <>
+            <span className="text-muted">{providerLabel(node.meraki.provider)}</span>
+            <span>
+              {node.meraki.site_name || (node.meraki.provider === 'cato' ? 'Cato account' : 'Meraki organization')}
+              {node.meraki.serial ? ` · ${node.meraki.serial}` : ''}
+            </span>
+          </>
+        )}
         {node.platform && (
           <>
             <span className="text-muted">Platform</span>
@@ -313,7 +382,7 @@ function OverviewTab(props: {
             {connectedEdges.map((edge) => {
               const isSource = edge.from === node.id;
               const peerId = isSource ? edge.to : edge.from;
-              const peer = allNodes.find((n) => n.id === peerId);
+              const peer = nodeById.get(peerId);
               const peerLabel = peer?.label ?? String(peerId);
               const proto = (edge.protocol ?? 'L2').toUpperCase();
               const util = edge.utilization;
@@ -383,7 +452,7 @@ function OverviewTab(props: {
         </>
       )}
 
-      {!node.in_inventory && node.ip && (
+      {!node.in_inventory && node.ip && !['wan', 'vpn_peer', 'cloud', 'users'].includes(node.meraki?.kind ?? '') && (
         <button
           type="button"
           className="btn btn-primary btn-sm"

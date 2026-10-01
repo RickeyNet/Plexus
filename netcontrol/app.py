@@ -220,6 +220,7 @@ from netcontrol.routes.mac_tracking import _mac_move_retention_loop, router as m
 from netcontrol.routes.maintenance_windows import (
     router as maintenance_windows_router,
 )
+from netcontrol.routes.meraki_topology import init_meraki_topology, router as meraki_topology_router
 from netcontrol.routes.metrics_engine import (
     _downsampling_loop,
     admin_router as metrics_engine_admin_router,
@@ -2037,6 +2038,7 @@ init_config_drift(verify_session_token, _get_user_features)
 init_compliance(require_auth, require_feature, require_admin)
 init_deployments(verify_session_token, _get_user_features)
 init_cloud_visibility(require_admin)
+init_meraki_topology(require_admin)
 init_ipam(require_admin)
 init_dhcp(require_admin)
 init_federation(require_admin)
@@ -2070,6 +2072,12 @@ app.include_router(
 app.include_router(
     topology_admin_router,
     dependencies=[Depends(require_admin)],
+)
+# Meraki organization topology (shares the topology feature; org/API-key
+# management is additionally admin-gated inside the router)
+app.include_router(
+    meraki_topology_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("topology"))],
 )
 # Config Drift + admin
 app.include_router(

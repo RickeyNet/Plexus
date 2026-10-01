@@ -22,6 +22,8 @@ export interface HighlightTarget {
 
 interface Props {
   onHighlight: (target: HighlightTarget | null) => void;
+  /** Map node of a Meraki device, for clients seen on Meraki devices. */
+  resolveMeraki?: (orgRef: number, nodeId: string) => number | string | undefined;
   onClose: () => void;
 }
 
@@ -39,7 +41,7 @@ function detectKind(q: string): Exclude<SearchKind, 'auto'> {
   return 'mac';
 }
 
-export function TopologySearchPanel({ onHighlight, onClose }: Props) {
+export function TopologySearchPanel({ onHighlight, resolveMeraki, onClose }: Props) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<SearchKind>('auto');
   const [debounced, setDebounced] = useState('');
@@ -87,12 +89,16 @@ export function TopologySearchPanel({ onHighlight, onClose }: Props) {
       return;
     }
     if (macEnabled && macQ.data) {
-      const hostIds = new Set<number>();
+      const hostIds = new Set<number | string>();
       const ports: { hostId: number; portName: string }[] = [];
       for (const r of macQ.data) {
         if (r.host_id != null) hostIds.add(r.host_id);
         if (r.host_id != null && r.port_name) {
           ports.push({ hostId: r.host_id, portName: r.port_name });
+        }
+        if (r.source === 'meraki' && r.org_ref != null && r.node_id) {
+          const node = resolveMeraki?.(r.org_ref, r.node_id);
+          if (node !== undefined) hostIds.add(node);
         }
       }
       onHighlight({ nodeIds: [...hostIds], ports });
@@ -111,7 +117,7 @@ export function TopologySearchPanel({ onHighlight, onClose }: Props) {
       });
       return;
     }
-  }, [debounced, macEnabled, macQ.data, effectiveKind, vlanQ.data, onHighlight]);
+  }, [debounced, macEnabled, macQ.data, effectiveKind, vlanQ.data, onHighlight, resolveMeraki]);
 
   // Clear highlight when the panel unmounts so the graph isn't stuck dimmed.
   useEffect(() => {
@@ -284,14 +290,16 @@ function ResultList({
         </thead>
         <tbody>
           {macRows.map((r) => (
-            <tr key={`${r.host_id}-${r.mac_address}-${r.port_name}`}>
-              <td style={{ fontFamily: 'monospace', fontSize: '0.72rem' }}>
+            <tr key={`${r.source ?? 'host'}-${r.host_id ?? r.org_ref}-${r.network_name ?? ''}-${r.mac_address}-${r.vlan}-${r.port_name}`}>
+              <td style={{ fontFamily: 'monospace', fontSize: '0.72rem' }} title={r.description || undefined}>
                 {r.mac_address}
               </td>
               <td>{r.ip_address || '-'}</td>
-              <td>{r.hostname || `#${r.host_id}`}</td>
-              <td>{r.port_name || '-'}</td>
-              <td>{r.vlan ?? '-'}</td>
+              <td title={r.source === 'meraki' ? `Meraki${r.network_name ? ` · ${r.network_name}` : ''}` : undefined}>
+                {r.hostname || (r.host_id != null ? `#${r.host_id}` : '-')}
+              </td>
+              <td>{r.port_name || (r.ssid ? `SSID ${r.ssid}` : '-')}</td>
+              <td>{r.vlan || '-'}</td>
             </tr>
           ))}
         </tbody>

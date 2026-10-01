@@ -39,6 +39,15 @@ def _clear_topology_caches():
     topology_module._UTIL_CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_meraki_snapshots(monkeypatch):
+    """These tests mock the discovery tables only. Keep Meraki snapshots that
+    happen to be in the database under test out of the graph they assert on."""
+    import netcontrol.routes.meraki_topology as meraki_module
+
+    monkeypatch.setattr(meraki_module, "latest_snapshots", AsyncMock(return_value=[]))
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 

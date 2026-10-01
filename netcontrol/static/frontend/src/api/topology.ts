@@ -30,6 +30,25 @@ export interface TopologyNode {
   in_inventory: boolean;
   ipam_subnet?: string | null;
   ipam_utilization_pct?: number | null;
+  /** 'meraki' for devices that exist only in a Meraki organization. */
+  source?: 'meraki' | string;
+  /** Present when the node is (or matches) a node of a Meraki snapshot. */
+  meraki?: TopologyMerakiRef | null;
+  /** Layout hint: Meraki sites arrive pre-arranged instead of using physics. */
+  x?: number;
+  y?: number;
+}
+
+export interface TopologyMerakiRef {
+  org_ref: number;
+  node_id: string;
+  site_id: string;
+  site_name: string;
+  kind: string;
+  status: string;
+  serial?: string;
+  /** Integration the snapshot came from: 'meraki' (default) or 'cato'. */
+  provider?: string;
 }
 
 export interface TopologyEdge {
@@ -42,6 +61,9 @@ export interface TopologyEdge {
   target_interface?: string | null;
   protocol?: string | null;
   utilization?: TopologyEdgeUtilization | null;
+  source?: 'meraki' | string;
+  /** Meraki link state: VPN reachability or WAN uplink status. */
+  status?: string | null;
 }
 
 export interface TopologyData {

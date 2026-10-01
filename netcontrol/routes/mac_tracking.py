@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.integrations.meraki.clients import search_entry as _meraki_search_entry
 from netcontrol.routes import background_jobs
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
@@ -1058,18 +1059,39 @@ async def collect_interface_inventory(
 async def search_mac(query: str = Query(""), limit: int = Query(5000, ge=1, le=50000)):
     """Search across MAC/ARP tables by MAC address, IP, or port name.
 
+    Covers the forwarding tables of inventory hosts and the clients of Meraki
+    devices (``source: "meraki"``, also matched by client or device name).
+
     A blank query returns the most recently collected entries. The default
     limit is high enough to show the full table for typical deployments so
     the list doesn't silently truncate; the cap only guards pathological
     sizes.
     """
-    return await db.search_mac_tracking(query, limit)
+    rows = await db.search_mac_tracking(query, limit)
+    meraki = [_meraki_search_entry(c) for c in await db.search_meraki_clients(query, limit)]
+    if not meraki:
+        return rows
+    merged = rows + meraki
+    merged.sort(key=lambda r: str(r.get("last_seen") or ""), reverse=True)
+    return merged[:limit]
 
 
 @router.get("/api/mac-tracking/stats")
 async def mac_tracking_stats():
-    """Header counts: total rows, unique MACs, switches reporting, freshness."""
-    return await db.get_mac_tracking_stats()
+    """Header counts: total rows, unique MACs, switches reporting, freshness.
+
+    Meraki clients count towards the totals; ``switches_reporting`` stays the
+    number of inventory hosts, with Meraki reported separately.
+    """
+    stats = await db.get_mac_tracking_stats()
+    meraki = await db.get_meraki_client_stats()
+    stats["meraki_clients"] = meraki["entries"]
+    stats["meraki_devices"] = meraki["devices"]
+    if meraki["entries"]:
+        stats["total_entries"] += meraki["entries"]
+        stats["unique_macs"] = meraki["unique_macs"]
+        stats["last_collected_at"] = stats["last_collected_at"] or meraki["last_seen"]
+    return stats
 
 
 @router.get("/api/mac-tracking/by-host")
@@ -1279,6 +1301,7 @@ async def get_mac_collection_job(job_id: str):
 async def cleanup_stale_entries(days: int = Query(30, ge=1)):
     """Remove MAC entries not seen in the specified number of days."""
     removed = await db.cleanup_stale_mac_entries(days)
+    removed += await db.cleanup_stale_meraki_clients(days)
     return {"removed": removed}
 
 
