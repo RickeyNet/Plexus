@@ -9,6 +9,8 @@ what feeds and surrounds that merge:
   - Meraki organization CRUD (Dashboard API key is write-only, stored encrypted)
   - Cato Networks accounts, which are stored and collected like an
     organization (``provider`` "cato") and produce the same snapshot format
+  - AWS: the accounts Cloud Visibility discovers are turned into one more
+    snapshot (``provider`` "aws") whenever their discovery changes
   - On-demand collection builds as background jobs with pollable progress
   - Stored snapshots: list / fetch JSON / delete, and an in-memory cache of
     the latest one per organization
@@ -32,6 +34,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from netcontrol.integrations.aws.normalize import build_snapshot as build_aws_snapshot
+from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
 from netcontrol.integrations.cato.client import (
     DEFAULT_BASE_URL as CATO_BASE_URL,
     CatoApiError,
@@ -77,10 +81,15 @@ _JOB_KIND = "meraki-topology-build"
 _SNAPSHOTS_KEPT_PER_ORG = 10
 SAMPLE_ORG_NAME = "Sample Organization (demo data)"
 SAMPLE_CATO_NAME = "Sample Cato Account (demo data)"
+SAMPLE_AWS_NAME = "Sample AWS Account (demo data)"
+# Marks the demo AWS account, which scheduled discovery leaves alone.
+SAMPLE_AWS_AUTH_TYPE = "sample"
 
 PROVIDER_MERAKI = "meraki"
 PROVIDER_CATO = "cato"
 PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO)
+# Not an organization provider: AWS accounts are Cloud Visibility accounts.
+PROVIDER_AWS = "aws"
 
 _require_admin = None
 
@@ -94,10 +103,39 @@ _running_builds: dict[int, str] = {}
 # are dropped when a newer build replaces them.
 _SNAPSHOT_CACHE: dict[int, dict[str, Any]] = {}
 
+# AWS accounts belong to Cloud Visibility, not to ``meraki_orgs``. What they
+# discovered is built into one snapshot for all of them and referenced by an
+# ``org_ref`` (and cache key) no organization or stored snapshot can have.
+AWS_ORG_REF = -1
+_AWS_ACCOUNT_FIELDS = ("id", "name", "account_identifier", "last_sync_at", "last_sync_status", "last_sync_message")
+
+
+async def _aws_entry() -> dict[str, Any] | None:
+    """The snapshot of every enabled AWS account that has been discovered,
+    rebuilt when a discovery, or the set of accounts, changes."""
+    accounts = [
+        {key: account.get(key) for key in (*_AWS_ACCOUNT_FIELDS, "resource_count", "connection_count")}
+        for account in await db.list_cloud_accounts(provider="aws", enabled_only=True)
+        if account.get("resource_count")
+    ]
+    if not accounts:
+        return None
+    signature = tuple(tuple(account.values()) for account in accounts)
+    entry = _SNAPSHOT_CACHE.get(AWS_ORG_REF)
+    if entry is None or entry.get("signature") != signature:
+        wanted = {account["id"] for account in accounts}
+        resources = [r for r in await db.get_cloud_resources(provider="aws") if r.get("account_id") in wanted]
+        connections = [c for c in await db.get_cloud_connections(provider="aws") if c.get("account_id") in wanted]
+        inventory = await load_inventory_index()
+        # Layout of a large account is CPU-bound; keep it off the event loop.
+        snapshot = await asyncio.to_thread(build_aws_snapshot, accounts, resources, connections, inventory)
+        entry = _SNAPSHOT_CACHE[AWS_ORG_REF] = {"snapshot": snapshot, "index": None, "signature": signature}
+    return entry
+
 
 async def _latest_entries() -> list[tuple[int, dict[str, Any]]]:
     latest = await db.get_latest_meraki_snapshot_ids()
-    wanted = {snapshot_id for _org_ref, snapshot_id in latest}
+    wanted = {snapshot_id for _org_ref, snapshot_id in latest} | {AWS_ORG_REF}
     for stale in set(_SNAPSHOT_CACHE) - wanted:
         _SNAPSHOT_CACHE.pop(stale, None)
     entries: list[tuple[int, dict[str, Any]]] = []
@@ -109,6 +147,18 @@ async def _latest_entries() -> list[tuple[int, dict[str, Any]]]:
                 continue
             entry = _SNAPSHOT_CACHE[snapshot_id] = {"snapshot": row["snapshot"], "index": None}
         entries.append((org_ref, entry))
+    # AWS goes last: its customer gateways and appliances are matched against
+    # what the other snapshots already put on the map. Best-effort, like the
+    # merge itself: a problem with cloud data must not hide the rest.
+    try:
+        aws = await _aws_entry()
+    except Exception as exc:  # noqa: BLE001
+        aws = None
+        LOGGER.warning("aws: topology snapshot skipped: %s", type(exc).__name__, exc_info=True)
+    if aws is None:
+        _SNAPSHOT_CACHE.pop(AWS_ORG_REF, None)
+    else:
+        entries.append((AWS_ORG_REF, aws))
     return entries
 
 
@@ -518,13 +568,59 @@ async def _build_cato_sample(user: str) -> dict:
     return {"ok": True, "org_ref": org["id"], **result}
 
 
+async def _build_aws_sample(user: str) -> dict:
+    """Discover the demo AWS account. It is a Cloud Visibility account like
+    any other AWS account (and is deleted there); only its data is bundled."""
+    started = time.monotonic()
+    accounts = await db.list_cloud_accounts(provider=PROVIDER_AWS)
+    # Only ever the demo account: a real account that happens to share the
+    # name keeps its discovery.
+    account = next(
+        (a for a in accounts if a.get("name") == SAMPLE_AWS_NAME and a.get("auth_type") == SAMPLE_AWS_AUTH_TYPE),
+        None,
+    )
+    if not account:
+        account = await db.create_cloud_account(
+            provider=PROVIDER_AWS,
+            name=SAMPLE_AWS_NAME,
+            account_identifier="sample",
+            region_scope="us-east-1,us-west-2",
+            auth_type=SAMPLE_AWS_AUTH_TYPE,
+            notes="Demo data for the Topology map. Delete this account when you are done.",
+            created_by=user,
+        )
+    if not account:
+        raise HTTPException(status_code=500, detail="Could not create the sample account")
+    resources, connections = build_aws_sample()
+    await db.replace_cloud_discovery_snapshot(
+        account["id"],
+        resources=resources,
+        connections=connections,
+        sync_status="success",
+        sync_message="Sample discovery snapshot refreshed",
+    )
+    _topology_changed()
+    entry = await _aws_entry()
+    return {
+        "ok": True,
+        "org_ref": AWS_ORG_REF,
+        "snapshot_id": None,
+        "summary": (entry["snapshot"].get("summary") if entry else None) or {},
+        "warning_count": 0,
+        "duration_seconds": round(time.monotonic() - started, 1),
+    }
+
+
 @router.post("/api/meraki/sample", status_code=201)
 async def build_sample_topology_api(request: Request, provider: str = Query(default=PROVIDER_MERAKI)):
     """Build a snapshot from bundled demo data (no API key needed).
-    ``provider=cato`` builds the demo Cato account instead of the Meraki one."""
+    ``provider=cato`` builds the demo Cato account instead of the Meraki one,
+    ``provider=aws`` the demo AWS account in Cloud Visibility."""
     user = _session_user(request)
     if provider == PROVIDER_CATO:
         return await _build_cato_sample(user)
+    if provider == PROVIDER_AWS:
+        return await _build_aws_sample(user)
     started = time.monotonic()
     org = await db.get_meraki_org_by_name(SAMPLE_ORG_NAME)
     if not org:

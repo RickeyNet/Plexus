@@ -10,7 +10,9 @@ the same search box, and are included in the HTML export.
 - API: `/api/meraki/*`, `/api/topology/search/deep`, `/api/topology/export.html`
 
 A Cato Networks account is added from the same dialog and shares the map,
-search, Path Mode and export; see [cato-topology.md](cato-topology.md).
+search, Path Mode and export; see [cato-topology.md](cato-topology.md). AWS
+accounts discovered by Cloud Visibility join the map as well; see
+[aws-topology.md](aws-topology.md).
 
 ## Quick start
 

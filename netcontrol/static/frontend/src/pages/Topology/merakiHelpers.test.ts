@@ -71,3 +71,22 @@ describe('cato detail tabs', () => {
     expect(merakiViewSections(socket, 'interfaces').sections.map((s) => s.title)).toEqual(['WAN links']);
   });
 });
+
+describe('aws detail tabs', () => {
+  it('files VPC sections under the shared tabs', () => {
+    const vpc = details({
+      sections: [table('Overview')],
+      site_sections: [
+        table('VPC overview'),
+        table('Subnets'),
+        table('Route tables'),
+        table('Instances'),
+        table('Security group rules'),
+      ],
+    });
+    expect(merakiViewsWithData(vpc)).toEqual(['meraki', 'vlans', 'routing', 'firewall']);
+    expect(merakiViewSections(vpc, 'vlans').siteSections.map((s) => s.title)).toEqual(['Subnets']);
+    // Instances have no tab of their own; they stay on the summary.
+    expect(merakiViewSections(vpc, 'meraki').siteSections.map((s) => s.title)).toEqual(['VPC overview', 'Instances']);
+  });
+});

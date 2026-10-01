@@ -120,8 +120,8 @@ export interface DetailSection {
 }
 
 export interface MerakiNodeDetails {
-  /** Integration the node's snapshot came from. */
-  provider?: CloudProvider;
+  /** Integration the node's snapshot came from ('aws' for Cloud Visibility's AWS discovery). */
+  provider?: CloudProvider | 'aws';
   node_id: string;
   label: string;
   kind: string;
@@ -287,12 +287,17 @@ export function useStartMerakiBuild() {
 export function useBuildMerakiSample() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (provider: CloudProvider) =>
+    // 'aws' loads the demo AWS account, which lives under Cloud Visibility.
+    mutationFn: (provider: CloudProvider | 'aws') =>
       apiRequest<MerakiBuildResult & { org_ref: number }>(
-        `/meraki/sample${provider === 'cato' ? '?provider=cato' : ''}`,
+        `/meraki/sample${provider === 'meraki' ? '' : `?provider=${provider}`}`,
         { method: 'POST' },
       ),
-    onSuccess: () => invalidateMeraki(qc),
+    onSuccess: () => {
+      invalidateMeraki(qc);
+      qc.invalidateQueries({ queryKey: ['cloud-accounts'] });
+      qc.invalidateQueries({ queryKey: ['cloud-topology'] });
+    },
   });
 }
 

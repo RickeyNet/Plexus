@@ -4,7 +4,8 @@ The Topology page has one graph. This module is the seam between the two
 data models:
 
   ``merge_meraki_into_graph``  - adds Meraki devices, WAN uplinks, VPN peers and
-      their links to the node/edge graph served by ``/api/topology``. A Meraki
+      their links (and the Cato and AWS snapshots, which share the format) to
+      the node/edge graph served by ``/api/topology``. A Meraki
       device or LLDP/CDP neighbor that is also a Plexus inventory host
       collapses into that host's node, which is what stitches a Meraki site
       onto the SNMP-discovered network around it.
@@ -18,6 +19,7 @@ Everything here is pure (no I/O); the routes own database access and caching.
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -49,8 +51,16 @@ _CATEGORY = {
 NON_DEVICE_KINDS = ("external", "wan", "vpn_peer", "cloud", "users")
 _GRAPH_STATUS = {"online": "up", "offline": "down", "alerting": "alerting"}
 # Snapshot edge kind -> Topology edge protocol.
-_PROTOCOL = {"lan": "lldp", "stack": "stack", "uplink": "wan", "vpn": "vpn", "vpn3p": "vpn-ipsec"}
-_EDGE_KIND = {"stack": "stack", "wan": "uplink", "vpn": "vpn", "vpn-ipsec": "vpn3p"}
+# ``attach`` is a cloud attachment (VPC to transit gateway, peering...).
+_PROTOCOL = {
+    "lan": "lldp",
+    "stack": "stack",
+    "uplink": "wan",
+    "vpn": "vpn",
+    "vpn3p": "vpn-ipsec",
+    "attach": "cloud",
+}
+_EDGE_KIND = {"stack": "stack", "wan": "uplink", "vpn": "vpn", "vpn-ipsec": "vpn3p", "cloud": "attach"}
 # Inventory device_category -> viewer node kind.
 _VIEWER_KIND = {
     "router": "router",
@@ -63,7 +73,7 @@ _VIEWER_KIND = {
 }
 
 EXTERNAL_SITE_ID = "__external__"
-_SOURCE_NAME = {"meraki": "Meraki Dashboard", "cato": "Cato API"}
+_SOURCE_NAME = {"meraki": "Meraki Dashboard", "cato": "Cato API", "aws": "AWS API"}
 
 
 def meraki_graph_id(org_ref: int, node_id: str) -> str:
@@ -84,6 +94,21 @@ def _name_or_blank(label: str) -> str:
     return "" if _is_ip(label) else label
 
 
+def _global_ips(*values: Any) -> list[str]:
+    """The public addresses among ``values`` (strings or lists of strings).
+    Private addresses repeat from site to site and identify nothing."""
+    found: list[str] = []
+    for value in values:
+        for raw in value if isinstance(value, (list, tuple)) else [value]:
+            try:
+                address = ipaddress.ip_address(str(raw or "").strip())
+            except ValueError:
+                continue
+            if address.is_global and str(address) not in found:
+                found.append(str(address))
+    return found
+
+
 def merge_meraki_into_graph(
     nodes_by_id: dict[Any, dict],
     edges: list[dict],
@@ -101,8 +126,52 @@ def merge_meraki_into_graph(
     node that already represents that neighbor, or ``None``.
     ``match_host(org_ref, snapshot_node)`` looks a node up in the *current* inventory,
     so a host added after the snapshot was built still collapses.
+
+    Snapshots of different integrations are stitched together by public
+    address: the device that answers on an address (its own, or that of its
+    WAN uplink) is the far end of any VPN peer configured with that address,
+    and is the cloud instance that holds it.
     """
     y_cursor = 0.0
+    # Public address -> graph node that answers on it. First claim wins.
+    claims: dict[str, Any] = {}
+    plans: list[dict[str, Any]] = []
+
+    def new_node(ref: dict, node: dict, provider: str, x: float, y: float) -> Any:
+        # A neighbor nothing else knows stays per site: names such as
+        # "Unknown neighbor" or a phone model repeat at every site, and one
+        # shared node would cable all of those sites together.
+        is_external = node["kind"] == "external"
+        graph_id = meraki_graph_id(ref["org_ref"], node["id"])
+        nodes_by_id[graph_id] = {
+            "id": graph_id,
+            "label": node.get("label") or graph_id,
+            "ip": node.get("ip") or "",
+            "device_type": "unknown" if is_external else provider,
+            "device_category": "" if is_external else _CATEGORY.get(node["kind"], node["kind"]),
+            "model": node.get("model") or "",
+            "group_id": None,
+            "group_name": "" if is_external else ref["site_name"],
+            "status": "unknown" if is_external else _GRAPH_STATUS.get(ref["status"], "unknown"),
+            "in_inventory": False,
+            "ipam_subnet": "",
+            "ipam_utilization_pct": None,
+            "ipam_source_types": [],
+            "meraki": ref,
+            "x": x,
+            "y": y,
+        }
+        if not is_external:
+            nodes_by_id[graph_id]["source"] = "meraki"
+        return graph_id
+
+    def collapse(target: dict, ref: dict, x: float, y: float) -> Any:
+        target.setdefault("meraki", ref)
+        target.setdefault("x", x)
+        target.setdefault("y", y)
+        return target["id"]
+
+    # Pass 1: devices. VPN peers wait until every device has claimed its addresses.
     for org_ref, snapshot in snapshots:
         snap_nodes = snapshot.get("nodes") or []
         if not snap_nodes:
@@ -113,11 +182,17 @@ def merge_meraki_into_graph(
         min_x = min(n.get("x", 0.0) for n in snap_nodes)
         min_y = min(n.get("y", 0.0) for n in snap_nodes)
         max_y = max(n.get("y", 0.0) for n in snap_nodes)
-        # Links Plexus discovered itself win over the Meraki view of the same
-        # adjacency (they carry utilization and STP state).
-        discovered_pairs = {frozenset((str(e["from"]), str(e["to"]))) for e in edges}
+        plan: dict[str, Any] = {
+            "org_ref": org_ref,
+            "snapshot": snapshot,
+            "provider": provider,
+            "id_map": {},
+            "peers": [],
+            "links": [],
+        }
+        plans.append(plan)
+        id_map: dict[str, Any] = plan["id_map"]
 
-        id_map: dict[str, Any] = {}
         for node in snap_nodes:
             ref = {
                 "org_ref": org_ref,
@@ -131,6 +206,9 @@ def merge_meraki_into_graph(
             }
             x = round(node.get("x", 0.0) - min_x + MERAKI_X_OFFSET, 1)
             y = round(node.get("y", 0.0) - min_y + y_cursor, 1)
+            if node["kind"] == "vpn_peer":
+                plan["peers"].append((node, ref, x, y))
+                continue
 
             target: dict | None = None
             host_id = (node.get("inventory") or {}).get("host_id")
@@ -142,41 +220,64 @@ def merge_meraki_into_graph(
             if target is None and node["kind"] == "external":
                 existing = resolve_external(_name_or_blank(node.get("label") or ""), node.get("ip") or "")
                 target = nodes_by_id.get(existing) if existing is not None else None
-            if target is not None:
-                target.setdefault("meraki", ref)
-                target.setdefault("x", x)
-                target.setdefault("y", y)
-                id_map[node["id"]] = target["id"]
-                continue
-
-            # A neighbor nothing else knows stays per site: names such as
-            # "Unknown neighbor" or a phone model repeat at every site, and one
-            # shared node would cable all of those sites together.
-            is_external = node["kind"] == "external"
-            graph_id = meraki_graph_id(org_ref, node["id"])
-            nodes_by_id[graph_id] = {
-                "id": graph_id,
-                "label": node.get("label") or graph_id,
-                "ip": node.get("ip") or "",
-                "device_type": "unknown" if is_external else provider,
-                "device_category": "" if is_external else _CATEGORY.get(node["kind"], node["kind"]),
-                "model": node.get("model") or "",
-                "group_id": None,
-                "group_name": "" if is_external else ref["site_name"],
-                "status": "unknown" if is_external else _GRAPH_STATUS.get(ref["status"], "unknown"),
-                "in_inventory": False,
-                "ipam_subnet": "",
-                "ipam_utilization_pct": None,
-                "ipam_source_types": [],
-                "meraki": ref,
-                "x": x,
-                "y": y,
-            }
-            if not is_external:
-                nodes_by_id[graph_id]["source"] = "meraki"
+            if target is None:
+                # A cloud instance is the device another integration already
+                # shows on one of its public addresses (a virtual appliance).
+                for address in _global_ips(node.get("alias_ips")):
+                    target = nodes_by_id.get(claims.get(address))
+                    if target is not None:
+                        break
+            graph_id = collapse(target, ref, x, y) if target is not None else new_node(ref, node, provider, x, y)
             id_map[node["id"]] = graph_id
 
+            if node["kind"] in ("external", "wan"):
+                continue  # a WAN stub's address belongs to the device behind it
+            for address in _global_ips(node.get("ip"), node.get("alias_ips")):
+                claims.setdefault(address, graph_id)
+            # Addresses a gateway terminates tunnels on: whoever already
+            # answers on one is the far end of that tunnel.
+            for address in _global_ips(node.get("endpoint_ips")):
+                holder = claims.setdefault(address, graph_id)
+                if holder != graph_id:
+                    plan["links"].append((holder, graph_id, node["id"], address))
+
+        wan_ids = {n["id"] for n in snap_nodes if n["kind"] == "wan"}
+        wan_ips = {n["id"]: n.get("ip") for n in snap_nodes if n["kind"] == "wan"}
         for edge in snapshot.get("edges") or []:
+            for wan, device in ((edge["a"], edge["b"]), (edge["b"], edge["a"])):
+                if wan in wan_ids and device not in wan_ids and device in id_map:
+                    for address in _global_ips(wan_ips[wan]):
+                        claims.setdefault(address, id_map[device])
+        y_cursor += (max_y - min_y) + MERAKI_ORG_GAP
+
+    # Pass 2: VPN peers. One whose address a device on the map answers on is
+    # that device; the rest stay as peers (shared when two snapshots name the
+    # same address).
+    for plan in plans:
+        for node, ref, x, y in plan["peers"]:
+            address = str(node.get("ip") or "").strip()
+            target: dict | None = None
+            if address:
+                existing = resolve_external("", address)
+                target = nodes_by_id.get(existing) if existing is not None else None
+            public = _global_ips(address)
+            if target is None and public:
+                target = nodes_by_id.get(claims.get(public[0]))
+            if target is not None:
+                plan["id_map"][node["id"]] = collapse(target, ref, x, y)
+                continue
+            graph_id = new_node(ref, node, plan["provider"], x, y)
+            plan["id_map"][node["id"]] = graph_id
+            for item in public:
+                claims.setdefault(item, graph_id)
+
+    # Pass 3: links.
+    for plan in plans:
+        org_ref, provider, id_map = plan["org_ref"], plan["provider"], plan["id_map"]
+        # Links Plexus discovered itself win over the Meraki view of the same
+        # adjacency (they carry utilization and STP state).
+        discovered_pairs = {frozenset((str(e["from"]), str(e["to"]))) for e in edges}
+        for edge in plan["snapshot"].get("edges") or []:
             a, b = id_map.get(edge["a"]), id_map.get(edge["b"])
             if a is None or b is None or a == b:
                 continue
@@ -199,13 +300,31 @@ def merge_meraki_into_graph(
                     "status": edge.get("status") or "",
                 }
             )
-        y_cursor += (max_y - min_y) + MERAKI_ORG_GAP
+        for holder, graph_id, node_id, address in plan["links"]:
+            if frozenset((str(holder), str(graph_id))) in {frozenset((str(e["from"]), str(e["to"]))) for e in edges}:
+                continue  # the tunnel is already drawn from the other side
+            edges.append(
+                {
+                    "id": f"meraki:{org_ref}:ip:{node_id}:{address}",
+                    "from": holder,
+                    "to": graph_id,
+                    "label": "",
+                    "protocol": "vpn",
+                    "source_interface": "",
+                    "target_interface": "",
+                    "color": "#808080",
+                    "width": 1,
+                    "source": "meraki",
+                    "provider": provider,
+                    "status": "",
+                }
+            )
 
 
 # ── Node details and search ──────────────────────────────────────────────────
 
 
-SITE_ADDRESSING_TITLES = ("VLANs", "Single LAN", "Network ranges")
+SITE_ADDRESSING_TITLES = ("VLANs", "Single LAN", "Network ranges", "Subnets")
 
 
 def node_details(snapshot: dict, node_id: str) -> dict | None:
@@ -472,7 +591,8 @@ def graph_to_snapshot(
         site["status"] = _worst([m["status"] for m in members]) if members else "unknown"
         site["device_count"] = len(members)
 
-    _layout(site_list, nodes, edges)
+    # Inside a cloud site, attachments shape the box like cables do.
+    _layout(site_list, nodes, [{**e, "kind": "lan"} if e["kind"] == "attach" else e for e in edges])
     node_list = list(nodes.values())
     for node in node_list:
         node.pop("parent", None)
@@ -510,6 +630,7 @@ def graph_to_snapshot(
             "lan_links": edge_counts.get("lan", 0) + edge_counts.get("stack", 0),
             "vpn_tunnels": edge_counts.get("vpn", 0) + edge_counts.get("vpn3p", 0),
             "wan_uplinks": edge_counts.get("uplink", 0),
+            "cloud_links": edge_counts.get("attach", 0),
             "vlans": sum((snap.get("summary") or {}).get("vlans", 0) for snap in snapshots.values()),
         },
         "collection": {"sources": sources, "stats": {}, "errors": errors, "options": {}},

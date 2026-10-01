@@ -22,7 +22,14 @@ import {
 } from '@/api/host-details';
 import { useConfigBackupDetail } from '@/api/configuration';
 import { Modal } from '@/components/Modal';
-import { abbreviateInterface, formatBps, providerLabel, stpPortKey } from './helpers';
+import {
+  abbreviateInterface,
+  formatBps,
+  providerLabel,
+  providerScopeName,
+  providerSourceName,
+  stpPortKey,
+} from './helpers';
 import { useMerakiNodeDetails } from '@/api/meraki';
 import { MerakiDetails } from './MerakiDetails';
 import {
@@ -195,7 +202,7 @@ export function NodeDetails({
           <>
             {/* An inventory host that is also a Meraki device shows both sources. */}
             {hostId != null && INVENTORY_TABS.includes(merakiView) && (
-              <SubHeading label={node.meraki.provider === 'cato' ? 'Cato API' : 'Meraki Dashboard'} />
+              <SubHeading label={providerSourceName(node.meraki.provider)} />
             )}
             <MerakiDetails
               key={merakiView}
@@ -355,7 +362,7 @@ function OverviewTab(props: {
           <>
             <span className="text-muted">{providerLabel(node.meraki.provider)}</span>
             <span>
-              {node.meraki.site_name || (node.meraki.provider === 'cato' ? 'Cato account' : 'Meraki organization')}
+              {node.meraki.site_name || providerScopeName(node.meraki.provider)}
               {node.meraki.serial ? ` · ${node.meraki.serial}` : ''}
             </span>
           </>
@@ -452,7 +459,7 @@ function OverviewTab(props: {
         </>
       )}
 
-      {!node.in_inventory && node.ip && !['wan', 'vpn_peer', 'cloud', 'users'].includes(node.meraki?.kind ?? '') && (
+      {!node.in_inventory && node.ip && !['wan', 'vpn_peer', 'cloud', 'users', 'vpc'].includes(node.meraki?.kind ?? '') && (
         <button
           type="button"
           className="btn btn-primary btn-sm"

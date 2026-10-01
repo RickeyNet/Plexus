@@ -1274,6 +1274,8 @@ def _layout_site(members: list[dict], edges: list[dict]) -> tuple[float, float]:
             adjacency[edge["b"]].append(edge["a"])
 
     kind_rank = {
+        # A VPC's router sits above the appliances inside the VPC.
+        "vpc": -1,
         "appliance": 0,
         "firewall": 0,
         "router": 0,
@@ -1294,7 +1296,7 @@ def _layout_site(members: list[dict], edges: list[dict]) -> tuple[float, float]:
     for candidate in sorted(tree_nodes, key=root_order):
         if candidate in visited:
             continue
-        if not adjacency[candidate] and tree_nodes[candidate]["kind"] != "appliance":
+        if not adjacency[candidate] and tree_nodes[candidate]["kind"] not in ("appliance", "vpc"):
             visited.add(candidate)
             loose.append(candidate)
             continue

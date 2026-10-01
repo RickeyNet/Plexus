@@ -1537,7 +1537,7 @@ export function Topology() {
       <PageHelp
         pageKey="topology"
         title="Interactive Network Map"
-        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, from the Meraki Dashboard. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Export HTML saves the whole map as one shareable interactive file."
+        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts and AWS accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Export HTML saves the whole map as one shareable interactive file."
       />
 
       {actionMsg && (
@@ -1572,7 +1572,7 @@ export function Topology() {
           >
             <option value="all">All sources</option>
             <option value="inventory">Inventory only</option>
-            <option value="meraki">Meraki / Cato only</option>
+            <option value="meraki">Meraki / Cato / AWS only</option>
           </select>
         )}
 
@@ -1641,7 +1641,7 @@ export function Topology() {
         </div>
 
         <button className="btn btn-primary btn-sm" onClick={() => setDiscoveryOpen(true)}>Discover Neighbors</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setMerakiOpen(true)} title="Meraki organizations and Cato accounts: add, collect, history">Meraki / Cato</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => setMerakiOpen(true)} title="Meraki organizations and Cato accounts: add, collect, history. AWS accounts are added under Cloud Visibility.">Meraki / Cato</button>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
         <button className="btn btn-secondary btn-sm" onClick={handleFit}>Fit</button>
         <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
@@ -1825,7 +1825,7 @@ export function Topology() {
           {pathResult.legs.length > 0 && (
             <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
               Shortest way over the cables, uplinks and VPN tunnels on the map that are up. Route tables are not consulted;
-              a subnet is placed on the device that owns it (appliance, L3 switch or VPN peer).
+              a subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).
             </div>
           )}
         </div>
@@ -1836,7 +1836,7 @@ export function Topology() {
 
       {data && !data.nodes.length && (
         <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
-          <p className="text-muted" style={{ margin: 0 }}>No topology data. Run discovery to populate links, or add a Meraki organization or Cato account with the Meraki / Cato button.</p>
+          <p className="text-muted" style={{ margin: 0 }}>No topology data. Run discovery to populate links, add a Meraki organization or Cato account with the Meraki / Cato button, or discover an AWS account under Cloud Visibility.</p>
         </div>
       )}
 
@@ -1899,8 +1899,9 @@ export function Topology() {
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
           {hasMeraki && sourceFilter !== 'inventory' && (
             <>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato Device</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / AWS</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ba68c8' }} /> VPN Tunnel</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ff9800' }} /> Cloud Attachment</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#4fc3f7' }} /> WAN Uplink</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#f44336' }} /> Offline / Unreachable</span>
             </>

@@ -4,6 +4,7 @@ import { type DetailSection, useMerakiNodeDetails } from '@/api/meraki';
 import type { TopologyMerakiRef } from '@/api/topology';
 import { Modal } from '@/components/Modal';
 
+import { providerSourceName } from './helpers';
 import { formatWhen, type MerakiView, merakiViewSections, rowMatches, searchTerms } from './merakiHelpers';
 
 interface Props {
@@ -76,7 +77,7 @@ export function MerakiDetails({ meraki, highlight = '', view, title }: Props) {
   return (
     <>
       <div className="text-muted" style={{ fontSize: '0.72rem', marginBottom: '0.4rem' }}>
-        {data.provider === 'cato' ? 'Cato API' : 'Meraki Dashboard'} data · collected {formatWhen(data.generated_at)}
+        {providerSourceName(data.provider)} data · collected {formatWhen(data.generated_at)}
       </div>
       {controls}
       {!expanded && body}
