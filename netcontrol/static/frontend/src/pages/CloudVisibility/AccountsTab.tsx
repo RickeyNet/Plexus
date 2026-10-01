@@ -432,6 +432,9 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
         </label>
         <div className="card" style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)' }}>
           <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Provider Sync Requirements</div>
+          {hint.discovery && (
+            <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.25rem' }}>{hint.discovery}</div>
+          )}
           <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.25rem' }}>{hint.flow}</div>
           <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.45rem' }}>{hint.traffic}</div>
           {Object.keys(hint.example).length > 0 && (

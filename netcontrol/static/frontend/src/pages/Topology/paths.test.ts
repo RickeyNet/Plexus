@@ -150,3 +150,30 @@ describe('path mode with a Cato account', () => {
     expect(traced.legs[0].path).toBeNull();
   });
 });
+
+describe('path mode with AWS', () => {
+  it('offers each VPC with its router as the gateway, not the firewall inside it', () => {
+    const nodes = [
+      meraki('ftd', 'edge', 'appliance'),
+      meraki('vpc-edge', 'edge', 'vpc'),
+      meraki('igw', 'edge', 'wan'),
+      meraki('vpc-core', 'core', 'vpc'),
+      meraki('tgw', 'transit', 'cloud'),
+      meraki('cgw', 'transit', 'vpn_peer'),
+    ];
+    expect(pathSites(nodes).map((s) => [s.name, s.gateway])).toEqual([
+      ['Site core', 'vpc-core'],
+      ['Site edge', 'vpc-edge'],
+    ]);
+  });
+
+  it('routes between VPCs over the transit gateway and skips a failed attachment', () => {
+    const attached = [
+      edge('a-core', 'vpc-core', 'tgw', 'cloud', 'active'),
+      edge('a-edge', 'vpc-edge', 'tgw', 'cloud', 'active'),
+    ];
+    expect(connectEndpoints(['vpc-core', 'vpc-edge'], attached).legs[0].path).toEqual(['vpc-core', 'tgw', 'vpc-edge']);
+    const broken = [attached[0], edge('a-edge', 'vpc-edge', 'tgw', 'cloud', 'failed')];
+    expect(connectEndpoints(['vpc-core', 'vpc-edge'], broken).legs[0].path).toBeNull();
+  });
+});

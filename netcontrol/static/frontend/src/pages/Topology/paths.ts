@@ -63,7 +63,8 @@ export interface PathResult {
   edgeIds: Set<NodeId>;
 }
 
-const GATEWAY_ORDER = ['appliance', 'switch', 'wireless'];
+// A VPC's own router stands for the VPC even when it holds an appliance.
+const GATEWAY_ORDER = ['vpc', 'appliance', 'switch', 'wireless'];
 // Stubs, neighbors, VPN peers and the nodes of a SASE cloud stand for no site.
 const NOT_A_SITE_DEVICE = new Set(['wan', 'external', 'vpn_peer', 'cloud', 'users']);
 

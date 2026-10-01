@@ -3,7 +3,7 @@
 Path mode lets a user pick subnets instead of devices. The index is derived
 from the detail sections a snapshot already carries (VLANs, single LAN,
 static routes, switch SVIs, VPN participation, non-Meraki VPN peers, the
-network ranges of a Cato site), so it
+network ranges of a Cato site, the subnets of an AWS VPC), so it
 works on snapshots collected before the index existed and on the merged
 snapshot of the HTML export alike.
 """
@@ -13,7 +13,8 @@ from __future__ import annotations
 import ipaddress
 from typing import Any
 
-_GATEWAY_ORDER = ("appliance", "switch", "wireless")
+# A VPC's own router owns its subnets even when the VPC holds an appliance.
+_GATEWAY_ORDER = ("vpc", "appliance", "switch", "wireless")
 _NOT_A_GATEWAY = ("wan", "external", "vpn_peer", "cloud", "users")
 
 
@@ -94,6 +95,10 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         for row in _rows(sections, "Network ranges"):
             vlan = f" (VLAN {_cell(row, 3)})" if _cell(row, 3) else ""
             add(_cidr(_cell(row, 0)), gateway, site["id"], "range", f"{_cell(row, 1)}{vlan}", True)
+        # An AWS VPC: Subnet, Name, Availability zone...
+        for row in _rows(sections, "Subnets"):
+            zone = f" ({_cell(row, 2)})" if _cell(row, 2) else ""
+            add(_cidr(_cell(row, 0)), gateway, site["id"], "subnet", f"{_cell(row, 1)}{zone}", None)
         for row in _rows(sections, "Single LAN"):
             if _cell(row, 0) == "Subnet":
                 cidr = _cidr(_cell(row, 1))

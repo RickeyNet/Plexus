@@ -127,13 +127,23 @@ export function connectionMetadataSummary(connection?: { metadata?: unknown }): 
   return parts.length ? parts.join(' | ') : '-';
 }
 
-export function authHintContent(provider: string): { flow: string; traffic: string; example: Record<string, unknown> } {
+export function authHintContent(provider: string): {
+  /** How topology discovery signs in, where the form can say so. */
+  discovery?: string;
+  flow: string;
+  traffic: string;
+  example: Record<string, unknown>;
+} {
   const n = provider.toLowerCase();
   if (n === 'aws') {
     return {
+      discovery:
+        'Discovery (also feeds the Topology map) signs in with access_key_id and secret_access_key, or assumes role_arn (optional external_id); with neither it uses the credentials of the Plexus server itself. Region Scope lists the regions to read; empty means us-east-1 only.',
       flow: 'Flow sync requires log_group_name for VPC Flow Logs in CloudWatch Logs.',
       traffic: 'Traffic sync requires resource_ids and optionally metric_names, metric_namespace, and resource_dimension_name.',
       example: {
+        access_key_id: 'AKIA...',
+        secret_access_key: '...',
         log_group_name: '/aws/vpc/flow-logs',
         resource_ids: ['i-1234567890abcdef0'],
         metric_names: ['NetworkIn', 'NetworkOut'],
