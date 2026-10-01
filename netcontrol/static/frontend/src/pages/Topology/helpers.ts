@@ -1,4 +1,4 @@
-import type { TopologyEdge, TopologyNode } from '@/api/topology';
+import type { TopologyData, TopologyEdge, TopologyNode } from '@/api/topology';
 
 // ── Theme Colors ──────────────────────────────────────────────────────────
 
@@ -21,6 +21,9 @@ export interface TopoThemeColors {
   edgeOspf: EdgeColor;
   edgeBgp: EdgeColor;
   edgeInferred: EdgeColor;
+  meraki: VendorColor;
+  edgeVpn: EdgeColor;
+  edgeWan: EdgeColor;
   pathGlow: string;
   dimColor: { background: string; border: string };
   dimEdge: EdgeColor;
@@ -66,6 +69,9 @@ export function getTopoThemeColors(): TopoThemeColors {
     edgeOspf: edge(v, 'ospf', '#ffab40', '#ffd180', 0.8),
     edgeBgp: edge(v, 'bgp', '#e040fb', '#ea80fc', 0.8),
     edgeInferred: edge(v, 'inferred', '#9e9e9e', '#bdbdbd', 0.65),
+    meraki: vendor(v, 'meraki', '#33691e', '#8bc34a', '#558b2f', '#c5e1a5'),
+    edgeVpn: edge(v, 'vpn', '#ba68c8', '#ce93d8', 0.6),
+    edgeWan: edge(v, 'wan', '#4fc3f7', '#81d4fa', 0.8),
     pathGlow: v('--topo-path-glow', 'rgba(255,255,255,0.6)'),
     dimColor: {
       background: v('--topo-dim-bg', 'rgba(40,50,60,0.4)'),
@@ -138,13 +144,44 @@ const FIREWALL_DEVICE_TYPES = new Set([
   'cisco_ftd',
 ]);
 
+/** Devices Plexus has first-hand data for: inventory hosts and Meraki-managed devices. */
+export function isManagedNode(node: TopologyNode): boolean {
+  return node.in_inventory || node.source === 'meraki';
+}
+
+/** Display name of the integration a snapshot node came from. */
+export function providerLabel(provider?: string | null): string {
+  return provider === 'cato' ? 'Cato' : 'Meraki';
+}
+
+/** WAN uplink stubs and non-Meraki VPN peers: endpoints, not devices. */
+export function isMerakiEndpointNode(node: TopologyNode): boolean {
+  return node.source === 'meraki' && ['wan', 'vpn_peer'].includes(node.meraki?.kind ?? '');
+}
+
 export function nodeIconUrl(node: TopologyNode): string | undefined {
   const cat = (node.device_category || '').toLowerCase();
   if (cat && ICON_MAP[cat]) return ICON_MAP[cat];
   if (node.device_type && FIREWALL_DEVICE_TYPES.has(node.device_type)) return ICON_MAP.firewall;
+  if (node.source === 'meraki') return undefined;
   if (!node.in_inventory) return ICON_MAP.unknown;
   return undefined;
 }
+
+export function merakiNodeShape(node: TopologyNode): string {
+  const kind = node.meraki?.kind;
+  if (kind === 'wan') return 'triangleDown';
+  if (kind === 'vpn_peer') return 'hexagon';
+  // A SASE cloud: its PoPs and backbone, and the remote-user group.
+  if (kind === 'cloud') return 'hexagon';
+  if (kind === 'users') return 'star';
+  return 'square';
+}
+
+const MERAKI_STATUS_BORDER: Record<string, string> = {
+  offline: '#f44336',
+  alerting: '#ffb300',
+};
 
 export function nodeShape(deviceType?: string | null): string {
   if (deviceType && FIREWALL_DEVICE_TYPES.has(deviceType)) return 'triangle';
@@ -155,6 +192,17 @@ export function nodeShape(deviceType?: string | null): string {
 }
 
 export function nodeColor(node: TopologyNode, tc: TopoThemeColors): VendorColor {
+  if (node.source === 'meraki') {
+    // Meraki reports device health; surface a problem as the node border.
+    const border = MERAKI_STATUS_BORDER[node.meraki?.status ?? ''];
+    if (!border) return tc.meraki;
+    return {
+      ...tc.meraki,
+      border,
+      highlight: { ...tc.meraki.highlight, border },
+      hover: { ...tc.meraki.hover, border },
+    };
+  }
   if (!node.in_inventory) {
     return {
       background: tc.externalBg,
@@ -179,7 +227,16 @@ export function edgeProtocolColor(protocol: string | null | undefined, tc: TopoT
   if (protocol === 'ospf') return tc.edgeOspf;
   if (protocol === 'bgp') return tc.edgeBgp;
   if (protocol === 'inferred-fdb') return tc.edgeInferred;
+  if (protocol === 'vpn' || protocol === 'vpn-ipsec') return tc.edgeVpn;
+  if (protocol === 'wan') return tc.edgeWan;
   return tc.edgeCdp;
+}
+
+const DOWN_EDGE_STATUSES = new Set(['unreachable', 'failed']);
+
+/** A Meraki VPN tunnel or WAN uplink that the Dashboard reports as down. */
+export function isEdgeDown(edge: TopologyEdge): boolean {
+  return DOWN_EDGE_STATUSES.has(String(edge.status ?? '').toLowerCase());
 }
 
 // ── Utilization color ramp ────────────────────────────────────────────────
@@ -323,5 +380,43 @@ export function nodeTitle(node: TopologyNode): string {
   const hasPct = node.ipam_utilization_pct != null && !Number.isNaN(Number(node.ipam_utilization_pct));
   const ipamPct = hasPct ? `${Math.round(Number(node.ipam_utilization_pct))}%` : 'n/a';
   const ipamInfo = ipamSubnet ? `\nIPAM: ${ipamSubnet} (${ipamPct})` : '';
+  if (node.source === 'meraki') {
+    const site = node.meraki?.site_name ? `\nSite: ${node.meraki.site_name}` : '';
+    return `${node.label}\n${node.ip || ''}\n${providerLabel(node.meraki?.provider)} ${node.meraki?.kind ?? 'device'} · ${node.meraki?.status ?? 'unknown'}${modelInfo}${site}\nDrag to move · Right-click to unpin`;
+  }
   return `${node.label}\n${node.ip || ''}\nType: ${node.device_type ?? ''}${categoryInfo}${modelInfo}${node.group_name ? '\nGroup: ' + node.group_name : ''}${node.in_inventory ? '' : '\n(External)'}${ipamInfo}\nDrag to move · Right-click to unpin`;
+}
+
+// ── Source filter (inventory vs Meraki) ───────────────────────────────────
+
+export type SourceFilter = 'all' | 'inventory' | 'meraki';
+
+export function filterBySource(data: TopologyData | undefined, filter: SourceFilter): TopologyData | undefined {
+  if (!data || filter === 'all') return data;
+  const nodes = data.nodes.filter((n) => (filter === 'meraki' ? !!n.meraki : n.source !== 'meraki'));
+  const kept = new Set(nodes.map((n) => n.id));
+  const edges = data.edges.filter(
+    (e) => kept.has(e.from) && kept.has(e.to) && (filter === 'meraki' || e.source !== 'meraki'),
+  );
+  return { ...data, nodes, edges };
+}
+
+/** Text the toolbar search box matches locally, before the server-side deep search. */
+export function nodeSearchText(node: TopologyNode): string {
+  return [
+    node.label,
+    node.ip,
+    node.model,
+    node.group_name,
+    node.device_type,
+    node.meraki?.serial,
+    node.meraki?.site_name,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+export function merakiNodeKey(orgRef: number, nodeId: string): string {
+  return `${orgRef}|${nodeId}`;
 }

@@ -49,6 +49,7 @@ All API endpoints and their required authentication/authorization levels.
 |---------|-------|--------|
 | `inventory` | `/api/inventory/*` | inventory |
 | `topology` | `/api/topology/*` | topology |
+| `topology` | `/api/meraki/*`, `/api/topology/search/deep`, `/api/topology/export.html` (collections/deletes need `topology.write`; org and API-key management `POST/PUT/DELETE /api/meraki/orgs*` is admin-only in the handlers) | meraki_topology |
 | `jobs` | `/api/jobs/*` | jobs |
 | `templates` | `/api/templates/*` | templates |
 | `credentials` | `/api/credentials/*` | credentials |

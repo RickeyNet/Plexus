@@ -8,12 +8,24 @@ export interface MacEntry {
   mac_address: string;
   ip_address: string | null;
   hostname: string | null;
-  host_id: number;
+  /** Inventory host the entry was learned on; null for a Meraki client. */
+  host_id: number | null;
   port_name: string | null;
   vlan: number | null;
   entry_type: string | null;
   first_seen: string | null;
   last_seen: string | null;
+  /** 'meraki' for a client seen on a Meraki device (hostname is that device). */
+  source?: 'meraki';
+  org_ref?: number;
+  org_name?: string;
+  /** The Meraki device's node in its organization's topology snapshot. */
+  node_id?: string;
+  network_name?: string;
+  description?: string;
+  manufacturer?: string;
+  ssid?: string;
+  status?: string;
 }
 
 export interface MacHistoryEntry {
@@ -38,6 +50,8 @@ export interface MacTrackingStats {
   unique_macs: number;
   switches_reporting: number;
   last_collected_at: string | null;
+  meraki_clients: number;
+  meraki_devices: number;
 }
 
 export function useMacTrackingStats() {

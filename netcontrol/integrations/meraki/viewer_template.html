@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- The saved file carries its own policy: nothing is ever loaded from or sent to the network. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="Plexus Meraki Topology">
+<title>__TITLE__</title>
+<style>
+:root {
+  --bg: #0f1420; --surface: #171e2e; --surface-2: #1f2840; --border: #2c3754;
+  --text: #e6eaf2; --muted: #93a0b8; --accent: #4c9aff; --hit: rgba(255, 196, 0, 0.22);
+  --online: #2fb344; --alerting: #f59f00; --offline: #e5484d; --unknown: #8892a6;
+}
+body.light {
+  --bg: #f3f5f9; --surface: #ffffff; --surface-2: #eef1f6; --border: #d5dbe6;
+  --text: #1a2233; --muted: #5d6980; --accent: #1d6fe0; --hit: rgba(255, 196, 0, 0.35);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13px/1.45 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+button, input { font: inherit; color: inherit; }
+header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+header h1 { font-size: 15px; margin: 0; white-space: nowrap; }
+.meta { color: var(--muted); font-size: 12px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; font-size: 12px; white-space: nowrap; }
+.chip b { font-weight: 600; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: baseline; }
+.s-online { background: var(--online); } .s-alerting { background: var(--alerting); }
+.s-offline { background: var(--offline); } .s-unknown, .s-dormant { background: var(--unknown); }
+.search { flex: 1 1 260px; min-width: 200px; position: relative; }
+.search input { width: 100%; padding: 7px 30px 7px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; outline: none; }
+.search input:focus { border-color: var(--accent); }
+.search button { position: absolute; right: 4px; top: 4px; border: 0; background: none; cursor: pointer; color: var(--muted); padding: 3px 6px; }
+.btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn.warn { border-color: var(--alerting); }
+.btn.on { border-color: var(--accent); color: var(--accent); }
+main { flex: 1; display: flex; min-height: 0; }
+aside { background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+#left { width: 290px; border-right: 1px solid var(--border); }
+#panel { width: 480px; max-width: 46vw; border-left: 1px solid var(--border); display: none; }
+#panel.open { display: flex; }
+.tabs { display: flex; border-bottom: 1px solid var(--border); }
+.tabs button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px; cursor: pointer; color: var(--muted); }
+.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.list { overflow: auto; flex: 1; }
+.item { padding: 7px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.item:hover, .item.selected { background: var(--surface-2); }
+.item .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .s { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { color: var(--muted); padding: 14px; }
+#stage { flex: 1; position: relative; min-width: 0; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+canvas.dragging { cursor: grabbing; }
+#tooltip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; font-size: 12px; display: none; max-width: 320px; box-shadow: 0 4px 14px rgba(0,0,0,.3); z-index: 3; }
+#legend, #layers { position: absolute; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; z-index: 2; }
+#legend { left: 10px; bottom: 10px; display: grid; grid-template-columns: auto auto; gap: 2px 14px; }
+#layers { right: 10px; top: 10px; display: none; }
+#layers.open { display: block; }
+#layers label { display: block; cursor: pointer; padding: 1px 0; }
+.sw { display: inline-block; width: 18px; height: 0; border-top: 3px solid; margin-right: 6px; vertical-align: middle; }
+.panel-head { padding: 12px 14px 8px; border-bottom: 1px solid var(--border); }
+.panel-head h2 { margin: 0 0 2px; font-size: 15px; word-break: break-word; }
+.panel-head .row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+.panel-head input { flex: 1; min-width: 120px; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.panel-body { overflow: auto; flex: 1; padding: 4px 14px 20px; }
+.group-title { margin: 14px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+details { border-bottom: 1px solid var(--border); }
+summary { cursor: pointer; padding: 8px 0; font-weight: 600; }
+summary .count { color: var(--muted); font-weight: 400; margin-left: 6px; }
+table { border-collapse: collapse; width: 100%; margin-bottom: 10px; font-size: 12px; }
+th, td { text-align: left; padding: 3px 8px 3px 0; vertical-align: top; border-bottom: 1px solid var(--border); word-break: break-word; }
+th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+td.k { color: var(--muted); white-space: nowrap; width: 1%; padding-right: 14px; }
+tr.hit td { background: var(--hit); }
+tr.hide { display: none; }
+pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow: auto; max-height: 420px; font: 12px/1.4 Consolas, "Courier New", monospace; white-space: pre; margin: 0 0 10px; }
+.link { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; }
+.scroll-x { overflow-x: auto; }
+@media (max-width: 900px) { #left { display: none; } #panel { position: absolute; right: 0; top: 0; bottom: 0; max-width: 92vw; z-index: 4; } }
+@media print { header .btn, #left, #layers { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <div class="chips" id="chips"></div>
+  <div class="search">
+    <input id="q" type="search" placeholder="Search devices, IPs, VLANs, subnets, serials, VPN peers, routes...  ( / )" autocomplete="off" spellcheck="false">
+    <button id="q-clear" title="Clear search" aria-label="Clear search">&#10005;</button>
+  </div>
+  <button class="btn" id="btn-fit" title="Fit whole map (F)">Fit</button>
+  <button class="btn" id="btn-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
+  <button class="btn" id="btn-in" title="Zoom in" aria-label="Zoom in">+</button>
+  <button class="btn" id="btn-path" title="Pick sites or devices and see how they reach one another">Path</button>
+  <button class="btn" id="btn-layers">Layers</button>
+  <button class="btn" id="btn-theme">Theme</button>
+  <button class="btn" id="btn-report">Report</button>
+</header>
+<main>
+  <aside id="left">
+    <div class="tabs">
+      <button id="tab-sites" class="active">Sites</button>
+      <button id="tab-results">Results</button>
+    </div>
+    <div class="list" id="list"></div>
+  </aside>
+  <div id="stage">
+    <canvas id="map"></canvas>
+    <div id="tooltip"></div>
+    <div id="layers"></div>
+    <div id="legend"></div>
+  </div>
+  <aside id="panel">
+    <div class="panel-head">
+      <h2 id="p-title"></h2>
+      <div class="meta" id="p-sub"></div>
+      <div class="row" id="p-subnet-row" style="display:none">
+        <input id="p-subnet" type="search" list="subnet-options" placeholder="Add a subnet or IP address..." autocomplete="off" spellcheck="false">
+        <datalist id="subnet-options"></datalist>
+      </div>
+      <div class="row">
+        <input id="p-filter" type="search" placeholder="Filter this panel..." autocomplete="off" spellcheck="false">
+        <button class="btn" id="p-zoom">Zoom to</button>
+        <button class="btn" id="p-close">Close</button>
+      </div>
+    </div>
+    <div class="panel-body" id="p-body"></div>
+  </aside>
+</main>
+<script type="application/json" id="topology-data">__TOPOLOGY_JSON__</script>
+<script>
+(function () {
+  'use strict';
+
+  var DATA = JSON.parse(document.getElementById('topology-data').textContent);
+  var nodes = DATA.nodes || [], edges = DATA.edges || [], sites = DATA.sites || [];
+  var nodeById = {}, siteById = {}, edgesByNode = {};
+  nodes.forEach(function (n) { nodeById[n.id] = n; edgesByNode[n.id] = []; });
+  sites.forEach(function (s) { siteById[s.id] = s; });
+  edges.forEach(function (e) {
+    e.na = nodeById[e.a]; e.nb = nodeById[e.b];
+    if (e.na && e.nb) { edgesByNode[e.a].push(e); edgesByNode[e.b].push(e); }
+  });
+  edges = edges.filter(function (e) { return e.na && e.nb; });
+
+  var KIND = {
+    appliance: { tag: 'FW', name: 'Security appliance', color: '#e8590c', shape: 'square' },
+    firewall: { tag: 'FW', name: 'Firewall', color: '#e8590c', shape: 'square' },
+    router: { tag: 'RTR', name: 'Router', color: '#f08c00', shape: 'circle' },
+    wlc: { tag: 'WLC', name: 'Wireless controller', color: '#0ca678', shape: 'square' },
+    phone: { tag: 'PH', name: 'Phone', color: '#7950f2', shape: 'circle' },
+    server: { tag: 'SRV', name: 'Server', color: '#7950f2', shape: 'square' },
+    device: { tag: 'DEV', name: 'Device', color: '#868e96', shape: 'square' },
+    switch: { tag: 'SW', name: 'Switch', color: '#1c7ed6', shape: 'wide' },
+    wireless: { tag: 'AP', name: 'Access point', color: '#0ca678', shape: 'circle' },
+    camera: { tag: 'CAM', name: 'Camera', color: '#7950f2', shape: 'circle' },
+    sensor: { tag: 'SEN', name: 'Sensor', color: '#7950f2', shape: 'circle' },
+    cellularGateway: { tag: 'CG', name: 'Cellular gateway', color: '#d6336c', shape: 'square' },
+    external: { tag: 'EXT', name: 'Non-Meraki neighbor', color: '#868e96', shape: 'diamond' },
+    wan: { tag: 'WAN', name: 'WAN uplink', color: '#4dabf7', shape: 'pill' },
+    vpn_peer: { tag: 'VPN', name: 'Non-Meraki VPN peer', color: '#ae3ec9', shape: 'pill' },
+    cloud: { tag: 'POP', name: 'Cato cloud / PoP', color: '#ae3ec9', shape: 'pill' },
+    users: { tag: 'USR', name: 'Remote users', color: '#0ca678', shape: 'pill' }
+  };
+  var OTHER = { tag: 'DEV', name: 'Device', color: '#868e96', shape: 'square' };
+  var STATUS = { online: '#2fb344', alerting: '#f59f00', offline: '#e5484d', dormant: '#8892a6', unknown: '#8892a6' };
+  var EDGE = {
+    lan: { name: 'LAN link (LLDP/CDP)', color: '#7b8aa8', dash: [] },
+    stack: { name: 'Switch stack', color: '#1c7ed6', dash: [] },
+    uplink: { name: 'WAN uplink', color: '#4dabf7', dash: [4, 4] },
+    vpn: { name: 'VPN tunnel (AutoVPN / Cato)', color: '#ae3ec9', dash: [10, 6] },
+    vpn3p: { name: 'Non-Meraki VPN', color: '#d6336c', dash: [3, 5] }
+  };
+  // A large organization has thousands of tunnels; drawn together they bury
+  // the map. Past this many, only the selection's tunnels are drawn unless
+  // "all tunnels" is switched on in Layers.
+  var MAX_AUTO_TUNNELS = 300;
+  var tunnelCount = edges.filter(function (e) { return e.kind === 'vpn' || e.kind === 'vpn3p'; }).length;
+  var layers = { lan: true, vpn: true, vpnAll: tunnelCount <= MAX_AUTO_TUNNELS, uplink: true, external: true,
+    labels: true, problems: false };
+
+  function kindOf(n) { return KIND[n.kind] || OTHER; }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  }
+  function $(id) { return document.getElementById(id); }
+
+  // ── Search index ─────────────────────────────────────────────────────────
+  function sectionRows(section) {
+    if (section.kind === 'kv') return section.rows.map(function (r) { return r[0] + ': ' + r[1]; });
+    if (section.kind === 'table') return section.rows.map(function (r) { return r.join(' · '); });
+    return (section.text || '').split('\n');
+  }
+  function buildEntry(type, ref, title, sub, extra) {
+    var rows = [];
+    (ref.sections || []).forEach(function (s) {
+      sectionRows(s).forEach(function (r) { rows.push({ title: s.title, text: r, lower: r.toLowerCase() }); });
+    });
+    var head = (title + ' ' + sub + ' ' + (extra || '')).toLowerCase();
+    return { type: type, ref: ref, title: title, sub: sub, head: head, rows: rows,
+      blob: head + '\n' + rows.map(function (r) { return r.lower; }).join('\n') };
+  }
+  var index = [];
+  sites.forEach(function (s) {
+    index.push(buildEntry('site', s, s.name, 'Site · ' + s.device_count + ' devices · VPN ' + s.vpn_mode, (s.tags || []).join(' ')));
+  });
+  nodes.forEach(function (n) {
+    var site = siteById[n.site];
+    var sub = kindOf(n).name + (n.model ? ' · ' + n.model : '') + (site ? ' · ' + site.name : '');
+    index.push(buildEntry('node', n, n.label, sub, [n.serial, n.mac, n.ip, n.status].join(' ')));
+  });
+
+  var query = '', tokens = [], results = [], matchNodes = null, matchSites = null;
+  function runSearch(text) {
+    query = text.trim().toLowerCase();
+    tokens = query ? query.split(/\s+/) : [];
+    results = [];
+    matchNodes = matchSites = null;
+    if (tokens.length) {
+      matchNodes = {}; matchSites = {};
+      index.forEach(function (entry) {
+        for (var i = 0; i < tokens.length; i++) if (entry.blob.indexOf(tokens[i]) === -1) return;
+        var snippet = '';
+        if (entry.head.indexOf(tokens[0]) === -1) {
+          for (var r = 0; r < entry.rows.length; r++) {
+            if (entry.rows[r].lower.indexOf(tokens[0]) !== -1) { snippet = entry.rows[r].title + ': ' + entry.rows[r].text; break; }
+          }
+        }
+        results.push({ entry: entry, snippet: snippet });
+        if (entry.type === 'site') matchSites[entry.ref.id] = true; else matchNodes[entry.ref.id] = true;
+      });
+      // Name/address/serial matches outrank matches buried in a detail table.
+      results = results.filter(function (r) { return !r.snippet; }).concat(results.filter(function (r) { return r.snippet; }));
+      // A site-level match (VLAN, route, firewall rule...) lights up its appliance too.
+      nodes.forEach(function (n) { if (n.site_sections && matchSites[n.site]) matchNodes[n.id] = true; });
+    }
+    setTab(tokens.length ? 'results' : 'sites');
+    if (selected) renderPanel();
+    dirty();
+  }
+
+  // ── View transform ───────────────────────────────────────────────────────
+  var canvas = $('map'), ctx = canvas.getContext('2d'), stage = $('stage');
+  var view = { x: 0, y: 0, k: 1 }, W = 0, H = 0, needsDraw = true;
+  function dirty() { if (!needsDraw) { needsDraw = true; requestAnimationFrame(draw); } }
+  function resize() {
+    var r = stage.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    W = Math.max(50, r.width); H = Math.max(50, r.height);
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    needsDraw = false; dirty();
+  }
+  function bounds(items) {
+    var b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    items.forEach(function (i) {
+      b.x0 = Math.min(b.x0, i.x0); b.y0 = Math.min(b.y0, i.y0);
+      b.x1 = Math.max(b.x1, i.x1); b.y1 = Math.max(b.y1, i.y1);
+    });
+    return b;
+  }
+  function siteBox(s) { return { x0: s.x, y0: s.y, x1: s.x + s.w, y1: s.y + s.h }; }
+  function nodeBox(n) { return { x0: n.x - 90, y0: n.y - 60, x1: n.x + 90, y1: n.y + 80 }; }
+  function fitBox(b, maxK) {
+    if (!isFinite(b.x0)) return;
+    var pad = 40, w = Math.max(b.x1 - b.x0, 1), h = Math.max(b.y1 - b.y0, 1);
+    var k = Math.min((W - pad * 2) / w, (H - pad * 2) / h, maxK || 1.6);
+    view.k = Math.max(k, 0.01);
+    view.x = W / 2 - (b.x0 + w / 2) * view.k;
+    view.y = H / 2 - (b.y0 + h / 2) * view.k;
+    dirty();
+  }
+  function fitAll() { fitBox(bounds(sites.map(siteBox).concat(nodes.map(nodeBox))), 1.2); }
+  function zoomAt(sx, sy, factor) {
+    var k = Math.min(Math.max(view.k * factor, 0.01), 5);
+    view.x = sx - (sx - view.x) * (k / view.k);
+    view.y = sy - (sy - view.y) * (k / view.k);
+    view.k = k; dirty();
+  }
+  function toWorld(sx, sy) { return { x: (sx - view.x) / view.k, y: (sy - view.y) / view.k }; }
+
+  // ── Drawing ──────────────────────────────────────────────────────────────
+  function css(name) { return getComputedStyle(document.body).getPropertyValue(name).trim(); }
+  var theme = {};
+  function readTheme() {
+    theme = { bg: css('--bg'), surface: css('--surface'), surface2: css('--surface-2'), border: css('--border'),
+      text: css('--text'), muted: css('--muted'), accent: css('--accent') };
+  }
+  function nodeVisible(n) {
+    if (n.kind === 'external' && !layers.external) return false;
+    if (n.kind === 'wan' && !layers.uplink) return false;
+    if ((n.kind === 'vpn_peer' || n.kind === 'cloud' || n.kind === 'users') && !layers.vpn) return false;
+    if (layers.problems && (n.status === 'online' || n.status === 'unknown')) return false;
+    return true;
+  }
+  function edgeVisible(e) {
+    var layer = e.kind === 'stack' ? 'lan' : (e.kind === 'vpn3p' ? 'vpn' : e.kind);
+    if (e.onPath && pathActive()) return true;
+    if (!layers[layer] || !nodeVisible(e.na) || !nodeVisible(e.nb)) return false;
+    return !isCurved(e) || layers.vpnAll || touchesSelection(e);
+  }
+  // The edge is selected, or belongs to the selected site. Selecting any
+  // device counts as its site: zoomed out, a click on a site lands on
+  // whichever device is nearest, and only the appliance carries the tunnels.
+  function touchesSelection(e) {
+    if (!selected) return false;
+    if (selected.type === 'edge') return selected.ref === e;
+    if (selected.type === 'node' && (selected.ref === e.na || selected.ref === e.nb)) return true;
+    var site = selected.type === 'site' ? selected.ref.id : (selected.type === 'node' ? selected.ref.site : null);
+    return !!site && (e.na.site === site || e.nb.site === site);
+  }
+  function dimmed(n) { return (matchNodes && !matchNodes[n.id]) || (pathActive() && !n.onPath); }
+  function curveCtl(e) {
+    var ax = e.na.x, ay = e.na.y, bx = e.nb.x, by = e.nb.y, dx = bx - ax, dy = by - ay;
+    var len = Math.sqrt(dx * dx + dy * dy) || 1, off = Math.min(len * 0.18, 260);
+    return { x: (ax + bx) / 2 - dy / len * off, y: (ay + by) / 2 + dx / len * off };
+  }
+  function isCurved(e) { return e.kind === 'vpn' || e.kind === 'vpn3p'; }
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+  function clip(text, max) { return text.length > max ? text.slice(0, max - 1) + '…' : text; }
+
+  function drawSite(s, detail) {
+    var isMatch = matchSites && matchSites[s.id], isSel = (selected && selected.type === 'site' && selected.ref === s) || (pathActive() && pathSiteIds[s.id]);
+    ctx.globalAlpha = matchSites && !isMatch && !siteHasMatch(s) ? 0.35 : 1;
+    roundRect(s.x, s.y, s.w, s.h, 18);
+    ctx.fillStyle = theme.surface; ctx.fill();
+    ctx.lineWidth = (isSel || isMatch ? 3 : 1.5) / Math.min(view.k, 1);
+    ctx.strokeStyle = isSel ? theme.accent : (isMatch ? '#ffc400' : theme.border); ctx.stroke();
+    // Header: status dot + name. Kept legible when zoomed far out.
+    var size = Math.max(20, Math.min(13 / view.k, s.h * 0.5, s.w / Math.max(s.name.length * 0.62, 4)));
+    ctx.fillStyle = STATUS[s.status] || STATUS.unknown;
+    ctx.beginPath(); ctx.arc(s.x + 22, s.y + 14 + size / 2, Math.min(size * 0.3, 9), 0, 6.2832); ctx.fill();
+    ctx.fillStyle = theme.text; ctx.font = '600 ' + size + 'px Segoe UI, system-ui, sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(s.name, s.x + 38, s.y + 14, s.w - 50);
+    if (detail && s.vpn_mode && s.vpn_mode !== 'none') {
+      ctx.fillStyle = theme.muted; ctx.font = '12px Segoe UI, system-ui, sans-serif';
+      ctx.fillText('VPN ' + s.vpn_mode + ' · ' + s.device_count + ' devices', s.x + 38, s.y + 18 + size, s.w - 50);
+    }
+    ctx.globalAlpha = 1;
+  }
+  var siteMatchCache = null;
+  function siteHasMatch(s) {
+    if (!matchNodes) return true;
+    if (!siteMatchCache) {
+      siteMatchCache = {};
+      nodes.forEach(function (n) { if (matchNodes[n.id]) siteMatchCache[n.site] = true; });
+    }
+    return !!siteMatchCache[s.id];
+  }
+
+  function drawEdge(e, detail) {
+    var style = EDGE[e.kind] || EDGE.lan, bad = e.status === 'unreachable' || e.status === 'failed';
+    var onPath = pathActive() && e.onPath;
+    var sel = onPath || (isCurved(e) ? touchesSelection(e) : selected && ((selected.type === 'edge' && selected.ref === e) ||
+      (selected.type === 'node' && (selected.ref === e.na || selected.ref === e.nb))));
+    var faded = (pathActive() && !onPath) || (matchNodes && !(matchNodes[e.a] && matchNodes[e.b]) && !sel);
+    ctx.globalAlpha = faded ? 0.07 : (isCurved(e) && !sel ? 0.55 : 0.9);
+    ctx.strokeStyle = sel ? theme.accent : (bad ? STATUS.offline : style.color);
+    ctx.lineWidth = (sel ? 3 : (e.kind === 'stack' ? 4 : 1.6)) / Math.min(view.k, 1);
+    ctx.setLineDash(style.dash.map(function (d) { return d / Math.min(view.k, 1); }));
+    ctx.beginPath(); ctx.moveTo(e.na.x, e.na.y);
+    if (isCurved(e)) { var c = curveCtl(e); ctx.quadraticCurveTo(c.x, c.y, e.nb.x, e.nb.y); }
+    else ctx.lineTo(e.nb.x, e.nb.y);
+    ctx.stroke(); ctx.setLineDash([]);
+    if (detail && layers.labels && view.k > 1.05 && e.kind === 'lan' && !faded) {
+      ctx.fillStyle = theme.muted; ctx.font = '10px Segoe UI, system-ui, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      var dx = e.nb.x - e.na.x, dy = e.nb.y - e.na.y;
+      if (e.a_port) ctx.fillText(clip(String(e.a_port), 14), e.na.x + dx * 0.27, e.na.y + dy * 0.27);
+      if (e.b_port) ctx.fillText(clip(String(e.b_port), 14), e.na.x + dx * 0.73, e.na.y + dy * 0.73);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawNode(n, detail) {
+    var kind = kindOf(n), sel = (selected && selected.type === 'node' && selected.ref === n) || (pathMode && pathPicked[n.id]);
+    var isMatch = matchNodes && matchNodes[n.id];
+    ctx.globalAlpha = dimmed(n) ? 0.16 : 1;
+    if (!detail) {
+      ctx.fillStyle = STATUS[n.status] || kind.color;
+      ctx.beginPath(); ctx.arc(n.x, n.y, isMatch ? 26 : 16, 0, 6.2832); ctx.fill();
+      ctx.globalAlpha = 1; return;
+    }
+    var r = 22;
+    ctx.beginPath();
+    if (kind.shape === 'circle') ctx.arc(n.x, n.y, r, 0, 6.2832);
+    else if (kind.shape === 'diamond') { ctx.moveTo(n.x, n.y - r - 3); ctx.lineTo(n.x + r + 3, n.y); ctx.lineTo(n.x, n.y + r + 3); ctx.lineTo(n.x - r - 3, n.y); ctx.closePath(); }
+    else if (kind.shape === 'wide') roundRect(n.x - 32, n.y - 16, 64, 32, 6);
+    else if (kind.shape === 'pill') roundRect(n.x - 34, n.y - 15, 68, 30, 15);
+    else roundRect(n.x - r, n.y - r, r * 2, r * 2, 8);
+    ctx.fillStyle = theme.surface2; ctx.fill();
+    ctx.lineWidth = sel || isMatch ? 4 : 2.5;
+    ctx.strokeStyle = sel ? theme.accent : (isMatch ? '#ffc400' : kind.color);
+    if (n.kind === 'external') ctx.setLineDash([5, 4]);
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = kind.color; ctx.font = '700 12px Segoe UI, system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(kind.tag, n.x, n.y + 0.5);
+    if (n.kind !== 'external' && n.kind !== 'vpn_peer') {
+      ctx.beginPath(); ctx.arc(n.x + (kind.shape === 'wide' || kind.shape === 'pill' ? 30 : 18), n.y - 15, 6, 0, 6.2832);
+      ctx.fillStyle = STATUS[n.status] || STATUS.unknown; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = theme.surface; ctx.stroke();
+    }
+    if (n.inventory) {
+      ctx.beginPath(); ctx.arc(n.x - (kind.shape === 'wide' || kind.shape === 'pill' ? 30 : 18), n.y - 15, 5, 0, 6.2832);
+      ctx.fillStyle = theme.accent; ctx.fill();
+    }
+    if (layers.labels && view.k > 0.42) {
+      ctx.fillStyle = theme.text; ctx.font = '12px Segoe UI, system-ui, sans-serif'; ctx.textBaseline = 'top';
+      ctx.fillText(clip(n.label, 24), n.x, n.y + 27);
+      if (view.k > 0.8) {
+        ctx.fillStyle = theme.muted; ctx.font = '10.5px Segoe UI, system-ui, sans-serif';
+        ctx.fillText(clip([n.model, n.ip].filter(Boolean).join(' · '), 30), n.x, n.y + 42);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function draw() {
+    needsDraw = false;
+    var dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = theme.bg; ctx.fillRect(0, 0, W, H);
+    ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, dpr * view.x, dpr * view.y);
+    var a = toWorld(0, 0), b = toWorld(W, H), detail = view.k > 0.22, m = 120;
+    function inView(x0, y0, x1, y1) { return x1 >= a.x - m && x0 <= b.x + m && y1 >= a.y - m && y0 <= b.y + m; }
+    // Tunnels run behind the site boxes so they never cover devices; only
+    // the selection's tunnels are drawn over them, where they can be traced.
+    var behind = [], links = [], front = [];
+    edges.forEach(function (e) {
+      if (!edgeVisible(e)) return;
+      var onPath = pathActive() && e.onPath;
+      if (!detail && !isCurved(e) && !onPath) return;
+      var x0 = Math.min(e.na.x, e.nb.x), x1 = Math.max(e.na.x, e.nb.x), y0 = Math.min(e.na.y, e.nb.y), y1 = Math.max(e.na.y, e.nb.y);
+      if (isCurved(e)) { x0 -= 260; x1 += 260; y0 -= 260; y1 += 260; }
+      if (!inView(x0, y0, x1, y1)) return;
+      (onPath ? front : (isCurved(e) ? (touchesSelection(e) ? front : behind) : links)).push(e);
+    });
+    behind.forEach(function (e) { drawEdge(e, detail); });
+    sites.forEach(function (s) { if (inView(s.x, s.y, s.x + s.w, s.y + s.h)) drawSite(s, detail); });
+    links.forEach(function (e) { drawEdge(e, detail); });
+    front.forEach(function (e) { drawEdge(e, detail); });
+    nodes.forEach(function (n) {
+      if (nodeVisible(n) && inView(n.x - 60, n.y - 40, n.x + 60, n.y + 60)) drawNode(n, detail);
+    });
+  }
+
+  // ── Hit testing ──────────────────────────────────────────────────────────
+  function distToSegment(p, ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    var t = l2 ? Math.max(0, Math.min(1, ((p.x - ax) * dx + (p.y - ay) * dy) / l2)) : 0;
+    var x = ax + t * dx - p.x, y = ay + t * dy - p.y;
+    return Math.sqrt(x * x + y * y);
+  }
+  function hit(sx, sy) {
+    var p = toWorld(sx, sy), i, best = null, bestD = Math.max(34, 10 / view.k);
+    for (i = nodes.length - 1; i >= 0; i--) {
+      var n = nodes[i];
+      if (!nodeVisible(n)) continue;
+      var d = Math.sqrt((n.x - p.x) * (n.x - p.x) + (n.y - p.y) * (n.y - p.y));
+      if (d < bestD) { bestD = d; best = n; }
+    }
+    if (best) return { type: 'node', ref: best };
+    var tol = 7 / view.k, bestE = null, bestED = tol;
+    for (i = 0; i < edges.length; i++) {
+      var e = edges[i], de;
+      if (!edgeVisible(e) || (view.k <= 0.22 && !isCurved(e))) continue;
+      if (isCurved(e)) {
+        var c = curveCtl(e), px = e.na.x, py = e.na.y; de = Infinity;
+        for (var s = 1; s <= 16; s++) {
+          var t = s / 16, u = 1 - t;
+          var qx = u * u * e.na.x + 2 * u * t * c.x + t * t * e.nb.x, qy = u * u * e.na.y + 2 * u * t * c.y + t * t * e.nb.y;
+          de = Math.min(de, distToSegment(p, px, py, qx, qy)); px = qx; py = qy;
+        }
+      } else de = distToSegment(p, e.na.x, e.na.y, e.nb.x, e.nb.y);
+      if (de < bestED) { bestED = de; bestE = e; }
+    }
+    if (bestE) return { type: 'edge', ref: bestE };
+    for (i = 0; i < sites.length; i++) {
+      var st = sites[i];
+      if (p.x >= st.x && p.x <= st.x + st.w && p.y >= st.y && p.y <= st.y + st.h) return { type: 'site', ref: st };
+    }
+    return null;
+  }
+
+  // ── Selection + detail panel ─────────────────────────────────────────────
+  var selected = null;
+  function select(target, zoom) {
+    if (pathMode) {
+      // Clicks pick path endpoints; the panel keeps showing the path.
+      if (target && target.type !== 'report') togglePick(target);
+      return;
+    }
+    selected = target;
+    renderPanel();
+    if (zoom && target) zoomTo(target);
+    renderList(); dirty();
+  }
+  function zoomTo(target) {
+    if (target.type === 'path') fitBox(bounds(nodes.filter(function (n) { return n.onPath; }).map(nodeBox)), 1.2);
+    else if (target.type === 'site') fitBox(siteBox(target.ref), 1.2);
+    else if (target.type === 'node') {
+      var n = target.ref; fitBox({ x0: n.x - 420, y0: n.y - 300, x1: n.x + 420, y1: n.y + 300 }, 1.4);
+    } else fitBox(bounds([nodeBox(target.ref.na), nodeBox(target.ref.nb)]), 1.3);
+  }
+  function rowMatches(text, terms) {
+    var lower = text.toLowerCase();
+    for (var i = 0; i < terms.length; i++) if (lower.indexOf(terms[i]) === -1) return false;
+    return true;
+  }
+  function renderSection(section, terms, filtering, openDefault) {
+    var det = el('details'), sum = el('summary', null, section.title), hits = 0, shown = 0, body;
+    if (section.kind === 'text') {
+      body = el('pre', null, section.text);
+      hits = terms.length && rowMatches(section.text, terms) ? 1 : 0; shown = 1;
+      if (filtering && !hits) return null;
+    } else {
+      var table = el('table'), tbody = el('tbody');
+      if (section.kind === 'table') {
+        var hr = el('tr'); section.columns.forEach(function (c) { hr.appendChild(el('th', null, c)); });
+        var thead = el('thead'); thead.appendChild(hr); table.appendChild(thead);
+      }
+      section.rows.forEach(function (row) {
+        var tr = el('tr'), isHit = terms.length > 0 && rowMatches(row.join(' '), terms);
+        row.forEach(function (cell, i) { tr.appendChild(el('td', section.kind === 'kv' && i === 0 ? 'k' : null, cell)); });
+        if (isHit) { tr.className = 'hit'; hits++; }
+        if (filtering && !isHit) tr.className = 'hide'; else shown++;
+        tbody.appendChild(tr);
+      });
+      if (filtering && !shown) return null;
+      table.appendChild(tbody);
+      body = el('div', 'scroll-x'); body.appendChild(table);
+      sum.appendChild(el('span', 'count', filtering ? shown + ' of ' + section.rows.length : (section.kind === 'table' ? section.rows.length : '')));
+    }
+    det.open = openDefault || hits > 0;
+    det.appendChild(sum); det.appendChild(body);
+    return det;
+  }
+  function renderPanel() {
+    var panel = $('panel'), body = $('p-body');
+    body.textContent = '';
+    if (!selected) { panel.classList.remove('open'); resize(); return; }
+    var wasOpen = panel.classList.contains('open');
+    panel.classList.add('open');
+    if (!wasOpen) resize();
+    var ref = selected.ref, title, sub, groups = [], filterText = $('p-filter').value.trim().toLowerCase();
+    var filtering = filterText.length > 0, terms = filtering ? filterText.split(/\s+/) : tokens;
+    if (selected.type === 'node') {
+      var site = siteById[ref.site];
+      title = ref.label;
+      sub = kindOf(ref).name + (ref.model ? ' · ' + ref.model : '') + ' · ' + (ref.status || 'unknown');
+      groups.push({ title: null, sections: ref.sections || [] });
+      var links = edgesByNode[ref.id].map(function (e) {
+        var peer = e.na === ref ? e.nb : e.na;
+        return [(EDGE[e.kind] || EDGE.lan).name, peer.label, e.na === ref ? e.a_port : e.b_port, e.na === ref ? e.b_port : e.a_port, e.status || ''];
+      });
+      if (links.length) groups[0].sections = groups[0].sections.concat([{ title: 'Connections', kind: 'table',
+        columns: ['Type', 'Peer', 'Local port', 'Remote port', 'Status'], rows: links }]);
+      if (ref.site_sections && site) groups.push({ title: 'Site configuration: ' + site.name, sections: site.sections || [] });
+    } else if (selected.type === 'site') {
+      title = ref.name; sub = 'Site · ' + ref.device_count + ' devices · ' + (ref.status || 'unknown');
+      var members = nodes.filter(function (n) { return n.site === ref.id && n.kind !== 'wan'; }).map(function (n) {
+        return [n.label, kindOf(n).name, n.model || '', n.ip || '', n.status || ''];
+      });
+      groups.push({ title: null, sections: (ref.sections || []).concat(members.length ? [{ title: 'Devices', kind: 'table',
+        columns: ['Name', 'Type', 'Model', 'IP', 'Status'], rows: members }] : []) });
+    } else if (selected.type === 'edge') {
+      title = ref.na.label + '  ↔  ' + ref.nb.label; sub = (EDGE[ref.kind] || EDGE.lan).name;
+      groups.push({ title: null, sections: ref.sections || [] });
+    } else {
+      title = ref.title; sub = ref.sub || ''; groups.push({ title: null, sections: ref.sections || [] });
+    }
+    $('p-title').textContent = title; $('p-sub').textContent = sub;
+    $('p-zoom').style.display = selected.type === 'report' ? 'none' : '';
+    var count = 0;
+    groups.forEach(function (g) {
+      var rendered = [];
+      g.sections.forEach(function (s, i) {
+        var node = renderSection(s, terms, filtering, selected.type === 'path' || count + i < 2);
+        if (node) rendered.push(node);
+      });
+      if (!rendered.length) return;
+      if (g.title) body.appendChild(el('div', 'group-title', g.title));
+      rendered.forEach(function (r) { body.appendChild(r); });
+      count += rendered.length;
+    });
+    if (!count) body.appendChild(el('div', 'empty', filtering ? 'Nothing in this panel matches the filter.' : 'No details collected.'));
+    if (selected.type === 'node') {
+      var bar = el('div', 'group-title', 'Jump to: ');
+      var siteRef = siteById[ref.site];
+      if (siteRef) {
+        var b = el('button', 'link', siteRef.name);
+        b.addEventListener('click', function () { select({ type: 'site', ref: siteRef }, true); });
+        bar.appendChild(b); body.appendChild(bar);
+      }
+    }
+  }
+  function showReport() {
+    var c = DATA.collection || {}, s = DATA.summary || {}, sections = [];
+    sections.push({ title: 'Summary', kind: 'kv', rows: [
+      ['Organization', DATA.org.name], ['Generated', DATA.generated_at], ['Sites', String(s.sites || 0)],
+      ['Devices', String(s.devices || 0)], ['LAN links', String(s.lan_links || 0)], ['VPN tunnels', String(s.vpn_tunnels || 0)],
+      ['WAN uplinks', String(s.wan_uplinks || 0)], ['VLANs', String(s.vlans || 0)],
+      ['Non-Meraki neighbors', String(s.external_neighbors || 0)], ['Matched to Plexus inventory', String(s.inventory_matches || 0)],
+      ['Data sources', (c.sources || []).join('; ')], ['API requests', String((c.stats || {}).requests || 0)],
+      ['Rate-limit retries', String((c.stats || {}).rate_limited || 0)]] });
+    var kinds = s.devices_by_kind || {};
+    sections.push({ title: 'Devices by type', kind: 'table', columns: ['Type', 'Count'],
+      rows: Object.keys(kinds).sort().map(function (k) { return [(KIND[k] || OTHER).name + ' (' + k + ')', String(kinds[k])]; }) });
+    sections.push({ title: 'Collection warnings', kind: 'table', columns: ['Scope', 'HTTP', 'Message'],
+      rows: (c.errors || []).map(function (e) { return [e.scope || '', e.status == null ? '' : String(e.status), e.message || '']; }) });
+    select({ type: 'report', ref: { title: 'Topology report', sub: DATA.org.name, sections: sections.filter(function (x) { return x.rows.length; }) } }, false);
+  }
+
+  // ── Path mode ────────────────────────────────────────────────────────────
+  // Pick a few sites, devices or subnets and see how they reach one another
+  // over the links on the map that are up (topology only; route tables are
+  // not read). A subnet stands for the device that owns it.
+  var MAX_PATH_PICKS = 6, pathMode = false, pathPicks = [], pathLegs = [], pathSiteIds = {}, pathPicked = {}, pathMessage = '';
+  function pathActive() { return pathMode && pathPicks.length > 0; }
+  function siteGateway(s) {
+    var best = null, bestRank = 99, order = ['appliance', 'switch', 'wireless'];
+    nodes.forEach(function (n) {
+      if (n.site !== s.id || n.kind === 'wan' || n.kind === 'external' || n.kind === 'vpn_peer' || n.kind === 'cloud' || n.kind === 'users') return;
+      var rank = order.indexOf(n.kind); if (rank === -1) rank = order.length;
+      if (rank < bestRank) { bestRank = rank; best = n; }
+    });
+    return best;
+  }
+  function edgeDown(e) { return e.status === 'unreachable' || e.status === 'failed'; }
+  // Costs are 1 or 2 (non-Meraki IPsec), so a bucket per distance is enough.
+  function shortestFrom(source) {
+    var done = {}, dist = {}, buckets = [[{ n: source, prev: null, edge: null }]];
+    dist[source.id] = 0;
+    for (var d = 0; d < buckets.length; d++) {
+      (buckets[d] || []).forEach(function (item) {
+        if (done[item.n.id] || dist[item.n.id] !== d) return;
+        done[item.n.id] = item;
+        edgesByNode[item.n.id].forEach(function (e) {
+          if (edgeDown(e) || e.na === e.nb) return;
+          var next = e.na === item.n ? e.nb : e.na, nd = d + (e.kind === 'vpn3p' ? 2 : 1);
+          if (done[next.id] || (dist[next.id] !== undefined && dist[next.id] <= nd)) return;
+          dist[next.id] = nd;
+          (buckets[nd] = buckets[nd] || []).push({ n: next, prev: item.n, edge: e });
+        });
+      });
+    }
+    return done;
+  }
+  // Why the tunnels on a path may not carry a picked subnet.
+  function subnetNotes(pick, tunnels) {
+    var s = pick.subnet;
+    if (!s || !tunnels) return [];
+    if (s.kind === 'peer') {
+      return tunnels > 1 ? [s.cidr + ' is behind a non-Meraki VPN peer: only a site with its own tunnel to that peer reaches it, the route is not passed on over AutoVPN.'] : [];
+    }
+    return s.in_vpn === false ? [s.cidr + ' is not advertised into the VPN at ' + (s.site_name || 'its site') + ', so a tunnel will not carry it.'] : [];
+  }
+  function computePath() {
+    nodes.forEach(function (n) { n.onPath = false; });
+    edges.forEach(function (e) { e.onPath = false; });
+    pathLegs = []; pathSiteIds = {}; pathPicked = {};
+    pathPicks.forEach(function (p) { p.n.onPath = true; pathPicked[p.n.id] = true; if (p.n.site) pathSiteIds[p.n.site] = true; });
+    var reachFrom = {};
+    for (var i = 0; i < pathPicks.length - 1; i++) {
+      for (var j = i + 1; j < pathPicks.length; j++) {
+        var from = pathPicks[i], to = pathPicks[j];
+        if (from.n === to.n) { pathLegs.push({ from: from, to: to, hops: null, same: true, notes: [] }); continue; }
+        var reach = reachFrom[from.n.id] || (reachFrom[from.n.id] = shortestFrom(from.n));
+        var hops = [], tunnels = 0, at = reach[to.n.id];
+        while (at) {
+          hops.unshift(at); at.n.onPath = true;
+          if (at.edge) { at.edge.onPath = true; if (isCurved(at.edge)) tunnels++; }
+          at = at.prev ? reach[at.prev.id] : null;
+        }
+        pathLegs.push({ from: from, to: to, hops: hops.length ? hops : null, same: false,
+          notes: subnetNotes(from, tunnels).concat(subnetNotes(to, tunnels)) });
+      }
+    }
+  }
+  function nodeSiteName(n) { return (siteById[n.site] || {}).name || ''; }
+  function pickName(p) { return p.subnet ? p.subnet.cidr : (nodeSiteName(p.n) || p.n.label); }
+  function showPath() {
+    var sections = [];
+    if (pathMessage) sections.push({ title: 'Note', kind: 'text', text: pathMessage });
+    if (pathPicks.length < 2) {
+      sections.push({ title: 'How to use', kind: 'text', text: 'Click two or more sites in the list, or sites and devices on the map, to see how they reach one another.' +
+        (subnets.length ? ' Or pick subnets in the box above: choose one from its list, or type an IP address or network and press Enter.' : '') +
+        ' Click a pick again to remove it. Up to ' + MAX_PATH_PICKS + ' picks.' });
+    }
+    if (pathPicks.length) {
+      sections.push({ title: 'Picked', kind: 'table', columns: ['Pick', 'Device', 'Site'],
+        rows: pathPicks.map(function (p) { return [p.subnet ? p.subnet.cidr + ' (' + p.subnet.name + ')' : 'Device', p.n.label, nodeSiteName(p.n)]; }) });
+    }
+    pathLegs.forEach(function (leg) {
+      var name = pickName(leg.from) + '  →  ' + pickName(leg.to);
+      if (leg.same) { sections.push({ title: name + ' (same device)', kind: 'text', text: 'Routed locally by ' + leg.from.n.label + '.' }); return; }
+      if (!leg.hops) { sections.push({ title: name + ' (no path)', kind: 'text', text: 'No path over links that are up.' }); return; }
+      sections.push({ title: name + ' (' + (leg.hops.length - 1) + (leg.hops.length === 2 ? ' hop)' : ' hops)'), kind: 'table', columns: ['#', 'Device', 'Site', 'Reached over'],
+        rows: leg.hops.map(function (h, i) {
+          return [String(i), h.n.label, nodeSiteName(h.n), h.edge ? (EDGE[h.edge.kind] || EDGE.lan).name : 'start'];
+        }) });
+      if (leg.notes.length) sections.push({ title: 'Warning: ' + name, kind: 'text', text: leg.notes.join('\n') });
+    });
+    if (pathLegs.length) {
+      sections.push({ title: 'About this path', kind: 'text', text: 'Shortest way over the cables, uplinks and VPN tunnels on the map that are up. Route tables are not consulted; a subnet is placed on the device that owns it (appliance, L3 switch or VPN peer).' });
+    }
+    selected = { type: 'path', ref: { title: 'Path', sub: pathPicks.length + ' picked', sections: sections } };
+    renderPanel(); renderList(); dirty();
+  }
+  function togglePathPick(pick, addOnly) {
+    pathMessage = '';
+    var at = -1;
+    pathPicks.forEach(function (p, i) { if (p.key === pick.key) at = i; });
+    if (at !== -1) { if (!addOnly) pathPicks.splice(at, 1); }
+    else if (pathPicks.length < MAX_PATH_PICKS) pathPicks.push(pick);
+    else pathMessage = 'A path connects up to ' + MAX_PATH_PICKS + ' picks. Remove one first.';
+    computePath(); showPath();
+  }
+  function togglePick(target) {
+    var n = target.type === 'node' ? target.ref : (target.type === 'site' ? siteGateway(target.ref) : null);
+    if (n) togglePathPick({ key: 'n:' + n.id, n: n, subnet: null }, false);
+  }
+  function setPathMode(on) {
+    pathMode = on; pathPicks = []; pathMessage = '';
+    $('btn-path').classList.toggle('on', on);
+    $('p-subnet-row').style.display = on && subnets.length ? '' : 'none';
+    $('p-subnet').value = '';
+    if (on) fillSubnetOptions();
+    computePath();
+    if (on) showPath(); else select(null, false);
+  }
+
+  // Subnet picker: the index Plexus embedded, limited to owners on this map.
+  var subnets = (DATA.subnets || []).filter(function (s) { return nodeById[s.node_id]; }), subnetByLabel = {}, subnetOptionsFilled = false;
+  function subnetLabel(s) { return s.cidr + ' - ' + (s.site_name || 'VPN peer') + ' - ' + s.name; }
+  subnets.forEach(function (s) { subnetByLabel[subnetLabel(s)] = s; });
+  function fillSubnetOptions() {
+    if (subnetOptionsFilled) return;
+    subnetOptionsFilled = true;
+    var list = $('subnet-options');
+    subnets.forEach(function (s) { var o = el('option'); o.value = subnetLabel(s); list.appendChild(o); });
+  }
+  function parseV4(text) {
+    var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/.exec(text.trim());
+    if (!m) return null;
+    var o = [+m[1], +m[2], +m[3], +m[4]], len = m[5] === undefined ? 32 : +m[5];
+    if (o[0] > 255 || o[1] > 255 || o[2] > 255 || o[3] > 255 || len > 32) return null;
+    return { addr: ((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) >>> 0, len: len };
+  }
+  function v4Prefix(addr, len) { return len === 0 ? 0 : addr >>> (32 - len); }
+  // The most specific subnets containing the typed address or network.
+  function findSubnets(text) {
+    var q = parseV4(text), best = -1, found = [];
+    if (!q) return found;
+    subnets.forEach(function (s) {
+      var net = parseV4(s.cidr);
+      if (!net || net.len > q.len || v4Prefix(net.addr, net.len) !== v4Prefix(q.addr, net.len)) return;
+      if (net.len > best) { best = net.len; found = [s]; } else if (net.len === best) found.push(s);
+    });
+    return found;
+  }
+  function addSubnetPick(s) {
+    $('p-subnet').value = '';
+    togglePathPick({ key: 's:' + s.cidr + ':' + s.node_id, n: nodeById[s.node_id], subnet: s }, true);
+  }
+  $('p-subnet').addEventListener('input', function () {
+    var s = subnetByLabel[this.value.trim()];
+    if (s && pathMode) addSubnetPick(s);
+  });
+  $('p-subnet').addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' || !pathMode) return;
+    var text = this.value.trim(), found = subnetByLabel[text] ? [subnetByLabel[text]] : findSubnets(text);
+    if (!text) return;
+    if (found.length === 1) { addSubnetPick(found[0]); return; }
+    pathMessage = found.length ? text + ' exists at ' + found.length + ' sites - pick the one you mean from the list.' : 'No collected subnet contains ' + text + '.';
+    showPath();
+  });
+
+  // ── Left list ────────────────────────────────────────────────────────────
+  var tab = 'sites';
+  function setTab(name) {
+    tab = name;
+    $('tab-sites').className = tab === 'sites' ? 'active' : '';
+    $('tab-results').className = tab === 'results' ? 'active' : '';
+    $('tab-results').textContent = tokens.length ? 'Results (' + results.length + ')' : 'Results';
+    siteMatchCache = null;
+    renderList();
+  }
+  function listItem(title, sub, status, target) {
+    var picked = pathMode && target.type === 'site' && pathSiteIds[target.ref.id];
+    var item = el('div', 'item' + (picked || (selected && selected.ref === target.ref) ? ' selected' : ''));
+    var t = el('div', 't');
+    if (status) t.appendChild(el('span', 'dot s-' + status));
+    t.appendChild(document.createTextNode(title));
+    item.appendChild(t); item.appendChild(el('div', 's', sub));
+    item.addEventListener('click', function () { select(target, true); });
+    return item;
+  }
+  function renderList() {
+    var list = $('list'); list.textContent = '';
+    if (tab === 'sites') {
+      sites.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).forEach(function (s) {
+        list.appendChild(listItem(s.name, s.device_count + ' devices' + (s.vpn_mode !== 'none' ? ' · VPN ' + s.vpn_mode : ''), s.status, { type: 'site', ref: s }));
+      });
+      if (!sites.length) list.appendChild(el('div', 'empty', 'No sites in this snapshot.'));
+      return;
+    }
+    if (!tokens.length) { list.appendChild(el('div', 'empty', 'Type in the search box to find devices, addresses, VLANs, subnets, routes, VPN peers, firewall rules or anything else on the map.')); return; }
+    if (!results.length) { list.appendChild(el('div', 'empty', 'No matches.')); return; }
+    results.slice(0, 400).forEach(function (r) {
+      var e = r.entry;
+      list.appendChild(listItem(e.title, r.snippet || e.sub, e.type === 'site' ? e.ref.status : e.ref.status, { type: e.type, ref: e.ref }));
+    });
+    if (results.length > 400) list.appendChild(el('div', 'empty', (results.length - 400) + ' more matches are highlighted on the map. Refine the search to list them.'));
+  }
+
+  // ── Chrome: header, legend, layers ───────────────────────────────────────
+  function buildChrome() {
+    var s = DATA.summary || {}, st = s.devices_by_status || {}, chips = $('chips');
+    $('title').textContent = DATA.org.name + ' · Network Topology';
+    function chip(label, value, status) {
+      var c = el('span', 'chip');
+      if (status) c.appendChild(el('span', 'dot s-' + status));
+      c.appendChild(el('b', null, value)); c.appendChild(document.createTextNode(' ' + label));
+      chips.appendChild(c);
+    }
+    chip('sites', s.sites || 0); chip('devices', s.devices || 0);
+    chip('online', st.online || 0, 'online');
+    if (st.alerting) chip('alerting', st.alerting, 'alerting');
+    if (st.offline) chip('offline', st.offline, 'offline');
+    chip('VPN tunnels', s.vpn_tunnels || 0);
+    if (!layers.vpnAll) chips.appendChild(el('span', 'meta', 'Select a device or site to see its tunnels'));
+    chips.appendChild(el('span', 'meta', 'Generated ' + String(DATA.generated_at || '').replace('T', ' ').replace('+00:00', ' UTC')));
+    if (((DATA.collection || {}).errors || []).length) $('btn-report').classList.add('warn');
+
+    var legend = $('legend');
+    Object.keys(KIND).forEach(function (k) {
+      if (!nodes.some(function (n) { return n.kind === k; })) return;
+      var row = el('div'); var tag = el('b', null, KIND[k].tag + ' '); tag.style.color = KIND[k].color;
+      row.appendChild(tag); row.appendChild(document.createTextNode(KIND[k].name)); legend.appendChild(row);
+    });
+    Object.keys(EDGE).forEach(function (k) {
+      if (!edges.some(function (e) { return e.kind === k; })) return;
+      var row = el('div'), sw = el('span', 'sw');
+      sw.style.borderTopColor = EDGE[k].color; sw.style.borderTopStyle = EDGE[k].dash.length ? 'dashed' : 'solid';
+      row.appendChild(sw); row.appendChild(document.createTextNode(EDGE[k].name)); legend.appendChild(row);
+    });
+    ['online', 'alerting', 'offline'].forEach(function (k) {
+      var row = el('div'); row.appendChild(el('span', 'dot s-' + k)); row.appendChild(document.createTextNode(k)); legend.appendChild(row);
+    });
+    if (nodes.some(function (n) { return n.inventory; })) {
+      var row = el('div'), dot = el('span', 'dot'); dot.style.background = 'var(--accent)';
+      row.appendChild(dot); row.appendChild(document.createTextNode('in Plexus inventory')); legend.appendChild(row);
+    }
+
+    var box = $('layers');
+    [['lan', 'LAN links'], ['vpn', 'VPN tunnels'], ['vpnAll', 'All tunnels at once (off: selection only)'],
+      ['uplink', 'WAN uplinks'], ['external', 'Non-Meraki neighbors'],
+      ['labels', 'Labels'], ['problems', 'Only offline / alerting devices']].forEach(function (pair) {
+      var label = el('label'), input = el('input');
+      input.type = 'checkbox'; input.checked = layers[pair[0]];
+      input.addEventListener('change', function () { layers[pair[0]] = input.checked; dirty(); });
+      label.appendChild(input); label.appendChild(document.createTextNode(' ' + pair[1])); box.appendChild(label);
+    });
+  }
+
+  // ── Input ────────────────────────────────────────────────────────────────
+  var pointers = {}, dragStart = null, moved = false, pinchDist = 0;
+  function pos(ev) { var r = canvas.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; }
+  canvas.addEventListener('pointerdown', function (ev) {
+    canvas.setPointerCapture(ev.pointerId);
+    pointers[ev.pointerId] = pos(ev);
+    var ids = Object.keys(pointers);
+    if (ids.length === 1) { dragStart = { p: pos(ev), vx: view.x, vy: view.y }; moved = false; }
+    else if (ids.length === 2) {
+      var a = pointers[ids[0]], b = pointers[ids[1]];
+      pinchDist = Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)); moved = true;
+    }
+  });
+  canvas.addEventListener('pointermove', function (ev) {
+    var p = pos(ev), ids = Object.keys(pointers);
+    if (pointers[ev.pointerId]) pointers[ev.pointerId] = p;
+    if (ids.length === 2) {
+      var a = pointers[ids[0]], b = pointers[ids[1]], d = Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+      if (pinchDist > 0 && d > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
+      pinchDist = d; return;
+    }
+    if (dragStart && ids.length === 1) {
+      var dx = p.x - dragStart.p.x, dy = p.y - dragStart.p.y;
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+      moved = true; canvas.classList.add('dragging');
+      view.x = dragStart.vx + dx; view.y = dragStart.vy + dy; hideTip(); dirty(); return;
+    }
+    var h = hit(p.x, p.y);
+    if (h && h.type !== 'site') showTip(h, p); else hideTip();
+    canvas.style.cursor = h && h.type !== 'site' ? 'pointer' : '';
+  });
+  function endPointer(ev) {
+    var wasDrag = moved, p = pos(ev);
+    delete pointers[ev.pointerId];
+    if (Object.keys(pointers).length === 0) {
+      canvas.classList.remove('dragging');
+      if (dragStart && !wasDrag && ev.type === 'pointerup') select(hit(p.x, p.y), false);
+      dragStart = null; pinchDist = 0;
+    }
+  }
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('pointerleave', hideTip);
+  canvas.addEventListener('dblclick', function (ev) { var p = pos(ev), h = hit(p.x, p.y); if (h) zoomTo(h); else zoomAt(p.x, p.y, 1.6); });
+  canvas.addEventListener('wheel', function (ev) {
+    ev.preventDefault();
+    var p = pos(ev); zoomAt(p.x, p.y, Math.exp(-ev.deltaY * (ev.deltaMode === 1 ? 0.05 : 0.0015)));
+  }, { passive: false });
+
+  var tip = $('tooltip');
+  function showTip(h, p) {
+    tip.textContent = '';
+    if (h.type === 'node') {
+      var n = h.ref;
+      tip.appendChild(el('b', null, n.label));
+      tip.appendChild(el('div', null, [kindOf(n).name, n.model, n.ip, n.status].filter(Boolean).join(' · ')));
+    } else {
+      var e = h.ref;
+      tip.appendChild(el('b', null, (EDGE[e.kind] || EDGE.lan).name));
+      tip.appendChild(el('div', null, e.na.label + (e.a_port ? ' [' + e.a_port + ']' : '') + '  ↔  ' + e.nb.label + (e.b_port ? ' [' + e.b_port + ']' : '')));
+      if (e.status) tip.appendChild(el('div', null, e.status));
+    }
+    tip.style.display = 'block';
+    tip.style.left = Math.min(p.x + 14, W - 330) + 'px'; tip.style.top = (p.y + 14) + 'px';
+  }
+  function hideTip() { tip.style.display = 'none'; }
+
+  var searchTimer = null;
+  $('q').addEventListener('input', function () {
+    clearTimeout(searchTimer);
+    var value = this.value;
+    searchTimer = setTimeout(function () { runSearch(value); }, 140);
+  });
+  $('q').addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter') return;
+    clearTimeout(searchTimer); runSearch(this.value);
+    if (!results.length) return;
+    var boxes = [];
+    nodes.forEach(function (n) { if (matchNodes[n.id]) boxes.push(nodeBox(n)); });
+    sites.forEach(function (s) { if (matchSites[s.id]) boxes.push(siteBox(s)); });
+    if (results.length === 1) select({ type: results[0].entry.type, ref: results[0].entry.ref }, true);
+    else fitBox(bounds(boxes), 1.2);
+  });
+  function clearSearch() { $('q').value = ''; runSearch(''); }
+  $('q-clear').addEventListener('click', clearSearch);
+  $('p-filter').addEventListener('input', renderPanel);
+  $('p-close').addEventListener('click', function () { if (pathMode) setPathMode(false); else select(null, false); });
+  $('btn-path').addEventListener('click', function () { setPathMode(!pathMode); });
+  $('p-zoom').addEventListener('click', function () { if (selected && selected.type !== 'report') zoomTo(selected); });
+  $('btn-fit').addEventListener('click', fitAll);
+  $('btn-in').addEventListener('click', function () { zoomAt(W / 2, H / 2, 1.4); });
+  $('btn-out').addEventListener('click', function () { zoomAt(W / 2, H / 2, 1 / 1.4); });
+  $('btn-layers').addEventListener('click', function () { $('layers').classList.toggle('open'); });
+  $('btn-report').addEventListener('click', function () { if (pathMode) setPathMode(false); showReport(); });
+  $('btn-theme').addEventListener('click', function () { document.body.classList.toggle('light'); readTheme(); dirty(); });
+  $('tab-sites').addEventListener('click', function () { setTab('sites'); });
+  $('tab-results').addEventListener('click', function () { setTab('results'); });
+  document.addEventListener('keydown', function (ev) {
+    var typing = /^(INPUT|TEXTAREA)$/.test((ev.target || {}).tagName || '');
+    if (ev.key === 'Escape') { if (query) clearSearch(); else if (pathMode) setPathMode(false); else select(null, false); if (typing) ev.target.blur(); return; }
+    if (typing) return;
+    if (ev.key === '/') { ev.preventDefault(); $('q').focus(); }
+    else if (ev.key === 'f' || ev.key === 'F') fitAll();
+    else if (ev.key === '+' || ev.key === '=') zoomAt(W / 2, H / 2, 1.3);
+    else if (ev.key === '-') zoomAt(W / 2, H / 2, 1 / 1.3);
+  });
+  window.addEventListener('resize', resize);
+
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) document.body.classList.add('light');
+  readTheme(); buildChrome(); setTab('sites'); resize(); fitAll();
+})();
+</script>
+</body>
+</html>
