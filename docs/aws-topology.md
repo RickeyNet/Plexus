@@ -121,12 +121,21 @@ as a node marked *Not collected*.
 - **Virtual appliances.** An instance whose public IP is the WAN address of a
   Meraki appliance or Cato Socket is that device (a vMX or vSocket): it stays
   in its Meraki or Cato site and gains a link to its VPC.
+- **Virtual appliances behind a NAT gateway.** A vMX in a private subnet has
+  no public IP of its own: Meraki knows it by the NAT gateway's address. It
+  is then matched by the private IP of its WAN uplink, under conditions that
+  keep a branch appliance that happens to use the same address out:
+  the instance forwards traffic (source/destination check off), exactly one
+  such instance and exactly one uplink have the address, and either the
+  Meraki model is a vMX or the public IP Meraki reports is a NAT gateway of
+  the instance's VPC. An appliance that meets none of this stays two nodes:
+  the Meraki device in its site and the instance in its VPC.
 - **The same VPN seen from the other side.** A Meraki non-Meraki VPN peer or
   a Cato IPsec site configured with an AWS tunnel address is joined to the
   AWS gateway that owns the address.
 
-Only public addresses are used for this; private addresses repeat from site
-to site and identify nothing.
+Apart from that one case only public addresses are used; private addresses
+repeat from site to site and identify nothing on their own.
 
 ### Device details
 
@@ -193,15 +202,29 @@ directions.
   to the gateway it leaves by, and back in through the same gateway. A NAT
   gateway accepts no connection from outside; an internet gateway only for
   an instance with a public address.
+- **Through a Meraki vMX.** When the route table hands the traffic to an
+  instance that is a Meraki appliance on the map, the check goes on with the
+  latest Meraki collection instead of stopping: the far address must be a
+  subnet of a Meraki site that advertises it into the VPN, an AutoVPN tunnel
+  that is up must join the vMX to that site (through a hub if need be; a
+  subnet behind a non-Meraki peer needs the vMX's own tunnel to that peer),
+  and the vMX must advertise the AWS address (its **VPN local subnets**) so
+  the site has a route back. The reply is then followed from the vMX's
+  subnet to the AWS end. Firewall rules on the Meraki appliances are not
+  matched.
 
 The check never reports as allowed what it could not look at. *Check
 incomplete* means one of:
 
 - the discovery predates this check, or the account may not read network
   ACLs or transit gateway route tables: run **Discover** again
-- the route hands the traffic to a firewall or router instance, or to a
-  gateway load balancer endpoint. What that appliance does with it is its
-  own configuration, which AWS does not describe
+- the route hands the traffic to a firewall or router instance that is not
+  a Meraki appliance on the map, or to a gateway load balancer endpoint.
+  What that appliance does with it is its own configuration, which AWS does
+  not describe
+- behind a vMX: the far address is in no subnet Meraki collected, or the
+  vMX does not list the AWS address among its VPN local subnets (other
+  sites then reach it only if they send all their traffic to the vMX)
 - the transit gateway hands the traffic to a VPC that does not hold the
   address (an inspection or egress VPC); it is not followed further
 - a route or rule refers to a prefix list, whose entries are not collected

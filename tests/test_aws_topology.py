@@ -25,7 +25,13 @@ from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample
 from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.integrations.meraki.subnets import subnet_index
-from netcontrol.integrations.meraki.unified import build_search_index, merge_meraki_into_graph, node_details
+from netcontrol.integrations.meraki.unified import (
+    build_search_index,
+    merge_meraki_into_graph,
+    node_details,
+    virtual_appliance_pairs,
+)
+from netcontrol.integrations.meraki.vpn_reach import VpnCarrier
 
 ACCOUNT = {"id": 1, "name": "Prod", "last_sync_at": "2026-10-01T12:00:00+00:00", "last_sync_status": "success"}
 
@@ -454,6 +460,72 @@ def test_merge_recognises_a_virtual_appliance_by_its_public_address():
     assert attach["protocol"] == "cloud"
 
 
+def test_merge_recognises_a_virtual_appliance_whichever_snapshot_comes_first():
+    aws = {
+        "provider": "aws",
+        "sites": [],
+        "nodes": [_n("vpc", "vpc"), _n("i", "appliance", ip="10.1.0.5", alias_ips=["8.8.4.4"])],
+        "edges": [{"id": "e1", "kind": "attach", "a": "i", "b": "vpc", "status": "active"}],
+    }
+    nodes, edges = _merge(aws, BRANCH)
+    assert "meraki:1:i" not in nodes
+    assert frozenset(("meraki:2:mx", "meraki:1:vpc")) in _pairs(edges)
+
+
+def _uplink(node_id: str, public: str, inside: str) -> dict:
+    """A WAN uplink known by ``public`` whose own interface has ``inside``."""
+    section = {"title": "WAN uplink", "kind": "kv", "rows": [["Interface", "wan1"], ["IP", inside]]}
+    return _n(node_id, "wan", ip=public, sections=[section])
+
+
+def _behind_nat(model: str, public: str = "8.8.4.4", inside: str = "10.1.0.5") -> dict:
+    return {
+        "provider": "meraki",
+        "sites": [{"id": "s", "name": "AWS hub"}],
+        "nodes": [_n("vmx", "appliance", model=model), _uplink("wan1", public, inside)],
+        "edges": [{"id": "e1", "kind": "uplink", "a": "wan1", "b": "vmx"}],
+    }
+
+
+def _vpc_with(*instances: dict, nat: str = "8.8.4.4") -> dict:
+    return {
+        "provider": "aws",
+        "sites": [],
+        "nodes": [_n("vpc", "vpc"), _n("nat", "cloud", ip=nat), *instances],
+        "edges": [{"id": f"e{i}", "kind": "attach", "a": n["id"], "b": "vpc"} for i, n in enumerate(instances)],
+    }
+
+
+def test_merge_recognises_a_virtual_appliance_behind_a_nat_gateway():
+    # In a private subnet the vMX has no public address: Meraki knows it by
+    # the NAT gateway's address, AWS by its private one.
+    aws = _vpc_with(_n("i", "appliance", ip="10.1.0.5", alias_ips=[]))
+    nodes, edges = _merge(_behind_nat("VMX-M"), aws)
+    assert "meraki:2:i" not in nodes and nodes["meraki:1:vmx"]["meraki"]["provider"] == "meraki"
+    assert frozenset(("meraki:1:vmx", "meraki:2:vpc")) in _pairs(edges)
+    # Any appliance is accepted when its public address is the VPC's NAT gateway...
+    assert virtual_appliance_pairs([(1, _behind_nat("Z3")), (2, aws)]) == {(2, "i"): (1, "vmx")}
+    # ...and a virtual model when the NAT in front of it is not in the VPC.
+    elsewhere = _vpc_with(_n("i", "appliance", ip="10.1.0.5", alias_ips=[]), nat="8.8.8.8")
+    assert virtual_appliance_pairs([(1, _behind_nat("vMX100")), (2, elsewhere)]) == {(2, "i"): (1, "vmx")}
+
+
+def test_merge_does_not_join_devices_that_only_share_a_private_address():
+    instance = _n("i", "appliance", ip="10.1.0.5", alias_ips=[])
+    # A branch appliance behind some other NAT happens to use the address.
+    assert virtual_appliance_pairs([(1, _behind_nat("MX68")), (2, _vpc_with(instance, nat="8.8.8.8"))]) == {}
+    # Two forwarding instances (overlapping VPCs) hold it: neither is picked.
+    twin = _n("i2", "appliance", ip="10.1.0.5", alias_ips=[])
+    assert virtual_appliance_pairs([(1, _behind_nat("VMX-M")), (2, _vpc_with(instance, twin))]) == {}
+    # Two uplinks have it: the instance could be either device.
+    assert (
+        virtual_appliance_pairs([(1, _behind_nat("VMX-M")), (3, _behind_nat("VMX-M")), (2, _vpc_with(instance))]) == {}
+    )
+    # An instance that does not forward traffic is not an appliance.
+    server = _n("i", "server", ip="10.1.0.5", alias_ips=[])
+    assert virtual_appliance_pairs([(1, _behind_nat("VMX-M")), (2, _vpc_with(server))]) == {}
+
+
 def test_merge_joins_a_vpn_seen_from_both_ends():
     # A site that names the AWS tunnel address as its IPsec peer, and a Cato
     # style site whose own address is the AWS tunnel address.
@@ -609,6 +681,110 @@ def test_reachability_needs_the_vpc_of_a_range_that_exists_twice():
         reach.check(APP, DB, protocol="gre")
 
 
+# ── Reachability through a Meraki vMX ────────────────────────────────────────
+
+VMX, BRANCH_HOST = "i-0f0e0vmx", "10.50.1.20"
+
+
+def _table(title: str, rows: list[list[str]]) -> dict:
+    return {"title": title, "kind": "table", "rows": rows}
+
+
+def _meraki_org(*, tunnel: str = "reachable", branch_in_vpn: str = "Yes", hub_subnets: list[list[str]] | None = None):
+    """A vMX hub in AWS and one branch whose VLAN 10 is 10.50.1.0/24."""
+    hub = hub_subnets if hub_subnets is not None else [["10.200.0.0/16", "Yes", ""]]
+    return {
+        "provider": "meraki",
+        "sites": [
+            {"id": "hub", "name": "AWS hub", "sections": [_table("VPN local subnets", hub)]},
+            {
+                "id": "br",
+                "name": "Branch 12",
+                "sections": [
+                    _table("VLANs", [["10", "Users", "10.50.1.0/24"]]),
+                    _table("VPN local subnets", [["10.50.1.0/24", branch_in_vpn, ""]]),
+                ],
+            },
+        ],
+        "nodes": [
+            _n("vmx", "appliance", "hub", label="aws-vmx", model="VMX-M"),
+            _n("mx", "appliance", "br", label="branch-mx", model="MX68"),
+        ],
+        "edges": [{"id": "e1", "kind": "vpn", "a": "vmx", "b": "mx", "status": tunnel}],
+    }
+
+
+def _reach_with_vmx() -> Reachability:
+    """The sample account with a vMX in the application subnet that the
+    VPC's route table sends the branch ranges to."""
+    resources, connections = _records()
+    table = next(r for r in resources if r["resource_uid"] == "aws:route_table:rtb-0c0re")
+    table["metadata"]["routes"].append(
+        {"destination": "10.50.0.0/16", "target": "eni-0f0e0vmx0", "state": "active", "origin": "CreateRoute"}
+    )
+    resources.append(
+        {
+            "resource_uid": f"aws:instance:{VMX}",
+            "resource_type": "instance",
+            "name": "aws-vmx",
+            "status": "running",
+            "metadata": {
+                "vpc_id": "vpc-0c0re00001",
+                "private_ip": "10.200.10.50",
+                "source_dest_check": False,
+                "interfaces": [{"id": "eni-0f0e0vmx0", "subnet_id": "subnet-0c0re0a", "private_ips": ["10.200.10.50"]}],
+            },
+        }
+    )
+    return Reachability(resources, connections)
+
+
+def test_reachability_stops_at_an_appliance_it_knows_nothing_about():
+    result = _reach_with_vmx().check(APP, BRANCH_HOST, protocol="tcp", port=443)
+    assert result["verdict"] == "unknown" and "aws-vmx" in result["summary"]
+
+
+def test_reachability_goes_on_through_a_meraki_vmx():
+    reach = _reach_with_vmx()
+    carriers = {VMX: VpnCarrier(_meraki_org(), "vmx")}
+    result = reach.check(APP, BRANCH_HOST, protocol="tcp", port=443, carriers=carriers)
+    assert result["verdict"] == "allowed", result["summary"]
+    vpn = [s for s in result["steps"] if s["stage"] == "vpn"]
+    assert [s["status"] for s in vpn] == ["ok", "ok"] and vpn[0]["where"].startswith("Meraki VMX-M aws-vmx")
+    assert "10.50.1.0/24 at Branch 12 is reached over AutoVPN: aws-vmx → branch-mx" in vpn[0]["text"]
+    assert "advertises 10.200.10.21/32 into AutoVPN" in vpn[1]["text"]
+    # The reply comes back in at the vMX, which is in the application subnet.
+    back = [s["text"] for s in result["steps"] if s["direction"] == "return"]
+    assert back[0].startswith("Enters AWS at instance aws-vmx") and back[1].startswith("Same subnet")
+
+    # Opened from the branch, the same VPN is checked once and the
+    # application servers' security group decides.
+    inbound = reach.check(BRANCH_HOST, APP, protocol="tcp", port=443, carriers=carriers)
+    assert inbound["verdict"] == "allowed" and len([s for s in inbound["steps"] if s["stage"] == "vpn"]) == 2
+    assert reach.check(BRANCH_HOST, APP, protocol="tcp", port=3389, carriers=carriers)["verdict"] == "blocked"
+
+
+def test_reachability_through_a_vmx_follows_what_meraki_reports():
+    reach = _reach_with_vmx()
+
+    def verdict(org: dict, destination: str = BRANCH_HOST) -> tuple[str, str]:
+        result = reach.check(APP, destination, protocol="tcp", port=443, carriers={VMX: VpnCarrier(org, "vmx")})
+        return result["verdict"], result["summary"]
+
+    down = verdict(_meraki_org(tunnel="unreachable"))
+    assert down[0] == "blocked" and "No AutoVPN tunnel that is up joins the appliance to Branch 12" in down[1]
+    hidden = verdict(_meraki_org(branch_in_vpn="No"))
+    assert hidden[0] == "blocked" and "not advertised into the VPN at Branch 12" in hidden[1]
+    excluded = verdict(_meraki_org(hub_subnets=[["10.200.0.0/16", "No", ""]]))
+    assert excluded[0] == "blocked" and "excluded from the VPN" in excluded[1]
+    # Not advertised is not a block: a full-tunnel spoke still routes there.
+    unlisted = verdict(_meraki_org(hub_subnets=[["10.210.0.0/16", "Yes", ""]]))
+    assert unlisted[0] == "unknown" and "default route" in unlisted[1]
+    # An address no Meraki site owns is not guessed at.
+    stranger = verdict(_meraki_org(), "10.50.9.9")
+    assert stranger[0] == "unknown" and "not a subnet of a site" in stranger[1]
+
+
 # ── HTTP API ─────────────────────────────────────────────────────────────────
 
 
@@ -701,6 +877,9 @@ def test_api_aws_shares_the_map_with_meraki_and_cato(api):
     assert api.post("/api/meraki/sample?provider=cato").status_code == 201
     nodes = api.get("/api/topology").json()["nodes"]
     assert {(n.get("meraki") or {}).get("provider") for n in nodes if n.get("meraki")} == {"meraki", "cato", "aws"}
+    # The AWS check looks for virtual appliances among every snapshot.
+    check = api.get("/api/meraki/aws/reachability?source=10.200.10.21&destination=10.200.20.31&protocol=tcp&port=5432")
+    assert check.status_code == 200 and check.json()["verdict"] == "allowed"
     # The snapshot history lists stored snapshots only; AWS has none of its own.
     assert all(s["org_ref"] > 0 for s in api.get("/api/meraki/snapshots").json()["snapshots"])
 
