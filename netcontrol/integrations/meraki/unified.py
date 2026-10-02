@@ -109,6 +109,103 @@ def _global_ips(*values: Any) -> list[str]:
     return found
 
 
+def _uplink_address(wan: dict) -> str:
+    """The address a WAN uplink has on its own interface: behind a NAT it is
+    not the public address the uplink is known by."""
+    for section in wan.get("sections") or []:
+        if section.get("title") == "WAN uplink" and section.get("kind") == "kv":
+            for row in section.get("rows") or []:
+                if len(row) > 1 and row[0] == "IP":
+                    return str(row[1] or "").strip()
+    return ""
+
+
+def virtual_appliance_pairs(snapshots: list[tuple[int, dict]]) -> dict[tuple[int, str], tuple[int, str]]:
+    """Cloud instances that are a device another snapshot manages (a Meraki
+    vMX, a Cato vSocket), as ``(org_ref, instance node id) -> (org_ref,
+    device node id)``.
+
+    An instance is the device that answers on one of its public addresses
+    (its own, or that of its WAN uplink). An appliance in a private subnet
+    has none: its uplink is known by the address of the NAT in front of it.
+    It is then matched by the private address of the uplink, which repeats
+    from site to site, so only when a single forwarding instance and a single
+    uplink have the address and either the device is a virtual model or its
+    public address is that of a NAT gateway of the instance's VPC.
+    """
+    public: dict[str, tuple[int, str]] = {}
+    private: dict[str, list[dict[str, Any]]] = {}
+    for org_ref, snapshot in snapshots:
+        nodes = {n["id"]: n for n in snapshot.get("nodes") or []}
+
+        def is_device(node: dict | None) -> bool:
+            return node is not None and node["kind"] not in NON_DEVICE_KINDS and "alias_ips" not in node
+
+        for node in nodes.values():
+            if is_device(node):
+                for address in _global_ips(node.get("ip")):
+                    public.setdefault(address, (org_ref, node["id"]))
+        for edge in snapshot.get("edges") or []:
+            for wan_id, device_id in ((edge["a"], edge["b"]), (edge["b"], edge["a"])):
+                wan, device = nodes.get(wan_id), nodes.get(device_id)
+                if wan is None or wan["kind"] != "wan" or not is_device(device):
+                    continue
+                known_by = _global_ips(wan.get("ip"))
+                for address in known_by:
+                    public.setdefault(address, (org_ref, device_id))
+                inside = _uplink_address(wan)
+                if inside and not _global_ips(inside):
+                    private.setdefault(inside, []).append(
+                        {
+                            "ref": (org_ref, device_id),
+                            "public": known_by,
+                            "virtual": str(device.get("model") or "").lower().startswith("vmx"),
+                        }
+                    )
+
+    pairs: dict[tuple[int, str], tuple[int, str]] = {}
+    for org_ref, snapshot in snapshots:
+        nodes = [n for n in snapshot.get("nodes") or [] if isinstance(n, dict)]
+        instances = [n for n in nodes if "alias_ips" in n]
+        if not instances:
+            continue
+
+        def inside_addresses(node: dict) -> list[str]:
+            every = [str(a or "").strip() for a in (node.get("ip"), *(node.get("alias_ips") or []))]
+            return [a for a in dict.fromkeys(every) if a and _is_ip(a) and not _global_ips(a)]
+
+        holders: dict[str, int] = {}
+        for node in instances:
+            if node["kind"] == "appliance":
+                for address in inside_addresses(node):
+                    holders[address] = holders.get(address, 0) + 1
+        # Public addresses of the gateways (NAT) of each VPC.
+        gateways: dict[str, set[str]] = {}
+        for node in nodes:
+            if node["kind"] == "cloud":
+                gateways.setdefault(node.get("site") or "", set()).update(_global_ips(node.get("ip")))
+
+        for node in instances:
+            match: tuple[int, str] | None = None
+            for address in _global_ips(node.get("ip"), node.get("alias_ips")):
+                holder = public.get(address)
+                if holder and holder[0] != org_ref:
+                    match = holder
+                    break
+            if match is None and node["kind"] == "appliance":
+                for address in inside_addresses(node):
+                    found = [c for c in private.get(address, []) if c["ref"][0] != org_ref]
+                    if len(found) != 1 or holders.get(address) != 1:
+                        continue
+                    behind_nat = set(found[0]["public"]) & gateways.get(node.get("site") or "", set())
+                    if found[0]["virtual"] or behind_nat:
+                        match = found[0]["ref"]
+                        break
+            if match is not None and match not in pairs.values():
+                pairs[(org_ref, node["id"])] = match
+    return pairs
+
+
 def merge_meraki_into_graph(
     nodes_by_id: dict[Any, dict],
     edges: list[dict],
@@ -129,13 +226,25 @@ def merge_meraki_into_graph(
 
     Snapshots of different integrations are stitched together by public
     address: the device that answers on an address (its own, or that of its
-    WAN uplink) is the far end of any VPN peer configured with that address,
-    and is the cloud instance that holds it.
+    WAN uplink) is the far end of any VPN peer configured with that address.
+    A cloud instance that is a device of another snapshot becomes that device
+    (``virtual_appliance_pairs``).
     """
     y_cursor = 0.0
     # Public address -> graph node that answers on it. First claim wins.
     claims: dict[str, Any] = {}
     plans: list[dict[str, Any]] = []
+    virtual = virtual_appliance_pairs(snapshots)
+
+    def claim(plan: dict, node: dict, graph_id: Any) -> None:
+        for address in _global_ips(node.get("ip"), node.get("alias_ips")):
+            claims.setdefault(address, graph_id)
+        # Addresses a gateway terminates tunnels on: whoever already
+        # answers on one is the far end of that tunnel.
+        for address in _global_ips(node.get("endpoint_ips")):
+            holder = claims.setdefault(address, graph_id)
+            if holder != graph_id:
+                plan["links"].append((holder, graph_id, node["id"], address))
 
     def new_node(ref: dict, node: dict, provider: str, x: float, y: float) -> Any:
         # A neighbor nothing else knows stays per site: names such as
@@ -188,6 +297,7 @@ def merge_meraki_into_graph(
             "provider": provider,
             "id_map": {},
             "peers": [],
+            "instances": [],
             "links": [],
         }
         plans.append(plan)
@@ -220,26 +330,17 @@ def merge_meraki_into_graph(
             if target is None and node["kind"] == "external":
                 existing = resolve_external(_name_or_blank(node.get("label") or ""), node.get("ip") or "")
                 target = nodes_by_id.get(existing) if existing is not None else None
-            if target is None:
-                # A cloud instance is the device another integration already
-                # shows on one of its public addresses (a virtual appliance).
-                for address in _global_ips(node.get("alias_ips")):
-                    target = nodes_by_id.get(claims.get(address))
-                    if target is not None:
-                        break
+            if target is None and (org_ref, node["id"]) in virtual:
+                # A cloud instance that is a device of another snapshot (a
+                # virtual appliance) waits until that device is on the map.
+                plan["instances"].append((node, ref, x, y))
+                continue
             graph_id = collapse(target, ref, x, y) if target is not None else new_node(ref, node, provider, x, y)
             id_map[node["id"]] = graph_id
 
             if node["kind"] in ("external", "wan"):
                 continue  # a WAN stub's address belongs to the device behind it
-            for address in _global_ips(node.get("ip"), node.get("alias_ips")):
-                claims.setdefault(address, graph_id)
-            # Addresses a gateway terminates tunnels on: whoever already
-            # answers on one is the far end of that tunnel.
-            for address in _global_ips(node.get("endpoint_ips")):
-                holder = claims.setdefault(address, graph_id)
-                if holder != graph_id:
-                    plan["links"].append((holder, graph_id, node["id"], address))
+            claim(plan, node, graph_id)
 
         wan_ids = {n["id"] for n in snap_nodes if n["kind"] == "wan"}
         wan_ips = {n["id"]: n.get("ip") for n in snap_nodes if n["kind"] == "wan"}
@@ -249,6 +350,18 @@ def merge_meraki_into_graph(
                     for address in _global_ips(wan_ips[wan]):
                         claims.setdefault(address, id_map[device])
         y_cursor += (max_y - min_y) + MERAKI_ORG_GAP
+
+    # Virtual appliances: the instance is the device that manages it.
+    device_ids = {plan["org_ref"]: plan["id_map"] for plan in plans}
+    for plan in plans:
+        for node, ref, x, y in plan["instances"]:
+            other_ref, other_id = virtual[(plan["org_ref"], node["id"])]
+            target = nodes_by_id.get(device_ids.get(other_ref, {}).get(other_id))
+            graph_id = (
+                collapse(target, ref, x, y) if target is not None else new_node(ref, node, plan["provider"], x, y)
+            )
+            plan["id_map"][node["id"]] = graph_id
+            claim(plan, node, graph_id)
 
     # Pass 2: VPN peers. One whose address a device on the map answers on is
     # that device; the rest stay as peers (shared when two snapshots name the

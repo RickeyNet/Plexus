@@ -69,7 +69,9 @@ from netcontrol.integrations.meraki.unified import (
     graph_to_snapshot,
     node_details,
     search_index,
+    virtual_appliance_pairs,
 )
+from netcontrol.integrations.meraki.vpn_reach import VpnCarrier
 from netcontrol.routes import background_jobs
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.telemetry import configure_logging, redact_value
@@ -726,14 +728,23 @@ async def aws_reachability_api(
     ``destination`` (IP addresses or networks) and its replies: VPC and
     transit gateway route tables, VPC peerings, network ACLs and security
     groups of the latest discovery. ``*_vpc`` names the VPC of an address
-    whose range exists in several."""
-    try:
-        entry = await _aws_entry()
-    except Exception as exc:  # noqa: BLE001 - cloud data must not break the page
-        LOGGER.warning("aws: reachability check skipped: %s", type(exc).__name__, exc_info=True)
-        entry = None
+    whose range exists in several. A route to an instance that is a Meraki
+    vMX is followed on through that appliance's VPN."""
+    entries = dict(await _latest_entries())
+    entry = entries.get(AWS_ORG_REF)
     if entry is None:
         return {"applies": False, "verdict": "unknown", "summary": "No AWS account has been discovered.", "steps": []}
+    # Instances that are an appliance of a Meraki organization on the map.
+    carriers: dict[str, VpnCarrier] = {}
+    pairs = virtual_appliance_pairs([(ref, item["snapshot"]) for ref, item in entries.items()])
+    for (cloud_ref, instance), (org_ref, node_id) in pairs.items():
+        device = entries[org_ref]
+        if cloud_ref != AWS_ORG_REF or str(device["snapshot"].get("provider") or PROVIDER_MERAKI) != PROVIDER_MERAKI:
+            continue
+        if device.get("subnets") is None:
+            device["subnets"] = await asyncio.to_thread(subnet_index, device["snapshot"])
+        # An AWS instance node is ``i:<instance id>``.
+        carriers[instance.removeprefix("i:")] = VpnCarrier(device["snapshot"], node_id, device["subnets"])
     try:
         return entry["reachability"].check(
             source,
@@ -742,6 +753,7 @@ async def aws_reachability_api(
             destination_vpc=destination_vpc,
             protocol=protocol,
             port=port,
+            carriers=carriers,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
