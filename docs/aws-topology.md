@@ -60,14 +60,20 @@ across accounts.
 
 ### Permissions
 
-Discovery only calls `Describe*` operations. The AWS-managed policies
-**AmazonEC2ReadOnlyAccess** and **AWSDirectConnectReadOnlyAccess** cover all
-of them. For a custom policy:
+Discovery is read-only: it calls `Describe*` operations and one search
+(`ec2:SearchTransitGatewayRoutes`). The AWS-managed policies
+**AmazonEC2ReadOnlyAccess** and **AWSDirectConnectReadOnlyAccess** cover the
+`Describe*` calls. For a custom policy:
 
 | Needed | Actions |
 |---|---|
 | Always (discovery fails without them) | `ec2:DescribeVpcs`, `ec2:DescribeInternetGateways`, `ec2:DescribeNatGateways`, `ec2:DescribeSecurityGroups`, `ec2:DescribeTransitGateways`, `ec2:DescribeTransitGatewayAttachments`, `ec2:DescribeVpcPeeringConnections`, `ec2:DescribeVpnGateways`, `ec2:DescribeRouteTables`, `ec2:DescribeVpnConnections`, `directconnect:DescribeConnections` |
 | For the map (skipped when denied) | `ec2:DescribeSubnets`, `ec2:DescribeInstances`, `ec2:DescribeCustomerGateways`, `directconnect:DescribeVirtualInterfaces`, `directconnect:DescribeDirectConnectGateways`, `directconnect:DescribeDirectConnectGatewayAssociations` |
+| For the Path Mode check (skipped when denied) | `ec2:DescribeNetworkAcls`, `ec2:DescribeTransitGatewayRouteTables`, `ec2:SearchTransitGatewayRoutes` |
+
+`ec2:SearchTransitGatewayRoutes` is not a `Describe*` action. Check that the
+policy in use grants it; without it the transit gateway part of a path check
+reports *not collected*.
 
 A map section that AWS denies is skipped, not fatal: discovery still
 succeeds, the map is built without that detail, and the skipped section is
@@ -128,13 +134,14 @@ Click a VPC for its tabs:
 
 - **Device**: the VPC overview and the list of instances
 - **VLANs**: the subnets (CIDR, name, availability zone, route table, where
-  the default route goes, free addresses)
+  the default route goes, free addresses, network ACL)
 - **Routing**: every route of every route table of the VPC
-- **Firewall**: the security group rules
+- **Firewall**: the security group rules and the network ACL rules
 
 A transit or virtual private gateway lists its attachments and VPN
 connections (tunnel addresses, tunnel status, routing, static routes); a
-forwarding instance lists its network interfaces.
+transit gateway also lists the routes of its route tables under **Routing**.
+A forwarding instance lists its network interfaces.
 
 ### Search and Path Mode
 
@@ -147,10 +154,62 @@ site; typing an IP address picks the subnet that contains it. A path between
 two VPCs runs over their transit gateway or peering, and a path to a site
 runs over the VPN or virtual appliance that joins it to AWS.
 
-Path Mode follows the links on the map, not route tables. It shows how two
-places *can* reach each other; it does not check that the VPC route tables,
-transit gateway route tables or security groups actually allow it. The
-VPC's route tables are in its details for that check.
+The path drawn on the map follows links, not route tables: it shows how two
+places *can* be joined. Whether AWS actually carries and permits the traffic
+is checked separately, below the path.
+
+### The AWS check of a path
+
+When both ends of a path are subnets or IP addresses and at least one is in
+a VPC, Plexus checks the flow against what discovery collected and reports
+**AWS allows it**, **AWS blocks it**, **AWS allows part of it** or **AWS
+check incomplete**, with the reason. Open the line for every step, in both
+directions.
+
+- **Direction and traffic.** The first of the two picks is the source. The
+  **Traffic** box next to the subnet box takes `tcp/443`, `udp/53`, `443`
+  (TCP), `icmp`, or nothing for any traffic. With nothing typed, rules that
+  open only some ports give *allows part of it*.
+- **Route tables.** The route table of the source subnet (its own, else the
+  VPC's main one) is matched longest prefix first, and the reply is routed
+  the same way from the other end. A missing route, a blackhole route, a
+  route out of AWS for an address that is in a VPC, and a private address
+  sent to an internet or NAT gateway are blocks.
+- **VPC peerings.** The peering must be active and lead to the VPC that
+  holds the address; a peering carries nothing beyond its two VPCs.
+- **Transit gateways.** The route table associated with the attachment the
+  traffic arrives on decides where it goes: to a VPC, out over a VPN (not
+  when every tunnel is down) or Direct Connect, or on to a peered transit
+  gateway that was also collected.
+- **Network ACLs.** They are stateless, so the request and the reply are
+  matched against the ACL of each subnet, rule by rule in number order, the
+  reply on ports 1024-65535. Two ends in one subnet pass no ACL.
+- **Security groups.** They belong to an instance. They are checked when an
+  end is typed as the **IP address of a collected instance** (any instance,
+  not only those drawn on the map): outbound at the source, inbound at the
+  destination, including rules that name another security group. For a
+  whole subnet they are not checked and the result says so.
+- **An end outside AWS** (a branch subnet, an internet address) is followed
+  to the gateway it leaves by, and back in through the same gateway. A NAT
+  gateway accepts no connection from outside; an internet gateway only for
+  an instance with a public address.
+
+The check never reports as allowed what it could not look at. *Check
+incomplete* means one of:
+
+- the discovery predates this check, or the account may not read network
+  ACLs or transit gateway route tables: run **Discover** again
+- the route hands the traffic to a firewall or router instance, or to a
+  gateway load balancer endpoint. What that appliance does with it is its
+  own configuration, which AWS does not describe
+- the transit gateway hands the traffic to a VPC that does not hold the
+  address (an inspection or egress VPC); it is not followed further
+- a route or rule refers to a prefix list, whose entries are not collected
+
+Limits: only IPv4 can be typed in Path Mode. ICMP types are not told apart.
+The ACLs of subnets the traffic only passes through (transit gateway
+attachment and NAT gateway subnets) are not matched. The HTML export does
+not include the check.
 
 ## What is collected
 
@@ -161,11 +220,13 @@ VPC's route tables are in its details for that check.
 | Route tables with their routes | `DescribeRouteTables` |
 | Site-to-site VPN connections and tunnel status | `DescribeVpnConnections` |
 | Subnets | `DescribeSubnets` |
+| Network ACLs | `DescribeNetworkAcls` |
+| Transit gateway route tables with their active and blackhole routes (up to 1000 per table) and the table each attachment is associated with | `DescribeTransitGatewayRouteTables`, `SearchTransitGatewayRoutes`, `DescribeTransitGatewayAttachments` |
 | Instances and their network interfaces | `DescribeInstances` |
 | Customer gateways | `DescribeCustomerGateways` |
 | Direct Connect connections, virtual interfaces, gateways | `DescribeConnections`, `DescribeVirtualInterfaces`, `DescribeDirectConnectGateways`, `DescribeDirectConnectGatewayAssociations` |
 
-Not collected: transit gateway route tables, network ACLs, load balancers,
+Not collected: prefix lists, load balancers,
 VPC endpoints, Client VPN endpoints, and the on-premises router behind a
 Direct Connect (a Direct Connect is the edge of the map). The subnets also
 appear in IPAM's cloud CIDR view.
@@ -179,4 +240,5 @@ appear in IPAM's cloud CIDR view.
 | `POST` | `/api/meraki/sample?provider=aws` | Add / refresh the demo AWS account |
 | `GET` | `/api/topology` | AWS nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `aws` and whose `org_ref` is `-1` (all AWS accounts share one reference) |
 | `GET` | `/api/meraki/nodes?org_ref=-1&node_id=…` | Detail sections of one AWS node |
-| `GET` | `/api/meraki/subnets` | Includes the subnets of every VPC |
+| `GET` | `/api/meraki/subnets` | Includes the subnets of every VPC (`provider: "aws"`, `site_id` is the VPC ID) |
+| `GET` | `/api/meraki/aws/reachability?source=&destination=` | The AWS check of a flow. `source` / `destination` are IP addresses or networks; optional `protocol` (`tcp`, `udp`, `icmp`), `port`, and `source_vpc` / `destination_vpc` for a range that exists in several VPCs. Returns `applies`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary` and `steps` |

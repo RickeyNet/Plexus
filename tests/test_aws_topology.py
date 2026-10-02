@@ -5,6 +5,8 @@ Covers the pipeline with no AWS access:
   * normalize   - VPC sites, gateways, forwarding instances, VPNs, the report
   * subnets     - VPC subnets are owned by the VPC's router
   * unified     - snapshots of different integrations joined by public address
+  * reachability - route tables, transit gateway route tables, peerings,
+                  network ACLs and security groups decide a flow
   * HTTP API    - a discovered AWS account on /api/topology, node details,
                   subnets, deep search, HTML export
 """
@@ -19,6 +21,7 @@ import pytest
 import routes.database as db_module
 from netcontrol.integrations.aws import collect
 from netcontrol.integrations.aws.normalize import TRANSIT_SITE_ID, build_snapshot
+from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample
 from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.integrations.meraki.subnets import subnet_index
@@ -105,6 +108,63 @@ def test_route_table_detail_names_targets():
     ]
 
 
+def test_network_acl_resource_names_protocols_and_orders_rules():
+    acl = {
+        "NetworkAclId": "acl-1",
+        "VpcId": "vpc-1",
+        "IsDefault": False,
+        "Associations": [{"SubnetId": "subnet-1"}],
+        "Entries": [
+            {"RuleNumber": 32767, "Egress": False, "RuleAction": "deny", "Protocol": "-1", "CidrBlock": "0.0.0.0/0"},
+            {
+                "RuleNumber": 100,
+                "Egress": False,
+                "RuleAction": "allow",
+                "Protocol": "6",
+                "CidrBlock": "10.0.0.0/8",
+                "PortRange": {"From": 443, "To": 443},
+            },
+            {"RuleNumber": 100, "Egress": True, "RuleAction": "allow", "Protocol": "-1", "CidrBlock": "0.0.0.0/0"},
+        ],
+    }
+    resource = collect.network_acl_resource(acl, "us-east-1")
+    meta = resource["metadata"]
+    assert resource["resource_uid"] == "aws:network_acl:acl-1" and meta["subnet_ids"] == ["subnet-1"]
+    assert [(e["egress"], e["rule_number"], e["protocol"]) for e in meta["entries"]] == [
+        (False, 100, "tcp"),
+        (False, 32767, "all"),
+        (True, 100, "all"),
+    ]
+    assert meta["entries"][0]["port_from"] == 443 and meta["entries"][1]["port_from"] is None
+
+
+def test_transit_gateway_route_table_resource_keeps_where_each_route_goes():
+    routes = [
+        {
+            "DestinationCidrBlock": "10.1.0.0/16",
+            "State": "active",
+            "Type": "propagated",
+            "TransitGatewayAttachments": [
+                {"TransitGatewayAttachmentId": "tgw-attach-1", "ResourceType": "vpc", "ResourceId": "vpc-1"}
+            ],
+        },
+        {"DestinationCidrBlock": "10.9.0.0/16", "State": "blackhole", "Type": "static"},
+    ]
+    table = {"TransitGatewayRouteTableId": "tgw-rtb-1", "TransitGatewayId": "tgw-1", "State": "available"}
+    resource = collect.transit_gateway_route_table_resource(table, routes, True, "us-east-1")
+    meta = resource["metadata"]
+    assert resource["resource_type"] == "transit_gateway_route_table" and meta["transit_gateway_id"] == "tgw-1"
+    assert meta["truncated"] is True and meta["routes"][1] == {
+        "destination": "10.9.0.0/16",
+        "state": "blackhole",
+        "type": "static",
+        "attachments": [],
+    }
+    assert meta["routes"][0]["attachments"] == [
+        {"attachment_id": "tgw-attach-1", "resource_type": "vpc", "resource_id": "vpc-1"}
+    ]
+
+
 class _Denied(Exception):
     response = {"Error": {"Code": "UnauthorizedOperation", "Message": "not authorized: arn:aws:iam::1:user/x"}}
 
@@ -121,6 +181,16 @@ class _FakeEc2:
 
     def describe_customer_gateways(self):
         return {"CustomerGateways": [{"CustomerGatewayId": "cgw-1", "IpAddress": "52.5.5.5", "State": "available"}]}
+
+    def describe_network_acls(self):
+        return {"NetworkAcls": [{"NetworkAclId": "acl-1", "VpcId": "vpc-1", "Entries": []}]}
+
+    def describe_transit_gateway_route_tables(self):
+        return {"TransitGatewayRouteTables": [{"TransitGatewayRouteTableId": "tgw-rtb-1", "TransitGatewayId": "tgw-1"}]}
+
+    def search_transit_gateway_routes(self, TransitGatewayRouteTableId, Filters, MaxResults):
+        assert TransitGatewayRouteTableId == "tgw-rtb-1" and Filters[0]["Values"] == ["active", "blackhole"]
+        return {"Routes": [{"DestinationCidrBlock": "10.1.0.0/16", "State": "active"}]}
 
 
 class _FakeDx:
@@ -157,7 +227,15 @@ def test_map_detail_skips_a_section_it_may_not_read():
     connections: list[dict] = []
     collectors_module._collect_aws_map_detail(_FakeSession(), _FakeEc2(), "us-east-1", None, resources, connections)
     by_type = {r["resource_type"]: r for r in resources}
-    assert set(by_type) == {"subnet", "customer_gateway", "direct_connect_gateway", collect.WARNING_TYPE}
+    assert set(by_type) == {
+        "subnet",
+        "customer_gateway",
+        "direct_connect_gateway",
+        "network_acl",
+        "transit_gateway_route_table",
+        collect.WARNING_TYPE,
+    }
+    assert by_type["transit_gateway_route_table"]["metadata"]["routes"][0]["destination"] == "10.1.0.0/16"
     warning = by_type[collect.WARNING_TYPE]
     # The AWS error code is kept; the message (which names the caller) is not.
     assert warning["metadata"] == {"section": "instances", "error": "UnauthorizedOperation"}
@@ -245,6 +323,18 @@ def test_snapshot_subnets_name_their_default_route(snapshot):
     assert rows["edge-outside-a"][4:6] == ["edge-outside", "Internet gateway"]
     # The inside subnets leave through the firewall's interface.
     assert rows["edge-inside-a"][4:6] == ["edge-inside", "Appliance interface"]
+
+
+def test_snapshot_lists_network_acls_and_transit_gateway_routes(snapshot):
+    core = next(s for s in snapshot["sites"] if s["id"] == "vpc-0c0re00001")
+    rows = {r[1]: r for r in _section(core, "Subnets")["rows"]}
+    assert rows["core-db-a"][7] == "core-db" and rows["core-app-a"][7] == "core-default"
+    acl = [r for r in _section(core, "Network ACL rules")["rows"] if r[0] == "core-db"]
+    assert acl[0][1:7] == ["inbound", "100", "allow", "tcp", "5432", "10.200.0.0/16"]
+    # The rule that ends every ACL is shown the way the AWS console shows it.
+    assert ["inbound", "*", "deny"] in [r[1:4] for r in acl]
+    routes = _section(_node(snapshot, "tgw:tgw-0910ba100001"), "Transit gateway routes")["rows"]
+    assert ["global-main", "10.10.0.0/16", "tgw-attach-0d4c0", "vpn-0d4c0001", "active", "propagated"] in routes
 
 
 def test_subnet_index_places_subnets_on_the_vpc_router(snapshot):
@@ -390,6 +480,135 @@ def test_merge_joins_a_vpn_seen_from_both_ends():
     assert {e["protocol"] for e in edges} == {"vpn-ipsec", "vpn"}
 
 
+# ── Reachability: what AWS does with a flow ─────────────────────────────────
+
+APP, DB, FIREWALL = "10.200.10.21", "10.200.20.31", "10.210.1.11"
+
+
+@pytest.fixture(scope="module")
+def reach() -> Reachability:
+    return Reachability(*_records())
+
+
+def _blocked_at(result: dict) -> list[str]:
+    return [f"{s['direction']} {s['stage']}" for s in result["steps"] if s["status"] == "blocked"]
+
+
+def test_reachability_allows_what_routes_acls_and_groups_all_allow(reach):
+    result = reach.check(APP, DB, protocol="tcp", port=5432)
+    assert result["verdict"] == "allowed" and result["traffic"] == "tcp/5432"
+    assert {s["status"] for s in result["steps"]} == {"ok"}
+    # Both directions are routed, both ACLs are matched both ways, and the
+    # stateful security groups once.
+    assert [(s["direction"], s["stage"]) for s in result["steps"]] == [
+        ("forward", "route"),
+        ("forward", "acl"),
+        ("forward", "acl"),
+        ("forward", "security_group"),
+        ("forward", "security_group"),
+        ("return", "route"),
+        ("return", "acl"),
+        ("return", "acl"),
+    ]
+    # The database's group names the application servers' group, not a CIDR.
+    assert "sg:sg-0c0re0a1" in result["steps"][4]["text"]
+
+
+def test_reachability_blocks_a_port_the_acl_and_group_do_not_open(reach):
+    result = reach.check(APP, DB, protocol="tcp", port=22)
+    assert result["verdict"] == "blocked"
+    assert _blocked_at(result) == ["forward acl", "forward security_group"]
+    assert "core-db" in result["summary"] and "final deny" in result["summary"]
+
+
+def test_reachability_of_any_traffic_is_partial_when_only_some_ports_are_open(reach):
+    result = reach.check("10.200.10.0/24", "10.200.20.0/24")
+    assert result["verdict"] == "partial" and result["traffic"] == "any traffic"
+    partial = next(s for s in result["steps"] if s["status"] == "partial")
+    assert "rule 100, rule 120 allow part of it" in partial["text"]
+    # Whole subnets have no security groups to check, and the result says so.
+    assert [s["stage"] for s in result["steps"] if s["status"] == "info"] == ["security_group", "security_group"]
+
+
+def test_reachability_follows_the_transit_gateway_route_table_both_ways(reach):
+    result = reach.check(APP, FIREWALL, protocol="tcp", port=443)
+    assert result["verdict"] == "allowed"
+    transit = [s["text"] for s in result["steps"] if s["stage"] == "transit"]
+    assert "10.210.0.0/16 via attachment tgw-attach-0ed9e" in transit[0]
+    assert "10.200.0.0/16 via attachment tgw-attach-0c0re" in transit[1]
+    blackhole = reach.check(APP, "10.99.1.1")
+    assert blackhole["verdict"] == "blocked" and "blackhole" in blackhole["summary"]
+
+
+def test_reachability_leaves_and_enters_aws_over_the_vpn(reach):
+    out = reach.check("10.200.10.0/24", "10.10.5.0/24")
+    assert out["verdict"] == "allowed" and out["destination"]["in_aws"] is False
+    assert any("leaves AWS over VPN hq-datacenter-vpn" in s["text"] for s in out["steps"])
+    # From the datacenter the route and the ACL let the flow in; the
+    # database's security group does not know the address.
+    inbound = reach.check("10.10.5.9", DB, protocol="tcp", port=5432)
+    assert inbound["verdict"] == "blocked" and _blocked_at(inbound) == ["forward security_group"]
+    assert inbound["steps"][0]["text"].startswith("Enters AWS over VPN")
+
+
+def test_reachability_stops_when_every_tunnel_of_the_vpn_is_down():
+    resources, connections = _records()
+    vpn = next(r for r in resources if r["resource_type"] == "vpn_connection")
+    for tunnel in vpn["metadata"]["tunnels"]:
+        tunnel["status"] = "DOWN"
+    result = Reachability(resources, connections).check("10.200.10.0/24", "10.10.5.0/24")
+    assert result["verdict"] == "blocked" and "every tunnel of that VPN is down" in result["summary"]
+
+
+def test_reachability_uses_a_peering_only_between_its_two_vpcs(reach):
+    assert reach.check("10.200.11.0/24", "10.220.1.0/24", protocol="icmp")["verdict"] == "allowed"
+    # The edge VPC has no peering with apps-west: its 10.0.0.0/8 route sends
+    # the traffic to the transit gateway, whose only route for it is the
+    # default one back into the edge VPC.
+    result = reach.check("10.210.2.20", "10.220.1.10")
+    assert result["verdict"] != "allowed"
+
+
+def test_reachability_through_gateways_to_the_internet(reach):
+    assert reach.check(APP, "8.8.8.8", protocol="tcp", port=443)["verdict"] == "allowed"
+    # A NAT gateway takes no connection from outside; an internet gateway
+    # does, for an instance that has a public address.
+    assert reach.check("8.8.8.8", APP, protocol="tcp", port=443)["verdict"] == "blocked"
+    assert reach.check("8.8.8.8", "10.210.0.11", protocol="tcp", port=443)["verdict"] == "allowed"
+    # A route to a firewall's interface ends what AWS can tell.
+    appliance = reach.check("10.210.1.0/24", "8.8.8.8")
+    assert appliance["verdict"] == "unknown" and "ftdv-ravpn-1" in appliance["summary"]
+
+
+def test_reachability_does_not_guess_what_was_not_collected():
+    resources, connections = _records()
+    kept = [r for r in resources if r["resource_type"] not in ("network_acl", "transit_gateway_route_table")]
+    old = Reachability(kept, connections)
+    acl = old.check(APP, DB, protocol="tcp", port=5432)
+    assert acl["verdict"] == "unknown" and "ec2:DescribeNetworkAcls" in acl["summary"]
+    transit = old.check(APP, FIREWALL, protocol="tcp", port=443)
+    assert any(s["stage"] == "transit" and s["status"] == "unknown" for s in transit["steps"])
+
+
+def test_reachability_needs_the_vpc_of_a_range_that_exists_twice():
+    resources, connections = _records()
+    twin = {"resource_uid": "aws:vpc:vpc-twin", "resource_type": "vpc", "name": "twin", "cidr": "10.200.0.0/16"}
+    subnet = {
+        "resource_uid": "aws:subnet:subnet-twin",
+        "resource_type": "subnet",
+        "cidr": "10.200.10.0/24",
+        "metadata": {"vpc_id": "vpc-twin"},
+    }
+    reach = Reachability([*resources, twin, subnet], connections)
+    vague = reach.check(APP, DB)
+    assert vague["verdict"] == "unknown" and "several VPCs" in vague["summary"] and vague["steps"] == []
+    assert reach.check(APP, DB, source_vpc="vpc-0c0re00001", protocol="tcp", port=5432)["verdict"] == "allowed"
+    with pytest.raises(ValueError):
+        reach.check("not-an-address", DB)
+    with pytest.raises(ValueError):
+        reach.check(APP, DB, protocol="gre")
+
+
 # ── HTTP API ─────────────────────────────────────────────────────────────────
 
 
@@ -455,6 +674,14 @@ def test_api_discovered_aws_account_is_on_the_topology(api):
     subnets = api.get("/api/meraki/subnets").json()["subnets"]
     db_subnet = next(s for s in subnets if s["cidr"] == "10.200.20.0/24")
     assert db_subnet["org_ref"] == org_ref and db_subnet["node_id"] == "vpc:vpc-0c0re00001"
+    assert db_subnet["provider"] == "aws" and db_subnet["site_id"] == "vpc-0c0re00001"
+
+    check = "/api/meraki/aws/reachability?source=10.200.10.21&destination=10.200.20.31&protocol=tcp"
+    allowed = api.get(f"{check}&port=5432&source_vpc=vpc-0c0re00001").json()
+    assert allowed["applies"] and allowed["verdict"] == "allowed" and allowed["traffic"] == "tcp/5432"
+    assert api.get(f"{check}&port=22").json()["verdict"] == "blocked"
+    assert api.get("/api/meraki/aws/reachability?source=nope&destination=10.200.20.31").status_code == 400
+    assert api.get("/api/meraki/aws/reachability?source=192.0.2.1&destination=192.0.2.2").json()["applies"] is False
 
     hits = api.get("/api/topology/search/deep?q=fmc-01").json()["results"]
     assert [(h["org_ref"], h["node_id"]) for h in hits] == [(org_ref, "vpc:vpc-0ed9e00002")]

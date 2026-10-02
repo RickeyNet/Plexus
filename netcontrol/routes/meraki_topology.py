@@ -35,6 +35,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from netcontrol.integrations.aws.normalize import build_snapshot as build_aws_snapshot
+from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
 from netcontrol.integrations.cato.client import (
     DEFAULT_BASE_URL as CATO_BASE_URL,
@@ -129,7 +130,13 @@ async def _aws_entry() -> dict[str, Any] | None:
         inventory = await load_inventory_index()
         # Layout of a large account is CPU-bound; keep it off the event loop.
         snapshot = await asyncio.to_thread(build_aws_snapshot, accounts, resources, connections, inventory)
-        entry = _SNAPSHOT_CACHE[AWS_ORG_REF] = {"snapshot": snapshot, "index": None, "signature": signature}
+        entry = _SNAPSHOT_CACHE[AWS_ORG_REF] = {
+            "snapshot": snapshot,
+            "index": None,
+            "signature": signature,
+            # Route tables, ACLs and security groups, for the Path Mode check.
+            "reachability": Reachability(resources, connections),
+        }
     return entry
 
 
@@ -701,8 +708,43 @@ async def list_meraki_subnets_api():
     for org_ref, entry in await _latest_entries():
         if entry.get("subnets") is None:
             entry["subnets"] = await asyncio.to_thread(subnet_index, entry["snapshot"])
-        subnets.extend({"org_ref": org_ref, **subnet} for subnet in entry["subnets"])
+        provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
+        subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in entry["subnets"])
     return {"subnets": subnets}
+
+
+@router.get("/api/meraki/aws/reachability")
+async def aws_reachability_api(
+    source: str = Query(min_length=1, max_length=64),
+    destination: str = Query(min_length=1, max_length=64),
+    source_vpc: str = Query(default="", max_length=64),
+    destination_vpc: str = Query(default="", max_length=64),
+    protocol: str = Query(default="", max_length=8),
+    port: int | None = Query(default=None, ge=0, le=65535),
+):
+    """Whether AWS carries and permits traffic from ``source`` to
+    ``destination`` (IP addresses or networks) and its replies: VPC and
+    transit gateway route tables, VPC peerings, network ACLs and security
+    groups of the latest discovery. ``*_vpc`` names the VPC of an address
+    whose range exists in several."""
+    try:
+        entry = await _aws_entry()
+    except Exception as exc:  # noqa: BLE001 - cloud data must not break the page
+        LOGGER.warning("aws: reachability check skipped: %s", type(exc).__name__, exc_info=True)
+        entry = None
+    if entry is None:
+        return {"applies": False, "verdict": "unknown", "summary": "No AWS account has been discovered.", "steps": []}
+    try:
+        return entry["reachability"].check(
+            source,
+            destination,
+            source_vpc=source_vpc,
+            destination_vpc=destination_vpc,
+            protocol=protocol,
+            port=port,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/api/topology/search/deep")
