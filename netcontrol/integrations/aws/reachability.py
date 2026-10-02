@@ -23,6 +23,13 @@ An end that is not in a collected VPC (a branch subnet, an internet address)
 is outside AWS: its traffic is followed to the gateway it leaves through,
 and back in through the same gateway.
 
+A route to an instance normally ends what AWS can tell. When the instance is
+a virtual appliance another integration manages (a Meraki vMX), ``check``
+takes a *carrier* for it: an object with a ``name`` and a
+``carry(inside, outside)`` that says, as ``(status, where, text)`` steps,
+whether the appliance's VPN carries traffic between an address in AWS and
+one outside. The walk then goes on through the appliance.
+
 A step is ``ok``, ``blocked``, ``partial`` (only some of the traffic asked
 about is allowed), ``unknown`` (not collected, or handed to something AWS
 does not describe, such as a firewall instance) or ``info``. Nothing is
@@ -276,9 +283,12 @@ class Reachability:
 
     # ── Routing ────────────────────────────────────────────────────────────
 
-    def _walk(self, origin: dict, target: dict, direction: str, steps: list[dict]) -> dict:
+    def _walk(
+        self, origin: dict, target: dict, direction: str, steps: list[dict], carriers: dict[str, Any] | None = None
+    ) -> dict:
         """Follow ``target``'s address from ``origin``'s subnet. Returns how it
-        ended: ``delivered``, ``exit`` (left AWS, with the gateway) or ``stop``."""
+        ended: ``delivered``, ``exit`` (left AWS, with the gateway) or ``stop``.
+        ``carriers`` maps an instance id to the carrier of that appliance."""
 
         def step(status: str, stage: str, where: str, text: str) -> None:
             steps.append({"direction": direction, "stage": stage, "status": status, "where": where, "text": text})
@@ -385,6 +395,20 @@ class Reachability:
         if hop.startswith(("eni-", "i-")):
             appliance = self._interface_owner.get(hop) or self._by_type.get("instance", {}).get(hop)
             name = self._instance_name(appliance) if appliance else hop
+            carrier = (carriers or {}).get(appliance["rid"]) if appliance else None
+            if carrier is not None and not in_aws:
+                step(OK, "route", where, f"{via} hands it to {name}, which is {carrier.name}.")
+                carried = True
+                for status, at, text in carrier.carry(origin["net"], net):
+                    step(status, "vpn", at, text)
+                    carried = carried and status == OK
+                if not carried:
+                    return {"kind": "stop"}
+                interfaces = [i for i in appliance["meta"].get("interfaces") or [] if isinstance(i, dict)]
+                held = next((i.get("private_ips") or [] for i in interfaces if _text(i.get("id")) == hop), [])
+                address = _text(held[0]) if held else _text(appliance["meta"].get("private_ip"))
+                gateway = {"kind": "appliance", "instance": appliance, "address": address, "name": carrier.name}
+                return {"kind": "exit", "exit": gateway}
             step(
                 UNKNOWN,
                 "route",
@@ -509,6 +533,15 @@ class Reachability:
             )
             return
         gateway = left["exit"]
+        if gateway["kind"] == "appliance":
+            instance = gateway["instance"]
+            origin = self.locate(gateway["address"], _text(instance["meta"].get("vpc_id")))
+            if origin["subnet"] is None:
+                step(UNKNOWN, gateway["name"], f"The subnet of {self._instance_name(instance)} was not collected.")
+                return
+            step(OK, gateway["name"], f"Enters AWS at {self._instance_name(instance)} in {origin['label']}.")
+            self._walk(origin, target, direction, steps)
+            return
         vpc = self._vpc_name(target["vpc_id"])
         if gateway["kind"] == "tgw":
             if gateway["attachment"] is None:
@@ -722,9 +755,11 @@ class Reachability:
         destination_vpc: str = "",
         protocol: str = "",
         port: int | None = None,
+        carriers: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Whether ``source`` can open ``protocol``/``port`` to ``destination``
-        and get the reply. ``protocol`` ``""`` asks about any traffic."""
+        and get the reply. ``protocol`` ``""`` asks about any traffic.
+        ``carriers`` maps an instance id to the carrier of that appliance."""
         protocol = _text(protocol).lower()
         protocol = "" if protocol in ("any", "all") else protocol
         if protocol and protocol not in PROTOCOLS:
@@ -756,13 +791,13 @@ class Reachability:
         forward: list[dict] = []
         back: list[dict] = []
         if src["subnet"] is not None:
-            left = self._walk(src, dst, FORWARD, forward)
+            left = self._walk(src, dst, FORWARD, forward, carriers)
             if dst["subnet"] is not None:
-                self._walk(dst, src, RETURN, back)
+                self._walk(dst, src, RETURN, back, carriers)
             else:
                 self._enter(left, src, RETURN, False, back)
         else:
-            left = self._walk(dst, src, RETURN, back)
+            left = self._walk(dst, src, RETURN, back, carriers)
             self._enter(left, dst, FORWARD, True, forward)
 
         # A network ACL guards the edge of a subnet: not traffic inside one.

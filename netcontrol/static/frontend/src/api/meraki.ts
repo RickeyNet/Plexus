@@ -190,7 +190,8 @@ export type ReachabilityStatus = 'ok' | 'blocked' | 'partial' | 'unknown' | 'inf
 
 export interface ReachabilityStep {
   direction: 'forward' | 'return';
-  stage: 'route' | 'transit' | 'acl' | 'security_group';
+  /** 'vpn' is the VPN of a Meraki vMX the route hands the traffic to. */
+  stage: 'route' | 'transit' | 'acl' | 'security_group' | 'vpn';
   status: ReachabilityStatus;
   /** The route table, ACL or security group the step looked at. */
   where: string;
