@@ -50,6 +50,15 @@ APP_API_TOKEN=${API_TOKEN}
 # Disable public registration
 APP_ALLOW_SELF_REGISTER=false
 
+# ── First login ───────────────────────────────────────────────────────
+# Initial password for the bootstrap 'admin' account. Read once on the
+# very first boot (when no admin exists yet) and the account is flagged
+# must-change, so you are forced to pick a real password at first login.
+# Has no effect after that - use PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true
+# (one restart, then remove it) to recover a lost admin password.
+PLEXUS_INITIAL_ADMIN_USERNAME=admin
+PLEXUS_INITIAL_ADMIN_PASSWORD=netcontrol
+
 # ── Database ──────────────────────────────────────────────────────────
 APP_DB_ENGINE=postgres
 APP_DATABASE_URL=postgresql://plexus:${DB_PASSWORD}@postgres:5432/plexus
@@ -116,10 +125,8 @@ echo ""
 echo "  1. Review and edit .env (set APP_CORS_ORIGINS)"
 echo "  2. Run:  docker compose up -d"
 echo "  3. Open: https://$(hostname -f 2>/dev/null || echo 'your-vm-ip')"
-echo "  4. Login as 'admin'. The one-time password was generated on first"
-echo "     boot and printed to the app log - retrieve it with:"
-echo "         docker compose logs plexus | grep -A3 'default admin'"
-echo "     You will be forced to change it at first login."
+echo "  4. Login as admin / netcontrol (set via PLEXUS_INITIAL_ADMIN_PASSWORD"
+echo "     in .env). You will be forced to change it at first login."
 echo ""
 echo "  To view logs:     docker compose logs -f plexus"
 echo "  To stop:          docker compose down"
