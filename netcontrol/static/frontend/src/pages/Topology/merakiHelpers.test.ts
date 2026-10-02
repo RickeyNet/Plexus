@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { DetailSection, MerakiNodeDetails } from '@/api/meraki';
 
-import { merakiViewSections, merakiViewsWithData, searchTerms, sectionsMatch } from './merakiHelpers';
+import {
+  merakiViewSections,
+  merakiViewsWithData,
+  searchTerms,
+  sectionsMatch,
+  sourceTypeLabel,
+} from './merakiHelpers';
 
 function table(title: string, rows: string[][] = [['a']]): DetailSection {
   return { title, kind: 'table', columns: ['c'], rows };
@@ -88,5 +94,16 @@ describe('aws detail tabs', () => {
     expect(merakiViewSections(vpc, 'vlans').siteSections.map((s) => s.title)).toEqual(['Subnets']);
     // Instances have no tab of their own; they stay on the summary.
     expect(merakiViewSections(vpc, 'meraki').siteSections.map((s) => s.title)).toEqual(['VPC overview', 'Instances']);
+  });
+});
+
+describe('sourceTypeLabel', () => {
+  it('names every kind of map source', () => {
+    expect(['neighbors', 'meraki', 'cato', 'aws'].map(sourceTypeLabel)).toEqual([
+      'Neighbor discovery',
+      'Meraki',
+      'Cato',
+      'AWS',
+    ]);
   });
 });

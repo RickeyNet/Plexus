@@ -23,7 +23,7 @@ different.
 ## Quick start
 
 1. **Preview without credentials.** On the Topology page click
-   **Meraki / Cato**, then **Load AWS Sample**. A demo AWS account is added
+   **Sources**, then **Load Sample** and **AWS**. A demo AWS account is added
    to Cloud Visibility and to the map. Delete it under **Cloud Visibility →
    Accounts** when you are done.
 2. **Install the AWS SDK** on the Plexus server, once:
@@ -32,9 +32,16 @@ different.
    not installed.
 3. **Add the account.** Open **Cloud Visibility → Accounts → Add Cloud
    Account**, choose AWS, and fill in:
-   - *Region Scope*: the regions to read, comma-separated
+   - *Regions*: the regions to read, comma-separated
      (`us-east-1,us-west-2`). **Left empty, only `us-east-1` is read.**
-   - *Auth Config*: how discovery signs in (see below).
+     Tick **All regions** to read every region enabled for the account
+     instead (saved as the region scope `all`). Plexus asks AWS for the list
+     on every run, so a region enabled later is picked up; discovery takes
+     longer, because each region is read in turn.
+   - *How Plexus signs in*: an access key, an IAM role, or the credentials
+     of the Plexus server (see below).
+   Nothing else is needed for the map; the flow log and traffic metric
+   settings are optional and only feed **Pull Flow** and **Pull Traffic**.
 4. **Validate**, then **Discover**. When discovery finishes the account is on
    the Topology map (group filter **All groups**).
 
@@ -44,9 +51,13 @@ To refresh the map, run **Discover** again. Scheduled discovery
 
 ### Signing in
 
-*Auth Config* is a JSON object, stored encrypted and never shown again:
+The form has a field for each common sign-in and saves them as one settings
+object, stored encrypted and never shown again. `session_token`,
+`role_session_name` and `profile_name` have no field: enter them as JSON under
+**Additional settings**. Editing an account keeps what is stored unless you
+click **Change sign-in and sync settings**, which replaces all of it.
 
-| Keys | Sign-in |
+| Settings | Sign-in |
 |---|---|
 | `access_key_id`, `secret_access_key` (optional `session_token`) | An IAM user's access key |
 | `role_arn` (optional `external_id`, `role_session_name`) | Assume an IAM role. Combine with an access key, or leave the key out to assume the role from the server's own credentials |
@@ -68,6 +79,7 @@ Discovery is read-only: it calls `Describe*` operations and one search
 | Needed | Actions |
 |---|---|
 | Always (discovery fails without them) | `ec2:DescribeVpcs`, `ec2:DescribeInternetGateways`, `ec2:DescribeNatGateways`, `ec2:DescribeSecurityGroups`, `ec2:DescribeTransitGateways`, `ec2:DescribeTransitGatewayAttachments`, `ec2:DescribeVpcPeeringConnections`, `ec2:DescribeVpnGateways`, `ec2:DescribeRouteTables`, `ec2:DescribeVpnConnections`, `directconnect:DescribeConnections` |
+| With **All regions** (discovery fails without it) | `ec2:DescribeRegions` |
 | For the map (skipped when denied) | `ec2:DescribeSubnets`, `ec2:DescribeInstances`, `ec2:DescribeCustomerGateways`, `directconnect:DescribeVirtualInterfaces`, `directconnect:DescribeDirectConnectGateways`, `directconnect:DescribeDirectConnectGatewayAssociations` |
 | For the Path Mode check (skipped when denied) | `ec2:DescribeNetworkAcls`, `ec2:DescribeTransitGatewayRouteTables`, `ec2:SearchTransitGatewayRoutes` |
 
@@ -265,3 +277,11 @@ appear in IPAM's cloud CIDR view.
 | `GET` | `/api/meraki/nodes?org_ref=-1&node_id=…` | Detail sections of one AWS node |
 | `GET` | `/api/meraki/subnets` | Includes the subnets of every VPC (`provider: "aws"`, `site_id` is the VPC ID) |
 | `GET` | `/api/meraki/aws/reachability?source=&destination=` | The AWS check of a flow. `source` / `destination` are IP addresses or networks; optional `protocol` (`tcp`, `udp`, `icmp`), `port`, and `source_vpc` / `destination_vpc` for a range that exists in several VPCs. Returns `applies`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary` and `steps` |
+
+## The Sources dialog
+
+Every AWS account is a row of the **Sources** dialog on the Topology page,
+next to neighbor discovery, Meraki organizations and Cato accounts, with its
+last discovery. **Collect Now** runs the same discovery as **Cloud Visibility
+→ Accounts → Discover** (administrators only) and **Manage** opens Cloud
+Visibility, where accounts are added, edited and deleted.

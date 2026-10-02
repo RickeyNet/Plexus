@@ -66,6 +66,13 @@ export function formatWhen(iso?: string | null): string {
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
 }
 
+/** What kind of map source a row of the Sources dialog is. */
+export function sourceTypeLabel(type: string): string {
+  if (type === 'neighbors') return 'Neighbor discovery';
+  if (type === 'aws') return 'AWS';
+  return type === 'cato' ? 'Cato' : 'Meraki';
+}
+
 export function buildStatusBadge(status?: string): string {
   if (status === 'success') return 'badge badge-success';
   if (status === 'partial') return 'badge badge-warning';

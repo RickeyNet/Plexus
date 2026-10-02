@@ -897,6 +897,42 @@ def test_api_aws_sample_is_a_cloud_visibility_account(api):
     assert api.get("/api/meraki/orgs").json()["orgs"] == []
 
 
+def test_api_sources_lists_everything_that_feeds_the_map(api):
+    def sources() -> dict[str, dict]:
+        response = api.get("/api/topology/sources")
+        assert response.status_code == 200, response.text
+        return {s["key"]: s for s in response.json()["sources"]}
+
+    # Neighbor discovery is always a source, even with nothing else set up.
+    listed = sources()
+    assert list(listed) == ["neighbors"]
+    assert listed["neighbors"]["type"] == "neighbors" and listed["neighbors"]["status"] == "never"
+
+    org = api.post("/api/meraki/orgs", json={"name": "HQ", "api_key": "k" * 40}).json()["org"]
+    assert api.post("/api/meraki/sample?provider=cato").status_code == 201
+    assert api.post("/api/meraki/sample?provider=aws").status_code == 201
+    body = {"provider": "aws", "name": "Prod AWS", "auth_config": {"secret_access_key": "hunter2"}}
+    account = api.post("/api/cloud/accounts", json=body).json()["account"]
+
+    listed = sources()
+    assert [s["type"] for s in listed.values()] == ["neighbors", "meraki", "cato", "aws", "aws"]
+    real = listed[f"org:{org['id']}"]
+    assert (real["status"], real["can_collect"], real["demo"], real["detail"]) == ("never", True, False, "")
+    cato = next(s for s in listed.values() if s["type"] == "cato")
+    assert cato["status"] == "success" and cato["demo"] and not cato["can_collect"]
+    assert cato["last_collected_at"] and "site" in cato["detail"] and "device" in cato["detail"]
+    prod = listed[f"aws:{account['id']}"]
+    assert (prod["status"], prod["can_collect"], prod["enabled"], prod["demo"]) == ("never", True, True, False)
+    demo = next(s for s in listed.values() if s["type"] == "aws" and s["demo"])
+    assert demo["status"] == "success" and not demo["can_collect"] and "resources" in demo["detail"]
+    # Keys and credentials never leave the server.
+    text = api.get("/api/topology/sources").text
+    assert "hunter2" not in text and "k" * 40 not in text and "auth_config" not in text
+
+    assert api.put(f"/api/cloud/accounts/{account['id']}", json={"enabled": False}).status_code == 200
+    assert sources()[f"aws:{account['id']}"]["enabled"] is False
+
+
 # ── The live collector, against a stand-in for boto3 ─────────────────────────
 
 

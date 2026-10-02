@@ -259,6 +259,39 @@ export function useMerakiOrgs() {
   });
 }
 
+/** 'neighbors' is CDP / LLDP discovery of the inventory; the rest are integrations. */
+export type TopologySourceType = 'neighbors' | CloudProvider | 'aws';
+
+/** One thing that feeds the topology map, with its last collection. */
+export interface TopologySource {
+  key: string;
+  type: TopologySourceType;
+  /** Organization id (Meraki, Cato) or Cloud Visibility account id (AWS). */
+  id: number | null;
+  name: string;
+  status: 'never' | 'success' | 'partial' | 'failed' | string;
+  last_collected_at: string | null;
+  message: string;
+  /** What the last collection found, e.g. "12 sites, 80 devices". */
+  detail: string;
+  warning_count: number;
+  collecting: boolean;
+  can_collect: boolean;
+  /** False for an AWS account switched off in Cloud Visibility. */
+  enabled: boolean;
+  demo: boolean;
+}
+
+export function useTopologySources(enabled = true) {
+  return useQuery({
+    queryKey: ['meraki', 'sources'],
+    queryFn: () => apiRequest<{ sources: TopologySource[] }>('/topology/sources'),
+    enabled,
+    // Collections are background jobs with no push channel.
+    refetchInterval: (query) => (query.state.data?.sources.some((s) => s.collecting) ? 4000 : false),
+  });
+}
+
 export function useMerakiSnapshots() {
   return useQuery({
     queryKey: ['meraki', 'snapshots'],
@@ -328,7 +361,10 @@ export function useStartMerakiBuild() {
   return useMutation({
     mutationFn: (id: number) =>
       apiRequest<{ job_id: string }>(`/meraki/orgs/${id}/build`, { method: 'POST' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['meraki', 'orgs'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['meraki', 'orgs'] });
+      qc.invalidateQueries({ queryKey: ['meraki', 'sources'] });
+    },
   });
 }
 

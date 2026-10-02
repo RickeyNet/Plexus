@@ -367,7 +367,10 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       (selected.type === 'node' && (selected.ref === e.na || selected.ref === e.nb))));
     var faded = (pathActive() && !onPath) || (matchNodes && !(matchNodes[e.a] && matchNodes[e.b]) && !sel);
     ctx.globalAlpha = faded ? 0.07 : (isCurved(e) && !sel ? 0.55 : 0.9);
-    ctx.strokeStyle = sel ? theme.accent : (bad ? STATUS.offline : style.color);
+    // The tunnels of a selected site or device keep their own colour (and red
+    // when down): in the selection colour they read as WAN uplinks.
+    var marked = isCurved(e) ? onPath || (selected && selected.type === 'edge' && selected.ref === e) : sel;
+    ctx.strokeStyle = marked ? theme.accent : (bad ? STATUS.offline : style.color);
     ctx.lineWidth = (sel ? 3 : (e.kind === 'stack' ? 4 : 1.6)) / Math.min(view.k, 1);
     ctx.setLineDash(style.dash.map(function (d) { return d / Math.min(view.k, 1); }));
     ctx.beginPath(); ctx.moveTo(e.na.x, e.na.y);

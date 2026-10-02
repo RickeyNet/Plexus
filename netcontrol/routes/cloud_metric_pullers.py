@@ -20,6 +20,7 @@ from typing import Any
 
 import routes.database as db
 
+from netcontrol.routes.cloud_collectors import _aws_enabled_regions, _is_all_regions
 from netcontrol.routes.cloud_visibility import (
     _build_traffic_metric_rows_for_ingest,
     _normalize_aws_traffic_metric_records,
@@ -143,7 +144,11 @@ async def pull_aws_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
 
     # Session build may call sts.assume_role (blocking network I/O)
     session = await asyncio.to_thread(_build_boto3_session, auth)
-    regions = _parse_regions(account)
+    try:
+        regions = await asyncio.to_thread(_resolve_regions, account, session)
+    except Exception:
+        LOGGER.warning("cloud account %s: failed to list AWS regions", account_id, exc_info=True)
+        return {"ok": False, "error": "region_list_failed", "ingested": 0}
     cursor = await _get_cursor(account_id)
     extra = _parse_cursor_extra(cursor)
     regions_set = set(regions)
@@ -750,6 +755,13 @@ def _parse_regions(account: dict) -> list[str]:
         )
         return ["us-east-1"]
     return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+def _resolve_regions(account: dict, session) -> list[str]:
+    """The regions to pull: the listed ones, or every enabled region for a scope of ``all``."""
+    if _is_all_regions(account.get("region_scope")):
+        return _aws_enabled_regions(session, _boto3_client_config())
+    return _parse_regions(account)
 
 
 def _parse_list(value: Any) -> list[str]:

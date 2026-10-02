@@ -28,6 +28,7 @@ from routes.database import (
 __all__ = [
     "upsert_topology_link",
     "get_topology_links",
+    "get_topology_link_stats",
     "get_topology_links_for_host",
     "delete_topology_links_for_host",
     "replace_topology_links_for_host",
@@ -214,6 +215,26 @@ async def get_topology_links(group_id: int | None = None) -> list[dict]:
                    ORDER BY tl.source_host_id, tl.source_interface"""
             )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_topology_link_stats() -> dict:
+    """How much neighbor discovery has found, and when it last found any."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT source_host_id), MAX(discovered_at) FROM topology_links"
+        )
+        links, sources, last = await cursor.fetchone()
+        cursor = await db.execute("SELECT COUNT(*) FROM hosts")
+        (hosts,) = await cursor.fetchone()
+        return {
+            "links": int(links or 0),
+            "hosts_with_links": int(sources or 0),
+            "hosts": int(hosts or 0),
+            "last_discovered_at": str(last) if last else None,
+        }
     finally:
         await db.close()
 
