@@ -25,11 +25,20 @@ echo "════════════════════════�
 if ! command -v docker >/dev/null 2>&1; then
     echo ""
     echo "[1/5] Installing Docker from local .deb packages..."
+    # A fresh Ubuntu runs unattended-upgrades shortly after boot (even offline
+    # it starts, then times out), and dpkg errors out instantly if that holds
+    # the lock. Wait for it rather than fail.
+    waited=0
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if (( waited == 0 )); then echo "  dpkg lock held (unattended-upgrades?) - waiting..."; fi
+        sleep 5; waited=$((waited + 5))
+        if (( waited >= 900 )); then echo "ERROR: dpkg lock still held after 15 min" >&2; exit 1; fi
+    done
     # dpkg installs in dependency order if you give it the whole set at once.
     # Any missing transitive deps are reported; --fix-broken won't help offline,
     # so the bundle should already include everything from apt-get install -y
     # --download-only on a fresh image.
-    dpkg -i "$BUNDLE_DIR"/debs/*.deb || {
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a dpkg -i "$BUNDLE_DIR"/debs/*.deb || {
         echo "dpkg reported missing dependencies. Listing:"
         dpkg -i "$BUNDLE_DIR"/debs/*.deb 2>&1 | grep -i 'depends' || true
         echo ""
