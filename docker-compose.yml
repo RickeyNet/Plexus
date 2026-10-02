@@ -9,7 +9,17 @@ x-logging: &default-logging
 
 services:
   plexus:
-    build: .
+    # Local-build deploys (bootstrap.sh / upgrade.sh git mode) build this tag.
+    # Registry deploys (upgrade.sh --image) write PLEXUS_IMAGE into .env so
+    # `up`/`restart` keep using the pulled image instead of rebuilding.
+    image: ${PLEXUS_IMAGE:-plexus-app:local}
+    build:
+      context: .
+      args:
+        # Install boto3 / azure / google SDKs so Cloud Visibility and the AWS
+        # topology layer collect live data. Set INSTALL_CLOUD_SDKS=false in
+        # .env for a smaller image if you never attach cloud accounts.
+        INSTALL_CLOUD_SDKS: ${INSTALL_CLOUD_SDKS:-true}
     container_name: plexus-app
     restart: unless-stopped
     logging: *default-logging
@@ -32,6 +42,13 @@ services:
       # the code default (<app>/floor_plans) is on the ephemeral layer and
       # is lost on every container recreate.
       GEO_FLOOR_PLAN_DIR: /app/state/floor_plans
+      # Login lockout and API rate limiting key on the client IP. Without
+      # this, uvicorn only trusts X-Forwarded-For from 127.0.0.1, so every
+      # browser arrives as the nginx container's IP and one user's failed
+      # logins lock out everyone. The app port is published on loopback only
+      # and otherwise reachable just from nginx on the compose network, so
+      # trusting the header from any peer is safe here.
+      FORWARDED_ALLOW_IPS: "*"
     ports:
       # Bind the app port to loopback only - nginx reaches it over the
       # internal Docker network (http://plexus:8080), so publishing it on all
