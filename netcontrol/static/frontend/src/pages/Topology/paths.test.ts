@@ -3,7 +3,17 @@ import { describe, expect, it } from 'vitest';
 import type { MerakiSubnet } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
-import { connectEndpoints, connectPicks, findSubnets, isAddressText, pathSites, subnetOptionLabel, type PathPick } from './paths';
+import {
+  connectEndpoints,
+  connectPicks,
+  findSubnets,
+  isAddressText,
+  parseTraffic,
+  pathSites,
+  reachabilityQuery,
+  subnetOptionLabel,
+  type PathPick,
+} from './paths';
 
 function meraki(id: string, site: string, kind: string): TopologyNode {
   return {
@@ -175,5 +185,50 @@ describe('path mode with AWS', () => {
     expect(connectEndpoints(['vpc-core', 'vpc-edge'], attached).legs[0].path).toEqual(['vpc-core', 'tgw', 'vpc-edge']);
     const broken = [attached[0], edge('a-edge', 'vpc-edge', 'tgw', 'cloud', 'failed')];
     expect(connectEndpoints(['vpc-core', 'vpc-edge'], broken).legs[0].path).toBeNull();
+  });
+});
+
+describe('the AWS check of a path', () => {
+  const subnet = (cidr: string, provider: 'aws' | 'meraki', site: string): MerakiSubnet => ({
+    org_ref: provider === 'aws' ? -1 : 1,
+    provider,
+    cidr,
+    name: cidr,
+    kind: provider === 'aws' ? 'subnet' : 'vlan',
+    site_id: site,
+    site_name: site,
+    node_id: site,
+    in_vpn: null,
+  });
+  const pick = (s: MerakiSubnet, address?: string): PathPick => ({ key: address ?? s.cidr, node: s.node_id, label: s.cidr, subnet: s, address });
+
+  it('reads the traffic to ask about', () => {
+    expect(parseTraffic('')).toEqual({ protocol: '' });
+    expect(parseTraffic(' Any ')).toEqual({ protocol: '' });
+    expect(parseTraffic('tcp/443')).toEqual({ protocol: 'tcp', port: 443 });
+    expect(parseTraffic('udp 53')).toEqual({ protocol: 'udp', port: 53 });
+    expect(parseTraffic('8443')).toEqual({ protocol: 'tcp', port: 8443 });
+    expect(parseTraffic('icmp')).toEqual({ protocol: 'icmp' });
+    expect(parseTraffic('tcp/70000')).toBeNull();
+    expect(parseTraffic('icmp/8')).toBeNull();
+    expect(parseTraffic('https')).toBeNull();
+  });
+
+  it('asks only for legs between addresses with an end in AWS', () => {
+    const app = subnet('10.200.10.0/24', 'aws', 'vpc-core');
+    const branch = subnet('10.10.5.0/24', 'meraki', 'N_1');
+    const tcp = { protocol: 'tcp', port: 443 };
+    // The typed address is sent, and the VPC of an AWS end with it.
+    expect(reachabilityQuery(pick(app, '10.200.10.21'), pick(branch), tcp)).toEqual({
+      source: '10.200.10.21',
+      destination: '10.10.5.0/24',
+      source_vpc: 'vpc-core',
+      destination_vpc: undefined,
+      protocol: 'tcp',
+      port: 443,
+    });
+    expect(reachabilityQuery(pick(branch), pick(branch), tcp)).toBeNull();
+    // A device or site pick has no address to check.
+    expect(reachabilityQuery(pick(app), { key: 'n:1', node: 'mx', label: 'mx' }, tcp)).toBeNull();
   });
 });

@@ -139,6 +139,8 @@ export interface MerakiNodeDetails {
 /** A subnet and the device that owns it, for picking path endpoints. */
 export interface MerakiSubnet {
   org_ref: number;
+  /** Integration whose snapshot holds the subnet. */
+  provider?: CloudProvider | 'aws';
   cidr: string;
   name: string;
   /** vlan / lan / static (behind the appliance), svi (L3 switch), peer (non-Meraki VPN peer), range (Cato site). */
@@ -181,6 +183,51 @@ export function useMerakiSubnets(enabled: boolean) {
     queryKey: ['meraki', 'subnets'],
     queryFn: () => apiRequest<{ subnets: MerakiSubnet[] }>('/meraki/subnets'),
     enabled,
+  });
+}
+
+export type ReachabilityStatus = 'ok' | 'blocked' | 'partial' | 'unknown' | 'info';
+
+export interface ReachabilityStep {
+  direction: 'forward' | 'return';
+  stage: 'route' | 'transit' | 'acl' | 'security_group';
+  status: ReachabilityStatus;
+  /** The route table, ACL or security group the step looked at. */
+  where: string;
+  text: string;
+}
+
+/** What AWS routing, network ACLs and security groups do with one flow. */
+export interface AwsReachability {
+  /** False when neither address is in a collected VPC. */
+  applies: boolean;
+  verdict: 'allowed' | 'blocked' | 'partial' | 'unknown';
+  summary: string;
+  traffic?: string;
+  steps: ReachabilityStep[];
+}
+
+export interface AwsReachabilityQuery {
+  source: string;
+  destination: string;
+  /** VPC of an address whose range exists in several VPCs. */
+  source_vpc?: string;
+  destination_vpc?: string;
+  /** tcp / udp / icmp; empty asks about any traffic. */
+  protocol?: string;
+  port?: number;
+}
+
+export function useAwsReachability(query: AwsReachabilityQuery | null) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value !== undefined && value !== '') params.set(key, String(value));
+  }
+  const search = params.toString();
+  return useQuery({
+    queryKey: ['meraki', 'aws-reachability', search],
+    queryFn: () => apiRequest<AwsReachability>(`/meraki/aws/reachability?${search}`),
+    enabled: query != null,
   });
 }
 

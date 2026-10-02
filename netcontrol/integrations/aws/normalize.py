@@ -44,7 +44,16 @@ TRANSIT_SITE_ID = "__aws_transit__"
 TRANSIT_SITE_NAME = "AWS transit and VPN"
 
 SUBNET_SECTION_TITLE = "Subnets"
-SUBNET_COLUMNS = ["Subnet", "Name", "Availability zone", "Subnet ID", "Route table", "Default route", "Free IPs"]
+SUBNET_COLUMNS = [
+    "Subnet",
+    "Name",
+    "Availability zone",
+    "Subnet ID",
+    "Route table",
+    "Default route",
+    "Free IPs",
+    "Network ACL",
+]
 
 # Detail tables are capped so one large VPC cannot bloat the snapshot.
 MAX_SITE_ROWS = 3000
@@ -112,6 +121,13 @@ def _status(state: Any) -> str:
 def _link_status(state: Any) -> str:
     """Edge status of a connection: ``failed`` takes it out of path tracing."""
     return {"online": "active", "unknown": ""}.get(_status(state), "failed")
+
+
+def _acl_ports(entry: dict) -> str:
+    low, high = entry.get("port_from"), entry.get("port_to")
+    if low is None and high is None:
+        return "all"
+    return str(low) if high in (None, low) else f"{low}-{high}"
 
 
 def _default_route_via(target: str) -> str:
@@ -246,7 +262,7 @@ class _Builder:
     def build_vpcs(self) -> None:
         many_accounts = len({self._account(v) for v in self.vpcs}) > 1
         by_vpc: dict[str, dict[str, list[dict]]] = {}
-        for resource_type in ("subnet", "route_table", "instance", "security_group"):
+        for resource_type in ("subnet", "route_table", "instance", "security_group", "network_acl"):
             for resource in self._of_type(resource_type):
                 by_vpc.setdefault(self._vpc_uid(resource), {}).setdefault(resource_type, []).append(resource)
 
@@ -305,9 +321,10 @@ class _Builder:
                 ),
             )
             subnet_names = {s["rid"]: _text(s.get("name")) for s in subnets}
+            acls = owned.get("network_acl", [])
             _add(
                 sections,
-                table_section(SUBNET_SECTION_TITLE, SUBNET_COLUMNS, self._subnet_rows(subnets, route_tables)),
+                table_section(SUBNET_SECTION_TITLE, SUBNET_COLUMNS, self._subnet_rows(subnets, route_tables, acls)),
             )
             self.subnet_count += len(subnets)
             _add(
@@ -369,6 +386,29 @@ class _Builder:
                     ][:MAX_SITE_ROWS],
                 ),
             )
+            _add(
+                sections,
+                table_section(
+                    "Network ACL rules",
+                    ["Network ACL", "Direction", "Rule", "Action", "Protocol", "Ports", "CIDR", "Subnets"],
+                    [
+                        [
+                            acl.get("name") or acl["rid"],
+                            "outbound" if entry.get("egress") else "inbound",
+                            # 32767 is the rule AWS ends every ACL with.
+                            "*" if entry.get("rule_number") == 32767 else entry.get("rule_number"),
+                            entry.get("action"),
+                            entry.get("protocol"),
+                            _acl_ports(entry),
+                            entry.get("cidr"),
+                            [subnet_names.get(_text(s)) or s for s in acl["meta"].get("subnet_ids") or []],
+                        ]
+                        for acl in acls
+                        for entry in acl["meta"].get("entries") or []
+                        if isinstance(entry, dict)
+                    ][:MAX_SITE_ROWS],
+                ),
+            )
 
             members = [node, *self._instance_nodes(instances, node, site_id, subnet_names)]
             members += self._vpc_gateways(uid, node, site_id)
@@ -385,7 +425,12 @@ class _Builder:
                 }
             )
 
-    def _subnet_rows(self, subnets: list[dict], route_tables: list[dict]) -> list[list[Any]]:
+    def _subnet_rows(self, subnets: list[dict], route_tables: list[dict], acls: list[dict]) -> list[list[Any]]:
+        acl_names = {
+            _text(subnet_id): acl.get("name") or acl["rid"]
+            for acl in acls
+            for subnet_id in acl["meta"].get("subnet_ids") or []
+        }
         explicit: dict[str, dict] = {}
         main: dict | None = None
         for table in route_tables:
@@ -409,6 +454,7 @@ class _Builder:
                     (table.get("name") or table["rid"]) if table else "",
                     default,
                     subnet["meta"].get("available_ips"),
+                    acl_names.get(subnet["rid"], ""),
                 ]
             )
         return rows
@@ -627,6 +673,27 @@ class _Builder:
                         ("Owner account", meta.get("owner_id")),
                         ("Discovered in", self._account(gateway)),
                     ],
+                ),
+            )
+            _add(
+                node["sections"],
+                table_section(
+                    "Transit gateway routes",
+                    ["Route table", "Destination", "Attachment", "Attached to", "State", "Type"],
+                    [
+                        [
+                            table.get("name") or table["rid"],
+                            route.get("destination"),
+                            [a.get("attachment_id") for a in route.get("attachments") or [] if isinstance(a, dict)],
+                            [a.get("resource_id") for a in route.get("attachments") or [] if isinstance(a, dict)],
+                            route.get("state"),
+                            route.get("type"),
+                        ]
+                        for table in self._of_type("transit_gateway_route_table")
+                        if _text(table["meta"].get("transit_gateway_id")) == gateway["rid"]
+                        for route in table["meta"].get("routes") or []
+                        if isinstance(route, dict)
+                    ][:MAX_SITE_ROWS],
                 ),
             )
         for connection in self._of_type("direct_connect"):

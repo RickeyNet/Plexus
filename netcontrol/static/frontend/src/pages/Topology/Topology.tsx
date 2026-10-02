@@ -53,7 +53,8 @@ import {
 } from './helpers';
 import { crowdedGroups, tidyLabel, tidyTreeLayout, type XY } from './layout';
 import { EdgeDetails } from './EdgeDetails';
-import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, pathSites, subnetOptionLabel, type PathPick } from './paths';
+import { AwsPathCheck } from './AwsPathCheck';
+import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, reachabilityQuery, subnetOptionLabel, type PathPick } from './paths';
 import { MerakiModal } from './MerakiModal';
 import { NodeDetails } from './NodeDetails';
 import { StpEventsModal } from './StpEventsModal';
@@ -109,6 +110,8 @@ export function Topology() {
   const [stpAllVlans, setStpAllVlans] = useState(false);
   const [pathMode, setPathMode] = useState(false);
   const [pathPicks, setPathPicks] = useState<PathPick[]>([]);
+  // Traffic the AWS check of a path is asked about: 'tcp/443', empty for any.
+  const [pathTraffic, setPathTraffic] = useState('');
   const [pathSubnetInput, setPathSubnetInput] = useState('');
   const [pathSiteInput, setPathSiteInput] = useState('');
   const [pathNote, setPathNote] = useState('');
@@ -973,6 +976,9 @@ export function Topology() {
     return { list, owners };
   }, [subnetsQuery.data, merakiNodeIds]);
   const pathResult = useMemo(() => connectPicks(pathPicks, data?.edges ?? []), [pathPicks, data]);
+  const trafficFilter = useMemo(() => parseTraffic(pathTraffic), [pathTraffic]);
+  // Legs with an end in AWS, where route tables, ACLs and security groups can be checked.
+  const pathHasAwsLeg = pathResult.legs.some((leg) => reachabilityQuery(leg.from, leg.to, { protocol: '' }) !== null);
   // Redraw the path whenever the picks change or the map is rebuilt.
   useEffect(() => {
     if (!pathMode) return;
@@ -1237,11 +1243,15 @@ export function Topology() {
     const owner = pathSubnets.owners.get(subnetOptionLabel(subnet));
     if (owner === undefined) return false;
     setPathSubnetInput('');
+    // A typed address inside the subnet is kept: the AWS check of the path
+    // matches the security groups of the instance that has it.
+    const typedAddress = isAddressText(value) && value.trim() !== subnet.cidr ? value.trim() : undefined;
     addPathPick({
-      key: `s:${subnet.org_ref}:${subnet.cidr}:${subnet.node_id}`,
+      key: `s:${subnet.org_ref}:${typedAddress ?? subnet.cidr}:${subnet.node_id}`,
       node: owner,
-      label: `${subnet.cidr} · ${subnet.site_name || subnet.name}`,
+      label: `${typedAddress ?? subnet.cidr} · ${subnet.site_name || subnet.name}`,
       subnet,
+      address: typedAddress,
     });
     return true;
   }
@@ -1782,6 +1792,18 @@ export function Topology() {
                 </datalist>
               </>
             )}
+            {pathHasAwsLeg && (
+              <input
+                className="form-input"
+                placeholder="Traffic: any, or tcp/443"
+                aria-label="Traffic checked against AWS route tables, network ACLs and security groups"
+                title="Traffic the AWS check is asked about, from the first of two picks to the second: tcp/443, udp/53, icmp, or empty for any traffic"
+                value={pathTraffic}
+                onChange={(e) => setPathTraffic(e.target.value)}
+                aria-invalid={trafficFilter === null}
+                style={{ width: 190, borderColor: trafficFilter === null ? 'var(--danger)' : undefined }}
+              />
+            )}
             <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); }} disabled={!pathPicks.length}>Clear</button>
             <button type="button" className="btn btn-sm btn-secondary" onClick={clearPathMode}>Exit</button>
           </div>
@@ -1803,7 +1825,7 @@ export function Topology() {
           {pathResult.legs.map((leg) => (
             <div key={`${leg.from.key}|${leg.to.key}`} style={{ marginTop: '0.35rem' }}>
               {(leg.from.subnet || leg.to.subnet) && (
-                <strong>{leg.from.subnet?.cidr ?? leg.from.label} ↔ {leg.to.subnet?.cidr ?? leg.to.label}: </strong>
+                <strong>{leg.from.address ?? leg.from.subnet?.cidr ?? leg.from.label} ↔ {leg.to.address ?? leg.to.subnet?.cidr ?? leg.to.label}: </strong>
               )}
               {leg.sameDevice ? (
                 <>Same device - routed locally by {pathLabel(leg.from.node)}.</>
@@ -1820,12 +1842,17 @@ export function Topology() {
               {leg.notes.map((note) => (
                 <div key={note} style={{ color: 'var(--warning, #f59f00)' }}>⚠ {note}</div>
               ))}
+              {(() => {
+                const query = trafficFilter && reachabilityQuery(leg.from, leg.to, trafficFilter);
+                return query ? <AwsPathCheck query={query} /> : null;
+              })()}
             </div>
           ))}
           {pathResult.legs.length > 0 && (
             <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
               Shortest way over the cables, uplinks and VPN tunnels on the map that are up. Route tables are not consulted;
               a subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).
+              {pathHasAwsLeg && ' Between two subnets or addresses with an end in AWS, the route tables, network ACLs and security groups of AWS are checked as well; type the IP address of an instance to include its security groups.'}
             </div>
           )}
         </div>

@@ -92,6 +92,9 @@ belong to no inventory group).
   VPN at its site, or it is behind a non-Meraki peer the other site has
   no tunnel of its own to. The subnet list comes from the latest
   collection (`GET /api/meraki/subnets`); IPv4 only when typing.
+  When one of two subnets or addresses is in an AWS VPC, the AWS route
+  tables, network ACLs and security groups are checked for that pair as
+  well; see [aws-topology.md](aws-topology.md#the-aws-check-of-a-path).
 - VPN tunnels are purple dashed lines (dotted for non-Meraki IPsec peers),
   WAN uplinks are blue. A tunnel or uplink Meraki reports as down is red.
 - **Device tabs.** Clicking a Meraki device opens its details, one tab per

@@ -1,4 +1,4 @@
-import type { MerakiSubnet } from '@/api/meraki';
+import type { AwsReachabilityQuery, MerakiSubnet } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
 import { isEdgeDown } from './helpers';
@@ -6,7 +6,8 @@ import { layoutGroupKey } from './layout';
 
 // Path mode: how a set of picked devices / sites reach one another over the
 // links on the map. This follows topology (cables, uplinks, VPN tunnels that
-// are up), not route tables.
+// are up), not route tables. Where a leg has an end in AWS, the server also
+// checks the route tables, network ACLs and security groups (reachabilityQuery).
 
 type NodeId = number | string;
 
@@ -39,6 +40,8 @@ export interface PathPick {
   node: NodeId;
   label: string;
   subnet?: MerakiSubnet;
+  /** The address typed to pick `subnet`, when it is narrower than the subnet. */
+  address?: string;
 }
 
 export interface PickLeg {
@@ -196,6 +199,47 @@ export function connectPicks(picks: PathPick[], edges: TopologyEdge[]): PickResu
     }
   }
   return { legs, nodeIds: traced.nodeIds, edgeIds: traced.edgeIds };
+}
+
+export interface TrafficFilter {
+  /** tcp / udp / icmp; empty for any traffic. */
+  protocol: string;
+  port?: number;
+}
+
+/**
+ * Traffic typed as `tcp/443`, `udp 53`, `443` (TCP), `icmp` or nothing (any
+ * traffic). Null when the text is none of these.
+ */
+export function parseTraffic(text: string): TrafficFilter | null {
+  const wanted = text.trim().toLowerCase();
+  if (!wanted || wanted === 'any' || wanted === 'all') return { protocol: '' };
+  const match = /^(?:(tcp|udp|icmp)(?:\s*[/:\s]\s*(\d{1,5}))?|(\d{1,5}))$/.exec(wanted);
+  if (!match) return null;
+  const protocol = match[1] ?? 'tcp';
+  const digits = match[2] ?? match[3];
+  if (digits === undefined) return { protocol };
+  const port = Number(digits);
+  return protocol === 'icmp' || port > 65535 ? null : { protocol, port };
+}
+
+/**
+ * The check AWS can make for a leg: both ends are subnets or addresses and
+ * at least one is in a VPC. Null when there is nothing for AWS to check.
+ */
+export function reachabilityQuery(from: PathPick, to: PathPick, traffic: TrafficFilter): AwsReachabilityQuery | null {
+  if (!from.subnet || !to.subnet) return null;
+  const inAws = (pick: PathPick) => pick.subnet?.provider === 'aws';
+  if (!inAws(from) && !inAws(to)) return null;
+  return {
+    source: from.address ?? from.subnet.cidr,
+    destination: to.address ?? to.subnet.cidr,
+    // An AWS subnet's site is its VPC.
+    source_vpc: inAws(from) ? from.subnet.site_id : undefined,
+    destination_vpc: inAws(to) ? to.subnet.site_id : undefined,
+    protocol: traffic.protocol,
+    port: traffic.port,
+  };
 }
 
 /** Text of a subnet in the picker; unique per (subnet, owner). */

@@ -144,9 +144,10 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'OSPF',
     'OSPF areas',
     'Route tables',
+    'Transit gateway routes',
   ],
   vpn: ['Site-to-site VPN', 'VPN peers', 'VPN local subnets', 'IPsec tunnel', 'VPN connections'],
-  firewall: ['Layer 3 firewall rules', 'Port forwarding', '1:1 NAT', 'Security group rules'],
+  firewall: ['Layer 3 firewall rules', 'Port forwarding', '1:1 NAT', 'Security group rules', 'Network ACL rules'],
   switching: ['Switch stacks', 'Spanning tree', 'STP bridge priority'],
   wireless: ['Wireless SSIDs'],
 };

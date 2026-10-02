@@ -2,8 +2,10 @@
 
 The records have the shape the Cloud Visibility AWS collector returns, so
 sample discovery exercises the same path to the Topology map as a live one:
-three VPCs in two regions, a transit gateway, a firewall pair that forwards
-traffic, a site-to-site VPN with one tunnel down and a Direct Connect.
+three VPCs in two regions, a transit gateway with its route table, a VPC
+peering, a firewall pair that forwards traffic, a site-to-site VPN with one
+tunnel down, a Direct Connect, and the network ACLs and security groups that
+decide what the database subnet accepts.
 Addresses are from the documentation ranges.
 """
 
@@ -68,10 +70,12 @@ def _instance(
     kind: str,
     forwards: bool,
     zone: str,
+    group: tuple[str, str],
     region: str = _R1,
     status: str = "running",
 ) -> dict:
-    """``interfaces`` are ``(subnet id, private IP, public IP)`` in device order."""
+    """``interfaces`` are ``(subnet id, private IP, public IP)`` in device
+    order; ``group`` is the ``(id, name)`` of the instance's security group."""
     return _res(
         f"instance:{instance_id}",
         "instance",
@@ -87,7 +91,8 @@ def _instance(
         private_ip=interfaces[0][1],
         public_ip=next((public for _s, _p, public in interfaces if public), ""),
         source_dest_check=not forwards,
-        security_groups=["sg-app-edge"],
+        security_groups=[group[1]],
+        security_group_ids=[group[0]],
         launched="2026-03-02T14:05:00+00:00",
         interfaces=[
             {
@@ -99,16 +104,83 @@ def _instance(
                 "private_ips": [private],
                 "public_ips": [public] if public else [],
                 "source_dest_check": not forwards,
+                "security_group_ids": [group[0]],
             }
             for index, (subnet, private, public) in enumerate(interfaces)
         ],
     )
 
 
+def _acl_entry(number: int, egress: bool, action: str, protocol: str = "all", cidr: str = "0.0.0.0/0", ports=None):
+    return {
+        "rule_number": number,
+        "egress": egress,
+        "action": action,
+        "protocol": protocol,
+        "cidr": cidr,
+        "port_from": ports[0] if ports else None,
+        "port_to": ports[1] if ports else None,
+    }
+
+
+def _acl(acl_id: str, name: str, vpc: str, subnets: list[str], entries: list[dict] | None = None, region: str = _R1):
+    """A network ACL; without ``entries`` it allows everything, like a default ACL."""
+    rules = entries if entries is not None else [_acl_entry(100, False, "allow"), _acl_entry(100, True, "allow")]
+    # Every ACL ends in the rule that denies what nothing above it matched.
+    rules = [*rules, _acl_entry(32767, False, "deny"), _acl_entry(32767, True, "deny")]
+    return _res(
+        f"network_acl:{acl_id}",
+        "network_acl",
+        name,
+        region,
+        status="active",
+        vpc_id=vpc,
+        is_default=entries is None,
+        subnet_ids=subnets,
+        entries=sorted(rules, key=lambda e: (e["egress"], e["rule_number"])),
+    )
+
+
+def _rule(group: str, direction: str, index: int, protocol: str, ports: str, peer: str) -> dict:
+    inbound = direction == "inbound"
+    return {
+        "rule_uid": f"aws:sg:{group}:{direction}:{index}",
+        "rule_name": f"{direction}-{index}",
+        "direction": direction,
+        "action": "allow",
+        "protocol": protocol,
+        "source_selector": peer if inbound else "self",
+        "destination_selector": "self" if inbound else peer,
+        "port_expression": ports,
+        "priority": None,
+    }
+
+
+def _group(group: tuple[str, str], vpc: str, inbound: list[tuple[str, str, str]], region: str = _R1) -> dict:
+    """A security group that lets ``inbound`` ``(protocol, ports, source)`` in and everything out."""
+    rules = [_rule(group[0], "inbound", i + 1, *rule) for i, rule in enumerate(inbound)]
+    rules.append(_rule(group[0], "outbound", 1, "all", "all", "0.0.0.0/0"))
+    return _res(f"sg:{group[0]}", "security_group", group[1], region, status="active", vpc_id=vpc, policy_rules=rules)
+
+
+def _tgw_route(destination: str, attachment: str, kind: str, resource: str, how: str = "propagated") -> dict:
+    return {
+        "destination": destination,
+        "state": "active",
+        "type": how,
+        "attachments": [{"attachment_id": attachment, "resource_type": kind, "resource_id": resource}],
+    }
+
+
 def build_sample() -> tuple[list[dict], list[dict]]:
     """``(resources, connections)`` of the demo AWS account."""
     core, edge, apps = "vpc-0c0re00001", "vpc-0ed9e00002", "vpc-0a9950003"
     tgw = "tgw-0910ba100001"
+    tgw_table = "tgw-rtb-0ma1n0001"
+    peering = "pcx-0c0re0a99"
+    sg_edge = ("sg-0ed9e0f1", "edge-firewalls")
+    sg_app = ("sg-0c0re0a1", "core-app")
+    sg_db = ("sg-0c0re0d1", "core-db")
     resources = [
         _res(f"vpc:{core}", "vpc", "prod-core-vpc", _R1, cidr="10.200.0.0/16", is_default=False),
         _res(f"vpc:{edge}", "vpc", "edge-security-vpc", _R1, cidr="10.210.0.0/16", is_default=False),
@@ -141,7 +213,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             _R1,
             status="active",
             vpc_id=core,
-            route_count=3,
+            route_count=4,
             association_count=3,
             associated_subnet_ids=["subnet-0c0re0a", "subnet-0c0re0b", "subnet-0c0re0d"],
             main=True,
@@ -149,8 +221,23 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             routes=[
                 _route("10.200.0.0/16", "local"),
                 _route("10.0.0.0/8", tgw),
+                _route("10.220.0.0/16", peering),
                 _route("0.0.0.0/0", "nat-0c0re0a"),
             ],
+        ),
+        _res(
+            "route_table:rtb-0a995",
+            "route_table",
+            "apps-main",
+            _R2,
+            status="active",
+            vpc_id=apps,
+            route_count=2,
+            association_count=1,
+            associated_subnet_ids=[],
+            main=True,
+            propagating_vgws=[],
+            routes=[_route("10.220.0.0/16", "local"), _route("10.200.0.0/16", peering)],
         ),
         _res(
             "route_table:rtb-0ed9e0o",
@@ -196,6 +283,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             kind="c5.xlarge",
             forwards=True,
             zone="us-east-1a",
+            group=sg_edge,
         ),
         _instance(
             "i-0f7d002",
@@ -209,6 +297,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             kind="c5.xlarge",
             forwards=True,
             zone="us-east-1a",
+            group=sg_edge,
         ),
         _instance(
             "i-0f3c001",
@@ -218,6 +307,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             kind="c5.4xlarge",
             forwards=False,
             zone="us-east-1a",
+            group=sg_edge,
         ),
         _instance(
             "i-0a99001",
@@ -227,6 +317,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             kind="m6i.large",
             forwards=False,
             zone="us-east-1a",
+            group=sg_app,
         ),
         _instance(
             "i-0a99002",
@@ -236,6 +327,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             kind="r6i.xlarge",
             forwards=False,
             zone="us-east-1a",
+            group=sg_db,
         ),
         _res(
             "customer_gateway:cgw-0d4c0001",
@@ -288,34 +380,43 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             amazon_asn="64513",
             owner_id="111122223333",
         ),
+        _group(sg_edge, edge, [("tcp", "443", "0.0.0.0/0"), ("all", "all", "10.0.0.0/8")]),
+        _group(sg_app, core, [("tcp", "443", "10.0.0.0/8"), ("tcp", "22", "10.210.2.0/24")]),
+        # Only the application servers reach the database.
+        _group(sg_db, core, [("tcp", "5432", f"sg:{sg_app[0]}")]),
+        _acl("acl-0c0re0001", "core-default", core, ["subnet-0c0re0a", "subnet-0c0re0b"]),
+        _acl(
+            "acl-0c0re0db1",
+            "core-db",
+            core,
+            ["subnet-0c0re0d"],
+            [
+                _acl_entry(100, False, "allow", "tcp", "10.200.0.0/16", (5432, 5432)),
+                _acl_entry(110, False, "allow", "tcp", "10.210.2.0/24", (22, 22)),
+                # Replies to what the database servers open themselves.
+                _acl_entry(120, False, "allow", "tcp", "0.0.0.0/0", (1024, 65535)),
+                _acl_entry(100, True, "allow", "tcp", "10.0.0.0/8", (1024, 65535)),
+                _acl_entry(110, True, "allow", "tcp", "0.0.0.0/0", (443, 443)),
+            ],
+        ),
+        _acl("acl-0ed9e0001", "edge-default", edge, ["subnet-0ed9e0o", "subnet-0ed9e0i", "subnet-0ed9e0m"]),
+        _acl("acl-0a9950001", "apps-default", apps, ["subnet-0a9950w"], region=_R2),
         _res(
-            "sg:app-edge",
-            "security_group",
-            "sg-app-edge",
+            f"tgw_route_table:{tgw_table}",
+            "transit_gateway_route_table",
+            "global-main",
             _R1,
-            status="active",
-            vpc_id=edge,
-            policy_rules=[
-                {
-                    "rule_uid": "aws:sg:app-edge:ingress:https",
-                    "rule_name": "HTTPS ingress",
-                    "direction": "inbound",
-                    "action": "allow",
-                    "protocol": "tcp",
-                    "source_selector": "0.0.0.0/0",
-                    "destination_selector": "self",
-                    "port_expression": "443",
-                },
-                {
-                    "rule_uid": "aws:sg:app-edge:egress:any",
-                    "rule_name": "All egress",
-                    "direction": "outbound",
-                    "action": "allow",
-                    "protocol": "all",
-                    "source_selector": "self",
-                    "destination_selector": "0.0.0.0/0",
-                    "port_expression": "all",
-                },
+            transit_gateway_id=tgw,
+            default_association=True,
+            default_propagation=True,
+            truncated=False,
+            routes=[
+                _tgw_route("10.200.0.0/16", "tgw-attach-0c0re", "vpc", core),
+                _tgw_route("10.210.0.0/16", "tgw-attach-0ed9e", "vpc", edge),
+                # The datacenter behind the VPN, learned over BGP.
+                _tgw_route("10.10.0.0/16", "tgw-attach-0d4c0", "vpn", "vpn-0d4c0001"),
+                _tgw_route("0.0.0.0/0", "tgw-attach-0ed9e", "vpc", edge, "static"),
+                {"destination": "10.99.0.0/16", "state": "blackhole", "type": "static", "attachments": []},
             ],
         ),
     ]
@@ -327,6 +428,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             attachment_id="tgw-attach-0c0re",
             resource_type="vpc",
             resource_id=core,
+            route_table_id=tgw_table,
         ),
         _conn(
             f"vpc:{edge}",
@@ -335,8 +437,18 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             attachment_id="tgw-attach-0ed9e",
             resource_type="vpc",
             resource_id=edge,
+            route_table_id=tgw_table,
         ),
-        _conn(f"vpc:{core}", f"vpc:{apps}", "vpc_peering", "active", peering_id="pcx-0c0re0a99"),
+        _conn(
+            "vpn:vpn-0d4c0001",
+            f"tgw:{tgw}",
+            "transit_gateway_attachment",
+            attachment_id="tgw-attach-0d4c0",
+            resource_type="vpn",
+            resource_id="vpn-0d4c0001",
+            route_table_id=tgw_table,
+        ),
+        _conn(f"vpc:{core}", f"vpc:{apps}", "vpc_peering", "active", peering_id=peering),
         _conn(f"vpc:{edge}", "internet_gateway:igw-0ed9e", "internet_gateway_attachment"),
         _conn(f"vpc:{core}", "internet_gateway:igw-0c0re", "internet_gateway_attachment"),
         _conn(f"vpc:{core}", "nat_gateway:nat-0c0re0a", "nat_gateway_attachment"),
@@ -369,6 +481,9 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             "associated",
             region=_R1,
         ),
-        _conn(f"vpc:{edge}", "sg:app-edge", "security_boundary", "enforced"),
+        _conn(f"vpc:{apps}", "route_table:rtb-0a995", "route_table_association", "attached", association_count=1),
+        _conn(f"vpc:{edge}", f"sg:{sg_edge[0]}", "security_boundary", "enforced"),
+        _conn(f"vpc:{core}", f"sg:{sg_app[0]}", "security_boundary", "enforced"),
+        _conn(f"vpc:{core}", f"sg:{sg_db[0]}", "security_boundary", "enforced"),
     ]
     return resources, connections
