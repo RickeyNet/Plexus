@@ -495,10 +495,34 @@ def _collect_aws_map_detail(session, ec2, region: str, cfg, resources: list[dict
                     )
                 )
 
+    def network_acls() -> None:
+        for acl in _aws_list_all(ec2, "describe_network_acls", "NetworkAcls"):
+            resource = aws_detail.network_acl_resource(acl, region)
+            if resource:
+                resources.append(resource)
+
+    def transit_gateway_route_tables() -> None:
+        for table in _aws_list_all(ec2, "describe_transit_gateway_route_tables", "TransitGatewayRouteTables"):
+            table_id = str(table.get("TransitGatewayRouteTableId") or "").strip()
+            if not table_id:
+                continue
+            found = ec2.search_transit_gateway_routes(
+                TransitGatewayRouteTableId=table_id,
+                Filters=[{"Name": "state", "Values": ["active", "blackhole"]}],
+                MaxResults=1000,
+            )
+            resource = aws_detail.transit_gateway_route_table_resource(
+                table, list(found.get("Routes") or []), bool(found.get("AdditionalRoutesAvailable")), region
+            )
+            if resource:
+                resources.append(resource)
+
     optional("subnets", subnets)
     optional("instances", instances)
     optional("customer_gateways", customer_gateways)
     optional("direct_connect_gateways", direct_connect)
+    optional("network_acls", network_acls)
+    optional("transit_gateway_route_tables", transit_gateway_route_tables)
 
 
 def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
@@ -735,6 +759,10 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             "resource_type": res_type,
                             "resource_id": res_id,
                             "resource_owner_id": str(attachment.get("ResourceOwnerId") or "").strip(),
+                            # The transit gateway route table that routes what arrives here.
+                            "route_table_id": str(
+                                (attachment.get("Association") or {}).get("TransitGatewayRouteTableId") or ""
+                            ).strip(),
                         },
                     )
                 )
